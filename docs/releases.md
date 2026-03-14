@@ -28,7 +28,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.
 | `release-rc` | Tag `v*.*.*-rc.*` |
 | `release-stable` | Tag `v*.*.*` (excluding `-rc`) |
 
-Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI. `release-stable` also creates a GitHub Release.
+Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI (`oci://ghcr.io/projectbeskar/charts` — parent repo; Helm appends chart name). `release-stable` also creates a GitHub Release. See [Helm OCI](install/helm-oci.md#push-vs-install-reference) for push vs install reference.
 
 ## Manual release
 

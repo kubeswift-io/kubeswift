@@ -11,7 +11,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
-  CHART_OCI: oci://ghcr.io/projectbeskar/charts/kubeswift
+  # Push: parent repo only (Helm appends chart name)
+  CHART_OCI_PUSH: oci://ghcr.io/projectbeskar/charts
+  # Install: full reference
+  CHART_OCI_INSTALL: oci://ghcr.io/projectbeskar/charts/kubeswift
 
 jobs:
   build-and-push:
@@ -81,4 +84,4 @@ jobs:
         run: |
           CHART_VERSION="${{ steps.version.outputs.version }}"
           helm package charts/kubeswift --version "$CHART_VERSION" --app-version "$CHART_VERSION"
-          helm push kubeswift-$CHART_VERSION.tgz ${{ env.CHART_OCI }}
+          helm push kubeswift-$CHART_VERSION.tgz ${{ env.CHART_OCI_PUSH }}
