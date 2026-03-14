@@ -1,85 +1,70 @@
 # KubeSwift Releases
 
-This document describes the release workflow, versioning, and how to produce releases.
+KubeSwift uses three release types: **dev** (main branch), **RC** (release candidates), and **stable**. All produce OCI images and Helm chart; CI runs on push/tag.
 
-## Version stamping
+## Release types (dev / RC / stable)
 
-All binaries (controller-manager, swiftletd) are built with version metadata:
+| Type | Trigger | Image tag | Chart version | Use case |
+|------|---------|-----------|---------------|----------|
+| **Dev** | Push to `main` | `sha-<shortsha>` | `0.0.0-dev.<shortsha>` | Bleeding edge; e.g. `0.0.0-dev.a1b2c3d` |
+| **RC** | Tag `v*.*.*-rc.*` | `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` | Pre-release; e.g. `0.1.0-rc.1` |
+| **Stable** | Tag `v*.*.*` (no `-rc`) | `vX.Y.Z` | `X.Y.Z` | Production; e.g. `0.1.0` |
 
-- **Version**: Semantic version or `0.0.0-dev.<shortsha>` for dev builds
-- **Git commit**: Full SHA
-- **Build date**: ISO 8601 UTC
-
-This metadata appears in:
-
-- Binary `--version` output
-- Startup logs
-- OCI image labels (`org.opencontainers.image.version`, `org.opencontainers.image.revision`)
-- Chart metadata
-- GitHub Release notes
-
-## Version helpers
-
-| Script | Purpose |
-|--------|---------|
-| `hack/version.sh` | Emits VERSION, IMAGE_TAG, CHART_VERSION, GIT_COMMIT, etc. Source or eval to use. |
-| `hack/chart-version.sh` | Returns chart version for dev, rc, or stable. |
+**Install examples:**
 
 ```bash
-# Print version info
-make print-version
+# Dev (latest main)
+helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.0.0-dev.a1b2c3d -n kubeswift-system --create-namespace
 
-# Or directly
-eval $(./hack/version.sh)
-echo $VERSION $IMAGE_TAG $CHART_VERSION
+# Stable
+helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.1.0 -n kubeswift-system --create-namespace
 ```
 
-## Release types
+## CI workflows
 
-| Type | Trigger | Image tag | Chart version | Workflow |
-|------|---------|-----------|---------------|----------|
-| **Dev** | Push to `main` | `sha-<shortsha>` | `0.0.0-dev.<shortsha>` | `release-dev.yaml` |
-| **RC** | Tag `v*.*.*-rc.*` | `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` | `release-rc.yaml` |
-| **Stable** | Tag `v*.*.*` (no `-rc`) | `vX.Y.Z` | `X.Y.Z` | `release-stable.yaml` |
+| Workflow | Trigger |
+|----------|---------|
+| `release-dev` | Push to `main` |
+| `release-rc` | Tag `v*.*.*-rc.*` |
+| `release-stable` | Tag `v*.*.*` (excluding `-rc`) |
 
-## Makefile targets
+Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI. `release-stable` also creates a GitHub Release.
 
-| Target | Description |
-|--------|-------------|
-| `build-images` | Build controller-manager and swiftletd images (with version stamping) |
-| `push-images` | Push images to registry (requires `docker login` to ghcr.io) |
-| `package-chart` | Package Helm chart (uses `hack/chart-version.sh dev` by default) |
-| `push-chart` | Push chart to OCI registry |
-| `release-dev` | Build, push images + chart (dev version) |
-| `release-rc` | Build, push images + chart (requires RC tag) |
-| `release-stable` | Build, push images + chart + GitHub Release (requires stable tag) |
-| `print-version` | Print version info from `hack/version.sh` |
-
-## Local release (manual)
-
-For manual releases, ensure you are on the correct ref and logged in:
+## Manual release
 
 ```bash
 # Dev (from main)
 make release-dev
 
-# RC (from tag v0.1.0-rc.1)
+# RC (checkout tag first)
 git checkout v0.1.0-rc.1
 make release-rc
 
-# Stable (from tag v0.1.0)
+# Stable
 git checkout v0.1.0
 make release-stable
 ```
 
-For `release-stable`, the Makefile prints a reminder to create the GitHub Release; CI does this automatically when the workflow runs on tag push.
+Requires `docker login` to ghcr.io.
 
-## CI workflows
+## Version stamping
 
-GitHub Actions run automatically:
+Binaries and images include VERSION, GIT_COMMIT, BUILD_DATE. Shown in `--version` output, logs, OCI labels, chart metadata.
 
-- **release-dev**: On every push to `main`
-- **release-rc**: On tag push matching `v*.*.*-rc.*`
-- **release-stable**: On tag push matching `v*.*.*` (excluding `-rc`)
+```bash
+make print-version
+```
 
-See [deploy.md](deploy.md) for install instructions.
+## Makefile targets
+
+| Target | Description |
+|--------|-------------|
+| `release-dev` | Build, push images + chart (dev) |
+| `release-rc` | Build, push images + chart (RC tag) |
+| `release-stable` | Build, push images + chart + GitHub Release |
+| `push-images` | Push images only |
+| `package-chart` | Package Helm chart |
+| `push-chart` | Push chart to OCI |
+| `print-version` | Print version info |
+
+[Helm OCI](install/helm-oci.md) · [Build](developer/build.md)
