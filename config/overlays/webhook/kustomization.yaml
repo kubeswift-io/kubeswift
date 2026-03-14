@@ -1,0 +1,13 @@
+# Webhook overlay: enables admission webhooks for SwiftGuest, SwiftImage, SwiftSeedProfile.
+# Requires cert-manager. Apply: kubectl apply -k config/overlays/webhook
+# Minimal path (no webhooks): kubectl apply -k config/default
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../default
+  - ../../webhook
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: controller-manager

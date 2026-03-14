@@ -1,0 +1,23 @@
+# Patch controller-manager Deployment for webhook mode.
+# Adds --webhook-enabled=true and mounts cert-manager TLS Secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: kubeswift-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller-manager
+          args:
+            - --leader-elect
+            - --webhook-enabled=true
+          volumeMounts:
+            - name: webhook-cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+      volumes:
+        - name: webhook-cert
+          secret:
+            secretName: kubeswift-webhook-cert

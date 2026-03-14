@@ -9,7 +9,8 @@ Repository: github.com/projectbeskar/kubeswift
 | api/ | Go API types (swift, image, seed) |
 | cmd/ | Go binaries: controller-manager, webhook-server, swiftctl |
 | internal/ | Go internal packages (controller, webhook, resolved) |
-| config/ | CRDs, RBAC, Kustomize, samples |
+| config/ | CRDs, RBAC, Kustomize, samples, deploy manifests |
+| images/ | Container build definitions (controller-manager, webhook-server, swiftletd) |
 | rust/ | Rust workspace (swiftletd, swift-runtime, swift-seed, swift-ch-client) |
 | docs/ | Documentation |
 
@@ -21,6 +22,18 @@ Repository: github.com/projectbeskar/kubeswift
 | webhook-server | cmd/webhook-server/ | Admission/mutation webhooks |
 | swiftctl | cmd/swiftctl/ | CLI for operators |
 | swiftletd | rust/swiftletd/ | Node daemon; launches Cloud Hypervisor |
+
+## Config layout
+
+| Path | Purpose |
+|------|---------|
+| config/namespace/ | kubeswift-system namespace |
+| config/manager/ | controller-manager Deployment, RBAC, ServiceAccounts |
+| config/webhook/ | webhook-server Deployment and Service |
+| config/daemonset/ | swiftletd DaemonSet |
+| config/default/ | Install entrypoint; composes namespace, manager, webhook, daemonset |
+
+See [deploy.md](deploy.md) for deployment instructions.
 
 ## Rust crates
 

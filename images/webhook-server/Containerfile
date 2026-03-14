@@ -1,0 +1,20 @@
+# Multi-stage build for webhook-server
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+# Copy module files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build webhook-server
+RUN CGO_ENABLED=0 GOOS=linux go build -o webhook-server ./cmd/webhook-server
+
+# Runtime stage
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /build/webhook-server /webhook-server
+ENTRYPOINT ["/webhook-server"]
