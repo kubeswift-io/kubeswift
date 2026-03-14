@@ -1,0 +1,37 @@
+# Default values for kubeswift.
+# Install: helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> --create-namespace
+
+# Namespace for KubeSwift resources. Use --create-namespace or pre-create the namespace.
+namespace: kubeswift-system
+
+# Create namespace if it does not exist. Set to false to use helm install --create-namespace instead.
+createNamespace: false
+
+controllerManager:
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    tag: latest
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+swiftletd:
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    tag: latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 2
+      memory: 2Gi
+
+# Admission webhooks (optional). Requires cert-manager. When enabled, controller-manager runs with --webhook-enabled=true.
+webhook:
+  enabled: false

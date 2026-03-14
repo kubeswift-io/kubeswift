@@ -1,0 +1,13 @@
+apiVersion: v2
+name: kubeswift
+description: KubeSwift - Cloud Hypervisor-native Kubernetes operator
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubeswift
+  - cloud-hypervisor
+  - vmm
+home: https://github.com/projectbeskar/kubeswift
+sources:
+  - https://github.com/projectbeskar/kubeswift

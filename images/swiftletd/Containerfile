@@ -3,6 +3,10 @@
 FROM rust:1-bookworm AS builder
 WORKDIR /build
 
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
 # Copy workspace
 COPY Cargo.toml Cargo.lock ./
 COPY swiftletd ./swiftletd
@@ -10,10 +14,15 @@ COPY swift-runtime ./swift-runtime
 COPY swift-seed ./swift-seed
 COPY swift-ch-client ./swift-ch-client
 
-RUN cargo build -p swiftletd --release
+RUN KUBESWIFT_VERSION=$VERSION KUBESWIFT_GIT_COMMIT=$GIT_COMMIT KUBESWIFT_BUILD_DATE=$BUILD_DATE \
+    cargo build -p swiftletd --release
 
 # Runtime stage
 FROM debian:bookworm-slim
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \

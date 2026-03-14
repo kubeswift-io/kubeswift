@@ -2,7 +2,63 @@
 
 This document describes the minimal install flow: build images, deploy KubeSwift to a Kubernetes cluster, and undeploy. The minimal path does not include admission webhooks; it is sufficient for first-boot smoke testing.
 
-## Prerequisites
+## Install from OCI (remote clusters)
+
+For remote clusters, install KubeSwift from the OCI Helm chart:
+
+### Prerequisites
+
+- Helm 3+
+- `kubectl` configured for the cluster
+- Worker nodes with [worker-node preflight](worker-node-preflight.md) passing (for SwiftGuest workloads)
+
+### Install command
+
+```bash
+helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace
+```
+
+### Version selection
+
+| Release type | Chart version | Example |
+|--------------|---------------|---------|
+| Dev (main branch) | `0.0.0-dev.<shortsha>` | `0.0.0-dev.a1b2c3d` |
+| Release candidate | `X.Y.Z-rc.N` | `0.1.0-rc.1` |
+| Stable | `X.Y.Z` | `0.1.0` |
+
+### Optional webhook
+
+To enable admission webhooks (requires [cert-manager](https://cert-manager.io/)):
+
+```bash
+helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace --set webhook.enabled=true
+```
+
+### Image overrides
+
+For air-gapped or custom registry installs:
+
+```bash
+helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace \
+  --set controllerManager.image.registry=my-registry.io \
+  --set controllerManager.image.tag=v0.1.0 \
+  --set swiftletd.image.registry=my-registry.io \
+  --set swiftletd.image.tag=v0.1.0
+```
+
+### Release workflow
+
+| Trigger | Workflow | Image tag | Chart version |
+|---------|----------|-----------|---------------|
+| Push to `main` | `release-dev` | `sha-<shortsha>` | `0.0.0-dev.<shortsha>` |
+| Tag `v*.*.*-rc.*` | `release-rc` | `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` |
+| Tag `v*.*.*` (no `-rc`) | `release-stable` | `vX.Y.Z` | `X.Y.Z` |
+
+See [releases.md](releases.md) for version stamping, Makefile targets, and release details.
+
+---
+
+## Prerequisites (local)
 
 - Kubernetes cluster (1.28+)
 - `kubectl` configured for the cluster

@@ -2,20 +2,34 @@
 
 IMAGE_TAG ?= latest
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
-WEBHOOK_IMAGE ?= ghcr.io/projectbeskar/kubeswift/webhook-server:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
+IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
+CHART_OCI ?= oci://ghcr.io/projectbeskar/charts/kubeswift
 
-.PHONY: build build-go build-rust build-images build-controller-image build-webhook-image build-swiftletd-image generate deploy undeploy load-images smoke-test preflight help
+# Version stamping (defaults for local dev; overridden by release-* targets)
+VERSION ?= dev
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
+
+.PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
+	generate deploy undeploy load-images smoke-test preflight help \
+	push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
 	@echo "Targets:"
 	@echo "  build                 Build Go and Rust"
 	@echo "  build-go              Build Go binaries"
 	@echo "  build-rust            Build Rust crates"
-	@echo "  build-images          Build all container images"
+	@echo "  build-images          Build all container images (with version stamping)"
 	@echo "  build-controller-image  Build controller-manager image"
-	@echo "  build-webhook-image   Build webhook-server image"
 	@echo "  build-swiftletd-image Build swiftletd image"
+	@echo "  push-images           Push images to registry (requires auth)"
+	@echo "  package-chart         Package Helm chart"
+	@echo "  push-chart            Push chart to OCI registry"
+	@echo "  release-dev           Build, push images + chart (dev: sha-<shortsha>)"
+	@echo "  release-rc            Build, push images + chart (RC tag)"
+	@echo "  release-stable        Build, push images + chart (stable tag) + GitHub Release"
+	@echo "  print-version         Print version info from hack/version.sh"
 	@echo "  generate              Generate CRDs and deepcopy"
 	@echo "  deploy                Apply CRDs and KubeSwift to cluster"
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
@@ -26,21 +40,66 @@ help:
 build: build-go build-rust
 
 build-go:
-	go build ./cmd/...
+	go build -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=$(VERSION) -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=$(GIT_COMMIT) -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=$(BUILD_DATE)" ./cmd/...
 
 build-rust:
-	cd rust && cargo build
+	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build
 
 build-images: build-controller-image build-swiftletd-image
 
 build-controller-image:
-	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE)
-
-build-webhook-image:
-	docker build -f images/webhook-server/Containerfile . -t $(WEBHOOK_IMAGE)
+	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
 build-swiftletd-image:
-	docker build -f images/swiftletd/Containerfile rust/ -t $(SWIFTLETD_IMAGE)
+	docker build -f images/swiftletd/Containerfile rust/ -t $(SWIFTLETD_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
+
+push-images: build-images
+	docker push $(CONTROLLER_IMAGE)
+	docker push $(SWIFTLETD_IMAGE)
+
+package-chart:
+	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \
+	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER"
+
+push-chart: package-chart
+	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+
+print-version:
+	@eval $$(./hack/version.sh) && \
+	echo "VERSION=$$VERSION" && \
+	echo "VERSION_TAG=$$VERSION_TAG" && \
+	echo "GIT_COMMIT=$$GIT_COMMIT" && \
+	echo "GIT_COMMIT_SHORT=$$GIT_COMMIT_SHORT" && \
+	echo "IMAGE_TAG=$$IMAGE_TAG" && \
+	echo "CHART_VERSION=$$CHART_VERSION"
+
+release-dev:
+	@eval $$(./hack/version.sh) && \
+	$(MAKE) build-images VERSION="$$VERSION" GIT_COMMIT="$$GIT_COMMIT" IMAGE_TAG="$$IMAGE_TAG" && \
+	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
+	CHART_VER="$$CHART_VERSION" && \
+	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+
+release-rc:
+	@eval $$(./hack/version.sh) && \
+	$(MAKE) build-images VERSION="$$VERSION" GIT_COMMIT="$$GIT_COMMIT" IMAGE_TAG="$$IMAGE_TAG" && \
+	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
+	CHART_VER="$$CHART_VERSION" && \
+	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+
+release-stable:
+	@eval $$(./hack/version.sh) && \
+	$(MAKE) build-images VERSION="$$VERSION" GIT_COMMIT="$$GIT_COMMIT" IMAGE_TAG="$$IMAGE_TAG" && \
+	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
+	CHART_VER="$$CHART_VERSION" && \
+	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI) && \
+	echo "Create GitHub Release: gh release create $(VERSION_TAG) --generate-notes"
 
 generate:
 	$(shell go env GOPATH)/bin/controller-gen object crd paths="./api/..." output:crd:dir=config/crd/bases
