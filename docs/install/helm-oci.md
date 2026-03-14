@@ -2,6 +2,14 @@
 
 Install KubeSwift from the OCI Helm chart. Use for **remote clusters**; for kind/minikube, use [local cluster](local-cluster.md).
 
+## Image tags
+
+The chart defaults image tags to match published images:
+- **Stable/RC** (e.g. chart 0.1.0): `v0.1.0`
+- **Dev** (e.g. chart 0.0.0-dev.abc1234): `sha-abc1234`
+
+CI does not publish `latest`. For **local builds** (kind/minikube), use `make build-images`, `make load-images`, then `make deploy` instead of Helm—or override: `--set controllerManager.image.tag=latest --set swiftletd.image.tag=latest` (only if you built and loaded images locally).
+
 ## Chart (install / pull reference)
 
 ```

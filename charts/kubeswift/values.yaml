@@ -10,6 +10,8 @@ createNamespace: false
 controllerManager:
   image:
     registry: ghcr.io/projectbeskar/kubeswift
+    # Default "latest" is overridden by chart to match published tags (vX.Y.Z or sha-xxx for dev).
+    # Set explicitly for local builds: tag: latest
     tag: latest
   replicas: 1
   resources:
@@ -23,6 +25,7 @@ controllerManager:
 swiftletd:
   image:
     registry: ghcr.io/projectbeskar/kubeswift
+    # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
   resources:
     requests:

@@ -2,6 +2,29 @@
 
 Common issues when running KubeSwift and how to resolve them.
 
+## ImagePullBackOff (controller-manager, swiftletd)
+
+**Symptom:** Pods fail with `ErrImagePull` or `ImagePullBackOff` for `ghcr.io/projectbeskar/kubeswift/controller-manager:latest` or `swiftletd:latest`.
+
+**Cause:** CI does not publish images with `latest`. Published tags: `vX.Y.Z` (stable/RC), `sha-<shortsha>` (dev).
+
+**Fix:**
+
+- **OCI install:** Use a chart version whose images exist. The chart (as of the fix) defaults image tags to match the chart version. Reinstall or upgrade:
+  ```bash
+  helm upgrade kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.1.0 -n kubeswift-system \
+    --set controllerManager.image.tag=v0.1.0 \
+    --set swiftletd.image.tag=v0.1.0
+  ```
+  For dev: use `--version 0.0.0-dev.<sha>` and `--set controllerManager.image.tag=sha-<sha> --set swiftletd.image.tag=sha-<sha>`.
+
+- **Local cluster:** Build and load images, then deploy with kustomize (not Helm):
+  ```bash
+  make build-images
+  make load-images
+  make deploy
+  ```
+
 ## SwiftImage
 
 ### SwiftImage stuck in Importing or Failed

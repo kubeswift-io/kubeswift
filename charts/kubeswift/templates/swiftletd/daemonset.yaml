@@ -28,7 +28,7 @@ spec:
         - operator: Exists
       containers:
         - name: swiftletd
-          image: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ .Values.swiftletd.image.tag }}
+          image: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ include "kubeswift.imageTag" (dict "tag" .Values.swiftletd.image.tag "appVersion" .Chart.AppVersion) }}
           securityContext:
             privileged: true
           volumeMounts:
