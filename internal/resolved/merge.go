@@ -2,8 +2,8 @@ package resolved
 
 import (
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -91,9 +91,9 @@ func mergeSeed(seedProfile *seedv1alpha1.SwiftSeedProfile) *Seed {
 		return nil
 	}
 	s := &Seed{
-		Datasource: string(seedProfile.Spec.Datasource),
-		UserData:   seedProfile.Spec.UserData,
-		MetaData:   seedProfile.Spec.MetaData,
+		Datasource:  string(seedProfile.Spec.Datasource),
+		UserData:    seedProfile.Spec.UserData,
+		MetaData:    seedProfile.Spec.MetaData,
 		NetworkData: seedProfile.Spec.NetworkData,
 	}
 	if seedProfile.Spec.UserDataFrom != nil {

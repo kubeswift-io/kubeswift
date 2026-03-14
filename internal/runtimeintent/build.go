@@ -27,8 +27,8 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Format: rg.GetRootDiskFormat(),
 		},
 		SeedPath:  seedPath,
-		CPU:      rg.GetCPU(),
-		Memory:   rg.GetMemoryMiB(),
+		CPU:       rg.GetCPU(),
+		Memory:    rg.GetMemoryMiB(),
 		Lifecycle: lifecycle,
 		GuestID:   rg.GetGuestID(),
 	}

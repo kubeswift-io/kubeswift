@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -134,7 +134,7 @@ func TestResolve_FailsWhenSwiftSeedProfileDoesNotExistWhenReferenced(t *testing.
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			ImageRef:       corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef:  corev1.LocalObjectReference{Name: "gc"},
-			SeedProfileRef:  &corev1.LocalObjectReference{Name: "missing-sp"},
+			SeedProfileRef: &corev1.LocalObjectReference{Name: "missing-sp"},
 		},
 	}
 

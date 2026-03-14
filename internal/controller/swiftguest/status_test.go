@@ -111,7 +111,7 @@ func TestMapPodToStatus_Failed(t *testing.T) {
 func TestMapPodToStatus_Succeeded(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest1", Namespace: "default"},
-		Spec: corev1.PodSpec{NodeName: "node-1"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodSucceeded,
 		},

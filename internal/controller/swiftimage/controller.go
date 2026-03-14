@@ -15,7 +15,7 @@ import (
 // SwiftImageReconciler reconciles SwiftImage resources.
 type SwiftImageReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
+	Scheme    *runtime.Scheme
 	Converter ImageConverter
 }
 

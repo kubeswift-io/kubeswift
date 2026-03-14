@@ -9,7 +9,11 @@ use crate::intent::RuntimeIntent;
 
 /// Runs the VM: spawns CH, waits for socket, monitors process until exit.
 /// Calls `on_socket_ready` when the API socket is available (VM running).
-pub fn run<F>(intent: &RuntimeIntent, runtime_dir: &RuntimeDir, on_socket_ready: Option<F>) -> Result<std::process::ExitStatus, String>
+pub fn run<F>(
+    intent: &RuntimeIntent,
+    runtime_dir: &RuntimeDir,
+    on_socket_ready: Option<F>,
+) -> Result<std::process::ExitStatus, String>
 where
     F: FnOnce(),
 {
@@ -27,7 +31,8 @@ where
         seed_path,
     };
 
-    let mut child = spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
+    let mut child =
+        spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
 
     // Wait for CH to create the API socket
     let socket_path = runtime_dir.api_socket();

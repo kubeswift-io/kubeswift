@@ -16,7 +16,7 @@ const (
 // SeedDataField holds inline content or a reference to Secret/ConfigMap. Exactly one of Value or ValueFrom should be set.
 type SeedDataField struct {
 	Value     string             `json:"value,omitempty"`
-	ValueFrom *SeedDataValueFrom  `json:"valueFrom,omitempty"`
+	ValueFrom *SeedDataValueFrom `json:"valueFrom,omitempty"`
 }
 
 // SeedDataValueFrom holds a reference to Secret or ConfigMap. Exactly one should be set.
@@ -27,12 +27,12 @@ type SeedDataValueFrom struct {
 
 // SwiftSeedProfileSpec defines the desired state of SwiftSeedProfile.
 type SwiftSeedProfileSpec struct {
-	Datasource  DatasourceType `json:"datasource"`
-	UserData    string        `json:"userData"`              // Inline; use UserDataFrom for ref
-	UserDataFrom *SeedDataValueFrom `json:"userDataFrom,omitempty"`
-	MetaData    string        `json:"metaData,omitempty"`    // Inline; use MetaDataFrom for ref
-	MetaDataFrom *SeedDataValueFrom `json:"metaDataFrom,omitempty"`
-	NetworkData string        `json:"networkData,omitempty"`  // Inline; use NetworkDataFrom for ref
+	Datasource      DatasourceType     `json:"datasource"`
+	UserData        string             `json:"userData"` // Inline; use UserDataFrom for ref
+	UserDataFrom    *SeedDataValueFrom `json:"userDataFrom,omitempty"`
+	MetaData        string             `json:"metaData,omitempty"` // Inline; use MetaDataFrom for ref
+	MetaDataFrom    *SeedDataValueFrom `json:"metaDataFrom,omitempty"`
+	NetworkData     string             `json:"networkData,omitempty"` // Inline; use NetworkDataFrom for ref
 	NetworkDataFrom *SeedDataValueFrom `json:"networkDataFrom,omitempty"`
 }
 

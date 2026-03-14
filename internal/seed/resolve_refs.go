@@ -60,4 +60,3 @@ func resolveConfigMap(ctx context.Context, c client.Client, namespace string, re
 	}
 	return val, nil
 }
-
