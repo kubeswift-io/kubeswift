@@ -121,6 +121,19 @@ spec:
 
 ---
 
+## Preflight Script
+
+Before joining a worker node or running the smoke test, run the preflight script to validate host prerequisites:
+
+```bash
+./scripts/kubeswift-preflight.sh
+# or: make preflight
+```
+
+See [docs/worker-node-preflight.md](worker-node-preflight.md) for download instructions, result interpretation, and exit codes.
+
+---
+
 ## Quick Verification Commands
 
 ```bash
@@ -145,6 +158,7 @@ kubectl logs -l swift.kubeswift.io/guest=sample -c launcher --tail=50
 
 ## Summary Checklist
 
+- [ ] Run `./scripts/kubeswift-preflight.sh` (or `make preflight`) and resolve any FAIL
 - [ ] Kernel 5.6+ (or 4.11+ minimum)
 - [ ] KVM modules loaded, `/dev/kvm` present
 - [ ] Hardware virtualization enabled (VT-x/AMD-V)
