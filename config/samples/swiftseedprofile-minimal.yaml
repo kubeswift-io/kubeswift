@@ -1,0 +1,14 @@
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: minimal
+  namespace: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: kubeswift-guest
+    package_update: true
+  metaData: |
+    instance-id: kubeswift-001
+    local-hostname: kubeswift-guest

@@ -1,0 +1,117 @@
+schema: spec-driven
+
+context: |
+  Project: KubeSwift
+  Repository: github.com/projectbeskar/kubeswift (GitHub: projectbeskar/kubeswift)
+
+  Domain:
+  KubeSwift is a Kubernetes-native virtualization platform built around Cloud Hypervisor rather than libvirt/QEMU.
+  It targets modern cloud-style VMs, starting with Linux cloud images and Cloud Hypervisor as the only supported VMM.
+  API style must be Kubernetes-native and intentionally distinct from KubeVirt naming.
+
+  Primary goals:
+  - Build a virtualization platform for Kubernetes using Cloud Hypervisor as the underlying VMM.
+  - Avoid libvirt entirely.
+  - Avoid a generic multi-hypervisor abstraction layer.
+  - Keep VM semantics explicit rather than pretending VMs are containers.
+  - Keep Kubernetes responsible for scheduling, reconciliation, networking attachment, and storage orchestration.
+  - Keep node-local VM realization in a dedicated runtime daemon.
+
+  Naming and API groups:
+  - Project name: KubeSwift
+  - Core API group: swift.kubeswift.io
+  - Image API group: image.kubeswift.io
+  - Seed API group: seed.kubeswift.io
+  - Main initial version: v1alpha1
+
+  Primary resource names:
+  - SwiftGuest
+  - SwiftGuestClass
+  - SwiftImage
+  - SwiftSeedProfile
+  - SwiftGuestMigration
+  - SwiftGuestSnapshot
+  - SwiftGuestPool
+
+  Architecture principles:
+  - Kubernetes-native control plane in Go 1.25
+  - Node runtime and low-level helpers in Rust
+  - One guest uses one pod envelope for scheduling, resource accounting, networking, and mounted storage
+  - Node daemon `swiftletd` launches and manages Cloud Hypervisor locally
+  - No libvirt in any control path
+  - Cloud Hypervisor API used directly via local Unix sockets
+  - Runtime assumptions: Linux-first, virtio-first, raw disk preferred, minimal legacy support
+
+  CRD design principles:
+  - Do not use KubeVirt names like VirtualMachine
+  - Prefer concise KubeSwift-native names
+  - Spec fields must map closely to Cloud Hypervisor capabilities
+  - Keep APIs small, explicit, and mergeable
+  - Use clear status conditions from the start
+
+  Image and initialization principles:
+  - Image management and guest initialization are separate concerns
+  - `SwiftImage` is immutable once ready
+  - No disk format guessing; formats must be explicitly declared
+  - Runtime-preferred format is raw
+  - Linux initialization supports cloud-init compatibility via generated seed media
+  - KubeSwift delivers datasource media; it does not reimplement cloud-init
+  - Seed abstraction: NoCloud first, then ConfigDrive, Ignition, Unattend later
+
+  Initial implementation scope:
+  - Linux cloud images only
+  - One root disk, one network
+  - NoCloud seed support
+  - Start/stop/restart
+  - Serial console and status conditions
+  - First CRDs: `SwiftImage`, `SwiftGuest`, `SwiftGuestClass`, `SwiftSeedProfile`
+
+  Tech stack:
+  - Control plane: Go 1.25, controller-runtime, Kubebuilder-style APIs/controllers/webhooks
+  - Node plane: Rust
+  - Monorepo layout with Go and Rust components
+  - Rust node daemon: `swiftletd`
+  - Internal resolved-spec model used by controllers before runtime handoff
+
+  Repository conventions:
+  - github.com/projectbeskar/kubeswift is the sole implementation repository.
+  - All OpenSpec artifacts must reference paths, packages, binaries, and docs within this repository.
+  - Do not describe work as belonging in another repository or a split-org layout.
+
+  Development standards:
+  - Prefer explicitness over hidden defaults
+  - Prefer immutable prepared artifacts over in-place mutation
+  - Prefer narrow MVP slices over broad feature parity
+  - Do not chase KubeVirt feature parity in early phases
+  - Preserve architecture docs as implementation proceeds
+  - Keep design aligned with Cloud Hypervisor's modern cloud scope
+
+rules:
+  proposal:
+    - State the problem, the scope, and what is intentionally excluded.
+    - Explain why the change fits KubeSwift's Cloud-Hypervisor-native architecture.
+    - Name impacted API groups, binaries, packages, and repository paths.
+    - Include risks, dependencies, and rollback notes.
+    - Keep all paths and commands consistent with github.com/projectbeskar/kubeswift.
+
+  specs:
+    - Use MUST/SHOULD language for requirements.
+    - Write concrete user or operator scenarios.
+    - Keep requirements testable.
+    - Prefer explicit resource names and field names already chosen for KubeSwift.
+    - Do not introduce KubeVirt naming.
+    - Ground requirements in paths and layout within github.com/projectbeskar/kubeswift.
+
+  design:
+    - Map the design to actual packages, binaries, and reconciliation boundaries.
+    - Distinguish control-plane logic from node-runtime logic.
+    - Explain data flow between controllers, pod envelope, runtime intent, and swiftletd.
+    - Call out validation, status conditions, and failure handling.
+    - Use repository-relative paths that fit github.com/projectbeskar/kubeswift.
+
+  tasks:
+    - Break work into small, independently reviewable steps.
+    - Separate API work, controller work, node-runtime work, and test work.
+    - Include docs and sample YAML.
+    - Mark blockers and prerequisites explicitly.
+    - Reference concrete repository paths where helpful.

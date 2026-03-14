@@ -1,0 +1,14 @@
+# Binds swiftletd-reporter Role to the default service account.
+# Apply in each namespace where SwiftGuests run (same namespace as the Role).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: swiftletd-reporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: swiftletd-reporter
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: default  # Override with kustomize -n or set to match Role namespace

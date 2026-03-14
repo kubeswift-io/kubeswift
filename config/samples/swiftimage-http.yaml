@@ -1,0 +1,10 @@
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-cloud
+  namespace: default
+spec:
+  format: raw
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img

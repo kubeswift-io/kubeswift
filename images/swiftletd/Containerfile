@@ -1,0 +1,37 @@
+# Multi-stage build for swiftletd + Cloud Hypervisor
+# Build swiftletd
+FROM rust:1-bookworm AS builder
+WORKDIR /build
+
+# Copy workspace
+COPY Cargo.toml Cargo.lock ./
+COPY swiftletd ./swiftletd
+COPY swift-runtime ./swift-runtime
+COPY swift-seed ./swift-seed
+COPY swift-ch-client ./swift-ch-client
+
+RUN cargo build -p swiftletd --release
+
+# Runtime stage
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cloud Hypervisor static binary (v37.0+)
+ARG CH_VERSION=37.0
+ARG TARGETARCH=amd64
+RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
+    curl -sSL -o /usr/local/bin/cloud-hypervisor \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/cloud-hypervisor-static${CH_ARCH}" && \
+    chmod +x /usr/local/bin/cloud-hypervisor
+
+COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
+
+# Runtime paths (must match internal/controller/swiftguest constants)
+ENV KUBESWIFT_RUN_DIR=/var/lib/kubeswift/run
+# Intent path default
+ENV KUBESWIFT_INTENT_PATH=/var/lib/kubeswift/intent/runtime-intent.json
+
+ENTRYPOINT ["/usr/local/bin/swiftletd"]

@@ -1,0 +1,9 @@
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: upload-placeholder
+  namespace: default
+spec:
+  format: raw
+  source:
+    upload: {}

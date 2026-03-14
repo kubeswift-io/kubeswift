@@ -1,0 +1,19 @@
+[package]
+name = "swiftletd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4"
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+kube = { version = "0.92", features = ["runtime", "client", "derive"] }
+k8s-openapi = { version = "0.22", features = ["v1_28"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+swift-seed = { path = "../swift-seed" }
+swift-runtime = { path = "../swift-runtime" }
+swift-ch-client = { path = "../swift-ch-client" }
+
+[[bin]]
+name = "swiftletd"
+path = "src/main.rs"

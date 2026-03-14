@@ -1,0 +1,11 @@
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: clone-from-pvc
+  namespace: default
+spec:
+  format: raw
+  source:
+    pvcClone:
+      name: source-pvc
+      namespace: default
