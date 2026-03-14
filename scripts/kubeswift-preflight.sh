@@ -31,8 +31,16 @@ PASS_ITEMS=()
 WARN_ITEMS=()
 FAIL_ITEMS=()
 
+WARN_FIXES=()
+FAIL_FIXES=()
+
 MIN_KERNEL="4.11"
 RECOMMENDED_KERNEL="5.15"
+
+CPU_VENDOR_MODULE=""
+OS_ID=""
+OS_PRETTY_NAME=""
+OS_VERSION_ID=""
 
 usage() {
   cat <<EOF
@@ -42,6 +50,7 @@ KubeSwift worker-node readiness preflight for Linux hosts.
 Primary target: Ubuntu x86_64.
 
 This script performs read-only checks for:
+- operating system and distribution
 - architecture
 - Linux kernel version
 - CPU virtualization support
@@ -50,7 +59,7 @@ This script performs read-only checks for:
 - swap status
 - required networking modules/sysctls
 - container runtime presence
-- basic host suitability for KubeSwift worker-node use
+- recommended capacity checks
 
 Exit codes:
   0  Ready (no hard failures; warnings may still be present)
@@ -67,6 +76,7 @@ Notes:
 - This script does not modify the host.
 - This script checks worker-node prerequisites only.
 - Warnings indicate caveats or recommended improvements, but they do not change the exit code.
+- For each WARN or FAIL, the script prints suggested permanent remediation commands where practical.
 EOF
 }
 
@@ -79,16 +89,24 @@ emit_pass() {
 
 emit_warn() {
   local msg="$1"
+  local remedy="${2:-}"
   echo "[WARN] $msg"
   WARN_COUNT=$((WARN_COUNT + 1))
   WARN_ITEMS+=("$msg")
+  if [ -n "$remedy" ]; then
+    WARN_FIXES+=("$msg|||$remedy")
+  fi
 }
 
 emit_fail() {
   local msg="$1"
+  local remedy="${2:-}"
   echo "[FAIL] $msg"
   FAIL_COUNT=$((FAIL_COUNT + 1))
   FAIL_ITEMS+=("$msg")
+  if [ -n "$remedy" ]; then
+    FAIL_FIXES+=("$msg|||$remedy")
+  fi
 }
 
 command_exists() {
@@ -127,19 +145,203 @@ kernel_major_minor() {
   uname -r | cut -d. -f1,2
 }
 
+detect_os_release() {
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    OS_ID="${ID:-}"
+    OS_PRETTY_NAME="${PRETTY_NAME:-${ID:-unknown}}"
+    OS_VERSION_ID="${VERSION_ID:-unknown}"
+  fi
+}
+
+detect_cpu_vendor_module() {
+  if grep -qE '(^|[[:space:]])vmx([[:space:]]|$)' /proc/cpuinfo 2>/dev/null; then
+    CPU_VENDOR_MODULE="kvm_intel"
+  elif grep -qE '(^|[[:space:]])svm([[:space:]]|$)' /proc/cpuinfo 2>/dev/null; then
+    CPU_VENDOR_MODULE="kvm_amd"
+  else
+    CPU_VENDOR_MODULE="kvm_intel"
+  fi
+}
+
+fix_upgrade_kernel() {
+  cat <<'EOF'
+# Ubuntu: install the generic kernel meta-package and reboot.
+sudo apt update
+sudo apt install -y linux-generic
+sudo reboot
+EOF
+}
+
+fix_enable_virtualization_bios() {
+  cat <<'EOF'
+# No safe Linux command can enable CPU virtualization if firmware has it disabled.
+# You must enable Intel VT-x or AMD-V / SVM in BIOS or UEFI, then reboot.
+# After reboot, re-run the preflight script.
+EOF
+}
+
+fix_load_kvm_modules() {
+  local vendor_module="$1"
+  cat <<EOF
+# Load KVM modules now.
+sudo modprobe kvm
+sudo modprobe ${vendor_module}
+
+# Make them load permanently on boot.
+cat <<'EOM' | sudo tee /etc/modules-load.d/kubeswift-kvm.conf >/dev/null
+kvm
+${vendor_module}
+EOM
+
+# Re-run the preflight script after reboot if /dev/kvm is still missing.
+EOF
+}
+
+fix_dev_kvm_permissions() {
+  cat <<'EOF'
+# Ensure the current user can access /dev/kvm persistently.
+sudo usermod -aG kvm "$USER"
+
+# Then fully log out and log back in, or reboot.
+# Verify again with:
+#   ls -l /dev/kvm
+#   id | grep kvm
+EOF
+}
+
+fix_enable_cgroup_v2() {
+  cat <<'EOF'
+# Ubuntu: enable unified cgroup v2 and reboot.
+sudo cp /etc/default/grub /etc/default/grub.bak
+
+if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
+  sudo sed -i 's/^GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="systemd.unified_cgroup_hierarchy=1 /' /etc/default/grub
+else
+  echo 'GRUB_CMDLINE_LINUX="systemd.unified_cgroup_hierarchy=1"' | sudo tee -a /etc/default/grub >/dev/null
+fi
+
+sudo update-grub
+sudo reboot
+EOF
+}
+
+fix_disable_swap() {
+  cat <<'EOF'
+# Disable swap now.
+sudo swapoff -a
+
+# Disable swap permanently in /etc/fstab.
+sudo cp /etc/fstab /etc/fstab.bak
+sudo sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+
+# Confirm:
+#   swapon --show
+EOF
+}
+
+fix_load_network_modules() {
+  cat <<'EOF'
+# Load modules now.
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Make them load permanently on boot.
+cat <<'EOM' | sudo tee /etc/modules-load.d/kubeswift-k8s.conf >/dev/null
+overlay
+br_netfilter
+EOM
+EOF
+}
+
+fix_network_sysctls() {
+  cat <<'EOF'
+# Persist required Kubernetes/KubeSwift networking sysctls.
+cat <<'EOM' | sudo tee /etc/sysctl.d/99-kubeswift-k8s.conf >/dev/null
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOM
+
+sudo sysctl --system
+EOF
+}
+
+fix_install_containerd() {
+  cat <<'EOF'
+# Install and enable containerd on Ubuntu.
+sudo apt update
+sudo apt install -y containerd
+
+sudo mkdir -p /etc/containerd
+sudo containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
+sudo sed -ri 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+sudo systemctl enable --now containerd
+sudo systemctl restart containerd
+EOF
+}
+
+fix_containerd_systemdcgroup() {
+  cat <<'EOF'
+# Ensure containerd uses systemd cgroups.
+sudo mkdir -p /etc/containerd
+
+# Create a default config if one does not exist.
+if [ ! -f /etc/containerd/config.toml ]; then
+  sudo containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
+fi
+
+sudo sed -ri 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+sudo systemctl restart containerd
+EOF
+}
+
+fix_use_ubuntu() {
+  cat <<'EOF'
+# Recommended: use Ubuntu 22.04 LTS or 24.04 LTS for KubeSwift worker nodes.
+# There is no universal in-place command that safely converts an arbitrary Linux
+# distribution to Ubuntu. Provision a supported Ubuntu host and re-run the script.
+EOF
+}
+
+fix_low_memory() {
+  cat <<'EOF'
+# Recommended: increase host memory to at least 16 GiB for smoke testing.
+# There is no universal safe command to add RAM permanently from inside the OS.
+# If this is a VM, increase assigned memory in the hypervisor settings and reboot.
+EOF
+}
+
+fix_low_disk() {
+  cat <<'EOF'
+# Recommended: provide at least 100 GiB free disk for smoke testing.
+# Permanent fixes depend on your storage layout:
+# - add/expand the backing disk in your hypervisor or cloud
+# - extend the partition/LVM/filesystem
+# - or free space under /var or /
+#
+# Quick inspection:
+df -h / /var
+EOF
+}
+
 check_architecture() {
   local arch
   arch="$(uname -m 2>/dev/null || true)"
 
   if [ -z "$arch" ]; then
-    emit_fail "Architecture: could not determine via uname -m"
+    emit_fail "Architecture: could not determine via uname -m" \
+      "uname -m"
     return
   fi
 
   if [ "$arch" = "x86_64" ]; then
     emit_pass "Architecture: $arch"
   else
-    emit_fail "Architecture: $arch (KubeSwift worker nodes currently require x86_64)"
+    emit_fail "Architecture: $arch (KubeSwift worker nodes currently require x86_64)" \
+      "Provision or reinstall on an x86_64 host."
   fi
 }
 
@@ -148,22 +350,23 @@ check_os() {
   os="$(uname -s 2>/dev/null || true)"
 
   if [ "$os" != "Linux" ]; then
-    emit_fail "Operating system: ${os:-unknown} (Linux required)"
+    emit_fail "Operating system: ${os:-unknown} (Linux required)" \
+      "Provision a Linux host. KubeSwift worker nodes are currently Linux-only."
     return
   fi
 
   emit_pass "Operating system: Linux"
 
-  if [ -r /etc/os-release ]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    if [ "${ID:-}" = "ubuntu" ]; then
-      emit_pass "Distribution: Ubuntu ${VERSION_ID:-unknown}"
+  if [ -n "$OS_ID" ]; then
+    if [ "$OS_ID" = "ubuntu" ]; then
+      emit_pass "Distribution: Ubuntu ${OS_VERSION_ID:-unknown}"
     else
-      emit_warn "Distribution: ${PRETTY_NAME:-${ID:-unknown}} (Ubuntu x86_64 is the primary tested target)"
+      emit_warn "Distribution: ${OS_PRETTY_NAME:-${OS_ID:-unknown}} (Ubuntu x86_64 is the primary tested target)" \
+        "$(fix_use_ubuntu)"
     fi
   else
-    emit_warn "Distribution: could not determine from /etc/os-release"
+    emit_warn "Distribution: could not determine from /etc/os-release" \
+      "Inspect /etc/os-release manually and prefer Ubuntu 22.04 or 24.04 LTS."
   fi
 }
 
@@ -173,16 +376,19 @@ check_kernel() {
   short="$(kernel_major_minor 2>/dev/null || true)"
 
   if [ -z "$full" ] || [ -z "$short" ]; then
-    emit_fail "Kernel: could not determine version"
+    emit_fail "Kernel: could not determine version" \
+      "uname -r"
     return
   fi
 
   if version_ge "$short" "$RECOMMENDED_KERNEL"; then
     emit_pass "Kernel: $full (meets recommended baseline >= $RECOMMENDED_KERNEL)"
   elif version_ge "$short" "$MIN_KERNEL"; then
-    emit_warn "Kernel: $full (supported minimum met, but >= $RECOMMENDED_KERNEL is recommended)"
+    emit_warn "Kernel: $full (supported minimum met, but >= $RECOMMENDED_KERNEL is recommended)" \
+      "$(fix_upgrade_kernel)"
   else
-    emit_fail "Kernel: $full (below minimum required baseline $MIN_KERNEL)"
+    emit_fail "Kernel: $full (below minimum required baseline $MIN_KERNEL)" \
+      "$(fix_upgrade_kernel)"
   fi
 }
 
@@ -194,7 +400,8 @@ check_virtualization() {
   if [ "$flags_count" -gt 0 ]; then
     emit_pass "CPU virtualization: vmx/svm detected"
   else
-    emit_fail "CPU virtualization: vmx/svm not detected in /proc/cpuinfo (enable VT-x/AMD-V in firmware)"
+    emit_fail "CPU virtualization: vmx/svm not detected in /proc/cpuinfo (enable VT-x/AMD-V in firmware)" \
+      "$(fix_enable_virtualization_bios)"
   fi
 }
 
@@ -204,21 +411,24 @@ check_kvm_modules() {
 
   if [ -r /proc/modules ]; then
     grep -qE '^kvm[[:space:]]' /proc/modules 2>/dev/null && have_kvm=1
-    grep -qE '^kvm_(intel|amd)[[:space:]]' /proc/modules 2>/dev/null && have_vendor=1
+    grep -qE "^${CPU_VENDOR_MODULE}[[:space:]]" /proc/modules 2>/dev/null && have_vendor=1
   fi
 
   if [ "$have_kvm" -eq 1 ] && [ "$have_vendor" -eq 1 ]; then
     emit_pass "KVM modules: loaded (kvm and vendor module present)"
   elif [ "$have_kvm" -eq 1 ]; then
-    emit_fail "KVM modules: kvm loaded but kvm_intel/kvm_amd missing"
+    emit_fail "KVM modules: kvm loaded but ${CPU_VENDOR_MODULE} missing" \
+      "$(fix_load_kvm_modules "$CPU_VENDOR_MODULE")"
   else
-    emit_fail "KVM modules: not loaded"
+    emit_fail "KVM modules: not loaded" \
+      "$(fix_load_kvm_modules "$CPU_VENDOR_MODULE")"
   fi
 }
 
 check_dev_kvm() {
   if [ ! -e /dev/kvm ]; then
-    emit_fail "/dev/kvm: missing"
+    emit_fail "/dev/kvm: missing" \
+      "$(fix_load_kvm_modules "$CPU_VENDOR_MODULE")"
     return
   fi
 
@@ -228,7 +438,8 @@ check_dev_kvm() {
   group="$(stat -c '%G' /dev/kvm 2>/dev/null || echo '?')"
 
   if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
-    emit_fail "/dev/kvm: present but not readable/writable by current user (owner=$owner group=$group mode=$mode)"
+    emit_fail "/dev/kvm: present but not readable/writable by current user (owner=$owner group=$group mode=$mode)" \
+      "$(fix_dev_kvm_permissions)"
     return
   fi
 
@@ -239,7 +450,8 @@ check_cgroup_v2() {
   if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     emit_pass "cgroup: v2 unified hierarchy detected"
   else
-    emit_fail "cgroup: v2 unified hierarchy not detected"
+    emit_fail "cgroup: v2 unified hierarchy not detected" \
+      "$(fix_enable_cgroup_v2)"
   fi
 }
 
@@ -250,7 +462,8 @@ check_swap() {
   if [ "$swap_lines" -eq 0 ]; then
     emit_pass "Swap: disabled"
   else
-    emit_fail "Swap: enabled"
+    emit_fail "Swap: enabled" \
+      "$(fix_disable_swap)"
   fi
 }
 
@@ -261,7 +474,8 @@ check_module_loaded() {
   if [ -r /proc/modules ] && grep -qE "^${module}[[:space:]]" /proc/modules 2>/dev/null; then
     emit_pass "Kernel module: $label loaded"
   else
-    emit_fail "Kernel module: $label not loaded"
+    emit_fail "Kernel module: $label not loaded" \
+      "$(fix_load_network_modules)"
   fi
 }
 
@@ -280,11 +494,13 @@ check_sysctl_equals() {
   val="$(sysctl_value "$key")"
 
   if [ -z "$val" ]; then
-    emit_fail "Sysctl: $key could not be read ($description)"
+    emit_fail "Sysctl: $key could not be read ($description)" \
+      "$(fix_network_sysctls)"
   elif [ "$val" = "$expected" ]; then
     emit_pass "Sysctl: $key=$expected ($description)"
   else
-    emit_fail "Sysctl: $key=$val (expected $expected; $description)"
+    emit_fail "Sysctl: $key=$val (expected $expected; $description)" \
+      "$(fix_network_sysctls)"
   fi
 }
 
@@ -324,7 +540,8 @@ check_container_runtime() {
   if [ "$found" -eq 1 ]; then
     emit_pass "Container runtime: $runtime detected"
   else
-    emit_fail "Container runtime: no supported runtime detected (containerd or CRI-O required)"
+    emit_fail "Container runtime: no supported runtime detected (containerd or CRI-O required)" \
+      "$(fix_install_containerd)"
   fi
 }
 
@@ -337,10 +554,12 @@ check_containerd_config_warning() {
     if grep -Eq 'SystemdCgroup[[:space:]]*=[[:space:]]*true' /etc/containerd/config.toml 2>/dev/null; then
       emit_pass "containerd config: SystemdCgroup=true detected"
     else
-      emit_warn "containerd config: could not confirm SystemdCgroup=true"
+      emit_warn "containerd config: could not confirm SystemdCgroup=true" \
+        "$(fix_containerd_systemdcgroup)"
     fi
   else
-    emit_warn "containerd config: /etc/containerd/config.toml not readable; systemd cgroup setting not verified"
+    emit_warn "containerd config: /etc/containerd/config.toml not readable; systemd cgroup setting not verified" \
+      "$(fix_containerd_systemdcgroup)"
   fi
 }
 
@@ -350,7 +569,8 @@ check_memory_warning() {
   mem_kb="${mem_kb:-0}"
 
   if [ "$mem_kb" -le 0 ]; then
-    emit_warn "Memory: could not determine total RAM"
+    emit_warn "Memory: could not determine total RAM" \
+      "grep MemTotal /proc/meminfo"
     return
   fi
 
@@ -359,7 +579,8 @@ check_memory_warning() {
   if [ "$mem_gb" -ge 16 ]; then
     emit_pass "Memory: ${mem_gb} GiB detected"
   else
-    emit_warn "Memory: ${mem_gb} GiB detected (16+ GiB recommended for smoke testing)"
+    emit_warn "Memory: ${mem_gb} GiB detected (16+ GiB recommended for smoke testing)" \
+      "$(fix_low_memory)"
   fi
 }
 
@@ -372,7 +593,8 @@ check_disk_warning() {
   fi
 
   if [ -z "$avail_kb" ]; then
-    emit_warn "Disk: could not determine available disk space"
+    emit_warn "Disk: could not determine available disk space" \
+      "df -h / /var"
     return
   fi
 
@@ -381,8 +603,34 @@ check_disk_warning() {
   if [ "$avail_gb" -ge 100 ]; then
     emit_pass "Disk: ${avail_gb} GiB available"
   else
-    emit_warn "Disk: ${avail_gb} GiB available (100+ GiB recommended for smoke testing)"
+    emit_warn "Disk: ${avail_gb} GiB available (100+ GiB recommended for smoke testing)" \
+      "$(fix_low_disk)"
   fi
+}
+
+print_actions() {
+  local title="$1"
+  shift
+  local -a items=("$@")
+  local item msg remedy i
+
+  if [ "${#items[@]}" -eq 0 ]; then
+    return
+  fi
+
+  echo
+  echo "$title"
+  echo "$(printf '%*s' "${#title}" '' | tr ' ' '-')"
+
+  i=1
+  for item in "${items[@]}"; do
+    msg="${item%%|||*}"
+    remedy="${item#*|||}"
+    echo
+    echo "$i. $msg"
+    echo "$remedy"
+    i=$((i + 1))
+  done
 }
 
 print_summary() {
@@ -409,6 +657,9 @@ print_summary() {
       echo "  - $item"
     done
   fi
+
+  print_actions "Recommended actions for FAIL items" "${FAIL_FIXES[@]}"
+  print_actions "Recommended actions for WARN items" "${WARN_FIXES[@]}"
 
   echo
   if [ "$FAIL_COUNT" -gt 0 ]; then
@@ -447,6 +698,9 @@ main() {
     echo "[FAIL] Unsupported environment: Linux required" >&2
     exit 2
   fi
+
+  detect_os_release
+  detect_cpu_vendor_module
 
   echo "KubeSwift worker-node readiness preflight"
   echo "========================================"
