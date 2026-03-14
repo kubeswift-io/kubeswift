@@ -21,7 +21,10 @@ spec:
       serviceAccountName: controller-manager
       containers:
         - name: controller-manager
-          image: {{ .Values.controllerManager.image.registry }}/controller-manager:{{ .Values.controllerManager.image.tag }}
+          image: {{ .Values.controllerManager.image.registry }}/controller-manager:{{ include "kubeswift.imageTag" (dict "tag" .Values.controllerManager.image.tag "appVersion" .Chart.AppVersion) }}
+          env:
+            - name: KUBESWIFT_LAUNCHER_IMAGE
+              value: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ include "kubeswift.imageTag" (dict "tag" .Values.swiftletd.image.tag "appVersion" .Chart.AppVersion) }}
           args:
             - --leader-elect
             {{- if .Values.webhook.enabled }}

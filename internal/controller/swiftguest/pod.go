@@ -66,7 +66,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 			Containers: []corev1.Container{
 				{
 					Name:  "launcher",
-					Image: LauncherImage,
+					Image: LauncherImage(),
 					Env: []corev1.EnvVar{
 						{
 							Name: "POD_NAME",
