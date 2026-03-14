@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
@@ -18,14 +19,40 @@ import (
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
 )
 
+const (
+	defaultWebhookPort  = 9443
+	defaultWebhookHost  = "0.0.0.0"
+	defaultCertDir      = "/tmp/k8s-webhook-server/serving-certs"
+	webhookCertDirEnv   = "WEBHOOK_CERT_DIR"
+)
+
 func main() {
+	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
+	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
+	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
+	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	klog.InitFlags(nil)
 	flag.Parse()
+
+	certDir := *webhookCertDir
+	if envCertDir := os.Getenv(webhookCertDirEnv); envCertDir != "" {
+		certDir = envCertDir
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgrOpts := ctrl.Options{
 		Scheme: scheme.Scheme,
-	})
+	}
+	if *webhookEnabled {
+		mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{
+			Port:    *webhookPort,
+			Host:    *webhookHost,
+			CertDir: certDir,
+		})
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		klog.ErrorS(err, "unable to create manager")
 		os.Exit(1)
@@ -48,26 +75,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftGuest{}).
-		WithCustomValidator(&swiftguestwebhook.Validator{}).
-		WithCustomDefaulter(&swiftguestwebhook.Defaulter{}).
-		Complete(); err != nil {
-		klog.ErrorS(err, "unable to create SwiftGuest webhook")
-		os.Exit(1)
-	}
-	if err = ctrl.NewWebhookManagedBy(mgr, &imagev1alpha1.SwiftImage{}).
-		WithCustomValidator(&swiftimagewebhook.Validator{}).
-		WithCustomDefaulter(&swiftimagewebhook.Defaulter{}).
-		Complete(); err != nil {
-		klog.ErrorS(err, "unable to create SwiftImage webhook")
-		os.Exit(1)
-	}
-	if err = ctrl.NewWebhookManagedBy(mgr, &seedv1alpha1.SwiftSeedProfile{}).
-		WithCustomValidator(&swiftseedprofilewebhook.Validator{}).
-		WithCustomDefaulter(&swiftseedprofilewebhook.Defaulter{}).
-		Complete(); err != nil {
-		klog.ErrorS(err, "unable to create SwiftSeedProfile webhook")
-		os.Exit(1)
+	if *webhookEnabled {
+		if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftGuest{}).
+			WithCustomValidator(&swiftguestwebhook.Validator{}).
+			WithCustomDefaulter(&swiftguestwebhook.Defaulter{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftGuest webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &imagev1alpha1.SwiftImage{}).
+			WithCustomValidator(&swiftimagewebhook.Validator{}).
+			WithCustomDefaulter(&swiftimagewebhook.Defaulter{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftImage webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &seedv1alpha1.SwiftSeedProfile{}).
+			WithCustomValidator(&swiftseedprofilewebhook.Validator{}).
+			WithCustomDefaulter(&swiftseedprofilewebhook.Defaulter{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftSeedProfile webhook")
+			os.Exit(1)
+		}
 	}
 
 	klog.Info("starting manager")

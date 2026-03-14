@@ -1,0 +1,8 @@
+# Install entrypoint for KubeSwift (minimal: no webhook).
+# Apply CRDs first, then: kubectl apply -k config/default
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../namespace
+  - ../manager
+  - ../daemonset

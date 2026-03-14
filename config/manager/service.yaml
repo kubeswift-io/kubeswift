@@ -1,0 +1,19 @@
+# Service for controller-manager webhook (port 9443).
+# Targets controller-manager pods; used by ValidatingWebhookConfiguration and MutatingWebhookConfiguration.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubeswift-webhook-service
+  namespace: kubeswift-system
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: webhook
+spec:
+  ports:
+    - port: 443
+      targetPort: 9443
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: controller-manager

@@ -1,0 +1,20 @@
+# Multi-stage build for controller-manager
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+# Copy module files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build controller-manager
+RUN CGO_ENABLED=0 GOOS=linux go build -o controller-manager ./cmd/controller-manager
+
+# Runtime stage
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /build/controller-manager /controller-manager
+ENTRYPOINT ["/controller-manager"]

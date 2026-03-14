@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kubeswift-system
+resources:
+  - issuer.yaml
+  - certificate.yaml
+  - validating-webhook.yaml
+  - mutating-webhook.yaml

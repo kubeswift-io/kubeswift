@@ -1,0 +1,27 @@
+# cert-manager Certificate for webhook TLS.
+# Requires cert-manager to be installed. Creates a Secret with tls.crt and tls.key
+# for the webhook Service DNS name.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kubeswift-webhook-cert
+  namespace: kubeswift-system
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: webhook
+spec:
+  secretName: kubeswift-webhook-cert
+  duration: 8760h # 1 year
+  renewBefore: 360h # 15 days
+  subject:
+    organizations:
+      - kubeswift
+  commonName: kubeswift-webhook-service.kubeswift-system.svc
+  dnsNames:
+    - kubeswift-webhook-service
+    - kubeswift-webhook-service.kubeswift-system
+    - kubeswift-webhook-service.kubeswift-system.svc
+  issuerRef:
+    name: kubeswift-selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
