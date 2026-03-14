@@ -1,0 +1,56 @@
+{{- if .Values.webhook.enabled }}
+# MutatingWebhookConfiguration for SwiftGuest, SwiftImage, SwiftSeedProfile.
+# cert-manager CA injector populates caBundle via the inject-ca-from annotation.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: kubeswift-mutating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Values.namespace }}/kubeswift-webhook-cert
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: webhook
+webhooks:
+  - name: mswiftguest.swift.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /mutate-swift-kubeswift-io-v1alpha1-swiftguest
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["swift.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftguests"]
+  - name: mswiftimage.image.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /mutate-image-kubeswift-io-v1alpha1-swiftimage
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["image.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftimages"]
+  - name: mswiftseedprofile.seed.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /mutate-seed-kubeswift-io-v1alpha1-swiftseedprofile
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["seed.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftseedprofiles"]
+{{- end }}

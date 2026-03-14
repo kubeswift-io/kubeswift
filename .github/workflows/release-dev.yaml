@@ -1,0 +1,84 @@
+name: Release Dev
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
+  CHART_OCI: oci://ghcr.io/projectbeskar/charts/kubeswift
+
+jobs:
+  build-and-push:
+    name: Build and push images + chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set version
+        id: version
+        run: |
+          SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "version=0.0.0-dev.${SHORT}" >> $GITHUB_OUTPUT
+          echo "image_tag=sha-${SHORT}" >> $GITHUB_OUTPUT
+          echo "git_commit=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push controller-manager
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/controller-manager/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/controller-manager:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push swiftletd
+        uses: docker/build-push-action@v6
+        with:
+          context: ./rust
+          file: ./images/swiftletd/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/swiftletd:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+
+      - name: Configure Helm for OCI
+        run: helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and push chart
+        run: |
+          CHART_VERSION="${{ steps.version.outputs.version }}"
+          helm package charts/kubeswift --version "$CHART_VERSION" --app-version "$CHART_VERSION"
+          helm push kubeswift-$CHART_VERSION.tgz ${{ env.CHART_OCI }}

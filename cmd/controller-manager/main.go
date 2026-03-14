@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 
 	"k8s.io/klog/v2"
@@ -14,6 +15,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
+	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftimage"
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
@@ -27,12 +29,18 @@ const (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	klog.InitFlags(nil)
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("controller-manager %s (git %s)\n", version.Version, version.GitCommit)
+		os.Exit(0)
+	}
 
 	certDir := *webhookCertDir
 	if envCertDir := os.Getenv(webhookCertDirEnv); envCertDir != "" {
@@ -99,7 +107,7 @@ func main() {
 		}
 	}
 
-	klog.Info("starting manager")
+	klog.InfoS("starting manager", "version", version.Version, "git", version.GitCommit)
 	if err := mgr.Start(ctx); err != nil {
 		klog.ErrorS(err, "manager exited with error")
 		os.Exit(1)

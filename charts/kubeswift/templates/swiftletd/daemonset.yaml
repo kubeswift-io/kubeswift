@@ -1,0 +1,54 @@
+# DaemonSet for swiftletd on each node.
+# Note: SwiftGuest pods created by the controller also use the swiftletd image
+# as a launcher. This DaemonSet provides a node-level swiftletd for alternative
+# deployment models. Requires Cloud Hypervisor and /dev/kvm on nodes.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: swiftletd
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: swiftletd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: swiftletd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: swiftletd
+    spec:
+      serviceAccountName: swiftletd
+      hostPID: true
+      hostNetwork: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: swiftletd
+          image: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ .Values.swiftletd.image.tag }}
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: kubeswift-data
+              mountPath: /var/lib/kubeswift
+            - name: dev-kvm
+              mountPath: /dev/kvm
+          env:
+            - name: KUBESWIFT_RUN_DIR
+              value: /var/lib/kubeswift/run
+            - name: KUBESWIFT_INTENT_PATH
+              value: /var/lib/kubeswift/intent/runtime-intent.json
+          resources:
+            {{- toYaml .Values.swiftletd.resources | nindent 12 }}
+      volumes:
+        - name: kubeswift-data
+          hostPath:
+            path: /var/lib/kubeswift
+            type: DirectoryOrCreate
+        - name: dev-kvm
+          hostPath:
+            path: /dev/kvm
+            type: CharDevice

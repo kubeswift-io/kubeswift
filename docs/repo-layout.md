@@ -7,10 +7,12 @@ Repository: github.com/projectbeskar/kubeswift
 | Path | Purpose |
 |------|---------|
 | api/ | Go API types (swift, image, seed) |
-| cmd/ | Go binaries: controller-manager, webhook-server, swiftctl |
+| hack/ | Version scripts (version.sh, chart-version.sh) |
+| cmd/ | Go binaries: controller-manager, swiftctl |
 | internal/ | Go internal packages (controller, webhook, resolved) |
 | config/ | CRDs, RBAC, Kustomize, samples, deploy manifests |
-| images/ | Container build definitions (controller-manager, webhook-server, swiftletd) |
+| charts/ | Helm chart for OCI install (`oci://ghcr.io/projectbeskar/charts/kubeswift`) |
+| images/ | Container build definitions (controller-manager, swiftletd) |
 | rust/ | Rust workspace (swiftletd, swift-runtime, swift-seed, swift-ch-client) |
 | docs/ | Documentation |
 
@@ -18,8 +20,7 @@ Repository: github.com/projectbeskar/kubeswift
 
 | Binary | Path | Purpose |
 |--------|------|---------|
-| controller-manager | cmd/controller-manager/ | Controllers, reconciliation |
-| webhook-server | cmd/webhook-server/ | Admission/mutation webhooks |
+| controller-manager | cmd/controller-manager/ | Controllers, reconciliation; serves admission webhooks when `--webhook-enabled=true` |
 | swiftctl | cmd/swiftctl/ | CLI for operators |
 | swiftletd | rust/swiftletd/ | Node daemon; launches Cloud Hypervisor |
 
@@ -28,10 +29,10 @@ Repository: github.com/projectbeskar/kubeswift
 | Path | Purpose |
 |------|---------|
 | config/namespace/ | kubeswift-system namespace |
-| config/manager/ | controller-manager Deployment, RBAC, ServiceAccounts |
-| config/webhook/ | webhook-server Deployment and Service |
+| config/manager/ | controller-manager Deployment, RBAC, ServiceAccounts, webhook Service |
+| config/webhook/ | Certificate, Issuer, ValidatingWebhookConfiguration, MutatingWebhookConfiguration (webhooks served by controller-manager) |
 | config/daemonset/ | swiftletd DaemonSet |
-| config/default/ | Install entrypoint; composes namespace, manager, webhook, daemonset |
+| config/default/ | Install entrypoint; composes namespace, manager, daemonset |
 
 See [deploy.md](deploy.md) for deployment instructions.
 

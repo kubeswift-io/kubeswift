@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: controller-manager
+spec:
+  replicas: {{ .Values.controllerManager.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: controller-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: controller-manager
+    spec:
+      serviceAccountName: controller-manager
+      containers:
+        - name: controller-manager
+          image: {{ .Values.controllerManager.image.registry }}/controller-manager:{{ .Values.controllerManager.image.tag }}
+          args:
+            - --leader-elect
+            {{- if .Values.webhook.enabled }}
+            - --webhook-enabled=true
+            {{- else }}
+            - --webhook-enabled=false
+            {{- end }}
+          ports:
+            - containerPort: 9443
+              name: webhook
+          resources:
+            {{- toYaml .Values.controllerManager.resources | nindent 12 }}
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-cert
+          secret:
+            secretName: kubeswift-webhook-cert
+      {{- end }}

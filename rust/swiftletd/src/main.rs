@@ -6,12 +6,21 @@ use std::env;
 use std::path::Path;
 use std::sync::Arc;
 
+const VERSION: &str = env!("KUBESWIFT_VERSION");
+const GIT_COMMIT: &str = env!("KUBESWIFT_GIT_COMMIT");
+
 fn main() {
+    if env::args().any(|a| a == "--version" || a == "-V") {
+        eprintln!("swiftletd {} (git {})", VERSION, GIT_COMMIT);
+        std::process::exit(0);
+    }
+
     let intent_path =
         env::var("KUBESWIFT_INTENT_PATH").unwrap_or_else(|_| intent::INTENT_PATH.to_string());
 
     match intent::load_intent(&intent_path) {
         Ok(intent) => {
+            eprintln!("swiftletd: {} (git {})", VERSION, GIT_COMMIT);
             eprintln!("swiftletd: loaded intent for guest {}", intent.guest_id);
             eprintln!("  disk: {}", intent.disk_path());
             eprintln!(
