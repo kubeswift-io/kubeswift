@@ -2,6 +2,33 @@
 
 Common issues when running KubeSwift and how to resolve them.
 
+## Controller-manager CrashLoopBackOff (exit code 2)
+
+**Symptom:** controller-manager pod restarts repeatedly with `Exit Code: 2`.
+
+**Causes:**
+- Missing RBAC for leader election — controller uses `--leader-elect` and needs `coordination.k8s.io/leases`
+- Missing CRDs (SwiftGuest, SwiftImage, SwiftSeedProfile, SwiftGuestClass)
+- RBAC not applied or outdated
+
+**Actions:**
+```bash
+kubectl logs -n kubeswift-system deployment/controller-manager --previous
+```
+
+- If logs mention `leases` or `coordination.k8s.io`: ensure the controller-manager ClusterRole includes:
+  ```yaml
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "get", "update", "patch", "list", "watch"]
+  ```
+- Reapply RBAC and redeploy:
+  ```bash
+  kubectl apply -f config/manager/controller-manager-rbac.yaml
+  # or, with Helm: helm upgrade kubeswift ... (chart includes RBAC)
+  ```
+- Verify CRDs exist: `kubectl get crd | grep kubeswift`
+
 ## ImagePullBackOff (controller-manager, swiftletd)
 
 **Symptom:** Pods fail with `ErrImagePull` or `ImagePullBackOff` for `ghcr.io/projectbeskar/kubeswift/controller-manager:latest` or `swiftletd:latest`.
