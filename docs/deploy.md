@@ -1,5 +1,10 @@
 # KubeSwift Deployment
 
+> **Note:** This document is retained for reference. For the canonical install docs, see [docs/index.md](index.md) → [Install](install/):
+> - [Local cluster](install/local-cluster.md)
+> - [Remote cluster](install/remote-cluster.md)
+> - [Helm OCI](install/helm-oci.md)
+
 This document describes the minimal install flow: build images, deploy KubeSwift to a Kubernetes cluster, and undeploy. The minimal path does not include admission webhooks; it is sufficient for first-boot smoke testing.
 
 ## Install from OCI (remote clusters)
@@ -10,7 +15,7 @@ For remote clusters, install KubeSwift from the OCI Helm chart:
 
 - Helm 3+
 - `kubectl` configured for the cluster
-- Worker nodes with [worker-node preflight](worker-node-preflight.md) passing (for SwiftGuest workloads)
+- Worker nodes with [worker-node preflight](operator/worker-node-preflight.md) passing (for SwiftGuest workloads)
 
 ### Install command
 
@@ -54,7 +59,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <v
 | Tag `v*.*.*-rc.*` | `release-rc` | `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` |
 | Tag `v*.*.*` (no `-rc`) | `release-stable` | `vX.Y.Z` | `X.Y.Z` |
 
-See [releases.md](releases.md) for version stamping, Makefile targets, and release details.
+See [releases.md](releases.md) for version stamping, Makefile targets, and release details. See [install/helm-oci.md](install/helm-oci.md) for the canonical Helm OCI doc.
 
 ---
 
@@ -63,7 +68,7 @@ See [releases.md](releases.md) for version stamping, Makefile targets, and relea
 - Kubernetes cluster (1.28+)
 - `kubectl` configured for the cluster
 - Docker (or compatible) for building images
-- Worker nodes with [worker-node preflight](worker-node-preflight.md) passing (for SwiftGuest workloads)
+- Worker nodes with [worker-node preflight](operator/worker-node-preflight.md) passing (for SwiftGuest workloads)
 
 ## Repository layout
 

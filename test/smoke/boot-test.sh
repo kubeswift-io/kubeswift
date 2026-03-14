@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test: apply boot-first samples, verify each stage, wait for Ready/Running, assert conditions, cleanup.
 # Requires: kubectl, KubeSwift cluster with CRDs and controllers deployed.
-# See docs/smoke-verification.md for prerequisites and failure checks.
+# See docs/operator/smoke-verification.md for prerequisites and failure checks.
 #
 # Usage: ./boot-test.sh [--timeout-image MIN] [--timeout-guest MIN] [--no-cleanup]
 # Default: timeout-image=15, timeout-guest=5
