@@ -1,6 +1,6 @@
 # KubeSwift Makefile
 
-.PHONY: build build-go build-rust build-swiftletd-image generate smoke-test help
+.PHONY: build build-go build-rust build-swiftletd-image generate smoke-test preflight help
 
 help:
 	@echo "Targets:"
@@ -10,6 +10,7 @@ help:
 	@echo "  build-swiftletd-image  Build swiftletd container image"
 	@echo "  generate           Generate CRDs and deepcopy"
 	@echo "  smoke-test         Run boot smoke test (requires KubeSwift cluster)"
+	@echo "  preflight          Run worker-node readiness preflight (host checks only)"
 
 build: build-go build-rust
 
@@ -27,3 +28,6 @@ generate:
 
 smoke-test:
 	@test/smoke/boot-test.sh
+
+preflight:
+	@./scripts/kubeswift-preflight.sh
