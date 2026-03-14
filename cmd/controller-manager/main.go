@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	defaultWebhookPort  = 9443
-	defaultWebhookHost  = "0.0.0.0"
-	defaultCertDir      = "/tmp/k8s-webhook-server/serving-certs"
-	webhookCertDirEnv   = "WEBHOOK_CERT_DIR"
+	defaultWebhookPort = 9443
+	defaultWebhookHost = "0.0.0.0"
+	defaultCertDir     = "/tmp/k8s-webhook-server/serving-certs"
+	webhookCertDirEnv  = "WEBHOOK_CERT_DIR"
 )
 
 func main() {
