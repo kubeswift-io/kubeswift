@@ -1,7 +1,8 @@
 # DaemonSet for swiftletd on each node.
-# Note: SwiftGuest pods created by the controller also use the swiftletd image
-# as a launcher. This DaemonSet provides a node-level swiftletd for alternative
-# deployment models. Requires Cloud Hypervisor and /dev/kvm on nodes.
+# DISABLED BY DEFAULT: swiftletd is designed to run only inside SwiftGuest pods (as the launcher).
+# A standalone DaemonSet has no runtime-intent.json and will crash immediately.
+# Set swiftletd.daemonset.enabled=true only if you have a node-level intent provider (not implemented).
+{{- if .Values.swiftletd.daemonset.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -52,3 +53,4 @@ spec:
           hostPath:
             path: /dev/kvm
             type: CharDevice
+{{- end }}

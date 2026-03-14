@@ -23,6 +23,10 @@ controllerManager:
       memory: 512Mi
 
 swiftletd:
+  # DaemonSet: disabled by default. swiftletd is designed to run only inside SwiftGuest pods
+  # (as the launcher container). A standalone DaemonSet has no runtime intent and will crash.
+  daemonset:
+    enabled: false
   image:
     registry: ghcr.io/projectbeskar/kubeswift
     # Same as controllerManager; use tag: latest for local build+load.
