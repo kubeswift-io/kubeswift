@@ -4,7 +4,10 @@ IMAGE_TAG ?= latest
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
 IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
-CHART_OCI ?= oci://ghcr.io/projectbeskar/charts/kubeswift
+# Push destination: parent OCI repo only (Helm appends chart name from Chart.yaml)
+CHART_OCI_PUSH ?= oci://ghcr.io/projectbeskar/charts
+# Install/pull reference: full path including chart name
+CHART_OCI_INSTALL ?= oci://ghcr.io/projectbeskar/charts/kubeswift
 
 # Version stamping (defaults for local dev; overridden by release-* targets)
 VERSION ?= dev
@@ -65,7 +68,7 @@ package-chart:
 
 push-chart: package-chart
 	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \
-	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI_PUSH)
 
 print-version:
 	@eval $$(./hack/version.sh) && \
@@ -82,7 +85,7 @@ release-dev:
 	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
 	CHART_VER="$$CHART_VERSION" && \
 	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
-	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI_PUSH)
 
 release-rc:
 	@eval $$(./hack/version.sh) && \
@@ -90,7 +93,7 @@ release-rc:
 	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
 	CHART_VER="$$CHART_VERSION" && \
 	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
-	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI)
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI_PUSH)
 
 release-stable:
 	@eval $$(./hack/version.sh) && \
@@ -98,7 +101,7 @@ release-stable:
 	$(MAKE) push-images IMAGE_TAG="$$IMAGE_TAG" && \
 	CHART_VER="$$CHART_VERSION" && \
 	helm package charts/kubeswift --version "$$CHART_VER" --app-version "$$CHART_VER" && \
-	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI) && \
+	helm push kubeswift-$$CHART_VER.tgz $(CHART_OCI_PUSH) && \
 	echo "Create GitHub Release: gh release create $(VERSION_TAG) --generate-notes"
 
 generate:

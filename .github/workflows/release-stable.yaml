@@ -12,7 +12,8 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
-  CHART_OCI: oci://ghcr.io/projectbeskar/charts/kubeswift
+  CHART_OCI_PUSH: oci://ghcr.io/projectbeskar/charts
+  CHART_OCI_INSTALL: oci://ghcr.io/projectbeskar/charts/kubeswift
 
 jobs:
   build-and-push:
@@ -88,7 +89,7 @@ jobs:
       - name: Package and push chart
         run: |
           helm package charts/kubeswift --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
-          helm push kubeswift-${{ steps.version.outputs.version }}.tgz ${{ env.CHART_OCI }}
+          helm push kubeswift-${{ steps.version.outputs.version }}.tgz ${{ env.CHART_OCI_PUSH }}
 
   github-release:
     if: "!contains(github.ref_name, '-rc')"
@@ -110,7 +111,7 @@ jobs:
             ## Install
 
             ```bash
-            helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version ${{ needs.build-and-push.outputs.version }} -n kubeswift-system --create-namespace
+            helm install kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} -n kubeswift-system --create-namespace
             ```
 
             ## Images
