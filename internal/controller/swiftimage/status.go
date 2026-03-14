@@ -15,7 +15,7 @@ const (
 	ReasonImportFailed   = "ImportFailed"
 	ReasonValidateFailed = "ValidateFailed"
 	ReasonPrepareFailed  = "PrepareFailed"
-	ReasonUploadNotImpl = "UploadNotImplemented"
+	ReasonUploadNotImpl  = "UploadNotImplemented"
 )
 
 // SetPhase updates status.phase.

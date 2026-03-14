@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	importJobNamePrefix  = "swiftimage-import-"
-	importPVCNamePrefix  = "swiftimage-import-"
+	importJobNamePrefix   = "swiftimage-import-"
+	importPVCNamePrefix   = "swiftimage-import-"
 	importVolumeMountPath = "/data"
-	importOutputFile     = "image.raw"
+	importOutputFile      = "image.raw"
 )
 
 // ImportResult holds the outcome of an import attempt.

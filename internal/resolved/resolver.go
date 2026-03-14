@@ -4,8 +4,8 @@ import (
 	"context"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )

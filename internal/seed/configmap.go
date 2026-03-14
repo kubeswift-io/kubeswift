@@ -5,10 +5,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-
 const (
-	KeyUserData    = "user-data"
-	KeyMetaData    = "meta-data"
+	KeyUserData      = "user-data"
+	KeyMetaData      = "meta-data"
 	KeyNetworkConfig = "network-config"
 )
 

@@ -32,4 +32,3 @@ func TestBuildConfigMap_EmptyOmitted(t *testing.T) {
 		t.Error("networkConfig should be omitted when empty")
 	}
 }
-

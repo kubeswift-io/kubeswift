@@ -9,14 +9,14 @@ import (
 // ResolvedGuest is the normalized internal model produced by the resolver.
 // The controller uses only this type for runtime decisions after resolution succeeds.
 type ResolvedGuest struct {
-	GuestSettings  GuestSettings  `json:"guestSettings"`
-	Resources      Resources      `json:"resources"`
-	RootDisk       RootDisk       `json:"rootDisk"`
-	Networks       Networks       `json:"networks"`
-	Seed           *Seed          `json:"seed,omitempty"`
-	Lifecycle      Lifecycle      `json:"lifecycle"`
-	PreparedImage  PreparedImage  `json:"preparedImage"`
-	Meta           Meta           `json:"meta"`
+	GuestSettings GuestSettings `json:"guestSettings"`
+	Resources     Resources     `json:"resources"`
+	RootDisk      RootDisk      `json:"rootDisk"`
+	Networks      Networks      `json:"networks"`
+	Seed          *Seed         `json:"seed,omitempty"`
+	Lifecycle     Lifecycle     `json:"lifecycle"`
+	PreparedImage PreparedImage `json:"preparedImage"`
+	Meta          Meta          `json:"meta"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -49,12 +49,12 @@ type Networks struct {
 // Seed holds materialization inputs for cloud-init.
 // UserData, MetaData, NetworkData are inline strings. When *From is set, the renderer fetches from Secret/ConfigMap.
 type Seed struct {
-	Datasource      string                       `json:"datasource"`
-	UserData        string                       `json:"userData"`
+	Datasource      string                          `json:"datasource"`
+	UserData        string                          `json:"userData"`
 	UserDataFrom    *seedv1alpha1.SeedDataValueFrom `json:"userDataFrom,omitempty"`
-	MetaData        string                       `json:"metaData"`
+	MetaData        string                          `json:"metaData"`
 	MetaDataFrom    *seedv1alpha1.SeedDataValueFrom `json:"metaDataFrom,omitempty"`
-	NetworkData     string                       `json:"networkData"`
+	NetworkData     string                          `json:"networkData"`
 	NetworkDataFrom *seedv1alpha1.SeedDataValueFrom `json:"networkDataFrom,omitempty"`
 }
 
@@ -65,11 +65,11 @@ type Lifecycle struct {
 
 // PreparedImage holds the resolved image info from SwiftImage when Ready.
 type PreparedImage struct {
-	Path     string `json:"path"`     // PVC mount path (set by controller)
-	Format   string `json:"format"`
-	Size     int64  `json:"size"`
-	Ready    bool   `json:"ready"`
-	PVCName  string `json:"pvcName"`  // PVC name for pod volume creation (from preparedArtifact.pvcRef)
+	Path    string `json:"path"` // PVC mount path (set by controller)
+	Format  string `json:"format"`
+	Size    int64  `json:"size"`
+	Ready   bool   `json:"ready"`
+	PVCName string `json:"pvcName"` // PVC name for pod volume creation (from preparedArtifact.pvcRef)
 }
 
 // Meta holds guest identity for pod naming and logging.

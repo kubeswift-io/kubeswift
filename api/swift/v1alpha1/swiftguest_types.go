@@ -19,7 +19,7 @@ const (
 type SwiftGuestPhase string
 
 const (
-	SwiftGuestPhasePending     SwiftGuestPhase = "Pending"
+	SwiftGuestPhasePending    SwiftGuestPhase = "Pending"
 	SwiftGuestPhaseScheduling SwiftGuestPhase = "Scheduling"
 	SwiftGuestPhaseRunning    SwiftGuestPhase = "Running"
 	SwiftGuestPhaseStopped    SwiftGuestPhase = "Stopped"
@@ -31,14 +31,14 @@ type SwiftGuestSpec struct {
 	ImageRef       corev1.LocalObjectReference  `json:"imageRef"`
 	GuestClassRef  corev1.LocalObjectReference  `json:"guestClassRef"`
 	SeedProfileRef *corev1.LocalObjectReference `json:"seedProfileRef,omitempty"`
-	RunPolicy      RunPolicy                   `json:"runPolicy,omitempty"`
+	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`
 }
 
 // SwiftGuestStatus defines the observed state of SwiftGuest.
 type SwiftGuestStatus struct {
-	Phase      SwiftGuestPhase    `json:"phase,omitempty"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	NodeName   string            `json:"nodeName,omitempty"`
+	Phase      SwiftGuestPhase         `json:"phase,omitempty"`
+	Conditions []metav1.Condition      `json:"conditions,omitempty"`
+	NodeName   string                  `json:"nodeName,omitempty"`
 	PodRef     *corev1.ObjectReference `json:"podRef,omitempty"`
 }
 

@@ -10,14 +10,12 @@ use crate::VmConfig;
 /// Spawns the Cloud Hypervisor process with the given config.
 /// Returns the child process. The API socket will be created by CH when ready.
 pub fn spawn_ch(config: &VmConfig) -> Result<Child, std::io::Error> {
-    let binary = std::env::var("KUBESWIFT_CH_BINARY")
-        .unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
+    let binary =
+        std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
 
     let args = config.to_args();
 
-    std::process::Command::new(&binary)
-        .args(&args)
-        .spawn()
+    std::process::Command::new(&binary).args(&args).spawn()
 }
 
 /// Polls until the socket file exists, then returns.

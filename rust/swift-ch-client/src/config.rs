@@ -1,6 +1,5 @@
 //! VM configuration for Cloud Hypervisor.
 
-
 /// Cloud Hypervisor binary name. Override with KUBESWIFT_CH_BINARY env.
 pub const DEFAULT_CH_BINARY: &str = "cloud-hypervisor";
 

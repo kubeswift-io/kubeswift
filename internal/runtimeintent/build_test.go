@@ -14,12 +14,12 @@ type mockResolvedGuest struct {
 	guestID   string
 }
 
-func (m *mockResolvedGuest) HasSeed() bool           { return m.hasSeed }
+func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
 func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
-func (m *mockResolvedGuest) GetCPU() int             { return m.cpu }
-func (m *mockResolvedGuest) GetMemoryMiB() int       { return m.memory }
-func (m *mockResolvedGuest) GetLifecycle() string    { return m.lifecycle }
-func (m *mockResolvedGuest) GetGuestID() string      { return m.guestID }
+func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
+func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }
+func (m *mockResolvedGuest) GetLifecycle() string      { return m.lifecycle }
+func (m *mockResolvedGuest) GetGuestID() string        { return m.guestID }
 
 func TestBuild(t *testing.T) {
 	rg := &mockResolvedGuest{
@@ -60,8 +60,8 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	intent := &RuntimeIntent{
 		RootDisk:  RootDiskSpec{Path: DisksRootPath, Format: "raw"},
 		SeedPath:  SeedPath,
-		CPU:      2,
-		Memory:   2048,
+		CPU:       2,
+		Memory:    2048,
 		Lifecycle: "start",
 		GuestID:   "test",
 	}

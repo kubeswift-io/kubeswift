@@ -10,12 +10,12 @@ import (
 type SwiftImagePhase string
 
 const (
-	SwiftImagePhasePending     SwiftImagePhase = "Pending"
-	SwiftImagePhaseImporting   SwiftImagePhase = "Importing"
+	SwiftImagePhasePending    SwiftImagePhase = "Pending"
+	SwiftImagePhaseImporting  SwiftImagePhase = "Importing"
 	SwiftImagePhaseValidating SwiftImagePhase = "Validating"
-	SwiftImagePhasePreparing   SwiftImagePhase = "Preparing"
-	SwiftImagePhaseReady       SwiftImagePhase = "Ready"
-	SwiftImagePhaseFailed      SwiftImagePhase = "Failed"
+	SwiftImagePhasePreparing  SwiftImagePhase = "Preparing"
+	SwiftImagePhaseReady      SwiftImagePhase = "Ready"
+	SwiftImagePhaseFailed     SwiftImagePhase = "Failed"
 )
 
 // HTTPSource specifies an HTTP(S) URL to fetch the image from.
@@ -50,8 +50,8 @@ type PVCObjectReference struct {
 // PreparedArtifactRef references the prepared runtime artifact.
 type PreparedArtifactRef struct {
 	PVCRef *PVCObjectReference `json:"pvcRef,omitempty"`
-	Format DiskFormat         `json:"format"`
-	Size   *resource.Quantity `json:"size,omitempty"`
+	Format DiskFormat          `json:"format"`
+	Size   *resource.Quantity  `json:"size,omitempty"`
 }
 
 // DiskFormat is the disk image format.
@@ -71,8 +71,8 @@ type SwiftImageSpec struct {
 
 // SwiftImageStatus defines the observed state of SwiftImage.
 type SwiftImageStatus struct {
-	Phase            SwiftImagePhase    `json:"phase,omitempty"`
-	Conditions       []metav1.Condition  `json:"conditions,omitempty"`
+	Phase            SwiftImagePhase      `json:"phase,omitempty"`
+	Conditions       []metav1.Condition   `json:"conditions,omitempty"`
 	PreparedArtifact *PreparedArtifactRef `json:"preparedArtifact,omitempty"`
 }
 
