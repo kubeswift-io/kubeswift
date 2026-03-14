@@ -1,0 +1,8 @@
+[package]
+name = "swift-ch-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swift_ch_client"
+path = "src/lib.rs"

@@ -1,0 +1,15 @@
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# Rust
+/target/
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

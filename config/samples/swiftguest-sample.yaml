@@ -1,0 +1,13 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: sample
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-cloud
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running

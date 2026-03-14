@@ -1,0 +1,11 @@
+[package]
+name = "swift-seed"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swift_seed"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3"

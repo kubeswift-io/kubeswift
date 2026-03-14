@@ -1,0 +1,11 @@
+[package]
+name = "swift-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swift_runtime"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3"
