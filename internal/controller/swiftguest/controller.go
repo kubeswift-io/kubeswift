@@ -24,10 +24,18 @@ import (
 const (
 	SeedConfigMapSuffix = "-seed"
 
-	// defaultNetworkConfig is used when SwiftSeedProfile has no networkData. Enables DHCP on eth0.
+	// defaultNetworkConfig is used when SwiftSeedProfile has no networkData.
+	// Matches both predictable naming (en*: ens3, enp0s3, eno1) and legacy (eth*: eth0).
+	// Ubuntu/Debian use en*; Rocky/RHEL may use eth0 when net.ifnames=0.
 	defaultNetworkConfig = `version: 2
 ethernets:
-  eth0:
+  predictable:
+    match:
+      name: en*
+    dhcp4: true
+  legacy:
+    match:
+      name: eth*
     dhcp4: true
 `
 )

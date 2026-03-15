@@ -135,6 +135,24 @@ if [[ "$GUEST_RUNNING" != "True" ]]; then
 fi
 echo "Conditions OK"
 
+# Stage 6: Verify networking (status.network.primaryIP)
+echo "Waiting for status.network.primaryIP (timeout 2m)..."
+PRIMARY_IP=""
+for i in $(seq 1 24); do
+  PRIMARY_IP=$(kubectl get swiftguest sample -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}' 2>/dev/null || true)
+  if [[ -n "$PRIMARY_IP" ]]; then
+    break
+  fi
+  sleep 5
+done
+if [[ -z "$PRIMARY_IP" ]]; then
+  echo "FAIL: status.network.primaryIP not populated (networking may not be working)"
+  kubectl describe swiftguest sample -n "$NAMESPACE" || true
+  kubectl logs "$POD_NAME" -n "$NAMESPACE" -c launcher --tail=30 2>/dev/null || true
+  exit 1
+fi
+echo "status.network.primaryIP=$PRIMARY_IP"
+
 echo ""
 echo "=== Smoke test PASSED ==="
 

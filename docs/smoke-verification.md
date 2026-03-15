@@ -181,6 +181,23 @@ kubectl logs <pod-name> -n <namespace> -c launcher
 
 **Remediation:** Apply RBAC; check launcher logs; verify GuestRunning is reported.
 
+### Stage 6: Networking (status.network.primaryIP)
+
+**Expected:** When SwiftGuest has seedProfileRef (enabling networking), `status.network.primaryIP` is populated within ~2 min of Running. The guest receives an IP via DHCP on the pod network.
+
+**On failure:**
+```bash
+kubectl get swiftguest sample -n <namespace> -o jsonpath='{.status.network}'
+kubectl logs <pod-name> -n <namespace> -c launcher | grep -E "lease|guest IP|timeout"
+```
+
+**Common causes:**
+- Interface name mismatch (fixed: default network-config uses `match: name: en*` and `eth*`)
+- Lease poll timeout (VM boot + DHCP took too long)
+- dnsmasq or bridge setup failed
+
+**Remediation:** See [guest-networking-troubleshooting.md](guest-networking-troubleshooting.md).
+
 ---
 
 ## Failure Check Commands Summary
@@ -192,6 +209,7 @@ kubectl logs <pod-name> -n <namespace> -c launcher
 | Seed missing | `kubectl get configmap sample-seed -n <namespace>`; `kubectl get pod <pod> -o yaml` |
 | swiftletd error | `kubectl logs <pod-name> -n <namespace> -c launcher` |
 | SwiftGuest not Running | `kubectl describe swiftguest sample -n <namespace>`; `kubectl logs <pod-name> -n <namespace> -c launcher` |
+| primaryIP not populated | `kubectl get swiftguest sample -o jsonpath='{.status.network}'`; launcher logs |
 
 ---
 

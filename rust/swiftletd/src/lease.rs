@@ -29,7 +29,8 @@ fn parse_first_lease(contents: &str) -> Option<String> {
 }
 
 /// Spawns a background thread that polls the lease file and patches the pod annotation when IP found.
-/// Stops after patching or after max_attempts (default 60 = 2 min at 2s interval).
+/// Stops after patching or after max_attempts (default 120 = 4 min at 2s interval).
+/// First boot of cloud images can take 60–90s for cloud-init + DHCP.
 pub fn spawn_lease_poller(
     lease_path: impl AsRef<Path> + Send + 'static,
     namespace: String,
@@ -38,7 +39,7 @@ pub fn spawn_lease_poller(
     let path = lease_path.as_ref().to_path_buf();
     thread::spawn(move || {
         const INTERVAL: Duration = Duration::from_secs(2);
-        const MAX_ATTEMPTS: u32 = 60;
+        const MAX_ATTEMPTS: u32 = 120;
 
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
