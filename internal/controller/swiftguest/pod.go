@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -34,6 +35,15 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: intentConfigMapName},
+				},
+			},
+		},
+		{
+			Name: "dev-kvm",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev/kvm",
+					Type: ptr.To(corev1.HostPathType("CharDevice")),
 				},
 			},
 		},
@@ -108,13 +118,14 @@ func VolumeMountPaths() (imagePath, seedPath, intentDir string) {
 }
 
 // AddVolumeMounts adds the standard volume mounts to a container.
-// Caller must ensure volumes exist for image, seed (if present), and intent.
+// Caller must ensure volumes exist for image, seed (if present), intent, and dev-kvm.
 func AddVolumeMounts(mounts *[]corev1.VolumeMount, hasSeed bool) {
 	imagePath, seedPath, intentDir := VolumeMountPaths()
 	*mounts = append(*mounts,
 		corev1.VolumeMount{Name: "run", MountPath: RunDirPath},
 		corev1.VolumeMount{Name: "root-disk", MountPath: imagePath},
 		corev1.VolumeMount{Name: "runtime-intent", MountPath: intentDir},
+		corev1.VolumeMount{Name: "dev-kvm", MountPath: "/dev/kvm"},
 	)
 	if hasSeed {
 		*mounts = append(*mounts, corev1.VolumeMount{Name: "seed", MountPath: seedPath})
