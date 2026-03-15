@@ -18,6 +18,8 @@ pub struct VmConfig {
     pub seed_path: String,
     /// Optional path for serial socket. When set, CH creates a Unix socket for interactive serial console.
     pub serial_socket_path: Option<String>,
+    /// Optional path to firmware (e.g. hypervisor-fw). Required for disk boot; CH creates serial device when VM is properly initialized.
+    pub firmware_path: Option<String>,
 }
 
 impl VmConfig {
@@ -33,6 +35,12 @@ impl VmConfig {
             "--cpus".to_string(),
             format!("boot={}", self.cpus.max(1)),
         ];
+
+        // --kernel (firmware) required for disk boot; CH creates serial device when VM is properly initialized.
+        if let Some(ref path) = self.firmware_path {
+            args.push("--kernel".to_string());
+            args.push(path.clone());
+        }
 
         // --disk accepts multiple values: --disk path=/foo path=/bar
         args.push("--disk".to_string());

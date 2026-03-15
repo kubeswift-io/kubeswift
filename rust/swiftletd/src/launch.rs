@@ -36,6 +36,7 @@ where
         api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
         seed_path,
         serial_socket_path: Some(serial_socket_path),
+        firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
     };
 
     let args = config.to_args();
