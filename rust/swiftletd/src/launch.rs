@@ -25,8 +25,9 @@ pub fn run<F>(
 where
     F: FnOnce(),
 {
+    // CH expects disk image (ISO), not directory. main.rs creates seed.iso from NoCloud dir.
     let seed_path = if intent.has_seed() {
-        runtime_dir.seed_dir().to_string_lossy().to_string()
+        runtime_dir.root().join("seed.iso").to_string_lossy().to_string()
     } else {
         String::new()
     };
