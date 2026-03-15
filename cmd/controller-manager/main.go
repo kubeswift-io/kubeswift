@@ -6,7 +6,9 @@ import (
 	"os"
 
 	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
@@ -40,6 +42,8 @@ func main() {
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	klog.InitFlags(nil)
 	flag.Parse()
+
+	crlog.SetLogger(klogr.New())
 
 	if *showVersion {
 		fmt.Printf("controller-manager %s (git %s)\n", version.Version, version.GitCommit)
