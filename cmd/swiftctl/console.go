@@ -23,9 +23,9 @@ var consoleCmd = &cobra.Command{
 	Use:          "console [guest-name]",
 	Short:        "Attach to VM serial console",
 	SilenceUsage: true,
-	Long: `Stream VM serial/console output by exec'ing into the launcher pod
-and running tail -f on the console file. Requires the guest to be Running.
-Use Ctrl+C to exit.`,
+	Long: `Attach to the VM serial console for interactive keyboard access.
+Execs into the launcher pod and connects to the serial socket via socat.
+Requires the guest to be Running. Use Ctrl+C to exit.`,
 	Example: `  swiftctl console sample
   swiftctl -n myns console my-guest`,
 	Args: cobra.ExactArgs(1),
@@ -63,7 +63,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	consolePath := "/var/lib/kubeswift/run/" + cli.GuestID(ns, guestName) + "/console.log"
+	serialSocket := "/var/lib/kubeswift/run/" + cli.GuestID(ns, guestName) + "/serial.sock"
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -77,9 +77,11 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: cli.LauncherContainer,
-			Command:   []string{"tail", "-f", consolePath},
+			Command:   []string{"socat", "-,crnl", "UNIX-CONNECT:" + serialSocket},
+			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
+			TTY:       true,
 		}, clientgoscheme.ParameterCodec)
 
 	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
@@ -98,8 +100,10 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}()
 
 	streamErr := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
+		Tty:    true,
 	})
 	if streamErr != nil {
 		if ctx.Err() != nil {

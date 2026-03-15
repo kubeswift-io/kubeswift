@@ -31,7 +31,7 @@ make build-go
 
 | Command | Description |
 |---------|-------------|
-| `swiftctl console <guest>` | Stream VM serial/console output. Execs into the launcher pod and runs `tail -f` on the VM console file. Requires guest phase=Running. Use Ctrl+C to exit. |
+| `swiftctl console <guest>` | Attach to VM serial console for interactive keyboard access. Execs into the launcher pod and connects via socat to the serial socket. Requires guest phase=Running. Use Ctrl+C to exit. |
 
 ## Global flags
 
@@ -62,13 +62,13 @@ swiftctl -n myns console my-guest
 
 ## Console transport
 
-swiftctl console uses **exec + tail** of the VM console file. It does not use port-forward, websocket, or any custom transport:
+swiftctl console uses **exec + socat** for interactive serial console access. It does not use port-forward, websocket, or any custom transport:
 
-1. swiftletd passes `--console file=<path>` to Cloud Hypervisor when launching the VM
-2. VM serial/virtio-console output is written to `/var/lib/kubeswift/run/<namespace>-<name>/console.log`
-3. swiftctl execs into the launcher container and runs `tail -f` on that file, streaming to stdout
+1. swiftletd passes `--serial socket=<path>` to Cloud Hypervisor when launching the VM
+2. Cloud Hypervisor creates a Unix socket at `/var/lib/kubeswift/run/<namespace>-<name>/serial.sock`
+3. swiftctl execs into the launcher container and runs `socat -,crnl UNIX-CONNECT:<path>` for bidirectional keyboard access
 
-**Prerequisites:** The guest must be Running. Clusters that restrict `pods/exec` will not support console access; use SSH via cloud-init as an alternative.
+**Prerequisites:** The guest must be Running. The swiftletd image includes socat. Clusters that restrict `pods/exec` will not support console access; use SSH via cloud-init as an alternative.
 
 ## Exit codes
 

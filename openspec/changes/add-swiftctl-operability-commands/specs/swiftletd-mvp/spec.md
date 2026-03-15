@@ -4,7 +4,7 @@
 
 ### Requirement: Cloud Hypervisor process launch
 
-swiftletd MUST launch Cloud Hypervisor as a child process. It MUST use the runtime intent (disk path, cpu, memory) to configure the VM. It MUST use rust/swift-ch-client for spawn and socket communication. It MUST pass `--console file=<runtime-dir>/console.log` to Cloud Hypervisor so VM serial/virtio-console output is written to a file for operator access via swiftctl console.
+swiftletd MUST launch Cloud Hypervisor as a child process. It MUST use the runtime intent (disk path, cpu, memory) to configure the VM. It MUST use rust/swift-ch-client for spawn and socket communication. It MUST pass `--serial socket=<runtime-dir>/serial.sock` and `--console off` to Cloud Hypervisor so VM serial console is exposed via a Unix socket for interactive operator access via swiftctl console.
 
 #### Scenario: CH process spawned
 
@@ -16,7 +16,7 @@ swiftletd MUST launch Cloud Hypervisor as a child process. It MUST use the runti
 - **WHEN** CH is launched
 - **THEN** disk path, cpu, and memory are taken from the runtime intent
 
-#### Scenario: VM console output to file
+#### Scenario: VM serial console via socket
 
 - **WHEN** swiftletd launches Cloud Hypervisor
-- **THEN** it passes `--console file=<runtime-dir>/console.log` so VM serial/console output is written to a file in the per-guest runtime directory, enabling swiftctl console to stream it via exec
+- **THEN** it passes `--serial socket=<runtime-dir>/serial.sock` and `--console off` so VM serial console is exposed via a Unix socket in the per-guest runtime directory, enabling swiftctl console to connect via socat for interactive access

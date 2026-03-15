@@ -26,6 +26,7 @@ LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Cloud Hypervisor static binary (v37.0+)

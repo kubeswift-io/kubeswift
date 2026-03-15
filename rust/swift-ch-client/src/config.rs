@@ -16,8 +16,8 @@ pub struct VmConfig {
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
     pub seed_path: String,
-    /// Optional path for VM console output. When set, CH writes serial/console to this file.
-    pub console_path: Option<String>,
+    /// Optional path for serial socket. When set, CH creates a Unix socket for interactive serial console.
+    pub serial_socket_path: Option<String>,
 }
 
 impl VmConfig {
@@ -43,13 +43,14 @@ impl VmConfig {
             args.push(format!("path={}", self.seed_path));
         }
 
-        if let Some(ref path) = self.console_path {
-            // Serial: Linux cloud images typically use console=ttyS0 for boot output
+        if let Some(ref path) = self.serial_socket_path {
+            // Serial socket: bidirectional; connect with socat for interactive console.
+            // Linux cloud images use console=ttyS0 (serial) for kernel/login output.
             args.push("--serial".to_string());
-            args.push(format!("file={}", path));
-            // Virtio-console: for hvc0 output if guest uses it
+            args.push(format!("socket={}", path));
+            // Disable virtio-console; serial is the interactive console.
             args.push("--console".to_string());
-            args.push(format!("file={}", path));
+            args.push("off".to_string());
         }
 
         args

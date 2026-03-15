@@ -23,9 +23,9 @@ where
         String::new()
     };
 
-    let console_path = runtime_dir
+    let serial_socket_path = runtime_dir
         .root()
-        .join("console.log")
+        .join("serial.sock")
         .to_string_lossy()
         .to_string();
 
@@ -35,7 +35,7 @@ where
         cpus: intent.cpu.max(1),
         api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
         seed_path,
-        console_path: Some(console_path),
+        serial_socket_path: Some(serial_socket_path),
     };
 
     let mut child =

@@ -32,12 +32,12 @@ swiftctl MUST provide start, stop, and restart commands that operate on SwiftGue
 
 ### Requirement: swiftctl console access
 
-swiftctl MUST provide a console command that streams VM serial/console output. It MUST use exec into the launcher pod to run `tail -f` on the VM console file produced by Cloud Hypervisor. It MUST NOT invent runtime endpoints or transport mechanisms that do not exist.
+swiftctl MUST provide a console command that attaches to the VM serial console for interactive keyboard access. It MUST use exec into the launcher pod to run `socat -,crnl UNIX-CONNECT:<path>` for the serial socket produced by Cloud Hypervisor. It MUST NOT invent runtime endpoints or transport mechanisms that do not exist.
 
 #### Scenario: Console attaches when guest is Running
 
 - **WHEN** an operator runs `swiftctl console <guest>` and the guest phase is Running
-- **THEN** swiftctl resolves the guest pod, execs into the launcher container, and runs `tail -f` on `/var/lib/kubeswift/run/<namespace>-<name>/console.log`, streaming output to stdout
+- **THEN** swiftctl resolves the guest pod, execs into the launcher container, and runs `socat -,crnl UNIX-CONNECT:/var/lib/kubeswift/run/<namespace>-<name>/serial.sock` with TTY for interactive access
 
 #### Scenario: Console fails when guest not Running
 
@@ -103,4 +103,4 @@ The repository MUST document how swiftctl interacts with SwiftGuest resources an
 #### Scenario: Console transport documented
 
 - **WHEN** an operator reads the console documentation
-- **THEN** they understand that console uses exec + tail of the VM console file in the launcher pod, not port-forward or websocket
+- **THEN** they understand that console uses exec + socat to connect to the serial socket in the launcher pod, not port-forward or websocket
