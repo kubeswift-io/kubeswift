@@ -53,7 +53,10 @@ impl VmConfig {
 
         if let Some(ref path) = self.serial_socket_path {
             // Serial socket: bidirectional; connect with socat for interactive console.
-            // Linux cloud images use console=ttyS0 (serial) for kernel/login output.
+            // Force kernel to use serial (ttyS0) regardless of image default; some images use hvc0.
+            // Include root= for firmware boot; Ubuntu cloud images use /dev/vda1.
+            args.push("--cmdline".to_string());
+            args.push("console=ttyS0,115200n8 root=/dev/vda1 rw".to_string());
             args.push("--serial".to_string());
             args.push(format!("socket={}", path));
             // Disable virtio-console; serial is the interactive console.
