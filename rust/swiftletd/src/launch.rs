@@ -7,6 +7,14 @@ use swift_runtime::RuntimeDir;
 
 use crate::intent::RuntimeIntent;
 
+/// Remove stale socket files before CH bind. CH does not clean up on crash; restart fails with "Address in use".
+fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
+    let api_sock = runtime_dir.api_socket();
+    let serial_sock = runtime_dir.root().join("serial.sock");
+    let _ = std::fs::remove_file(&api_sock);
+    let _ = std::fs::remove_file(&serial_sock);
+}
+
 /// Runs the VM: spawns CH, waits for socket, monitors process until exit.
 /// Calls `on_socket_ready` when the API socket is available (VM running).
 pub fn run<F>(
@@ -38,6 +46,8 @@ where
         serial_socket_path: Some(serial_socket_path),
         firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
     };
+
+    remove_stale_sockets(runtime_dir);
 
     let args = config.to_args();
     eprintln!("swiftletd: spawning cloud-hypervisor with args: {:?}", args);
