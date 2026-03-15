@@ -23,7 +23,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	}
 	return &RuntimeIntent{
 		RootDisk: RootDiskSpec{
-			Path:   DisksRootPath,
+			Path:   DisksRootPath + "/" + RootDiskImageFile,
 			Format: rg.GetRootDiskFormat(),
 		},
 		SeedPath:  seedPath,

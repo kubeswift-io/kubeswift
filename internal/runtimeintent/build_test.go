@@ -31,8 +31,9 @@ func TestBuild(t *testing.T) {
 		guestID:   "test-guest",
 	}
 	intent := Build(rg)
-	if intent.RootDisk.Path != DisksRootPath {
-		t.Errorf("rootDisk.path = %q, want %q", intent.RootDisk.Path, DisksRootPath)
+	wantPath := DisksRootPath + "/" + RootDiskImageFile
+	if intent.RootDisk.Path != wantPath {
+		t.Errorf("rootDisk.path = %q, want %q", intent.RootDisk.Path, wantPath)
 	}
 	if intent.RootDisk.Format != "raw" {
 		t.Errorf("rootDisk.format = %q, want raw", intent.RootDisk.Format)
@@ -58,7 +59,7 @@ func TestBuildNoSeed(t *testing.T) {
 
 func TestSerializeParseRoundtrip(t *testing.T) {
 	intent := &RuntimeIntent{
-		RootDisk:  RootDiskSpec{Path: DisksRootPath, Format: "raw"},
+		RootDisk:  RootDiskSpec{Path: DisksRootPath + "/" + RootDiskImageFile, Format: "raw"},
 		SeedPath:  SeedPath,
 		CPU:       2,
 		Memory:    2048,
