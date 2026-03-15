@@ -7,6 +7,7 @@ Common issues when running KubeSwift and how to resolve them.
 **Symptom:** controller-manager pod restarts repeatedly with `Exit Code: 2`.
 
 **Causes:**
+- `flag provided but not defined: -leader-elect` — controller-manager binary did not support `--leader-elect` (fixed in recent builds; rebuild and redeploy)
 - Missing RBAC for leader election — controller uses `--leader-elect` and needs `coordination.k8s.io/leases`
 - Missing CRDs (SwiftGuest, SwiftImage, SwiftSeedProfile, SwiftGuestClass)
 - RBAC not applied or outdated
@@ -28,6 +29,14 @@ kubectl logs -n kubeswift-system deployment/controller-manager --previous
   # or, with Helm: helm upgrade kubeswift ... (chart includes RBAC)
   ```
 - Verify CRDs exist: `kubectl get crd | grep kubeswift`
+
+## swiftletd DaemonSet not deployed
+
+**Symptom:** No swiftletd pods in the cluster.
+
+**Cause:** The swiftletd DaemonSet is **disabled by default** (`swiftletd.daemonset.enabled: false`). swiftletd is designed to run only inside SwiftGuest pods as the launcher container. A standalone DaemonSet has no runtime intent and would crash immediately.
+
+**Fix:** No action needed. swiftletd runs as a sidecar when you create SwiftGuest resources. Enable the DaemonSet only if you have a custom setup that provides runtime intent to each node.
 
 ## ImagePullBackOff (controller-manager, swiftletd)
 

@@ -22,15 +22,19 @@ import (
 )
 
 const (
-	defaultWebhookPort = 9443
-	defaultWebhookHost = "0.0.0.0"
-	defaultCertDir     = "/tmp/k8s-webhook-server/serving-certs"
-	webhookCertDirEnv  = "WEBHOOK_CERT_DIR"
+	defaultWebhookPort      = 9443
+	defaultWebhookHost      = "0.0.0.0"
+	defaultCertDir          = "/tmp/k8s-webhook-server/serving-certs"
+	webhookCertDirEnv       = "WEBHOOK_CERT_DIR"
+	leaderElectionID        = "kubeswift-controller-manager"
+	leaderElectionNSEnv     = "POD_NAMESPACE"
+	defaultLeaderElectionNS = "kubeswift-system"
 )
 
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
+	leaderElect := flag.Bool("leader-elect", false, "Enable leader election for controller manager")
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
@@ -47,10 +51,18 @@ func main() {
 		certDir = envCertDir
 	}
 
+	leaderElectionNS := defaultLeaderElectionNS
+	if ns := os.Getenv(leaderElectionNSEnv); ns != "" {
+		leaderElectionNS = ns
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 
 	mgrOpts := ctrl.Options{
-		Scheme: scheme.Scheme,
+		Scheme:                  scheme.Scheme,
+		LeaderElection:          *leaderElect,
+		LeaderElectionID:        leaderElectionID,
+		LeaderElectionNamespace: leaderElectionNS,
 	}
 	if *webhookEnabled {
 		mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{

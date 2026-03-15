@@ -25,6 +25,10 @@ spec:
           env:
             - name: KUBESWIFT_LAUNCHER_IMAGE
               value: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ include "kubeswift.imageTag" (dict "tag" .Values.swiftletd.image.tag "appVersion" .Chart.AppVersion) }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           args:
             - --leader-elect
             {{- if .Values.webhook.enabled }}
