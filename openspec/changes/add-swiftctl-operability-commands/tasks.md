@@ -1,8 +1,8 @@
-## 1. Prerequisite: Cloud Hypervisor console file support
+## 1. Prerequisite: Cloud Hypervisor serial socket support
 
-- [ ] 1.1 Add `console_path: Option<String>` to `VmConfig` in rust/swift-ch-client/src/config.rs
-- [ ] 1.2 When `console_path` is `Some(path)`, append `--console file=<path>` to CH args in `to_args()`
-- [ ] 1.3 In rust/swiftletd launch flow, pass `console_path: Some(runtime_dir.root().join("console.log"))` when building VmConfig
+- [x] 1.1 Add `serial_socket_path: Option<String>` to `VmConfig` in rust/swift-ch-client/src/config.rs
+- [x] 1.2 When `serial_socket_path` is `Some(path)`, append `--serial socket=<path>` and `--console off` to CH args in `to_args()`
+- [x] 1.3 In rust/swiftletd launch flow, pass `serial_socket_path: Some(runtime_dir.root().join("serial.sock"))` when building VmConfig
 
 ## 2. Lifecycle commands
 
@@ -15,9 +15,9 @@
 
 ## 3. Console command
 
-- [ ] 3.1 Implement `swiftctl console <guest>`: resolve pod, exec `tail -f /var/lib/kubeswift/run/<namespace>-<name>/console.log` in launcher container
-- [ ] 3.2 Use exec.Stream to stream output to stdout; handle SIGINT for clean exit
-- [ ] 3.3 Fail with clear errors when guest not found, pod not found, or guest phase not Running
+- [x] 3.1 Implement `swiftctl console <guest>`: resolve pod, exec `socat -,crnl UNIX-CONNECT:/var/lib/kubeswift/run/<namespace>-<name>/serial.sock` in launcher container with TTY
+- [x] 3.2 Use exec.Stream with Stdin/Stdout/Tty for interactive access; handle SIGINT for clean exit
+- [x] 3.3 Fail with clear errors when guest not found, pod not found, or guest phase not Running
 
 ## 4. Release integration
 

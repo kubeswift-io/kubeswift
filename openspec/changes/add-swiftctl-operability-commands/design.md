@@ -11,7 +11,7 @@ KubeSwift has a working first-boot path: SwiftGuest controller creates a pod, sw
 - swiftletd runs in the launcher container; when `lifecycle=stop` in runtime intent, it exits without launching CH
 - Controller does not delete the pod when runPolicy changes; pod must be deleted to force recreation with new intent
 
-**Current console state:** Cloud Hypervisor is launched without `--console`; VM output is not captured. swift-ch-client does not pass console options.
+**Current console state:** Cloud Hypervisor is launched with `--serial socket=<path>` to create a Unix socket for interactive serial console. swift-ch-client passes `serial_socket_path`; swiftctl uses socat to connect.
 
 ## Goals / Non-Goals
 
@@ -40,16 +40,16 @@ KubeSwift has a working first-boot path: SwiftGuest controller creates a pod, sw
 
 **Rationale:** runPolicy and lifecycle already exist; controller and swiftletd honor them. Pod deletion forces recreation with updated intent. No controller changes.
 
-### 2. Console transport: exec + tail of VM console file
+### 2. Console transport: exec + socat for interactive serial console
 
-**Choice:** swiftctl console uses `kubectl exec` into the launcher pod to run `tail -f` on a VM console file. The file is produced by Cloud Hypervisor when launched with `--console file=<path>`.
+**Choice:** swiftctl console uses `kubectl exec` into the launcher pod to run `socat -,crnl UNIX-CONNECT:<path>` for the serial socket. Cloud Hypervisor creates the socket when launched with `--serial socket=<path>`.
 
 **Exact flow:**
-1. swiftletd passes `--console file=<runtime-dir>/console.log` to Cloud Hypervisor (path: `/var/lib/kubeswift/run/<guest-id>/console.log`; guest-id = `namespace-name` per swift-runtime sanitization)
-2. VM serial/virtio-console output is written to that file
-3. swiftctl console: resolve SwiftGuest → pod → exec into launcher container → `tail -f /var/lib/kubeswift/run/<namespace>-<name>/console.log`
+1. swiftletd passes `--serial socket=<runtime-dir>/serial.sock` and `--console off` to Cloud Hypervisor (path: `/var/lib/kubeswift/run/<guest-id>/serial.sock`; guest-id = `namespace-name` per swift-runtime sanitization)
+2. Cloud Hypervisor creates a Unix socket; VM serial (ttyS0) is bidirectional over the socket
+3. swiftctl console: resolve SwiftGuest → pod → exec into launcher container → `socat -,crnl UNIX-CONNECT:/var/lib/kubeswift/run/<namespace>-<name>/serial.sock` with TTY for interactive keyboard access
 
-**No invented mechanisms:** Uses existing exec, existing runtime dir layout, Cloud Hypervisor's native `--console file=` support.
+**No invented mechanisms:** Uses existing exec, existing runtime dir layout, Cloud Hypervisor's native `--serial socket=` support (PR #5708).
 
 ### 3. Guest discovery
 
@@ -80,9 +80,9 @@ swiftctl [global flags] <command> [command flags] <guest-name>
 
 Errors to stderr; stdout for console stream only.
 
-### 6. swiftletd change: console file path
+### 6. swiftletd change: serial socket path
 
-Add `--console file=<runtime-dir>/console.log` to CH args in swift-ch-client. Path: `/var/lib/kubeswift/run/<guest-id>/console.log`. Extend `VmConfig` with optional `console_path`; swiftletd passes it when building config.
+Add `--serial socket=<runtime-dir>/serial.sock` and `--console off` to CH args in swift-ch-client. Path: `/var/lib/kubeswift/run/<guest-id>/serial.sock`. Extend `VmConfig` with optional `serial_socket_path`; swiftletd passes it when building config. Add socat to the swiftletd image for interactive console access.
 
 ### 7. Release integration
 
@@ -111,8 +111,9 @@ Add `--console file=<runtime-dir>/console.log` to CH args in swift-ch-client. Pa
 | `cmd/swiftctl/console.go` | `swiftctl console` |
 | `internal/cli/guest.go` | Helper: resolve SwiftGuest, get pod, guest-id for console path |
 | `internal/cli/kubeconfig.go` | Helper: load rest.Config from flags/env |
-| `rust/swift-ch-client/src/config.rs` | Add `console_path`; `--console file=` in to_args |
-| `rust/swiftletd/src/launch.rs` | Pass console_path when building VmConfig |
+| `rust/swift-ch-client/src/config.rs` | Add `serial_socket_path`; `--serial socket=` and `--console off` in to_args |
+| `rust/swiftletd/src/launch.rs` | Pass serial_socket_path when building VmConfig |
+| `images/swiftletd/Containerfile` | Add socat for interactive console |
 | `docs/swiftctl.md` | Command reference, SwiftGuest/pod operations, console transport |
 | `docs/releases.md` | Add swiftctl section |
 | `Makefile` | Optional `build-swiftctl`; ensure build-go includes swiftctl |
@@ -123,12 +124,12 @@ Add `--console file=<runtime-dir>/console.log` to CH args in swift-ch-client. Pa
 | Risk | Mitigation |
 |------|------------|
 | Exec disabled in cluster | Document; suggest SSH via cloud-init |
-| Console file not yet created (VM starting) | Fail with clear message or brief retry |
+| Serial socket not yet created (VM starting) | Fail with clear message or brief retry |
 | runPolicy change + pod delete race | Controller reconciles; eventual consistency |
 
 ## Migration Plan
 
-1. Add `--console file=` to swift-ch-client and swiftletd; rebuild swiftletd image
-2. Implement swiftctl commands in Go
+1. Add `--serial socket=` to swift-ch-client and swiftletd; add socat to swiftletd image; rebuild swiftletd image
+2. Implement swiftctl commands in Go (console uses socat with TTY)
 3. Add release integration (workflow, docs)
 4. Document in docs/swiftctl.md
