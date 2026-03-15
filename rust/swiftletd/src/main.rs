@@ -4,7 +4,30 @@ mod report;
 
 use std::env;
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
+
+/// Creates NoCloud seed ISO from directory. CH expects disk image, not directory.
+fn create_seed_iso(seed_dir: &Path, output_iso: &Path) -> Result<(), String> {
+    let status = Command::new("genisoimage")
+        .args([
+            "-output",
+            output_iso.to_str().ok_or("invalid output path")?,
+            "-volid",
+            "cidata",
+            "-joliet",
+            "-rock",
+            "-input-charset",
+            "utf-8",
+            seed_dir.to_str().ok_or("invalid seed dir path")?,
+        ])
+        .status()
+        .map_err(|e| format!("genisoimage exec failed: {}", e))?;
+    if !status.success() {
+        return Err(format!("genisoimage exited with {:?}", status.code()));
+    }
+    Ok(())
+}
 
 const VERSION: &str = env!("KUBESWIFT_VERSION");
 const GIT_COMMIT: &str = env!("KUBESWIFT_GIT_COMMIT");
@@ -54,6 +77,13 @@ fn main() {
                     "swiftletd: built NoCloud dir at {}",
                     nocloud_output.display()
                 );
+                // CH expects disk image (ISO), not directory. Create seed.iso for cloud-init.
+                let seed_iso = runtime_dir.root().join("seed.iso");
+                if let Err(e) = create_seed_iso(&nocloud_output, &seed_iso) {
+                    eprintln!("swiftletd: failed to create seed ISO: {}", e);
+                    std::process::exit(1);
+                }
+                eprintln!("swiftletd: created seed ISO at {}", seed_iso.display());
             }
 
             let rt = Arc::new(

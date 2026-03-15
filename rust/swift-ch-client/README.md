@@ -13,7 +13,7 @@ Cloud Hypervisor expects a **disk image** (ISO or vfat) for the second `--disk` 
 - **ISO**: Volume label `cidata` (or `CIDATA`) with `user-data`, `meta-data`, optionally `network-config`
 - **vfat**: Same layout, vfat filesystem with `cidata` label
 
-**Current MVP**: swiftletd passes the NoCloud **directory** path (from `swift-seed` output) as the second disk. Some CH builds or configurations may accept a directory; if not, the guest will boot without cloud-init. A future change may add ISO generation (e.g. via `genisoimage` or a Rust crate) before invoking CH.
+**Implementation**: swiftletd builds the NoCloud directory via `swift-seed`, then creates `seed.iso` with `genisoimage` (volume label `cidata`). The ISO path is passed as the second `--disk` argument.
 
 ## Environment
 
