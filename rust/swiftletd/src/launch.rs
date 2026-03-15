@@ -38,6 +38,9 @@ where
         serial_socket_path: Some(serial_socket_path),
     };
 
+    let args = config.to_args();
+    eprintln!("swiftletd: spawning cloud-hypervisor with args: {:?}", args);
+
     let mut child =
         spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
 

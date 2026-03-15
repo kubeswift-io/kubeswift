@@ -33,6 +33,13 @@ make build-go
 |---------|-------------|
 | `swiftctl console <guest>` | Attach to VM serial console for interactive keyboard access. Execs into the launcher pod and connects via socat to the serial socket. Requires guest phase=Running. Use Ctrl+C to exit. |
 
+### Debug
+
+| Command | Description |
+|---------|-------------|
+| `swiftctl debug <guest>` | Run diagnostics: runtime dir contents, serial socket status, Cloud Hypervisor process and args. Use to troubleshoot console or boot issues. |
+| `swiftctl debug <guest> --shell` | Drop into an interactive shell in the launcher container. |
+
 ## Global flags
 
 | Flag | Description |
@@ -58,6 +65,10 @@ swiftctl restart sample
 # Attach to VM console
 swiftctl console sample
 swiftctl -n myns console my-guest
+
+# Troubleshoot (runtime dir, CH process, serial socket)
+swiftctl debug sample
+swiftctl debug sample --shell
 ```
 
 ## Console transport
