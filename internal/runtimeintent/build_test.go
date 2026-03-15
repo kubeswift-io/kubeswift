@@ -47,6 +47,9 @@ func TestBuild(t *testing.T) {
 	if intent.GuestID != "test-guest" {
 		t.Errorf("guestId = %q, want test-guest", intent.GuestID)
 	}
+	if !intent.Network {
+		t.Error("network = false, want true when HasSeed")
+	}
 }
 
 func TestBuildNoSeed(t *testing.T) {
@@ -54,6 +57,9 @@ func TestBuildNoSeed(t *testing.T) {
 	intent := Build(rg)
 	if intent.SeedPath != "" {
 		t.Errorf("seedPath = %q, want empty", intent.SeedPath)
+	}
+	if intent.Network {
+		t.Error("network = true, want false when no seed")
 	}
 }
 
@@ -65,6 +71,7 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 		Memory:    2048,
 		Lifecycle: "start",
 		GuestID:   "test",
+		Network:   true,
 	}
 	data, err := Serialize(intent)
 	if err != nil {

@@ -18,6 +18,16 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		return
 	}
 
+	// Set network from pod annotation (guest IP discovered by swiftletd)
+	if ip, ok := pod.Annotations[PodAnnotationGuestIP]; ok && ip != "" {
+		if status.Network == nil {
+			status.Network = &swiftv1alpha1.GuestNetworkStatus{}
+		}
+		status.Network.PrimaryIP = ip
+		status.Network.Interface = "eth0"
+		status.Network.Ready = true
+	}
+
 	// Set nodeName and podRef when scheduled
 	if pod.Spec.NodeName != "" {
 		status.NodeName = pod.Spec.NodeName

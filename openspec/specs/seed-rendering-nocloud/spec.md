@@ -3,12 +3,10 @@
 ## Purpose
 
 KubeSwift delivers cloud-init-compatible NoCloud datasource media without reimplementing cloud-init. The control plane resolves user-data, meta-data, and network-config from SwiftSeedProfile (inline or Secret/ConfigMap refs), creates a text-based ConfigMap, and the node runtime (swiftletd/swift-seed) builds local NoCloud media from it.
-
 ## Requirements
-
 ### Requirement: Resolve user-data, meta-data, network-data from SwiftGuest and SwiftSeedProfile
 
-The control plane MUST resolve user-data, meta-data, and network-data from SwiftGuest and optional SwiftSeedProfile. When SwiftSeedProfile is referenced, its userData, metaData, and networkData (or refs) are used. When not referenced, no seed is produced.
+The control plane MUST resolve user-data, meta-data, and network-data from SwiftGuest and optional SwiftSeedProfile. When SwiftSeedProfile is referenced, its userData, metaData, and networkData (or refs) are used. When not referenced, no seed is produced. UserData MAY contain cloud-init cloud-config with `ssh_authorized_keys` for SSH key injection; KubeSwift passes it through verbatim and does not interpret or validate cloud-config structure.
 
 #### Scenario: UserData from SwiftSeedProfile
 
@@ -24,6 +22,11 @@ The control plane MUST resolve user-data, meta-data, and network-data from Swift
 
 - **WHEN** SwiftGuest does not reference SwiftSeedProfile
 - **THEN** no seed ConfigMap is created; no user-data, meta-data, or network-data are resolved
+
+#### Scenario: ssh_authorized_keys in userData passed through
+
+- **WHEN** SwiftSeedProfile userData contains cloud-config with a user and `ssh_authorized_keys` list
+- **THEN** the resolved user-data includes that content verbatim; cloud-init in the guest will process it and write keys to ~/.ssh/authorized_keys
 
 ### Requirement: Support Secret and ConfigMap references
 
@@ -132,3 +135,4 @@ Seed rendering logic MUST reside in paths that fit github.com/projectbeskar/kube
 
 - **WHEN** the repository is inspected
 - **THEN** NoCloud media building logic resides under rust/swift-seed/ in github.com/projectbeskar/kubeswift
+

@@ -20,6 +20,8 @@ pub struct VmConfig {
     pub serial_socket_path: Option<String>,
     /// Optional path to firmware (e.g. hypervisor-fw). Required for disk boot; CH creates serial device when VM is properly initialized.
     pub firmware_path: Option<String>,
+    /// Optional TAP device name for VM networking. When set, CH gets --net tap=<name>.
+    pub tap_name: Option<String>,
 }
 
 impl VmConfig {
@@ -59,6 +61,11 @@ impl VmConfig {
             // Disable virtio-console; serial is the interactive console.
             args.push("--console".to_string());
             args.push("off".to_string());
+        }
+
+        if let Some(ref tap) = self.tap_name {
+            args.push("--net".to_string());
+            args.push(format!("tap={}", tap));
         }
 
         args

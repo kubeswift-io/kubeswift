@@ -34,12 +34,20 @@ type SwiftGuestSpec struct {
 	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`
 }
 
+// GuestNetworkStatus holds discovered guest network information.
+type GuestNetworkStatus struct {
+	PrimaryIP string `json:"primaryIP,omitempty"`
+	Interface string `json:"interface,omitempty"`
+	Ready     bool   `json:"ready,omitempty"`
+}
+
 // SwiftGuestStatus defines the observed state of SwiftGuest.
 type SwiftGuestStatus struct {
 	Phase      SwiftGuestPhase         `json:"phase,omitempty"`
 	Conditions []metav1.Condition      `json:"conditions,omitempty"`
 	NodeName   string                  `json:"nodeName,omitempty"`
 	PodRef     *corev1.ObjectReference `json:"podRef,omitempty"`
+	Network    *GuestNetworkStatus     `json:"network,omitempty"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.

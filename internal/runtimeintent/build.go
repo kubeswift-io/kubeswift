@@ -31,5 +31,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Memory:    rg.GetMemoryMiB(),
 		Lifecycle: lifecycle,
 		GuestID:   rg.GetGuestID(),
+		Network:   rg.HasSeed(),
 	}
 }

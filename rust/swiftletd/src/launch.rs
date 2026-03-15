@@ -42,6 +42,12 @@ where
         .to_string_lossy()
         .to_string();
 
+    let tap_name = if intent.has_network() {
+        Some("tap0".to_string())
+    } else {
+        None
+    };
+
     let config = VmConfig {
         disk_path: intent.disk_path().to_string(),
         memory_mib: intent.memory.max(128),
@@ -50,6 +56,7 @@ where
         seed_path,
         serial_socket_path: Some(serial_socket_path),
         firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
+        tap_name,
     };
 
     remove_stale_sockets(runtime_dir);

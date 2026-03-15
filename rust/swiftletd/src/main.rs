@@ -1,5 +1,6 @@
 mod intent;
 mod launch;
+mod lease;
 mod report;
 
 use std::env;
@@ -122,6 +123,13 @@ fn main() {
                 eprintln!("swiftletd: lifecycle=stop, skipping launch");
                 report_running(false, Some("VmStopped"));
                 return;
+            }
+
+            if intent.has_network() {
+                if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                    let lease_path = runtime_dir.root().join("dnsmasq.leases");
+                    lease::spawn_lease_poller(lease_path, ns.clone(), n.clone());
+                }
             }
 
             let on_socket_ready = namespace.as_ref().zip(name.as_ref()).map(|_| {

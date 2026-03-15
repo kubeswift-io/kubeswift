@@ -28,6 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     genisoimage \
     socat \
+    iproute2 \
+    bridge-utils \
+    dnsmasq \
     && rm -rf /var/lib/apt/lists/*
 
 # Cloud Hypervisor static binary (v37.0+)
@@ -52,10 +55,13 @@ RUN mkdir -p /usr/share/kubeswift-firmware && \
     chmod 644 /usr/share/kubeswift-firmware/hypervisor-fw
 
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
+COPY swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh
+COPY swiftletd/scripts/launcher-entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
+RUN chmod +x /usr/local/bin/network-init.sh /usr/local/bin/launcher-entrypoint.sh
 
 # Runtime paths (must match internal/controller/swiftguest constants)
 ENV KUBESWIFT_RUN_DIR=/var/lib/kubeswift/run
 # Intent path default
 ENV KUBESWIFT_INTENT_PATH=/var/lib/kubeswift/intent/runtime-intent.json
 
-ENTRYPOINT ["/usr/local/bin/swiftletd"]
+ENTRYPOINT ["/usr/local/bin/launcher-entrypoint.sh"]
