@@ -21,22 +21,23 @@ pub struct VmConfig {
 impl VmConfig {
     /// Build CH process arguments. Unix socket only; no TCP.
     /// Each option and its value must be separate argv elements (e.g. ["--api-socket", "path=/foo"]).
+    /// For --disk, multiple disks are passed as multiple values to a single --disk (not repeated --disk).
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![
             "--api-socket".to_string(),
             format!("path={}", self.api_socket),
-            "--disk".to_string(),
-            format!("path={}", self.disk_path),
             "--memory".to_string(),
             format!("size={}M", self.memory_mib),
             "--cpus".to_string(),
             format!("boot={}", self.cpus.max(1)),
         ];
 
+        // --disk accepts multiple values: --disk path=/foo path=/bar
+        args.push("--disk".to_string());
+        args.push(format!("path={}", self.disk_path));
         if !self.seed_path.is_empty() {
             // Cloud Hypervisor: second disk for cloud-init NoCloud.
             // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
-            args.push("--disk".to_string());
             args.push(format!("path={}", self.seed_path));
         }
 
