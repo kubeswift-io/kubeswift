@@ -55,6 +55,18 @@ Binaries and images include VERSION, GIT_COMMIT, BUILD_DATE. Shown in `--version
 make print-version
 ```
 
+## swiftctl
+
+swiftctl is the operator CLI for SwiftGuest lifecycle and console access. It is built with `make build-go` and included in stable GitHub Releases as a downloadable binary.
+
+| Obtain | Command |
+|--------|---------|
+| From source | `go install github.com/projectbeskar/kubeswift/cmd/swiftctl@latest` |
+| From build | `make build-go` → `./swiftctl` |
+| From release | Download from [GitHub Releases](https://github.com/projectbeskar/kubeswift/releases) |
+
+Version stamping: `swiftctl --version` prints the same VERSION and GIT_COMMIT as controller-manager and swiftletd. See [swiftctl](swiftctl.md) for usage.
+
 ## Makefile targets
 
 | Target | Description |

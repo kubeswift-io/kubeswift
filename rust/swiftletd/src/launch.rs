@@ -23,12 +23,19 @@ where
         String::new()
     };
 
+    let console_path = runtime_dir
+        .root()
+        .join("console.log")
+        .to_string_lossy()
+        .to_string();
+
     let config = VmConfig {
         disk_path: intent.disk_path().to_string(),
         memory_mib: intent.memory.max(128),
         cpus: intent.cpu.max(1),
         api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
         seed_path,
+        console_path: Some(console_path),
     };
 
     let mut child =

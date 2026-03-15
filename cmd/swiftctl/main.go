@@ -1,7 +1,7 @@
 package main
 
-import "os"
-
 func main() {
-	os.Exit(0)
+	if err := rootCmd.Execute(); err != nil {
+		exitErr(err)
+	}
 }

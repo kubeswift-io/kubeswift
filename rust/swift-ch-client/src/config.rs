@@ -16,6 +16,8 @@ pub struct VmConfig {
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
     pub seed_path: String,
+    /// Optional path for VM console output. When set, CH writes serial/console to this file.
+    pub console_path: Option<String>,
 }
 
 impl VmConfig {
@@ -39,6 +41,11 @@ impl VmConfig {
             // Cloud Hypervisor: second disk for cloud-init NoCloud.
             // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
             args.push(format!("path={}", self.seed_path));
+        }
+
+        if let Some(ref path) = self.console_path {
+            args.push("--console".to_string());
+            args.push(format!("file={}", path));
         }
 
         args
