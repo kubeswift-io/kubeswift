@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
@@ -25,14 +26,29 @@ const (
 
 // importScript returns a shell script that downloads and converts the image.
 // When sourceFormat is qcow2, converts to raw (CH does not support qcow2 compressed blocks).
+// After conversion, patches GRUB to add console=ttyS0 for serial console (firmware boot uses disk's cmdline).
 func importScript(sourceURL, sourceFormat string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
+	grubPatch := `
+# Patch GRUB for serial console (firmware boot uses disk cmdline, not CH --cmdline)
+mkdir -p /mnt/disk
+if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
+  for grub in /mnt/disk/boot/grub/grub.cfg /mnt/disk/boot/grub2/grub.cfg; do
+    if [ -f "$grub" ] && ! grep -q 'console=ttyS0' "$grub"; then
+      sed -i 's/\(linux[^ ]* .*\)/\1 console=ttyS0,115200n8/' "$grub"
+      echo "Patched $grub for serial console"
+    fi
+  done
+  umount /mnt/disk
+fi
+rmdir /mnt/disk 2>/dev/null || true
+`
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\napt-get update -qq && apt-get install -y -qq curl qemu-utils >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q %q", source, sourceURL, source, output)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s", output, source, sourceURL, source, grubPatch)
 	}
-	return fmt.Sprintf("set -e\napt-get update -qq && apt-get install -y -qq curl >/dev/null\ncurl -fsSL -o %q %q\n", output, sourceURL)
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s", output, sourceURL, grubPatch)
 }
 
 // ImportResult holds the outcome of an import attempt.
@@ -97,10 +113,17 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{
+						// Required for mount -o loop when patching GRUB
+						RunAsUser: ptr.To(int64(0)),
+					},
 					Containers: []corev1.Container{{
 						Name:    "import",
 						Image:   "ubuntu:22.04",
 						Command: []string{"sh", "-c", script},
+						SecurityContext: &corev1.SecurityContext{
+							Privileged: ptr.To(true),
+						},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "data",
 							MountPath: importVolumeMountPath,

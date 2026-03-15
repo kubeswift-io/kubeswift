@@ -53,9 +53,7 @@ impl VmConfig {
 
         if let Some(ref path) = self.serial_socket_path {
             // Serial socket: bidirectional; connect with socat for interactive console.
-            // Force kernel to use serial (ttyS0); firmware boot may ignore --cmdline, but CH passes it.
-            args.push("--cmdline".to_string());
-            args.push("console=ttyS0,115200n8 root=/dev/vda1 rw".to_string());
+            // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for console=ttyS0).
             args.push("--serial".to_string());
             args.push(format!("socket={}", path));
             // Disable virtio-console; serial is the interactive console.
