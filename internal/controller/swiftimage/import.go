@@ -50,11 +50,12 @@ if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
   patch_grub /mnt/disk
   umount /mnt/disk
 fi
-# Discover Linux partition offsets via fdisk (sector * 512), then fallback to known offsets
-# Ubuntu root: sector 227328. Debian: 134MB. Fedora: 512MB. Rocky/RHEL: 1106MiB (root), 100MiB (generic).
-OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux filesystem|Linux LVM/ {print $2*512}' | sort -u)
+# Discover Linux partition offsets via fdisk (sector * 512), then fallback to known offsets.
+# Fallback covers: Ubuntu (1MB ESP, 5MB EFI, 227328*512 root), Debian (134MB), Rocky/Fedora (100MB /boot, 512MB, 1106MiB root).
+OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux filesystem|Linux LVM/ {print $2*512}' | sort -un)
 if [ -z "$OFFSETS" ]; then
-  OFFSETS="116391936 140509184 1159725056 104857600 1048576 5242880 536870912 537919488"
+  OFFSETS="1048576 5242880 104857600 116391936 140509184 536870912 537919488 1159725056"
+  echo "GRUB patch: using fallback offsets (fdisk found none)"
 fi
 for offset in $OFFSETS; do
   [ -z "$offset" ] || [ "$offset" = "0" ] && continue

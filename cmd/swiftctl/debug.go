@@ -138,8 +138,10 @@ func runDebug(cmd *cobra.Command, args []string) error {
 		}()
 
 		fmt.Fprintf(os.Stderr, "=== Shell in launcher pod %s/%s (guest %s) ===\n", pod.Namespace, pod.Name, guestName)
+		fmt.Fprintf(os.Stderr, "You are in the LAUNCHER container (host), not the VM. To connect to the VM, run: swiftctl console %s\n", guestName)
 		fmt.Fprintf(os.Stderr, "Runtime dir: %s\n", runtimeDir)
 		fmt.Fprintf(os.Stderr, "Serial socket: %s\n", serialSocket)
+		fmt.Fprintf(os.Stderr, "To test VM serial manually: socat -,raw,echo=0 UNIX-CONNECT:%s\n", serialSocket)
 		fmt.Fprintf(os.Stderr, "Use 'exit' to leave.\n\n")
 
 		streamErr := exec.StreamWithContext(ctx, remotecommand.StreamOptions{

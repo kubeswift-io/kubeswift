@@ -168,7 +168,7 @@ func TestStartImport_HTTPSourceScriptPatchesGRUBForUEFI(t *testing.T) {
 	}
 	script := cmd[2] // sh -c "<script>"
 	// Verify GRUB patch covers UEFI (ESP + root), Rocky/RHEL (grub.conf), serial console
-	for _, want := range []string{"patch_grub", "find", "grub.cfg", "grub.conf", "console=ttyS0,115200n8", "536870912", "1048576", "Linux LVM"} {
+	for _, want := range []string{"patch_grub", "find", "grub.cfg", "grub.conf", "console=ttyS0,115200n8", "104857600", "1048576", "Linux LVM"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("import script missing %q", want)
 		}
