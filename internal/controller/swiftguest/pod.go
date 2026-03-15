@@ -77,6 +77,9 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 				{
 					Name:  "launcher",
 					Image: LauncherImage(),
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: ptr.To(true),
+					},
 					Env: []corev1.EnvVar{
 						{
 							Name: "POD_NAME",
