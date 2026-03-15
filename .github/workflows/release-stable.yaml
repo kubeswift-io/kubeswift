@@ -101,12 +101,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build swiftctl
+        run: |
+          VERSION="${{ needs.build-and-push.outputs.version }}"
+          GIT_COMMIT="$(git rev-parse HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LDFLAGS="-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}"
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-linux-amd64 ./cmd/swiftctl
+          GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-darwin-amd64 ./cmd/swiftctl
+          GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-darwin-arm64 ./cmd/swiftctl
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: KubeSwift ${{ github.ref_name }}
           generate_release_notes: true
+          files: dist/*
           body: |
             ## Install
 
@@ -118,5 +135,9 @@ jobs:
 
             - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
+
+            ## swiftctl
+
+            Download the `swiftctl` binary for your platform from the Assets below.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
