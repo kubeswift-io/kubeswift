@@ -63,10 +63,18 @@ const (
 	DiskFormatQcow2 DiskFormat = "qcow2"
 )
 
+// SwiftImageRootDiskSpec specifies root disk options for the import PVC.
+type SwiftImageRootDiskSpec struct {
+	// Size is the requested storage for the import PVC. Defaults to 10Gi if not set.
+	// Should match or exceed SwiftGuestClass.rootDisk.size for guests using this image.
+	Size *resource.Quantity `json:"size,omitempty"`
+}
+
 // SwiftImageSpec defines the desired state of SwiftImage.
 type SwiftImageSpec struct {
-	Source ImageSource `json:"source"`
-	Format DiskFormat  `json:"format"`
+	Source   ImageSource             `json:"source"`
+	Format   DiskFormat              `json:"format"`
+	RootDisk *SwiftImageRootDiskSpec `json:"rootDisk,omitempty"`
 }
 
 // SwiftImageStatus defines the observed state of SwiftImage.
