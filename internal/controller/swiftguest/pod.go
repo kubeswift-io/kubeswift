@@ -75,8 +75,9 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:  "launcher",
-					Image: LauncherImage(),
+					Name:            "launcher",
+					Image:           LauncherImage(),
+					ImagePullPolicy: corev1.PullIfNotPresent,
 					SecurityContext: &corev1.SecurityContext{
 						Privileged: ptr.To(true),
 					},
