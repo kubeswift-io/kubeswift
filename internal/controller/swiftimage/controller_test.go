@@ -2,6 +2,7 @@ package swiftimage
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
@@ -134,5 +135,42 @@ func TestStartImport_HTTPSourceUsesRootDiskSize(t *testing.T) {
 	}
 	if req := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; req.String() != "40Gi" {
 		t.Errorf("PVC storage = %s, want 40Gi", req.String())
+	}
+}
+
+func TestStartImport_HTTPSourceScriptPatchesGRUBForUEFI(t *testing.T) {
+	scheme := testScheme()
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftImageReconciler{Client: client, Scheme: scheme}
+	img := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: imagev1alpha1.SwiftImageSpec{
+			Format: imagev1alpha1.DiskFormatQcow2,
+			Source: imagev1alpha1.ImageSource{
+				HTTP: &imagev1alpha1.HTTPSource{URL: "https://example.com/ubuntu.img"},
+			},
+		},
+	}
+	result, err := r.StartImport(context.Background(), img)
+	if err != nil {
+		t.Fatalf("StartImport: %v", err)
+	}
+	if result.Phase != imagev1alpha1.SwiftImagePhaseImporting {
+		t.Fatalf("phase = %s, want Importing", result.Phase)
+	}
+	var job batchv1.Job
+	if err := client.Get(context.Background(), types.NamespacedName{Name: importJobNamePrefix + "test", Namespace: "default"}, &job); err != nil {
+		t.Fatalf("Job not created: %v", err)
+	}
+	cmd := job.Spec.Template.Spec.Containers[0].Command
+	if len(cmd) < 3 {
+		t.Fatalf("job command expected sh -c script, got %v", cmd)
+	}
+	script := cmd[2] // sh -c "<script>"
+	// Verify GRUB patch covers UEFI (ESP + root), Rocky/RHEL (grub.conf), serial console
+	for _, want := range []string{"patch_grub", "find", "grub.cfg", "grub.conf", "console=ttyS0,115200n8", "536870912", "1048576", "Linux LVM"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("import script missing %q", want)
+		}
 	}
 }

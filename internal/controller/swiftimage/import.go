@@ -27,28 +27,48 @@ const (
 // importScript returns a shell script that downloads and converts the image.
 // When sourceFormat is qcow2, converts to raw (CH does not support qcow2 compressed blocks).
 // After conversion, patches GRUB to add console=ttyS0 for serial console (firmware boot uses disk's cmdline).
+// Supports Ubuntu, Debian, Fedora, Rocky Linux, and common layouts. Uses fdisk to discover
+// Linux/LVM partitions first, then falls back to known offsets. Patches both grub.cfg and grub.conf.
 func importScript(sourceURL, sourceFormat string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
 	grubPatch := `
 # Patch GRUB for serial console (firmware boot uses disk cmdline, not CH --cmdline)
-mkdir -p /mnt/disk
-if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
-  for grub in /mnt/disk/boot/grub/grub.cfg /mnt/disk/boot/grub2/grub.cfg; do
+patch_grub() {
+  local mnt="$1"
+  for grub in $(find "$mnt" \( -name "grub.cfg" -o -name "grub.conf" \) 2>/dev/null); do
     if [ -f "$grub" ] && ! grep -q 'console=ttyS0' "$grub"; then
       sed -i 's/\(linux[^ ]* .*\)/\1 console=ttyS0,115200n8/' "$grub"
       echo "Patched $grub for serial console"
     fi
   done
+}
+mkdir -p /mnt/disk
+# Try ESP (1MB) - UEFI: /EFI/ubuntu/grub.cfg, /EFI/BOOT/grub.cfg
+if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
+  patch_grub /mnt/disk
   umount /mnt/disk
 fi
+# Discover Linux partition offsets via fdisk (sector * 512), then fallback to known offsets
+# Ubuntu root: sector 227328. Debian: 134MB. Fedora: 512MB. Rocky/RHEL: 1106MiB (root), 100MiB (generic).
+OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux filesystem|Linux LVM/ {print $2*512}' | sort -u)
+if [ -z "$OFFSETS" ]; then
+  OFFSETS="116391936 140509184 1159725056 104857600 1048576 5242880 536870912 537919488"
+fi
+for offset in $OFFSETS; do
+  [ -z "$offset" ] || [ "$offset" = "0" ] && continue
+  if mount -o loop,offset=$offset "$OUTPUT" /mnt/disk 2>/dev/null; then
+    patch_grub /mnt/disk
+    umount /mnt/disk
+  fi
+done
 rmdir /mnt/disk 2>/dev/null || true
 `
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s", output, source, sourceURL, source, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s", output, source, sourceURL, source, grubPatch)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s", output, sourceURL, grubPatch)
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s", output, sourceURL, grubPatch)
 }
 
 // ImportResult holds the outcome of an import attempt.
