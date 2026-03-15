@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/remotecommand"
@@ -18,6 +19,17 @@ import (
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
+
+// fixedSizeQueue returns the initial terminal size once, then nil.
+type fixedSizeQueue struct {
+	size *remotecommand.TerminalSize
+}
+
+func (f *fixedSizeQueue) Next() *remotecommand.TerminalSize {
+	s := f.size
+	f.size = nil
+	return s
+}
 
 var consoleCmd = &cobra.Command{
 	Use:          "console [guest-name]",
@@ -63,6 +75,11 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Console requires a TTY for interactive use
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("stdin is not a terminal; run swiftctl console from an interactive terminal (e.g. not piped)")
+	}
+
 	serialSocket := "/var/lib/kubeswift/run/" + cli.GuestID(ns, guestName) + "/serial.sock"
 
 	clientset, err := kubernetes.NewForConfig(config)
@@ -72,7 +89,8 @@ func runConsole(cmd *cobra.Command, args []string) error {
 
 	// Wait for socket (up to 15s) then connect. CH creates the socket when the VM starts.
 	// If socket never appears: ensure swiftletd image was rebuilt with --serial socket= support.
-	waitAndSocat := fmt.Sprintf("for i in $(seq 1 15); do test -S %q && break; sleep 1; done; test -S %q || { echo 'serial socket not found at %s'; exit 1; }; exec socat -,crnl UNIX-CONNECT:%s", serialSocket, serialSocket, serialSocket, serialSocket)
+	// socat: raw mode for serial; crnl can corrupt binary/control chars from guest
+	waitAndSocat := fmt.Sprintf("for i in $(seq 1 15); do test -S %q && break; sleep 1; done; test -S %q || { echo 'serial socket not found at %s'; exit 1; }; exec socat -,raw,echo=0 UNIX-CONNECT:%s", serialSocket, serialSocket, serialSocket, serialSocket)
 
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -93,6 +111,18 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to attach to console: %w", err)
 	}
 
+	// Put terminal in raw mode for interactive console (like kubectl exec -it).
+	// Without this, input is line-buffered and characters don't reach the guest immediately.
+	var restore func()
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		state, err := term.MakeRaw(fd)
+		if err != nil {
+			return fmt.Errorf("terminal raw mode: %w", err)
+		}
+		restore = func() { _ = term.Restore(fd, state) }
+		defer restore()
+	}
+
 	// Handle SIGINT for clean exit
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -103,11 +133,20 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	// TerminalSizeQueue for resize support (optional; nil is ok)
+	var sizeQueue remotecommand.TerminalSizeQueue
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		if w, h, err := term.GetSize(fd); err == nil {
+			sizeQueue = &fixedSizeQueue{size: &remotecommand.TerminalSize{Width: uint16(w), Height: uint16(h)}}
+		}
+	}
+
 	streamErr := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Tty:    true,
+		Stdin:             os.Stdin,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
+		Tty:               true,
+		TerminalSizeQueue: sizeQueue,
 	})
 	if streamErr != nil {
 		if ctx.Err() != nil {

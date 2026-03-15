@@ -77,9 +77,12 @@ swiftctl console uses **exec + socat** for interactive serial console access. It
 
 1. swiftletd passes `--serial socket=<path>` to Cloud Hypervisor when launching the VM
 2. Cloud Hypervisor creates a Unix socket at `/var/lib/kubeswift/run/<namespace>-<name>/serial.sock`
-3. swiftctl execs into the launcher container and runs `socat -,crnl UNIX-CONNECT:<path>` for bidirectional keyboard access
+3. swiftctl execs into the launcher container and runs `socat -,raw,echo=0 UNIX-CONNECT:<path>` for bidirectional keyboard access
+4. swiftctl puts the local terminal in raw mode (like `kubectl exec -it`) so keystrokes reach the guest immediately
 
-**Prerequisites:** The guest must be Running. The swiftletd image includes socat. Clusters that restrict `pods/exec` will not support console access; use SSH via cloud-init as an alternative.
+**Prerequisites:** The guest must be Running. Run from an interactive terminal (not piped). The swiftletd image includes socat. Clusters that restrict `pods/exec` will not support console access; use SSH via cloud-init as an alternative.
+
+**Troubleshooting:** If the console is blank, ensure (1) the guest has booted (wait 30–60s for Ubuntu), (2) the SwiftSeedProfile enables `getty@ttyS0.service`, (3) Cloud Hypervisor is launched with `--cmdline console=ttyS0,115200n8` and `--serial socket=`. Use `swiftctl debug <guest>` to verify CH args and serial socket.
 
 ## Exit codes
 

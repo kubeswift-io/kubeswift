@@ -53,8 +53,7 @@ impl VmConfig {
 
         if let Some(ref path) = self.serial_socket_path {
             // Serial socket: bidirectional; connect with socat for interactive console.
-            // Force kernel to use serial (ttyS0) regardless of image default; some images use hvc0.
-            // Include root= for firmware boot; Ubuntu cloud images use /dev/vda1.
+            // Force kernel to use serial (ttyS0); firmware boot may ignore --cmdline, but CH passes it.
             args.push("--cmdline".to_string());
             args.push("console=ttyS0,115200n8 root=/dev/vda1 rw".to_string());
             args.push("--serial".to_string());
