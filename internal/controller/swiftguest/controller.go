@@ -10,8 +10,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
@@ -168,11 +171,32 @@ func (r *SwiftGuestReconciler) patchStatus(ctx context.Context, guest *swiftv1al
 	return r.Status().Patch(ctx, guest, patch)
 }
 
+// swiftImageToSwiftGuests enqueues SwiftGuests that reference a SwiftImage when the SwiftImage changes.
+func (r *SwiftGuestReconciler) swiftImageToSwiftGuests(ctx context.Context, obj client.Object) []reconcile.Request {
+	var img imagev1alpha1.SwiftImage
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &img); err != nil {
+		return nil
+	}
+	var list swiftv1alpha1.SwiftGuestList
+	if err := r.List(ctx, &list, client.InNamespace(img.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		g := &list.Items[i]
+		if g.Spec.ImageRef.Name == img.Name {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
+		}
+	}
+	return reqs
+}
+
 // SetupWithManager registers the reconciler with the manager.
 func (r *SwiftGuestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&swiftv1alpha1.SwiftGuest{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Pod{}).
+		Watches(&imagev1alpha1.SwiftImage{}, handler.EnqueueRequestsFromMapFunc(r.swiftImageToSwiftGuests)).
 		Complete(r)
 }
