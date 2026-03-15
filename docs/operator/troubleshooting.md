@@ -8,6 +8,8 @@ Common issues when running KubeSwift and how to resolve them.
 
 **Causes:**
 - `flag provided but not defined: -leader-elect` — controller-manager binary did not support `--leader-elect` (fixed in recent builds; rebuild and redeploy)
+- `failed to wait for swiftimage caches to sync kind source: *v1.Job` — missing RBAC for Jobs (add `batch` API group `jobs` to ClusterRole)
+- `v1.ListOptions is not suitable for converting to "image.kubeswift.io/v1alpha1"` — scheme missing metav1 for custom types (add `metav1.AddToGroupVersion` per API group)
 - Missing RBAC for leader election — controller uses `--leader-elect` and needs `coordination.k8s.io/leases`
 - Missing CRDs (SwiftGuest, SwiftImage, SwiftSeedProfile, SwiftGuestClass)
 - RBAC not applied or outdated
