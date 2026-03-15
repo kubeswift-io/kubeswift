@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,35 @@ import (
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
+
+// escapeByte is Ctrl+O (0x0f). In raw mode, Ctrl+C goes to the guest; use this to detach.
+const escapeByte = 0x0f
+
+// escapeReader wraps stdin and calls cancel when it sees the escape byte.
+type escapeReader struct {
+	r      io.Reader
+	cancel context.CancelFunc
+	buf    []byte
+	done   bool
+}
+
+func (e *escapeReader) Read(p []byte) (n int, err error) {
+	if e.done {
+		return 0, io.EOF
+	}
+	n, err = e.r.Read(p)
+	if n > 0 {
+		for i := 0; i < n; i++ {
+			if p[i] == escapeByte {
+				e.done = true
+				e.cancel()
+				// Return bytes before escape; don't forward the escape
+				return i, nil
+			}
+		}
+	}
+	return n, err
+}
 
 // fixedSizeQueue returns the initial terminal size once, then nil.
 type fixedSizeQueue struct {
@@ -37,7 +67,7 @@ var consoleCmd = &cobra.Command{
 	SilenceUsage: true,
 	Long: `Attach to the VM serial console for interactive keyboard access.
 Execs into the launcher pod and connects to the serial socket via socat.
-Requires the guest to be Running. Use Ctrl+C to exit.`,
+Requires the guest to be Running. Press Ctrl+O to detach (Ctrl+C goes to the guest in raw mode).`,
 	Example: `  swiftctl console sample
   swiftctl -n myns console my-guest`,
 	Args: cobra.ExactArgs(1),
@@ -123,15 +153,19 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		defer restore()
 	}
 
-	// Handle SIGINT for clean exit
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// In raw mode, Ctrl+C goes to the guest. Use Ctrl+O to detach, or SIGINT/SIGTERM from another terminal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		cancel()
 	}()
+
+	// Wrap stdin to detect Ctrl+O (escape) for detach
+	stdin := &escapeReader{r: os.Stdin, cancel: cancel}
 
 	// TerminalSizeQueue for resize support (optional; nil is ok)
 	var sizeQueue remotecommand.TerminalSizeQueue
@@ -142,7 +176,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}
 
 	streamErr := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdin:             os.Stdin,
+		Stdin:             stdin,
 		Stdout:            os.Stdout,
 		Stderr:            os.Stderr,
 		Tty:               true,
