@@ -19,6 +19,9 @@ pub struct RuntimeIntent {
     pub memory: u32,
     pub lifecycle: String,
     pub guest_id: String,
+    /// When true, guest has network (TAP, DHCP). Defaults to true when seed present.
+    #[serde(default)]
+    pub network: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +45,11 @@ impl RuntimeIntent {
     /// Returns true if seed is present.
     pub fn has_seed(&self) -> bool {
         !self.seed_path.is_empty()
+    }
+
+    /// Returns true if guest has network (TAP, DHCP). Defaults to true when seed present.
+    pub fn has_network(&self) -> bool {
+        self.network.unwrap_or(self.has_seed())
     }
 }
 

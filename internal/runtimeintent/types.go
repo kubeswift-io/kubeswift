@@ -9,6 +9,7 @@ type RuntimeIntent struct {
 	Memory    int          `json:"memory"`    // MiB
 	Lifecycle string       `json:"lifecycle"` // "start" or "stop"
 	GuestID   string       `json:"guestId"`
+	Network   bool         `json:"network"` // true when guest has network (TAP, DHCP)
 }
 
 // RootDiskSpec specifies the root disk for the VM.

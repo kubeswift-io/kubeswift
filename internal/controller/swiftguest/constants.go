@@ -16,6 +16,9 @@ func LauncherImage() string {
 	return LauncherImageDefault
 }
 
+// PodAnnotationGuestIP is the annotation key for the guest's primary IP (set by swiftletd when discovered).
+const PodAnnotationGuestIP = "kubeswift.io/guest-ip"
+
 // Mount path constants. Must match internal/runtimeintent and rust/swiftletd.
 const (
 	DisksRootPath = "/var/lib/kubeswift/disks/root"

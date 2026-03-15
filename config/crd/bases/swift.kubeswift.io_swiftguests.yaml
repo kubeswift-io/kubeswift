@@ -158,6 +158,16 @@ spec:
                   - type
                   type: object
                 type: array
+              network:
+                description: GuestNetworkStatus holds discovered guest network information.
+                properties:
+                  interface:
+                    type: string
+                  primaryIP:
+                    type: string
+                  ready:
+                    type: boolean
+                type: object
               nodeName:
                 type: string
               phase:

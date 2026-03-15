@@ -23,6 +23,13 @@ import (
 
 const (
 	SeedConfigMapSuffix = "-seed"
+
+	// defaultNetworkConfig is used when SwiftSeedProfile has no networkData. Enables DHCP on eth0.
+	defaultNetworkConfig = `version: 2
+ethernets:
+  eth0:
+    dhcp4: true
+`
 )
 
 // SwiftGuestReconciler reconciles SwiftGuest resources.
@@ -69,6 +76,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err != nil {
 			logger.Error(err, "seed render failed")
 			return ctrl.Result{}, err
+		}
+		if networkData == "" {
+			networkData = defaultNetworkConfig
 		}
 		seedConfigMapName = guest.Name + SeedConfigMapSuffix
 		desiredCM := seed.BuildConfigMap(seedConfigMapName, guest.Namespace, userData, metaData, networkData)

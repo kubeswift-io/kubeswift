@@ -64,6 +64,22 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 		mem = 128
 	}
 
+	var initContainers []corev1.Container
+	if rg.HasSeed() {
+		initContainers = append(initContainers, corev1.Container{
+			Name:            "network-init",
+			Image:           LauncherImage(),
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{"/usr/local/bin/network-init.sh"},
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true),
+				Capabilities: &corev1.Capabilities{
+					Add: []corev1.Capability{"NET_ADMIN"},
+				},
+			},
+		})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guest.Name,
@@ -73,6 +89,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 			},
 		},
 		Spec: corev1.PodSpec{
+			InitContainers: initContainers,
 			Containers: []corev1.Container{
 				{
 					Name:            "launcher",

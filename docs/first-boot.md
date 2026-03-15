@@ -65,6 +65,8 @@ You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `
 
   Check `status.conditions` for `Resolved`, `ImageReady`, `PodScheduled`, `GuestRunning`.
 
+- **SSH access:** When using a SwiftSeedProfile with `ssh_authorized_keys`, the guest gets an IP on the pod network. See [guest-networking-ssh.md](guest-networking-ssh.md) for the full workflow (discover IP via `kubectl get swiftguest <name> -o jsonpath='{.status.network.primaryIP}'`, then `ssh kubeswift@<IP>`).
+
 - **Pod logs:**
 
   ```bash

@@ -127,6 +127,33 @@ func TestMapPodToStatus_Succeeded(t *testing.T) {
 	}
 }
 
+func TestMapPodToStatus_WithGuestIPAnnotation(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "guest1",
+			Namespace:   "default",
+			Annotations: map[string]string{PodAnnotationGuestIP: "10.244.1.12"},
+		},
+		Spec:   corev1.PodSpec{NodeName: "node-1"},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	status := &swiftv1alpha1.SwiftGuestStatus{}
+	MapPodToStatus(pod, status)
+
+	if status.Network == nil {
+		t.Fatal("status.Network = nil, want set")
+	}
+	if status.Network.PrimaryIP != "10.244.1.12" {
+		t.Errorf("status.Network.PrimaryIP = %q, want 10.244.1.12", status.Network.PrimaryIP)
+	}
+	if status.Network.Interface != "eth0" {
+		t.Errorf("status.Network.Interface = %q, want eth0", status.Network.Interface)
+	}
+	if !status.Network.Ready {
+		t.Error("status.Network.Ready = false, want true")
+	}
+}
+
 func TestMapPodToStatus_NilPod(t *testing.T) {
 	status := &swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning}
 	MapPodToStatus(nil, status)

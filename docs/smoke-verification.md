@@ -58,6 +58,17 @@ kubectl get role swiftletd-reporter -n <namespace>
 kubectl get rolebinding swiftletd-reporter -n <namespace>
 ```
 
+### 4a. SSH validation (optional follow-up)
+
+When using a SwiftSeedProfile with `ssh_authorized_keys`, the guest receives an IP on the pod network. To validate networking and SSH:
+
+1. Create a SwiftGuest with an SSH-enabled SwiftSeedProfile (see `config/samples/swiftseedprofile-ssh.yaml`).
+2. Wait for `status.network.ready=true`.
+3. Get the IP: `kubectl get swiftguest <name> -o jsonpath='{.status.network.primaryIP}'`
+4. SSH: `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 kubeswift@<IP> echo ok`
+
+See [guest-networking-ssh.md](guest-networking-ssh.md) for the full workflow.
+
 ### 5. Node requirements
 
 At least one node must be able to run guest pods. The node needs:

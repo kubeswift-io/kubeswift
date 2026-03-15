@@ -1,4 +1,4 @@
-# Role for swiftletd to patch SwiftGuest status (GuestRunning condition).
+# Role for swiftletd to patch SwiftGuest status (GuestRunning condition) and pod annotations (guest IP).
 # Apply in each namespace where SwiftGuests run. Use swiftletd-rolebinding.yaml
 # to bind this role to the launcher pod's service account (default).
 apiVersion: rbac.authorization.k8s.io/v1
@@ -8,4 +8,7 @@ metadata:
 rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
     verbs: ["get", "patch", "update"]
