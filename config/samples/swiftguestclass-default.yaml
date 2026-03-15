@@ -7,5 +7,5 @@ spec:
   cpu: "2"
   memory: "2Gi"
   rootDisk:
-    size: "10Gi"
+    size: "40Gi"
     format: raw

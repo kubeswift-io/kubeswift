@@ -70,6 +70,10 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create clientset: %w", err)
 	}
 
+	// Wait for socket (up to 15s) then connect. CH creates the socket when the VM starts.
+	// If socket never appears: ensure swiftletd image was rebuilt with --serial socket= support.
+	waitAndSocat := fmt.Sprintf("for i in $(seq 1 15); do test -S %q && break; sleep 1; done; test -S %q || { echo 'serial socket not found at %s'; exit 1; }; exec socat -,crnl UNIX-CONNECT:%s", serialSocket, serialSocket, serialSocket, serialSocket)
+
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(pod.Namespace).
@@ -77,7 +81,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: cli.LauncherContainer,
-			Command:   []string{"socat", "-,crnl", "UNIX-CONNECT:" + serialSocket},
+			Command:   []string{"sh", "-c", waitAndSocat},
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
