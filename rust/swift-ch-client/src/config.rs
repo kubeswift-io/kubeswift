@@ -20,18 +20,24 @@ pub struct VmConfig {
 
 impl VmConfig {
     /// Build CH process arguments. Unix socket only; no TCP.
+    /// Each option and its value must be separate argv elements (e.g. ["--api-socket", "path=/foo"]).
     pub fn to_args(&self) -> Vec<String> {
         let mut args = vec![
-            format!("--api-socket path={}", self.api_socket),
-            format!("--disk path={}", self.disk_path),
-            format!("--memory size={}M", self.memory_mib),
-            format!("--cpus boot={}", self.cpus.max(1)),
+            "--api-socket".to_string(),
+            format!("path={}", self.api_socket),
+            "--disk".to_string(),
+            format!("path={}", self.disk_path),
+            "--memory".to_string(),
+            format!("size={}M", self.memory_mib),
+            "--cpus".to_string(),
+            format!("boot={}", self.cpus.max(1)),
         ];
 
         if !self.seed_path.is_empty() {
             // Cloud Hypervisor: second disk for cloud-init NoCloud.
             // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
-            args.push(format!("--disk path={}", self.seed_path));
+            args.push("--disk".to_string());
+            args.push(format!("path={}", self.seed_path));
         }
 
         args

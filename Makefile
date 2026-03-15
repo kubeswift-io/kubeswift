@@ -15,7 +15,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	generate deploy undeploy load-images smoke-test preflight help \
+	generate deploy undeploy load-images smoke-test smoke-test-cleanup preflight help \
 	push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
@@ -38,6 +38,7 @@ help:
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
 	@echo "  smoke-test            Run boot smoke test (requires KubeSwift cluster)"
+	@echo "  smoke-test-cleanup    Remove smoke-test resources (SwiftGuest, SwiftImage, etc.) for re-runs"
 	@echo "  preflight             Run worker-node readiness preflight (host checks only)"
 
 build: build-go build-rust
@@ -126,7 +127,21 @@ load-images:
 	fi
 
 smoke-test:
-	@test/smoke/boot-test.sh
+	@test/smoke/boot-test.sh --no-cleanup
+
+# smoke-test-cleanup removes resources created by the smoke test so you can re-run cleanly.
+# Uses NAMESPACE (default: default). Run: make smoke-test-cleanup NAMESPACE=myns
+smoke-test-cleanup:
+	@NS="$${NAMESPACE:-default}"; \
+	echo "Cleaning up smoke-test resources in namespace $$NS..."; \
+	kubectl delete swiftguest sample -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
+	kubectl delete swiftimage ubuntu-cloud -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
+	kubectl delete swiftseedprofile minimal -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
+	kubectl delete swiftguestclass default -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
+	kubectl delete job swiftimage-import-ubuntu-cloud -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
+	kubectl delete pvc swiftimage-import-ubuntu-cloud -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
+	kubectl delete configmap sample-seed sample-runtime-intent -n "$$NS" --ignore-not-found --timeout=10s 2>/dev/null || true; \
+	echo "Smoke-test cleanup done"
 
 preflight:
 	@./scripts/kubeswift-preflight.sh
