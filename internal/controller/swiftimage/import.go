@@ -63,13 +63,19 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 	pvcName := importPVCNamePrefix + img.Name
 	jobName := importJobNamePrefix + img.Name
 
+	// PVC size: from spec.rootDisk.size if set, else default 10Gi
+	storageReq := resource.MustParse("10Gi")
+	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
+		storageReq = *img.Spec.RootDisk.Size
+	}
+
 	// Create PVC if not exists
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: img.Namespace},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")},
+				Requests: corev1.ResourceList{corev1.ResourceStorage: storageReq},
 			},
 		},
 	}

@@ -9,6 +9,8 @@ spec:
     #cloud-config
     hostname: kubeswift-guest
     package_update: true
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
   metaData: |
     instance-id: kubeswift-001
     local-hostname: kubeswift-guest

@@ -5,6 +5,8 @@ metadata:
   namespace: default
 spec:
   format: qcow2  # Ubuntu .img is qcow2; import job converts to raw for CH
+  rootDisk:
+    size: "40Gi"  # Must match SwiftGuestClass.rootDisk.size for guests using this image
   source:
     http:
       url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
