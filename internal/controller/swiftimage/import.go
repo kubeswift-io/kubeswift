@@ -52,7 +52,8 @@ if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
 fi
 # Discover Linux partition offsets via fdisk (sector * 512), then fallback to known offsets.
 # Fallback covers: Ubuntu (1MB ESP, 5MB EFI, 227328*512 root), Debian (134MB), Rocky/Fedora (100MB /boot, 512MB, 1106MiB root).
-OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux filesystem|Linux LVM/ {print $2*512}' | sort -un)
+# Start sector: $3 when Boot is "*", else $2 (fdisk -l: Device Boot Start End ...; 83=Linux, 8e=Linux LVM)
+OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux/ {s=($2=="*"?$3:$2); if(s+0==s) print s*512}' | sort -un)
 if [ -z "$OFFSETS" ]; then
   OFFSETS="1048576 5242880 104857600 116391936 140509184 536870912 537919488 1159725056"
   echo "GRUB patch: using fallback offsets (fdisk found none)"
