@@ -2,9 +2,9 @@ package swiftguest
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
