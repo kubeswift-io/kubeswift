@@ -44,6 +44,10 @@ impl VmConfig {
         }
 
         if let Some(ref path) = self.console_path {
+            // Serial: Linux cloud images typically use console=ttyS0 for boot output
+            args.push("--serial".to_string());
+            args.push(format!("file={}", path));
+            // Virtio-console: for hvc0 output if guest uses it
             args.push("--console".to_string());
             args.push(format!("file={}", path));
         }
