@@ -6,7 +6,7 @@ KubeSwift attaches the guest VM to the pod network so the guest receives an IP a
 
 - **Bridge + TAP:** An init container creates a Linux bridge (`br0`), moves the pod's primary interface (`eth0`) onto the bridge, and creates a TAP device (`tap0`) for the VM.
 - **DHCP:** The launcher starts dnsmasq on the bridge and hands out an IP from the pod subnet to the VM.
-- **Cloud-init:** The seed includes network-config (default: DHCP on eth0) so the guest configures its interface on first boot.
+- **Cloud-init:** The seed includes network-config (default: DHCP on first Ethernet interface) so the guest configures its interface on first boot.
 
 ## SSH Key Injection
 
@@ -21,7 +21,7 @@ users:
       - "ssh-ed25519 AAAA... user@host"
 ```
 
-Use `config/samples/swiftseedprofile-ssh.yaml` as a template. Replace `REPLACE_WITH_YOUR_SSH_PUBLIC_KEY` with your public key.
+Use `config/samples/swiftseedprofile-ssh.yaml` as a template. Samples include a default key; replace with your own for production.
 
 ## IP Discovery
 

@@ -2,6 +2,8 @@
 
 Sample manifests for booting a Linux cloud guest with KubeSwift.
 
+All SwiftSeedProfile samples include `ssh_authorized_keys` for SSH access. Replace the key with your own for production use.
+
 ## Apply order
 
 Apply resources in this order (dependencies first):

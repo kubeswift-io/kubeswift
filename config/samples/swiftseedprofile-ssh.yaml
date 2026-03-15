@@ -1,5 +1,5 @@
 # SwiftSeedProfile with SSH key injection for guest access.
-# Add your SSH public key to ssh_authorized_keys, then reference this profile from SwiftGuest.
+# Replace the ssh_authorized_keys entry with your own for production.
 # After the guest boots, discover its IP and SSH: ssh kubeswift@<primaryIP>
 apiVersion: seed.kubeswift.io/v1alpha1
 kind: SwiftSeedProfile
@@ -18,7 +18,7 @@ spec:
         sudo: ALL=(ALL) NOPASSWD:ALL
         lock_passwd: false
         ssh_authorized_keys:
-          - "REPLACE_WITH_YOUR_SSH_PUBLIC_KEY"
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
     runcmd:
       - systemctl enable --now getty@ttyS0.service
   metaData: |
