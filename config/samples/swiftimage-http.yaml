@@ -4,7 +4,7 @@ metadata:
   name: ubuntu-cloud
   namespace: default
 spec:
-  format: raw
+  format: qcow2  # Ubuntu .img is qcow2; import job converts to raw for CH
   source:
     http:
       url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img

@@ -20,7 +20,20 @@ const (
 	importPVCNamePrefix   = "swiftimage-import-"
 	importVolumeMountPath = "/data"
 	importOutputFile      = "image.raw"
+	importSourceFile      = "source.img"
 )
+
+// importScript returns a shell script that downloads and converts the image.
+// When sourceFormat is qcow2, converts to raw (CH does not support qcow2 compressed blocks).
+func importScript(sourceURL, sourceFormat string) string {
+	base := importVolumeMountPath
+	source := base + "/" + importSourceFile
+	output := base + "/" + importOutputFile
+	if sourceFormat == "qcow2" {
+		return fmt.Sprintf("set -e\napt-get update -qq && apt-get install -y -qq curl qemu-utils >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q %q", source, sourceURL, source, output)
+	}
+	return fmt.Sprintf("set -e\napt-get update -qq && apt-get install -y -qq curl >/dev/null\ncurl -fsSL -o %q %q\n", output, sourceURL)
+}
 
 // ImportResult holds the outcome of an import attempt.
 type ImportResult struct {
@@ -67,7 +80,11 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 		return nil, err
 	}
 
-	// Create Job if not exists
+	// Import job: download and convert qcow2→raw when needed.
+	// CH does not support qcow2 compressed blocks; runtime format is always raw.
+	sourceURL := img.Spec.Source.HTTP.URL
+	sourceFormat := string(img.Spec.Format)
+	script := importScript(sourceURL, sourceFormat)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
 		Spec: batchv1.JobSpec{
@@ -76,8 +93,8 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 					RestartPolicy: corev1.RestartPolicyOnFailure,
 					Containers: []corev1.Container{{
 						Name:    "import",
-						Image:   "curlimages/curl:latest",
-						Command: []string{"sh", "-c", fmt.Sprintf("curl -L -o %s/%s %q", importVolumeMountPath, importOutputFile, img.Spec.Source.HTTP.URL)},
+						Image:   "ubuntu:22.04",
+						Command: []string{"sh", "-c", script},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "data",
 							MountPath: importVolumeMountPath,
