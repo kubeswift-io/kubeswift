@@ -38,7 +38,7 @@ make build-go
 | Command | Description |
 |---------|-------------|
 | `swiftctl debug <guest>` | Run diagnostics: runtime dir contents, serial socket status, Cloud Hypervisor process and args. Use to troubleshoot console or boot issues. |
-| `swiftctl debug <guest> --shell` | Drop into an interactive shell in the launcher container. |
+| `swiftctl debug <guest> --shell` | Drop into an interactive shell in the **launcher container** (host/pod). This is the Debian-based container that runs swiftletd and Cloud Hypervisor—**not** the VM. Use `swiftctl console` to connect to the VM. |
 
 ## Global flags
 
@@ -83,6 +83,8 @@ swiftctl console uses **exec + socat** for interactive serial console access. It
 **Prerequisites:** The guest must be Running. Run from an interactive terminal (not piped). The swiftletd image includes socat. Clusters that restrict `pods/exec` will not support console access; use SSH via cloud-init as an alternative.
 
 **Troubleshooting:** If the console is blank, ensure (1) the guest has booted (wait 30–60s for Ubuntu), (2) the SwiftSeedProfile enables `getty@ttyS0.service`, (3) the SwiftImage was imported with the GRUB patch (import job patches `grub.cfg` for UEFI and BIOS layouts). If the image was imported before the UEFI GRUB patch, delete the SwiftImage and re-import. Use `swiftctl debug <guest>` to verify CH args and serial socket.
+
+**Important:** `swiftctl debug --shell` gives you a shell in the **launcher container** (Debian), not the VM. The launcher runs swiftletd and Cloud Hypervisor. To connect to the VM's serial console, use `swiftctl console <guest>`. From a debug shell, you can manually test: `socat -,raw,echo=0 UNIX-CONNECT:/var/lib/kubeswift/run/<namespace>-<name>/serial.sock`
 
 ## Exit codes
 

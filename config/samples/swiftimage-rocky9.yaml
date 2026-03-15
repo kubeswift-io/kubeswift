@@ -1,0 +1,12 @@
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: rocky9-cloud
+  namespace: default
+spec:
+  format: qcow2
+  rootDisk:
+    size: "40Gi"
+  source:
+    http:
+      url: https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
