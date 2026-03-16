@@ -4,8 +4,8 @@ KubeSwift attaches the guest VM to the pod network so the guest receives an IP a
 
 ## Pod Network Model
 
-- **Bridge + TAP:** An init container creates a Linux bridge (`br0`), moves the pod's primary interface (`eth0`) onto the bridge, and creates a TAP device (`tap0`) for the VM.
-- **DHCP:** The launcher starts dnsmasq on the bridge and hands out an IP from the pod subnet to the VM.
+- **Bridge + TAP:** An init container creates an internal Linux bridge (`br0`) with its own subnet and a TAP device (`tap0`) for the VM. The pod's primary interface (`eth0`) is never touched—it retains the pod IP so swiftletd can reach the Kubernetes API.
+- **DHCP:** The launcher starts dnsmasq on the bridge and hands out an IP from the bridge subnet (e.g. 10.244.125.10–20) to the VM. VM traffic is NATted out via eth0.
 - **Cloud-init:** The seed includes network-config (default: DHCP on first Ethernet interface) so the guest configures its interface on first boot.
 
 ## SSH Key Injection

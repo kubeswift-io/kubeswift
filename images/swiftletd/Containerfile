@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     genisoimage \
     socat \
     iproute2 \
+    iptables \
     bridge-utils \
     dnsmasq \
     procps \
