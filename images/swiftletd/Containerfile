@@ -31,10 +31,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     bridge-utils \
     dnsmasq \
+    procps \
+    openssh-client \
+    bash \
+    bash-completion \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
-# Cloud Hypervisor static binary (v37.0+)
-ARG CH_VERSION=37.0
+# Cloud Hypervisor static binary (v51.1)
+ARG CH_VERSION=51.1
 ARG TARGETARCH=amd64
 RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
     curl -sSL -o /usr/local/bin/cloud-hypervisor \
@@ -43,14 +48,14 @@ RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
 
 # Rust Hypervisor Firmware for disk boot (required for serial device creation)
 # CH needs --kernel (firmware) to properly initialize VM and create serial socket
-ARG RHF_VERSION=0.4.2
+ARG RHF_VERSION=0.5.0
 RUN mkdir -p /usr/share/kubeswift-firmware && \
     if [ "${TARGETARCH}" = "amd64" ]; then \
         curl -sSL -o /usr/share/kubeswift-firmware/hypervisor-fw \
         "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RHF_VERSION}/hypervisor-fw"; \
     elif [ "${TARGETARCH}" = "arm64" ]; then \
         curl -sSL -o /usr/share/kubeswift-firmware/hypervisor-fw \
-        "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/0.5.0/hypervisor-fw-aarch64"; \
+        "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RHF_VERSION}/hypervisor-fw-aarch64"; \
     fi && \
     chmod 644 /usr/share/kubeswift-firmware/hypervisor-fw
 
