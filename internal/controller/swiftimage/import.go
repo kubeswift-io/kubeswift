@@ -37,9 +37,17 @@ func importScript(sourceURL, sourceFormat string) string {
 patch_grub() {
   local mnt="$1"
   for grub in $(find "$mnt" \( -name "grub.cfg" -o -name "grub.conf" \) 2>/dev/null); do
-    if [ -f "$grub" ] && ! grep -q 'console=ttyS0' "$grub"; then
+    if [ ! -f "$grub" ]; then continue; fi
+    if ! grep -q 'console=ttyS0' "$grub"; then
       sed -i 's/\(linux[^ ]* .*\)/\1 console=ttyS0,115200n8 earlycon=uart8250,io,0x3f8,115200n8/' "$grub"
       echo "Patched $grub for serial console"
+    fi
+    # Always enable GRUB serial terminal (required for Cloud Hypervisor serial socket)
+    if grep -q '^terminal_output console' "$grub"; then
+      sed -i '/^terminal_output console/i serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1' "$grub"
+      sed -i 's/^terminal_input console/terminal_input serial console/' "$grub"
+      sed -i 's/^terminal_output console/terminal_output serial console/' "$grub"
+      echo "Patched $grub GRUB terminal for serial output"
     fi
   done
 }
