@@ -10,19 +10,32 @@ use std::process::Command;
 use std::sync::Arc;
 
 /// Creates NoCloud seed ISO from directory. CH expects disk image, not directory.
+/// Passes meta-data, user-data, network-config explicitly for correct root-level layout.
 fn create_seed_iso(seed_dir: &Path, output_iso: &Path) -> Result<(), String> {
+    let mut files = Vec::new();
+    for name in ["meta-data", "user-data", "network-config"] {
+        let p = seed_dir.join(name);
+        if p.exists() {
+            files.push(name.to_string());
+        }
+    }
+    if files.is_empty() {
+        return Err("no seed files (meta-data, user-data, network-config) found".to_string());
+    }
+    let mut args = vec![
+        "-output",
+        output_iso.to_str().ok_or("invalid output path")?,
+        "-volid",
+        "cidata",
+        "-joliet",
+        "-rock",
+        "-input-charset",
+        "utf-8",
+    ];
+    args.extend(files.iter().map(String::as_str));
     let status = Command::new("genisoimage")
-        .args([
-            "-output",
-            output_iso.to_str().ok_or("invalid output path")?,
-            "-volid",
-            "cidata",
-            "-joliet",
-            "-rock",
-            "-input-charset",
-            "utf-8",
-            seed_dir.to_str().ok_or("invalid seed dir path")?,
-        ])
+        .args(&args)
+        .current_dir(seed_dir)
         .status()
         .map_err(|e| format!("genisoimage exec failed: {}", e))?;
     if !status.success() {
