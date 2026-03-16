@@ -108,8 +108,12 @@ release-stable:
 generate:
 	$(shell go env GOPATH)/bin/controller-gen object crd paths="./api/..." output:crd:dir=config/crd/bases
 
-deploy:
+deploy: generate
 	kubectl apply -k config/crd
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftguests.swift.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftimages.image.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftseedprofiles.seed.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftguestclasses.swift.kubeswift.io
 	kubectl apply -k config/default
 
 undeploy:

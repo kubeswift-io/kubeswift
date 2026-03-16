@@ -3,8 +3,8 @@
 # Requires: kubectl, KubeSwift cluster with CRDs and controllers deployed.
 # See docs/operator/smoke-verification.md for prerequisites and failure checks.
 #
-# Usage: ./boot-test.sh [--timeout-image MIN] [--timeout-guest MIN] [--no-cleanup]
-# Default: timeout-image=15, timeout-guest=5
+# Usage: ./boot-test.sh [--timeout-image MIN] [--timeout-guest MIN] [--timeout-network MIN] [--no-cleanup]
+# Default: timeout-image=15, timeout-guest=5, timeout-network=5
 
 set -euo pipefail
 
@@ -15,6 +15,7 @@ RBAC_DIR="${REPO_ROOT}/config/rbac"
 NAMESPACE="${NAMESPACE:-default}"
 TIMEOUT_IMAGE=15
 TIMEOUT_GUEST=5
+TIMEOUT_NETWORK=5
 NO_CLEANUP=false
 
 while [[ $# -gt 0 ]]; do
@@ -25,6 +26,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --timeout-guest)
       TIMEOUT_GUEST="$2"
+      shift 2
+      ;;
+    --timeout-network)
+      TIMEOUT_NETWORK="$2"
       shift 2
       ;;
     --no-cleanup)
@@ -40,7 +45,7 @@ done
 
 echo "=== KubeSwift boot smoke test ==="
 echo "Namespace: $NAMESPACE"
-echo "Image timeout: ${TIMEOUT_IMAGE}m, Guest timeout: ${TIMEOUT_GUEST}m"
+echo "Image timeout: ${TIMEOUT_IMAGE}m, Guest timeout: ${TIMEOUT_GUEST}m, Network timeout: ${TIMEOUT_NETWORK}m"
 echo ""
 
 # Apply RBAC before SwiftGuest (required for swiftletd status reporting)
@@ -136,9 +141,9 @@ fi
 echo "Conditions OK"
 
 # Stage 6: Verify networking (status.network.primaryIP)
-echo "Waiting for status.network.primaryIP (timeout 2m)..."
+echo "Waiting for status.network.primaryIP (timeout ${TIMEOUT_NETWORK}m)..."
 PRIMARY_IP=""
-for i in $(seq 1 24); do
+for i in $(seq 1 $((TIMEOUT_NETWORK * 12))); do
   PRIMARY_IP=$(kubectl get swiftguest sample -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}' 2>/dev/null || true)
   if [[ -n "$PRIMARY_IP" ]]; then
     break
