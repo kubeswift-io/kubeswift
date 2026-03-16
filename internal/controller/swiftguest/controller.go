@@ -27,16 +27,18 @@ const (
 	// defaultNetworkConfig is used when SwiftSeedProfile has no networkData.
 	// Matches both predictable naming (en*: ens3, enp0s3, eno1) and legacy (eth*: eth0).
 	// Ubuntu/Debian use en*; Rocky/RHEL may use eth0 when net.ifnames=0.
-	defaultNetworkConfig = `version: 2
-ethernets:
-  predictable:
-    match:
-      name: en*
-    dhcp4: true
-  legacy:
-    match:
-      name: eth*
-    dhcp4: true
+	// Top-level "network:" is required by cloud-init/netplan.
+	defaultNetworkConfig = `network:
+  version: 2
+  ethernets:
+    predictable:
+      match:
+        name: en*
+      dhcp4: true
+    legacy:
+      match:
+        name: eth*
+      dhcp4: true
 `
 )
 

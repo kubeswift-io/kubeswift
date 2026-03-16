@@ -1,4 +1,5 @@
 mod intent;
+mod kube_client;
 mod launch;
 mod lease;
 mod report;
@@ -101,7 +102,7 @@ fn main() {
                     return;
                 };
                 rt.block_on(async {
-                    let client = match kube::Client::try_default().await {
+                    let client = match kube_client::create_client().await {
                         Ok(c) => c,
                         Err(e) => {
                             eprintln!(
@@ -138,7 +139,7 @@ fn main() {
                 let rt_clone = Arc::clone(&rt);
                 move || {
                     rt_clone.block_on(async {
-                        let client = match kube::Client::try_default().await {
+                        let client = match kube_client::create_client().await {
                             Ok(c) => c,
                             Err(e) => {
                                 eprintln!(
