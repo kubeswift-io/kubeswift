@@ -38,9 +38,9 @@ impl VmConfig {
             format!("boot={}", self.cpus.max(1)),
         ];
 
-        // --kernel (firmware) required for disk boot; CH creates serial device when VM is properly initialized.
+        // --firmware required for disk boot; CH creates serial device when VM is properly initialized.
         if let Some(ref path) = self.firmware_path {
-            args.push("--kernel".to_string());
+            args.push("--firmware".to_string());
             args.push(path.clone());
         }
 
