@@ -90,12 +90,17 @@ The SwiftImage http source must point to a valid, accessible Linux cloud image. 
 
 Run the smoke test:
 ```bash
+# Set KUBECONFIG if using a non-default cluster
+export KUBECONFIG=/path/to/kubeconfig
+
 make smoke-test
 # or
 ./test/smoke/boot-test.sh [--timeout-image MIN] [--timeout-guest MIN] [--no-cleanup]
 ```
 
 Default: `--timeout-image=15`, `--timeout-guest=5`. Use `NAMESPACE=my-ns` to override the default namespace.
+
+**After applying fixes:** Rebuild and redeploy controller + swiftletd images before re-running the smoke test. For remote clusters, push images to the registry; for kind/minikube, use `make load-images`.
 
 ---
 

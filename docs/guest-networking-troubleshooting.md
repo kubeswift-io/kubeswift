@@ -6,7 +6,7 @@ When `status.network.primaryIP` is empty, use these steps to diagnose.
 
 **Ubuntu cloud images use predictable interface naming** (e.g. `ens3`, `enp0s3`) for virtio-net, not legacy `eth0`. If the default network-config targets only `eth0`, cloud-init creates netplan for a non-existent interface and the VM never sends DHCP. The lease file stays empty.
 
-**Fix:** Default network-config uses `match: name: en*` (predictable) and `match: name: eth*` (legacy) to support Ubuntu, Debian, Rocky, Fedora. See `internal/controller/swiftguest/controller.go` `defaultNetworkConfig`.
+**Fix:** Default network-config uses `match: name: en*` (predictable) and `match: name: eth*` (legacy) to support Ubuntu, Debian, Rocky, Fedora. Top-level `network:` wrapper is required by cloud-init/netplan. See `internal/controller/swiftguest/controller.go` `defaultNetworkConfig`.
 
 ## Data flow
 

@@ -63,7 +63,7 @@ pub fn spawn_lease_poller(
                 return;
             };
             rt.block_on(async {
-                let client = match kube::Client::try_default().await {
+                let client = match crate::kube_client::create_client().await {
                     Ok(c) => c,
                     Err(e) => {
                         eprintln!(

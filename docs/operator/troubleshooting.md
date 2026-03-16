@@ -124,6 +124,7 @@ kubectl describe node <node-name>
 - swiftletd or Cloud Hypervisor crashed
 - VM failed to boot
 - Runtime intent or mount path mismatch
+- **Kube API unreachable** — `failed to report running: ServiceError: client error (Connect)` when `KUBERNETES_SERVICE_HOST` is set but the cluster IP is unreachable (e.g. external API server, custom networking). swiftletd now falls back to `Config::incluster_dns()` (uses `https://kubernetes.default.svc`). Ensure you run a swiftletd image that includes this fix.
 
 **Actions:**
 ```bash
@@ -135,6 +136,7 @@ kubectl describe swiftguest <name> -n <namespace>
 - Apply RBAC in the namespace
 - Check launcher logs for swiftletd/Cloud Hypervisor errors
 - Verify runtime intent ConfigMap is mounted at `/var/lib/kubeswift/intent`
+- If logs show `client error (Connect)`: rebuild and redeploy swiftletd image; use latest from `ghcr.io/projectbeskar/kubeswift/swiftletd` or a release tag
 
 ### swiftletd errors in logs
 
