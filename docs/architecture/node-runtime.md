@@ -39,7 +39,7 @@ The runtime directory is created under `KUBESWIFT_RUN_DIR` (default `/var/lib/ku
 
 ## Cloud Hypervisor requirements
 
-- **Version:** v37.0+ (CLI format: `--api-socket path=`, `--disk path=`, etc.)
+- **Version:** v51.1 (CLI format: `--api-socket path=`, `--disk path=`, etc.)
 - **Binary:** Included in the swiftletd container image at `/usr/local/bin/cloud-hypervisor`
 - **Socket:** Unix socket only; no TCP binding
 

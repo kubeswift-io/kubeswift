@@ -4,7 +4,7 @@ Cloud Hypervisor API client for KubeSwift. Spawns the `cloud-hypervisor` process
 
 ## Cloud Hypervisor version
 
-Tested with Cloud Hypervisor v37.0+. CLI arguments (`--api-socket`, `--disk`, `--memory`, `--cpus`) follow the format documented at https://cloudhypervisor.org/docs/prologue/commands.
+Tested with Cloud Hypervisor v51.1. CLI arguments (`--api-socket`, `--disk`, `--memory`, `--cpus`) follow the format documented at https://cloudhypervisor.org/docs/prologue/commands.
 
 ## Seed media (cloud-init NoCloud)
 
