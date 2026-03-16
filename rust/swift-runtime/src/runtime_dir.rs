@@ -42,10 +42,13 @@ impl RuntimeDir {
 /// `guest_id` is used for the directory name (e.g., "default/guest1").
 /// Slashes are replaced with hyphens for filesystem safety.
 /// `base_path` is the parent directory (e.g., /var/lib/kubeswift/run).
+/// Returns RuntimeDir with an absolute root path so subprocess calls (e.g. genisoimage -output)
+/// resolve correctly regardless of current_dir.
 pub fn create_runtime_dir(guest_id: &str, base_path: &Path) -> Result<RuntimeDir, std::io::Error> {
     let safe_id = guest_id.replace('/', "-");
     let root = base_path.join(&safe_id);
     std::fs::create_dir_all(root.join(SEED_SUBDIR))?;
+    let root = root.canonicalize()?;
     Ok(RuntimeDir { root })
 }
 
