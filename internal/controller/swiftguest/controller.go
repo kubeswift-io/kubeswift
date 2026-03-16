@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"context"
 	"errors"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -172,6 +173,14 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	} else {
 		// Pod exists; update status from pod
 		MapPodToStatus(&existingPod, status)
+		// If guest is running but IP not yet discovered, requeue to catch annotation update
+		if status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
+			(status.Network == nil || status.Network.PrimaryIP == "") {
+			if err := r.patchStatus(ctx, &guest, status); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 		// TODO: consider updating pod spec if resolved changed (e.g., resources)
 	}
 
