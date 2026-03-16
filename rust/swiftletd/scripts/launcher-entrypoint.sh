@@ -23,16 +23,23 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
-    # Derive subnet from br0 (e.g. 10.244.1.1/24 -> 10.244.1.0/24)
+    # Derive subnet from br0 (e.g. 10.244.125.1/24 -> 10.244.125.0/24)
     br_addr=$(ip -4 addr show "$BRIDGE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | head -1)
     [ -z "$br_addr" ] && { echo "No IP on $BRIDGE"; exit 1; }
     base=$(echo "$br_addr" | cut -d'/' -f1 | sed 's/\.[0-9]*$/.0/')
+    gateway=$(echo "$base" | sed 's/\.0$/.1/')
     range_start=$(echo "$base" | sed 's/\.0$/.10/')
     range_end=$(echo "$base" | sed 's/\.0$/.20/')
     range="$range_start,$range_end"
 
+    # DNS: use cluster DNS from resolv.conf, fallback to 10.96.0.10
+    dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+    [ -z "$dns" ] && dns="10.96.0.10"
+
     dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" \
         --dhcp-range="$range" \
+        --dhcp-option=option:router,"$gateway" \
+        --dhcp-option=option:dns-server,"$dns" \
         --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
         --dhcp-authoritative &
     sleep 1

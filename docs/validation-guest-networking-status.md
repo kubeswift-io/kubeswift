@@ -15,9 +15,11 @@ This document summarizes the root causes, fixes, and validation steps for the sm
 
 ### 2. Kube API client (Connect error)
 
-**Cause:** swiftletd used `kube::Client::try_default()` which uses `KUBERNETES_SERVICE_HOST` + `KUBERNETES_SERVICE_PORT`. In clusters with an external API server (e.g. `https://frida.labk8s.io:6443`), the cluster IP may be unreachable from pods.
+**Cause:** swiftletd used `kube::Client::try_default()` which uses `KUBERNETES_SERVICE_HOST` + `KUBERNETES_SERVICE_PORT`. In clusters with an external API server (e.g. `https://frida.labk8s.io:6443`), the cluster IP may be unreachable from pods. The patch to SwiftGuest status fails with `ServiceError: client error (Connect)`.
 
-**Fix:** `rust/swiftletd/src/kube_client.rs` – `create_client()` tries `Client::try_default()` first, then falls back to `Config::incluster_dns()` (uses `https://kubernetes.default.svc`). Both report-running and lease poller use this client.
+**Target:** `api.patch_status()` in `report.rs` → `PATCH /apis/swift.kubeswift.io/v1alpha1/namespaces/{ns}/swiftguests/{name}/status` → Kubernetes API server at `https://{KUBERNETES_SERVICE_HOST}:{PORT}` or `https://kubernetes.default.svc`.
+
+**Fix:** `rust/swiftletd/src/kube_client.rs` – `create_client()` tries `Config::incluster_dns()` first (uses `https://kubernetes.default.svc`), then falls back to `Client::try_default()`. Both report-running and lease poller use this client.
 
 ### 3. status.network.primaryIP
 

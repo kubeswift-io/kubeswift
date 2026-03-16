@@ -35,9 +35,10 @@ kubectl exec -n default "$POD" -c launcher -- cat /var/lib/kubeswift/run/default
 # 5. Check if dnsmasq is running
 kubectl exec -n default "$POD" -c launcher -- ps aux | grep dnsmasq
 
-# 6. Check network setup (br0, tap0)
+# 6. Check network setup (br0 internal with tap0 only; eth0 must NOT be on br0)
 kubectl exec -n default "$POD" -c launcher -- ip addr show br0 2>/dev/null || echo "br0 not found"
 kubectl exec -n default "$POD" -c launcher -- ip link show tap0 2>/dev/null || echo "tap0 not found"
+kubectl exec -n default "$POD" -c launcher -- bridge link show 2>/dev/null || true  # br0 should show only tap0
 ```
 
 ## Common issues
