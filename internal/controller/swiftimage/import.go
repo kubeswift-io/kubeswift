@@ -34,31 +34,37 @@ func importScript(sourceURL, sourceFormat string) string {
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
 	grubPatch := `
-# Patch GRUB for serial console (firmware boot uses disk cmdline, not CH --cmdline)
 patch_grub() {
   local mnt="$1"
   for grub in $(find "$mnt" \( -name "grub.cfg" -o -name "grub.conf" \) 2>/dev/null); do
     if [ -f "$grub" ] && ! grep -q 'console=ttyS0' "$grub"; then
-      sed -i 's/\(linux[^ ]* .*\)/\1 console=ttyS0,115200n8/' "$grub"
+      sed -i 's/\(linux[^ ]* .*\)/\1 console=ttyS0,115200n8 earlycon=uart8250,io,0x3f8,115200n8/' "$grub"
       echo "Patched $grub for serial console"
     fi
   done
 }
 mkdir -p /mnt/disk
-# Try ESP (1MB) - UEFI: /EFI/ubuntu/grub.cfg, /EFI/BOOT/grub.cfg
-if mount -o loop,offset=1048576 "$OUTPUT" /mnt/disk 2>/dev/null; then
-  patch_grub /mnt/disk
-  umount /mnt/disk
-fi
-# Discover Linux partition offsets via fdisk (sector * 512), then fallback to known offsets.
-# Fallback covers: Ubuntu (1MB ESP, 5MB EFI, 227328*512 root), Debian (134MB), Rocky/Fedora (100MB /boot, 512MB, 1106MiB root).
-# Start sector: $3 when Boot is "*", else $2 (fdisk -l: Device Boot Start End ...; 83=Linux, 8e=Linux LVM)
-OFFSETS=$(fdisk -l "$OUTPUT" 2>/dev/null | awk '/Linux/ {s=($2=="*"?$3:$2); if(s+0==s) print s*512}' | sort -un)
-if [ -z "$OFFSETS" ]; then
-  OFFSETS="1048576 5242880 104857600 116391936 140509184 536870912 537919488 1159725056"
-  echo "GRUB patch: using fallback offsets (fdisk found none)"
-fi
-for offset in $OFFSETS; do
+
+# Read GPT partition start LBAs using od (128 bytes per entry, start LBA at offset 32 in each entry).
+# LBA 2 = byte 1024. We read up to 32 partition entries (32 * 128 = 4096 bytes).
+# od: -A d (decimal addresses), -t u8 (unsigned 8-byte integers), skip 1024 bytes, read 4096 bytes.
+GPT_OFFSETS=$(od -A d -t u8 -j 1024 -N 4096 "$OUTPUT" 2>/dev/null | awk '
+  {
+    addr = $1 + 0
+    for (i = 2; i <= NF; i++) {
+      byte_pos = addr + (i-2)*8
+      rel = byte_pos - 1024
+      if (rel >= 0 && rel % 128 == 32 && $i+0 == $i && $i > 2047 && $i < 1000000000) {
+        print $i * 512
+      }
+    }
+  }
+' | sort -un)
+
+# Also always try the known Ubuntu Noble offsets as fallback (covers MBR Linux/Linux LVM, GPT EFI+root)
+FALLBACK_OFFSETS="1048576 116391936 5242880 104857600 140509184 536870912 1159725056"
+
+for offset in $GPT_OFFSETS $FALLBACK_OFFSETS; do
   [ -z "$offset" ] || [ "$offset" = "0" ] && continue
   if mount -o loop,offset=$offset "$OUTPUT" /mnt/disk 2>/dev/null; then
     patch_grub /mnt/disk
