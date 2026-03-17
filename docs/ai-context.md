@@ -1,0 +1,417 @@
+# KubeSwift Project Context
+> This document is the canonical context anchor for AI-assisted KubeSwift development.
+> It should be read at the start of every new session before any work begins.
+> Last updated: March 17, 2026 — after first passing end-to-end smoke test (v0.1.0-smoke-passed).
+
+---
+
+## What is KubeSwift
+
+KubeSwift is a Kubernetes-native virtual machine runtime built on Cloud Hypervisor.
+It allows Kubernetes users to run virtual machines as first-class Kubernetes workloads,
+using custom resources and controllers.
+
+KubeSwift is **not** a container sandbox (not Kata Containers).
+It is a VM platform where virtual machines are first-class Kubernetes workloads.
+
+It is similar in spirit to KubeVirt but with a much simpler architecture:
+- Runtime: Cloud Hypervisor (not QEMU)
+- Firmware: rust-hypervisor-firmware v0.5.0
+- Distribution: OCI-native (Helm chart + container images)
+- Goal: minimal architecture, strong operability, fast iteration
+
+Repository: `https://github.com/projectbeskar/kubeswift` (private)
+Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
+
+---
+
+## Current State (v0.1.0-smoke-passed)
+
+### What works end-to-end
+- SwiftImage import: downloads qcow2, converts to raw, patches GRUB for serial console
+- SwiftGuest lifecycle: creates launcher pod, boots VM, reports status
+- Networking: tap+bridge+dnsmasq DHCP, guest gets IP, IP propagated to status
+- `swiftctl console`: connects to serial socket, interactive console works
+- `swiftctl start/stop/restart/debug`: implemented and working
+- Smoke test: passes end-to-end (`make smoke-test`)
+
+### Known working configuration
+- Guest OS: **Ubuntu Focal (20.04)** cloud image — Noble (24.04) is incompatible with rust-hypervisor-firmware due to EFI protocol gaps (TPM, MOK, writable NVRAM)
+- Firmware: rust-hypervisor-firmware v0.5.0, loaded via `--kernel` flag (NOT `--firmware`)
+- Cloud Hypervisor: v51.1
+- Seed format: NoCloud flat layout (meta-data, user-data, network-config at ISO root)
+- Seed ISO: genisoimage with `-rock -joliet -volid cidata` flags
+- DHCP range: 10.244.125.10–20 on br0 (10.244.125.1)
+
+### Deployed images
+- `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-1782241`
+- `ghcr.io/projectbeskar/kubeswift/swiftletd:sha-1782241`
+- Tag: `v0.1.0-smoke-passed`
+
+---
+
+## Architecture
+
+### High-Level
+
+```
+User
+ │
+ │ kubectl / helm / swiftctl
+ │
+ ▼
+Kubernetes API Server
+ │  CRDs
+ ▼
+KubeSwift Controllers (Go, controller-runtime)
+ │  create launcher pod
+ ▼
+SwiftGuest Pod
+ ├─ init container: network-init (bridge/tap/dnsmasq setup)
+ └─ launcher container: swiftletd (Rust)
+        │
+        ▼
+     Cloud Hypervisor v51.1
+        │  --kernel hypervisor-fw (rust-hypervisor-firmware v0.5.0)
+        ▼
+      Guest VM (Ubuntu Focal)
+```
+
+### CRDs
+
+**SwiftGuest** — represents a running VM
+```yaml
+spec:
+  imageRef:       # SwiftImage to boot from
+  guestClassRef:  # SwiftGuestClass for resource defaults
+  seedProfileRef: # SwiftSeedProfile for cloud-init
+  runPolicy:      # Running | Stopped
+status:
+  phase:          # Pending | Scheduling | Running | Failed | Stopped
+  conditions:     # Resolved | PodScheduled | GuestRunning
+  nodeName:
+  podRef:
+  network:
+    primaryIP:    # discovered from dnsmasq DHCP lease
+```
+
+**SwiftImage** — represents a VM disk image
+```yaml
+spec:
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+  format: qcow2   # converted to raw during import
+status:
+  phase: Ready | Importing | Validating | Failed
+  preparedArtifact:
+    pvcRef:       # PVC containing image.raw
+```
+
+**SwiftSeedProfile** — cloud-init / NoCloud configuration
+```yaml
+spec:
+  datasource: NoCloud
+  userData: |    # cloud-config YAML
+  metaData: |
+  networkData: |
+```
+
+**SwiftGuestClass** — default resource profile
+```yaml
+spec:
+  cpu: 2
+  memory: 2048Mi
+```
+
+### Repository Structure
+
+```
+api/                        CRD types (Go)
+cmd/
+  swiftctl/                 CLI (console, start, stop, restart, debug)
+internal/
+  controller/swiftguest/    SwiftGuest controller
+  controller/swiftimage/    SwiftImage controller (import job)
+  runtimeintent/            VM launch spec builder
+  seed/                     cloud-init ConfigMap builder
+  cli/                      shared CLI helpers
+
+rust/
+  swiftletd/                VM launcher (main binary in swiftletd image)
+  swift-runtime/            RuntimeDir management
+  swift-ch-client/          Cloud Hypervisor spawn + API client
+  swift-seed/               NoCloud ISO builder
+
+images/
+  swiftletd/Containerfile   Multi-stage: rust builder + debian runtime
+  controller-manager/
+  webhook-server/
+
+config/
+  crd/bases/                Generated CRD YAML (apply with kubectl apply -k config/crd)
+  samples/                  Sample SwiftImage, SwiftGuest, etc.
+
+charts/kubeswift/           Helm chart
+test/smoke/boot-test.sh     End-to-end smoke test
+```
+
+### Networking Model
+
+```
+Guest VM
+   │ virtio-net
+   │
+  tap0
+   │
+  br0 (10.244.125.1/24)
+   │
+  pod network (eth0, NOT bridged)
+
+dnsmasq: DHCP range 10.244.125.10–20, router 10.244.125.1
+iptables: MASQUERADE on eth0 for guest outbound traffic
+```
+
+Key facts:
+- `eth0` is **not** enslaved to `br0` — this was Bug 1 and broke pod networking
+- `br0` has its own IP (`10.244.125.1`) as the default gateway for guests
+- swiftletd polls dnsmasq lease file to discover guest IP
+- Guest IP written to pod annotation `kubeswift.io/guest-ip`
+- Controller reads annotation and writes to `SwiftGuest.status.network.primaryIP`
+- Controller requeues every 5s while Running but no IP yet (cache staleness fix)
+
+### Image Import Pipeline
+
+```
+SwiftImage created
+  │
+  ▼
+Import Job (ubuntu:22.04, privileged)
+  │  curl download
+  │  qemu-img convert qcow2 → raw (if needed)
+  │  GPT partition detection via od (NOT fdisk — fails on GPT)
+  │  mount each partition, patch grub.cfg:
+  │    - add console=ttyS0 to kernel cmdline (if missing)
+  │    - add serial --speed=115200 BEFORE terminal_input/output
+  │    - replace terminal_input/output console → serial console
+  │  EFI partition: replace BOOTX64.EFI with grubx64.efi (bypass shim if needed)
+  ▼
+image.raw stored in PVC
+status.phase = Ready
+```
+
+Key facts:
+- Runtime disk format must be **raw** (Cloud Hypervisor requirement)
+- GRUB terminal patch order matters: `serial` init must come BEFORE `terminal_input serial`
+- Ubuntu Noble (24.04) does NOT boot with rust-hypervisor-firmware — use Focal (20.04)
+- Import job uses `od`-based GPT LBA parser (not fdisk) for partition detection
+
+### Cloud Hypervisor Invocation
+
+```
+cloud-hypervisor \
+  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \   # rust-hypervisor-firmware v0.5.0
+  --api-socket path=<runtime-dir>/ch.sock \
+  --memory size=2048M \
+  --cpus boot=2 \
+  --disk path=<image.raw> path=<seed.iso> \
+  --serial socket=<runtime-dir>/serial.sock \
+  --console off \
+  --net tap=tap0
+```
+
+Critical: `--kernel` is correct for rust-hypervisor-firmware (PVH ELF binary).
+`--firmware` is for OVMF/EDK2 only — using it silently prevents serial output.
+
+---
+
+## Bugs Fixed (Historical Reference)
+
+| # | Component | Bug | Fix |
+|---|-----------|-----|-----|
+| 1 | network-init.sh | eth0 enslaved to br0, broke pod network | Remove eth0 from bridge, add NAT/masquerade |
+| 2 | swift-seed | OpenStack ConfigDrive layout instead of NoCloud | Write flat files at ISO root |
+| 3 | swiftletd | genisoimage missing -rock/-joliet/-volid flags | Add flags to genisoimage invocation |
+| 4 | swift-runtime | genisoimage relative output path | Canonicalize output path |
+| 5 | swiftimage/import.go | fdisk fails on GPT disks | Replace with od-based GPT LBA parser |
+| 6 | swiftimage/import.go | GRUB patch skipped BOOT partition (ttyS0 already present) | Add unconditional terminal patch block |
+| 7 | swiftimage/import.go | GRUB terminal patch order wrong (terminal_input before serial init) | Use awk rewrite for correct ordering |
+| 8 | swift-ch-client/config.rs | --firmware used instead of --kernel | Revert to --kernel |
+| 9 | config/samples/image.yaml | Ubuntu Noble incompatible with rust-hypervisor-firmware | Switch to Ubuntu Focal |
+| 10 | swiftguest controller | No requeue when IP not yet discovered | Add RequeueAfter: 5s when Running + no IP |
+| 11 | CRD schema | status.network missing from OpenAPI schema | Regenerate CRD, add to make deploy |
+| 12 | smoke test | 2m network timeout too short | Increase to 5m, add --timeout-network flag |
+| 13 | Makefile | make deploy didn't apply CRDs | Add kubectl apply -k config/crd + kubectl wait |
+| 14 | seed profile | package_update: true caused slow first boot | Remove from sample seed profile |
+
+---
+
+## Deployment
+
+```bash
+make build-images push-images deploy
+```
+
+`make deploy` must:
+1. Run `controller-gen` to regenerate CRD YAML from Go types
+2. `kubectl apply -k config/crd` + wait for Established
+3. Deploy controller-manager
+
+**Never let the CRD schema drift from the Go types.** The API server silently drops unknown fields.
+
+### Smoke Test
+
+```bash
+make smoke-test
+# or with custom timeouts:
+./test/smoke/boot-test.sh --timeout-image 15 --timeout-guest 5 --timeout-network 5
+```
+
+Success criteria:
+- `GuestRunning=True`
+- `status.network.primaryIP` populated
+
+---
+
+## Roadmap
+
+### Completed (v0.1.0)
+- VM boots end-to-end ✓
+- Networking works ✓
+- IP discovery and status reporting ✓
+- swiftctl console ✓
+- swiftctl start/stop/restart/debug ✓
+- Smoke test passes ✓
+
+### Next Priorities (in order)
+
+**1. Networking hardening**
+- tap cleanup on pod deletion
+- dnsmasq lease reliability
+- `status.network.interfaces[]` (multiple interfaces)
+- `swiftctl ssh <guest>` command
+
+**2. Rich guest status**
+```yaml
+status:
+  runtime:
+    pid: 42
+    hypervisor: cloud-hypervisor
+  console:
+    serialSocket: /var/lib/kubeswift/run/default-sample/serial.sock
+  network:
+    primaryIP: 10.244.125.10
+    interfaces:
+    - name: eth0
+      ip: 10.244.125.10
+```
+
+**3. Full lifecycle controls**
+- `runPolicy: RestartOnFailure | Always`
+- Controller handles VM crash/exit
+- `swiftctl stop` graceful shutdown via CH API
+
+**4. swiftctl expansion**
+- `swiftctl ssh <guest>` — SSH proxy through launcher pod
+- `swiftctl describe <guest>` — rich human-readable status
+- `swiftctl logs <guest>` — tail swiftletd logs
+
+**5. Image pipeline improvements**
+- `status.sourceFormat`, `status.preparedFormat`, `status.size`
+- Format validation
+- Support for more distros (Rocky Linux, Debian)
+
+**6. SwiftKernel — MicroVM Kernel Library (NEW)**
+
+This is a planned addition that makes KubeSwift uniquely powerful for cloud-native workloads.
+
+Concept: a curated catalog of minimal kernels and rootfs images purpose-built for specific
+workload types, distributed as OCI artifacts. Users reference them in SwiftGuest instead of
+a full OS SwiftImage.
+
+Proposed CRD:
+```yaml
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: faas-minimal
+spec:
+  kernel:
+    oci: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+  initrd:
+    oci: ghcr.io/projectbeskar/kubeswift/rootfs/faas-minimal:latest
+  capabilities:
+    - faas
+    - fast-boot
+```
+
+SwiftGuest with kernel reference (no imageRef needed):
+```yaml
+spec:
+  kernelRef:
+    name: faas-minimal
+```
+
+Boot path: Cloud Hypervisor `--kernel bzImage --initramfs` — bypasses firmware and GRUB
+entirely, giving sub-second boot times. This is fundamentally different from the full OS
+disk boot path.
+
+Target workload profiles:
+- **faas-minimal**: tiny kernel + BusyBox/musl userspace, <100ms cold start, no systemd
+- **gpu-workload**: kernel with vfio/vgpu modules, CUDA-compatible userspace
+- **vhost-user**: kernel with vhost-user-blk/net, DPDK-ready
+- **wasm**: wasmtime/wasmer in minimal rootfs
+
+This positions KubeSwift as the right tool for secure microVM workloads needing VM
+isolation with container-like density and startup time — differentiated from KubeVirt.
+
+**7. Host runtime hardening**
+- Drop unnecessary privileges in launcher pod
+- Restrict host mounts
+- Tap/dnsmasq cleanup on pod termination
+
+**8. Documentation**
+- README (what KubeSwift is, how it differs from KubeVirt)
+- docs/install.md, quickstart.md, networking.md, images.md, swiftctl.md, architecture.md
+
+**9. Observability**
+- Metrics: `kubeswift_guest_running_total`, `kubeswift_vm_boot_seconds`, `kubeswift_vm_failures_total`
+- Structured logging improvements in controller and swiftletd
+
+### Long-term (not yet prioritized)
+- Live migration
+- Snapshots / persistent disks
+- SR-IOV / Multus networking
+- GPU passthrough
+- High availability controllers
+
+---
+
+## Design Principles
+
+When contributing, always follow these:
+
+1. **Minimalism** — avoid unnecessary complexity, deps, abstraction layers
+2. **Cloud Hypervisor first** — all decisions must be compatible with CH v51+
+3. **Raw disk at runtime** — qcow2 is input only; runtime always uses raw
+4. **Kubernetes-native** — everything observable via kubectl; status fields must be accurate
+5. **Strong operability** — operators must be able to discover IP, connect console, SSH, inspect status
+6. **No silent failures** — status fields must reflect real system state; never drop errors silently
+7. **Verified fixes only** — no speculative patches; diagnose with real cluster output first
+
+---
+
+## AI Assistant Instructions
+
+When helping develop KubeSwift:
+
+- Read this document and the session transcript before starting any work
+- Check `/mnt/transcripts/journal.txt` for previous session summaries
+- Prefer minimal changes — one bug fix at a time, verified with real output
+- Always ask for actual cluster output before suggesting fixes
+- Never assume a fix worked without seeing logs confirming it
+- When writing Cursor prompts: be explicit about what NOT to change
+- CRD changes always require `make deploy` with CRD regeneration — remind the user
+- The working guest OS is Ubuntu Focal — do not suggest Noble without noting incompatibility
+- rust-hypervisor-firmware uses `--kernel`, not `--firmware`
+- The GRUB terminal patch order is: serial init → terminal_input → terminal_output
