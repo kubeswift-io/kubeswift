@@ -11,7 +11,6 @@ spec:
   userData: |
     #cloud-config
     hostname: kubeswift-guest
-    package_update: true
     users:
       - name: kubeswift
         passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
