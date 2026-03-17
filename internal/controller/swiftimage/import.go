@@ -44,9 +44,11 @@ patch_grub() {
     fi
     # Always enable GRUB serial terminal (required for Cloud Hypervisor serial socket)
     if grep -q '^terminal_output console' "$grub"; then
-      sed -i '/^terminal_output console/i serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1' "$grub"
-      sed -i 's/^terminal_input console/terminal_input serial console/' "$grub"
-      sed -i 's/^terminal_output console/terminal_output serial console/' "$grub"
+      awk '
+        /^terminal_input console/ { print "serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"; print "terminal_input serial console"; print "terminal_output serial console"; next }
+        /^terminal_output console/ { next }
+        { print }
+      ' "$grub" > "$grub.tmp" && mv "$grub.tmp" "$grub"
       echo "Patched $grub GRUB terminal for serial output"
     fi
   done
