@@ -153,7 +153,7 @@ fn main() {
                 let ns = namespace.clone().unwrap();
                 let name = name.clone().unwrap();
                 let rt_clone = Arc::clone(&rt);
-                move |pid: u32, serial_socket_path: &str| {
+                move |pid: u32, serial_socket_path: String| {
                     rt_clone.block_on(async {
                         let client = match kube_client::create_client().await {
                             Ok(c) => c,
@@ -175,7 +175,7 @@ fn main() {
                             &ns,
                             &name,
                             pid,
-                            serial_socket_path,
+                            serial_socket_path.as_str(),
                         )
                         .await
                         {
