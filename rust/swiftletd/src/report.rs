@@ -52,3 +52,27 @@ pub async fn report_guest_running(
     api.patch_status(name, &pp, &Patch::Merge(status)).await?;
     Ok(())
 }
+
+/// Reports runtime and console status to SwiftGuest.
+pub async fn report_guest_runtime(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    pid: u32,
+    serial_socket: &str,
+) -> Result<(), kube::Error> {
+    let gvk = GroupVersionKind::gvk("swift.kubeswift.io", "v1alpha1", "SwiftGuest");
+    let api_resource = ApiResource::from_gvk_with_plural(&gvk, "swiftguests");
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &api_resource);
+
+    let status = json!({
+        "status": {
+            "runtime": { "pid": pid as i64, "hypervisor": "cloud-hypervisor" },
+            "console": { "serialSocket": serial_socket }
+        }
+    });
+
+    let pp = PatchParams::default();
+    api.patch_status(name, &pp, &Patch::Merge(status)).await?;
+    Ok(())
+}

@@ -1,6 +1,9 @@
 package swiftguest
 
 import (
+	"encoding/json"
+	"strconv"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -26,6 +29,34 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		status.Network.PrimaryIP = ip
 		status.Network.Interface = "eth0"
 		status.Network.Ready = true
+	}
+
+	// Set network interfaces from pod annotation (set by swiftletd lease poller)
+	if raw, ok := pod.Annotations[PodAnnotationGuestInterfaces]; ok && raw != "" {
+		var ifaces []swiftv1alpha1.GuestNetworkInterface
+		if err := json.Unmarshal([]byte(raw), &ifaces); err == nil {
+			if status.Network == nil {
+				status.Network = &swiftv1alpha1.GuestNetworkStatus{}
+			}
+			status.Network.Interfaces = ifaces
+		}
+	}
+
+	// Set runtime from pod annotation (set by swiftletd on socket ready)
+	if pidStr, ok := pod.Annotations[PodAnnotationGuestRuntimePID]; ok && pidStr != "" {
+		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+			status.Runtime = &swiftv1alpha1.GuestRuntimeStatus{
+				PID:        pid,
+				Hypervisor: "cloud-hypervisor",
+			}
+		}
+	}
+
+	// Set console from pod annotation (set by swiftletd on socket ready)
+	if socket, ok := pod.Annotations[PodAnnotationGuestSerialSocket]; ok && socket != "" {
+		status.Console = &swiftv1alpha1.GuestConsoleStatus{
+			SerialSocket: socket,
+		}
 	}
 
 	// Set nodeName and podRef when scheduled
