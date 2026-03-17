@@ -24,7 +24,7 @@ pub fn run<F>(
     on_socket_ready: Option<F>,
 ) -> Result<(std::process::ExitStatus, u32, String), String>
 where
-    F: FnOnce(u32, &str),
+    F: FnOnce(u32, String),
 {
     // CH expects disk image (ISO), not directory. main.rs creates seed.iso from NoCloud dir.
     let seed_path = if intent.has_seed() {
@@ -76,7 +76,7 @@ where
 
     // VM is running; notify caller (e.g. for status reporting)
     if let Some(cb) = on_socket_ready {
-        cb(pid, &serial_socket_path);
+        cb(pid, serial_socket_path.clone());
     }
 
     // Monitor process until exit
