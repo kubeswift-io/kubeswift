@@ -17,13 +17,14 @@ fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
 
 /// Runs the VM: spawns CH, waits for socket, monitors process until exit.
 /// Calls `on_socket_ready` when the API socket is available (VM running).
+/// Returns (exit_status, pid, serial_socket_path) on success.
 pub fn run<F>(
     intent: &RuntimeIntent,
     runtime_dir: &RuntimeDir,
     on_socket_ready: Option<F>,
-) -> Result<std::process::ExitStatus, String>
+) -> Result<(std::process::ExitStatus, u32, String), String>
 where
-    F: FnOnce(),
+    F: FnOnce(u32, &str),
 {
     // CH expects disk image (ISO), not directory. main.rs creates seed.iso from NoCloud dir.
     let seed_path = if intent.has_seed() {
@@ -54,7 +55,7 @@ where
         cpus: intent.cpu.max(1),
         api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
         seed_path,
-        serial_socket_path: Some(serial_socket_path),
+        serial_socket_path: Some(serial_socket_path.clone()),
         firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
         tap_name,
     };
@@ -67,17 +68,19 @@ where
     let mut child =
         spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
 
+    let pid = child.id();
+
     // Wait for CH to create the API socket
     let socket_path = runtime_dir.api_socket();
     wait_for_socket(&socket_path, Duration::from_secs(30))?;
 
     // VM is running; notify caller (e.g. for status reporting)
     if let Some(cb) = on_socket_ready {
-        cb();
+        cb(pid, &serial_socket_path);
     }
 
     // Monitor process until exit
     let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
 
-    Ok(status)
+    Ok((status, pid, serial_socket_path))
 }
