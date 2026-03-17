@@ -34,11 +34,29 @@ type SwiftGuestSpec struct {
 	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`
 }
 
+// GuestRuntimeStatus holds runtime process information.
+type GuestRuntimeStatus struct {
+	PID        int64  `json:"pid,omitempty"`
+	Hypervisor string `json:"hypervisor,omitempty"`
+}
+
+// GuestConsoleStatus holds console access information.
+type GuestConsoleStatus struct {
+	SerialSocket string `json:"serialSocket,omitempty"`
+}
+
+// GuestNetworkInterface represents a single network interface with its IP.
+type GuestNetworkInterface struct {
+	Name string `json:"name,omitempty"`
+	IP   string `json:"ip,omitempty"`
+}
+
 // GuestNetworkStatus holds discovered guest network information.
 type GuestNetworkStatus struct {
-	PrimaryIP string `json:"primaryIP,omitempty"`
-	Interface string `json:"interface,omitempty"`
-	Ready     bool   `json:"ready,omitempty"`
+	PrimaryIP  string                  `json:"primaryIP,omitempty"`
+	Interface  string                  `json:"interface,omitempty"`
+	Ready      bool                    `json:"ready,omitempty"`
+	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
 }
 
 // SwiftGuestStatus defines the observed state of SwiftGuest.
@@ -48,6 +66,8 @@ type SwiftGuestStatus struct {
 	NodeName   string                  `json:"nodeName,omitempty"`
 	PodRef     *corev1.ObjectReference `json:"podRef,omitempty"`
 	Network    *GuestNetworkStatus     `json:"network,omitempty"`
+	Runtime    *GuestRuntimeStatus     `json:"runtime,omitempty"`
+	Console    *GuestConsoleStatus     `json:"console,omitempty"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.
