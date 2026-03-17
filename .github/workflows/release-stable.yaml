@@ -86,6 +86,18 @@ jobs:
       - name: Configure Helm for OCI
         run: helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Generate and sync CRDs
+        run: |
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          make generate
+          cp config/crd/bases/*.yaml charts/kubeswift/crds/
+
       - name: Package and push chart
         run: |
           helm package charts/kubeswift --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
