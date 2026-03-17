@@ -153,7 +153,7 @@ fn main() {
                 let ns = namespace.clone().unwrap();
                 let name = name.clone().unwrap();
                 let rt_clone = Arc::clone(&rt);
-                move || {
+                move |pid: u32, serial_socket_path: &str| {
                     rt_clone.block_on(async {
                         let client = match kube_client::create_client().await {
                             Ok(c) => c,
@@ -170,12 +170,23 @@ fn main() {
                         {
                             eprintln!("swiftletd: failed to report running: {}", e);
                         }
+                        if let Err(e) = report::report_guest_runtime(
+                            &client,
+                            &ns,
+                            &name,
+                            pid,
+                            serial_socket_path,
+                        )
+                        .await
+                        {
+                            eprintln!("swiftletd: failed to report runtime: {}", e);
+                        }
                     });
                 }
             });
 
             match launch::run(&intent, &runtime_dir, on_socket_ready) {
-                Ok(exit_status) => {
+                Ok((exit_status, _pid, _serial_socket_path)) => {
                     if exit_status.success() {
                         eprintln!("swiftletd: VM stopped gracefully");
                         report_running(false, Some("VmStopped"));

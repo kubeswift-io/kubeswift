@@ -158,11 +158,28 @@ spec:
                   - type
                   type: object
                 type: array
+              console:
+                description: GuestConsoleStatus holds console access information.
+                properties:
+                  serialSocket:
+                    type: string
+                type: object
               network:
                 description: GuestNetworkStatus holds discovered guest network information.
                 properties:
                   interface:
                     type: string
+                  interfaces:
+                    items:
+                      description: GuestNetworkInterface represents a single network
+                        interface with its IP.
+                      properties:
+                        ip:
+                          type: string
+                        name:
+                          type: string
+                      type: object
+                    type: array
                   primaryIP:
                     type: string
                   ready:
@@ -223,6 +240,15 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              runtime:
+                description: GuestRuntimeStatus holds runtime process information.
+                properties:
+                  hypervisor:
+                    type: string
+                  pid:
+                    format: int64
+                    type: integer
+                type: object
             type: object
         type: object
     served: true

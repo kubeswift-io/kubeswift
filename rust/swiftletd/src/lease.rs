@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 pub const ANNOTATION_GUEST_IP: &str = "kubeswift.io/guest-ip";
+pub const ANNOTATION_GUEST_INTERFACES: &str = "kubeswift.io/guest-interfaces";
 
 /// dnsmasq lease file format: timestamp mac ip hostname client_id (space-separated).
 /// Returns the first IP found, or None if no valid lease.
@@ -94,9 +95,12 @@ async fn patch_pod_annotation(
     name: &str,
     ip: &str,
 ) -> Result<(), kube::Error> {
+    let interfaces_json = format!(r#"[{{\"name\":\"eth0\",\"ip\":\"{}\"}}]"#, ip);
+
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert(ANNOTATION_GUEST_IP.to_string(), ip.to_string());
+    annotations.insert(ANNOTATION_GUEST_INTERFACES.to_string(), interfaces_json);
     let patch = json!({
         "metadata": {
             "annotations": annotations
