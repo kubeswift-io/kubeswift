@@ -89,6 +89,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 			},
 		},
 		Spec: corev1.PodSpec{
+			RestartPolicy:   corev1.RestartPolicyNever,
 			InitContainers: initContainers,
 			Containers: []corev1.Container{
 				{
