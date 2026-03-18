@@ -10,16 +10,18 @@ import (
 
 // PrepareResult holds the outcome of preparation.
 type PrepareResult struct {
-	PVCRef  *imagev1alpha1.PVCObjectReference
-	Format  imagev1alpha1.DiskFormat
-	Size    *resource.Quantity
-	Success bool
-	Error   string
+	PVCRef   *imagev1alpha1.PVCObjectReference
+	Format   imagev1alpha1.DiskFormat
+	Size     *resource.Quantity
+	SizeHint int64
+	Success  bool
+	Error    string
 }
 
 // Prepare converts the image to runtime format if needed. Target format is raw when spec.format is qcow2.
 // When spec.format is raw, no conversion; use artifact as-is.
-func (r *SwiftImageReconciler) Prepare(ctx context.Context, img *imagev1alpha1.SwiftImage, sourcePath string, pvcRef *imagev1alpha1.PVCObjectReference) (*PrepareResult, error) {
+// SizeHint is used when the converter returns size 0 (e.g. pass-through).
+func (r *SwiftImageReconciler) Prepare(ctx context.Context, img *imagev1alpha1.SwiftImage, sourcePath string, pvcRef *imagev1alpha1.PVCObjectReference, sizeHint int64) (*PrepareResult, error) {
 	if pvcRef == nil {
 		pvcRef = &imagev1alpha1.PVCObjectReference{
 			Name:      importPVCNamePrefix + img.Name,
@@ -43,6 +45,9 @@ func (r *SwiftImageReconciler) Prepare(ctx context.Context, img *imagev1alpha1.S
 	}
 
 	_ = preparedPath
+	if size == 0 && sizeHint > 0 {
+		size = sizeHint
+	}
 	q := resource.NewQuantity(size, resource.BinarySI)
 	return &PrepareResult{
 		PVCRef:  pvcRef,

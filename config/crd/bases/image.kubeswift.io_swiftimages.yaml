@@ -195,6 +195,11 @@ spec:
                 - raw
                 - qcow2
                 type: string
+              sizeHint:
+                description: SizeHint is an internal field used to pass measured size
+                  between Validating and Preparing phases.
+                format: int64
+                type: integer
               sourceFormat:
                 description: DiskFormat is the disk image format.
                 enum:

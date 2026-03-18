@@ -2,9 +2,11 @@ package swiftimage
 
 import (
 	"context"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -17,6 +19,7 @@ type SwiftImageReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Converter ImageConverter
+	Clientset kubernetes.Interface
 }
 
 // Reconcile implements the reconcile loop.
@@ -76,21 +79,23 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 	case imagev1alpha1.SwiftImagePhaseValidating:
-		// Stub: assume validation passes, transition to Preparing
 		validateRes, err := r.Validate(ctx, &img, "")
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if validateRes.Error == "measuring" {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 		if !validateRes.OK {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
 			SetFailedCondition(status, ReasonValidateFailed, validateRes.Error)
 		} else {
+			status.SizeHint = validateRes.Size
 			SetPhase(status, imagev1alpha1.SwiftImagePhasePreparing)
 		}
 
 	case imagev1alpha1.SwiftImagePhasePreparing:
-		// Stub: call prepare; for raw format, pass-through
-		prepareRes, err := r.Prepare(ctx, &img, "", nil)
+		prepareRes, err := r.Prepare(ctx, &img, "", nil, status.SizeHint)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -100,6 +105,8 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		} else {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseReady)
 			SetPreparedArtifact(status, prepareRes.PVCRef, prepareRes.Format, prepareRes.Size)
+			status.SourceFormat = img.Spec.Format
+			status.PreparedFormat = imagev1alpha1.DiskFormatRaw
 			SetReadyCondition(status)
 		}
 
