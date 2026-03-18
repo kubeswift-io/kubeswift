@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: March 17, 2026 — after first passing end-to-end smoke test (v0.1.0-smoke-passed).
+> Last updated: March 18, 2026 — rich guest status implemented and verified
 
 ---
 
@@ -282,14 +282,16 @@ Success criteria:
 - swiftctl console ✓
 - swiftctl start/stop/restart/debug ✓
 - Smoke test passes ✓
+- swiftctl ssh <guest> with --user and --identity flags ✓
 
 ### Next Priorities (in order)
 
 **1. Networking hardening**
-- tap cleanup on pod deletion
-- dnsmasq lease reliability
+- ~~tap cleanup on pod deletion~~ — cleaned up automatically with pod netns ✓
+- ~~dnsmasq lease reliability~~ — working correctly ✓
 - `status.network.interfaces[]` (multiple interfaces)
-- `swiftctl ssh <guest>` command
+- ~~swiftctl ssh <guest> command~~ ✓
+- ~~Rich guest status~~ ✓
 
 **2. Rich guest status**
 ```yaml
@@ -305,6 +307,7 @@ status:
     - name: eth0
       ip: 10.244.125.10
 ```
+- Rich guest status: runtime.pid, runtime.hypervisor, console.serialSocket, network.interfaces[] ✓
 
 **3. Full lifecycle controls**
 - `runPolicy: RestartOnFailure | Always`
