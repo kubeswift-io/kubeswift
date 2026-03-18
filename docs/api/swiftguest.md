@@ -17,7 +17,7 @@ A SwiftGuest is **one VM instance**. You create it by referencing a SwiftGuestCl
 | `imageRef.name` | Yes | SwiftImage name (same namespace) |
 | `guestClassRef.name` | Yes | SwiftGuestClass name (cluster-scoped) |
 | `seedProfileRef.name` | No | SwiftSeedProfile for cloud-init (same namespace) |
-| `runPolicy` | No | `Running` (default) or `Stopped` |
+| `runPolicy` | No | `Running` (default), `Stopped`, `RestartOnFailure`, `Always` |
 
 ```yaml
 apiVersion: swift.kubeswift.io/v1alpha1
@@ -35,14 +35,30 @@ spec:
   runPolicy: Running
 ```
 
+## Run Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `Running` | Start VM and keep running. Default. |
+| `Stopped` | Do not start VM. If running, stop it. |
+| `RestartOnFailure` | Restart VM if it exits with a non-zero exit code. Uses exponential backoff: 10s → 20s → 40s → 80s → 160s → max 300s. |
+| `Always` | Restart VM on any exit (success or failure). Same backoff as RestartOnFailure. |
+
 ## Status
 
 | Field | Description |
 |-------|-------------|
 | `phase` | Pending, Scheduling, Running, Stopped, Failed |
-| `conditions` | Resolved, ImageReady, PodScheduled, GuestRunning |
+| `conditions` | Resolved, PodScheduled, GuestRunning |
 | `nodeName` | Node where the guest pod runs |
 | `podRef` | Reference to the guest pod |
+| `runtime.pid` | Cloud Hypervisor process PID |
+| `runtime.hypervisor` | Hypervisor name (cloud-hypervisor) |
+| `console.serialSocket` | Path to serial socket for console access |
+| `network.primaryIP` | Guest IP discovered from DHCP lease |
+| `network.interfaces` | List of {name, ip} for all guest interfaces |
+| `restartCount` | Number of times the guest has been restarted |
+| `lastRestartTime` | Timestamp of last restart |
 
 **Phase meanings:** `Pending` = resolution failed or unschedulable; `Scheduling` = pod pending; `Running` = VM up; `Stopped` = VM stopped; `Failed` = resolution, pod, or VM error.
 

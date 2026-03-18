@@ -47,10 +47,14 @@ swiftletd patches SwiftGuest with GuestRunning:
 
 SwiftGuest `spec.runPolicy` controls desired state:
 
-- **Running** — Start and keep VM running
+- **Running** — Start and keep VM running (default)
 - **Stopped** — Do not start; if running, stop
+- **RestartOnFailure** — Restart VM on failure (non-zero exit) with exponential backoff: 10s → 20s → 40s → 80s → 160s → max 300s
+- **Always** — Restart VM on any exit with same backoff
 
-(Additional policies may be added in future.)
+Restart tracking: `status.restartCount` increments on each restart.
+`status.lastRestartTime` records the timestamp of the last restart.
+The controller uses these to compute the next backoff delay.
 
 ## Related docs
 

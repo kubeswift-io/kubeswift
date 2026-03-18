@@ -327,12 +327,14 @@ Success criteria:
 - Image pipeline improvements: sourceFormat, preparedFormat, size measurement ✓
 - swiftctl describe <guest> ✓
 - swiftctl logs <guest> ✓
+- runPolicy: RestartOnFailure | Always with exponential backoff ✓
 
 ### Next Priorities (in order)
 
-**1. Full lifecycle controls (remaining)**
-- runPolicy: RestartOnFailure | Always
-- Controller handles VM crash/exit and requeues
+**1. Full lifecycle controls (remaining)** ✓
+- runPolicy: RestartOnFailure | Always ✓
+- Controller handles VM crash/exit with exponential backoff restart ✓
+- Backoff: 10s → 20s → 40s → 80s → 160s → max 300s
 
 **2. SwiftKernel — MicroVM Kernel Library**
 - Blocked on kernel build pipeline (buildroot + Cloud Hypervisor reference config)
