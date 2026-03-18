@@ -54,6 +54,22 @@ swiftletd polls the dnsmasq lease file and patches the pod annotation `kubeswift
    ```
    Use the private key matching the `ssh_authorized_keys` you provided.
 
+## Using swiftctl ssh (recommended)
+
+Instead of discovering the IP and SSH-ing manually, use swiftctl ssh
+which proxies through the launcher pod automatically:
+
+```bash
+swiftctl ssh sample -i ~/.ssh/your-key
+swiftctl ssh sample -u ubuntu -i ~/.ssh/your-key
+```
+
+swiftctl ssh reads status.network.primaryIP and execs an SSH session
+through the launcher pod. No direct network access to the guest IP is
+required from your workstation.
+
+See [swiftctl](swiftctl.md) for full flag reference.
+
 ## Prerequisites
 
 - RBAC: Apply `config/rbac/` in the namespace so swiftletd can patch pods and SwiftGuest status.

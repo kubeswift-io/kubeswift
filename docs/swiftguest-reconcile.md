@@ -19,6 +19,23 @@ The SwiftGuest controller reconciles SwiftGuest resources by resolving reference
    - Pod Failed → `phase=Failed`; PodScheduled=False with reason
    - Pod Succeeded → `phase=Stopped`; PodScheduled=True
 
+## Lifecycle guards
+
+Before pod creation, the controller applies two guards in order:
+
+**Stopped guard** — If `spec.runPolicy=Stopped` and the pod is gone or
+completed, the controller sets `phase=Stopped` and returns without
+recreating the pod.
+
+**Restart guard** — If `spec.runPolicy=RestartOnFailure` or `Always`
+and the pod has failed (or succeeded for Always), the controller:
+1. Computes backoff delay: 10s × 2^restartCount, capped at 300s
+2. If the backoff has not elapsed since `status.lastRestartTime`,
+   requeues with the remaining delay
+3. Otherwise deletes the pod, increments `status.restartCount`,
+   sets `status.lastRestartTime`, and returns — the next reconcile
+   creates a fresh pod
+
 ## Conditions
 
 - **Resolved** – True when resolution succeeded; False with reason when resolution failed.
