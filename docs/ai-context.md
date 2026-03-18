@@ -328,6 +328,7 @@ Success criteria:
 - swiftctl describe <guest> ✓
 - swiftctl logs <guest> ✓
 - runPolicy: RestartOnFailure | Always with exponential backoff ✓
+- documentation ✓
 
 ### Next Priorities (in order)
 
@@ -345,12 +346,16 @@ Success criteria:
 - See SwiftKernel Build Notes section for full requirements
 
 **3. Host runtime hardening**
-- Drop unnecessary privileges in launcher pod
-- Restrict host mounts
+- Requires careful capability analysis before implementation
+- network-init needs: NET_ADMIN, NET_RAW (no SYS_ADMIN needed)
+- launcher needs: NET_ADMIN, SYS_ADMIN (for KVM ioctls)
+- Current: both containers run privileged: true — works but overprivileged
+- Approach: harden network-init first, verify, then harden launcher
+- Risk: breaking change if capabilities are wrong — test on dedicated cluster
 
-**4. Documentation**
-- README (what KubeSwift is, how it differs from KubeVirt)
-- docs/install.md, quickstart.md, networking.md, images.md, swiftctl.md, architecture.md
+**4. Documentation** ✓
+- README (what KubeSwift is, how it differs from KubeVirt) ✓
+- docs/install.md, quickstart.md, networking.md, images.md, swiftctl.md, architecture.md ✓
 
 **5. Observability**
 - Metrics: kubeswift_guest_running_total, kubeswift_vm_boot_seconds, kubeswift_vm_failures_total
