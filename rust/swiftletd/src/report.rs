@@ -53,7 +53,8 @@ pub async fn report_guest_running(
     Ok(())
 }
 
-/// Reports runtime and console status to SwiftGuest.
+/// Reports runtime and console to the launcher pod annotations.
+/// The controller maps these annotations to SwiftGuest status.
 pub async fn report_guest_runtime(
     client: &Client,
     namespace: &str,
@@ -61,18 +62,22 @@ pub async fn report_guest_runtime(
     pid: u32,
     serial_socket: &str,
 ) -> Result<(), kube::Error> {
-    let gvk = GroupVersionKind::gvk("swift.kubeswift.io", "v1alpha1", "SwiftGuest");
-    let api_resource = ApiResource::from_gvk_with_plural(&gvk, "swiftguests");
-    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &api_resource);
-
-    let status = json!({
-        "status": {
-            "runtime": { "pid": pid as i64, "hypervisor": "cloud-hypervisor" },
-            "console": { "serialSocket": serial_socket }
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let mut annotations = std::collections::BTreeMap::new();
+    annotations.insert(
+        "kubeswift.io/guest-runtime-pid".to_string(),
+        pid.to_string(),
+    );
+    annotations.insert(
+        "kubeswift.io/guest-serial-socket".to_string(),
+        serial_socket.to_string(),
+    );
+    let patch = json!({
+        "metadata": {
+            "annotations": annotations
         }
     });
-
     let pp = PatchParams::default();
-    api.patch_status(name, &pp, &Patch::Merge(status)).await?;
+    api.patch(name, &pp, &Patch::Merge(&patch)).await?;
     Ok(())
 }
