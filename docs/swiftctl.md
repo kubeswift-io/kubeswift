@@ -27,6 +27,14 @@ make build-go
 | `swiftctl stop <guest>` | Set `spec.runPolicy=Stopped`, delete pod. Controller recreates pod with `lifecycle=stop`; swiftletd exits without launching. |
 | `swiftctl restart <guest>` | Delete pod (requires `runPolicy=Running`). Controller recreates pod; VM restarts. |
 
+### Inspection
+
+| Command | Description |
+|---------|-------------|
+| `swiftctl describe <guest>` | Print a rich human-readable summary of SwiftGuest status including phase, runtime, console, network, conditions, and pod reference. |
+| `swiftctl logs <guest>` | Tail swiftletd launcher logs. Flags: --follow/-f (stream), --tail (lines, default 50). |
+| `swiftctl ssh <guest>` | SSH into the guest VM via the launcher pod. Uses status.network.primaryIP. Flags: --user/-u (default: kubeswift), --identity/-i (default: ~/.ssh/id_rsa). Requires SSH key injected via SwiftSeedProfile. |
+
 ### Console
 
 | Command | Description |
@@ -61,6 +69,18 @@ swiftctl stop sample
 
 # Restart a guest
 swiftctl restart sample
+
+# Describe guest status
+swiftctl describe sample
+
+# Tail launcher logs
+swiftctl logs sample
+swiftctl logs sample --follow
+swiftctl logs sample --tail 100
+
+# SSH into guest
+swiftctl ssh sample
+swiftctl ssh sample -u ubuntu -i ~/.ssh/mykey
 
 # Attach to VM console
 swiftctl console sample

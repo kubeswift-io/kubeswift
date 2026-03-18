@@ -45,8 +45,12 @@ See `config/samples/swiftimage-pvc-clone.yaml`.
 
 | Field | Description |
 |-------|-------------|
-| `phase` | Pending → Importing → Ready (or Failed) |
-| `preparedArtifact` | `pvcRef`, `format`, `size` — used by SwiftGuest |
+| `phase` | Pending → Importing → Validating → Preparing → Ready (or Failed) |
+| `sourceFormat` | Original input format (e.g. qcow2) |
+| `preparedFormat` | Runtime format after preparation (always raw) |
+| `preparedArtifact.pvcRef` | PVC containing image.raw |
+| `preparedArtifact.format` | Prepared disk format (raw) |
+| `preparedArtifact.size` | Actual measured size of image.raw |
 
 ## Operator workflow
 
