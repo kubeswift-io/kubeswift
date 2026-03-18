@@ -108,6 +108,7 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			status.SourceFormat = img.Spec.Format
 			status.PreparedFormat = imagev1alpha1.DiskFormatRaw
 			SetReadyCondition(status)
+			status.SizeHint = 0
 		}
 
 	case imagev1alpha1.SwiftImagePhaseReady, imagev1alpha1.SwiftImagePhaseFailed:
