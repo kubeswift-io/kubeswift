@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: March 18, 2026 — rich guest status implemented and verified
+> Last updated: March 18, 2026 — full stop lifecycle implemented and verified
 
 ---
 
@@ -283,6 +283,11 @@ Success criteria:
 - swiftctl start/stop/restart/debug ✓
 - Smoke test passes ✓
 - swiftctl ssh <guest> with --user and --identity flags ✓
+- swiftctl ssh <guest> with --user and --identity flags ✓
+- Rich guest status: runtime.pid, runtime.hypervisor, console.serialSocket, network.interfaces[] ✓
+- Graceful stop via SIGTERM + 30s fallback to pod delete ✓
+- RestartPolicy=Never on launcher pod ✓
+- Controller stopped guard — no pod recreation when runPolicy=Stopped ✓ß
 
 ### Next Priorities (in order)
 
@@ -292,6 +297,29 @@ Success criteria:
 - `status.network.interfaces[]` (multiple interfaces)
 - ~~swiftctl ssh <guest> command~~ ✓
 - ~~Rich guest status~~ ✓
+- ~~swiftctl stop graceful shutdown via CH API~~ — implemented via SIGTERM + 30s fallback ✓
+- ~~RestartPolicy=Never on launcher pod~~ ✓
+- ~~Controller stopped guard — no pod recreation when runPolicy=Stopped~~ ✓
+**1. Image pipeline improvements** (next)
+- status.sourceFormat, status.preparedFormat, status.size
+- Format validation
+- Support for more distros (Rocky Linux, Debian)
+
+**2. swiftctl expansion**
+- swiftctl describe <guest> — rich human-readable status
+- swiftctl logs <guest> — tail swiftletd logs
+
+**3. Full lifecycle controls (remaining)**
+- runPolicy: RestartOnFailure | Always
+- Controller handles VM crash/exit and requeues
+
+**4. SwiftKernel — MicroVM Kernel Library**
+- Blocked on kernel build pipeline (buildroot + Cloud Hypervisor reference config)
+- Target profiles: faas-minimal, gpu-workload, vhost-user
+- Build pipeline to live at build/kernels/faas-minimal/ in repo
+- Use ORAS Go library for OCI artifact pull in SwiftKernel controller
+- HTTP download as interim path, ORAS as production path
+- See session notes for full kernel config requirements and boot verification steps
 
 **2. Rich guest status**
 ```yaml
@@ -388,6 +416,27 @@ isolation with container-like density and startup time — differentiated from K
 - GPU passthrough
 - High availability controllers
 
+## SwiftKernel Build Notes
+
+### Kernel requirements
+- Base: Cloud Hypervisor reference config at resources/linux-config-x86_64
+- Required: CONFIG_VIRTIO*, CONFIG_SERIAL_8250_CONSOLE, CONFIG_VIRTIO_NET, CONFIG_VIRTIO_BLK
+- Build tool: buildroot (produces both bzImage and initramfs in one build)
+
+### Initramfs requirements  
+- BusyBox statically linked (musl)
+- Minimal /init script: mount /proc /sys, networking, exec workload
+- No systemd, no cloud-init, no package manager
+
+### OCI packaging
+- Use ORAS CLI to push bzImage + initramfs.cpio.gz as OCI artifacts
+- Artifact type: application/vnd.kubeswift.kernel.v1
+- Target: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+
+### Boot verification (must pass before KubeSwift integration)
+- cloud-hypervisor --kernel bzImage --initramfs initramfs.cpio.gz
+- --cmdline "console=ttyS0 root=/dev/ram0" --memory size=256M --cpus boot=1
+- Must give interactive shell before touching KubeSwift code
 ---
 
 ## Design Principles

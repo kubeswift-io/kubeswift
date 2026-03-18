@@ -189,6 +189,18 @@ spec:
                 required:
                 - format
                 type: object
+              preparedFormat:
+                description: DiskFormat is the disk image format.
+                enum:
+                - raw
+                - qcow2
+                type: string
+              sourceFormat:
+                description: DiskFormat is the disk image format.
+                enum:
+                - raw
+                - qcow2
+                type: string
             type: object
         type: object
     served: true
