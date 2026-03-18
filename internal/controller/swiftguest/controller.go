@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -170,6 +171,67 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
+		}
+	}
+
+	if guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyRestartOnFailure ||
+		guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyAlways {
+
+		var existingPod corev1.Pod
+		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod)
+		if podErr != nil && !apierrors.IsNotFound(podErr) {
+			return ctrl.Result{}, podErr
+		}
+		podGone := apierrors.IsNotFound(podErr)
+
+		if !podGone {
+			shouldRestart := false
+			if existingPod.Status.Phase == corev1.PodFailed {
+				shouldRestart = true
+			}
+			if guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyAlways &&
+				existingPod.Status.Phase == corev1.PodSucceeded {
+				shouldRestart = true
+			}
+
+			if shouldRestart {
+				// Compute backoff: 10s * 2^restartCount, capped at 300s
+				backoff := time.Duration(10) * time.Second
+				for i := 0; i < int(guest.Status.RestartCount); i++ {
+					backoff *= 2
+					if backoff > 300*time.Second {
+						backoff = 300 * time.Second
+						break
+					}
+				}
+
+				// Check if enough time has passed since last restart
+				if guest.Status.LastRestartTime != nil {
+					elapsed := time.Since(guest.Status.LastRestartTime.Time)
+					if elapsed < backoff {
+						remaining := backoff - elapsed
+						if err := r.patchStatus(ctx, &guest, status); err != nil {
+							return ctrl.Result{}, err
+						}
+						return ctrl.Result{RequeueAfter: remaining}, nil
+					}
+				}
+
+				// Delete the pod so controller recreates it on next reconcile
+				if err := r.Delete(ctx, &existingPod); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, err
+				}
+
+				// Update restart tracking
+				now := metav1.Now()
+				status.RestartCount++
+				status.LastRestartTime = &now
+				status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+				if err := r.patchStatus(ctx, &guest, status); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
 		}
 	}
 

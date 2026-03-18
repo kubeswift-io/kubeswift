@@ -6,12 +6,14 @@ import (
 )
 
 // RunPolicy defines the desired run state of a guest.
-// +kubebuilder:validation:Enum=Running;Stopped
+// +kubebuilder:validation:Enum=Running;Stopped;RestartOnFailure;Always
 type RunPolicy string
 
 const (
-	RunPolicyRunning RunPolicy = "Running"
-	RunPolicyStopped RunPolicy = "Stopped"
+	RunPolicyRunning          RunPolicy = "Running"
+	RunPolicyStopped          RunPolicy = "Stopped"
+	RunPolicyRestartOnFailure RunPolicy = "RestartOnFailure"
+	RunPolicyAlways           RunPolicy = "Always"
 )
 
 // SwiftGuestPhase is the phase of a SwiftGuest.
@@ -61,13 +63,15 @@ type GuestNetworkStatus struct {
 
 // SwiftGuestStatus defines the observed state of SwiftGuest.
 type SwiftGuestStatus struct {
-	Phase      SwiftGuestPhase         `json:"phase,omitempty"`
-	Conditions []metav1.Condition      `json:"conditions,omitempty"`
-	NodeName   string                  `json:"nodeName,omitempty"`
-	PodRef     *corev1.ObjectReference `json:"podRef,omitempty"`
-	Network    *GuestNetworkStatus     `json:"network,omitempty"`
-	Runtime    *GuestRuntimeStatus     `json:"runtime,omitempty"`
-	Console    *GuestConsoleStatus     `json:"console,omitempty"`
+	Phase           SwiftGuestPhase         `json:"phase,omitempty"`
+	Conditions      []metav1.Condition      `json:"conditions,omitempty"`
+	NodeName        string                  `json:"nodeName,omitempty"`
+	PodRef          *corev1.ObjectReference `json:"podRef,omitempty"`
+	Network         *GuestNetworkStatus     `json:"network,omitempty"`
+	Runtime         *GuestRuntimeStatus     `json:"runtime,omitempty"`
+	Console         *GuestConsoleStatus     `json:"console,omitempty"`
+	RestartCount    int32                   `json:"restartCount,omitempty"`
+	LastRestartTime *metav1.Time            `json:"lastRestartTime,omitempty"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.
