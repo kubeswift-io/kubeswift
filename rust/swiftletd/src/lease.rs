@@ -95,7 +95,10 @@ async fn patch_pod_annotation(
     name: &str,
     ip: &str,
 ) -> Result<(), kube::Error> {
-    let interfaces_json = format!(r#"[{{\"name\":\"eth0\",\"ip\":\"{}\"}}]"#, ip);
+    let interfaces_json = serde_json::to_string(&serde_json::json!([
+        {"name": "eth0", "ip": ip}
+    ]))
+    .unwrap_or_default();
 
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
