@@ -41,8 +41,14 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	if spec.GuestClassRef.Name == "" {
 		return fmt.Errorf("spec.guestClassRef.name is required")
 	}
-	if spec.RunPolicy != "" && spec.RunPolicy != swiftv1alpha1.RunPolicyRunning && spec.RunPolicy != swiftv1alpha1.RunPolicyStopped {
-		return fmt.Errorf("spec.runPolicy must be Running or Stopped, got %q", spec.RunPolicy)
+	validPolicies := map[swiftv1alpha1.RunPolicy]bool{
+		swiftv1alpha1.RunPolicyRunning:          true,
+		swiftv1alpha1.RunPolicyStopped:          true,
+		swiftv1alpha1.RunPolicyRestartOnFailure: true,
+		swiftv1alpha1.RunPolicyAlways:           true,
+	}
+	if spec.RunPolicy != "" && !validPolicies[spec.RunPolicy] {
+		return fmt.Errorf("spec.runPolicy must be Running, Stopped, RestartOnFailure, or Always, got %q", spec.RunPolicy)
 	}
 	return nil
 }
