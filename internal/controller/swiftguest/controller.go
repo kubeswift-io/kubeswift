@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -150,6 +151,25 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if err := r.Update(ctx, &existingIntentCM); err != nil {
 				return ctrl.Result{}, err
 			}
+		}
+	}
+
+	if rg.GetLifecycle() == "stop" {
+		// Guest is intentionally stopped. If a pod exists and is completed or doesn't exist,
+		// update status to Stopped and return without recreating the pod.
+		var existingPod corev1.Pod
+		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod)
+		if podErr != nil && client.IgnoreNotFound(podErr) != nil {
+			return ctrl.Result{}, podErr
+		}
+		podGone := apierrors.IsNotFound(podErr)
+		podDone := !podGone && (existingPod.Status.Phase == corev1.PodSucceeded || existingPod.Status.Phase == corev1.PodFailed)
+		if podGone || podDone {
+			status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
+			if err := r.patchStatus(ctx, &guest, status); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
 		}
 	}
 
