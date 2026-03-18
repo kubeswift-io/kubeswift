@@ -82,6 +82,8 @@ type SwiftImageStatus struct {
 	Phase            SwiftImagePhase      `json:"phase,omitempty"`
 	Conditions       []metav1.Condition   `json:"conditions,omitempty"`
 	PreparedArtifact *PreparedArtifactRef `json:"preparedArtifact,omitempty"`
+	SourceFormat     DiskFormat           `json:"sourceFormat,omitempty"`
+	PreparedFormat   DiskFormat           `json:"preparedFormat,omitempty"`
 }
 
 // SwiftImage is the Schema for the swiftimages API.
