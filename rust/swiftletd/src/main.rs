@@ -154,6 +154,10 @@ fn main() {
                 let name = name.clone().unwrap();
                 let rt_clone = Arc::clone(&rt);
                 move |pid: u32, serial_socket_path: String| {
+                    eprintln!(
+                        "swiftletd: socket ready, pid={}, serial={}",
+                        pid, serial_socket_path
+                    );
                     rt_clone.block_on(async {
                         let client = match kube_client::create_client().await {
                             Ok(c) => c,
@@ -169,6 +173,8 @@ fn main() {
                             report::report_guest_running(&client, &ns, &name, true, None).await
                         {
                             eprintln!("swiftletd: failed to report running: {}", e);
+                        } else {
+                            eprintln!("swiftletd: reported guest running");
                         }
                         if let Err(e) = report::report_guest_runtime(
                             &client,
@@ -180,6 +186,8 @@ fn main() {
                         .await
                         {
                             eprintln!("swiftletd: failed to report runtime: {}", e);
+                        } else {
+                            eprintln!("swiftletd: reported guest runtime");
                         }
                     });
                 }
