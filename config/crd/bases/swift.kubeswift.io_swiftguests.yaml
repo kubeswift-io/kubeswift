@@ -78,6 +78,8 @@ spec:
                 enum:
                 - Running
                 - Stopped
+                - RestartOnFailure
+                - Always
                 type: string
               seedProfileRef:
                 description: |-
@@ -164,6 +166,9 @@ spec:
                   serialSocket:
                     type: string
                 type: object
+              lastRestartTime:
+                format: date-time
+                type: string
               network:
                 description: GuestNetworkStatus holds discovered guest network information.
                 properties:
@@ -240,6 +245,9 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              restartCount:
+                format: int32
+                type: integer
               runtime:
                 description: GuestRuntimeStatus holds runtime process information.
                 properties:

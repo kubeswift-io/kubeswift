@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: March 18, 2026 — full stop lifecycle implemented and verified
+> Last updated: March 18, 2026 — swiftctl describe/logs, image pipeline improvements completed
 
 ---
 
@@ -33,6 +33,14 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - Networking: tap+bridge+dnsmasq DHCP, guest gets IP, IP propagated to status
 - `swiftctl console`: connects to serial socket, interactive console works
 - `swiftctl start/stop/restart/debug`: implemented and working
+- `swiftctl ssh <guest>`: SSH into guest via launcher pod with --user and --identity flags
+- `swiftctl describe <guest>`: rich human-readable status
+- `swiftctl logs <guest>`: tail swiftletd launcher logs
+- Rich guest status: runtime.pid, runtime.hypervisor, console.serialSocket, network.interfaces[]
+- Graceful stop via SIGTERM + 30s fallback to pod delete
+- RestartPolicy=Never on launcher pod
+- Controller stopped guard — no pod recreation when runPolicy=Stopped
+- Image pipeline: sourceFormat, preparedFormat, size measurement via post-import job
 - Smoke test: passes end-to-end (`make smoke-test`)
 
 ### Known working configuration
@@ -44,16 +52,14 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - DHCP range: 10.244.125.10–20 on br0 (10.244.125.1)
 
 ### Deployed images
-- `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-1782241`
-- `ghcr.io/projectbeskar/kubeswift/swiftletd:sha-1782241`
-- Tag: `v0.1.0-smoke-passed`
+- `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-5b757de`
+- `ghcr.io/projectbeskar/kubeswift/swiftletd:sha-5b757de`
 
 ---
 
 ## Architecture
 
 ### High-Level
-
 ```
 User
  │
@@ -91,8 +97,14 @@ status:
   conditions:     # Resolved | PodScheduled | GuestRunning
   nodeName:
   podRef:
+  runtime:
+    pid:          # Cloud Hypervisor process PID
+    hypervisor:   # "cloud-hypervisor"
+  console:
+    serialSocket: # path to serial.sock
   network:
     primaryIP:    # discovered from dnsmasq DHCP lease
+    interfaces:   # list of {name, ip}
 ```
 
 **SwiftImage** — represents a VM disk image
@@ -103,9 +115,13 @@ spec:
       url: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
   format: qcow2   # converted to raw during import
 status:
-  phase: Ready | Importing | Validating | Failed
+  phase: Ready | Importing | Validating | Preparing | Failed
+  sourceFormat:   # original input format (e.g. qcow2)
+  preparedFormat: # runtime format (always raw)
   preparedArtifact:
     pvcRef:       # PVC containing image.raw
+    format: raw
+    size:         # actual measured size of image.raw
 ```
 
 **SwiftSeedProfile** — cloud-init / NoCloud configuration
@@ -125,14 +141,13 @@ spec:
 ```
 
 ### Repository Structure
-
 ```
 api/                        CRD types (Go)
 cmd/
-  swiftctl/                 CLI (console, start, stop, restart, debug)
+  swiftctl/                 CLI (console, ssh, describe, logs, start, stop, restart, debug)
 internal/
   controller/swiftguest/    SwiftGuest controller
-  controller/swiftimage/    SwiftImage controller (import job)
+  controller/swiftimage/    SwiftImage controller (import + measure jobs)
   runtimeintent/            VM launch spec builder
   seed/                     cloud-init ConfigMap builder
   cli/                      shared CLI helpers
@@ -157,7 +172,6 @@ test/smoke/boot-test.sh     End-to-end smoke test
 ```
 
 ### Networking Model
-
 ```
 Guest VM
    │ virtio-net
@@ -181,7 +195,6 @@ Key facts:
 - Controller requeues every 5s while Running but no IP yet (cache staleness fix)
 
 ### Image Import Pipeline
-
 ```
 SwiftImage created
   │
@@ -194,10 +207,16 @@ Import Job (ubuntu:22.04, privileged)
   │    - add console=ttyS0 to kernel cmdline (if missing)
   │    - add serial --speed=115200 BEFORE terminal_input/output
   │    - replace terminal_input/output console → serial console
-  │  EFI partition: replace BOOTX64.EFI with grubx64.efi (bypass shim if needed)
+  │  stat -c %s image.raw > image.raw.size
+  ▼
+Measure Job (ubuntu:22.04)
+  │  cat /data/image.raw.size → parsed as int64
   ▼
 image.raw stored in PVC
 status.phase = Ready
+status.sourceFormat = qcow2
+status.preparedFormat = raw
+status.preparedArtifact.size = <measured bytes>
 ```
 
 Key facts:
@@ -207,7 +226,6 @@ Key facts:
 - Import job uses `od`-based GPT LBA parser (not fdisk) for partition detection
 
 ### Cloud Hypervisor Invocation
-
 ```
 cloud-hypervisor \
   --kernel /usr/share/kubeswift-firmware/hypervisor-fw \   # rust-hypervisor-firmware v0.5.0
@@ -222,6 +240,21 @@ cloud-hypervisor \
 
 Critical: `--kernel` is correct for rust-hypervisor-firmware (PVH ELF binary).
 `--firmware` is for OVMF/EDK2 only — using it silently prevents serial output.
+
+### Status Reporting Architecture
+
+swiftletd reports status via pod annotations (not SwiftGuest status directly).
+The controller reads annotations on reconcile and maps them to SwiftGuest status.
+
+| Annotation | Set by | Maps to |
+|---|---|---|
+| `kubeswift.io/guest-ip` | lease.rs (DHCP discovery) | status.network.primaryIP |
+| `kubeswift.io/guest-interfaces` | lease.rs | status.network.interfaces[] |
+| `kubeswift.io/guest-runtime-pid` | report.rs (socket ready) | status.runtime.pid |
+| `kubeswift.io/guest-serial-socket` | report.rs (socket ready) | status.console.serialSocket |
+
+GuestRunning condition is patched directly to SwiftGuest status by swiftletd via
+kube-rs DynamicObject patch (not via pod annotation).
 
 ---
 
@@ -243,11 +276,16 @@ Critical: `--kernel` is correct for rust-hypervisor-firmware (PVH ELF binary).
 | 12 | smoke test | 2m network timeout too short | Increase to 5m, add --timeout-network flag |
 | 13 | Makefile | make deploy didn't apply CRDs | Add kubectl apply -k config/crd + kubectl wait |
 | 14 | seed profile | package_update: true caused slow first boot | Remove from sample seed profile |
+| 15 | swiftletd/main.rs | on_socket_ready closure used nested tokio runtime | Reuse outer Arc<Runtime> via rt_clone |
+| 16 | swiftletd/lease.rs | guest-interfaces annotation double-escaped JSON | Use serde_json::json! instead of format! |
+| 17 | swiftletd/report.rs | report_guest_runtime patched SwiftGuest status directly | Patch pod annotations instead |
+| 18 | swiftguest/pod.go | RestartPolicy not set, defaulted to Always | Set RestartPolicy: Never unconditionally |
+| 19 | swiftguest/controller.go | Controller recreated pod when runPolicy=Stopped | Add stopped guard before pod create logic |
+| 20 | rbac.yaml | controller-manager missing pods/log get permission | Add pods/log get rule to ClusterRole |
 
 ---
 
 ## Deployment
-
 ```bash
 make build-images push-images deploy
 ```
@@ -260,7 +298,6 @@ make build-images push-images deploy
 **Never let the CRD schema drift from the Go types.** The API server silently drops unknown fields.
 
 ### Smoke Test
-
 ```bash
 make smoke-test
 # or with custom timeouts:
@@ -283,130 +320,38 @@ Success criteria:
 - swiftctl start/stop/restart/debug ✓
 - Smoke test passes ✓
 - swiftctl ssh <guest> with --user and --identity flags ✓
-- swiftctl ssh <guest> with --user and --identity flags ✓
 - Rich guest status: runtime.pid, runtime.hypervisor, console.serialSocket, network.interfaces[] ✓
 - Graceful stop via SIGTERM + 30s fallback to pod delete ✓
 - RestartPolicy=Never on launcher pod ✓
-- Controller stopped guard — no pod recreation when runPolicy=Stopped ✓ß
+- Controller stopped guard — no pod recreation when runPolicy=Stopped ✓
+- Image pipeline improvements: sourceFormat, preparedFormat, size measurement ✓
+- swiftctl describe <guest> ✓
+- swiftctl logs <guest> ✓
 
 ### Next Priorities (in order)
 
-**1. Networking hardening**
-- ~~tap cleanup on pod deletion~~ — cleaned up automatically with pod netns ✓
-- ~~dnsmasq lease reliability~~ — working correctly ✓
-- `status.network.interfaces[]` (multiple interfaces)
-- ~~swiftctl ssh <guest> command~~ ✓
-- ~~Rich guest status~~ ✓
-- ~~swiftctl stop graceful shutdown via CH API~~ — implemented via SIGTERM + 30s fallback ✓
-- ~~RestartPolicy=Never on launcher pod~~ ✓
-- ~~Controller stopped guard — no pod recreation when runPolicy=Stopped~~ ✓
-**1. Image pipeline improvements** (next)
-- status.sourceFormat, status.preparedFormat, status.size
-- Format validation
-- Support for more distros (Rocky Linux, Debian)
-
-**2. swiftctl expansion**
-- swiftctl describe <guest> — rich human-readable status
-- swiftctl logs <guest> — tail swiftletd logs
-
-**3. Full lifecycle controls (remaining)**
+**1. Full lifecycle controls (remaining)**
 - runPolicy: RestartOnFailure | Always
 - Controller handles VM crash/exit and requeues
 
-**4. SwiftKernel — MicroVM Kernel Library**
+**2. SwiftKernel — MicroVM Kernel Library**
 - Blocked on kernel build pipeline (buildroot + Cloud Hypervisor reference config)
 - Target profiles: faas-minimal, gpu-workload, vhost-user
 - Build pipeline to live at build/kernels/faas-minimal/ in repo
 - Use ORAS Go library for OCI artifact pull in SwiftKernel controller
 - HTTP download as interim path, ORAS as production path
-- See session notes for full kernel config requirements and boot verification steps
+- See SwiftKernel Build Notes section for full requirements
 
-**2. Rich guest status**
-```yaml
-status:
-  runtime:
-    pid: 42
-    hypervisor: cloud-hypervisor
-  console:
-    serialSocket: /var/lib/kubeswift/run/default-sample/serial.sock
-  network:
-    primaryIP: 10.244.125.10
-    interfaces:
-    - name: eth0
-      ip: 10.244.125.10
-```
-- Rich guest status: runtime.pid, runtime.hypervisor, console.serialSocket, network.interfaces[] ✓
-
-**3. Full lifecycle controls**
-- `runPolicy: RestartOnFailure | Always`
-- Controller handles VM crash/exit
-- `swiftctl stop` graceful shutdown via CH API
-
-**4. swiftctl expansion**
-- `swiftctl ssh <guest>` — SSH proxy through launcher pod
-- `swiftctl describe <guest>` — rich human-readable status
-- `swiftctl logs <guest>` — tail swiftletd logs
-
-**5. Image pipeline improvements**
-- `status.sourceFormat`, `status.preparedFormat`, `status.size`
-- Format validation
-- Support for more distros (Rocky Linux, Debian)
-
-**6. SwiftKernel — MicroVM Kernel Library (NEW)**
-
-This is a planned addition that makes KubeSwift uniquely powerful for cloud-native workloads.
-
-Concept: a curated catalog of minimal kernels and rootfs images purpose-built for specific
-workload types, distributed as OCI artifacts. Users reference them in SwiftGuest instead of
-a full OS SwiftImage.
-
-Proposed CRD:
-```yaml
-apiVersion: swift.kubeswift.io/v1alpha1
-kind: SwiftKernel
-metadata:
-  name: faas-minimal
-spec:
-  kernel:
-    oci: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
-  initrd:
-    oci: ghcr.io/projectbeskar/kubeswift/rootfs/faas-minimal:latest
-  capabilities:
-    - faas
-    - fast-boot
-```
-
-SwiftGuest with kernel reference (no imageRef needed):
-```yaml
-spec:
-  kernelRef:
-    name: faas-minimal
-```
-
-Boot path: Cloud Hypervisor `--kernel bzImage --initramfs` — bypasses firmware and GRUB
-entirely, giving sub-second boot times. This is fundamentally different from the full OS
-disk boot path.
-
-Target workload profiles:
-- **faas-minimal**: tiny kernel + BusyBox/musl userspace, <100ms cold start, no systemd
-- **gpu-workload**: kernel with vfio/vgpu modules, CUDA-compatible userspace
-- **vhost-user**: kernel with vhost-user-blk/net, DPDK-ready
-- **wasm**: wasmtime/wasmer in minimal rootfs
-
-This positions KubeSwift as the right tool for secure microVM workloads needing VM
-isolation with container-like density and startup time — differentiated from KubeVirt.
-
-**7. Host runtime hardening**
+**3. Host runtime hardening**
 - Drop unnecessary privileges in launcher pod
 - Restrict host mounts
-- Tap/dnsmasq cleanup on pod termination
 
-**8. Documentation**
+**4. Documentation**
 - README (what KubeSwift is, how it differs from KubeVirt)
 - docs/install.md, quickstart.md, networking.md, images.md, swiftctl.md, architecture.md
 
-**9. Observability**
-- Metrics: `kubeswift_guest_running_total`, `kubeswift_vm_boot_seconds`, `kubeswift_vm_failures_total`
+**5. Observability**
+- Metrics: kubeswift_guest_running_total, kubeswift_vm_boot_seconds, kubeswift_vm_failures_total
 - Structured logging improvements in controller and swiftletd
 
 ### Long-term (not yet prioritized)
@@ -416,6 +361,8 @@ isolation with container-like density and startup time — differentiated from K
 - GPU passthrough
 - High availability controllers
 
+---
+
 ## SwiftKernel Build Notes
 
 ### Kernel requirements
@@ -423,7 +370,7 @@ isolation with container-like density and startup time — differentiated from K
 - Required: CONFIG_VIRTIO*, CONFIG_SERIAL_8250_CONSOLE, CONFIG_VIRTIO_NET, CONFIG_VIRTIO_BLK
 - Build tool: buildroot (produces both bzImage and initramfs in one build)
 
-### Initramfs requirements  
+### Initramfs requirements
 - BusyBox statically linked (musl)
 - Minimal /init script: mount /proc /sys, networking, exec workload
 - No systemd, no cloud-init, no package manager
@@ -437,6 +384,7 @@ isolation with container-like density and startup time — differentiated from K
 - cloud-hypervisor --kernel bzImage --initramfs initramfs.cpio.gz
 - --cmdline "console=ttyS0 root=/dev/ram0" --memory size=256M --cpus boot=1
 - Must give interactive shell before touching KubeSwift code
+
 ---
 
 ## Design Principles
@@ -463,7 +411,9 @@ When helping develop KubeSwift:
 - Always ask for actual cluster output before suggesting fixes
 - Never assume a fix worked without seeing logs confirming it
 - When writing Cursor prompts: be explicit about what NOT to change
-- CRD changes always require `make deploy` with CRD regeneration — remind the user
+- CRD changes always require `make generate manifests` + `kubectl apply -k config/crd` — remind the user
 - The working guest OS is Ubuntu Focal — do not suggest Noble without noting incompatibility
 - rust-hypervisor-firmware uses `--kernel`, not `--firmware`
 - The GRUB terminal patch order is: serial init → terminal_input → terminal_output
+- swiftletd reports status via pod annotations, not direct SwiftGuest status patches
+- RestartPolicy on launcher pods is always Never — controller owns VM lifecycle
