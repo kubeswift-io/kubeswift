@@ -8,7 +8,7 @@ swiftletd is the node-side launcher that runs inside each SwiftGuest pod. It rea
 2. **Create runtime dir** – Per-guest directory at `KUBESWIFT_RUN_DIR/<guest-id>/` with `seed/` subdir and `ch.sock` socket path.
 3. **Build NoCloud** – If seed is present, copy and transform seed ConfigMap into `runtime_dir/seed/` via `swift-seed`.
 4. **Lifecycle check** – If `lifecycle=stop`, report Stopped and exit.
-5. **Launch CH** – Spawn Cloud Hypervisor with `--api-socket`, `--disk` (root + optional seed), `--memory`, `--cpus`.
+5. **Launch CH** – Spawn Cloud Hypervisor with `--kernel hypervisor-fw`, `--api-socket`, `--disk` (root.raw + seed.iso), `--memory`, `--cpus`, `--serial socket=`, `--net tap=tap0`.
 6. **Wait for socket** – Poll until CH creates the API socket.
 7. **Report running** – Patch SwiftGuest status with `GuestRunning=True`.
 8. **Monitor process** – Wait on CH process; on exit, report Stopped (exit 0) or Failed (non-zero).
@@ -43,7 +43,10 @@ The runtime directory is created under `KUBESWIFT_RUN_DIR` (default `/var/lib/ku
 
 ## Seed media
 
-Cloud Hypervisor expects a **disk image** (ISO or vfat) for cloud-init NoCloud, not a directory. The MVP passes the NoCloud **directory** path; some CH builds may accept it. If the guest boots without cloud-init, consider adding ISO generation (e.g. `genisoimage` or a Rust crate) in a future change. See `rust/swift-ch-client/README.md` for details.
+swiftletd generates a NoCloud seed ISO using genisoimage with flags
+`-rock -joliet -volid cidata`. Cloud Hypervisor receives the ISO path
+via `--disk path=<seed.iso>`. The ISO is created in the runtime
+directory at `<runtime-dir>/seed.iso`.
 
 ## Status reporting
 

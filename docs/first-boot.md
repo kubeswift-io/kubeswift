@@ -13,11 +13,12 @@ For exact prerequisites, verification commands, and failure checks, see [docs/sm
 
 ## Sample Image
 
-The default sample uses Ubuntu 24.04 (Noble) cloud image:
+The default sample uses Ubuntu 20.04 (Focal) cloud image:
 
-- **URL:** `https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img`
-- **Format:** raw
+- **URL:** `https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img`
+- **Format:** qcow2 (NOT raw — Ubuntu .img files are qcow2)
 - **Size:** ~600MB (download time varies by network)
+- **Note:** Ubuntu Noble (24.04) is incompatible with rust-hypervisor-firmware
 
 You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `config/samples/swiftimage-http.yaml`.
 
@@ -66,6 +67,12 @@ You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `
   Check `status.conditions` for `Resolved`, `ImageReady`, `PodScheduled`, `GuestRunning`.
 
 - **SSH access:** When using a SwiftSeedProfile with `ssh_authorized_keys`, the guest gets an IP on the pod network. See [guest-networking-ssh.md](guest-networking-ssh.md) for the full workflow (discover IP via `kubectl get swiftguest <name> -o jsonpath='{.status.network.primaryIP}'`, then `ssh kubeswift@<IP>`).
+
+  Or use swiftctl ssh for direct SSH access via the launcher pod:
+
+  ```bash
+  swiftctl ssh sample -i ~/.ssh/your-key
+  ```
 
 - **Pod logs:**
 
