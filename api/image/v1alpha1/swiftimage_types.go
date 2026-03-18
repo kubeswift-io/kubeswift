@@ -84,6 +84,8 @@ type SwiftImageStatus struct {
 	PreparedArtifact *PreparedArtifactRef `json:"preparedArtifact,omitempty"`
 	SourceFormat     DiskFormat           `json:"sourceFormat,omitempty"`
 	PreparedFormat   DiskFormat           `json:"preparedFormat,omitempty"`
+	// SizeHint is an internal field used to pass measured size between Validating and Preparing phases.
+	SizeHint int64 `json:"sizeHint,omitempty"`
 }
 
 // SwiftImage is the Schema for the swiftimages API.

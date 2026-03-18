@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -82,10 +83,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		klog.ErrorS(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
 	if err = (&swiftimage.SwiftImageReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Converter: swiftimage.StubConverter{},
+		Clientset: clientset,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftImage controller")
 		os.Exit(1)
