@@ -28,6 +28,7 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 ### Operator
 
 - [swiftctl](swiftctl.md) — Operator CLI for SwiftGuest lifecycle and console access
+- [Observability](operator/observability.md) — Metrics, Prometheus integration, log collection
 - [Worker-node preflight](operator/worker-node-preflight.md) — Host readiness validation script
 - [Operator checklist (Ubuntu x86_64)](operator/operator-checklist-ubuntu-x86_64.md) — Host prerequisites for smoke test
 - [Smoke verification](operator/smoke-verification.md) — Prerequisites, stages, failure checks, quick walkthrough
