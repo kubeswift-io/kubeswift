@@ -54,38 +54,32 @@ pub fn spawn_lease_poller(
                 Some(ip) => ip,
                 None => continue,
             };
-            eprintln!("swiftletd: discovered guest IP {} from lease file", ip);
+            log::info!("guest_ip_discovered ip={}", ip);
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build();
             let Ok(rt) = rt else {
-                eprintln!("swiftletd: failed to create runtime for pod patch");
+                log::error!("failed to create runtime for pod patch");
                 return;
             };
             rt.block_on(async {
                 let client = match crate::kube_client::create_client().await {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!(
-                            "swiftletd: kube client unavailable ({}), skipping pod annotation",
-                            e
-                        );
+                        log::warn!("kube client unavailable ({}), skipping pod annotation", e);
                         return;
                     }
                 };
                 if let Err(e) = patch_pod_annotation(&client, &namespace, &pod_name, &ip).await {
-                    eprintln!("swiftletd: failed to patch pod annotation: {}", e);
+                    log::error!("patch_pod_annotation_failed: {}", e);
                 } else {
-                    eprintln!(
-                        "swiftletd: patched pod annotation {}={}",
-                        ANNOTATION_GUEST_IP, ip
-                    );
+                    log::info!("pod_annotation_patched {}={}", ANNOTATION_GUEST_IP, ip);
                 }
             });
             return;
         }
-        eprintln!("swiftletd: lease poll timeout, no IP discovered");
+        log::warn!("lease_poll_timeout");
     });
 }
 

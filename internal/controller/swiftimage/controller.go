@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // SwiftImageReconciler reconciles SwiftImage resources.
@@ -109,6 +110,8 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			status.PreparedFormat = imagev1alpha1.DiskFormatRaw
 			SetReadyCondition(status)
 			status.SizeHint = 0
+			elapsed := time.Since(img.CreationTimestamp.Time).Seconds()
+			metrics.ImageImportSeconds.WithLabelValues(img.Namespace).Observe(elapsed)
 		}
 
 	case imagev1alpha1.SwiftImagePhaseReady, imagev1alpha1.SwiftImagePhaseFailed:

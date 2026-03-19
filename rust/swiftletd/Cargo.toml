@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4"
+env_logger = "0.11"
+log = "0.4"
 tokio = { version = "1", features = ["rt", "macros", "sync"] }
 kube = { version = "0.92", features = ["runtime", "client", "derive"] }
 k8s-openapi = { version = "0.22", features = ["v1_28"] }

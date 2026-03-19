@@ -51,8 +51,12 @@ const VERSION: &str = env!("KUBESWIFT_VERSION");
 const GIT_COMMIT: &str = env!("KUBESWIFT_GIT_COMMIT");
 
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
+
     if env::args().any(|a| a == "--version" || a == "-V") {
-        eprintln!("swiftletd {} (git {})", VERSION, GIT_COMMIT);
+        log::info!("swiftletd {} (git {})", VERSION, GIT_COMMIT);
         std::process::exit(0);
     }
 
@@ -61,16 +65,16 @@ fn main() {
 
     match intent::load_intent(&intent_path) {
         Ok(intent) => {
-            eprintln!("swiftletd: {} (git {})", VERSION, GIT_COMMIT);
-            eprintln!("swiftletd: loaded intent for guest {}", intent.guest_id);
-            eprintln!("  disk: {}", intent.disk_path());
-            eprintln!(
-                "  seed: {}",
-                if intent.has_seed() {
-                    intent.seed_path()
-                } else {
-                    "(none)"
-                }
+            let seed_val = if intent.has_seed() {
+                intent.seed_path()
+            } else {
+                "(none)"
+            };
+            log::info!(
+                "intent_loaded guest_id={} disk={} seed={}",
+                intent.guest_id,
+                intent.disk_path(),
+                seed_val
             );
 
             let base_run_dir = swift_runtime::base_run_dir();
@@ -78,30 +82,27 @@ fn main() {
                 match swift_runtime::create_runtime_dir(&intent.guest_id, &base_run_dir) {
                     Ok(rt) => rt,
                     Err(e) => {
-                        eprintln!("swiftletd: failed to create runtime dir: {}", e);
+                        log::error!("failed to create runtime dir: {}", e);
                         std::process::exit(1);
                     }
                 };
-            eprintln!("swiftletd: runtime dir at {}", runtime_dir.root().display());
+            log::info!("runtime_dir path={}", runtime_dir.root().display());
 
             if intent.has_seed() {
                 let configmap_path = Path::new(intent.seed_path());
                 let nocloud_output = runtime_dir.seed_dir();
                 if let Err(e) = swift_seed::build_nocloud_dir(configmap_path, &nocloud_output) {
-                    eprintln!("swiftletd: failed to build NoCloud dir: {}", e);
+                    log::error!("failed to build NoCloud dir: {}", e);
                     std::process::exit(1);
                 }
-                eprintln!(
-                    "swiftletd: built NoCloud dir at {}",
-                    nocloud_output.display()
-                );
+                log::info!("nocloud_built path={}", nocloud_output.display());
                 // CH expects disk image (ISO), not directory. Create seed.iso for cloud-init.
                 let seed_iso = runtime_dir.root().join("seed.iso");
                 if let Err(e) = create_seed_iso(&nocloud_output, &seed_iso) {
-                    eprintln!("swiftletd: failed to create seed ISO: {}", e);
+                    log::error!("failed to create seed ISO: {}", e);
                     std::process::exit(1);
                 }
-                eprintln!("swiftletd: created seed ISO at {}", seed_iso.display());
+                log::info!("seed_iso_created path={}", seed_iso.display());
             }
 
             let rt = Arc::new(
@@ -121,23 +122,20 @@ fn main() {
                     let client = match kube_client::create_client().await {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!(
-                                "swiftletd: kube client unavailable ({}), skipping report",
-                                e
-                            );
+                            log::warn!("kube client unavailable ({}), skipping report", e);
                             return;
                         }
                     };
                     if let Err(e) =
                         report::report_guest_running(&client, ns, n, running, reason).await
                     {
-                        eprintln!("swiftletd: failed to report status: {}", e);
+                        log::error!("report_failed: {}", e);
                     }
                 });
             };
 
             if intent.lifecycle == "stop" {
-                eprintln!("swiftletd: lifecycle=stop, skipping launch");
+                log::info!("lifecycle=stop, skipping launch");
                 report_running(false, Some("VmStopped"));
                 return;
             }
@@ -154,27 +152,21 @@ fn main() {
                 let name = name.clone().unwrap();
                 let rt_clone = Arc::clone(&rt);
                 move |pid: u32, serial_socket_path: String| {
-                    eprintln!(
-                        "swiftletd: socket ready, pid={}, serial={}",
-                        pid, serial_socket_path
-                    );
+                    log::info!("socket_ready pid={} serial={}", pid, serial_socket_path);
                     rt_clone.block_on(async {
                         let client = match kube_client::create_client().await {
                             Ok(c) => c,
                             Err(e) => {
-                                eprintln!(
-                                    "swiftletd: kube client unavailable ({}), skipping report",
-                                    e
-                                );
+                                log::warn!("kube client unavailable ({}), skipping report", e);
                                 return;
                             }
                         };
                         if let Err(e) =
                             report::report_guest_running(&client, &ns, &name, true, None).await
                         {
-                            eprintln!("swiftletd: failed to report running: {}", e);
+                            log::error!("report_running_failed: {}", e);
                         } else {
-                            eprintln!("swiftletd: reported guest running");
+                            log::info!("guest_running_reported");
                         }
                         if let Err(e) = report::report_guest_runtime(
                             &client,
@@ -185,9 +177,9 @@ fn main() {
                         )
                         .await
                         {
-                            eprintln!("swiftletd: failed to report runtime: {}", e);
+                            log::error!("report_runtime_failed: {}", e);
                         } else {
-                            eprintln!("swiftletd: reported guest runtime");
+                            log::info!("guest_runtime_reported");
                         }
                     });
                 }
@@ -196,23 +188,23 @@ fn main() {
             match launch::run(&intent, &runtime_dir, on_socket_ready) {
                 Ok((exit_status, _pid, _serial_socket_path)) => {
                     if exit_status.success() {
-                        eprintln!("swiftletd: VM stopped gracefully");
+                        log::info!("vm_stopped_gracefully");
                         report_running(false, Some("VmStopped"));
                     } else {
-                        eprintln!("swiftletd: VM exited with code {:?}", exit_status.code());
+                        log::warn!("vm_exited_nonzero code={:?}", exit_status.code());
                         report_running(false, Some("VmFailed"));
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
-                    eprintln!("swiftletd: launch error: {}", e);
+                    log::error!("launch_error: {}", e);
                     report_running(false, Some("VmFailed"));
                     std::process::exit(1);
                 }
             }
         }
         Err(e) => {
-            eprintln!("swiftletd: error: {}", e);
+            log::error!("intent_load_error: {}", e);
             std::process::exit(1);
         }
     }

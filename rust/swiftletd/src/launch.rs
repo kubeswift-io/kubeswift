@@ -63,7 +63,7 @@ where
     remove_stale_sockets(runtime_dir);
 
     let args = config.to_args();
-    eprintln!("swiftletd: spawning cloud-hypervisor with args: {:?}", args);
+    log::info!("spawning cloud-hypervisor args={:?}", args);
 
     let mut child =
         spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
