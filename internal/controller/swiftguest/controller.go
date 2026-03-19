@@ -19,6 +19,7 @@ import (
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
 	"github.com/projectbeskar/kubeswift/internal/seed"
@@ -69,6 +70,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			status := guest.Status.DeepCopy()
 			SetResolvedCondition(status, false, re.Reason)
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
+			recordGuestMetrics(&guest, &guest.Status, status, nil)
 			if err := r.patchStatus(ctx, &guest, status); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -167,6 +169,11 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		podDone := !podGone && (existingPod.Status.Phase == corev1.PodSucceeded || existingPod.Status.Phase == corev1.PodFailed)
 		if podGone || podDone {
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
+			var podForStopped *corev1.Pod
+			if !podGone {
+				podForStopped = &existingPod
+			}
+			recordGuestMetrics(&guest, &guest.Status, status, podForStopped)
 			if err := r.patchStatus(ctx, &guest, status); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -227,6 +234,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				status.RestartCount++
 				status.LastRestartTime = &now
 				status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+				recordGuestMetrics(&guest, &guest.Status, status, &existingPod)
 				if err := r.patchStatus(ctx, &guest, status); err != nil {
 					return ctrl.Result{}, err
 				}
@@ -242,6 +250,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	var existingPod corev1.Pod
+	var podForMetrics *corev1.Pod
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
@@ -254,10 +263,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		SetPodScheduledCondition(status, nil, false, "Scheduling")
 	} else {
 		// Pod exists; update status from pod
+		podForMetrics = &existingPod
 		MapPodToStatus(&existingPod, status)
 		// If guest is running but IP not yet discovered, requeue to catch annotation update
 		if status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
 			(status.Network == nil || status.Network.PrimaryIP == "") {
+			recordGuestMetrics(&guest, &guest.Status, status, podForMetrics)
 			if err := r.patchStatus(ctx, &guest, status); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -266,11 +277,70 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// TODO: consider updating pod spec if resolved changed (e.g., resources)
 	}
 
+	recordGuestMetrics(&guest, &guest.Status, status, podForMetrics)
 	if err := r.patchStatus(ctx, &guest, status); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *swiftv1alpha1.SwiftGuestStatus, pod *corev1.Pod) {
+	ns := guest.Namespace
+	oldPhase := swiftv1alpha1.SwiftGuestPhase("")
+	if oldStatus != nil {
+		oldPhase = oldStatus.Phase
+	}
+	newPhase := swiftv1alpha1.SwiftGuestPhase("")
+	if newStatus != nil {
+		newPhase = newStatus.Phase
+	}
+
+	// GuestRunningTotal: increment on transition to Running, decrement on transition away
+	if newPhase == swiftv1alpha1.SwiftGuestPhaseRunning && oldPhase != swiftv1alpha1.SwiftGuestPhaseRunning {
+		metrics.GuestRunningTotal.WithLabelValues(ns).Inc()
+	}
+	if oldPhase == swiftv1alpha1.SwiftGuestPhaseRunning && newPhase != swiftv1alpha1.SwiftGuestPhaseRunning {
+		metrics.GuestRunningTotal.WithLabelValues(ns).Dec()
+		metrics.UnmarkVMBootObserved(ns + "/" + guest.Name)
+	}
+
+	// VMBootSeconds: observe when GuestRunning becomes True (once per boot)
+	if newPhase == swiftv1alpha1.SwiftGuestPhaseRunning && pod != nil {
+		guestRunning := findCondition(newStatus, "GuestRunning")
+		if guestRunning != nil && guestRunning.Status == metav1.ConditionTrue {
+			key := guest.Namespace + "/" + guest.Name
+			if metrics.MarkVMBootObserved(key) {
+				elapsed := time.Since(pod.CreationTimestamp.Time).Seconds()
+				metrics.VMBootSeconds.WithLabelValues(ns).Observe(elapsed)
+			}
+		}
+	}
+
+	// VMFailuresTotal: increment on transition to Failed
+	if newPhase == swiftv1alpha1.SwiftGuestPhaseFailed && oldPhase != swiftv1alpha1.SwiftGuestPhaseFailed {
+		reason := "unknown"
+		if c := findCondition(newStatus, "PodScheduled"); c != nil && c.Message != "" {
+			reason = c.Message
+		} else if c := findCondition(newStatus, "GuestRunning"); c != nil && c.Message != "" {
+			reason = c.Message
+		} else if c := findCondition(newStatus, "Resolved"); c != nil && c.Message != "" {
+			reason = c.Message
+		}
+		metrics.VMFailuresTotal.WithLabelValues(ns, reason).Inc()
+	}
+}
+
+func findCondition(status *swiftv1alpha1.SwiftGuestStatus, condType string) *metav1.Condition {
+	if status == nil {
+		return nil
+	}
+	for i := range status.Conditions {
+		if status.Conditions[i].Type == condType {
+			return &status.Conditions[i]
+		}
+	}
+	return nil
 }
 
 func (r *SwiftGuestReconciler) patchStatus(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, status *swiftv1alpha1.SwiftGuestStatus) error {

@@ -10,6 +10,7 @@ import (
 	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
@@ -41,6 +42,7 @@ func main() {
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
+	metricsAddr := flag.String("metrics-bind-address", ":8080", "Address for metrics endpoint")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -65,6 +67,7 @@ func main() {
 
 	mgrOpts := ctrl.Options{
 		Scheme:                  scheme.Scheme,
+		Metrics:                 metricsserver.Options{BindAddress: *metricsAddr},
 		LeaderElection:          *leaderElect,
 		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: leaderElectionNS,
