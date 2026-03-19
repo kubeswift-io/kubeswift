@@ -329,6 +329,9 @@ Success criteria:
 - swiftctl logs <guest> ✓
 - runPolicy: RestartOnFailure | Always with exponential backoff ✓
 - documentation ✓
+- Observability: Prometheus metrics endpoint, kubeswift_guest_running_total,
+  kubeswift_vm_boot_seconds, kubeswift_vm_failures_total,
+  kubeswift_image_import_seconds, structured logging in swiftletd ✓
 
 ### Next Priorities (in order)
 
@@ -357,7 +360,7 @@ Success criteria:
 - README (what KubeSwift is, how it differs from KubeVirt) ✓
 - docs/install.md, quickstart.md, networking.md, images.md, swiftctl.md, architecture.md ✓
 
-**5. Observability**
+**5. Observability** ✓
 - Metrics: kubeswift_guest_running_total, kubeswift_vm_boot_seconds, kubeswift_vm_failures_total
 - Structured logging improvements in controller and swiftletd
 
