@@ -18,6 +18,7 @@ import (
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
@@ -107,6 +108,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuest controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftkernel.SwiftKernelReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftKernel controller")
 		os.Exit(1)
 	}
 
