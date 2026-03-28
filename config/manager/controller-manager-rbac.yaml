@@ -21,7 +21,14 @@ rules:
   - apiGroups: ["seed.kubeswift.io"]
     resources: ["swiftseedprofiles"]
     verbs: ["get", "list", "watch"]
+  # SwiftKernel
+  - apiGroups: ["kernel.kubeswift.io"]
+    resources: ["swiftkernels", "swiftkernels/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Core resources
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods", "pods/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
