@@ -131,8 +131,25 @@ spec:
                 type: string
               kernelDigest:
                 type: string
-              localPath:
-                type: string
+              nodeStatuses:
+                items:
+                  description: NodeKernelStatus reports pull progress for one node.
+                  properties:
+                    nodeName:
+                      type: string
+                    phase:
+                      description: SwiftKernelPhase is the phase of a SwiftKernel.
+                      enum:
+                      - Pending
+                      - Pulling
+                      - Ready
+                      - Failed
+                      type: string
+                  required:
+                  - nodeName
+                  - phase
+                  type: object
+                type: array
               phase:
                 description: SwiftKernelPhase is the phase of a SwiftKernel.
                 enum:
