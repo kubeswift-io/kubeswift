@@ -1,8 +1,15 @@
 package v1alpha1
 
 import (
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// KernelLocalPath returns the hostPath directory where kernel artifacts are stored for this SwiftKernel.
+func KernelLocalPath(namespace, name string) string {
+	return fmt.Sprintf("/var/lib/kubeswift/kernels/%s-%s", namespace, name)
+}
 
 // SwiftKernelPhase is the phase of a SwiftKernel.
 // +kubebuilder:validation:Enum=Pending;Pulling;Ready;Failed
@@ -28,11 +35,17 @@ type SwiftKernelSpec struct {
 	Profile       string `json:"profile,omitempty"`
 }
 
+// NodeKernelStatus reports pull progress for one node.
+type NodeKernelStatus struct {
+	NodeName string           `json:"nodeName"`
+	Phase    SwiftKernelPhase `json:"phase"`
+}
+
 // SwiftKernelStatus defines the observed state of SwiftKernel.
 type SwiftKernelStatus struct {
 	Phase           SwiftKernelPhase   `json:"phase,omitempty"`
 	Conditions      []metav1.Condition `json:"conditions,omitempty"`
-	LocalPath       string             `json:"localPath,omitempty"`
+	NodeStatuses    []NodeKernelStatus `json:"nodeStatuses,omitempty"`
 	KernelDigest    string             `json:"kernelDigest,omitempty"`
 	InitramfsDigest string             `json:"initramfsDigest,omitempty"`
 }
