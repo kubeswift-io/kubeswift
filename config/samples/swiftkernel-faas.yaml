@@ -1,0 +1,10 @@
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: faas-minimal
+  namespace: default
+spec:
+  ociRef:
+    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  profile: faas-minimal

@@ -18,7 +18,7 @@ import (
 const (
 	pullJobNamePrefix  = "swiftkernel-pull-"
 	kernelHostBasePath = "/var/lib/kubeswift/kernels"
-	orasImage          = "ghcr.io/oras-project/oras:v1.2.2"
+	orasImage          = "ghcr.io/oras-project/oras:v1.3.1"
 )
 
 func destDirFor(sk *kernelv1alpha1.SwiftKernel) string {
@@ -30,9 +30,10 @@ func pullScript(image, destDir string) string {
 	return fmt.Sprintf(`set -e
 mkdir -p %q
 cd %q
-oras pull %q --media-type application/vnd.kubeswift.kernel.binary,application/vnd.kubeswift.initramfs.binary
-ls -lh
-`, destDir, destDir, image)
+oras pull %q
+echo "Pull complete"
+ls -lh .`,
+		destDir, destDir, image)
 }
 
 // StartPull creates the pull Job for the SwiftKernel.
