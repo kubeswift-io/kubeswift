@@ -18,6 +18,10 @@ rules:
     resources: ["swiftimages", "swiftimages/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftSeedProfile
+  # SwiftKernel
+  - apiGroups: ["kernel.kubeswift.io"]
+    resources: ["swiftkernels", "swiftkernels/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["seed.kubeswift.io"]
     resources: ["swiftseedprofiles"]
     verbs: ["get", "list", "watch"]
