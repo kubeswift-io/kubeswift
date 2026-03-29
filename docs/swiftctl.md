@@ -39,7 +39,7 @@ make build-go
 
 | Command | Description |
 |---------|-------------|
-| `swiftctl console <guest>` | Attach to VM serial console for interactive keyboard access. Execs into the launcher pod and connects via socat to the serial socket. Requires guest phase=Running. Press **Ctrl+O** to detach (Ctrl+C is sent to the guest). |
+| `swiftctl console <guest>` | Attach to VM serial console for interactive keyboard access. Execs into the launcher pod and connects via socat to the serial socket. Requires guest phase=Running. Press **Ctrl+O** to detach (Ctrl+C is sent to the guest). Works identically for both disk boot and kernel boot guests. |
 
 ### Debug
 

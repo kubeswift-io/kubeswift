@@ -8,22 +8,57 @@
 |------|--------|
 | 1 | Read `runtime-intent.json` from `/var/lib/kubeswift/intent/` |
 | 2 | Create runtime dir under `KUBESWIFT_RUN_DIR` (default `/var/lib/kubeswift/run`) |
-| 3 | If seed present: build NoCloud layout via swift-seed into runtime dir |
+| 3 | If seed present and not kernel boot: build NoCloud layout via swift-seed into runtime dir |
 | 4 | If `lifecycle=stop`: report Stopped, exit |
-| 5 | Spawn Cloud Hypervisor with `--api-socket`, `--disk`, `--memory`, `--cpus` |
+| 5 | Spawn Cloud Hypervisor (see invocation below) |
 | 6 | Poll until CH creates API socket |
 | 7 | Patch SwiftGuest `GuestRunning=True` |
 | 8 | Wait on CH process; on exit, report Stopped (0) or Failed (non-zero) |
 
+### Cloud Hypervisor invocation
+
+**Disk boot** (when `kernelBoot` is absent in the intent):
+
+```
+cloud-hypervisor --api-socket path=<socket> --kernel hypervisor-fw \
+  --disk path=<root.raw> path=<seed.iso> \
+  --memory size=<N>M --cpus boot=<N> \
+  --serial socket=<serial.sock> --console off --net tap=tap0
+```
+
+**Kernel boot** (when `kernelBoot` is present in the intent):
+
+```
+cloud-hypervisor --api-socket path=<socket> \
+  --kernel <bzImage> --initramfs <rootfs.cpio.gz> --cmdline "<cmdline>" \
+  --memory size=<N>M --cpus boot=<N> \
+  --serial socket=<serial.sock> --console off
+```
+
+No `--disk`, no `--kernel hypervisor-fw`, no `--net` in kernel boot mode.
+
 ## Mount paths
 
-The pod must mount:
+### Disk boot pod
 
 | Volume       | Mount path                      | Purpose                          |
 |--------------|----------------------------------|----------------------------------|
 | root-disk    | `/var/lib/kubeswift/disks/root` | Root disk image (PVC)            |
 | seed         | `/var/lib/kubeswift/seed`       | Seed ConfigMap (when present)    |
 | runtime-intent | `/var/lib/kubeswift/intent`   | Runtime intent ConfigMap         |
+| run          | `/var/lib/kubeswift/run`        | Per-guest runtime directory (emptyDir) |
+| dev-kvm      | `/dev/kvm`                      | KVM device passthrough           |
+
+### Kernel boot pod
+
+| Volume           | Mount path                                     | Purpose                          |
+|------------------|------------------------------------------------|----------------------------------|
+| kernel-artifacts | `/var/lib/kubeswift/kernels/<ns>-<name>/`     | Kernel + initramfs hostPath      |
+| runtime-intent   | `/var/lib/kubeswift/intent`                    | Runtime intent ConfigMap         |
+| run              | `/var/lib/kubeswift/run`                       | Per-guest runtime directory (emptyDir) |
+| dev-kvm          | `/dev/kvm`                                     | KVM device passthrough           |
+
+Kernel boot pods also have `nodeSelector: {"kubeswift.io/kernel-node": "true"}` to ensure they land on nodes where the kernel artifacts exist.
 
 The runtime directory is created under `KUBESWIFT_RUN_DIR` (default `/var/lib/kubeswift/run`). Ensure this path is writable (e.g. emptyDir or hostPath).
 

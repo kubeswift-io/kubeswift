@@ -6,13 +6,14 @@ github.com/projectbeskar/kubeswift
 
 | Path | Purpose |
 |------|---------|
-| `api/` | CRD types (swift, image, seed) |
+| `api/` | CRD types (swift, image, seed, kernel) |
 | `cmd/` | controller-manager, swiftctl |
 | `internal/` | Controllers, webhooks, seed, runtimeintent, resolved |
 | `config/` | CRDs, RBAC, Kustomize, samples |
 | `charts/` | Helm chart (OCI) |
 | `images/` | Containerfiles (controller-manager, swiftletd) |
 | `rust/` | swiftletd, swift-runtime, swift-seed, swift-ch-client |
+| `build/` | Kernel profiles (faas-minimal) |
 | `hack/` | version.sh, chart-version.sh |
 | `test/` | Smoke tests |
 
@@ -22,11 +23,14 @@ github.com/projectbeskar/kubeswift
 |------|-------|
 | SwiftGuest controller | `internal/controller/swiftguest/` |
 | SwiftImage controller | `internal/controller/swiftimage/` |
+| SwiftKernel controller | `internal/controller/swiftkernel/` |
 | Pod creation | `internal/controller/swiftguest/pod.go` |
 | Launcher image constant | `internal/controller/swiftguest/constants.go` |
 | Seed rendering | `internal/seed/` |
 | Runtime intent | `internal/runtimeintent/` |
+| Resolution (resolver) | `internal/resolved/` |
 | swiftletd entrypoint | `rust/swiftletd/` |
+| faas-minimal kernel profile | `build/kernels/faas-minimal/` |
 
 ## Config layout
 
