@@ -6,6 +6,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// KernelBoot holds resolved kernel boot information.
+type KernelBoot struct {
+	LocalPath     string // e.g. /var/lib/kubeswift/kernels/default-faas-minimal
+	KernelCmdline string // effective cmdline: guest override > kernel default
+}
+
 // ResolvedGuest is the normalized internal model produced by the resolver.
 // The controller uses only this type for runtime decisions after resolution succeeds.
 type ResolvedGuest struct {
@@ -17,6 +23,7 @@ type ResolvedGuest struct {
 	Lifecycle     Lifecycle     `json:"lifecycle"`
 	PreparedImage PreparedImage `json:"preparedImage"`
 	Meta          Meta          `json:"meta"`
+	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -82,6 +89,26 @@ type Meta struct {
 // HasSeed returns true if seed materialization inputs are present.
 func (r *ResolvedGuest) HasSeed() bool {
 	return r.Seed != nil && r.Seed.Datasource != ""
+}
+
+// HasKernel returns true when the guest boots via kernel+initramfs instead of disk.
+func (r *ResolvedGuest) HasKernel() bool {
+	return r.KernelBoot != nil
+}
+
+// GetKernelPath returns the full path to the kernel (bzImage) inside the artifact dir.
+func (r *ResolvedGuest) GetKernelPath() string {
+	return r.KernelBoot.LocalPath + "/bzImage"
+}
+
+// GetInitramfsPath returns the full path to the initramfs inside the artifact dir.
+func (r *ResolvedGuest) GetInitramfsPath() string {
+	return r.KernelBoot.LocalPath + "/rootfs.cpio.gz"
+}
+
+// GetKernelCmdline returns the effective kernel command line.
+func (r *ResolvedGuest) GetKernelCmdline() string {
+	return r.KernelBoot.KernelCmdline
 }
 
 // GetRootDiskFormat returns the root disk format for runtime intent.

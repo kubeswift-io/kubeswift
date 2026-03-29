@@ -14,7 +14,7 @@ func TestBuildPod_HasInitContainerWhenHasSeed(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
-			ImageRef:       corev1.LocalObjectReference{Name: "img"},
+			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef:  corev1.LocalObjectReference{Name: "class"},
 			SeedProfileRef: &corev1.LocalObjectReference{Name: "minimal"},
 		},
@@ -43,7 +43,7 @@ func TestBuildPod_NoInitContainerWhenNoSeed(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
-			ImageRef:      corev1.LocalObjectReference{Name: "img"},
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
 		},
 	}
