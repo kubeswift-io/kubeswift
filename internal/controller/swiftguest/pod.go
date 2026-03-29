@@ -15,6 +15,119 @@ const IntentConfigMapSuffix = "-runtime-intent"
 
 // BuildPod creates a pod spec for the SwiftGuest.
 func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
+	if rg.HasKernel() {
+		return buildKernelBootPod(guest, rg, intentConfigMapName)
+	}
+	return buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName)
+}
+
+func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, intentConfigMapName string) *corev1.Pod {
+	volumes := []corev1.Volume{
+		{
+			Name: "run",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: "runtime-intent",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: intentConfigMapName},
+				},
+			},
+		},
+		{
+			Name: "dev-kvm",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev/kvm",
+					Type: ptr.To(corev1.HostPathType("CharDevice")),
+				},
+			},
+		},
+		{
+			Name: "kernel-artifacts",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: rg.KernelBoot.LocalPath,
+					Type: ptr.To(corev1.HostPathDirectory),
+				},
+			},
+		},
+	}
+
+	mounts := []corev1.VolumeMount{
+		{Name: "run", MountPath: RunDirPath},
+		{Name: "runtime-intent", MountPath: IntentPath},
+		{Name: "dev-kvm", MountPath: "/dev/kvm"},
+		{Name: "kernel-artifacts", MountPath: rg.KernelBoot.LocalPath},
+	}
+
+	cpu := rg.Resources.CPU
+	if cpu < 1 {
+		cpu = 1
+	}
+	mem := rg.Resources.Memory
+	if mem < 128 {
+		mem = 128
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      guest.Name,
+			Namespace: guest.Namespace,
+			Labels: map[string]string{
+				"swift.kubeswift.io/guest": guest.Name,
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			NodeSelector: map[string]string{
+				"kubeswift.io/kernel-node": "true",
+			},
+			Containers: []corev1.Container{
+				{
+					Name:            "launcher",
+					Image:           LauncherImage(),
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: ptr.To(true),
+					},
+					Env: []corev1.EnvVar{
+						{
+							Name: "POD_NAME",
+							ValueFrom: &corev1.EnvVarSource{
+								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+							},
+						},
+						{
+							Name: "POD_NAMESPACE",
+							ValueFrom: &corev1.EnvVarSource{
+								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+							},
+						},
+					},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+						},
+					},
+					VolumeMounts: mounts,
+				},
+			},
+			Volumes: volumes,
+		},
+	}
+	return pod
+}
+
+func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
 	volumes := []corev1.Volume{
 		{
 			Name: "run",

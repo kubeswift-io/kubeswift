@@ -4,6 +4,7 @@ import (
 	"context"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,12 +27,59 @@ type resolver struct {
 
 // Resolve fetches referenced resources, validates, merges, and returns ResolvedGuest or ResolutionError.
 func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*ResolvedGuest, error) {
+	hasImage := guest.Spec.ImageRef != nil
+	hasKernel := guest.Spec.KernelRef != nil
+
+	if hasImage == hasKernel {
+		return nil, &ResolutionError{Reason: "exactly one of imageRef or kernelRef must be set"}
+	}
+
 	// Fetch GuestClass (cluster-scoped)
 	guestClass := &swiftv1alpha1.SwiftGuestClass{}
 	if err := r.client.Get(ctx, types.NamespacedName{Name: guest.Spec.GuestClassRef.Name}, guestClass); err != nil {
 		return nil, &ResolutionError{Reason: "SwiftGuestClass not found: " + err.Error(), AffectedResource: guest.Spec.GuestClassRef.Name}
 	}
 
+	if hasKernel {
+		return r.resolveKernelBoot(ctx, guest, guestClass)
+	}
+	return r.resolveDiskBoot(ctx, guest, guestClass)
+}
+
+func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) (*ResolvedGuest, error) {
+	sk := &kernelv1alpha1.SwiftKernel{}
+	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.KernelRef.Name}, sk); err != nil {
+		return nil, &ResolutionError{Reason: "SwiftKernel not found", AffectedResource: guest.Spec.KernelRef.Name}
+	}
+	if sk.Status.Phase != kernelv1alpha1.SwiftKernelPhaseReady {
+		return nil, &ResolutionError{Reason: "SwiftKernel not Ready", AffectedResource: guest.Spec.KernelRef.Name}
+	}
+
+	// Fetch SeedProfile if referenced
+	var seedProfile *seedv1alpha1.SwiftSeedProfile
+	if guest.Spec.SeedProfileRef != nil {
+		sp := &seedv1alpha1.SwiftSeedProfile{}
+		if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.SeedProfileRef.Name}, sp); err != nil {
+			return nil, &ResolutionError{Reason: "SwiftSeedProfile not found: " + err.Error(), AffectedResource: guest.Spec.SeedProfileRef.Name}
+		}
+		seedProfile = sp
+	}
+
+	rg := Merge(guest, guestClass, nil, seedProfile)
+
+	cmdline := sk.Spec.KernelCmdline
+	if guest.Spec.KernelCmdline != "" {
+		cmdline = guest.Spec.KernelCmdline
+	}
+	rg.KernelBoot = &KernelBoot{
+		LocalPath:     kernelv1alpha1.KernelLocalPath(sk.Namespace, sk.Name),
+		KernelCmdline: cmdline,
+	}
+
+	return rg, nil
+}
+
+func (r *resolver) resolveDiskBoot(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) (*ResolvedGuest, error) {
 	// Fetch Image (namespaced)
 	image := &imagev1alpha1.SwiftImage{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.ImageRef.Name}, image); err != nil {

@@ -7,7 +7,7 @@ import (
 )
 
 // ValidateExistence checks that all required resources exist and SwiftImage is Ready.
-// Called before merge. Returns ResolutionError on failure.
+// Called before merge for disk boot path. Returns ResolutionError on failure.
 func ValidateExistence(
 	guest *swiftv1alpha1.SwiftGuest,
 	guestClass *swiftv1alpha1.SwiftGuestClass,
@@ -18,10 +18,14 @@ func ValidateExistence(
 		return &ResolutionError{Reason: "SwiftGuestClass not found", AffectedResource: guest.Spec.GuestClassRef.Name}
 	}
 	if image == nil {
-		return &ResolutionError{Reason: "SwiftImage not found", AffectedResource: guest.Spec.ImageRef.Name}
+		imgName := ""
+		if guest.Spec.ImageRef != nil {
+			imgName = guest.Spec.ImageRef.Name
+		}
+		return &ResolutionError{Reason: "SwiftImage not found", AffectedResource: imgName}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
-		return &ResolutionError{Reason: "SwiftImage not Ready", AffectedResource: guest.Spec.ImageRef.Name}
+		return &ResolutionError{Reason: "SwiftImage not Ready", AffectedResource: image.Name}
 	}
 	if guest.Spec.SeedProfileRef != nil {
 		if seedProfile == nil {

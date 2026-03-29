@@ -62,8 +62,17 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 	if guest.Spec.SeedProfileRef != nil && guest.Spec.SeedProfileRef.Name != "" {
 		seedProfile = guest.Spec.SeedProfileRef.Name
 	}
+	imageRef := "(none)"
+	if guest.Spec.ImageRef != nil && guest.Spec.ImageRef.Name != "" {
+		imageRef = guest.Spec.ImageRef.Name
+	}
+	kernelRef := "(none)"
+	if guest.Spec.KernelRef != nil && guest.Spec.KernelRef.Name != "" {
+		kernelRef = guest.Spec.KernelRef.Name
+	}
 	fmt.Fprintf(out, "\nSpec:\n")
-	fmt.Fprintf(out, "  Image:       %s\n", guest.Spec.ImageRef.Name)
+	fmt.Fprintf(out, "  Image:       %s\n", imageRef)
+	fmt.Fprintf(out, "  Kernel:      %s\n", kernelRef)
 	fmt.Fprintf(out, "  GuestClass:  %s\n", guest.Spec.GuestClassRef.Name)
 	fmt.Fprintf(out, "  SeedProfile: %s\n", seedProfile)
 

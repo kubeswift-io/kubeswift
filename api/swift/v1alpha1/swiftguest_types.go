@@ -30,7 +30,9 @@ const (
 
 // SwiftGuestSpec defines the desired state of SwiftGuest.
 type SwiftGuestSpec struct {
-	ImageRef       corev1.LocalObjectReference  `json:"imageRef"`
+	ImageRef       *corev1.LocalObjectReference `json:"imageRef,omitempty"`
+	KernelRef      *corev1.LocalObjectReference `json:"kernelRef,omitempty"`
+	KernelCmdline  string                       `json:"kernelCmdline,omitempty"`
 	GuestClassRef  corev1.LocalObjectReference  `json:"guestClassRef"`
 	SeedProfileRef *corev1.LocalObjectReference `json:"seedProfileRef,omitempty"`
 	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`

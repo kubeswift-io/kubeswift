@@ -14,7 +14,7 @@ import (
 func TestMerge_GuestRunPolicyOverridesSystemDefault(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{RunPolicy: swiftv1alpha1.RunPolicyStopped, ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{RunPolicy: swiftv1alpha1.RunPolicyStopped, ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
 	}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
@@ -26,7 +26,7 @@ func TestMerge_GuestRunPolicyOverridesSystemDefault(t *testing.T) {
 }
 
 func TestMerge_ClassCPUUsedWhenGuestNoOverride(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("4"), Memory: resource.MustParse("4Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("20Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
 
@@ -37,7 +37,7 @@ func TestMerge_ClassCPUUsedWhenGuestNoOverride(t *testing.T) {
 }
 
 func TestMerge_ClassMemoryUsedWhenGuestNoOverride(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("4096Mi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
 
@@ -48,7 +48,7 @@ func TestMerge_ClassMemoryUsedWhenGuestNoOverride(t *testing.T) {
 }
 
 func TestMerge_SystemDefaultArchitectureWhenOmit(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
 
@@ -59,7 +59,7 @@ func TestMerge_SystemDefaultArchitectureWhenOmit(t *testing.T) {
 }
 
 func TestMerge_ClassRootDiskSizeAndFormatApplied(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("30Gi"), Format: swiftv1alpha1.DiskFormatQcow2}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatQcow2}}}
 
@@ -70,7 +70,7 @@ func TestMerge_ClassRootDiskSizeAndFormatApplied(t *testing.T) {
 }
 
 func TestMerge_SeedFromSwiftSeedProfileWhenReferenced(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{SeedProfileRef: &corev1.LocalObjectReference{Name: "sp"}, ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{SeedProfileRef: &corev1.LocalObjectReference{Name: "sp"}, ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
 	seedProfile := &seedv1alpha1.SwiftSeedProfile{Spec: seedv1alpha1.SwiftSeedProfileSpec{Datasource: seedv1alpha1.DatasourceNoCloud, UserData: "#cloud-config\nhostname: test", MetaData: "instance-id: 001"}}
@@ -85,7 +85,7 @@ func TestMerge_SeedFromSwiftSeedProfileWhenReferenced(t *testing.T) {
 }
 
 func TestMerge_NoSeedWhenSwiftSeedProfileNotReferenced(t *testing.T) {
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
 	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
 

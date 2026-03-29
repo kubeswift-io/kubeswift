@@ -365,7 +365,7 @@ func (r *SwiftGuestReconciler) swiftImageToSwiftGuests(ctx context.Context, obj 
 	var reqs []reconcile.Request
 	for i := range list.Items {
 		g := &list.Items[i]
-		if g.Spec.ImageRef.Name == img.Name {
+		if g.Spec.ImageRef != nil && g.Spec.ImageRef.Name == img.Name {
 			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
 		}
 	}

@@ -35,8 +35,10 @@ func (v *Validator) ValidateDelete(ctx context.Context, obj runtime.Object) (adm
 
 func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	spec := &g.Spec
-	if spec.ImageRef.Name == "" {
-		return fmt.Errorf("spec.imageRef.name is required")
+	hasImage := spec.ImageRef != nil && spec.ImageRef.Name != ""
+	hasKernel := spec.KernelRef != nil && spec.KernelRef.Name != ""
+	if hasImage == hasKernel {
+		return fmt.Errorf("exactly one of spec.imageRef or spec.kernelRef must be set")
 	}
 	if spec.GuestClassRef.Name == "" {
 		return fmt.Errorf("spec.guestClassRef.name is required")

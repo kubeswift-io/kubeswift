@@ -6,20 +6,28 @@ import (
 )
 
 type mockResolvedGuest struct {
-	hasSeed   bool
-	format    string
-	cpu       int
-	memory    int
-	lifecycle string
-	guestID   string
+	hasSeed       bool
+	hasKernel     bool
+	format        string
+	cpu           int
+	memory        int
+	lifecycle     string
+	guestID       string
+	kernelPath    string
+	initramfsPath string
+	kernelCmdline string
 }
 
 func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
+func (m *mockResolvedGuest) HasKernel() bool           { return m.hasKernel }
 func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
 func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
 func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }
 func (m *mockResolvedGuest) GetLifecycle() string      { return m.lifecycle }
 func (m *mockResolvedGuest) GetGuestID() string        { return m.guestID }
+func (m *mockResolvedGuest) GetKernelPath() string     { return m.kernelPath }
+func (m *mockResolvedGuest) GetInitramfsPath() string  { return m.initramfsPath }
+func (m *mockResolvedGuest) GetKernelCmdline() string  { return m.kernelCmdline }
 
 func TestBuild(t *testing.T) {
 	rg := &mockResolvedGuest{

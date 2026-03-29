@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,8 @@ func testScheme() *runtime.Scheme {
 	s.AddKnownTypes(gvImage, &imagev1alpha1.SwiftImage{}, &imagev1alpha1.SwiftImageList{})
 	gvSeed := schema.GroupVersion{Group: "seed.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSeed, &seedv1alpha1.SwiftSeedProfile{}, &seedv1alpha1.SwiftSeedProfileList{})
+	gvKernel := schema.GroupVersion{Group: "kernel.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvKernel, &kernelv1alpha1.SwiftKernel{}, &kernelv1alpha1.SwiftKernelList{})
 	return s
 }
 
@@ -40,7 +43,7 @@ func TestResolve_FailsWhenSwiftImageDoesNotExist(t *testing.T) {
 	resolver := NewResolver(client)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "missing"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "missing"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
 	}
 
 	rg, err := resolver.Resolve(context.Background(), guest)
@@ -73,7 +76,7 @@ func TestResolve_FailsWhenSwiftImageNotReady(t *testing.T) {
 	resolver := NewResolver(client)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
 	}
 
 	rg, err := resolver.Resolve(context.Background(), guest)
@@ -100,7 +103,7 @@ func TestResolve_FailsWhenSwiftGuestClassDoesNotExist(t *testing.T) {
 	resolver := NewResolver(client)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "missing"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "missing"}},
 	}
 
 	rg, err := resolver.Resolve(context.Background(), guest)
@@ -132,7 +135,7 @@ func TestResolve_FailsWhenSwiftSeedProfileDoesNotExistWhenReferenced(t *testing.
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
-			ImageRef:       corev1.LocalObjectReference{Name: "img"},
+			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef:  corev1.LocalObjectReference{Name: "gc"},
 			SeedProfileRef: &corev1.LocalObjectReference{Name: "missing-sp"},
 		},
@@ -172,7 +175,7 @@ func TestResolve_SucceedsWhenAllChecksPass(t *testing.T) {
 	resolver := NewResolver(client)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid-123"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
 	}
 
 	rg, err := resolver.Resolve(context.Background(), guest)
@@ -217,7 +220,7 @@ func TestResolve_FailsWhenRootDiskFormatIncompatibleWithImageFormat(t *testing.T
 	resolver := NewResolver(client)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
 	}
 
 	rg, err := resolver.Resolve(context.Background(), guest)
