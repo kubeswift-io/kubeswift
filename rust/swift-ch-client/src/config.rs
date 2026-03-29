@@ -22,6 +22,12 @@ pub struct VmConfig {
     pub firmware_path: Option<String>,
     /// Optional TAP device name for VM networking. When set, CH gets --net tap=<name>.
     pub tap_name: Option<String>,
+    /// When set, boot via --kernel + --initramfs instead of --disk for root.
+    pub kernel_path: Option<String>,
+    /// Path to initramfs image. Required when kernel_path is set.
+    pub initramfs_path: Option<String>,
+    /// Kernel command line. Only used when kernel_path is set.
+    pub kernel_cmdline: Option<String>,
 }
 
 impl VmConfig {
@@ -38,19 +44,41 @@ impl VmConfig {
             format!("boot={}", self.cpus.max(1)),
         ];
 
-        // --kernel (rust-hypervisor-firmware PVH ELF) required for disk boot; CH creates serial device when VM is properly initialized.
-        if let Some(ref path) = self.firmware_path {
+        if let Some(ref kp) = self.kernel_path {
             args.push("--kernel".to_string());
-            args.push(path.clone());
-        }
+            args.push(kp.clone());
 
-        // --disk accepts multiple values: --disk path=/foo path=/bar
-        args.push("--disk".to_string());
-        args.push(format!("path={}", self.disk_path));
-        if !self.seed_path.is_empty() {
-            // Cloud Hypervisor: second disk for cloud-init NoCloud.
-            // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
-            args.push(format!("path={}", self.seed_path));
+            if let Some(ref ip) = self.initramfs_path {
+                args.push("--initramfs".to_string());
+                args.push(ip.clone());
+            }
+
+            if let Some(ref cl) = self.kernel_cmdline {
+                if !cl.is_empty() {
+                    args.push("--cmdline".to_string());
+                    args.push(cl.clone());
+                }
+            }
+
+            if !self.seed_path.is_empty() {
+                args.push("--disk".to_string());
+                args.push(format!("path={}", self.seed_path));
+            }
+        } else {
+            // --kernel (rust-hypervisor-firmware PVH ELF) required for disk boot; CH creates serial device when VM is properly initialized.
+            if let Some(ref path) = self.firmware_path {
+                args.push("--kernel".to_string());
+                args.push(path.clone());
+            }
+
+            // --disk accepts multiple values: --disk path=/foo path=/bar
+            args.push("--disk".to_string());
+            args.push(format!("path={}", self.disk_path));
+            if !self.seed_path.is_empty() {
+                // Cloud Hypervisor: second disk for cloud-init NoCloud.
+                // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
+                args.push(format!("path={}", self.seed_path));
+            }
         }
 
         if let Some(ref path) = self.serial_socket_path {

@@ -65,17 +65,27 @@ fn main() {
 
     match intent::load_intent(&intent_path) {
         Ok(intent) => {
-            let seed_val = if intent.has_seed() {
-                intent.seed_path()
+            if intent.has_kernel() {
+                let kb = intent.kernel_boot.as_ref().unwrap();
+                log::info!(
+                    "intent_loaded guest_id={} kernel={} initramfs={}",
+                    intent.guest_id,
+                    kb.kernel_path,
+                    kb.initramfs_path
+                );
             } else {
-                "(none)"
-            };
-            log::info!(
-                "intent_loaded guest_id={} disk={} seed={}",
-                intent.guest_id,
-                intent.disk_path(),
-                seed_val
-            );
+                let seed_val = if intent.has_seed() {
+                    intent.seed_path()
+                } else {
+                    "(none)"
+                };
+                log::info!(
+                    "intent_loaded guest_id={} disk={} seed={}",
+                    intent.guest_id,
+                    intent.disk_path(),
+                    seed_val
+                );
+            }
 
             let base_run_dir = swift_runtime::base_run_dir();
             let runtime_dir =
@@ -88,7 +98,7 @@ fn main() {
                 };
             log::info!("runtime_dir path={}", runtime_dir.root().display());
 
-            if intent.has_seed() {
+            if intent.has_seed() && !intent.has_kernel() {
                 let configmap_path = Path::new(intent.seed_path());
                 let nocloud_output = runtime_dir.seed_dir();
                 if let Err(e) = swift_seed::build_nocloud_dir(configmap_path, &nocloud_output) {

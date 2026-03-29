@@ -22,6 +22,9 @@ pub struct RuntimeIntent {
     /// When true, guest has network (TAP, DHCP). Defaults to true when seed present.
     #[serde(default)]
     pub network: Option<bool>,
+    /// When set, boot via --kernel + --initramfs instead of --disk for root.
+    #[serde(default)]
+    pub kernel_boot: Option<KernelBoot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +32,14 @@ pub struct RuntimeIntent {
 pub struct RootDisk {
     pub path: String,
     pub format: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KernelBoot {
+    pub kernel_path: String,
+    pub initramfs_path: String,
+    pub cmdline: String,
 }
 
 impl RuntimeIntent {
@@ -50,6 +61,11 @@ impl RuntimeIntent {
     /// Returns true if guest has network (TAP, DHCP). Defaults to true when seed present.
     pub fn has_network(&self) -> bool {
         self.network.unwrap_or(self.has_seed())
+    }
+
+    /// Returns true if guest boots via direct kernel (not disk).
+    pub fn has_kernel(&self) -> bool {
+        self.kernel_boot.is_some()
     }
 }
 

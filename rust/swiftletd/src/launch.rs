@@ -43,21 +43,40 @@ where
         .to_string_lossy()
         .to_string();
 
-    let tap_name = if intent.has_network() {
-        Some("tap0".to_string())
+    let config = if intent.has_kernel() {
+        let kb = intent.kernel_boot.as_ref().unwrap();
+        VmConfig {
+            disk_path: String::new(),
+            memory_mib: intent.memory.max(128),
+            cpus: intent.cpu.max(1),
+            api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
+            seed_path: String::new(),
+            serial_socket_path: Some(serial_socket_path.clone()),
+            firmware_path: None,
+            tap_name: None,
+            kernel_path: Some(kb.kernel_path.clone()),
+            initramfs_path: Some(kb.initramfs_path.clone()),
+            kernel_cmdline: Some(kb.cmdline.clone()),
+        }
     } else {
-        None
-    };
-
-    let config = VmConfig {
-        disk_path: intent.disk_path().to_string(),
-        memory_mib: intent.memory.max(128),
-        cpus: intent.cpu.max(1),
-        api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
-        seed_path,
-        serial_socket_path: Some(serial_socket_path.clone()),
-        firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
-        tap_name,
+        let tap_name = if intent.has_network() {
+            Some("tap0".to_string())
+        } else {
+            None
+        };
+        VmConfig {
+            disk_path: intent.disk_path().to_string(),
+            memory_mib: intent.memory.max(128),
+            cpus: intent.cpu.max(1),
+            api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
+            seed_path,
+            serial_socket_path: Some(serial_socket_path.clone()),
+            firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
+            tap_name,
+            kernel_path: None,
+            initramfs_path: None,
+            kernel_cmdline: None,
+        }
     };
 
     remove_stale_sockets(runtime_dir);
