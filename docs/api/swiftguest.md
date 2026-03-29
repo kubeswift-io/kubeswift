@@ -1,23 +1,38 @@
 # SwiftGuest
 
-A SwiftGuest is **one VM instance**. You create it by referencing a SwiftGuestClass (CPU/memory template), SwiftImage (root disk), and optionally a SwiftSeedProfile (cloud-init).
+A SwiftGuest is **one VM instance**. It boots via one of two paths: disk boot (using SwiftImage) or kernel boot (using SwiftKernel). The `imageRef` and `kernelRef` fields are mutually exclusive.
 
 **API:** `swift.kubeswift.io/v1alpha1` · **Short name:** `sg`
 
 ## Operator workflow
 
+### Disk boot
+
 1. Ensure SwiftImage exists and is `phase=Ready` (import can take 5–15 min).
 2. Apply `config/rbac/` in the namespace (required for swiftletd status patching).
-3. Create SwiftGuest; controller creates pod; swiftletd launches Cloud Hypervisor.
+3. Create SwiftGuest with `imageRef`; controller creates pod; swiftletd launches Cloud Hypervisor.
+
+### Kernel boot
+
+1. Label nodes with `kubeswift.io/kernel-node=true`.
+2. Ensure SwiftKernel exists and is `phase=Ready`.
+3. Apply `config/rbac/` in the namespace.
+4. Create SwiftGuest with `kernelRef`; controller creates pod with hostPath volume and nodeSelector.
 
 ## Spec
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `imageRef.name` | Yes | SwiftImage name (same namespace) |
+| `imageRef.name` | Yes* | SwiftImage name (same namespace) — disk boot |
+| `kernelRef.name` | Yes* | SwiftKernel name (same namespace) — kernel boot |
+| `kernelCmdline` | No | Kernel command line override (kernel boot only); overrides SwiftKernel default |
 | `guestClassRef.name` | Yes | SwiftGuestClass name (cluster-scoped) |
-| `seedProfileRef.name` | No | SwiftSeedProfile for cloud-init (same namespace) |
+| `seedProfileRef.name` | No | SwiftSeedProfile for cloud-init (disk boot only) |
 | `runPolicy` | No | `Running` (default), `Stopped`, `RestartOnFailure`, `Always` |
+
+*Exactly one of `imageRef` or `kernelRef` must be set.
+
+### Disk boot example
 
 ```yaml
 apiVersion: swift.kubeswift.io/v1alpha1
@@ -32,6 +47,23 @@ spec:
     name: default
   seedProfileRef:
     name: minimal
+  runPolicy: Running
+```
+
+### Kernel boot example
+
+```yaml
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: faas-test
+  namespace: default
+spec:
+  kernelRef:
+    name: faas-minimal
+  guestClassRef:
+    name: default
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   runPolicy: Running
 ```
 
@@ -55,7 +87,7 @@ spec:
 | `runtime.pid` | Cloud Hypervisor process PID |
 | `runtime.hypervisor` | Hypervisor name (cloud-hypervisor) |
 | `console.serialSocket` | Path to serial socket for console access |
-| `network.primaryIP` | Guest IP discovered from DHCP lease |
+| `network.primaryIP` | Guest IP discovered from DHCP lease (disk boot only) |
 | `network.interfaces` | List of {name, ip} for all guest interfaces |
 | `restartCount` | Number of times the guest has been restarted |
 | `lastRestartTime` | Timestamp of last restart |
@@ -71,8 +103,9 @@ kubectl get swiftguest sample -w
 
 ## Prerequisites
 
-- SwiftImage `phase=Ready` before creating SwiftGuest
+- For disk boot: SwiftImage `phase=Ready` before creating SwiftGuest
+- For kernel boot: SwiftKernel `phase=Ready` and nodes labeled `kubeswift.io/kernel-node=true`
 - `kubectl apply -k config/rbac -n <namespace>`
 - Worker nodes with KVM; run [preflight](../operator/worker-node-preflight.md)
 
-[SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [Lifecycle](../architecture/lifecycle.md)
+[SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [SwiftKernel](swiftkernel.md) · [Lifecycle](../architecture/lifecycle.md)

@@ -60,4 +60,12 @@ See `config/samples/swiftimage-pvc-clone.yaml`.
 
 **If import fails:** Check `format` matches image (Ubuntu = qcow2). See [troubleshooting](../operator/troubleshooting.md).
 
-[SwiftGuest](swiftguest.md) · [SwiftGuestClass](swiftguestclass.md)
+## Kernel images (SwiftKernel)
+
+SwiftImage handles disk images for the disk boot path. For the kernel boot path, use [SwiftKernel](swiftkernel.md) instead.
+
+SwiftKernel manages OCI artifacts containing a Linux kernel (bzImage) and initramfs (rootfs.cpio.gz). These are not disk images — they are raw binary files pulled to each labeled node via ORAS. SwiftKernel and SwiftImage serve different boot paths and are referenced via different fields on SwiftGuest (`kernelRef` vs `imageRef`).
+
+See [SwiftKernel API reference](swiftkernel.md) for the full CRD spec, and the [SwiftKernel guide](../swiftkernel.md) for building and packaging kernel profiles.
+
+[SwiftGuest](swiftguest.md) · [SwiftGuestClass](swiftguestclass.md) · [SwiftKernel](swiftkernel.md)
