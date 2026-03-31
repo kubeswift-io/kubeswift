@@ -7,12 +7,9 @@ INTENT_PATH="${KUBESWIFT_INTENT_PATH:-/var/lib/kubeswift/intent/runtime-intent.j
 RUN_DIR="${KUBESWIFT_RUN_DIR:-/var/lib/kubeswift/run}"
 BRIDGE="${BRIDGE_NAME:-br0}"
 
-# Check if network is enabled (has seed; network defaults true when seed present)
 network_enabled() {
     [ -f "$INTENT_PATH" ] || return 1
-    # Has seed and network not explicitly false
-    grep -q '"seedPath"[[:space:]]*:[[:space:]]*"[^"]\+"' "$INTENT_PATH" || return 1
-    grep -q '"network"[[:space:]]*:[[:space:]]*false' "$INTENT_PATH" && return 1
+    grep -q '"network"[[:space:]]*:[[:space:]]*true' "$INTENT_PATH" || return 1
     return 0
 }
 
