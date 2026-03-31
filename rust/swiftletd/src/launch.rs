@@ -45,6 +45,11 @@ where
 
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
+        let tap_name = if intent.has_network() {
+            Some("tap0".to_string())
+        } else {
+            None
+        };
         VmConfig {
             disk_path: String::new(),
             memory_mib: intent.memory.max(128),
@@ -53,7 +58,7 @@ where
             seed_path: String::new(),
             serial_socket_path: Some(serial_socket_path.clone()),
             firmware_path: None,
-            tap_name: None,
+            tap_name,
             kernel_path: Some(kb.kernel_path.clone()),
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
