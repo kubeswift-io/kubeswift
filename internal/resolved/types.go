@@ -24,6 +24,7 @@ type ResolvedGuest struct {
 	PreparedImage PreparedImage `json:"preparedImage"`
 	Meta          Meta          `json:"meta"`
 	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
+	Network       bool          `json:"network"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -94,6 +95,11 @@ func (r *ResolvedGuest) HasSeed() bool {
 // HasKernel returns true when the guest boots via kernel+initramfs instead of disk.
 func (r *ResolvedGuest) HasKernel() bool {
 	return r.KernelBoot != nil
+}
+
+// HasNetwork returns true when the guest should have tap+bridge networking.
+func (r *ResolvedGuest) HasNetwork() bool {
+	return r.Network
 }
 
 // GetKernelPath returns the full path to the kernel (bzImage) inside the artifact dir.

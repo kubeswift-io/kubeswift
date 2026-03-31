@@ -23,6 +23,7 @@ func TestBuildPod_HasInitContainerWhenHasSeed(t *testing.T) {
 		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
 		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
 		Seed:          &resolved.Seed{Datasource: "NoCloud", UserData: "x", MetaData: "y"},
+		Network:       true,
 	}
 
 	pod := BuildPod(guest, rg, "test-seed", "test-intent")

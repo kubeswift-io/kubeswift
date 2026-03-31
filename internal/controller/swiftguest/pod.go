@@ -73,6 +73,22 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		mem = 128
 	}
 
+	var initContainers []corev1.Container
+	if rg.HasNetwork() {
+		initContainers = append(initContainers, corev1.Container{
+			Name:            "network-init",
+			Image:           LauncherImage(),
+			ImagePullPolicy: corev1.PullIfNotPresent,
+			Command:         []string{"/usr/local/bin/network-init.sh"},
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true),
+				Capabilities: &corev1.Capabilities{
+					Add: []corev1.Capability{"NET_ADMIN"},
+				},
+			},
+		})
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      guest.Name,
@@ -82,7 +98,8 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			RestartPolicy:  corev1.RestartPolicyNever,
+			InitContainers: initContainers,
 			NodeSelector: map[string]string{
 				"kubeswift.io/kernel-node": "true",
 			},
@@ -178,7 +195,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	}
 
 	var initContainers []corev1.Container
-	if rg.HasSeed() {
+	if rg.HasNetwork() {
 		initContainers = append(initContainers, corev1.Container{
 			Name:            "network-init",
 			Image:           LauncherImage(),

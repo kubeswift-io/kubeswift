@@ -51,6 +51,9 @@ func Merge(
 	// PreparedImage: from SwiftImage when Ready
 	rg.PreparedImage = mergePreparedImage(image)
 
+	// All guests get tap+bridge networking; the field exists for future per-guest opt-out.
+	rg.Network = true
+
 	return rg
 }
 
