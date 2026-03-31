@@ -5,6 +5,7 @@ package runtimeintent
 type ResolvedGuest interface {
 	HasSeed() bool
 	HasKernel() bool
+	HasNetwork() bool
 	GetRootDiskFormat() string
 	GetCPU() int
 	GetMemoryMiB() int
@@ -29,7 +30,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Memory:    rg.GetMemoryMiB(),
 			Lifecycle: lifecycle,
 			GuestID:   rg.GetGuestID(),
-			Network:   false,
+			Network:   rg.HasNetwork(),
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -56,6 +57,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Memory:    rg.GetMemoryMiB(),
 		Lifecycle: lifecycle,
 		GuestID:   rg.GetGuestID(),
-		Network:   rg.HasSeed(),
+		Network:   rg.HasNetwork(),
 	}
 }

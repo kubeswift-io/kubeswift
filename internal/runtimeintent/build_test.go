@@ -8,6 +8,7 @@ import (
 type mockResolvedGuest struct {
 	hasSeed       bool
 	hasKernel     bool
+	hasNetwork    bool
 	format        string
 	cpu           int
 	memory        int
@@ -20,6 +21,7 @@ type mockResolvedGuest struct {
 
 func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
 func (m *mockResolvedGuest) HasKernel() bool           { return m.hasKernel }
+func (m *mockResolvedGuest) HasNetwork() bool          { return m.hasNetwork }
 func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
 func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
 func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }
@@ -31,12 +33,13 @@ func (m *mockResolvedGuest) GetKernelCmdline() string  { return m.kernelCmdline 
 
 func TestBuild(t *testing.T) {
 	rg := &mockResolvedGuest{
-		hasSeed:   true,
-		format:    "raw",
-		cpu:       2,
-		memory:    2048,
-		lifecycle: "start",
-		guestID:   "test-guest",
+		hasSeed:    true,
+		hasNetwork: true,
+		format:     "raw",
+		cpu:        2,
+		memory:     2048,
+		lifecycle:  "start",
+		guestID:    "test-guest",
 	}
 	intent := Build(rg)
 	wantPath := DisksRootPath + "/" + RootDiskImageFile
@@ -56,18 +59,18 @@ func TestBuild(t *testing.T) {
 		t.Errorf("guestId = %q, want test-guest", intent.GuestID)
 	}
 	if !intent.Network {
-		t.Error("network = false, want true when HasSeed")
+		t.Error("network = false, want true when HasNetwork")
 	}
 }
 
 func TestBuildNoSeed(t *testing.T) {
-	rg := &mockResolvedGuest{hasSeed: false, format: "raw", guestID: "x"}
+	rg := &mockResolvedGuest{hasSeed: false, hasNetwork: false, format: "raw", guestID: "x"}
 	intent := Build(rg)
 	if intent.SeedPath != "" {
 		t.Errorf("seedPath = %q, want empty", intent.SeedPath)
 	}
 	if intent.Network {
-		t.Error("network = true, want false when no seed")
+		t.Error("network = true, want false when no network")
 	}
 }
 
