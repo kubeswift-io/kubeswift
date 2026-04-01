@@ -1,6 +1,7 @@
 package scheme
 
 import (
+	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
@@ -28,4 +29,7 @@ func init() {
 	gvKernel := schema.GroupVersion{Group: "kernel.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvKernel, &kernelv1alpha1.SwiftKernel{}, &kernelv1alpha1.SwiftKernelList{})
 	metav1.AddToGroupVersion(Scheme, gvKernel)
+	gvGPU := schema.GroupVersion{Group: "gpu.kubeswift.io", Version: "v1alpha1"}
+	Scheme.AddKnownTypes(gvGPU, &gpuv1alpha1.SwiftGPUProfile{}, &gpuv1alpha1.SwiftGPUProfileList{}, &gpuv1alpha1.SwiftGPUNode{}, &gpuv1alpha1.SwiftGPUNodeList{})
+	metav1.AddToGroupVersion(Scheme, gvGPU)
 }

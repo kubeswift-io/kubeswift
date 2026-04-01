@@ -189,6 +189,23 @@ spec:
                 required:
                 - format
                 type: object
+              preparedFormat:
+                description: DiskFormat is the disk image format.
+                enum:
+                - raw
+                - qcow2
+                type: string
+              sizeHint:
+                description: SizeHint is an internal field used to pass measured size
+                  between Validating and Preparing phases.
+                format: int64
+                type: integer
+              sourceFormat:
+                description: DiskFormat is the disk image format.
+                enum:
+                - raw
+                - qcow2
+                type: string
             type: object
         type: object
     served: true

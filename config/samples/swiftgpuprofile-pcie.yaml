@@ -1,0 +1,17 @@
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: a100-pcie-single
+  namespace: default
+spec:
+  count: 1
+  model: "A100-PCIe"
+  # tier=pcie: Cloud Hypervisor, flat PCI topology, no NVSwitch, no Fabric Manager
+  tier: pcie
+  partitionMode: isolated
+  pcieTopology:
+    rootPortPerDevice: false
+    gpuDirectClique: 0
+    noMmap: false
+  hugepages: "1Gi"
+  vcpuPinning: false

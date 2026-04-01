@@ -115,6 +115,8 @@ deploy: generate
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftkernels.kernel.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftseedprofiles.seed.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftguestclasses.swift.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpuprofiles.gpu.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpunodes.gpu.kubeswift.io
 	kubectl apply -k config/default
 
 undeploy:

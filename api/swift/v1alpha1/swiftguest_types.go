@@ -16,6 +16,10 @@ const (
 	RunPolicyAlways           RunPolicy = "Always"
 )
 
+// ConditionGPUAllocated is set on SwiftGuest when the SwiftGPU controller has
+// allocated GPU devices and the guest is ready to be scheduled.
+const ConditionGPUAllocated = "GPUAllocated"
+
 // SwiftGuestPhase is the phase of a SwiftGuest.
 // +kubebuilder:validation:Enum=Pending;Scheduling;Running;Stopped;Failed
 type SwiftGuestPhase string
@@ -30,12 +34,25 @@ const (
 
 // SwiftGuestSpec defines the desired state of SwiftGuest.
 type SwiftGuestSpec struct {
-	ImageRef       *corev1.LocalObjectReference `json:"imageRef,omitempty"`
-	KernelRef      *corev1.LocalObjectReference `json:"kernelRef,omitempty"`
-	KernelCmdline  string                       `json:"kernelCmdline,omitempty"`
-	GuestClassRef  corev1.LocalObjectReference  `json:"guestClassRef"`
+	// ImageRef references the SwiftImage to boot from (disk boot).
+	// Mutually exclusive with kernelRef.
+	// +optional
+	ImageRef *corev1.LocalObjectReference `json:"imageRef,omitempty"`
+	// KernelRef references the SwiftKernel to boot from (kernel boot).
+	// Mutually exclusive with imageRef and gpuProfileRef.
+	// +optional
+	KernelRef     *corev1.LocalObjectReference `json:"kernelRef,omitempty"`
+	KernelCmdline string                       `json:"kernelCmdline,omitempty"`
+	GuestClassRef corev1.LocalObjectReference  `json:"guestClassRef"`
+	// SeedProfileRef references a SwiftSeedProfile for cloud-init (disk boot only).
+	// +optional
 	SeedProfileRef *corev1.LocalObjectReference `json:"seedProfileRef,omitempty"`
 	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`
+	// GPUProfileRef references a SwiftGPUProfile for GPU passthrough.
+	// When set, the SwiftGPU controller allocates GPUs before the pod is created.
+	// Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
+	// +optional
+	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
 }
 
 // GuestRuntimeStatus holds runtime process information.
@@ -63,6 +80,22 @@ type GuestNetworkStatus struct {
 	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
 }
 
+// GPUStatus holds GPU allocation and runtime information for a SwiftGuest.
+// Populated when spec.gpuProfileRef is set.
+type GPUStatus struct {
+	// Devices lists the PCI addresses of allocated GPUs (e.g. "0000:41:00.0").
+	Devices []string `json:"devices,omitempty"`
+	// PartitionID is the Fabric Manager partition ID for shared NVSwitch mode.
+	// -1 means no partition (isolated or full passthrough mode).
+	PartitionID int `json:"partitionId,omitempty"`
+	// NUMANodes lists the NUMA node IDs the allocated GPUs are attached to.
+	NUMANodes []int `json:"numaNodes,omitempty"`
+	// Hypervisor is the resolved hypervisor for this guest ("cloud-hypervisor" or "qemu").
+	Hypervisor string `json:"hypervisor,omitempty"`
+	// NodeName is the Kubernetes node where GPUs were allocated.
+	NodeName string `json:"nodeName,omitempty"`
+}
+
 // SwiftGuestStatus defines the observed state of SwiftGuest.
 type SwiftGuestStatus struct {
 	Phase           SwiftGuestPhase         `json:"phase,omitempty"`
@@ -74,6 +107,10 @@ type SwiftGuestStatus struct {
 	Console         *GuestConsoleStatus     `json:"console,omitempty"`
 	RestartCount    int32                   `json:"restartCount,omitempty"`
 	LastRestartTime *metav1.Time            `json:"lastRestartTime,omitempty"`
+	// GPU contains GPU allocation and runtime status.
+	// Populated when spec.gpuProfileRef is set.
+	// +optional
+	GPU *GPUStatus `json:"gpu,omitempty"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.
