@@ -1,65 +1,63 @@
 # KubeSwift
 
-**KubeSwift** runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.cloud-hypervisor.org/) as the sole hypervisor—no libvirt, no QEMU. You define guests with Kubernetes custom resources; the control plane reconciles them into pods; a node-side launcher (`swiftletd`) starts Cloud Hypervisor and reports VM state.
+KubeSwift is a Kubernetes-native virtual machine runtime. VMs are first-class Kubernetes workloads defined with custom resources and reconciled by controllers. The default hypervisor is [Cloud Hypervisor](https://www.cloud-hypervisor.org/); QEMU is used automatically for GPU workloads that require PCIe topology.
 
-## What is KubeSwift?
+KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM platform — each SwiftGuest becomes one pod, and swiftletd inside that pod launches the hypervisor.
 
-KubeSwift adds VM orchestration to Kubernetes. Each guest is a pod: Kubernetes schedules it, provides networking and storage, and the launcher container runs Cloud Hypervisor inside the pod. The control plane reconciles four CRDs—**SwiftGuest** (a VM), **SwiftGuestClass** (CPU/memory template), **SwiftImage** (disk source), **SwiftSeedProfile** (cloud-init)—and drives the runtime.
+## Features
 
-## Why it exists
+- **Disk boot** — Cloud images (Ubuntu Focal, Rocky Linux, etc.) via rust-hypervisor-firmware
+- **Kernel boot** — Direct bzImage + initramfs boot via SwiftKernel OCI artifacts; sub-second cold start
+- **GPU passthrough** — Three-tier model: PCIe GPUs on Cloud Hypervisor, HGX SXM GPUs on QEMU with PCIe topology, full HGX passthrough
+- **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
+- **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status
+- **Observability** — Prometheus metrics: boot time, running count, failure count, import time
+- **cloud-init** — SwiftSeedProfile (NoCloud datasource) for user-data, SSH keys, network config
+- **RunPolicy** — Running, Stopped, RestartOnFailure, Always with exponential backoff
 
-KubeSwift targets a narrow, modern use case: Linux cloud images, virtio devices, explicit VM semantics. It skips libvirt and multi-hypervisor abstraction. Kubernetes handles orchestration; Cloud Hypervisor handles the VMM. The result is a simpler stack for cloud-native workloads.
+## Architecture overview
 
-## How it differs from KubeVirt
+```
+kubectl / swiftctl
+        |
+Kubernetes API Server  (CRDs)
+        |
+KubeSwift Controllers (Go, controller-runtime)
+  |- SwiftImage controller   (import, convert, prepare)
+  |- SwiftGuest controller   (pod lifecycle, status)
+  |- SwiftKernel controller  (per-node OCI pull)
+  |- SwiftGPU controller     (allocation, VFIO, Fabric Manager)
+        |
+SwiftGuest Pod
+  |- init: network-init  (bridge, tap, iptables)
+  |- init: gpu-init      (VFIO bind, FM partition) [GPU path only]
+  |- launcher: swiftletd (Rust)
+        |
+  Cloud Hypervisor v51.1  (default)
+  or QEMU               (GPU Tier 2/3)
+        |
+  Guest VM
+```
 
-| Aspect | KubeVirt | KubeSwift |
-|--------|----------|-----------|
-| VMM | libvirt, QEMU, multi-hypervisor | Cloud Hypervisor only |
-| API style | VirtualMachine, VirtualMachineInstance | SwiftGuest, SwiftImage, SwiftGuestClass |
-| Scope | Broad legacy and cloud support | Linux cloud images, modern virtio |
-| Abstraction | VM-as-pod, complex layering | Explicit VM semantics, one guest per pod |
+See [docs/architecture.md](docs/architecture.md) for the full diagram, networking model, and status reporting details.
 
-KubeSwift is intentionally distinct: different naming, narrower scope, and a direct Cloud Hypervisor integration.
+## CRDs
 
-## Project status
+| CRD | Short name | API group | Scope | Description |
+|-----|-----------|-----------|-------|-------------|
+| SwiftGuest | `sg` | `swift.kubeswift.io` | Namespaced | A running VM instance |
+| SwiftGuestClass | `sgc` | `swift.kubeswift.io` | Cluster | CPU/memory/disk template |
+| SwiftImage | `si` | `image.kubeswift.io` | Namespaced | Disk image source (HTTP or PVC clone) |
+| SwiftSeedProfile | `ssp` | `seed.kubeswift.io` | Namespaced | cloud-init NoCloud configuration |
+| SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | Kernel + initramfs OCI artifact |
+| SwiftGPUProfile | `sgp` | `gpu.kubeswift.io` | Namespaced | GPU passthrough request |
+| SwiftGPUNode | `sgn` | `gpu.kubeswift.io` | Cluster | Per-node GPU inventory (populated by discovery) |
 
-- **Experimental / pre-1.0** — API may change; no stability guarantee
-- **Linux-first** — Linux cloud images only; no Windows
-- **x86_64-first** — Primary target architecture
-- **Cloud Hypervisor only** — No libvirt, no QEMU
-- **Current focus:** first-boot, installability, smoke validation
+All CRDs are `v1alpha1`.
 
-**Planned improvements:**
-- Generated API reference tables from Go types / CRDs
-- Diagram assets for architecture and lifecycle
-- Troubleshooting matrix
+## Quick start
 
-**Implemented:** Linux cloud images (raw, qcow2), one root disk, one network, NoCloud seed, start/stop/restart, OCI Helm install, admission webhooks (optional), worker-node preflight, smoke test.
-
-**Not yet implemented:** SwiftGuestMigration, SwiftGuestSnapshot, SwiftGuestPool, ConfigDrive/Ignition seeds, multi-disk, multi-NIC, Windows guests, live migration, snapshots.
-
-## Main components
-
-| Component | Purpose |
-|-----------|---------|
-| **controller-manager** | SwiftImage, SwiftGuest controllers; optional admission webhooks |
-| **swiftletd** | Node daemon; launches Cloud Hypervisor, manages VM lifecycle |
-| **Helm chart** | OCI chart at `oci://ghcr.io/projectbeskar/charts/kubeswift` |
-
-## API groups and main CRDs
-
-| API group | CRD | Purpose |
-|-----------|-----|---------|
-| `swift.kubeswift.io` | SwiftGuest | A single VM instance |
-| `swift.kubeswift.io` | SwiftGuestClass | Cluster-scoped template (CPU, memory, root disk) |
-| `image.kubeswift.io` | SwiftImage | Disk image source (HTTP, PVC) |
-| `seed.kubeswift.io` | SwiftSeedProfile | Cloud-init datasource (NoCloud) |
-
-See [API overview](docs/api/overview.md) and [architecture](docs/architecture.md).
-
-## Quick install
-
-**Remote cluster (Helm OCI):**
+### Install
 
 ```bash
 helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
@@ -68,70 +66,76 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
   --create-namespace
 ```
 
-**Local cluster (kind/minikube):**
+### Boot a VM (disk boot)
 
 ```bash
-make build-images
-make load-images   # loads images into kind/minikube
-make deploy
+kubectl apply -f config/samples/swiftguestclass-default.yaml
+kubectl apply -f config/samples/swiftimage-http.yaml
+kubectl apply -f config/samples/swiftseedprofile-ssh.yaml
+kubectl apply -f config/samples/swiftguest-sample.yaml
+
+# Wait for image import (5-15 minutes)
+kubectl get swiftimage ubuntu-cloud -w
+
+# Wait for VM to start
+kubectl get swiftguest sample -w
+
+# Connect to serial console
+swiftctl console sample
+
+# SSH into VM
+swiftctl ssh sample -u kubeswift -i ~/.ssh/id_rsa
 ```
 
-Version guide: dev `0.0.0-dev.<shortsha>`, RC `X.Y.Z-rc.N`, stable `X.Y.Z`. See [install docs](docs/install/).
+### Boot a microVM (kernel boot)
 
-## Quick smoke test
+```bash
+kubectl label node <node> kubeswift.io/kernel-node=true
+kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl get swiftkernel faas-minimal -w  # wait for Ready
 
-After install, run:
+kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl get swiftguest faas-test -w
+```
+
+### Smoke test
 
 ```bash
 make smoke-test
 ```
 
-Or manually: apply samples from `config/samples/`, wait for SwiftImage Ready (5–15 min), then SwiftGuest Running. See [smoke verification](docs/operator/smoke-verification.md#quick-walkthrough).
-
-## Repo layout summary
-
-```
-api/          # Go API types (swift, image, seed)
-cmd/          # controller-manager, swiftctl
-config/       # CRDs, RBAC, Kustomize, samples
-charts/       # Helm chart (OCI)
-images/       # Containerfiles (controller-manager, swiftletd)
-rust/         # swiftletd, swift-runtime, swift-seed, swift-ch-client
-hack/         # version.sh, chart-version.sh
-docs/         # Documentation
-```
-
-See [repo layout](docs/developer/repo-layout.md).
-
 ## Documentation
 
-**[docs/index.md](docs/index.md)** — Full index
-
-| Topic | Docs |
+| Topic | Link |
 |-------|------|
-| Architecture | [Overview](docs/architecture.md), [Control plane](docs/architecture/control-plane.md), [Node runtime](docs/architecture/node-runtime.md) |
-| Install | [Local cluster](docs/install/local-cluster.md), [Remote cluster](docs/install/remote-cluster.md), [Helm OCI](docs/install/helm-oci.md) |
-| API | [Overview](docs/api/overview.md), [SwiftGuest](docs/api/swiftguest.md), [SwiftGuestClass](docs/api/swiftguestclass.md), [SwiftImage](docs/api/swiftimage.md), [SwiftSeedProfile](docs/api/swiftseedprofile.md) |
-| Operator | [Preflight](docs/operator/worker-node-preflight.md), [Checklist](docs/operator/operator-checklist-ubuntu-x86_64.md), [Smoke test](docs/operator/smoke-verification.md), [Troubleshooting](docs/operator/troubleshooting.md) |
-| Developer | [Getting started](docs/developer/getting-started.md), [Build](docs/developer/build.md), [Repo layout](docs/developer/repo-layout.md), [Testing](docs/developer/testing.md) |
-| Releases | [Versioning, dev/rc/stable](docs/releases.md) |
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| CRD reference | [docs/crds.md](docs/crds.md) |
+| Quickstart | [docs/quickstart.md](docs/quickstart.md) |
+| GPU passthrough | [docs/gpu-passthrough.md](docs/gpu-passthrough.md) |
+| swiftctl CLI | [docs/swiftctl.md](docs/swiftctl.md) |
+| Development | [docs/development.md](docs/development.md) |
+| Docs index | [docs/README.md](docs/README.md) |
 
-## Release model
+## Build
 
-- **Dev:** Push to `main` → images `sha-<shortsha>`, chart `0.0.0-dev.<shortsha>`
-- **RC:** Tag `v*.*.*-rc.*` → images and chart with tag version
-- **Stable:** Tag `v*.*.*` → images, chart, GitHub Release
+```bash
+make build            # build Go binaries
+make build-images     # build container images
+make push-images      # push to ghcr.io
+make deploy           # apply CRDs + deploy controller
+cargo build --release # build Rust crates (from rust/)
+go test ./...
+cargo test
+```
 
-Workflows: `release-dev.yaml`, `release-rc.yaml`, `release-stable.yaml`. See [releases](docs/releases.md).
+## Status
 
-## Current limitations
+Experimental / pre-1.0. API may change. Linux x86_64 only.
 
-- Linux cloud images only; no Windows
-- One root disk, one network per guest
-- NoCloud seed only; ConfigDrive/Ignition not implemented
-- No live migration, snapshots, or SwiftGuestPool
-- Worker nodes require KVM and `/dev/kvm`; run preflight before use
+**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU CRDs and controllers (Phase 2), QEMU runtime path (Phase 1).
 
-## Contributing
+**Not yet implemented:** live migration, snapshots, multi-NIC, Windows guests, SwiftGuestPool, GPU Phase 3/4.
 
-Clone, build with `make build`, deploy locally with `make deploy`. See [developer getting started](docs/developer/getting-started.md).
+## License
+
+See [LICENSE](LICENSE).
