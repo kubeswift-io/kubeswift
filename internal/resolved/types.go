@@ -25,6 +25,10 @@ type ResolvedGuest struct {
 	Meta          Meta          `json:"meta"`
 	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
 	Network       bool          `json:"network"`
+	// Hypervisor overrides the default hypervisor selection.
+	// "qemu" forces the QEMU path; empty or "cloud-hypervisor" uses Cloud Hypervisor.
+	// Set by the controller from the kubeswift.io/hypervisor-override annotation.
+	Hypervisor string `json:"hypervisor,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -141,6 +145,11 @@ func (r *ResolvedGuest) GetLifecycle() string {
 		return "stop"
 	}
 	return "start"
+}
+
+// GetHypervisor returns the hypervisor override, or empty string for default (Cloud Hypervisor).
+func (r *ResolvedGuest) GetHypervisor() string {
+	return r.Hypervisor
 }
 
 // GetGuestID returns a unique ID for the guest (namespace/name).

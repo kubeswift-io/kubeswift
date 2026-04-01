@@ -120,6 +120,14 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// Apply hypervisor override from annotation before building intent.
+	// kubeswift.io/hypervisor-override: "qemu" forces the QEMU runtime path.
+	// This is a temporary mechanism for Phase 1 validation; Phase 3 will set
+	// the hypervisor automatically based on gpuProfileRef tier.
+	if override, ok := guest.Annotations["kubeswift.io/hypervisor-override"]; ok && override != "" {
+		rg.Hypervisor = override
+	}
+
 	// Create or update intent ConfigMap
 	intentConfigMapName := guest.Name + IntentConfigMapSuffix
 	intent := runtimeintent.Build(rg)
