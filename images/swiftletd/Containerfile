@@ -13,6 +13,7 @@ COPY swiftletd ./swiftletd
 COPY swift-runtime ./swift-runtime
 COPY swift-seed ./swift-seed
 COPY swift-ch-client ./swift-ch-client
+COPY swift-qemu-client ./swift-qemu-client
 
 RUN KUBESWIFT_VERSION=$VERSION KUBESWIFT_GIT_COMMIT=$GIT_COMMIT KUBESWIFT_BUILD_DATE=$BUILD_DATE \
     cargo build -p swiftletd --release
@@ -37,7 +38,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     bash-completion \
     dnsutils \
+    qemu-system-x86 \
+    ovmf \
     && rm -rf /var/lib/apt/lists/*
+
+# ovmf package installs to /usr/share/OVMF/OVMF_CODE.fd and /usr/share/OVMF/OVMF_VARS.fd
+# qemu-system-x86 package provides /usr/bin/qemu-system-x86_64
+# Both paths are the defaults in swift-qemu-client/src/config.rs
 
 # Cloud Hypervisor static binary (v51.1)
 ARG CH_VERSION=51.1

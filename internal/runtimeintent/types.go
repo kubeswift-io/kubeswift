@@ -1,7 +1,7 @@
 package runtimeintent
 
 // RuntimeIntent is the node-local runtime specification.
-// It contains only what swiftletd needs to launch Cloud Hypervisor.
+// It contains only what swiftletd needs to launch Cloud Hypervisor or QEMU.
 type RuntimeIntent struct {
 	RootDisk   RootDiskSpec    `json:"rootDisk"`
 	SeedPath   string          `json:"seedPath"`
@@ -11,6 +11,7 @@ type RuntimeIntent struct {
 	GuestID    string          `json:"guestId"`
 	Network    bool            `json:"network"`              // true when guest has network (TAP, DHCP)
 	KernelBoot *KernelBootSpec `json:"kernelBoot,omitempty"` // when set, boot via --kernel + --initramfs
+	Hypervisor string          `json:"hypervisor,omitempty"` // "cloud-hypervisor" (default) or "qemu"
 }
 
 // RootDiskSpec specifies the root disk for the VM.

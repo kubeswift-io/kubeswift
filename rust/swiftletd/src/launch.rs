@@ -1,23 +1,26 @@
-//! Cloud Hypervisor launch and process monitoring.
+//! Hypervisor launch dispatch — Cloud Hypervisor or QEMU based on RuntimeIntent.hypervisor.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use swift_ch_client::{spawn_ch, wait_for_socket, VmConfig};
+use swift_qemu_client::{QemuConfig, QemuProcess};
 use swift_runtime::RuntimeDir;
 
 use crate::intent::RuntimeIntent;
 
-/// Remove stale socket files before CH bind. CH does not clean up on crash; restart fails with "Address in use".
+/// Remove stale socket files before hypervisor bind.
+/// Neither CH nor QEMU clean up on crash; restart fails with "Address in use".
 fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
-    let api_sock = runtime_dir.api_socket();
-    let serial_sock = runtime_dir.root().join("serial.sock");
-    let _ = std::fs::remove_file(&api_sock);
-    let _ = std::fs::remove_file(&serial_sock);
+    let _ = std::fs::remove_file(runtime_dir.api_socket()); // ch.sock
+    let _ = std::fs::remove_file(runtime_dir.root().join("serial.sock"));
+    let _ = std::fs::remove_file(runtime_dir.root().join("qmp.sock"));
 }
 
-/// Runs the VM: spawns CH, waits for socket, monitors process until exit.
-/// Calls `on_socket_ready` when the API socket is available (VM running).
-/// Returns (exit_status, pid, serial_socket_path) on success.
+/// Dispatch VM launch to Cloud Hypervisor or QEMU based on `intent.hypervisor`.
+///
+/// Calls `on_socket_ready(pid, serial_socket_path)` once the hypervisor is ready
+/// (API/QMP socket appeared). Returns `(exit_status, pid, serial_socket_path)`.
 pub fn run<F>(
     intent: &RuntimeIntent,
     runtime_dir: &RuntimeDir,
@@ -26,7 +29,23 @@ pub fn run<F>(
 where
     F: FnOnce(u32, String),
 {
-    // CH expects disk image (ISO), not directory. main.rs creates seed.iso from NoCloud dir.
+    remove_stale_sockets(runtime_dir);
+    match intent.hypervisor() {
+        "qemu" => run_qemu(intent, runtime_dir, on_socket_ready),
+        _ => run_ch(intent, runtime_dir, on_socket_ready),
+    }
+}
+
+// ─── Cloud Hypervisor path ───────────────────────────────────────────────────
+
+fn run_ch<F>(
+    intent: &RuntimeIntent,
+    runtime_dir: &RuntimeDir,
+    on_socket_ready: Option<F>,
+) -> Result<(std::process::ExitStatus, u32, String), String>
+where
+    F: FnOnce(u32, String),
+{
     let seed_path = if intent.has_seed() {
         runtime_dir
             .root()
@@ -84,27 +103,78 @@ where
         }
     };
 
-    remove_stale_sockets(runtime_dir);
-
     let args = config.to_args();
     log::info!("spawning cloud-hypervisor args={:?}", args);
 
     let mut child =
         spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
-
     let pid = child.id();
 
-    // Wait for CH to create the API socket
-    let socket_path = runtime_dir.api_socket();
-    wait_for_socket(&socket_path, Duration::from_secs(30))?;
+    // Wait for CH to create the API socket (signals VM is initialising)
+    wait_for_socket(&runtime_dir.api_socket(), Duration::from_secs(30))?;
 
-    // VM is running; notify caller (e.g. for status reporting)
     if let Some(cb) = on_socket_ready {
         cb(pid, serial_socket_path.clone());
     }
 
-    // Monitor process until exit
     let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
+    Ok((status, pid, serial_socket_path))
+}
 
+// ─── QEMU path ───────────────────────────────────────────────────────────────
+
+fn run_qemu<F>(
+    intent: &RuntimeIntent,
+    runtime_dir: &RuntimeDir,
+    on_socket_ready: Option<F>,
+) -> Result<(std::process::ExitStatus, u32, String), String>
+where
+    F: FnOnce(u32, String),
+{
+    let serial_socket = runtime_dir.root().join("serial.sock");
+    let qmp_socket = runtime_dir.root().join("qmp.sock");
+    let ovmf_vars = runtime_dir.root().join("OVMF_VARS.fd");
+
+    let seed_path = if intent.has_seed() {
+        runtime_dir
+            .root()
+            .join("seed.iso")
+            .to_string_lossy()
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    let config = QemuConfig {
+        guest_id: intent.guest_id.clone(),
+        cpus: intent.cpu.max(1),
+        memory_mib: intent.memory.max(128),
+        ovmf_code: PathBuf::from("/usr/share/OVMF/OVMF_CODE.fd"),
+        ovmf_vars,
+        disk_path: intent.disk_path().to_string(),
+        seed_path,
+        tap_name: if intent.has_network() {
+            Some("tap0".to_string())
+        } else {
+            None
+        },
+        // Fixed locally-administered MAC (sufficient for Phase 1 single-VM testing).
+        mac: "52:54:00:12:34:56".to_string(),
+        serial_socket: serial_socket.clone(),
+        qmp_socket: qmp_socket.clone(),
+    };
+
+    let mut process = QemuProcess::spawn(&config)?;
+    let pid = process.pid();
+    let serial_socket_path = serial_socket.to_string_lossy().to_string();
+
+    // Wait for QEMU to create the QMP socket (signals QEMU is ready to accept connections)
+    wait_for_socket(&qmp_socket, Duration::from_secs(30))?;
+
+    if let Some(cb) = on_socket_ready {
+        cb(pid, serial_socket_path.clone());
+    }
+
+    let status = process.wait()?;
     Ok((status, pid, serial_socket_path))
 }

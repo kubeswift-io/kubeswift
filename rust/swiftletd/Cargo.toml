@@ -15,6 +15,7 @@ serde_json = "1"
 swift-seed = { path = "../swift-seed" }
 swift-runtime = { path = "../swift-runtime" }
 swift-ch-client = { path = "../swift-ch-client" }
+swift-qemu-client = { path = "../swift-qemu-client" }
 
 [[bin]]
 name = "swiftletd"

@@ -1,0 +1,11 @@
+[package]
+name = "swift-qemu-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "swift_qemu_client"
+path = "src/lib.rs"
+
+[dependencies]
+log = "0.4"

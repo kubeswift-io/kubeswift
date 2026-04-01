@@ -25,6 +25,10 @@ pub struct RuntimeIntent {
     /// When set, boot via --kernel + --initramfs instead of --disk for root.
     #[serde(default)]
     pub kernel_boot: Option<KernelBoot>,
+    /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
+    /// Empty or absent means Cloud Hypervisor.
+    #[serde(default)]
+    pub hypervisor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +70,14 @@ impl RuntimeIntent {
     /// Returns true if guest boots via direct kernel (not disk).
     pub fn has_kernel(&self) -> bool {
         self.kernel_boot.is_some()
+    }
+
+    /// Returns the hypervisor to use. Defaults to "cloud-hypervisor".
+    pub fn hypervisor(&self) -> &str {
+        match self.hypervisor.as_deref() {
+            Some(h) if !h.is_empty() => h,
+            _ => "cloud-hypervisor",
+        }
     }
 }
 

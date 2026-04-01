@@ -1769,6 +1769,13 @@ name = "swift-ch-client"
 version = "0.1.0"
 
 [[package]]
+name = "swift-qemu-client"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "swift-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1794,6 +1801,7 @@ dependencies = [
  "serde",
  "serde_json",
  "swift-ch-client",
+ "swift-qemu-client",
  "swift-runtime",
  "swift-seed",
  "tokio",
