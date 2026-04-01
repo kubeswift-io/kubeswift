@@ -5,6 +5,6 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.1
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
