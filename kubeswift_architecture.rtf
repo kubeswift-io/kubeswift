@@ -1,0 +1,470 @@
+KubeSwift Architecture
+Purpose
+This document explains the internal architecture of KubeSwift, a Kubernetes-native virtual machine runtime built on Cloud Hypervisor.
+It is intended for:
+contributors
+operators
+AI assistants helping develop the project
+It describes:
+system architecture
+runtime lifecycle
+controller behavior
+networking model
+image pipeline
+debugging surfaces
+
+System Overview
+KubeSwift allows Kubernetes users to run virtual machines as native Kubernetes workloads.
+Each VM is represented by a SwiftGuest custom resource and executed inside a launcher pod running Cloud Hypervisor.
+The architecture separates:
+
+Control Plane
+Runtime Plane
+Guest VM
+
+
+High-Level Architecture
+
+User
+ │
+ │ kubectl / helm / swiftctl
+ │
+ ▼
+Kubernetes API Server
+ │
+ │ CRDs
+ │
+ ▼
+KubeSwift Controllers
+ │
+ │ create launcher pod
+ │
+ ▼
+SwiftGuest Pod
+ │
+ ├─ network-init (init container)
+ │
+ └─ launcher container (swiftletd)
+        │
+        ▼
+     Cloud Hypervisor
+        │
+        ▼
+      Guest VM
+
+
+Core Components
+CRDs
+KubeSwift defines four primary Kubernetes resources.
+SwiftGuest
+Represents a running virtual machine.
+Example:
+
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+spec:
+  imageRef:
+    name: ubuntu-cloud
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+
+Status contains:
+
+phase
+conditions
+podRef
+nodeName
+network.primaryIP
+
+
+SwiftImage
+Represents a VM disk image.
+Example:
+
+spec:
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  format: qcow2
+
+During import:
+
+qcow2 → raw conversion
+
+Runtime disks must be raw.
+
+SwiftSeedProfile
+Defines cloud-init configuration.
+Used to inject:
+
+user data
+metadata
+network config
+SSH keys
+
+Rendered as a NoCloud seed ISO.
+
+SwiftGuestClass
+Defines default runtime resources:
+
+CPU
+memory
+storage defaults
+
+
+Controller Architecture
+Controllers are written in Go using controller-runtime.
+Main controllers:
+
+internal/controller/swiftguest
+internal/controller/swiftimage
+
+
+SwiftImage Controller
+Handles image preparation.
+Workflow:
+
+SwiftImage created
+      │
+      ▼
+Import Job created
+      │
+      ▼
+Image downloaded
+      │
+      ▼
+qemu-img convert qcow2 → raw
+      │
+      ▼
+Artifact stored
+      │
+      ▼
+status.phase = Ready
+
+
+SwiftGuest Controller
+Responsible for launching the VM.
+Workflow:
+
+SwiftGuest created
+      │
+      ▼
+Resolve references
+      │
+      ▼
+Generate runtime intent
+      │
+      ▼
+Create launcher pod
+      │
+      ▼
+Update status
+
+
+Runtime Intent
+Before launching a VM, the controller creates a runtime intent describing how the VM should run.
+Example:
+
+{
+  "guestId": "default/sample",
+  "cpu": 2,
+  "memory": 2048,
+  "rootDisk": {
+      "path": "/var/lib/kubeswift/disks/root/image.raw"
+  },
+  "seedPath": "/var/lib/kubeswift/seed"
+}
+
+The runtime intent is mounted into the launcher container.
+
+Launcher Pod
+Each SwiftGuest runs inside a pod.
+
+SwiftGuest Pod
+ ├─ init container: network-init
+ └─ launcher container: swiftletd
+
+
+network-init
+Prepares networking inside the pod.
+Steps:
+
+create bridge br0
+create tap interface tap0
+attach tap0 to bridge
+start dnsmasq DHCP server
+
+Example DHCP range:
+
+10.244.x.x
+
+
+swiftletd
+swiftletd is the VM launcher written in Rust.
+Responsibilities:
+
+load runtime intent
+prepare runtime directory
+generate seed ISO
+spawn Cloud Hypervisor
+monitor VM lifecycle
+discover guest IP
+report status
+
+
+Runtime Directory
+Each VM gets a runtime directory.
+Example:
+
+/var/lib/kubeswift/run/default-sample
+
+Contains:
+
+ch.sock
+serial.sock
+seed/
+seed.iso
+
+
+Cloud Hypervisor Invocation
+swiftletd launches Cloud Hypervisor with arguments similar to:
+
+cloud-hypervisor \
+  --api-socket path=/var/lib/kubeswift/run/default-sample/ch.sock \
+  --memory size=2048M \
+  --cpus boot=2 \
+  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \
+  --disk path=/var/lib/kubeswift/disks/root/image.raw \
+  --disk path=/var/lib/kubeswift/run/default-sample/seed.iso \
+  --serial socket=/var/lib/kubeswift/run/default-sample/serial.sock \
+  --console off \
+  --net tap=tap0
+
+Important:
+
+root disk must be raw
+
+
+Networking Model
+Networking uses tap + bridge inside the pod.
+
+Guest VM
+   │
+virtio-net
+   │
+tap0
+   │
+br0
+   │
+pod network
+
+dnsmasq provides DHCP.
+Example lease range:
+
+10.244.125.10 → 10.244.125.20
+
+
+IP Discovery
+swiftletd monitors DHCP leases.
+When a lease appears:
+
+guest IP discovered
+
+Then:
+
+SwiftGuest.status.network.primaryIP updated
+
+Example:
+
+status:
+  network:
+    primaryIP: 10.244.125.12
+
+
+Guest Lifecycle
+SwiftGuest lifecycle:
+
+Pending
+   │
+   ▼
+Scheduled
+   │
+   ▼
+Running
+   │
+   ▼
+Stopped / Failed
+
+Conditions include:
+
+Resolved
+PodScheduled
+GuestRunning
+
+
+Console Access
+Guest console uses the Cloud Hypervisor serial socket.
+
+serial.sock
+
+swiftctl connects using:
+
+kubectl exec
+socat
+
+Example:
+
+swiftctl console sample
+
+
+SSH Access
+SSH access is provided through cloud-init.
+Seed profile injects:
+
+authorized_keys
+
+Once networking works:
+
+ssh ubuntu@<primaryIP>
+
+
+CLI
+swiftctl is the KubeSwift CLI.
+Planned commands:
+
+swiftctl console
+swiftctl start
+swiftctl stop
+swiftctl restart
+swiftctl debug
+
+Modeled after virtctl from KubeVirt.
+
+Distribution
+KubeSwift is distributed using OCI artifacts.
+Images:
+
+ghcr.io/projectbeskar/kubeswift/controller-manager
+ghcr.io/projectbeskar/kubeswift/swiftletd
+
+Helm chart:
+
+oci://ghcr.io/projectbeskar/charts/kubeswift
+
+
+Release Model
+
+dev builds: sha-<git-sha>
+RC builds:  vX.Y.Z-rc.N
+stable:     vX.Y.Z
+
+
+Smoke Test
+Smoke test verifies full system functionality.
+Steps:
+
+create SwiftGuestClass
+create SwiftImage
+create SwiftSeedProfile
+create SwiftGuest
+wait for image ready
+wait for guest running
+verify seed mount
+verify VM launch
+verify networking
+
+Success requires:
+
+GuestRunning=True
+status.network.primaryIP populated
+
+
+Debugging Surfaces
+Key debugging commands.
+Inspect guest:
+
+kubectl get swiftguest sample -o yaml
+
+Launcher logs:
+
+kubectl logs <pod> -c launcher
+
+Runtime files:
+
+kubectl exec -it <pod> -- ls /var/lib/kubeswift/run/<guest>
+
+Console:
+
+swiftctl console sample
+
+Networking:
+
+kubectl exec <pod> -- ip a
+kubectl exec <pod> -- brctl show
+
+
+Known Complexity Areas
+These areas often cause bugs.
+Networking
+
+tap device reuse
+bridge state
+DHCP discovery
+
+Image preparation
+
+qcow2 → raw conversion
+compressed qcow2 blocks
+
+Status reporting
+
+GuestRunning condition
+IP discovery
+controller status updates
+
+
+Design Principles
+KubeSwift prioritizes:
+
+minimal architecture
+clear runtime control
+Cloud Hypervisor compatibility
+Kubernetes-native APIs
+strong operability
+
+Avoid:
+
+unnecessary dependencies
+container-runtime abstractions
+complex orchestration layers
+
+
+Future Development Areas
+Upcoming features include:
+
+SSH access improvements
+console reliability
+guest lifecycle operations
+networking robustness
+status improvements
+
+Long-term features may include:
+
+snapshots
+migration
+advanced networking
+
+
+Summary
+KubeSwift is a lightweight Kubernetes-native VM runtime.
+It combines:
+
+Kubernetes controllers
+Rust runtime
+Cloud Hypervisor
+cloud-init
+OCI distribution
+
+The goal is a simple, debuggable virtualization platform tightly integrated with Kubernetes.

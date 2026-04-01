@@ -1,0 +1,1185 @@
+# SwiftGPU Technical Design Sketch
+> KubeSwift GPU Passthrough — CRD Types, RuntimeIntent Extensions, QEMU Launcher Architecture
+> April 1, 2026
+
+---
+
+## 1. CRD Type Definitions (Go)
+
+### 1.1 SwiftGPUProfile
+
+```go
+// api/gpu/v1alpha1/types_gpuprofile.go
+package v1alpha1
+
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+// SwiftGPUProfile defines a GPU passthrough request profile.
+// Users create these to describe their GPU requirements.
+// Multiple SwiftGuests can reference the same profile.
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=sgp
+// +kubebuilder:printcolumn:name="Count",type=integer,JSONPath=`.spec.count`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.partitionMode`
+// +kubebuilder:printcolumn:name="Tier",type=string,JSONPath=`.spec.tier`
+type SwiftGPUProfile struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Spec              SwiftGPUProfileSpec `json:"spec"`
+}
+
+type SwiftGPUProfileSpec struct {
+    // Count is the number of GPUs requested (1, 2, 4, or 8).
+    // +kubebuilder:validation:Enum=1;2;4;8
+    Count int `json:"count"`
+
+    // Model is an optional GPU model filter.
+    // Examples: "H200-SXM", "A100-PCIe", "L40S", "B200-SXM".
+    // Empty string matches any model.
+    // +optional
+    Model string `json:"model,omitempty"`
+
+    // Tier selects the GPU complexity tier and determines which hypervisor is used.
+    //   pcie:         Tier 1 — Cloud Hypervisor, flat PCI topology, no NVSwitch
+    //   hgx-shared:   Tier 2 — QEMU, pcie-root-port per GPU, host Fabric Manager
+    //   hgx-full:     Tier 3 — QEMU, full PCIe hierarchy, NVSwitches in guest
+    // +kubebuilder:validation:Enum=pcie;hgx-shared;hgx-full
+    // +kubebuilder:default=pcie
+    Tier string `json:"tier"`
+
+    // PartitionMode controls how GPUs are allocated.
+    //   isolated:  GPUs have no NVLink (single GPU per VM, no Fabric Manager)
+    //   shared:    GPUs share NVSwitch fabric via host Fabric Manager partition
+    //   full:      All GPUs + NVSwitches passed to single VM, FM runs in guest
+    // +kubebuilder:validation:Enum=isolated;shared;full
+    // +kubebuilder:default=isolated
+    PartitionMode string `json:"partitionMode"`
+
+    // PCIeTopology controls virtual PCIe hierarchy construction.
+    // +optional
+    PCIeTopology *PCIeTopologySpec `json:"pcieTopology,omitempty"`
+
+    // NUMATopology controls virtual NUMA layout inside the guest.
+    // If nil, a flat (single NUMA node) topology is used.
+    // +optional
+    NUMATopology *NUMATopologySpec `json:"numaTopology,omitempty"`
+
+    // Hugepages specifies the hugepage size for GPU memory.
+    // "1Gi" is required for most GPU workloads.
+    // Empty string means no hugepages.
+    // +kubebuilder:validation:Enum="";1Gi;2Mi
+    // +optional
+    Hugepages string `json:"hugepages,omitempty"`
+
+    // VCPUPinning enables 1:1 vCPU to physical CPU core pinning.
+    // When true, the controller computes a pinning map from the node's
+    // topology to ensure vCPUs run on the same NUMA node as the allocated GPUs.
+    // +kubebuilder:default=false
+    VCPUPinning bool `json:"vcpuPinning"`
+
+    // FabricManager controls NVIDIA Fabric Manager behavior.
+    // Only relevant for tier=hgx-shared or tier=hgx-full.
+    // +optional
+    FabricManager *FabricManagerSpec `json:"fabricManager,omitempty"`
+}
+
+type PCIeTopologySpec struct {
+    // RootPortPerDevice places each VFIO GPU device behind its own
+    // virtual pcie-root-port in QEMU. Required for Tier 2/3 GPUs
+    // where CUDA expects a multi-level PCIe hierarchy.
+    // +kubebuilder:default=false
+    RootPortPerDevice bool `json:"rootPortPerDevice"`
+
+    // GPUDirectClique sets the x_nv_gpudirect_clique value for Cloud Hypervisor.
+    // All GPUs in the same clique can do PCIe P2P DMA.
+    // Only used when tier=pcie (Cloud Hypervisor path).
+    // +kubebuilder:default=0
+    GPUDirectClique int `json:"gpuDirectClique"`
+
+    // NoMmap disables BAR mmap in QEMU for GPUs with very large BARs (>64GB).
+    // Required for B200 (256GB BAR) to avoid multi-minute boot stalls.
+    // +kubebuilder:default=false
+    NoMmap bool `json:"noMmap"`
+}
+
+type NUMATopologySpec struct {
+    // Sockets is the number of virtual CPU sockets.
+    Sockets int `json:"sockets"`
+    // CoresPerSocket is the number of cores per virtual socket.
+    CoresPerSocket int `json:"coresPerSocket"`
+    // ThreadsPerCore is the number of SMT threads per core (usually 1).
+    // +kubebuilder:default=1
+    ThreadsPerCore int `json:"threadsPerCore"`
+    // MemoryPerSocketMi is the memory per NUMA node in MiB.
+    MemoryPerSocketMi int64 `json:"memoryPerSocketMi"`
+}
+
+type FabricManagerSpec struct {
+    // RunInGuest is true for full passthrough (Tier 3): NVSwitches and FM
+    // are inside the guest. False for shared mode (Tier 2): FM runs on host.
+    // +kubebuilder:default=false
+    RunInGuest bool `json:"runInGuest"`
+
+    // RequiredVersion is the required nvidia-open driver version in the guest image.
+    // Must exactly match the host Fabric Manager version for shared mode.
+    // The controller validates this before allowing allocation.
+    // +optional
+    RequiredVersion string `json:"requiredVersion,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type SwiftGPUProfileList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items           []SwiftGPUProfile `json:"items"`
+}
+```
+
+### 1.2 SwiftGPUNode
+
+```go
+// api/gpu/v1alpha1/types_gpunode.go
+package v1alpha1
+
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+// SwiftGPUNode represents the GPU inventory on a single Kubernetes node.
+// One SwiftGPUNode exists per node labeled kubeswift.io/gpu-node=true.
+// The status is populated by the GPU discovery DaemonSet.
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster,shortName=sgn
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="GPUs",type=integer,JSONPath=`.status.gpuCount`
+// +kubebuilder:printcolumn:name="Free",type=integer,JSONPath=`.status.freeGPUs`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.status.gpuModel`
+type SwiftGPUNode struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Status            SwiftGPUNodeStatus `json:"status,omitempty"`
+}
+
+type SwiftGPUNodeStatus struct {
+    // Phase of discovery: Discovering | Ready | Error
+    Phase string `json:"phase,omitempty"`
+
+    // LastDiscovery is the timestamp of the last successful discovery run.
+    LastDiscovery *metav1.Time `json:"lastDiscovery,omitempty"`
+
+    // GPUCount is the total number of GPUs on this node.
+    GPUCount int `json:"gpuCount,omitempty"`
+
+    // FreeGPUs is the number of unallocated GPUs.
+    FreeGPUs int `json:"freeGPUs,omitempty"`
+
+    // GPUModel is the model of the GPUs (assumes homogeneous node).
+    GPUModel string `json:"gpuModel,omitempty"`
+
+    // Host describes the physical host topology.
+    Host HostTopology `json:"host,omitempty"`
+
+    // GPUs is the list of individual GPU devices.
+    GPUs []GPUDevice `json:"gpus,omitempty"`
+
+    // NVSwitches is the list of NVSwitch devices (HGX only).
+    // +optional
+    NVSwitches []NVSwitchDevice `json:"nvSwitches,omitempty"`
+
+    // FabricManager describes the host Fabric Manager state.
+    // +optional
+    FabricManager *FabricManagerStatus `json:"fabricManager,omitempty"`
+}
+
+type HostTopology struct {
+    // CPUTopology from lscpu.
+    CPUTopology CPUTopologyInfo `json:"cpuTopology"`
+    // NUMANodes describes each NUMA node's CPUs and memory.
+    NUMANodes []NUMANodeInfo `json:"numaNodes"`
+    // IOMMUEnabled is true if IOMMU is active on the host.
+    IOMMUEnabled bool `json:"iommuEnabled"`
+    // Hugepages1Gi tracks 1GiB hugepage availability.
+    Hugepages1Gi HugepageInfo `json:"hugepages1Gi,omitempty"`
+}
+
+type CPUTopologyInfo struct {
+    Sockets        int `json:"sockets"`
+    CoresPerSocket int `json:"coresPerSocket"`
+    ThreadsPerCore int `json:"threadsPerCore"`
+    TotalCPUs      int `json:"totalCPUs"`
+}
+
+type NUMANodeInfo struct {
+    ID       int    `json:"id"`
+    CPUs     string `json:"cpus"`     // e.g. "0-47,96-143"
+    MemoryMi int64  `json:"memoryMi"`
+}
+
+type HugepageInfo struct {
+    Total int `json:"total"`
+    Free  int `json:"free"`
+}
+
+type GPUDevice struct {
+    // Index is the GPU index on this node (0-7).
+    Index int `json:"index"`
+    // PCIAddress is the full PCI BDF address (e.g. "0000:17:00.0").
+    PCIAddress string `json:"pciAddress"`
+    // Model is the human-readable GPU model.
+    Model string `json:"model"`
+    // DeviceID is the PCI vendor:device ID (e.g. "10de:2336").
+    DeviceID string `json:"deviceId"`
+    // NUMANode is the NUMA node this GPU is physically attached to.
+    NUMANode int `json:"numaNode"`
+    // IOMMUGroup is the IOMMU group number.
+    IOMMUGroup int `json:"iommuGroup"`
+    // Driver is the currently bound kernel driver.
+    Driver string `json:"driver"`
+    // BARSizes lists the PCI BAR sizes for large-BAR handling.
+    // +optional
+    BARSizes []BARSize `json:"barSizes,omitempty"`
+    // Allocated is true if this GPU is currently assigned to a SwiftGuest.
+    Allocated bool `json:"allocated"`
+    // AllocatedTo is "namespace/name" of the SwiftGuest using this GPU.
+    // +optional
+    AllocatedTo string `json:"allocatedTo,omitempty"`
+}
+
+type BARSize struct {
+    Region int   `json:"region"`
+    SizeMi int64 `json:"sizeMi"`
+}
+
+type NVSwitchDevice struct {
+    PCIAddress string `json:"pciAddress"`
+    DeviceID   string `json:"deviceId"`
+    NUMANode   int    `json:"numaNode"`
+}
+
+type FabricManagerStatus struct {
+    Installed  bool                `json:"installed"`
+    Version    string              `json:"version"`
+    Running    bool                `json:"running"`
+    Partitions []FMPartitionStatus `json:"partitions,omitempty"`
+}
+
+type FMPartitionStatus struct {
+    // ID is the Fabric Manager partition ID.
+    ID int `json:"id"`
+    // GPUIndices lists which GPU indices belong to this partition.
+    GPUIndices []int `json:"gpuIndices"`
+    // Active is true if this partition is currently activated.
+    Active bool `json:"active"`
+    // AllocatedTo is "namespace/name" of the SwiftGuest using this partition.
+    // +optional
+    AllocatedTo string `json:"allocatedTo,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type SwiftGPUNodeList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items           []SwiftGPUNode `json:"items"`
+}
+```
+
+### 1.3 SwiftGuest Extensions
+
+```go
+// Changes to api/swift/v1alpha1/types_swiftguest.go
+
+// Add to SwiftGuestSpec:
+type SwiftGuestSpec struct {
+    // ... existing fields ...
+
+    // GPUProfileRef references a SwiftGPUProfile for GPU passthrough.
+    // When set, the SwiftGPU controller allocates GPUs before the pod is created.
+    // Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
+    // +optional
+    GPUProfileRef *ObjectReference `json:"gpuProfileRef,omitempty"`
+}
+
+// Add to SwiftGuestStatus:
+type SwiftGuestStatus struct {
+    // ... existing fields ...
+
+    // GPU contains GPU allocation and runtime status.
+    // Populated when gpuProfileRef is set.
+    // +optional
+    GPU *GPUStatus `json:"gpu,omitempty"`
+}
+
+type GPUStatus struct {
+    // Devices lists the PCI addresses of allocated GPUs.
+    Devices []string `json:"devices,omitempty"`
+    // PartitionID is the Fabric Manager partition ID (shared mode only).
+    // -1 means no partition (isolated or full mode).
+    PartitionID int `json:"partitionId"`
+    // NUMANodes lists the NUMA node IDs the GPUs are attached to.
+    NUMANodes []int `json:"numaNodes,omitempty"`
+    // Hypervisor is the resolved hypervisor for this guest ("cloud-hypervisor" or "qemu").
+    Hypervisor string `json:"hypervisor,omitempty"`
+    // NodeName is the node where GPUs were allocated (may differ from spec preference).
+    NodeName string `json:"nodeName,omitempty"`
+}
+
+// New condition constant:
+const ConditionGPUAllocated = "GPUAllocated"
+```
+
+---
+
+## 2. RuntimeIntent Extensions
+
+### 2.1 Updated RuntimeIntent JSON Schema
+
+```go
+// internal/runtimeintent/types.go
+
+type RuntimeIntent struct {
+    GuestID   string `json:"guestId"`
+    CPU       int    `json:"cpu"`
+    Memory    int    `json:"memory"`       // MiB
+
+    // Hypervisor selects the VMM: "cloud-hypervisor" (default) or "qemu"
+    Hypervisor string `json:"hypervisor,omitempty"`
+
+    // --- Disk boot fields ---
+    RootDisk  DiskIntent  `json:"rootDisk"`
+    SeedPath  string      `json:"seedPath,omitempty"`
+
+    // --- Kernel boot fields ---
+    KernelBoot *KernelBootIntent `json:"kernelBoot,omitempty"`
+
+    // --- Network ---
+    Network bool `json:"network"`
+
+    // --- GPU fields (NEW) ---
+    GPU *GPUIntent `json:"gpu,omitempty"`
+}
+
+type GPUIntent struct {
+    // Devices lists VFIO GPU devices to pass through.
+    Devices []VFIODeviceIntent `json:"devices"`
+
+    // Firmware specifies the guest firmware.
+    // "hypervisor-fw" for CH disk boot, "ovmf" for QEMU GPU boot.
+    Firmware string `json:"firmware"`
+
+    // NUMATopology describes the virtual NUMA layout for the guest.
+    // If nil, a flat topology is used.
+    NUMA *NUMAIntent `json:"numa,omitempty"`
+
+    // VCPUPinning maps vCPU IDs to host physical CPU IDs.
+    // Only used when hypervisor=qemu and NUMA is configured.
+    VCPUPinning []VCPUPin `json:"vcpuPinning,omitempty"`
+
+    // Hugepages specifies hugepage size ("1G", "2M", or "").
+    Hugepages string `json:"hugepages,omitempty"`
+
+    // FabricManagerPartitionID is the FM partition to activate (-1 = none).
+    FabricManagerPartitionID int `json:"fabricManagerPartitionId"`
+
+    // NVSwitches lists NVSwitch VFIO devices (Tier 3 full passthrough only).
+    NVSwitches []VFIODeviceIntent `json:"nvSwitches,omitempty"`
+}
+
+type VFIODeviceIntent struct {
+    // HostPath is the sysfs path (e.g. "/sys/bus/pci/devices/0000:17:00.0/")
+    HostPath string `json:"hostPath"`
+    // PCIAddress is the BDF (e.g. "0000:17:00.0")
+    PCIAddress string `json:"pciAddress"`
+    // PCIeRootPort: if true, place behind a pcie-root-port in QEMU.
+    PCIeRootPort bool `json:"pcieRootPort"`
+    // GPUDirectClique: x_nv_gpudirect_clique value (CH only).
+    GPUDirectClique int `json:"gpuDirectClique"`
+    // NoMmap: if true, add x-no-mmap=true (QEMU only, for large BARs).
+    NoMmap bool `json:"noMmap"`
+    // NUMANode: which virtual NUMA node this device is associated with.
+    NUMANode int `json:"numaNode"`
+}
+
+type NUMAIntent struct {
+    Nodes []NUMANodeIntent `json:"nodes"`
+}
+
+type NUMANodeIntent struct {
+    ID       int    `json:"id"`
+    CPUs     string `json:"cpus"`     // e.g. "0-39"
+    MemoryMi int64  `json:"memoryMi"`
+}
+
+type VCPUPin struct {
+    VCPU    int `json:"vcpu"`
+    HostCPU int `json:"hostCpu"`
+}
+```
+
+### 2.2 Example RuntimeIntent: Tier 1 (A100 PCIe on Cloud Hypervisor)
+
+```json
+{
+  "guestId": "default/gpu-pcie-test",
+  "cpu": 16,
+  "memory": 32768,
+  "hypervisor": "cloud-hypervisor",
+  "rootDisk": {
+    "path": "/var/lib/kubeswift/disks/root/image.raw",
+    "format": "raw"
+  },
+  "seedPath": "/var/lib/kubeswift/seed",
+  "network": true,
+  "gpu": {
+    "devices": [
+      {
+        "hostPath": "/sys/bus/pci/devices/0000:41:00.0/",
+        "pciAddress": "0000:41:00.0",
+        "pcieRootPort": false,
+        "gpuDirectClique": 0,
+        "noMmap": false,
+        "numaNode": 0
+      }
+    ],
+    "firmware": "hypervisor-fw",
+    "hugepages": "1G",
+    "fabricManagerPartitionId": -1
+  }
+}
+```
+
+### 2.3 Example RuntimeIntent: Tier 2 (4× H200 SXM on QEMU)
+
+```json
+{
+  "guestId": "default/gpu-hgx-test",
+  "cpu": 80,
+  "memory": 1966080,
+  "hypervisor": "qemu",
+  "rootDisk": {
+    "path": "/var/lib/kubeswift/disks/root/image.raw",
+    "format": "raw"
+  },
+  "seedPath": "/var/lib/kubeswift/seed",
+  "network": true,
+  "gpu": {
+    "devices": [
+      {
+        "hostPath": "/sys/bus/pci/devices/0000:17:00.0/",
+        "pciAddress": "0000:17:00.0",
+        "pcieRootPort": true,
+        "gpuDirectClique": 0,
+        "noMmap": true,
+        "numaNode": 0
+      },
+      {
+        "hostPath": "/sys/bus/pci/devices/0000:3d:00.0/",
+        "pciAddress": "0000:3d:00.0",
+        "pcieRootPort": true,
+        "gpuDirectClique": 0,
+        "noMmap": true,
+        "numaNode": 0
+      },
+      {
+        "hostPath": "/sys/bus/pci/devices/0000:60:00.0/",
+        "pciAddress": "0000:60:00.0",
+        "pcieRootPort": true,
+        "gpuDirectClique": 0,
+        "noMmap": true,
+        "numaNode": 1
+      },
+      {
+        "hostPath": "/sys/bus/pci/devices/0000:70:00.0/",
+        "pciAddress": "0000:70:00.0",
+        "pcieRootPort": true,
+        "gpuDirectClique": 0,
+        "noMmap": true,
+        "numaNode": 1
+      }
+    ],
+    "firmware": "ovmf",
+    "numa": {
+      "nodes": [
+        {"id": 0, "cpus": "0-39", "memoryMi": 983040},
+        {"id": 1, "cpus": "40-79", "memoryMi": 983040}
+      ]
+    },
+    "vcpuPinning": [
+      {"vcpu": 0, "hostCpu": 94},
+      {"vcpu": 1, "hostCpu": 92},
+      {"vcpu": 39, "hostCpu": 16},
+      {"vcpu": 40, "hostCpu": 95},
+      {"vcpu": 79, "hostCpu": 17}
+    ],
+    "hugepages": "1G",
+    "fabricManagerPartitionId": 2
+  }
+}
+```
+
+---
+
+## 3. QEMU Launcher Architecture in swiftletd
+
+### 3.1 Rust Crate Structure
+
+```
+rust/
+  swiftletd/
+    src/
+      main.rs              # Entrypoint — reads intent, selects launcher
+      launch.rs            # Dispatch: CH or QEMU based on intent.hypervisor
+      ch_launch.rs         # Existing Cloud Hypervisor launch logic (extracted)
+      qemu_launch.rs       # NEW: QEMU launch logic
+      lease.rs             # DHCP lease discovery (shared by both paths)
+      report.rs            # Pod annotation reporting (shared by both paths)
+  swift-ch-client/
+    src/
+      lib.rs               # Existing: CH spawn + HTTP API client
+      config.rs            # CH command-line builder
+  swift-qemu-client/       # NEW CRATE
+    src/
+      lib.rs               # QemuProcess — spawn, monitor, shutdown
+      config.rs            # QEMU command-line builder
+      qmp.rs               # QMP (QEMU Machine Protocol) client
+      topology.rs          # PCIe topology builder (root ports, switches)
+```
+
+### 3.2 Launcher Dispatch (launch.rs)
+
+```rust
+// rust/swiftletd/src/launch.rs
+
+use swift_ch_client::CloudHypervisorProcess;
+use swift_qemu_client::QemuProcess;
+
+pub enum HypervisorProcess {
+    CloudHypervisor(CloudHypervisorProcess),
+    Qemu(QemuProcess),
+}
+
+impl HypervisorProcess {
+    pub async fn spawn(intent: &RuntimeIntent, runtime_dir: &Path) -> Result<Self> {
+        match intent.hypervisor.as_deref().unwrap_or("cloud-hypervisor") {
+            "cloud-hypervisor" => {
+                let proc = CloudHypervisorProcess::spawn(intent, runtime_dir).await?;
+                Ok(Self::CloudHypervisor(proc))
+            }
+            "qemu" => {
+                let proc = QemuProcess::spawn(intent, runtime_dir).await?;
+                Ok(Self::Qemu(proc))
+            }
+            other => Err(anyhow!("unknown hypervisor: {}", other)),
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        match self {
+            Self::CloudHypervisor(p) => p.pid(),
+            Self::Qemu(p) => p.pid(),
+        }
+    }
+
+    pub fn serial_socket(&self) -> &Path {
+        // Both hypervisors write to the same serial.sock path
+        match self {
+            Self::CloudHypervisor(p) => p.serial_socket(),
+            Self::Qemu(p) => p.serial_socket(),
+        }
+    }
+
+    pub async fn wait(&mut self) -> Result<ExitStatus> {
+        match self {
+            Self::CloudHypervisor(p) => p.wait().await,
+            Self::Qemu(p) => p.wait().await,
+        }
+    }
+
+    pub async fn shutdown(&mut self) -> Result<()> {
+        match self {
+            Self::CloudHypervisor(p) => p.shutdown().await,  // CH HTTP API
+            Self::Qemu(p) => p.shutdown().await,             // QMP quit
+        }
+    }
+}
+```
+
+### 3.3 QEMU Command Builder (swift-qemu-client/config.rs)
+
+```rust
+// rust/swift-qemu-client/src/config.rs
+
+use crate::topology::PCIeTopologyBuilder;
+
+pub struct QemuConfig {
+    pub binary: PathBuf,           // /usr/bin/qemu-system-x86_64
+    pub machine: String,           // "q35,accel=kvm"
+    pub cpu: String,               // "host"
+    pub smp: SmpConfig,
+    pub memory: MemoryConfig,
+    pub firmware: FirmwareConfig,
+    pub disks: Vec<DiskConfig>,
+    pub network: Option<NetworkConfig>,
+    pub serial: SerialConfig,
+    pub qmp: QmpConfig,
+    pub devices: Vec<DeviceConfig>,
+    pub numa: Option<NUMAConfig>,
+    pub vcpu_pinning: Vec<VCPUPinConfig>,
+}
+
+pub struct SmpConfig {
+    pub sockets: u32,
+    pub cores: u32,
+    pub threads: u32,
+}
+
+pub struct MemoryConfig {
+    pub size_mb: u64,
+    pub hugepage_path: Option<PathBuf>,  // /dev/hugepages
+    pub hugepage_size: Option<String>,   // "1G"
+}
+
+pub struct FirmwareConfig {
+    pub code_path: PathBuf,    // /usr/share/OVMF/OVMF_CODE.fd
+    pub vars_path: PathBuf,    // <runtime-dir>/OVMF_VARS.fd (copied from template)
+}
+
+pub struct DiskConfig {
+    pub path: PathBuf,
+    pub format: String,        // "raw"
+    pub interface: String,     // "virtio"
+    pub read_only: bool,
+}
+
+pub struct NetworkConfig {
+    pub tap_name: String,      // "tap0"
+    pub mac: String,
+    pub netdev_id: String,     // "net0"
+}
+
+pub struct SerialConfig {
+    pub socket_path: PathBuf,  // <runtime-dir>/serial.sock
+}
+
+pub struct QmpConfig {
+    pub socket_path: PathBuf,  // <runtime-dir>/qmp.sock
+}
+
+pub struct DeviceConfig {
+    pub host_address: String,       // "0000:17:00.0"
+    pub pcie_root_port: bool,       // place behind pcie-root-port
+    pub root_port_id: String,       // "rp0", "rp1", ...
+    pub chassis: u32,               // unique chassis number
+    pub no_mmap: bool,              // x-no-mmap=true
+    pub numa_node: u32,             // associate with NUMA node
+}
+
+pub struct NUMAConfig {
+    pub nodes: Vec<NUMANodeConfig>,
+}
+
+pub struct NUMANodeConfig {
+    pub id: u32,
+    pub cpus: String,
+    pub memory_backend_id: String,  // "mem0"
+    pub memory_mb: u64,
+    pub hugepage_path: PathBuf,
+}
+
+pub struct VCPUPinConfig {
+    pub vcpu: u32,
+    pub host_cpu: u32,
+}
+
+impl QemuConfig {
+    /// Build from RuntimeIntent
+    pub fn from_intent(intent: &RuntimeIntent, runtime_dir: &Path) -> Result<Self> {
+        let gpu = intent.gpu.as_ref();
+        let is_gpu = gpu.is_some();
+
+        // Determine SMP topology
+        let smp = if let Some(gpu) = gpu {
+            if let Some(numa) = &gpu.numa {
+                let total_cpus: u32 = numa.nodes.iter()
+                    .map(|n| count_cpus(&n.cpus))
+                    .sum();
+                let sockets = numa.nodes.len() as u32;
+                SmpConfig {
+                    sockets,
+                    cores: total_cpus / sockets,
+                    threads: 1,
+                }
+            } else {
+                SmpConfig { sockets: 1, cores: intent.cpu as u32, threads: 1 }
+            }
+        } else {
+            SmpConfig { sockets: 1, cores: intent.cpu as u32, threads: 1 }
+        };
+
+        // Memory configuration
+        let memory = if let Some(gpu) = gpu {
+            MemoryConfig {
+                size_mb: intent.memory as u64,
+                hugepage_path: if gpu.hugepages.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from("/dev/hugepages"))
+                },
+                hugepage_size: if gpu.hugepages.is_empty() {
+                    None
+                } else {
+                    Some(gpu.hugepages.clone())
+                },
+            }
+        } else {
+            MemoryConfig {
+                size_mb: intent.memory as u64,
+                hugepage_path: None,
+                hugepage_size: None,
+            }
+        };
+
+        // Firmware: OVMF for GPU/QEMU, hypervisor-fw not applicable
+        let firmware = FirmwareConfig {
+            code_path: PathBuf::from("/usr/share/OVMF/OVMF_CODE.fd"),
+            vars_path: runtime_dir.join("OVMF_VARS.fd"),
+        };
+
+        // VFIO devices with PCIe topology
+        let devices: Vec<DeviceConfig> = if let Some(gpu) = gpu {
+            gpu.devices.iter().enumerate().map(|(i, dev)| {
+                DeviceConfig {
+                    host_address: dev.pci_address.clone(),
+                    pcie_root_port: dev.pcie_root_port,
+                    root_port_id: format!("rp{}", i),
+                    chassis: (i + 1) as u32,
+                    no_mmap: dev.no_mmap,
+                    numa_node: dev.numa_node as u32,
+                }
+            }).collect()
+        } else {
+            vec![]
+        };
+
+        // NUMA configuration
+        let numa = if let Some(gpu) = gpu {
+            gpu.numa.as_ref().map(|n| {
+                NUMAConfig {
+                    nodes: n.nodes.iter().map(|node| {
+                        NUMANodeConfig {
+                            id: node.id as u32,
+                            cpus: node.cpus.clone(),
+                            memory_backend_id: format!("mem{}", node.id),
+                            memory_mb: node.memory_mi as u64,
+                            hugepage_path: PathBuf::from("/dev/hugepages"),
+                        }
+                    }).collect()
+                }
+            })
+        } else {
+            None
+        };
+
+        Ok(QemuConfig {
+            binary: PathBuf::from("/usr/bin/qemu-system-x86_64"),
+            machine: "q35,accel=kvm".to_string(),
+            cpu: "host".to_string(),
+            smp,
+            memory,
+            firmware,
+            disks: build_disks(intent),
+            network: build_network(intent),
+            serial: SerialConfig {
+                socket_path: runtime_dir.join("serial.sock"),
+            },
+            qmp: QmpConfig {
+                socket_path: runtime_dir.join("qmp.sock"),
+            },
+            devices,
+            numa,
+            vcpu_pinning: build_pinning(gpu),
+        })
+    }
+
+    /// Generate the full QEMU command-line arguments
+    pub fn to_args(&self) -> Vec<String> {
+        let mut args = vec![];
+
+        // Machine
+        args.extend(["-machine".into(), self.machine.clone()]);
+        args.extend(["-cpu".into(), self.cpu.clone()]);
+        args.push("-enable-kvm".into());
+
+        // SMP
+        args.extend(["-smp".into(),
+            format!("sockets={},cores={},threads={}",
+                self.smp.sockets, self.smp.cores, self.smp.threads)]);
+
+        // Memory (non-NUMA path)
+        if self.numa.is_none() {
+            args.extend(["-m".into(), format!("{}M", self.memory.size_mb)]);
+            if let Some(ref hp) = self.memory.hugepage_path {
+                args.extend(["-mem-path".into(), hp.display().to_string()]);
+            }
+        }
+
+        // NUMA memory backends + nodes
+        if let Some(ref numa) = self.numa {
+            for node in &numa.nodes {
+                args.extend([
+                    "-object".into(),
+                    format!(
+                        "memory-backend-file,id={},size={}M,mem-path={},share=on,prealloc=on",
+                        node.memory_backend_id, node.memory_mb,
+                        node.hugepage_path.display()
+                    ),
+                ]);
+                args.extend([
+                    "-numa".into(),
+                    format!("node,nodeid={},cpus={},memdev={}",
+                        node.id, node.cpus, node.memory_backend_id),
+                ]);
+            }
+        }
+
+        // Firmware (OVMF)
+        args.extend([
+            "-drive".into(),
+            format!("if=pflash,format=raw,readonly=on,file={}",
+                self.firmware.code_path.display()),
+        ]);
+        args.extend([
+            "-drive".into(),
+            format!("if=pflash,format=raw,file={}",
+                self.firmware.vars_path.display()),
+        ]);
+
+        // Disks
+        for disk in &self.disks {
+            let ro = if disk.read_only { ",readonly=on" } else { "" };
+            args.extend([
+                "-drive".into(),
+                format!("file={},format={},if={}{}", 
+                    disk.path.display(), disk.format, disk.interface, ro),
+            ]);
+        }
+
+        // Network
+        if let Some(ref net) = self.network {
+            args.extend([
+                "-netdev".into(),
+                format!("tap,id={},ifname={},script=no,downscript=no",
+                    net.netdev_id, net.tap_name),
+            ]);
+            args.extend([
+                "-device".into(),
+                format!("virtio-net-pci,netdev={},mac={}", net.netdev_id, net.mac),
+            ]);
+        }
+
+        // Serial
+        args.extend([
+            "-chardev".into(),
+            format!("socket,id=serial0,path={},server=on,wait=off",
+                self.serial.socket_path.display()),
+        ]);
+        args.extend(["-serial".into(), "chardev:serial0".into()]);
+
+        // QMP
+        args.extend([
+            "-qmp".into(),
+            format!("unix:{},server=on,wait=off", self.qmp.socket_path.display()),
+        ]);
+
+        // Display
+        args.push("-nographic".into());
+        args.extend(["-monitor".into(), "none".into()]);
+
+        // VFIO devices with PCIe root ports
+        for dev in &self.devices {
+            if dev.pcie_root_port {
+                args.extend([
+                    "-device".into(),
+                    format!("pcie-root-port,id={},bus=pcie.0,chassis={}",
+                        dev.root_port_id, dev.chassis),
+                ]);
+                let mut vfio = format!(
+                    "vfio-pci,host={},bus={}", dev.host_address, dev.root_port_id
+                );
+                if dev.no_mmap {
+                    vfio.push_str(",x-no-mmap=true");
+                }
+                args.extend(["-device".into(), vfio]);
+            } else {
+                let mut vfio = format!("vfio-pci,host={}", dev.host_address);
+                if dev.no_mmap {
+                    vfio.push_str(",x-no-mmap=true");
+                }
+                args.extend(["-device".into(), vfio]);
+            }
+        }
+
+        args
+    }
+}
+```
+
+### 3.4 QMP Client (swift-qemu-client/qmp.rs)
+
+```rust
+// rust/swift-qemu-client/src/qmp.rs
+// Minimal QMP client for QEMU process management
+
+use tokio::net::UnixStream;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use serde_json::{json, Value};
+
+pub struct QmpClient {
+    socket_path: PathBuf,
+}
+
+impl QmpClient {
+    pub fn new(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
+
+    /// Connect and perform QMP handshake (capabilities negotiation)
+    pub async fn connect(&self) -> Result<QmpConnection> {
+        let stream = UnixStream::connect(&self.socket_path).await?;
+        let (reader, writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+
+        // Read greeting
+        let mut greeting = String::new();
+        reader.read_line(&mut greeting).await?;
+
+        // Negotiate capabilities
+        let mut writer = writer;
+        let negotiate = json!({"execute": "qmp_capabilities"});
+        writer.write_all(negotiate.to_string().as_bytes()).await?;
+        writer.write_all(b"\n").await?;
+
+        // Read response
+        let mut response = String::new();
+        reader.read_line(&mut response).await?;
+
+        Ok(QmpConnection { reader, writer })
+    }
+
+    /// Send system_powerdown (graceful ACPI shutdown)
+    pub async fn powerdown(&self) -> Result<()> {
+        let mut conn = self.connect().await?;
+        conn.execute("system_powerdown", json!({})).await
+    }
+
+    /// Send quit (immediate termination)
+    pub async fn quit(&self) -> Result<()> {
+        let mut conn = self.connect().await?;
+        conn.execute("quit", json!({})).await
+    }
+
+    /// Query VM status
+    pub async fn query_status(&self) -> Result<String> {
+        let mut conn = self.connect().await?;
+        let response = conn.execute_with_response("query-status", json!({})).await?;
+        Ok(response["return"]["status"].as_str().unwrap_or("unknown").to_string())
+    }
+}
+```
+
+### 3.5 QEMU Process Manager (swift-qemu-client/lib.rs)
+
+```rust
+// rust/swift-qemu-client/src/lib.rs
+
+pub struct QemuProcess {
+    child: tokio::process::Child,
+    pid: u32,
+    serial_socket: PathBuf,
+    qmp: QmpClient,
+}
+
+impl QemuProcess {
+    pub async fn spawn(intent: &RuntimeIntent, runtime_dir: &Path) -> Result<Self> {
+        // Copy OVMF_VARS template to runtime dir (mutable per-VM copy)
+        let vars_template = Path::new("/usr/share/OVMF/OVMF_VARS.fd");
+        let vars_dest = runtime_dir.join("OVMF_VARS.fd");
+        tokio::fs::copy(vars_template, &vars_dest).await?;
+
+        // Build QEMU config from intent
+        let config = QemuConfig::from_intent(intent, runtime_dir)?;
+        let args = config.to_args();
+
+        info!("Spawning QEMU: {} {}", config.binary.display(), args.join(" "));
+
+        // Spawn QEMU process
+        let child = tokio::process::Command::new(&config.binary)
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let pid = child.id().ok_or_else(|| anyhow!("no PID for QEMU process"))?;
+
+        let qmp = QmpClient::new(config.qmp.socket_path.clone());
+
+        // Wait for QMP socket to become available
+        for _ in 0..30 {
+            if config.qmp.socket_path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        Ok(Self {
+            child,
+            pid,
+            serial_socket: config.serial.socket_path,
+            qmp,
+        })
+    }
+
+    pub fn pid(&self) -> u32 { self.pid }
+
+    pub fn serial_socket(&self) -> &Path { &self.serial_socket }
+
+    pub async fn wait(&mut self) -> Result<ExitStatus> {
+        let status = self.child.wait().await?;
+        Ok(status)
+    }
+
+    pub async fn shutdown(&mut self) -> Result<()> {
+        // Try graceful ACPI powerdown first
+        if let Ok(()) = self.qmp.powerdown().await {
+            // Wait up to 30s for graceful shutdown
+            match tokio::time::timeout(
+                Duration::from_secs(30),
+                self.child.wait()
+            ).await {
+                Ok(_) => return Ok(()),
+                Err(_) => info!("QEMU did not shut down gracefully, sending quit"),
+            }
+        }
+
+        // Force quit via QMP
+        let _ = self.qmp.quit().await;
+
+        // Final fallback: SIGKILL
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.child.wait()
+        ).await {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                self.child.kill().await?;
+                Ok(())
+            }
+        }
+    }
+}
+```
+
+---
+
+## 4. GPU Compatibility Model — Answering "Does This Work for Simpler GPUs?"
+
+**Yes, absolutely.** The architecture is designed as a superset. Here is how each GPU class maps:
+
+### 4.1 Discrete PCIe GPUs (simplest)
+
+Examples: A100-PCIe, L40S, RTX 4090, RTX A6000, T4
+
+```yaml
+# SwiftGPUProfile for a simple PCIe GPU
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: single-pcie-gpu
+spec:
+  count: 1
+  model: "L40S"
+  tier: pcie                   # Cloud Hypervisor path
+  partitionMode: isolated      # no NVSwitch involved
+  pcieTopology:
+    rootPortPerDevice: false   # flat topology is fine
+    gpuDirectClique: 0         # enable P2P if multiple GPUs
+  hugepages: "1Gi"             # optional but recommended
+  vcpuPinning: false           # not critical for single GPU
+```
+
+What happens:
+- Hypervisor = Cloud Hypervisor (no QEMU needed)
+- No PCIe root ports, no NUMA topology, no Fabric Manager
+- SwiftGPU controller just allocates the device and marks it in SwiftGPUNode
+- RuntimeIntent adds `--device path=/sys/bus/pci/devices/...,x_nv_gpudirect_clique=0`
+- gpu-init container binds device to vfio-pci
+- That's it — minimal overhead, works today with CH v51.1
+
+### 4.2 Multi-GPU PCIe (e.g. 2× or 4× A100-PCIe in same server)
+
+```yaml
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: multi-pcie-gpu
+spec:
+  count: 4
+  model: "A100-PCIe"
+  tier: pcie
+  partitionMode: isolated
+  pcieTopology:
+    rootPortPerDevice: false
+    gpuDirectClique: 0         # all 4 in same clique for P2P
+  numaTopology:                # optional but helps performance
+    enabled: true
+    sockets: 2
+    coresPerSocket: 24
+    memoryPerSocketMi: 524288
+  hugepages: "1Gi"
+  vcpuPinning: true
+```
+
+What happens:
+- Still Cloud Hypervisor
+- Multiple `--device` flags, all with same `x_nv_gpudirect_clique=0`
+- NUMA and pinning improve performance but aren't required for correctness
+- CH's PCI segments can associate GPUs with NUMA nodes via `--numa`
+
+### 4.3 Single HGX SXM GPU (isolated mode, no NVLink)
+
+```yaml
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: single-hgx-isolated
+spec:
+  count: 1
+  model: "H200-SXM"
+  tier: hgx-shared             # QEMU needed for PCIe hierarchy
+  partitionMode: isolated      # no NVLink, no FM partition
+  pcieTopology:
+    rootPortPerDevice: true    # CUDA requires this for SXM GPUs
+    noMmap: true               # large BAR handling
+  hugepages: "1Gi"
+```
+
+What happens:
+- QEMU path (CUDA needs the GPU behind a root port even for 1 GPU)
+- One `pcie-root-port` + one `vfio-pci` device
+- No Fabric Manager interaction (isolated mode)
+- OVMF firmware for UEFI boot
+
+### 4.4 Summary Table
+
+| GPU Class | Tier | Hypervisor | PCIe Root Ports | Fabric Manager | NUMA | Hugepages |
+|-----------|------|------------|----------------|---------------|------|-----------|
+| T4, RTX 4090 | pcie | Cloud Hypervisor | No | No | Optional | Optional |
+| L40S | pcie | Cloud Hypervisor | No | No | Optional | Recommended |
+| A100-PCIe | pcie | Cloud Hypervisor | No | No | Recommended | Recommended |
+| A100-SXM (isolated) | hgx-shared | QEMU | Yes | No | Recommended | Required |
+| H100-SXM (2-4 GPU) | hgx-shared | QEMU | Yes | Yes (host) | Required | Required |
+| H200-SXM (2-4 GPU) | hgx-shared | QEMU | Yes | Yes (host) | Required | Required |
+| B200-SXM (2-4 GPU) | hgx-shared | QEMU | Yes + noMmap | Yes (host) | Required | Required |
+| Any HGX (8 GPU full) | hgx-full | QEMU | Full hierarchy | Yes (guest) | Required | Required |
+
+The key insight: **the tier field is the single decision point**. Users set `tier: pcie` for simple GPUs (Cloud Hypervisor, minimal config) or `tier: hgx-shared` / `tier: hgx-full` for HGX hardware (QEMU, full PCIe topology). The controller handles everything else automatically based on the tier.
