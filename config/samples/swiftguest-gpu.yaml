@@ -1,0 +1,17 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: gpu-test
+  namespace: default
+spec:
+  # imageRef + gpuProfileRef: disk boot with GPU passthrough
+  # gpuProfileRef is mutually exclusive with kernelRef
+  imageRef:
+    name: ubuntu-focal
+  gpuProfileRef:
+    name: a100-pcie-single
+  guestClassRef:
+    name: default-class
+  seedProfileRef:
+    name: minimal-seed
+  runPolicy: Running

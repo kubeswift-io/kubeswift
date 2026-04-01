@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftgpuprofiles.gpu.kubeswift.io
+spec:
+  group: gpu.kubeswift.io
+  names:
+    kind: SwiftGPUProfile
+    listKind: SwiftGPUProfileList
+    plural: swiftgpuprofiles
+    shortNames:
+    - sgp
+    singular: swiftgpuprofile
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.count
+      name: Count
+      type: integer
+    - jsonPath: .spec.model
+      name: Model
+      type: string
+    - jsonPath: .spec.partitionMode
+      name: Mode
+      type: string
+    - jsonPath: .spec.tier
+      name: Tier
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SwiftGPUProfile defines a GPU passthrough request profile.
+          Users create these to describe their GPU requirements.
+          Multiple SwiftGuests can reference the same profile.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SwiftGPUProfileSpec defines the desired GPU configuration.
+            properties:
+              count:
+                description: Count is the number of GPUs requested (1, 2, 4, or 8).
+                enum:
+                - 1
+                - 2
+                - 4
+                - 8
+                type: integer
+              fabricManager:
+                description: |-
+                  FabricManager controls NVIDIA Fabric Manager behavior.
+                  Only relevant for tier=hgx-shared or tier=hgx-full.
+                properties:
+                  requiredVersion:
+                    description: |-
+                      RequiredVersion is the required nvidia-open driver version in the guest image.
+                      Must exactly match the host Fabric Manager version for shared mode.
+                    type: string
+                  runInGuest:
+                    default: false
+                    description: |-
+                      RunInGuest is true for full passthrough (Tier 3): NVSwitches and FM run in guest.
+                      False for shared mode (Tier 2): FM runs on the host.
+                    type: boolean
+                required:
+                - runInGuest
+                type: object
+              hugepages:
+                description: |-
+                  Hugepages specifies the hugepage size for GPU memory ("1Gi", "2Mi", or "").
+                  "1Gi" is required for most GPU workloads. Empty string means no hugepages.
+                type: string
+              model:
+                description: |-
+                  Model is an optional GPU model filter.
+                  Examples: "H200-SXM", "A100-PCIe", "L40S", "B200-SXM".
+                  Empty string matches any model.
+                type: string
+              numaTopology:
+                description: |-
+                  NUMATopology controls virtual NUMA layout inside the guest.
+                  If nil, a flat (single NUMA node) topology is used.
+                properties:
+                  coresPerSocket:
+                    description: CoresPerSocket is the number of cores per virtual
+                      socket.
+                    type: integer
+                  memoryPerSocketMi:
+                    description: MemoryPerSocketMi is the memory per NUMA node in
+                      MiB.
+                    format: int64
+                    type: integer
+                  sockets:
+                    description: Sockets is the number of virtual CPU sockets.
+                    type: integer
+                  threadsPerCore:
+                    default: 1
+                    description: ThreadsPerCore is the number of SMT threads per core
+                      (usually 1).
+                    type: integer
+                required:
+                - coresPerSocket
+                - memoryPerSocketMi
+                - sockets
+                - threadsPerCore
+                type: object
+              partitionMode:
+                default: isolated
+                description: |-
+                  PartitionMode controls how GPUs are allocated.
+                    isolated:  GPUs have no NVLink (single GPU per VM, no Fabric Manager)
+                    shared:    GPUs share NVSwitch fabric via host Fabric Manager partition
+                    full:      All GPUs + NVSwitches passed to single VM, FM runs in guest
+                enum:
+                - isolated
+                - shared
+                - full
+                type: string
+              pcieTopology:
+                description: PCIeTopology controls virtual PCIe hierarchy construction.
+                properties:
+                  gpuDirectClique:
+                    default: 0
+                    description: |-
+                      GPUDirectClique sets the x_nv_gpudirect_clique value for Cloud Hypervisor.
+                      All GPUs in the same clique can do PCIe P2P DMA.
+                      Only used when tier=pcie (Cloud Hypervisor path).
+                    type: integer
+                  noMmap:
+                    default: false
+                    description: |-
+                      NoMmap disables BAR mmap in QEMU for GPUs with very large BARs (>64GB).
+                      Required for B200 (256GB BAR) to avoid multi-minute boot stalls.
+                    type: boolean
+                  rootPortPerDevice:
+                    default: false
+                    description: |-
+                      RootPortPerDevice places each GPU behind its own pcie-root-port (QEMU).
+                      Required for Tier 2/3 GPUs where CUDA expects a multi-level PCIe hierarchy.
+                    type: boolean
+                required:
+                - gpuDirectClique
+                - noMmap
+                - rootPortPerDevice
+                type: object
+              tier:
+                default: pcie
+                description: |-
+                  Tier selects the GPU complexity tier and determines which hypervisor is used.
+                    pcie:        Tier 1 — Cloud Hypervisor, flat PCI topology, no NVSwitch
+                    hgx-shared:  Tier 2 — QEMU, pcie-root-port per GPU, host Fabric Manager
+                    hgx-full:    Tier 3 — QEMU, full PCIe hierarchy, NVSwitches in guest
+                enum:
+                - pcie
+                - hgx-shared
+                - hgx-full
+                type: string
+              vcpuPinning:
+                default: false
+                description: VCPUPinning enables 1:1 vCPU to physical CPU core pinning.
+                type: boolean
+            required:
+            - count
+            - partitionMode
+            - tier
+            - vcpuPinning
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}

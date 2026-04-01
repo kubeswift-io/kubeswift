@@ -1,0 +1,55 @@
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUNode
+metadata:
+  # SwiftGPUNode name matches the Kubernetes node name
+  name: gpu-node-sample
+  labels:
+    kubeswift.io/gpu-node: "true"
+# spec is intentionally absent — no user-editable spec.
+# status is populated by the GPU discovery DaemonSet (Phase 2).
+# Example of what the discovery DaemonSet would write to status:
+#
+# status:
+#   phase: Ready
+#   gpuCount: 8
+#   freeGPUs: 8
+#   gpuModel: "NVIDIA H200 SXM"
+#   host:
+#     cpuTopology:
+#       sockets: 2
+#       coresPerSocket: 48
+#       threadsPerCore: 2
+#       totalCPUs: 192
+#     numaNodes:
+#     - id: 0
+#       cpus: "0-47,96-143"
+#       memoryMi: 1048576
+#     - id: 1
+#       cpus: "48-95,144-191"
+#       memoryMi: 1048576
+#     iommuEnabled: true
+#     hugepages1Gi:
+#       total: 400
+#       free: 400
+#   gpus:
+#   - index: 0
+#     pciAddress: "0000:17:00.0"
+#     model: "NVIDIA H200 SXM"
+#     deviceId: "10de:2336"
+#     numaNode: 0
+#     iommuGroup: 15
+#     driver: vfio-pci
+#     barSizes:
+#     - region: 0
+#       sizeMi: 64
+#     - region: 2
+#       sizeMi: 262144
+#     allocated: false
+#   fabricManager:
+#     installed: true
+#     version: "580.95.05"
+#     running: true
+#     partitions:
+#     - id: 0
+#       gpuIndices: [0, 1, 2, 3]
+#       active: false

@@ -25,6 +25,17 @@ rules:
   - apiGroups: ["kernel.kubeswift.io"]
     resources: ["swiftkernels", "swiftkernels/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftGPUProfile
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpuprofiles"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftGPUNode — discovery DaemonSet and controller both write status
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes/status"]
+    verbs: ["get", "update", "patch"]
   # Core resources
   - apiGroups: [""]
     resources: ["nodes"]

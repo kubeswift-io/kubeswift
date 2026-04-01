@@ -1,0 +1,28 @@
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: h200-hgx-4gpu
+  namespace: default
+spec:
+  count: 4
+  model: "H200-SXM"
+  # tier=hgx-shared: QEMU, pcie-root-port per GPU, host Fabric Manager
+  tier: hgx-shared
+  partitionMode: shared
+  pcieTopology:
+    rootPortPerDevice: true
+    gpuDirectClique: 0
+    # H200 SXM has large BARs (>64GB); required to avoid QEMU boot stall
+    noMmap: true
+  numaTopology:
+    sockets: 2
+    coresPerSocket: 40
+    threadsPerCore: 1
+    # 960 GiB per socket (1920 GiB total)
+    memoryPerSocketMi: 983040
+  hugepages: "1Gi"
+  vcpuPinning: true
+  fabricManager:
+    runInGuest: false
+    # Guest nvidia-open driver must exactly match host Fabric Manager version
+    requiredVersion: "580.95.05"

@@ -1,0 +1,254 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftgpunodes.gpu.kubeswift.io
+spec:
+  group: gpu.kubeswift.io
+  names:
+    kind: SwiftGPUNode
+    listKind: SwiftGPUNodeList
+    plural: swiftgpunodes
+    shortNames:
+    - sgn
+    singular: swiftgpunode
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.gpuCount
+      name: GPUs
+      type: integer
+    - jsonPath: .status.freeGPUs
+      name: Free
+      type: integer
+    - jsonPath: .status.gpuModel
+      name: Model
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SwiftGPUNode represents the GPU inventory on a single Kubernetes node.
+          One SwiftGPUNode exists per node labeled kubeswift.io/gpu-node=true.
+          The status is populated by the GPU discovery DaemonSet; spec is intentionally empty.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          status:
+            description: SwiftGPUNodeStatus describes the GPU inventory and topology
+              on one node.
+            properties:
+              fabricManager:
+                description: FabricManager describes the host Fabric Manager state.
+                properties:
+                  installed:
+                    type: boolean
+                  partitions:
+                    items:
+                      description: FMPartitionStatus describes one Fabric Manager
+                        NVSwitch partition.
+                      properties:
+                        active:
+                          description: Active is true if this partition is currently
+                            activated.
+                          type: boolean
+                        allocatedTo:
+                          description: AllocatedTo is "namespace/name" of the SwiftGuest
+                            using this partition.
+                          type: string
+                        gpuIndices:
+                          description: GPUIndices lists which GPU indices belong to
+                            this partition.
+                          items:
+                            type: integer
+                          type: array
+                        id:
+                          description: ID is the Fabric Manager partition ID.
+                          type: integer
+                      required:
+                      - active
+                      - gpuIndices
+                      - id
+                      type: object
+                    type: array
+                  running:
+                    type: boolean
+                  version:
+                    type: string
+                required:
+                - installed
+                - running
+                type: object
+              freeGPUs:
+                description: FreeGPUs is the number of unallocated GPUs.
+                type: integer
+              gpuCount:
+                description: GPUCount is the total number of GPUs on this node.
+                type: integer
+              gpuModel:
+                description: GPUModel is the model of the GPUs (assumes homogeneous
+                  node).
+                type: string
+              gpus:
+                description: GPUs is the list of individual GPU devices on this node.
+                items:
+                  description: GPUDevice describes one GPU on the node.
+                  properties:
+                    allocated:
+                      description: Allocated is true if this GPU is currently assigned
+                        to a SwiftGuest.
+                      type: boolean
+                    allocatedTo:
+                      description: AllocatedTo is "namespace/name" of the SwiftGuest
+                        using this GPU.
+                      type: string
+                    barSizes:
+                      description: BARSizes lists the PCI BAR sizes; used to decide
+                        whether x-no-mmap=true is needed.
+                      items:
+                        description: BARSize records one PCI Base Address Register
+                          region and its size.
+                        properties:
+                          region:
+                            type: integer
+                          sizeMi:
+                            format: int64
+                            type: integer
+                        required:
+                        - region
+                        - sizeMi
+                        type: object
+                      type: array
+                    deviceId:
+                      description: DeviceID is the PCI vendor:device ID (e.g. "10de:2336").
+                      type: string
+                    driver:
+                      description: Driver is the currently bound kernel driver (e.g.
+                        "vfio-pci", "nvidia").
+                      type: string
+                    index:
+                      description: Index is the GPU index on this node (0-7).
+                      type: integer
+                    iommuGroup:
+                      description: IOMMUGroup is the IOMMU group number.
+                      type: integer
+                    model:
+                      description: Model is the human-readable GPU model string.
+                      type: string
+                    numaNode:
+                      description: NUMANode is the NUMA node this GPU is physically
+                        attached to.
+                      type: integer
+                    pciAddress:
+                      description: PCIAddress is the full PCI BDF address (e.g. "0000:17:00.0").
+                      type: string
+                  required:
+                  - allocated
+                  - deviceId
+                  - driver
+                  - index
+                  - iommuGroup
+                  - model
+                  - numaNode
+                  - pciAddress
+                  type: object
+                type: array
+              host:
+                description: Host describes the physical host topology.
+                properties:
+                  cpuTopology:
+                    description: CPUTopology from lscpu.
+                    properties:
+                      coresPerSocket:
+                        type: integer
+                      sockets:
+                        type: integer
+                      threadsPerCore:
+                        type: integer
+                      totalCPUs:
+                        type: integer
+                    type: object
+                  hugepages1Gi:
+                    description: Hugepages1Gi tracks 1GiB hugepage availability.
+                    properties:
+                      free:
+                        type: integer
+                      total:
+                        type: integer
+                    type: object
+                  iommuEnabled:
+                    description: IOMMUEnabled is true if IOMMU is active on the host.
+                    type: boolean
+                  numaNodes:
+                    description: NUMANodes describes each NUMA node's CPUs and memory.
+                    items:
+                      description: NUMANodeInfo describes one NUMA node's CPU mask
+                        and memory.
+                      properties:
+                        cpus:
+                          type: string
+                        id:
+                          type: integer
+                        memoryMi:
+                          format: int64
+                          type: integer
+                      required:
+                      - cpus
+                      - id
+                      - memoryMi
+                      type: object
+                    type: array
+                type: object
+              lastDiscovery:
+                description: LastDiscovery is the timestamp of the last successful
+                  discovery run.
+                format: date-time
+                type: string
+              nvSwitches:
+                description: NVSwitches is the list of NVSwitch devices (HGX nodes
+                  only).
+                items:
+                  description: NVSwitchDevice describes one NVSwitch on the node (HGX
+                    nodes only).
+                  properties:
+                    deviceId:
+                      type: string
+                    numaNode:
+                      type: integer
+                    pciAddress:
+                      type: string
+                  required:
+                  - deviceId
+                  - numaNode
+                  - pciAddress
+                  type: object
+                type: array
+              phase:
+                description: 'Phase of discovery: Discovering | Ready | Error'
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
