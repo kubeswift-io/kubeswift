@@ -1,33 +1,69 @@
-# SwiftGuest that boots via QEMU instead of Cloud Hypervisor.
-# Used to validate Phase 1 hypervisor abstraction.
-# Uses the same ubuntu-cloud SwiftImage, same networking, same seed profile.
-# The only difference is the runtime intent will contain "hypervisor": "qemu".
+# End-to-end QEMU path validation — Phase 1 hypervisor abstraction.
+# Uses Ubuntu 24.04 (Noble) — compatible with OVMF/UEFI used by the QEMU path.
+# (Noble is NOT compatible with rust-hypervisor-firmware on Cloud Hypervisor.)
 #
-# NOTE: This requires a mechanism to set hypervisor=qemu in the RuntimeIntent.
-# Since the controller doesn't yet have a field for this (no gpuProfileRef wired),
-# you have two options:
-#   Option A: Temporarily hardcode "qemu" in the RuntimeIntent builder in
-#             internal/runtimeintent/ when building the intent for this guest
-#   Option B: Add a temporary annotation on the SwiftGuest that the controller
-#             reads to override the hypervisor field:
-#               kubeswift.io/hypervisor-override: "qemu"
+# Deploy all three resources:
+#   kubectl apply -f config/samples/swiftguest-qemu.yaml
 #
-# After validation, remove the temporary mechanism — Phase 3 controller will
-# set hypervisor automatically based on gpuProfileRef tier.
- 
+# The annotation kubeswift.io/hypervisor-override: "qemu" forces the QEMU path
+# until Phase 3 controller wires gpuProfileRef tier → hypervisor selection.
+#
+# Verify:
+#   kubectl get swiftguest qemu-test -w        # wait for Running + primaryIP
+#   swiftctl console qemu-test                 # serial console
+#   swiftctl ssh qemu-test                     # SSH (user: ubuntu, key below)
+
+---
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble-qemu
+  namespace: default
+spec:
+  format: qcow2
+  rootDisk:
+    size: "40Gi"
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+
+---
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: qemu-test-seed
+  namespace: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: qemu-test
+    users:
+      - name: ubuntu
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now serial-getty@ttyS0.service
+  metaData: |
+    instance-id: qemu-test-001
+    local-hostname: qemu-test
+
+---
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:
   name: qemu-test
   namespace: default
   annotations:
-    # Use this if you implement Option B (annotation-based override)
     kubeswift.io/hypervisor-override: "qemu"
 spec:
   imageRef:
-    name: ubuntu-cloud
+    name: ubuntu-noble-qemu
   guestClassRef:
     name: default
   seedProfileRef:
-    name: minimal
+    name: qemu-test-seed
   runPolicy: Running
