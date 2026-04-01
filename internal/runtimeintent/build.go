@@ -14,6 +14,7 @@ type ResolvedGuest interface {
 	GetKernelPath() string
 	GetInitramfsPath() string
 	GetKernelCmdline() string
+	GetHypervisor() string
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -24,13 +25,14 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			lifecycle = "start"
 		}
 		return &RuntimeIntent{
-			RootDisk:  RootDiskSpec{Path: "", Format: ""},
-			SeedPath:  "",
-			CPU:       rg.GetCPU(),
-			Memory:    rg.GetMemoryMiB(),
-			Lifecycle: lifecycle,
-			GuestID:   rg.GetGuestID(),
-			Network:   rg.HasNetwork(),
+			RootDisk:   RootDiskSpec{Path: "", Format: ""},
+			SeedPath:   "",
+			CPU:        rg.GetCPU(),
+			Memory:     rg.GetMemoryMiB(),
+			Lifecycle:  lifecycle,
+			GuestID:    rg.GetGuestID(),
+			Network:    rg.HasNetwork(),
+			Hypervisor: rg.GetHypervisor(),
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -52,11 +54,12 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Path:   DisksRootPath + "/" + RootDiskImageFile,
 			Format: rg.GetRootDiskFormat(),
 		},
-		SeedPath:  seedPath,
-		CPU:       rg.GetCPU(),
-		Memory:    rg.GetMemoryMiB(),
-		Lifecycle: lifecycle,
-		GuestID:   rg.GetGuestID(),
-		Network:   rg.HasNetwork(),
+		SeedPath:   seedPath,
+		CPU:        rg.GetCPU(),
+		Memory:     rg.GetMemoryMiB(),
+		Lifecycle:  lifecycle,
+		GuestID:    rg.GetGuestID(),
+		Network:    rg.HasNetwork(),
+		Hypervisor: rg.GetHypervisor(),
 	}
 }
