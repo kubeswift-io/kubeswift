@@ -1,0 +1,33 @@
+# SwiftGuest that boots via QEMU instead of Cloud Hypervisor.
+# Used to validate Phase 1 hypervisor abstraction.
+# Uses the same ubuntu-cloud SwiftImage, same networking, same seed profile.
+# The only difference is the runtime intent will contain "hypervisor": "qemu".
+#
+# NOTE: This requires a mechanism to set hypervisor=qemu in the RuntimeIntent.
+# Since the controller doesn't yet have a field for this (no gpuProfileRef wired),
+# you have two options:
+#   Option A: Temporarily hardcode "qemu" in the RuntimeIntent builder in
+#             internal/runtimeintent/ when building the intent for this guest
+#   Option B: Add a temporary annotation on the SwiftGuest that the controller
+#             reads to override the hypervisor field:
+#               kubeswift.io/hypervisor-override: "qemu"
+#
+# After validation, remove the temporary mechanism — Phase 3 controller will
+# set hypervisor automatically based on gpuProfileRef tier.
+ 
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: qemu-test
+  namespace: default
+  annotations:
+    # Use this if you implement Option B (annotation-based override)
+    kubeswift.io/hypervisor-override: "qemu"
+spec:
+  imageRef:
+    name: ubuntu-cloud
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
