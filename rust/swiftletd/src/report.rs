@@ -61,6 +61,7 @@ pub async fn report_guest_runtime(
     name: &str,
     pid: u32,
     serial_socket: &str,
+    hypervisor: &str,
 ) -> Result<(), kube::Error> {
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
@@ -71,6 +72,10 @@ pub async fn report_guest_runtime(
     annotations.insert(
         "kubeswift.io/guest-serial-socket".to_string(),
         serial_socket.to_string(),
+    );
+    annotations.insert(
+        "kubeswift.io/guest-hypervisor".to_string(),
+        hypervisor.to_string(),
     );
     let patch = json!({
         "metadata": {

@@ -161,8 +161,13 @@ fn main() {
                 let ns = namespace.clone().unwrap();
                 let name = name.clone().unwrap();
                 let rt_clone = Arc::clone(&rt);
-                move |pid: u32, serial_socket_path: String| {
-                    log::info!("socket_ready pid={} serial={}", pid, serial_socket_path);
+                move |pid: u32, serial_socket_path: String, hypervisor: String| {
+                    log::info!(
+                        "socket_ready pid={} serial={} hypervisor={}",
+                        pid,
+                        serial_socket_path,
+                        hypervisor
+                    );
                     rt_clone.block_on(async {
                         let client = match kube_client::create_client().await {
                             Ok(c) => c,
@@ -184,6 +189,7 @@ fn main() {
                             &name,
                             pid,
                             serial_socket_path.as_str(),
+                            hypervisor.as_str(),
                         )
                         .await
                         {

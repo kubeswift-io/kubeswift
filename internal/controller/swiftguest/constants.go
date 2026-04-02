@@ -28,6 +28,9 @@ const PodAnnotationGuestRuntimePID = "kubeswift.io/guest-runtime-pid"
 // PodAnnotationGuestSerialSocket is the annotation key for the serial socket path (set by swiftletd on socket ready).
 const PodAnnotationGuestSerialSocket = "kubeswift.io/guest-serial-socket"
 
+// PodAnnotationGuestHypervisor is the annotation key for the hypervisor type (set by swiftletd on socket ready).
+const PodAnnotationGuestHypervisor = "kubeswift.io/guest-hypervisor"
+
 // Mount path constants. Must match internal/runtimeintent and rust/swiftletd.
 const (
 	DisksRootPath = "/var/lib/kubeswift/disks/root"

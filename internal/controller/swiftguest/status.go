@@ -45,9 +45,13 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	// Set runtime from pod annotation (set by swiftletd on socket ready)
 	if pidStr, ok := pod.Annotations[PodAnnotationGuestRuntimePID]; ok && pidStr != "" {
 		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+			hypervisor := "cloud-hypervisor"
+			if h, ok := pod.Annotations[PodAnnotationGuestHypervisor]; ok && h != "" {
+				hypervisor = h
+			}
 			status.Runtime = &swiftv1alpha1.GuestRuntimeStatus{
 				PID:        pid,
-				Hypervisor: "cloud-hypervisor",
+				Hypervisor: hypervisor,
 			}
 		}
 	}

@@ -27,7 +27,7 @@ pub fn run<F>(
     on_socket_ready: Option<F>,
 ) -> Result<(std::process::ExitStatus, u32, String), String>
 where
-    F: FnOnce(u32, String),
+    F: FnOnce(u32, String, String),
 {
     remove_stale_sockets(runtime_dir);
     match intent.hypervisor() {
@@ -44,7 +44,7 @@ fn run_ch<F>(
     on_socket_ready: Option<F>,
 ) -> Result<(std::process::ExitStatus, u32, String), String>
 where
-    F: FnOnce(u32, String),
+    F: FnOnce(u32, String, String),
 {
     let seed_path = if intent.has_seed() {
         runtime_dir
@@ -114,7 +114,11 @@ where
     wait_for_socket(&runtime_dir.api_socket(), Duration::from_secs(30))?;
 
     if let Some(cb) = on_socket_ready {
-        cb(pid, serial_socket_path.clone());
+        cb(
+            pid,
+            serial_socket_path.clone(),
+            "cloud-hypervisor".to_string(),
+        );
     }
 
     let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
@@ -129,7 +133,7 @@ fn run_qemu<F>(
     on_socket_ready: Option<F>,
 ) -> Result<(std::process::ExitStatus, u32, String), String>
 where
-    F: FnOnce(u32, String),
+    F: FnOnce(u32, String, String),
 {
     let serial_socket = runtime_dir.root().join("serial.sock");
     let qmp_socket = runtime_dir.root().join("qmp.sock");
@@ -172,7 +176,7 @@ where
     wait_for_socket(&qmp_socket, Duration::from_secs(30))?;
 
     if let Some(cb) = on_socket_ready {
-        cb(pid, serial_socket_path.clone());
+        cb(pid, serial_socket_path.clone(), "qemu".to_string());
     }
 
     let status = process.wait()?;
