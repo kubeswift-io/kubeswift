@@ -76,6 +76,16 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 	var initContainers []corev1.Container
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
+		volumes = append(volumes, corev1.Volume{
+			Name: "dev-net-tun",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev/net/tun",
+					Type: ptr.To(corev1.HostPathType("CharDevice")),
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: "dev-net-tun", MountPath: "/dev/net/tun"})
 	}
 
 	pod := &corev1.Pod{
@@ -184,6 +194,18 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	var initContainers []corev1.Container
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
+		// /dev/net/tun is needed by network-init (ip tuntap add) and the launcher
+		// (CH/QEMU open it for tap device). Required when not running privileged.
+		volumes = append(volumes, corev1.Volume{
+			Name: "dev-net-tun",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev/net/tun",
+					Type: ptr.To(corev1.HostPathType("CharDevice")),
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: "dev-net-tun", MountPath: "/dev/net/tun"})
 	}
 
 	pod := &corev1.Pod{

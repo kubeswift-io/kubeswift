@@ -8,6 +8,7 @@ import (
 // networkInitContainer returns the hardened network-init init container.
 // Capabilities: NET_ADMIN (ip link, ip addr, brctl, iptables, sysctl) +
 // NET_RAW (raw sockets for dnsmasq, iptables conntrack).
+// /dev/net/tun is required for ip tuntap add (tap device creation).
 func networkInitContainer() corev1.Container {
 	return corev1.Container{
 		Name:            "network-init",
@@ -21,6 +22,9 @@ func networkInitContainer() corev1.Container {
 				Drop: []corev1.Capability{"ALL"},
 				Add:  []corev1.Capability{"NET_ADMIN", "NET_RAW"},
 			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "dev-net-tun", MountPath: "/dev/net/tun"},
 		},
 	}
 }
