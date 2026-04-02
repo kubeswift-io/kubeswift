@@ -180,8 +180,11 @@ func (r *SwiftGPUReconciler) mapGPUNodeToSwiftGuests(ctx context.Context, obj cl
 }
 
 // SetupWithManager registers the reconciler with the manager.
+// The controller is named explicitly to avoid collision with the SwiftGuest controller,
+// since both watch SwiftGuest resources.
 func (r *SwiftGPUReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("swiftgpu").
 		For(&swiftv1alpha1.SwiftGuest{}).
 		Watches(
 			&gpuv1alpha1.SwiftGPUNode{},
