@@ -25,6 +25,11 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/seed"
 )
 
+// gpuHypervisorAnnotation overrides hypervisor selection for manual QEMU testing
+// without GPU hardware. The annotation value is used as-is ("qemu" or "cloud-hypervisor").
+// Only read by the controller; never written.
+const gpuHypervisorAnnotation = "kubeswift.io/hypervisor-override"
+
 const (
 	SeedConfigMapSuffix = "-seed"
 
@@ -120,17 +125,29 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// Apply hypervisor override from annotation before building intent.
-	// kubeswift.io/hypervisor-override: "qemu" forces the QEMU runtime path.
-	// This is a temporary mechanism for Phase 1 validation; Phase 3 will set
-	// the hypervisor automatically based on gpuProfileRef tier.
-	if override, ok := guest.Annotations["kubeswift.io/hypervisor-override"]; ok && override != "" {
+	// Set hypervisor from GPU allocation status when gpuProfileRef is set.
+	// The annotation override (kubeswift.io/hypervisor-override) takes precedence
+	// for manual QEMU testing without real GPU hardware.
+	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
+		rg.Hypervisor = guest.Status.GPU.Hypervisor
+	}
+	if override, ok := guest.Annotations[gpuHypervisorAnnotation]; ok && override != "" {
 		rg.Hypervisor = override
 	}
 
 	// Create or update intent ConfigMap
 	intentConfigMapName := guest.Name + IntentConfigMapSuffix
 	intent := runtimeintent.Build(rg)
+
+	// Attach GPU intent when GPUs have been allocated (Phase 3+).
+	if guest.Spec.GPUProfileRef != nil && isGPUAllocated(&guest) {
+		gpuIntent, err := r.buildGPUIntent(ctx, &guest)
+		if err != nil {
+			logger.Error(err, "failed to build GPU intent")
+			return ctrl.Result{}, err
+		}
+		intent.GPU = gpuIntent
+	}
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		logger.Error(err, "failed to serialize runtime intent")
@@ -251,8 +268,24 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// GPU gate: if gpuProfileRef is set, wait for GPUAllocated=True before creating
+	// the launcher pod. The SwiftGPU controller runs independently and sets this
+	// condition once devices are reserved on a SwiftGPUNode.
+	if guest.Spec.GPUProfileRef != nil && !isGPUAllocated(&guest) {
+		logger.Info("waiting for GPU allocation", "guest", req.NamespacedName)
+		status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+		if err := r.patchStatus(ctx, &guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
 	// Build and create/update pod
-	desiredPod := BuildPod(&guest, rg, seedConfigMapName, intentConfigMapName)
+	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName)
+	if err != nil {
+		logger.Error(err, "failed to build pod spec")
+		return ctrl.Result{}, err
+	}
 	if err := controllerutil.SetControllerReference(&guest, desiredPod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}

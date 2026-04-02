@@ -7,7 +7,7 @@ spec:
   # imageRef + gpuProfileRef: disk boot with GPU passthrough
   # gpuProfileRef is mutually exclusive with kernelRef
   imageRef:
-    name: ubuntu-focal
+    name: ubuntu-noble-qemu
   gpuProfileRef:
     name: a100-pcie-single
   guestClassRef:

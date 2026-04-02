@@ -16,6 +16,7 @@ import (
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftgpu"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
@@ -116,6 +117,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftKernel controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftgpu.SwiftGPUReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftGPU controller")
 		os.Exit(1)
 	}
 
