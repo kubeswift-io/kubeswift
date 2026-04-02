@@ -10,6 +10,16 @@ set -euo pipefail
 #   GPU_PCI_ADDRESSES  — comma-separated BDF addresses (e.g. "0000:17:00.0,0000:3d:00.0")
 #   GPU_PARTITION_ID   — Fabric Manager partition ID to activate, or -1 to skip
 
+# Validate PCI BDF address format (DDDD:BB:DD.F) to prevent path traversal
+# or injection via crafted addresses in the GPU_PCI_ADDRESSES env var.
+validate_bdf() {
+  local addr="$1"
+  if ! echo "$addr" | grep -qE '^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$'; then
+    echo "ERROR: invalid PCI address format: '$addr'"
+    exit 1
+  fi
+}
+
 IFS=',' read -ra ADDRS <<< "${GPU_PCI_ADDRESSES}"
 
 for addr in "${ADDRS[@]}"; do
@@ -17,6 +27,8 @@ for addr in "${ADDRS[@]}"; do
   if [ -z "$addr" ]; then
     continue
   fi
+
+  validate_bdf "$addr"
 
   echo "Binding ${addr} to vfio-pci"
 

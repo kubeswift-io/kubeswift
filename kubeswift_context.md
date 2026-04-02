@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: April 2, 2026 — SwiftGPU Phases 1-3 complete, stabilization pass done
+> Last updated: April 2, 2026 — SwiftGPU Phases 1-3 complete, host runtime hardening done
 
 ---
 
@@ -821,21 +821,28 @@ swiftctl ssh gpu-test -- nvidia-smi
   - Comprehensive unit tests: selectGPUs, findFMPartition, countFreeGPUs, idempotent allocation, deallocation, hypervisor selection, cross-NUMA fallback
   - Documentation: docs/gpu-passthrough.md with workflow, examples, troubleshooting
 
+### Completed (Host Runtime Hardening)
+- Removed `privileged: true` from all three pod containers (SEC-01, SEC-02, SEC-03)
+- **network-init**: drop ALL + NET_ADMIN, NET_RAW — bridge/tap/iptables/dnsmasq
+- **gpu-init**: drop ALL + SYS_ADMIN — sysfs writes for VFIO driver binding + fmpm
+- **launcher (non-GPU)**: drop ALL + NET_ADMIN, SYS_ADMIN — tap device, KVM ioctls
+- **launcher (GPU)**: drop ALL + NET_ADMIN, SYS_ADMIN, SYS_RESOURCE, DAC_OVERRIDE — adds hugepage mlock + VFIO device access
+- All containers set `allowPrivilegeEscalation: false`
+- Added `/sys/bus/pci` hostPath volume for gpu-init sysfs access without privileged
+- PCI BDF validation in gpu-init.sh: regex rejects malformed addresses (SEC-05)
+- FM partition ownership validation: `isFMPartitionOwnedBy()` check before pod creation (SEC-06)
+- `/dev/vfio` scoping documented: directory mount required because VFIO group files are created during bind (SEC-04)
+- Security audit findings SEC-01 through SEC-06 resolved or mitigated
+- Unit tests for all security contexts: `security_test.go`
+
 ### Next Priorities (in order)
 
-**1. Host runtime hardening**
-- network-init needs: NET_ADMIN, NET_RAW (no SYS_ADMIN needed)
-- launcher needs: NET_ADMIN, SYS_ADMIN (for KVM ioctls)
-- Current: both containers run privileged: true — works but overprivileged
-- Approach: harden network-init first, verify, then harden launcher
-- Risk: breaking change if capabilities are wrong — test on dedicated cluster
-
-**2. SwiftKernel additional profiles**
+**1. SwiftKernel additional profiles**
 - gpu-workload profile
 - vhost-user profile
 - Build pipeline at build/kernels/<profile>/
 
-**3. dataDiskRef on SwiftGuest**
+**2. dataDiskRef on SwiftGuest**
 - Kernel boot guests may need persistent storage
 - New optional field: spec.dataDiskRef pointing to a SwiftImage
 - Adds --disk to cloud-hypervisor invocation alongside --kernel/--initramfs
@@ -970,3 +977,11 @@ When helping develop KubeSwift:
 - **GPU: swift-qemu-client QMP is synchronous (std::os::unix::net::UnixStream), not async tokio**
 - **GPU: SwiftGPUProfile has no `firmware` field — firmware is auto-selected based on tier (hypervisor-fw for CH, ovmf for QEMU)**
 - **GPU: gpuProfileRef uses corev1.LocalObjectReference (same as imageRef/kernelRef), not a custom ObjectReference**
+- **Security: NO container uses privileged: true — all use drop ALL + specific capabilities**
+- **Security: network-init capabilities: NET_ADMIN, NET_RAW — do NOT add SYS_ADMIN**
+- **Security: gpu-init capabilities: SYS_ADMIN — needs /sys/bus/pci hostPath volume (sysfs-pci)**
+- **Security: launcher (non-GPU) capabilities: NET_ADMIN, SYS_ADMIN**
+- **Security: launcher (GPU) capabilities: NET_ADMIN, SYS_ADMIN, SYS_RESOURCE, DAC_OVERRIDE**
+- **Security: gpu-init.sh validates PCI BDF format before sysfs writes — do NOT remove validation**
+- **Security: FM partition ownership checked via isFMPartitionOwnedBy() before pod creation**
+- **Security: All containers set allowPrivilegeEscalation: false — do NOT revert to privileged: true**

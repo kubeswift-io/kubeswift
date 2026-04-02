@@ -11,12 +11,12 @@
 
 | ID | Severity | Component | Finding |
 |----|----------|-----------|---------|
-| SEC-01 | CRITICAL | launcher container | `privileged: true` grants full host access; far exceeds required capabilities |
-| SEC-02 | CRITICAL | network-init container | `privileged: true` set alongside explicit `NET_ADMIN` -- privileged overrides and grants all capabilities |
-| SEC-03 | HIGH | gpu-init container | `privileged: true` grants full host access; only needs sysfs write and device access |
-| SEC-04 | HIGH | /dev/vfio hostPath | Entire `/dev/vfio` directory mounted, not scoped to specific IOMMU group |
-| SEC-05 | HIGH | PCI address injection | No validation of PCI BDF addresses flowing from SwiftGPUNode into QEMU command line |
-| SEC-06 | HIGH | Fabric Manager partition isolation | No authorization check prevents cross-tenant partition activation |
+| SEC-01 | ~~CRITICAL~~ RESOLVED | launcher container | ~~`privileged: true`~~ Replaced with drop ALL + NET_ADMIN, SYS_ADMIN (non-GPU) / + SYS_RESOURCE, DAC_OVERRIDE (GPU) |
+| SEC-02 | ~~CRITICAL~~ RESOLVED | network-init container | ~~`privileged: true`~~ Replaced with drop ALL + NET_ADMIN, NET_RAW |
+| SEC-03 | ~~HIGH~~ RESOLVED | gpu-init container | ~~`privileged: true`~~ Replaced with drop ALL + SYS_ADMIN; sysfs-pci hostPath volume added |
+| SEC-04 | HIGH (mitigated) | /dev/vfio hostPath | Entire `/dev/vfio` directory mounted — documented why scoping is impractical (VFIO group files created during bind) |
+| SEC-05 | ~~HIGH~~ RESOLVED | PCI address injection | BDF format validation added to gpu-init.sh (regex: `^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`) |
+| SEC-06 | ~~HIGH~~ RESOLVED | Fabric Manager partition isolation | Partition ownership validated against SwiftGPUNode allocatedTo before pod creation |
 | SEC-07 | MEDIUM | /dev/kvm hostPath | Mounted as hostPath volume, not a proper device volume |
 | SEC-08 | MEDIUM | RBAC over-permissioning | Controller ClusterRole grants `delete` on SwiftGPUProfiles and SwiftGPUNodes unnecessarily |
 | SEC-09 | MEDIUM | RBAC cluster-wide secrets read | Controller can `get/list/watch` all Secrets cluster-wide |
