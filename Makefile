@@ -3,6 +3,7 @@
 IMAGE_TAG ?= latest
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
+GPU_DISCOVERY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/gpu-discovery:$(IMAGE_TAG)
 IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
 # Push destination: parent OCI repo only (Helm appends chart name from Chart.yaml)
 CHART_OCI_PUSH ?= oci://ghcr.io/projectbeskar/charts
@@ -15,8 +16,8 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	generate deploy undeploy load-images smoke-test smoke-test-cleanup preflight help \
-	push-images package-chart push-chart release-dev release-rc release-stable print-version
+	build-gpu-discovery-image generate deploy undeploy load-images smoke-test smoke-test-cleanup \
+	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
 	@echo "Targets:"
@@ -49,7 +50,7 @@ build-go:
 build-rust:
 	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build
 
-build-images: build-controller-image build-swiftletd-image
+build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image
 
 build-controller-image:
 	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE) \
@@ -59,9 +60,14 @@ build-swiftletd-image:
 	docker build -f images/swiftletd/Containerfile rust/ -t $(SWIFTLETD_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
+build-gpu-discovery-image:
+	docker build -f images/gpu-discovery/Containerfile . -t $(GPU_DISCOVERY_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
+
 push-images: build-images
 	docker push $(CONTROLLER_IMAGE)
 	docker push $(SWIFTLETD_IMAGE)
+	docker push $(GPU_DISCOVERY_IMAGE)
 
 package-chart:
 	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \
@@ -125,10 +131,11 @@ undeploy:
 
 load-images:
 	@if command -v kind >/dev/null 2>&1; then \
-		kind load docker-image $(CONTROLLER_IMAGE) $(SWIFTLETD_IMAGE); \
+		kind load docker-image $(CONTROLLER_IMAGE) $(SWIFTLETD_IMAGE) $(GPU_DISCOVERY_IMAGE); \
 	elif command -v minikube >/dev/null 2>&1; then \
 		minikube image load $(CONTROLLER_IMAGE); \
 		minikube image load $(SWIFTLETD_IMAGE); \
+		minikube image load $(GPU_DISCOVERY_IMAGE); \
 	else \
 		echo "Install kind or minikube for load-images"; exit 1; \
 	fi

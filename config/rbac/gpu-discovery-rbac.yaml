@@ -1,0 +1,45 @@
+# RBAC for the GPU discovery DaemonSet.
+# Minimum necessary: create/get/patch SwiftGPUNode and its status subresource,
+# plus read-only access to nodes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-gpu-discovery
+  namespace: kubeswift-system
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gpu-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+rules:
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes/status"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gpu-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gpu-discovery
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gpu-discovery
+    namespace: kubeswift-system

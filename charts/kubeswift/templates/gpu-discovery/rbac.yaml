@@ -1,0 +1,44 @@
+{{- if .Values.gpuDiscovery.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-gpu-discovery
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gpu-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+rules:
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes"]
+    verbs: ["get", "list", "create", "patch"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes/status"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gpu-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gpu-discovery
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gpu-discovery
+    namespace: {{ .Values.namespace }}
+{{- end }}

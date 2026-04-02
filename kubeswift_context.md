@@ -58,6 +58,10 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - **Comprehensive tests: selectGPUs, findFMPartition, countFreeGPUs, idempotent allocation, deallocation**
 - **gpu-init.sh: VFIO bind + Fabric Manager partition activation init container**
 - **Containerfile updated: qemu-system-x86, ovmf, gpu-init.sh included in swiftletd image**
+- **GPU Discovery DaemonSet (cmd/gpu-discovery/): auto-discovers GPUs, NUMA topology, NVSwitches, Fabric Manager via sysfs + lspci + lscpu + fmpm**
+- **Discovery merge logic preserves controller-owned allocation fields during status patches**
+- **Separate gpu-discovery container image (images/gpu-discovery/Containerfile) with pciutils**
+- **Helm chart: gpuDiscovery.enabled gate for DaemonSet + RBAC templates**
 
 ### Known working configuration
 - Guest OS (disk boot): **Ubuntu Focal (20.04)** cloud image — Noble (24.04) is incompatible
@@ -311,6 +315,7 @@ cmd/
   swiftctl/               CLI
   controller-manager/     main entry point
   webhook-server/         webhook entry point
+  gpu-discovery/          GPU hardware discovery DaemonSet binary
 
 internal/
   controller/swiftguest/  SwiftGuest controller + gpu.go (GPU intent builder, GPU pod builder, NUMA/pinning)
@@ -338,6 +343,7 @@ build/
       verify-boot.sh      boot verification script
 
 images/
+  gpu-discovery/Containerfile Go binary + pciutils for GPU hardware discovery
   swiftletd/Containerfile   (now includes qemu-system-x86_64 + OVMF for GPU path)
   swiftletd/scripts/
     network-init.sh         bridge/tap setup (runs as init container)
@@ -347,8 +353,9 @@ images/
 config/
   crd/bases/              Generated CRD YAML (now includes gpu.kubeswift.io CRDs)
   samples/                Sample manifests (incl. swiftgpuprofile-pcie.yaml, swiftgpuprofile-hgx.yaml, swiftguest-gpu.yaml, swiftgpunode-sample.yaml)
-  daemonset/              SwiftGPU discovery DaemonSet
-charts/kubeswift/         Helm chart (includes all CRDs)
+  daemonset/              DaemonSet manifests (swiftletd, gpu-discovery)
+  rbac/                   RBAC for gpu-discovery ServiceAccount/ClusterRole/ClusterRoleBinding
+charts/kubeswift/         Helm chart (includes all CRDs, gpu-discovery gated by gpuDiscovery.enabled)
 test/smoke/               End-to-end smoke test
 test/gpu/                 GPU passthrough smoke test
 ```
@@ -414,11 +421,14 @@ Key facts:
 
 ### SwiftGPU Architecture
 ```
-SwiftGPUNode discovery
+SwiftGPUNode discovery (cmd/gpu-discovery/)
   │
   ▼
-Discovery DaemonSet runs on nodes with kubeswift.io/gpu-node=true
-  │ lspci, lstopo, nvidia-smi, check IOMMU, check Fabric Manager
+Discovery DaemonSet (config/daemonset/gpu-discovery.yaml)
+  │ runs on nodes with kubeswift.io/gpu-node=true
+  │ reads: lspci -Dnn, lscpu, sysfs (numa_node, iommu_group, driver, BAR sizes)
+  │ reads: fmpm -v, fmpm -q, systemctl is-active nvidia-fabricmanager
+  │ loop: discover → merge (preserve controller-owned fields) → patch status → sleep 60s
   │
   ▼
 SwiftGPUNode status populated (GPUs, NUMA, NVSwitches, partitions)
