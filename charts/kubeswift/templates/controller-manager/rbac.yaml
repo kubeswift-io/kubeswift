@@ -54,6 +54,17 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["create", "get", "update", "patch", "list", "watch"]
+  # SwiftGPUProfile
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpuprofiles"]
+    verbs: ["get", "list", "watch"]
+  # SwiftGPUNode — controller writes allocation fields, discovery writes hardware info
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes/status"]
+    verbs: ["get", "update", "patch"]
   # Nodes — required for SwiftKernel per-node pull scheduling
   - apiGroups: [""]
     resources: ["nodes"]
