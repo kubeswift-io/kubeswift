@@ -393,30 +393,16 @@ func BuildGPUDiskBootPod(
 	initContainers = append(initContainers, gpuInitContainer)
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
-		volumes = append(volumes,
-			corev1.Volume{
-				Name: "dev-net-tun",
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{
-						Path: "/dev/net/tun",
-						Type: ptr.To(corev1.HostPathType("CharDevice")),
-					},
+		volumes = append(volumes, corev1.Volume{
+			Name: "dev-net-tun",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev/net/tun",
+					Type: ptr.To(corev1.HostPathType("CharDevice")),
 				},
 			},
-			corev1.Volume{
-				Name: "proc-sys-net",
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{
-						Path: "/proc/sys/net",
-						Type: ptr.To(corev1.HostPathDirectory),
-					},
-				},
-			},
-		)
-		mounts = append(mounts,
-			corev1.VolumeMount{Name: "dev-net-tun", MountPath: "/dev/net/tun"},
-			corev1.VolumeMount{Name: "proc-sys-net", MountPath: "/proc/sys/net"},
-		)
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: "dev-net-tun", MountPath: "/dev/net/tun"})
 	}
 
 	// Resource requests for launcher container.
@@ -445,8 +431,9 @@ func BuildGPUDiskBootPod(
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: podSecurityContext(rg.HasNetwork()),
+			InitContainers:  initContainers,
 			// Pin to the specific node where GPUs were allocated.
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": nodeName,
