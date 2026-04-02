@@ -97,8 +97,9 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: podSecurityContext(rg.HasNetwork()),
+			InitContainers:  initContainers,
 			NodeSelector: map[string]string{
 				"kubeswift.io/kernel-node": "true",
 			},
@@ -217,8 +218,9 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: podSecurityContext(rg.HasNetwork()),
+			InitContainers:  initContainers,
 			Containers: []corev1.Container{
 				{
 					Name:            "launcher",
