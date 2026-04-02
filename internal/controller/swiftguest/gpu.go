@@ -431,8 +431,9 @@ func BuildGPUDiskBootPod(
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			RestartPolicy:   corev1.RestartPolicyNever,
+			SecurityContext: podSecurityContext(rg.HasNetwork()),
+			InitContainers:  initContainers,
 			// Pin to the specific node where GPUs were allocated.
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": nodeName,

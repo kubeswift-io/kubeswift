@@ -29,6 +29,20 @@ func networkInitContainer() corev1.Container {
 	}
 }
 
+// podSecurityContext returns the pod-level security context.
+// When networking is enabled, sets net.ipv4.ip_forward=1 via sysctl
+// (safe namespaced sysctl — avoids needing writable /proc/sys).
+func podSecurityContext(hasNetwork bool) *corev1.PodSecurityContext {
+	if !hasNetwork {
+		return nil
+	}
+	return &corev1.PodSecurityContext{
+		Sysctls: []corev1.Sysctl{
+			{Name: "net.ipv4.ip_forward", Value: "1"},
+		},
+	}
+}
+
 // gpuInitSecurityContext returns the hardened security context for the gpu-init
 // init container. SYS_ADMIN is required to write to sysfs paths for VFIO driver
 // binding (/sys/bus/pci/devices/*/driver_override, /sys/bus/pci/drivers_probe)
