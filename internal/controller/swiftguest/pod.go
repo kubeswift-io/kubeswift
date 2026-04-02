@@ -75,18 +75,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 
 	var initContainers []corev1.Container
 	if rg.HasNetwork() {
-		initContainers = append(initContainers, corev1.Container{
-			Name:            "network-init",
-			Image:           LauncherImage(),
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{"/usr/local/bin/network-init.sh"},
-			SecurityContext: &corev1.SecurityContext{
-				Privileged: ptr.To(true),
-				Capabilities: &corev1.Capabilities{
-					Add: []corev1.Capability{"NET_ADMIN"},
-				},
-			},
-		})
+		initContainers = append(initContainers, networkInitContainer())
 	}
 
 	pod := &corev1.Pod{
@@ -108,9 +97,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 					Name:            "launcher",
 					Image:           LauncherImage(),
 					ImagePullPolicy: corev1.PullIfNotPresent,
-					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
-					},
+					SecurityContext: launcherSecurityContext(false),
 					Env: []corev1.EnvVar{
 						{
 							Name: "POD_NAME",
@@ -196,18 +183,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 
 	var initContainers []corev1.Container
 	if rg.HasNetwork() {
-		initContainers = append(initContainers, corev1.Container{
-			Name:            "network-init",
-			Image:           LauncherImage(),
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{"/usr/local/bin/network-init.sh"},
-			SecurityContext: &corev1.SecurityContext{
-				Privileged: ptr.To(true),
-				Capabilities: &corev1.Capabilities{
-					Add: []corev1.Capability{"NET_ADMIN"},
-				},
-			},
-		})
+		initContainers = append(initContainers, networkInitContainer())
 	}
 
 	pod := &corev1.Pod{
@@ -226,9 +202,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 					Name:            "launcher",
 					Image:           LauncherImage(),
 					ImagePullPolicy: corev1.PullIfNotPresent,
-					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
-					},
+					SecurityContext: launcherSecurityContext(false),
 					Env: []corev1.EnvVar{
 						{
 							Name: "POD_NAME",

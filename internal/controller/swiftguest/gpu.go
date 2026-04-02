@@ -103,14 +103,41 @@ func (r *SwiftGuestReconciler) buildGPUIntent(ctx context.Context, guest *swiftv
 		)
 	}
 
+	// Validate that the FM partition (if any) is still allocated to this guest.
+	// This guards against stale status.gpu data activating a partition that was
+	// reassigned to another tenant after this guest's allocation.
+	fmPartitionID := guest.Status.GPU.PartitionID
+	if fmPartitionID >= 0 {
+		allocatedTo := guest.Namespace + "/" + guest.Name
+		if !isFMPartitionOwnedBy(gpuNode.Status.FabricManager, fmPartitionID, allocatedTo) {
+			return nil, fmt.Errorf("FM partition %d is not allocated to %s on node %s — possible stale allocation",
+				fmPartitionID, allocatedTo, gpuNode.Name)
+		}
+	}
+
 	return &runtimeintent.GPUIntent{
 		Devices:                  devices,
 		Firmware:                 firmware,
 		NUMA:                     numaIntent,
 		VCPUPinning:              vcpuPins,
 		Hugepages:                hugepages,
-		FabricManagerPartitionID: guest.Status.GPU.PartitionID,
+		FabricManagerPartitionID: fmPartitionID,
 	}, nil
+}
+
+// isFMPartitionOwnedBy checks that the given FM partition on the node is still
+// allocated to the expected guest (namespace/name). Returns false if the FM
+// status is nil, the partition doesn't exist, or it's allocated to someone else.
+func isFMPartitionOwnedBy(fm *gpuv1alpha1.FabricManagerStatus, partitionID int, allocatedTo string) bool {
+	if fm == nil {
+		return false
+	}
+	for _, p := range fm.Partitions {
+		if p.ID == partitionID {
+			return p.AllocatedTo == allocatedTo
+		}
+	}
+	return false
 }
 
 // buildNUMAAndPinning computes the virtual NUMA topology and optional vCPU→pCPU
@@ -285,11 +312,29 @@ func BuildGPUDiskBootPod(
 			},
 		},
 		// /dev/vfio provides VFIO character devices for IOMMU group access.
+		// Ideally this would be scoped to specific IOMMU group devices (e.g.
+		// /dev/vfio/15), but the VFIO group device files are created by the kernel
+		// during gpu-init's driver bind — they may not exist when the pod spec is
+		// generated. Mounting the directory is the pragmatic choice; IOMMU hardware
+		// isolation prevents cross-group DMA regardless.
 		{
 			Name: "dev-vfio",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: "/dev/vfio",
+					Type: ptr.To(corev1.HostPathDirectory),
+				},
+			},
+		},
+		// /sys/bus/pci is needed by gpu-init to bind devices to vfio-pci via sysfs
+		// (driver_override, drivers_probe, driver/unbind). Without this volume, sysfs
+		// writes fail even with SYS_ADMIN because the container's mount namespace
+		// does not include the host sysfs.
+		{
+			Name: "sysfs-pci",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/sys/bus/pci",
 					Type: ptr.To(corev1.HostPathDirectory),
 				},
 			},
@@ -337,29 +382,17 @@ func BuildGPUDiskBootPod(
 			{Name: "GPU_PCI_ADDRESSES", Value: gpuAddresses},
 			{Name: "GPU_PARTITION_ID", Value: strconv.Itoa(partitionID)},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			Privileged: ptr.To(true),
-		},
+		SecurityContext: gpuInitSecurityContext(),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "dev-vfio", MountPath: "/dev/vfio"},
+			{Name: "sysfs-pci", MountPath: "/sys/bus/pci"},
 		},
 	}
 
 	var initContainers []corev1.Container
 	initContainers = append(initContainers, gpuInitContainer)
 	if rg.HasNetwork() {
-		initContainers = append(initContainers, corev1.Container{
-			Name:            "network-init",
-			Image:           LauncherImage(),
-			ImagePullPolicy: corev1.PullIfNotPresent,
-			Command:         []string{"/usr/local/bin/network-init.sh"},
-			SecurityContext: &corev1.SecurityContext{
-				Privileged: ptr.To(true),
-				Capabilities: &corev1.Capabilities{
-					Add: []corev1.Capability{"NET_ADMIN"},
-				},
-			},
-		})
+		initContainers = append(initContainers, networkInitContainer())
 	}
 
 	// Resource requests for launcher container.
@@ -399,9 +432,7 @@ func BuildGPUDiskBootPod(
 					Name:            "launcher",
 					Image:           LauncherImage(),
 					ImagePullPolicy: corev1.PullIfNotPresent,
-					SecurityContext: &corev1.SecurityContext{
-						Privileged: ptr.To(true),
-					},
+					SecurityContext: launcherSecurityContext(true),
 					Env: []corev1.EnvVar{
 						{
 							Name: "POD_NAME",
