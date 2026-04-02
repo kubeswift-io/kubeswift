@@ -696,6 +696,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 29 | launch.rs | kernel boot path hardcoded tap_name: None | Use intent.has_network() for tap_name |
 | 30 | Rust commit | launch.rs changes not included in git commit | Add rust files explicitly to git add |
 | 31 | swiftgpu controller | Duplicate controller name collision with swiftguest (both watch SwiftGuest) | Add explicit .Named("swiftgpu") to controller builder |
+| 32 | swiftletd/report.rs + status.go | Hypervisor annotation never reported — status.runtime.hypervisor hardcoded to "cloud-hypervisor" | Add kubeswift.io/guest-hypervisor annotation in report.rs, read it in status.go |
 
 ---
 
