@@ -98,6 +98,23 @@ kubectl apply -f config/samples/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w
 ```
 
+### Boot a GPU VM
+
+```bash
+kubectl label node <node> kubeswift.io/gpu-node=true
+kubectl apply -f config/manager/controller-manager-rbac.yaml
+
+# PCIe GPU (Cloud Hypervisor)
+kubectl apply -f config/samples/swiftgpuprofile-pcie.yaml
+kubectl apply -f config/samples/swiftguest-gpu.yaml
+kubectl get swiftguest gpu-test -w
+
+# Verify
+swiftctl ssh gpu-test -- nvidia-smi
+```
+
+See [docs/gpu-passthrough.md](docs/gpu-passthrough.md) for Tier 2 HGX SXM setup and detailed prerequisites.
+
 ### Smoke test
 
 ```bash
@@ -132,9 +149,9 @@ cargo test
 
 Experimental / pre-1.0. API may change. Linux x86_64 only.
 
-**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU CRDs and controllers (Phase 2), QEMU runtime path (Phase 1).
+**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3: QEMU runtime path, GPU CRDs, SwiftGPU controller with allocation/deallocation, Tier 1 PCIe on Cloud Hypervisor, Tier 2 HGX SXM on QEMU).
 
-**Not yet implemented:** live migration, snapshots, multi-NIC, Windows guests, SwiftGuestPool, GPU Phase 3/4.
+**Not yet implemented:** live migration, snapshots, multi-NIC, Windows guests, SwiftGuestPool, GPU Phase 4 (full HGX passthrough with NVSwitches in guest).
 
 ## License
 
