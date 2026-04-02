@@ -70,7 +70,8 @@ RUN mkdir -p /usr/share/kubeswift-firmware && \
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
 COPY swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh
 COPY swiftletd/scripts/launcher-entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
-RUN chmod +x /usr/local/bin/network-init.sh /usr/local/bin/launcher-entrypoint.sh
+COPY swiftletd/scripts/gpu-init.sh /usr/local/bin/gpu-init.sh
+RUN chmod +x /usr/local/bin/network-init.sh /usr/local/bin/launcher-entrypoint.sh /usr/local/bin/gpu-init.sh
 
 # Runtime paths (must match internal/controller/swiftguest constants)
 ENV KUBESWIFT_RUN_DIR=/var/lib/kubeswift/run
