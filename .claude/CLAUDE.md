@@ -113,9 +113,9 @@ The API server **silently drops** unknown fields if CRDs drift from Go types.
 
 ## Current Work: SwiftGPU
 
-Active development track. See @swiftgpu_design_sketch.md for full design.
+See @swiftgpu_design_sketch.md for full design (with implementation status notes at top).
 
-Phase 1: QEMU runtime path in swiftletd (no GPU hardware needed)
-Phase 2: GPU passthrough Tier 1 — PCIe GPUs on Cloud Hypervisor
-Phase 3: GPU passthrough Tier 2 — HGX SXM on QEMU with PCIe topology
-Phase 4: Full PCIe hierarchy for Tier 3 HGX full passthrough
+Phase 1: QEMU runtime path in swiftletd -- COMPLETE
+Phase 2: GPU CRDs and resource model -- COMPLETE
+Phase 3: SwiftGPU controller, allocation, GPU pod building -- COMPLETE
+Phase 4: Full PCIe hierarchy for Tier 3 HGX full passthrough -- NEXT

@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: April 1, 2026 — SwiftGPU architecture planned, QEMU runtime path designed
+> Last updated: April 2, 2026 — SwiftGPU Phases 1-3 complete, stabilization pass done
 
 ---
 
@@ -25,7 +25,7 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 
 ---
 
-## Current State (v0.1.0 + SwiftKernel + Networking)
+## Current State (v0.1.0 + SwiftKernel + Networking + SwiftGPU)
 
 ### What works end-to-end
 - SwiftImage import: downloads qcow2, converts to raw, patches GRUB for serial console
@@ -46,6 +46,18 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
   kubeswift_vm_failures_total, kubeswift_image_import_seconds
 - **SwiftKernel: per-node OCI artifact pull, kernel boot path, verified on CH v51.1**
 - **SwiftKernel networking: faas-minimal gets DHCP IP via virtio-net, status.network.primaryIP populated**
+- **SwiftGPU controller: GPU allocation, deallocation, finalizer-based cleanup**
+- **SwiftGPUProfile and SwiftGPUNode CRDs (api/gpu/v1alpha1/)**
+- **GPU pod building: gpu-init container, VFIO volumes, hugepage volumes, node pinning**
+- **QEMU hypervisor path in swiftletd (Phase 1): swift-qemu-client crate, QMP lifecycle, OVMF boot**
+- **Hypervisor override annotation (kubeswift.io/hypervisor-override) for testing QEMU without GPU hardware**
+- **Tier-based hypervisor selection: pcie -> Cloud Hypervisor, hgx-shared/hgx-full -> QEMU**
+- **NUMA-aware GPU allocation: prefers same NUMA node, falls back to cross-NUMA**
+- **Fabric Manager partition selection for shared NVSwitch mode (Tier 2)**
+- **GPU deallocation on SwiftGuest deletion via kubeswift.io/gpu-allocation finalizer**
+- **Comprehensive tests: selectGPUs, findFMPartition, countFreeGPUs, idempotent allocation, deallocation**
+- **gpu-init.sh: VFIO bind + Fabric Manager partition activation init container**
+- **Containerfile updated: qemu-system-x86, ovmf, gpu-init.sh included in swiftletd image**
 
 ### Known working configuration
 - Guest OS (disk boot): **Ubuntu Focal (20.04)** cloud image — Noble (24.04) is incompatible
@@ -58,6 +70,10 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - Seed ISO: genisoimage with `-rock -joliet -volid cidata` flags
 - DHCP range: 10.244.125.10–20 on br0 (10.244.125.1)
 - ORAS CLI: v1.3.1 (used in SwiftKernel pull jobs)
+- GPU (Tier 1): SwiftGPUProfile tier=pcie, Cloud Hypervisor, x_nv_gpudirect_clique=0
+- GPU (Tier 2): SwiftGPUProfile tier=hgx-shared, QEMU, pcie-root-port per device, OVMF, 1Gi hugepages
+- GPU runtime: QEMU from qemu-system-x86 package (Debian bookworm), OVMF at /usr/share/OVMF/
+- GPU init: gpu-init.sh binds GPUs to vfio-pci, activates FM partition via fmpm
 
 ### Deployed images (latest)
 - `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-<latest>`
@@ -180,7 +196,7 @@ spec:
     format: raw
 ```
 
-**SwiftGPUProfile** — GPU passthrough configuration (NEW)
+**SwiftGPUProfile** — GPU passthrough configuration
 ```yaml
 apiVersion: gpu.kubeswift.io/v1alpha1
 kind: SwiftGPUProfile
@@ -201,10 +217,13 @@ spec:
   vcpuPinning: true                # enable 1:1 vCPU to physical CPU pinning
   fabricManager:
     runInGuest: false              # true = full passthrough (NVSwitches passed to guest)
-  firmware: ovmf                   # ovmf (QEMU path) — auto-selected when pcieTopology needed
+    requiredVersion: "580.95.05"   # must match host Fabric Manager version
 ```
 
-**SwiftGPUNode** — per-node GPU inventory (NEW)
+Note: firmware selection is automatic — the controller sets "hypervisor-fw" for CH (tier=pcie)
+and "ovmf" for QEMU (tier=hgx-shared or tier=hgx-full). There is no `firmware` field on the CRD.
+
+**SwiftGPUNode** — per-node GPU inventory
 ```yaml
 apiVersion: gpu.kubeswift.io/v1alpha1
 kind: SwiftGPUNode
@@ -285,7 +304,7 @@ api/
   kernel/v1alpha1/        SwiftKernel types
   seed/v1alpha1/          SwiftSeedProfile types
   swift/v1alpha1/         SwiftGuest, SwiftGuestClass types
-  gpu/v1alpha1/           SwiftGPUProfile, SwiftGPUNode types (NEW)
+  gpu/v1alpha1/           SwiftGPUProfile, SwiftGPUNode types
   shared/                 common types
 
 cmd/
@@ -294,10 +313,10 @@ cmd/
   webhook-server/         webhook entry point
 
 internal/
-  controller/swiftguest/  SwiftGuest controller
+  controller/swiftguest/  SwiftGuest controller + gpu.go (GPU intent builder, GPU pod builder, NUMA/pinning)
   controller/swiftimage/  SwiftImage controller
   controller/swiftkernel/ SwiftKernel controller (per-node pull)
-  controller/swiftgpu/    SwiftGPU controller (NEW — allocation, VFIO, Fabric Manager)
+  controller/swiftgpu/    SwiftGPU controller (controller.go, allocate.go, status.go + tests)
   runtimeintent/          VM launch spec builder (disk + kernel + GPU boot paths)
   resolved/               Resolution and merge logic
   seed/                   cloud-init ConfigMap builder
@@ -307,7 +326,7 @@ rust/
   swiftletd/              VM launcher (disk boot + kernel boot + GPU boot paths)
   swift-runtime/          RuntimeDir management
   swift-ch-client/        Cloud Hypervisor spawn + API client
-  swift-qemu-client/      QEMU spawn + QMP client (NEW)
+  swift-qemu-client/      QEMU spawn + QMP client (lib.rs, config.rs, qmp.rs)
   swift-seed/             NoCloud ISO builder
 
 build/
@@ -322,16 +341,16 @@ images/
   swiftletd/Containerfile   (now includes qemu-system-x86_64 + OVMF for GPU path)
   swiftletd/scripts/
     network-init.sh         bridge/tap setup (runs as init container)
-    gpu-init.sh             VFIO bind + FM partition activate (NEW, runs as init container)
+    gpu-init.sh             VFIO bind + FM partition activate (runs as init container)
     launcher-entrypoint.sh  starts dnsmasq when network=true, then execs swiftletd
 
 config/
   crd/bases/              Generated CRD YAML (now includes gpu.kubeswift.io CRDs)
-  samples/                Sample manifests
-  daemonset/              SwiftGPU discovery DaemonSet (NEW)
+  samples/                Sample manifests (incl. swiftgpuprofile-pcie.yaml, swiftgpuprofile-hgx.yaml, swiftguest-gpu.yaml, swiftgpunode-sample.yaml)
+  daemonset/              SwiftGPU discovery DaemonSet
 charts/kubeswift/         Helm chart (includes all CRDs)
 test/smoke/               End-to-end smoke test
-test/gpu/                 GPU passthrough smoke test (NEW)
+test/gpu/                 GPU passthrough smoke test
 ```
 
 ### Networking Model (both boot paths)
@@ -393,7 +412,7 @@ Key facts:
   - initramfs: `application/vnd.kubeswift.initramfs.binary`
   - artifact type: `application/vnd.kubeswift.kernel.v1`
 
-### SwiftGPU Architecture (NEW)
+### SwiftGPU Architecture
 ```
 SwiftGPUNode discovery
   │
@@ -568,7 +587,7 @@ cloud-hypervisor \
   --device path=/sys/bus/pci/devices/0000:41:00.0/,x_nv_gpudirect_clique=0
 ```
 
-### QEMU Invocation (NEW — Tier 2/3 GPU boot)
+### QEMU Invocation (Tier 2/3 GPU boot)
 ```
 qemu-system-x86_64 \
   -name guest=<guestId>,debug-threads=on \
@@ -666,6 +685,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 28 | faas-minimal linux.config | CONFIG_NETDEVICES missing — Kconfig silently dropped VIRTIO_NET | Add CONFIG_NETDEVICES=y CONFIG_NET_CORE=y |
 | 29 | launch.rs | kernel boot path hardcoded tap_name: None | Use intent.has_network() for tap_name |
 | 30 | Rust commit | launch.rs changes not included in git commit | Add rust files explicitly to git add |
+| 31 | swiftgpu controller | Duplicate controller name collision with swiftguest (both watch SwiftGuest) | Add explicit .Named("swiftgpu") to controller builder |
 
 ---
 
@@ -712,16 +732,22 @@ kubectl apply -f config/samples/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w  # wait for Running + primaryIP
 ```
 
-### SwiftGPU Quick Test (NEW)
+### SwiftGPU Quick Test
 ```bash
 # Label a GPU node
 kubectl label node <nodename> kubeswift.io/gpu-node=true
 
+# Apply GPU RBAC (needed for gpu.kubeswift.io permissions)
+kubectl apply -f config/manager/controller-manager-rbac.yaml
+
 # Wait for discovery
 kubectl get swiftgpunode <nodename> -o yaml  # check GPUs detected
 
-# Create GPU profile
-kubectl apply -f config/samples/swiftgpuprofile-a100.yaml
+# Create GPU profile (PCIe tier — Cloud Hypervisor)
+kubectl apply -f config/samples/swiftgpuprofile-pcie.yaml
+
+# Or for HGX SXM tier (QEMU):
+# kubectl apply -f config/samples/swiftgpuprofile-hgx.yaml
 
 # Create GPU guest
 kubectl apply -f config/samples/swiftguest-gpu.yaml
@@ -763,6 +789,38 @@ swiftctl ssh gpu-test -- nvidia-smi
 - status.network.primaryIP populated for kernel boot guests ✓
 - Smoke test passes with kernel boot changes ✓
 
+### Completed (SwiftGPU Phases 1-3)
+- **Phase 1: QEMU Hypervisor Abstraction in swiftletd**
+  - `hypervisor` field on RuntimeIntent: "cloud-hypervisor" (default) or "qemu"
+  - New Rust crate: swift-qemu-client (lib.rs, config.rs, qmp.rs)
+  - QemuProcess: spawn, QMP lifecycle (powerdown, quit, SIGKILL fallback)
+  - QemuConfig: Q35 machine, OVMF firmware, KVM acceleration, virtio-net tap, serial socket
+  - QMP client: synchronous Unix socket, capabilities negotiation, system_powerdown, quit
+  - Containerfile updated: qemu-system-x86, ovmf, gpu-init.sh included
+  - Hypervisor override annotation (kubeswift.io/hypervisor-override) for testing without GPU hardware
+- **Phase 2: GPU CRDs and Resource Model**
+  - SwiftGPUProfile CRD (api/gpu/v1alpha1/types_gpuprofile.go): tier, count, model, pcieTopology, numaTopology, hugepages, vcpuPinning, fabricManager
+  - SwiftGPUNode CRD (api/gpu/v1alpha1/types_gpunode.go): cluster-scoped, status-only, host topology, GPU inventory, NVSwitch, Fabric Manager
+  - SwiftGuest extended: spec.gpuProfileRef, status.gpu (GPUStatus), ConditionGPUAllocated
+  - RuntimeIntent extended: gpu.devices[], gpu.firmware, gpu.numa, gpu.vcpuPinning, gpu.hugepages, gpu.fabricManagerPartitionId
+  - Scheme registration for gpu.kubeswift.io in internal/scheme/
+  - RBAC: gpu.kubeswift.io permissions in config/manager/controller-manager-rbac.yaml
+  - Sample manifests: swiftgpuprofile-pcie.yaml, swiftgpuprofile-hgx.yaml, swiftguest-gpu.yaml, swiftgpunode-sample.yaml
+- **Phase 3: SwiftGPU Controller and GPU Pod Building**
+  - SwiftGPU controller (internal/controller/swiftgpu/): watches SwiftGuest, allocates GPUs on SwiftGPUNode
+  - Controller named "swiftgpu" explicitly (.Named()) to avoid collision with swiftguest controller
+  - NUMA-aware GPU selection: prefers single NUMA node, falls back to cross-NUMA
+  - Fabric Manager partition selection for shared mode (findFMPartition)
+  - Tier-based hypervisor selection: pcie -> cloud-hypervisor, hgx-shared/hgx-full -> qemu
+  - Idempotent allocation: detects existing allocatedTo before re-allocating
+  - Finalizer-based deallocation (kubeswift.io/gpu-allocation): frees GPUs and FM partitions on SwiftGuest delete
+  - Graceful handling when SwiftGPUNode is gone during deallocation
+  - GPU pod builder (internal/controller/swiftguest/gpu.go): BuildGPUDiskBootPod with gpu-init container, /dev/vfio volume, hugepage volume, node selector
+  - GPU intent builder: resolves PCIe topology flags, NUMA layout, vCPU pinning from SwiftGPUNode host topology
+  - gpu-init.sh: unbind from current driver, bind to vfio-pci, verify binding, activate FM partition via fmpm
+  - Comprehensive unit tests: selectGPUs, findFMPartition, countFreeGPUs, idempotent allocation, deallocation, hypervisor selection, cross-NUMA fallback
+  - Documentation: docs/gpu-passthrough.md with workflow, examples, troubleshooting
+
 ### Next Priorities (in order)
 
 **1. Host runtime hardening**
@@ -782,53 +840,7 @@ swiftctl ssh gpu-test -- nvidia-smi
 - New optional field: spec.dataDiskRef pointing to a SwiftImage
 - Adds --disk to cloud-hypervisor invocation alongside --kernel/--initramfs
 
-### SwiftGPU Roadmap (NEW — in order)
-
-**Phase 1: Hypervisor Abstraction in swiftletd**
-- Add `hypervisor` field to RuntimeIntent: `"cloud-hypervisor"` (default) or `"qemu"`
-- New Rust crate: `swift-qemu-client` — QEMU spawn + QMP monitor
-- QemuLauncher builds qemu-system-x86_64 command from RuntimeIntent
-- QEMU uses Q35 machine type, OVMF firmware, KVM acceleration
-- QEMU uses same virtio-net tap device, same serial socket, same lease discovery
-- swiftletd selects launcher based on intent.hypervisor field
-- Status reporting via pod annotations works identically for both paths
-- swiftletd Containerfile updated to include qemu-system-x86_64 + OVMF
-- Verify: boot a regular disk-boot VM via QEMU path, confirm networking + console work
-- Risk: QEMU process management differs from CH (no HTTP API, uses QMP instead)
-- Deliverable: swiftletd can boot VMs on either hypervisor, selected by intent
-
-**Phase 2: GPU Passthrough — Tier 1 (PCIe GPUs on Cloud Hypervisor)**
-- New CRDs: SwiftGPUProfile, SwiftGPUNode (api/gpu/v1alpha1/)
-- New controller: internal/controller/swiftgpu/ — allocation, VFIO lifecycle
-- Discovery DaemonSet: runs on kubeswift.io/gpu-node=true nodes, populates SwiftGPUNode
-- SwiftGuest gets spec.gpuProfileRef field
-- RuntimeIntent gets devices[] array with VFIO sysfs paths + x_nv_gpudirect_clique
-- SwiftGuestClass gets optional NUMA/hugepage fields
-- Launcher pod gets: /dev/vfio volume mount, /dev/kvm, hugepage volume
-- gpu-init init container: binds devices to vfio-pci driver before launcher starts
-- New condition on SwiftGuest: GPUAllocated
-- RBAC: controller-manager needs gpu.kubeswift.io permissions + node access
-- Target GPUs: A100-PCIe, L40S, RTX 4090, any PCIe card where flat topology works
-- Verify: boot VM with A100 PCIe passthrough, nvidia-smi works inside guest
-- Deliverable: GPU VMs work on Cloud Hypervisor for PCIe GPUs
-
-**Phase 3: GPU Passthrough — Tier 2 (HGX SXM on QEMU)**
-- RuntimeIntent: when gpuProfile requires pcieTopology, set hypervisor=qemu
-- QEMU launch builds PCIe root ports per GPU device
-- NUMA topology: QEMU gets -smp sockets/cores/threads + -numa node definitions
-- vCPU pinning: controller computes pinning map from SwiftGPUNode host topology
-- Hugepage allocation: launcher pod uses 1Gi hugepage volume
-- OVMF firmware: QEMU boots with -drive if=pflash for UEFI
-- Large BAR handling: x-no-mmap=true for GPUs with >64GB BARs (B200: 256GB)
-- Fabric Manager integration: gpu-init activates partition via fmpm -a <partition-id>
-- Fabric Manager cleanup: on pod termination, deactivate partition via fmpm -d
-- Guest image requirements: nvidia-open driver must match host FM version exactly
-- SwiftGPUNode tracks FM version + partitions in status
-- SwiftGPU controller validates driver version compatibility before allocation
-- New annotation: kubeswift.io/gpu-partition-id — set by controller, read by gpu-init
-- Target GPUs: H100-SXM, H200-SXM, B200-SXM (1/2/4 GPU partitions)
-- Verify: boot 4-GPU VM on H200 HGX, nvidia-smi shows 4 GPUs, NCCL allreduce works
-- Deliverable: multi-GPU HGX VMs with NVLink via shared NVSwitch
+### SwiftGPU Roadmap
 
 **Phase 4: Full PCIe Topology — Tier 3 (HGX full passthrough)**
 - QEMU launch builds full PCIe hierarchy per NVIDIA reference architecture:
@@ -950,3 +962,11 @@ When helping develop KubeSwift:
 - **GPU: NVSwitch passthrough only for Tier 3 full passthrough — not for shared mode**
 - **GPU: gpu-init container handles VFIO bind + FM partition activate before swiftletd starts**
 - **GPU: QEMU path uses QMP (unix socket) for monitoring, not HTTP API like CH**
+- **GPU: SwiftGPU controller name is "swiftgpu" (explicit .Named() to avoid collision with swiftguest controller)**
+- **GPU: RBAC for gpu.kubeswift.io must be applied separately: kubectl apply -f config/manager/controller-manager-rbac.yaml**
+- **GPU: Allocation is idempotent — if GPUs already marked allocatedTo this guest, they are returned without re-allocating**
+- **GPU: Deallocation uses kubeswift.io/gpu-allocation finalizer on SwiftGuest**
+- **GPU: Hypervisor override annotation kubeswift.io/hypervisor-override allows testing QEMU path without GPU hardware**
+- **GPU: swift-qemu-client QMP is synchronous (std::os::unix::net::UnixStream), not async tokio**
+- **GPU: SwiftGPUProfile has no `firmware` field — firmware is auto-selected based on tier (hypervisor-fw for CH, ovmf for QEMU)**
+- **GPU: gpuProfileRef uses corev1.LocalObjectReference (same as imageRef/kernelRef), not a custom ObjectReference**

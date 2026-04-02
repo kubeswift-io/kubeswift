@@ -76,6 +76,43 @@ func TestBuildNoSeed(t *testing.T) {
 	}
 }
 
+func TestBuild_WithHypervisorQEMU(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasSeed:    true,
+		hasNetwork: true,
+		format:     "raw",
+		cpu:        16,
+		memory:     32768,
+		lifecycle:  "start",
+		guestID:    "default/gpu-test",
+		hypervisor: "qemu",
+	}
+	intent := Build(rg)
+	if intent.Hypervisor != "qemu" {
+		t.Errorf("hypervisor = %q, want qemu", intent.Hypervisor)
+	}
+	if intent.CPU != 16 || intent.Memory != 32768 {
+		t.Errorf("cpu=%d memory=%d, want 16 32768", intent.CPU, intent.Memory)
+	}
+}
+
+func TestBuild_WithHypervisorDefault(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasSeed:    true,
+		hasNetwork: true,
+		format:     "raw",
+		cpu:        2,
+		memory:     2048,
+		lifecycle:  "start",
+		guestID:    "default/regular-guest",
+		hypervisor: "",
+	}
+	intent := Build(rg)
+	if intent.Hypervisor != "" {
+		t.Errorf("hypervisor = %q, want empty string (default)", intent.Hypervisor)
+	}
+}
+
 func TestSerializeParseRoundtrip(t *testing.T) {
 	intent := &RuntimeIntent{
 		RootDisk:  RootDiskSpec{Path: DisksRootPath + "/" + RootDiskImageFile, Format: "raw"},
