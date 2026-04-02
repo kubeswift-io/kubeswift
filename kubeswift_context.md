@@ -697,6 +697,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 30 | Rust commit | launch.rs changes not included in git commit | Add rust files explicitly to git add |
 | 31 | swiftgpu controller | Duplicate controller name collision with swiftguest (both watch SwiftGuest) | Add explicit .Named("swiftgpu") to controller builder |
 | 32 | swiftletd/report.rs + status.go | Hypervisor annotation never reported — status.runtime.hypervisor hardcoded to "cloud-hypervisor" | Add kubeswift.io/guest-hypervisor annotation in report.rs, read it in status.go |
+| 33 | pod.go + security.go | network-init fails with "open: No such file or directory" — missing /dev/net/tun | Add dev-net-tun hostPath volume + mount on network-init and launcher when networking enabled |
 
 ---
 
