@@ -39,6 +39,22 @@ swiftletd:
       cpu: 2
       memory: 2Gi
 
+# GPU discovery DaemonSet: auto-discovers GPU hardware on nodes labeled kubeswift.io/gpu-node=true.
+# Populates SwiftGPUNode status with GPU inventory, NUMA topology, and Fabric Manager state.
+gpuDiscovery:
+  enabled: false
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    tag: latest
+  interval: "60s"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
 # Admission webhooks (optional). Requires cert-manager. When enabled, controller-manager runs with --webhook-enabled=true.
 webhook:
   enabled: false

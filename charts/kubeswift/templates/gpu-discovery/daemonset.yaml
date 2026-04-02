@@ -1,0 +1,59 @@
+{{- if .Values.gpuDiscovery.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-discovery
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: gpu-discovery
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: gpu-discovery
+    spec:
+      serviceAccountName: kubeswift-gpu-discovery
+      hostPID: false
+      hostNetwork: false
+      nodeSelector:
+        kubeswift.io/gpu-node: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: gpu-discovery
+          image: {{ .Values.gpuDiscovery.image.registry }}/gpu-discovery:{{ include "kubeswift.imageTag" (dict "tag" .Values.gpuDiscovery.image.tag "appVersion" .Chart.AppVersion) }}
+          args:
+            - --interval={{ .Values.gpuDiscovery.interval | default "60s" }}
+            - --v=2
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+          resources:
+            {{- toYaml .Values.gpuDiscovery.resources | nindent 12 }}
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+{{- end }}

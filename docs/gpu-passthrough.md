@@ -51,6 +51,49 @@ lsmod | grep vfio
 
 **Tier 3 (`hgx-full`)**: QEMU with full PCIe hierarchy including expander buses, root ports, and switches. NVSwitches are passed to the guest. Fabric Manager runs inside the guest. This is Phase 4 — not yet implemented.
 
+## GPU Discovery DaemonSet
+
+The discovery DaemonSet (`gpu-discovery`) auto-detects GPU hardware on labeled nodes and populates the SwiftGPUNode status. It runs in a loop (default: 60 seconds) reading sysfs, lspci, lscpu, and Fabric Manager state.
+
+### Enable via Helm
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+  --set gpuDiscovery.enabled=true
+```
+
+Or apply manifests directly:
+
+```bash
+kubectl apply -f config/rbac/gpu-discovery-rbac.yaml
+kubectl apply -f config/daemonset/gpu-discovery.yaml
+```
+
+### What it discovers
+
+- **GPUs**: PCI address, model, device ID, NUMA node, IOMMU group, driver binding, BAR sizes
+- **Host topology**: CPU sockets/cores/threads, NUMA nodes with CPU masks and memory, IOMMU status, 1GiB hugepage counts
+- **NVSwitches**: PCI addresses and device IDs (HGX nodes)
+- **Fabric Manager**: installed/version/running, partition IDs, GPU indices per partition, active state
+
+### Field ownership
+
+The discovery DaemonSet and SwiftGPU controller both write to SwiftGPUNode status but own different fields:
+
+| Field | Owner |
+|-------|-------|
+| `phase`, `host`, `gpus[].model/pciAddress/driver/barSizes/numaNode/iommuGroup/deviceId`, `nvSwitches`, `fabricManager.installed/version/running`, `fabricManager.partitions[].id/gpuIndices/active` | Discovery DaemonSet |
+| `gpus[].allocated`, `gpus[].allocatedTo`, `fabricManager.partitions[].allocatedTo`, `freeGPUs`, `gpuCount`, `gpuModel` | SwiftGPU controller |
+
+Discovery preserves controller-owned fields during status patches by reading the existing status first and merging.
+
+### Security
+
+- **No privileged containers**: drops ALL capabilities, readOnlyRootFilesystem
+- **/sys and /dev mounted read-only**: sysfs and lspci reads only, no host state modification
+- **hostPID=false, hostNetwork=false**
+- **Separate RBAC**: only `swiftgpunodes` (get/list/create/patch) + `swiftgpunodes/status` (get/patch) + `nodes` (get)
+
 ## Workflow
 
 ### Step 1: Label a GPU node

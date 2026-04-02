@@ -1,0 +1,65 @@
+# DaemonSet for GPU hardware discovery on nodes labeled kubeswift.io/gpu-node=true.
+# Discovers NVIDIA GPUs, NUMA topology, NVSwitches, and Fabric Manager state,
+# then populates the SwiftGPUNode status for that node.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-discovery
+  namespace: kubeswift-system
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gpu-discovery
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: gpu-discovery
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: gpu-discovery
+    spec:
+      serviceAccountName: kubeswift-gpu-discovery
+      hostPID: false
+      hostNetwork: false
+      nodeSelector:
+        kubeswift.io/gpu-node: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: gpu-discovery
+          image: ghcr.io/projectbeskar/kubeswift/gpu-discovery:latest
+          args:
+            - --interval=60s
+            - --v=2
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
