@@ -22,11 +22,7 @@ ip tuntap add dev "$TAP" mode tap
 ip link set "$TAP" up
 ip link set "$TAP" master "$BRIDGE"
 
-# Enable IP forwarding
-echo 1 > /proc/sys/net/ipv4/ip_forward
-
-# Masquerade VM traffic out through the pod's real interface
-# Only match traffic from VM subnet, not destined to same subnet
-iptables -t nat -A POSTROUTING -s 10.244.125.0/24 ! -d 10.244.125.0/24 -j MASQUERADE
+# IP forwarding and iptables NAT are set up by launcher-entrypoint.sh
+# (launcher container has SYS_ADMIN; network-init only has NET_ADMIN + NET_RAW).
 
 echo "Network init done: $BRIDGE (internal) with $TAP; $PRIMARY unchanged"

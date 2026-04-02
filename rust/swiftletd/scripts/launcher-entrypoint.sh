@@ -14,6 +14,11 @@ network_enabled() {
 }
 
 if network_enabled; then
+    # Enable IP forwarding and NAT masquerade for VM outbound traffic.
+    # These require SYS_ADMIN (write to /proc/sys) which the launcher has.
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    iptables -t nat -A POSTROUTING -s 10.244.125.0/24 ! -d 10.244.125.0/24 -j MASQUERADE
+
     guest_id=$(grep -o '"guestId"[[:space:]]*:[[:space:]]*"[^"]*"' "$INTENT_PATH" | cut -d'"' -f4)
     # Sanitize guest_id for path (default/rocky -> default-rocky)
     safe_id=$(echo "$guest_id" | tr '/' '-')
