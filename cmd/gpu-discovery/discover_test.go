@@ -212,7 +212,7 @@ func TestMergePreservesAllocation(t *testing.T) {
 			Version:   "580.95.05",
 			Running:   true,
 			Partitions: []gpuv1alpha1.FMPartitionStatus{
-				{ID: 0, GPUIndices: []int{0, 1}, Active: true},  // Discovery sees active but not allocatedTo
+				{ID: 0, GPUIndices: []int{0, 1}, Active: true}, // Discovery sees active but not allocatedTo
 				{ID: 1, GPUIndices: []int{2, 3}, Active: false},
 			},
 		},
