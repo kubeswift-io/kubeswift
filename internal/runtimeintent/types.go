@@ -13,6 +13,7 @@ type RuntimeIntent struct {
 	KernelBoot *KernelBootSpec `json:"kernelBoot,omitempty"` // when set, boot via --kernel + --initramfs
 	Hypervisor string          `json:"hypervisor,omitempty"` // "cloud-hypervisor" (default) or "qemu"
 	GPU        *GPUIntent      `json:"gpu,omitempty"`        // populated when gpuProfileRef is set
+	DataDisk   *RootDiskSpec   `json:"dataDisk,omitempty"`   // secondary data disk (appears as /dev/vdb)
 }
 
 // RootDiskSpec specifies the root disk for the VM.

@@ -28,6 +28,8 @@ pub struct VmConfig {
     pub initramfs_path: Option<String>,
     /// Kernel command line. Only used when kernel_path is set.
     pub kernel_cmdline: Option<String>,
+    /// Optional secondary data disk path. Empty = no data disk.
+    pub data_disk_path: String,
 }
 
 impl VmConfig {
@@ -64,6 +66,10 @@ impl VmConfig {
                 args.push("--disk".to_string());
                 args.push(format!("path={}", self.seed_path));
             }
+            if !self.data_disk_path.is_empty() {
+                args.push("--disk".to_string());
+                args.push(format!("path={}", self.data_disk_path));
+            }
         } else {
             // --kernel (rust-hypervisor-firmware PVH ELF) required for disk boot; CH creates serial device when VM is properly initialized.
             if let Some(ref path) = self.firmware_path {
@@ -78,6 +84,9 @@ impl VmConfig {
                 // Cloud Hypervisor: second disk for cloud-init NoCloud.
                 // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
                 args.push(format!("path={}", self.seed_path));
+            }
+            if !self.data_disk_path.is_empty() {
+                args.push(format!("path={}", self.data_disk_path));
             }
         }
 

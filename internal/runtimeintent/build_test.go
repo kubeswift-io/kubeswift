@@ -23,6 +23,7 @@ type mockResolvedGuest struct {
 func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
 func (m *mockResolvedGuest) HasKernel() bool           { return m.hasKernel }
 func (m *mockResolvedGuest) HasNetwork() bool          { return m.hasNetwork }
+func (m *mockResolvedGuest) HasDataDisk() bool         { return false }
 func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
 func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
 func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }

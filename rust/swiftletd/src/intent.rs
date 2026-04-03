@@ -29,6 +29,9 @@ pub struct RuntimeIntent {
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
     pub hypervisor: Option<String>,
+    /// Optional secondary data disk (appears as /dev/vdb in guest).
+    #[serde(default)]
+    pub data_disk: Option<RootDisk>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +73,19 @@ impl RuntimeIntent {
     /// Returns true if guest boots via direct kernel (not disk).
     pub fn has_kernel(&self) -> bool {
         self.kernel_boot.is_some()
+    }
+
+    /// Returns the data disk path, or empty string if no data disk.
+    pub fn data_disk_path(&self) -> &str {
+        match &self.data_disk {
+            Some(d) if !d.path.is_empty() => &d.path,
+            _ => "",
+        }
+    }
+
+    /// Returns true if a data disk is attached.
+    pub fn has_data_disk(&self) -> bool {
+        !self.data_disk_path().is_empty()
     }
 
     /// Returns the hypervisor to use. Defaults to "cloud-hypervisor".

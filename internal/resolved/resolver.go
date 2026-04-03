@@ -40,10 +40,27 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 		return nil, &ResolutionError{Reason: "SwiftGuestClass not found: " + err.Error(), AffectedResource: guest.Spec.GuestClassRef.Name}
 	}
 
+	var rg *ResolvedGuest
+	var err error
 	if hasKernel {
-		return r.resolveKernelBoot(ctx, guest, guestClass)
+		rg, err = r.resolveKernelBoot(ctx, guest, guestClass)
+	} else {
+		rg, err = r.resolveDiskBoot(ctx, guest, guestClass)
 	}
-	return r.resolveDiskBoot(ctx, guest, guestClass)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve optional data disk (works with all boot paths).
+	if guest.Spec.DataDiskRef != nil {
+		dataDisk, err := r.resolveDataDisk(ctx, guest)
+		if err != nil {
+			return nil, err
+		}
+		rg.DataDisk = dataDisk
+	}
+
+	return rg, nil
 }
 
 func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) (*ResolvedGuest, error) {
@@ -77,6 +94,18 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 	}
 
 	return rg, nil
+}
+
+func (r *resolver) resolveDataDisk(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*PreparedImage, error) {
+	image := &imagev1alpha1.SwiftImage{}
+	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.DataDiskRef.Name}, image); err != nil {
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: guest.Spec.DataDiskRef.Name}
+	}
+	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: guest.Spec.DataDiskRef.Name}
+	}
+	pi := mergePreparedImage(image)
+	return &pi, nil
 }
 
 func (r *resolver) resolveDiskBoot(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) (*ResolvedGuest, error) {

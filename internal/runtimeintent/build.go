@@ -6,6 +6,7 @@ type ResolvedGuest interface {
 	HasSeed() bool
 	HasKernel() bool
 	HasNetwork() bool
+	HasDataDisk() bool
 	GetRootDiskFormat() string
 	GetCPU() int
 	GetMemoryMiB() int
@@ -19,6 +20,14 @@ type ResolvedGuest interface {
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
 func Build(rg ResolvedGuest) *RuntimeIntent {
+	var dataDisk *RootDiskSpec
+	if rg.HasDataDisk() {
+		dataDisk = &RootDiskSpec{
+			Path:   DisksDataPath + "/" + DataDiskImageFile,
+			Format: "raw",
+		}
+	}
+
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
 		if lifecycle == "" {
@@ -33,6 +42,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			GuestID:    rg.GetGuestID(),
 			Network:    rg.HasNetwork(),
 			Hypervisor: rg.GetHypervisor(),
+			DataDisk:   dataDisk,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -61,5 +71,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		GuestID:    rg.GetGuestID(),
 		Network:    rg.HasNetwork(),
 		Hypervisor: rg.GetHypervisor(),
+		DataDisk:   dataDisk,
 	}
 }

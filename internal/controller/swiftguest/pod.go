@@ -57,11 +57,25 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		},
 	}
 
+	if rg.HasDataDisk() {
+		volumes = append(volumes, corev1.Volume{
+			Name: "data-disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: rg.GetDataDiskPVCName(),
+				},
+			},
+		})
+	}
+
 	mounts := []corev1.VolumeMount{
 		{Name: "run", MountPath: RunDirPath},
 		{Name: "runtime-intent", MountPath: IntentPath},
 		{Name: "dev-kvm", MountPath: "/dev/kvm"},
 		{Name: "kernel-artifacts", MountPath: rg.KernelBoot.LocalPath},
+	}
+	if rg.HasDataDisk() {
+		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
 
 	cpu := rg.Resources.CPU
@@ -168,9 +182,22 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	if rg.HasSeed() {
 		AddSeedVolume(&volumes, seedConfigMapName)
 	}
+	if rg.HasDataDisk() {
+		volumes = append(volumes, corev1.Volume{
+			Name: "data-disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: rg.GetDataDiskPVCName(),
+				},
+			},
+		})
+	}
 
 	var mounts []corev1.VolumeMount
 	AddVolumeMounts(&mounts, rg.HasSeed())
+	if rg.HasDataDisk() {
+		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
+	}
 
 	cpu := rg.Resources.CPU
 	if cpu < 1 {
