@@ -35,7 +35,7 @@ spec:
 ## Example
 
 ```bash
-kubectl apply -f config/samples/swiftguestclass-default.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
 ```
 
 [SwiftGuest](swiftguest.md) · [SwiftImage](swiftimage.md)

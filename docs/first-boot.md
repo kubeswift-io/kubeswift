@@ -20,17 +20,17 @@ The default sample uses Ubuntu 20.04 (Focal) cloud image:
 - **Size:** ~600MB (download time varies by network)
 - **Note:** Ubuntu Noble (24.04) is incompatible with rust-hypervisor-firmware
 
-You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `config/samples/swiftimage-http.yaml`.
+You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml`.
 
 ## Apply Steps
 
 1. Apply resources in order:
 
    ```bash
-   kubectl apply -f config/samples/swiftguestclass-default.yaml
-   kubectl apply -f config/samples/swiftimage-http.yaml
-   kubectl apply -f config/samples/swiftseedprofile-minimal.yaml
-   kubectl apply -f config/samples/swiftguest-sample.yaml
+   kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
+   kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+   kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
+   kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
    ```
 
 2. Wait for SwiftImage to reach Ready (import can take 5–15 minutes depending on image size and network):

@@ -72,10 +72,10 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
 ### Boot a VM (disk boot)
 
 ```bash
-kubectl apply -f config/samples/swiftguestclass-default.yaml
-kubectl apply -f config/samples/swiftimage-http.yaml
-kubectl apply -f config/samples/swiftseedprofile-ssh.yaml
-kubectl apply -f config/samples/swiftguest-sample.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
+kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 
 # Wait for image import (5-15 minutes)
 kubectl get swiftimage ubuntu-cloud -w
@@ -94,10 +94,10 @@ swiftctl ssh sample -u kubeswift -i ~/.ssh/id_rsa
 
 ```bash
 kubectl label node <node> kubeswift.io/kernel-node=true
-kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftkernel-faas.yaml
 kubectl get swiftkernel faas-minimal -w  # wait for Ready
 
-kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w
 ```
 
@@ -108,8 +108,8 @@ kubectl label node <node> kubeswift.io/gpu-node=true
 kubectl apply -f config/manager/controller-manager-rbac.yaml
 
 # PCIe GPU (Cloud Hypervisor)
-kubectl apply -f config/samples/swiftgpuprofile-pcie.yaml
-kubectl apply -f config/samples/swiftguest-gpu.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftgpuprofile-a100-pcie.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftguest-gpu.yaml
 kubectl get swiftguest gpu-test -w
 
 # Verify

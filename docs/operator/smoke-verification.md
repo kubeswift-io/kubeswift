@@ -17,11 +17,11 @@ The script applies samples, waits for SwiftImage Ready (up to 15 min) and SwiftG
 **3. Or run manually:**
 
 ```bash
-kubectl apply -f config/samples/swiftguestclass-default.yaml
-kubectl apply -f config/samples/swiftimage-http.yaml
-kubectl apply -f config/samples/swiftseedprofile-minimal.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 kubectl apply -k config/rbac -n default
-kubectl apply -f config/samples/swiftguest-sample.yaml
+kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 
 # Wait for SwiftImage Ready (5–15 min)
 kubectl get swiftimage ubuntu-cloud -w
@@ -55,14 +55,14 @@ make smoke-test
 | swiftletd image available | Local: `docker images`; or pull from registry |
 | RBAC in namespace | Script applies it; for manual: `kubectl apply -k config/rbac -n default` |
 | Node capacity | Default SwiftGuestClass: 2 CPU, 2Gi; at least one node must have capacity |
-| Image URL reachable | `config/samples/swiftimage-http.yaml` URL must be reachable from cluster |
+| Image URL reachable | `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml` URL must be reachable from cluster |
 | KVM on workers | Run [preflight](worker-node-preflight.md) before smoke test |
 
 **Realistic expectations:**
 - SwiftImage import: 5–15 min (Ubuntu cloud image ~600MB)
 - SwiftGuest boot: 1–3 min after image Ready
 - Default SwiftGuestClass: 2 CPU, 2Gi — nodes need capacity
-- If SwiftImage import fails: sample uses `format: raw` but Ubuntu `.img` is qcow2; try `format: qcow2` in `config/samples/swiftimage-http.yaml`
+- If SwiftImage import fails: sample uses `format: raw` but Ubuntu `.img` is qcow2; try `format: qcow2` in `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml`
 
 ---
 

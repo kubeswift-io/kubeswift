@@ -66,16 +66,16 @@ kubectl get crd | grep kubeswift.io
 
 ```bash
 # Resource template (CPU, memory, disk)
-kubectl apply -f config/samples/swiftguestclass-default.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
 
 # Disk image from Ubuntu cloud images
-kubectl apply -f config/samples/swiftimage-http.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
 
 # SSH key injection via cloud-init
 kubectl apply -f config/samples/swiftseedprofile-ssh.yaml
 
 # The VM itself
-kubectl apply -f config/samples/swiftguest-sample.yaml
+kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 ```
 
 ### Wait for image import
@@ -190,7 +190,7 @@ kubectl label node <node-name> kubeswift.io/kernel-node=true
 ### Create the SwiftKernel
 
 ```bash
-kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftkernel-faas.yaml
 kubectl get swiftkernel faas-minimal -w
 ```
 
@@ -206,7 +206,7 @@ faas-minimal   faas-minimal   Ready     15s
 ### Create the VM
 
 ```bash
-kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w
 ```
 

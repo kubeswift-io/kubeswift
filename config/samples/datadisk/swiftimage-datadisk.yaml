@@ -1,6 +1,10 @@
 # A SwiftImage for use as a secondary data disk.
 # The import pipeline downloads and converts to raw, same as any SwiftImage.
 # Reference this from SwiftGuest spec.dataDiskRef.
+#
+# NOTE: Replace the URL below with a real raw disk image or pre-populated data volume.
+# You can create a blank raw image with: qemu-img create -f raw data-volume.raw 100G
+# then host it on an HTTP server accessible from the cluster.
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
 metadata:
@@ -12,4 +16,4 @@ spec:
     size: "100Gi"
   source:
     http:
-      url: https://example.com/data-volume.raw
+      url: https://example.com/data-volume.raw  # PLACEHOLDER — replace with real URL

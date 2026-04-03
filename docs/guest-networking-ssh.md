@@ -33,7 +33,7 @@ swiftletd polls the dnsmasq lease file and patches the pod annotation `kubeswift
 
 2. **Create SwiftGuest** referencing SwiftImage, SwiftGuestClass, and the SwiftSeedProfile:
    ```bash
-   kubectl apply -f config/samples/swiftguest-sample.yaml
+   kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
    ```
    (Ensure the SwiftGuest's `seedProfileRef` points to your SSH-enabled profile.)
 

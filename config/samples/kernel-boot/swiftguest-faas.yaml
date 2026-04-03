@@ -1,15 +1,6 @@
-apiVersion: swift.kubeswift.io/v1alpha1
-kind: SwiftGuestClass
-metadata:
-  name: default
-  namespace: default
-spec:
-  cpu: "2"
-  memory: "2Gi"
-  rootDisk:
-    size: "40Gi"
-    format: raw
----
+# Kernel boot SwiftGuest using faas-minimal kernel.
+# Requires: SwiftGuestClass "default" (shared/), SwiftKernel "faas-minimal" Ready,
+# and at least one node labeled kubeswift.io/kernel-node=true.
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:

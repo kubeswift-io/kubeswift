@@ -11,7 +11,7 @@ spec:
   gpuProfileRef:
     name: a100-pcie-single
   guestClassRef:
-    name: default-class
+    name: default
   seedProfileRef:
-    name: minimal-seed
+    name: minimal
   runPolicy: Running
