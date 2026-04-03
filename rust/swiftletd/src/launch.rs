@@ -98,7 +98,7 @@ where
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path,
             serial_socket_path: Some(serial_socket_path.clone()),
-            firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
+            firmware_path: Some("/usr/share/kubeswift-firmware/CLOUDHV.fd".to_string()),
             tap_name,
             kernel_path: None,
             initramfs_path: None,

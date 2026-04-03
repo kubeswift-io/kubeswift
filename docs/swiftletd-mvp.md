@@ -8,7 +8,7 @@ swiftletd is the node-side launcher that runs inside each SwiftGuest pod. It rea
 2. **Create runtime dir** – Per-guest directory at `KUBESWIFT_RUN_DIR/<guest-id>/` with `seed/` subdir and `ch.sock` socket path.
 3. **Build NoCloud** – If seed is present, copy and transform seed ConfigMap into `runtime_dir/seed/` via `swift-seed`.
 4. **Lifecycle check** – If `lifecycle=stop`, report Stopped and exit.
-5. **Launch CH** – Spawn Cloud Hypervisor with `--kernel hypervisor-fw`, `--api-socket`, `--disk` (root.raw + seed.iso), `--memory`, `--cpus`, `--serial socket=`, `--net tap=tap0`.
+5. **Launch CH** – Spawn Cloud Hypervisor with `--kernel CLOUDHV.fd`, `--api-socket`, `--disk` (root.raw + seed.iso), `--memory`, `--cpus`, `--serial socket=`, `--net tap=tap0`.
 6. **Wait for socket** – Poll until CH creates the API socket.
 7. **Report running** – Patch SwiftGuest status with `GuestRunning=True`.
 8. **Monitor process** – Wait on CH process; on exit, report Stopped (exit 0) or Failed (non-zero).

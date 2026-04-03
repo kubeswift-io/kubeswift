@@ -13,14 +13,14 @@ For exact prerequisites, verification commands, and failure checks, see [docs/sm
 
 ## Sample Image
 
-The default sample uses Ubuntu 20.04 (Focal) cloud image:
+The default sample uses Ubuntu 24.04 (Noble) cloud image:
 
-- **URL:** `https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img`
+- **URL:** `https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img`
 - **Format:** qcow2 (NOT raw — Ubuntu .img files are qcow2)
 - **Size:** ~600MB (download time varies by network)
-- **Note:** Ubuntu Noble (24.04) is incompatible with rust-hypervisor-firmware
+- **Note:** All modern Linux distributions are supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12) thanks to CLOUDHV.fd UEFI firmware
 
-You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml`.
+You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `config/samples/disk-boot/swiftimage-ubuntu-noble.yaml`.
 
 ## Apply Steps
 
@@ -28,7 +28,7 @@ You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `
 
    ```bash
    kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
-   kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+   kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
    kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
    kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
    ```
@@ -36,7 +36,7 @@ You can substitute another Linux cloud image (e.g., Fedora, Debian) by editing `
 2. Wait for SwiftImage to reach Ready (import can take 5–15 minutes depending on image size and network):
 
    ```bash
-   kubectl get swiftimage ubuntu-cloud -w
+   kubectl get swiftimage ubuntu-noble -w
    ```
 
    When `status.phase` is `Ready`, the image is prepared.

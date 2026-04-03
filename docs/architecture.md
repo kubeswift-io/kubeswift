@@ -149,10 +149,10 @@ The controller requeues every 5 seconds while the guest is Running but has no IP
 
 ### Disk boot (imageRef)
 
-The default boot path for cloud images. rust-hypervisor-firmware acts as the PVH bootloader.
+The default boot path for cloud images. CLOUDHV.fd (EDK2/OVMF UEFI firmware for Cloud Hypervisor) provides UEFI boot.
 
 ```
-SwiftGuest (imageRef=ubuntu-cloud, seedProfileRef=ssh)
+SwiftGuest (imageRef=ubuntu-noble, seedProfileRef=ssh)
   |
   v
 Controller resolves SwiftImage → PVC path
@@ -166,15 +166,15 @@ Pod:
     |
     v
 cloud-hypervisor \
-  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \
+  --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
   --disk path=image.raw path=seed.iso \
   --net tap=tap0 \
   --serial socket=serial.sock
 ```
 
-The rust-hypervisor-firmware binary is loaded via `--kernel` (PVH ELF format), never `--firmware`. The `--firmware` flag is reserved for OVMF/EDK2 in the QEMU path.
+CLOUDHV.fd is loaded via `--kernel`, never `--firmware`. The `--firmware` flag is reserved for OVMF/EDK2 in the QEMU path.
 
-Only Ubuntu Focal (20.04) is known to work with rust-hypervisor-firmware. Ubuntu Noble (24.04) has EFI protocol gaps that prevent booting.
+All modern Linux distributions are supported: Ubuntu 22.04+, Rocky 9, Fedora, Debian 12. Ubuntu Noble (24.04) is the primary guest OS.
 
 ### Kernel boot (kernelRef)
 
@@ -213,7 +213,7 @@ GPU boot always combines `imageRef` with `gpuProfileRef`. The hypervisor is sele
 
 ```
 cloud-hypervisor \
-  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \
+  --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
   --disk path=image.raw path=seed.iso \
   --memory size=32768M,hugepages=on,hugepage_size=1G \
   --net tap=tap0 \

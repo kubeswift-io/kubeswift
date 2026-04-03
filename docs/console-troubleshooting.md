@@ -4,7 +4,7 @@ If `swiftctl console <guest>` shows a blank screen or `socat` from the debug she
 
 ## Root Cause
 
-With firmware boot (hypervisor-fw), the kernel cmdline comes from **GRUB on the disk**, not from Cloud Hypervisor. The import job patches GRUB during image import. If the patch didn't run (wrong partition layout, fdisk didn't find partitions), the image has no serial console.
+With firmware boot (CLOUDHV.fd), the kernel cmdline comes from **GRUB on the disk**, not from Cloud Hypervisor. The import job patches GRUB during image import. If the patch didn't run (wrong partition layout, fdisk didn't find partitions), the image has no serial console.
 
 ## Fix: Re-import the Image
 

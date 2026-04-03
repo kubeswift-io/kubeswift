@@ -1,6 +1,6 @@
 # Rocky Linux 9 Boot
 
-Boot a Rocky Linux 9 cloud image on Cloud Hypervisor. Alternative distro to Ubuntu Focal.
+Boot a Rocky Linux 9 cloud image on Cloud Hypervisor. Alternative distro to Ubuntu Noble.
 
 ## Prerequisites
 

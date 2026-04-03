@@ -77,7 +77,7 @@ func (r *SwiftGuestReconciler) buildGPUIntent(ctx context.Context, guest *swiftv
 	}
 
 	// Firmware selection.
-	firmware := "hypervisor-fw"
+	firmware := "cloudhv"
 	if isQEMU {
 		firmware = "ovmf"
 	}

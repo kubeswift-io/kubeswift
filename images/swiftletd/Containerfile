@@ -54,18 +54,16 @@ RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
     "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/cloud-hypervisor-static${CH_ARCH}" && \
     chmod +x /usr/local/bin/cloud-hypervisor
 
-# Rust Hypervisor Firmware for disk boot (required for serial device creation)
-# CH needs --kernel (firmware) to properly initialize VM and create serial socket
-ARG RHF_VERSION=0.5.0
+# CLOUDHV.fd — Cloud Hypervisor UEFI firmware (EDK2/OVMF build for CH)
+# Passed via --kernel flag for disk boot. Supports all modern Linux distributions.
+# Pin to a specific release for reproducibility.
+ARG CLOUDHV_TAG=ch-13b4963ec4
+ARG CLOUDHV_SHA256=f46ebc32e6b32fb58b83e10e9bf89df5ea7f103b4f8fc3999b6557b513d62b4e
 RUN mkdir -p /usr/share/kubeswift-firmware && \
-    if [ "${TARGETARCH}" = "amd64" ]; then \
-        curl -sSL -o /usr/share/kubeswift-firmware/hypervisor-fw \
-        "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RHF_VERSION}/hypervisor-fw"; \
-    elif [ "${TARGETARCH}" = "arm64" ]; then \
-        curl -sSL -o /usr/share/kubeswift-firmware/hypervisor-fw \
-        "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RHF_VERSION}/hypervisor-fw-aarch64"; \
-    fi && \
-    chmod 644 /usr/share/kubeswift-firmware/hypervisor-fw
+    curl -sSL -o /usr/share/kubeswift-firmware/CLOUDHV.fd \
+    "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_TAG}/CLOUDHV.fd" && \
+    echo "${CLOUDHV_SHA256}  /usr/share/kubeswift-firmware/CLOUDHV.fd" | sha256sum -c - && \
+    chmod 644 /usr/share/kubeswift-firmware/CLOUDHV.fd
 
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
 COPY swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh

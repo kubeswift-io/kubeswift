@@ -1,6 +1,6 @@
 # Disk Boot (Cloud Hypervisor)
 
-Boot an Ubuntu Focal cloud image on Cloud Hypervisor with cloud-init.
+Boot an Ubuntu Noble 24.04 cloud image on Cloud Hypervisor with CLOUDHV.fd UEFI firmware.
 
 ## Prerequisites
 
@@ -11,10 +11,10 @@ Boot an Ubuntu Focal cloud image on Cloud Hypervisor with cloud-init.
 
 ```bash
 kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
-kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
 kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 # Wait for image import (5-15 minutes)
-kubectl get swiftimage ubuntu-cloud -w
+kubectl get swiftimage ubuntu-noble -w
 # Once Ready:
 kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 kubectl get swiftguest sample -w
@@ -22,7 +22,7 @@ kubectl get swiftguest sample -w
 
 ## Expected result
 
-- SwiftImage `ubuntu-cloud`: phase=Ready
+- SwiftImage `ubuntu-noble`: phase=Ready
 - SwiftGuest `sample`: phase=Running, GuestRunning=True, primaryIP populated
 - Hypervisor: cloud-hypervisor
 
@@ -30,7 +30,7 @@ kubectl get swiftguest sample -w
 
 ```bash
 kubectl delete swiftguest sample
-kubectl delete swiftimage ubuntu-cloud
+kubectl delete swiftimage ubuntu-noble
 kubectl delete swiftseedprofile minimal
 kubectl delete swiftguestclass default
 ```

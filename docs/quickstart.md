@@ -60,7 +60,7 @@ kubectl get crd | grep kubeswift.io
 # Expected: swiftguests, swiftimages, swiftkernels, swiftseedprofiles, swiftguestclasses, swiftgpuprofiles, swiftgpunodes
 ```
 
-## Step 2: Boot a disk-boot VM (Ubuntu Focal)
+## Step 2: Boot a disk-boot VM (Ubuntu Noble)
 
 ### Create the resources
 
@@ -69,7 +69,7 @@ kubectl get crd | grep kubeswift.io
 kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
 
 # Disk image from Ubuntu cloud images
-kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
 
 # SSH key injection via cloud-init
 kubectl apply -f config/samples/swiftseedprofile-ssh.yaml
@@ -80,21 +80,21 @@ kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 
 ### Wait for image import
 
-Image import downloads the Ubuntu Focal cloud image, converts it from qcow2 to raw, and patches GRUB for serial console. This takes 5–15 minutes depending on network speed.
+Image import downloads the Ubuntu Noble cloud image, converts it from qcow2 to raw, and patches GRUB for serial console. This takes 5–15 minutes depending on network speed.
 
 ```bash
-kubectl get swiftimage ubuntu-cloud -w
+kubectl get swiftimage ubuntu-noble -w
 ```
 
 Expected progression:
 
 ```
 NAME           PHASE       AGE
-ubuntu-cloud   Pending     0s
-ubuntu-cloud   Importing   5s
-ubuntu-cloud   Validating  3m
-ubuntu-cloud   Preparing   5m
-ubuntu-cloud   Ready       8m
+ubuntu-noble   Pending     0s
+ubuntu-noble   Importing   5s
+ubuntu-noble   Validating  3m
+ubuntu-noble   Preparing   5m
+ubuntu-noble   Ready       8m
 ```
 
 ### Wait for the VM to start
@@ -130,7 +130,7 @@ Node:        worker-1
 RunPolicy:   Running
 
 Spec:
-  Image:       ubuntu-cloud
+  Image:       ubuntu-noble
   Kernel:      (none)
   GuestClass:  default
   SeedProfile: ssh
@@ -244,7 +244,7 @@ swiftctl debug sample --shell   # interactive shell in launcher container
 ```bash
 kubectl delete swiftguest sample faas-test
 kubectl delete swiftkernel faas-minimal
-kubectl delete swiftimage ubuntu-cloud
+kubectl delete swiftimage ubuntu-noble
 kubectl delete swiftseedprofile ssh
 kubectl delete swiftguestclass default
 ```

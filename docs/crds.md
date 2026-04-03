@@ -80,7 +80,7 @@ metadata:
   namespace: default
 spec:
   imageRef:
-    name: ubuntu-cloud
+    name: ubuntu-noble
   guestClassRef:
     name: default
   seedProfileRef:
@@ -162,7 +162,7 @@ Represents a VM disk image. The controller imports, converts, and patches the im
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
 metadata:
-  name: ubuntu-cloud
+  name: ubuntu-noble
   namespace: default
 spec:
   format: qcow2
@@ -170,10 +170,10 @@ spec:
     size: "40Gi"
   source:
     http:
-      url: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 ```
 
-**Note:** Ubuntu Focal (20.04) is the verified working guest OS. Ubuntu Noble (24.04) is incompatible with rust-hypervisor-firmware.
+**Note:** Ubuntu Noble (24.04) is the primary guest OS. All modern Linux distributions are supported thanks to CLOUDHV.fd UEFI firmware.
 
 ---
 

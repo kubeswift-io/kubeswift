@@ -18,7 +18,7 @@ pub struct VmConfig {
     pub seed_path: String,
     /// Optional path for serial socket. When set, CH creates a Unix socket for interactive serial console.
     pub serial_socket_path: Option<String>,
-    /// Optional path to firmware (e.g. hypervisor-fw). Required for disk boot; CH creates serial device when VM is properly initialized.
+    /// Optional path to UEFI firmware (CLOUDHV.fd). Required for disk boot; passed via --kernel flag.
     pub firmware_path: Option<String>,
     /// Optional TAP device name for VM networking. When set, CH gets --net tap=<name>.
     pub tap_name: Option<String>,
@@ -71,7 +71,7 @@ impl VmConfig {
                 args.push(format!("path={}", self.data_disk_path));
             }
         } else {
-            // --kernel (rust-hypervisor-firmware PVH ELF) required for disk boot; CH creates serial device when VM is properly initialized.
+            // --kernel (CLOUDHV.fd UEFI firmware) required for disk boot.
             if let Some(ref path) = self.firmware_path {
                 args.push("--kernel".to_string());
                 args.push(path.clone());
@@ -121,7 +121,7 @@ mod tests {
             api_socket: "/tmp/ch.sock".to_string(),
             seed_path: "/data/seed".to_string(),
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
-            firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
+            firmware_path: Some("/usr/share/kubeswift-firmware/CLOUDHV.fd".to_string()),
             tap_name: Some("tap0".to_string()),
             kernel_path: None,
             initramfs_path: None,

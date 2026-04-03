@@ -1,5 +1,7 @@
 # QEMU Boot Validation Report
 
+> **Note:** This validation was performed with rust-hypervisor-firmware for CH. CH disk boot has since migrated to CLOUDHV.fd.
+
 > Phase 1 hypervisor abstraction end-to-end test.
 > Validates that a VM boots via QEMU, gets networking, and is fully operational.
 

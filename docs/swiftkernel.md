@@ -4,7 +4,7 @@ SwiftKernel is the CRD for managing kernel + initramfs artifacts across cluster 
 
 ## Overview
 
-Kernel boot is the alternative to disk boot. Where disk boot uses a cloud image with rust-hypervisor-firmware as the PVH bootloader, kernel boot passes a bzImage and initramfs directly to Cloud Hypervisor via `--kernel` and `--initramfs`. There is no cloud-init, no GRUB, no root filesystem on a persistent volume.
+Kernel boot is the alternative to disk boot. Where disk boot uses a cloud image with CLOUDHV.fd as the UEFI firmware, kernel boot passes a bzImage and initramfs directly to Cloud Hypervisor via `--kernel` and `--initramfs`. There is no cloud-init, no GRUB, no root filesystem on a persistent volume.
 
 When to use kernel boot:
 

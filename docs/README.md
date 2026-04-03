@@ -18,7 +18,7 @@ KubeSwift is a Kubernetes-native VM runtime built on Cloud Hypervisor (default) 
 ## Documents
 
 ### [quickstart.md](quickstart.md)
-Getting started guide. Install KubeSwift, boot your first disk-boot VM (Ubuntu Focal), boot a kernel-boot microVM (faas-minimal), connect via console and SSH, and run lifecycle commands.
+Getting started guide. Install KubeSwift, boot your first disk-boot VM (Ubuntu Noble), boot a kernel-boot microVM (faas-minimal), connect via console and SSH, and run lifecycle commands.
 
 ### [architecture.md](architecture.md)
 Comprehensive architecture reference. System diagram, control plane components (SwiftImage, SwiftKernel, SwiftGPU, SwiftGuest controllers), runtime plane (swiftletd, hypervisor dispatch, serial socket), all three boot paths, networking model (tap + bridge + dnsmasq), status reporting via pod annotations, and GPU architecture.

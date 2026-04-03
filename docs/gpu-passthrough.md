@@ -124,11 +124,11 @@ See examples below. Create the profile that matches your hardware tier.
 
 ### Step 4: Create a SwiftImage
 
-GPU VMs boot from a disk image. Use Ubuntu Focal with the correct NVIDIA driver version installed.
+GPU VMs boot from a disk image. Use Ubuntu Noble with the correct NVIDIA driver version installed.
 
 ```bash
-kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
-kubectl get swiftimage ubuntu-cloud -w
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
+kubectl get swiftimage ubuntu-noble -w
 ```
 
 ### Step 5: Create a SwiftGuest with gpuProfileRef
@@ -141,7 +141,7 @@ metadata:
   namespace: default
 spec:
   imageRef:
-    name: ubuntu-cloud
+    name: ubuntu-noble
   gpuProfileRef:
     name: a100-pcie-single
   guestClassRef:

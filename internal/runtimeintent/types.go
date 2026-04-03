@@ -34,7 +34,7 @@ type KernelBootSpec struct {
 type GPUIntent struct {
 	// Devices lists VFIO GPU devices to pass through to the guest.
 	Devices []VFIODeviceIntent `json:"devices"`
-	// Firmware is the guest firmware type: "hypervisor-fw" (CH) or "ovmf" (QEMU).
+	// Firmware is the guest firmware type: "cloudhv" (CH) or "ovmf" (QEMU).
 	Firmware string `json:"firmware"`
 	// NUMA describes the virtual NUMA layout. Nil = flat single-node topology.
 	NUMA *NUMAIntent `json:"numa,omitempty"`
