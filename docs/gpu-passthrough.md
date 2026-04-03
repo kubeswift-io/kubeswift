@@ -127,7 +127,7 @@ See examples below. Create the profile that matches your hardware tier.
 GPU VMs boot from a disk image. Use Ubuntu Focal with the correct NVIDIA driver version installed.
 
 ```bash
-kubectl apply -f config/samples/swiftimage-http.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
 kubectl get swiftimage ubuntu-cloud -w
 ```
 

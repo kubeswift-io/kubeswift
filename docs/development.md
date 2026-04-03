@@ -166,10 +166,10 @@ cargo test           # Rust unit tests
 
 ```bash
 kubectl label node <node> kubeswift.io/kernel-node=true
-kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftkernel-faas.yaml
 kubectl get swiftkernel faas-minimal -w    # wait for Ready
 
-kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w        # wait for Running + primaryIP
 ```
 
@@ -179,8 +179,8 @@ kubectl get swiftguest faas-test -w        # wait for Running + primaryIP
 kubectl label node <node> kubeswift.io/gpu-node=true
 kubectl get swiftgpunode <node> -o yaml    # verify discovery
 
-kubectl apply -f config/samples/swiftgpuprofile-pcie.yaml
-kubectl apply -f config/samples/swiftguest-gpu.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftgpuprofile-a100-pcie.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftguest-gpu.yaml
 kubectl get swiftguest gpu-test -w
 
 swiftctl ssh gpu-test -- nvidia-smi

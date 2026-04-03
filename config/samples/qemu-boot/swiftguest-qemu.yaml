@@ -3,7 +3,7 @@
 # (Noble is NOT compatible with rust-hypervisor-firmware on Cloud Hypervisor.)
 #
 # Deploy all three resources:
-#   kubectl apply -f config/samples/swiftguest-qemu.yaml
+#   kubectl apply -f config/samples/qemu-boot/swiftguest-qemu.yaml
 #
 # The annotation kubeswift.io/hypervisor-override: "qemu" forces the QEMU path
 # until Phase 3 controller wires gpuProfileRef tier → hypervisor selection.

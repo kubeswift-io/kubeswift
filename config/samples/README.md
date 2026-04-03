@@ -1,31 +1,50 @@
 # KubeSwift Sample Manifests
 
-Sample manifests for booting a Linux cloud guest with KubeSwift.
+Sample manifests organized by scenario. Each directory is self-contained with a README
+explaining prerequisites, apply order, and expected results.
 
-All SwiftSeedProfile samples include `ssh_authorized_keys` for SSH access. Replace the key with your own for production use.
+All seed profiles include `ssh_authorized_keys` — replace with your own key for production.
 
-## Apply order
+## Shared Resources
 
-Apply resources in this order (dependencies first):
-
-1. **SwiftGuestClass** – defines CPU, memory, root disk size
-2. **SwiftImage** – image source (http) and format; controller imports to Ready
-3. **SwiftSeedProfile** – cloud-init user-data, meta-data
-4. **SwiftGuest** – references image, guest class, and seed profile
-
-The controller creates a pod for each SwiftGuest when SwiftImage is Ready. See `swiftguest-with-pod.yaml` and docs/swiftguest-reconcile.md.
-
-## Usage
+Resources used across multiple scenarios. Apply these first.
 
 ```bash
-kubectl apply -f config/samples/swiftguestclass-default.yaml
-kubectl apply -f config/samples/swiftimage-http.yaml
-kubectl apply -f config/samples/swiftseedprofile-minimal.yaml
-kubectl apply -f config/samples/swiftguest-sample.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
+kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 ```
 
-## Prerequisites
+## Scenarios
 
-- KubeSwift controllers and CRDs installed
-- swiftletd RBAC for status reporting: `kubectl apply -k config/rbac/ -n <namespace>`
-- See [docs/first-boot.md](../docs/first-boot.md), [docs/swiftletd-mvp.md](../docs/swiftletd-mvp.md), and [docs/smoke-verification.md](../docs/smoke-verification.md) for full prerequisites and verification
+| Directory | Description | Hypervisor | GPU Required |
+|-----------|-------------|------------|--------------|
+| [disk-boot/](disk-boot/) | Ubuntu Focal cloud image boot | Cloud Hypervisor | No |
+| [kernel-boot/](kernel-boot/) | faas-minimal direct kernel boot | Cloud Hypervisor | No |
+| [qemu-boot/](qemu-boot/) | Ubuntu Noble via QEMU/OVMF | QEMU | No |
+| [gpu-pcie/](gpu-pcie/) | Tier 1 PCIe GPU passthrough | Cloud Hypervisor | Yes |
+| [gpu-hgx/](gpu-hgx/) | Tier 2 HGX SXM shared NVSwitch | QEMU | Yes |
+| [datadisk/](datadisk/) | Secondary data disk attachment | Cloud Hypervisor | No |
+| [rocky/](rocky/) | Rocky Linux 9 alternative distro | Cloud Hypervisor | No |
+
+## Quick Start (Disk Boot)
+
+```bash
+kubectl apply -k config/rbac
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
+kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl get swiftimage ubuntu-cloud -w  # wait for Ready (5-15 min)
+kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
+kubectl get swiftguest sample -w        # wait for Running + IP
+swiftctl console sample                 # serial console
+swiftctl ssh sample -u kubeswift        # SSH access
+```
+
+## Advanced Examples
+
+The [advanced/](advanced/) directory contains additional resource examples:
+
+- `swiftimage-pvc-clone.yaml` — clone an existing PVC as image source
+- `swiftimage-upload-placeholder.yaml` — placeholder for future upload support
+- `swiftseedprofile-ssh.yaml` — SSH-focused seed profile
+- `swiftseedprofile-with-secret.yaml` — cloud-init user-data from a Kubernetes Secret

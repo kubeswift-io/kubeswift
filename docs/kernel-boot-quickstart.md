@@ -34,13 +34,13 @@ NAME          STATUS   ROLES    AGE   VERSION
 If you already have a `default` SwiftGuestClass, skip this step:
 
 ```bash
-kubectl apply -f config/samples/swiftguestclass-default.yaml
+kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
 ```
 
 ## Step 3: Apply SwiftKernel
 
 ```bash
-kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftkernel-faas.yaml
 ```
 
 This creates the `faas-minimal` SwiftKernel. The controller starts a pull Job on each labeled node:
@@ -69,7 +69,7 @@ kubectl get jobs -l app.kubernetes.io/managed-by=swiftkernel
 ## Step 4: Apply SwiftGuest with kernelRef
 
 ```bash
-kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftguest-faas.yaml
 ```
 
 The sample creates a SwiftGuest with `kernelRef` pointing to the `faas-minimal` SwiftKernel:

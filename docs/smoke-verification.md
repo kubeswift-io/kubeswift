@@ -82,7 +82,7 @@ At least one node must be able to run guest pods. The node needs:
 
 The SwiftImage http source must point to a valid, accessible Linux cloud image. Default sample uses Ubuntu cloud image.
 
-**Verify:** Ensure the URL in `config/samples/swiftimage-http.yaml` is reachable from the cluster (e.g., `curl -I <url>` from a pod).
+**Verify:** Ensure the URL in `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml` is reachable from the cluster (e.g., `curl -I <url>` from a pod).
 
 ---
 

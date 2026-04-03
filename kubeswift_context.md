@@ -736,11 +736,11 @@ Success criteria:
 kubectl label node <nodename> kubeswift.io/kernel-node=true
 
 # Create kernel artifact (use 6.6.1 — 6.6.0 has no networking)
-kubectl apply -f config/samples/swiftkernel-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftkernel-faas.yaml
 kubectl get swiftkernel faas-minimal -w  # wait for Ready
 
 # Create guest using kernel boot
-kubectl apply -f config/samples/swiftguest-faas.yaml
+kubectl apply -f config/samples/kernel-boot/swiftguest-faas.yaml
 kubectl get swiftguest faas-test -w  # wait for Running + primaryIP
 ```
 
@@ -756,13 +756,13 @@ kubectl apply -f config/manager/controller-manager-rbac.yaml
 kubectl get swiftgpunode <nodename> -o yaml  # check GPUs detected
 
 # Create GPU profile (PCIe tier — Cloud Hypervisor)
-kubectl apply -f config/samples/swiftgpuprofile-pcie.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftgpuprofile-a100-pcie.yaml
 
 # Or for HGX SXM tier (QEMU):
-# kubectl apply -f config/samples/swiftgpuprofile-hgx.yaml
+# kubectl apply -f config/samples/gpu-hgx/swiftgpuprofile-h200-hgx.yaml
 
 # Create GPU guest
-kubectl apply -f config/samples/swiftguest-gpu.yaml
+kubectl apply -f config/samples/gpu-pcie/swiftguest-gpu.yaml
 kubectl get swiftguest gpu-test -w  # wait for Running + primaryIP
 
 # Verify inside guest
