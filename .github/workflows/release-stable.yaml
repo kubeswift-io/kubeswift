@@ -63,6 +63,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push gpu-discovery
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/gpu-discovery/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/gpu-discovery:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build and push swiftletd
         uses: docker/build-push-action@v6
         with:
@@ -147,6 +162,7 @@ jobs:
 
             - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
 
             ## swiftctl
 
