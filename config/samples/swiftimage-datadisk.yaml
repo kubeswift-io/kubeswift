@@ -1,0 +1,15 @@
+# A SwiftImage for use as a secondary data disk.
+# The import pipeline downloads and converts to raw, same as any SwiftImage.
+# Reference this from SwiftGuest spec.dataDiskRef.
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: data-disk
+  namespace: default
+spec:
+  format: raw
+  rootDisk:
+    size: "100Gi"
+  source:
+    http:
+      url: https://example.com/data-volume.raw

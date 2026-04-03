@@ -15,17 +15,17 @@ type KernelBoot struct {
 // ResolvedGuest is the normalized internal model produced by the resolver.
 // The controller uses only this type for runtime decisions after resolution succeeds.
 type ResolvedGuest struct {
-	GuestSettings GuestSettings `json:"guestSettings"`
-	Resources     Resources     `json:"resources"`
-	RootDisk      RootDisk      `json:"rootDisk"`
-	Networks      Networks      `json:"networks"`
-	Seed          *Seed         `json:"seed,omitempty"`
-	Lifecycle     Lifecycle     `json:"lifecycle"`
-	PreparedImage PreparedImage `json:"preparedImage"`
-	Meta          Meta          `json:"meta"`
-	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
+	GuestSettings GuestSettings  `json:"guestSettings"`
+	Resources     Resources      `json:"resources"`
+	RootDisk      RootDisk       `json:"rootDisk"`
+	Networks      Networks       `json:"networks"`
+	Seed          *Seed          `json:"seed,omitempty"`
+	Lifecycle     Lifecycle      `json:"lifecycle"`
+	PreparedImage PreparedImage  `json:"preparedImage"`
+	Meta          Meta           `json:"meta"`
+	KernelBoot    *KernelBoot    `json:"kernelBoot,omitempty"`
 	DataDisk      *PreparedImage `json:"dataDisk,omitempty"`
-	Network       bool          `json:"network"`
+	Network       bool           `json:"network"`
 	// Hypervisor overrides the default hypervisor selection.
 	// "qemu" forces the QEMU path; empty or "cloud-hypervisor" uses Cloud Hypervisor.
 	// Set by the controller from the kubeswift.io/hypervisor-override annotation.

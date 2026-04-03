@@ -9,11 +9,14 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 - **Disk boot** — Cloud images (Ubuntu Focal, Rocky Linux, etc.) via rust-hypervisor-firmware
 - **Kernel boot** — Direct bzImage + initramfs boot via SwiftKernel OCI artifacts; sub-second cold start
 - **GPU passthrough** — Three-tier model: PCIe GPUs on Cloud Hypervisor, HGX SXM GPUs on QEMU with PCIe topology, full HGX passthrough
+- **GPU Discovery** — DaemonSet auto-discovers GPUs, NUMA topology, NVSwitches, and Fabric Manager state per node
+- **Data disks** — Optional secondary data disk (`dataDiskRef`) on any boot path; appears as /dev/vdb in guest
 - **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
 - **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status
 - **Observability** — Prometheus metrics: boot time, running count, failure count, import time
 - **cloud-init** — SwiftSeedProfile (NoCloud datasource) for user-data, SSH keys, network config
 - **RunPolicy** — Running, Stopped, RestartOnFailure, Always with exponential backoff
+- **Security hardened** — All containers use minimum capabilities (drop ALL + specific adds), no privileged containers
 
 ## Architecture overview
 
@@ -149,9 +152,11 @@ cargo test
 
 Experimental / pre-1.0. API may change. Linux x86_64 only.
 
-**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3: QEMU runtime path, GPU CRDs, SwiftGPU controller with allocation/deallocation, Tier 1 PCIe on Cloud Hypervisor, Tier 2 HGX SXM on QEMU).
+**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3), GPU discovery DaemonSet, dataDiskRef, security-hardened containers.
 
-**Not yet implemented:** live migration, snapshots, multi-NIC, Windows guests, SwiftGuestPool, GPU Phase 4 (full HGX passthrough with NVSwitches in guest).
+**Next:** GPU hardware validation (Tier 1 PCIe end-to-end, Tier 2 HGX SXM), additional kernel profiles, Windows guest support, multi-NIC, SwiftGuestPool, GPU Phase 4 (full HGX passthrough).
+
+See [kubeswift_context.md](kubeswift_context.md) for the full roadmap.
 
 ## License
 

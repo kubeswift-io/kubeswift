@@ -40,6 +40,87 @@ func TestBuildPod_HasInitContainerWhenHasSeed(t *testing.T) {
 	}
 }
 
+func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-dd", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
+		Seed:          nil,
+		Network:       true,
+		DataDisk:      &resolved.PreparedImage{PVCName: "pvc-data", Ready: true, Format: "raw"},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	// Check volume exists.
+	foundVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "data-disk" {
+			foundVol = true
+			if v.VolumeSource.PersistentVolumeClaim == nil {
+				t.Fatal("data-disk volume should be a PVC")
+			}
+			if v.VolumeSource.PersistentVolumeClaim.ClaimName != "pvc-data" {
+				t.Errorf("data-disk PVC = %q, want pvc-data", v.VolumeSource.PersistentVolumeClaim.ClaimName)
+			}
+		}
+	}
+	if !foundVol {
+		t.Error("missing data-disk volume")
+	}
+
+	// Check mount exists on launcher.
+	launcher := pod.Spec.Containers[0]
+	foundMount := false
+	for _, m := range launcher.VolumeMounts {
+		if m.Name == "data-disk" {
+			foundMount = true
+			if m.MountPath != DisksDataPath {
+				t.Errorf("data-disk mountPath = %q, want %q", m.MountPath, DisksDataPath)
+			}
+		}
+	}
+	if !foundMount {
+		t.Error("launcher missing data-disk mount")
+	}
+}
+
+func TestBuildPod_NoDataDisk_BackwardCompat(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-nodd", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Seed:          nil,
+		Network:       false,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "data-disk" {
+			t.Error("data-disk volume should not be present when DataDisk is nil")
+		}
+	}
+	launcher := pod.Spec.Containers[0]
+	for _, m := range launcher.VolumeMounts {
+		if m.Name == "data-disk" {
+			t.Error("data-disk mount should not be present when DataDisk is nil")
+		}
+	}
+}
+
 func TestBuildPod_NoInitContainerWhenNoSeed(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},

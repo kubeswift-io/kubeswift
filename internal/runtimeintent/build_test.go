@@ -9,6 +9,7 @@ type mockResolvedGuest struct {
 	hasSeed       bool
 	hasKernel     bool
 	hasNetwork    bool
+	hasDataDisk   bool
 	format        string
 	cpu           int
 	memory        int
@@ -23,7 +24,7 @@ type mockResolvedGuest struct {
 func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
 func (m *mockResolvedGuest) HasKernel() bool           { return m.hasKernel }
 func (m *mockResolvedGuest) HasNetwork() bool          { return m.hasNetwork }
-func (m *mockResolvedGuest) HasDataDisk() bool         { return false }
+func (m *mockResolvedGuest) HasDataDisk() bool         { return m.hasDataDisk }
 func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
 func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
 func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }
@@ -137,5 +138,97 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	}
 	if parsed.SeedPath != intent.SeedPath {
 		t.Errorf("parsed seedPath = %q", parsed.SeedPath)
+	}
+}
+
+func TestBuild_WithDataDisk_DiskBoot(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasSeed:     true,
+		hasNetwork:  true,
+		hasDataDisk: true,
+		format:      "raw",
+		cpu:         2,
+		memory:      2048,
+		lifecycle:   "start",
+		guestID:     "default/data-test",
+	}
+	intent := Build(rg)
+	if intent.DataDisk == nil {
+		t.Fatal("dataDisk should be set when HasDataDisk is true")
+	}
+	wantPath := DisksDataPath + "/" + DataDiskImageFile
+	if intent.DataDisk.Path != wantPath {
+		t.Errorf("dataDisk.path = %q, want %q", intent.DataDisk.Path, wantPath)
+	}
+	if intent.DataDisk.Format != "raw" {
+		t.Errorf("dataDisk.format = %q, want raw", intent.DataDisk.Format)
+	}
+}
+
+func TestBuild_WithDataDisk_KernelBoot(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasKernel:     true,
+		hasNetwork:    true,
+		hasDataDisk:   true,
+		cpu:           1,
+		memory:        512,
+		guestID:       "default/kernel-data",
+		kernelPath:    "/var/lib/kubeswift/kernels/default-faas-minimal/bzImage",
+		initramfsPath: "/var/lib/kubeswift/kernels/default-faas-minimal/rootfs.cpio.gz",
+		kernelCmdline: "console=ttyS0",
+	}
+	intent := Build(rg)
+	if intent.DataDisk == nil {
+		t.Fatal("dataDisk should be set for kernel boot with HasDataDisk")
+	}
+	wantPath := DisksDataPath + "/" + DataDiskImageFile
+	if intent.DataDisk.Path != wantPath {
+		t.Errorf("dataDisk.path = %q, want %q", intent.DataDisk.Path, wantPath)
+	}
+	if intent.KernelBoot == nil {
+		t.Fatal("kernelBoot should also be set")
+	}
+}
+
+func TestBuild_WithoutDataDisk(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasSeed:    true,
+		hasNetwork: true,
+		format:     "raw",
+		cpu:        2,
+		memory:     2048,
+		lifecycle:  "start",
+		guestID:    "default/no-data",
+	}
+	intent := Build(rg)
+	if intent.DataDisk != nil {
+		t.Error("dataDisk should be nil when HasDataDisk is false")
+	}
+}
+
+func TestSerializeParseRoundtrip_WithDataDisk(t *testing.T) {
+	intent := &RuntimeIntent{
+		RootDisk:  RootDiskSpec{Path: DisksRootPath + "/" + RootDiskImageFile, Format: "raw"},
+		SeedPath:  SeedPath,
+		CPU:       2,
+		Memory:    2048,
+		Lifecycle: "start",
+		GuestID:   "test-dd",
+		Network:   true,
+		DataDisk:  &RootDiskSpec{Path: DisksDataPath + "/" + DataDiskImageFile, Format: "raw"},
+	}
+	data, err := Serialize(intent)
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	var parsed RuntimeIntent
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if parsed.DataDisk == nil {
+		t.Fatal("parsed dataDisk should not be nil")
+	}
+	if parsed.DataDisk.Path != intent.DataDisk.Path {
+		t.Errorf("parsed dataDisk.path = %q, want %q", parsed.DataDisk.Path, intent.DataDisk.Path)
 	}
 }
