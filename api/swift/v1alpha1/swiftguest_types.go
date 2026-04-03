@@ -53,6 +53,11 @@ type SwiftGuestSpec struct {
 	// Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
 	// +optional
 	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
+	// DataDiskRef references a SwiftImage to attach as a secondary data disk.
+	// The referenced image must be in Ready state. The disk appears as /dev/vdb
+	// inside the guest. Works with all boot paths (disk, kernel, GPU).
+	// +optional
+	DataDiskRef *corev1.LocalObjectReference `json:"dataDiskRef,omitempty"`
 }
 
 // GuestRuntimeStatus holds runtime process information.

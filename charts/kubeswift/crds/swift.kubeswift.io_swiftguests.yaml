@@ -41,6 +41,23 @@ spec:
           spec:
             description: SwiftGuestSpec defines the desired state of SwiftGuest.
             properties:
+              dataDiskRef:
+                description: |-
+                  DataDiskRef references a SwiftImage to attach as a secondary data disk.
+                  The referenced image must be in Ready state. The disk appears as /dev/vdb
+                  inside the guest. Works with all boot paths (disk, kernel, GPU).
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               gpuProfileRef:
                 description: |-
                   GPUProfileRef references a SwiftGPUProfile for GPU passthrough.

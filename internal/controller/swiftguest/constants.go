@@ -34,6 +34,7 @@ const PodAnnotationGuestHypervisor = "kubeswift.io/guest-hypervisor"
 // Mount path constants. Must match internal/runtimeintent and rust/swiftletd.
 const (
 	DisksRootPath = "/var/lib/kubeswift/disks/root"
+	DisksDataPath = "/var/lib/kubeswift/disks/data"
 	SeedPath      = "/var/lib/kubeswift/seed"
 	IntentPath    = "/var/lib/kubeswift/intent"
 	IntentFile    = "runtime-intent.json"

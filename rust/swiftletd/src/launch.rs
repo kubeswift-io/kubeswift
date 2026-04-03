@@ -62,6 +62,8 @@ where
         .to_string_lossy()
         .to_string();
 
+    let data_disk_path = intent.data_disk_path().to_string();
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         let tap_name = if intent.has_network() {
@@ -81,6 +83,7 @@ where
             kernel_path: Some(kb.kernel_path.clone()),
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
+            data_disk_path: data_disk_path.clone(),
         }
     } else {
         let tap_name = if intent.has_network() {
@@ -100,6 +103,7 @@ where
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
+            data_disk_path: data_disk_path.clone(),
         }
     };
 
@@ -166,6 +170,7 @@ where
         mac: "52:54:00:12:34:56".to_string(),
         serial_socket: serial_socket.clone(),
         qmp_socket: qmp_socket.clone(),
+        data_disk_path: intent.data_disk_path().to_string(),
     };
 
     let mut process = QemuProcess::spawn(&config)?;

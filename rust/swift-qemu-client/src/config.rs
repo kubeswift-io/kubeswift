@@ -30,6 +30,8 @@ pub struct QemuConfig {
     pub serial_socket: PathBuf,
     /// QMP (QEMU Machine Protocol) Unix socket path.
     pub qmp_socket: PathBuf,
+    /// Optional secondary data disk path. Empty = no data disk.
+    pub data_disk_path: String,
 }
 
 impl QemuConfig {
@@ -75,6 +77,14 @@ impl QemuConfig {
             args.extend([
                 "-drive".to_string(),
                 format!("file={},format=raw,if=virtio", self.seed_path),
+            ]);
+        }
+
+        // Data disk (secondary, appears as /dev/vdb)
+        if !self.data_disk_path.is_empty() {
+            args.extend([
+                "-drive".to_string(),
+                format!("file={},format=raw,if=virtio", self.data_disk_path),
             ]);
         }
 
@@ -131,6 +141,7 @@ mod tests {
             mac: "52:54:00:12:34:56".to_string(),
             serial_socket: PathBuf::from("/tmp/run/serial.sock"),
             qmp_socket: PathBuf::from("/tmp/run/qmp.sock"),
+            data_disk_path: String::new(),
         }
     }
 

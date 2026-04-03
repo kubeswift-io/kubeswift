@@ -356,12 +356,26 @@ func BuildGPUDiskBootPod(
 		})
 	}
 
+	if rg.HasDataDisk() {
+		volumes = append(volumes, corev1.Volume{
+			Name: "data-disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: rg.GetDataDiskPVCName(),
+				},
+			},
+		})
+	}
+
 	// Standard launcher mounts.
 	var mounts []corev1.VolumeMount
 	AddVolumeMounts(&mounts, rg.HasSeed())
 	mounts = append(mounts, corev1.VolumeMount{Name: "dev-vfio", MountPath: "/dev/vfio"})
 	if hugepages != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "hugepages", MountPath: "/dev/hugepages"})
+	}
+	if rg.HasDataDisk() {
+		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
 
 	// gpu-init runs before network-init: binds devices to vfio-pci and activates

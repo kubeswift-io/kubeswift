@@ -24,6 +24,7 @@ type ResolvedGuest struct {
 	PreparedImage PreparedImage `json:"preparedImage"`
 	Meta          Meta          `json:"meta"`
 	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
+	DataDisk      *PreparedImage `json:"dataDisk,omitempty"`
 	Network       bool          `json:"network"`
 	// Hypervisor overrides the default hypervisor selection.
 	// "qemu" forces the QEMU path; empty or "cloud-hypervisor" uses Cloud Hypervisor.
@@ -104,6 +105,19 @@ func (r *ResolvedGuest) HasKernel() bool {
 // HasNetwork returns true when the guest should have tap+bridge networking.
 func (r *ResolvedGuest) HasNetwork() bool {
 	return r.Network
+}
+
+// HasDataDisk returns true when a secondary data disk is attached.
+func (r *ResolvedGuest) HasDataDisk() bool {
+	return r.DataDisk != nil && r.DataDisk.Ready
+}
+
+// GetDataDiskPVCName returns the PVC name for the data disk volume.
+func (r *ResolvedGuest) GetDataDiskPVCName() string {
+	if r.DataDisk == nil {
+		return ""
+	}
+	return r.DataDisk.PVCName
 }
 
 // GetKernelPath returns the full path to the kernel (bzImage) inside the artifact dir.

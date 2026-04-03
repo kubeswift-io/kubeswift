@@ -954,6 +954,7 @@ When helping develop KubeSwift:
 - Prefer minimal changes — one bug fix at a time, verified with real output
 - Always ask for actual cluster output before suggesting fixes
 - Never assume a fix worked without seeing logs confirming it
+- All pod containers currently run privileged: true — this is intentional during development. Do not attempt to harden security contexts until the feature surface is stable.
 - When writing Cursor prompts: be explicit about what NOT to change
 - CRD changes always require `make generate` + copy to charts/kubeswift/crds/ + redeploy
 - The working guest OS (disk boot) is Ubuntu Focal — do not suggest Noble
