@@ -115,14 +115,14 @@ check_hypervisor() {
 
 scenario_disk_boot() {
   echo ""
-  echo "--- Scenario: disk-boot (Cloud Hypervisor + Ubuntu Focal) ---"
+  echo "--- Scenario: disk-boot (Cloud Hypervisor + Ubuntu Noble) ---"
 
   apply_rbac
   apply_shared
-  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-focal.yaml" -n "$NAMESPACE" >/dev/null
+  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-noble.yaml" -n "$NAMESPACE" >/dev/null
   kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftguest-sample.yaml" -n "$NAMESPACE" >/dev/null
 
-  wait_image_ready "ubuntu-cloud" || { RESULTS[disk-boot]="FAIL"; return; }
+  wait_image_ready "ubuntu-noble" || { RESULTS[disk-boot]="FAIL"; return; }
   wait_guest_running "sample" || { RESULTS[disk-boot]="FAIL"; return; }
 
   # Verify GuestRunning condition
@@ -140,7 +140,7 @@ scenario_disk_boot() {
 
   if [[ "$NO_CLEANUP" != "true" ]]; then
     kubectl delete swiftguest sample -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    kubectl delete swiftimage ubuntu-cloud -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
+    kubectl delete swiftimage ubuntu-noble -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
   fi
 }
 

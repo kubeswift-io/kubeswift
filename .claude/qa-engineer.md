@@ -34,7 +34,7 @@ as much as possible can be validated without access to physical GPU hardware.
    correct pcie-root-port, vfio-pci, NUMA, hugepage, and OVMF flags.
 
 2. **QEMU VM boot without GPUs** (integration test):
-   Boot Ubuntu Focal via QEMU Q35 + OVMF on the existing cluster.
+   Boot Ubuntu Noble via QEMU Q35 + OVMF on the existing cluster.
    Verify: serial socket works, DHCP lease discovery works, IP reported via annotation,
    swiftctl console works, swiftctl ssh works. No VFIO devices needed.
 

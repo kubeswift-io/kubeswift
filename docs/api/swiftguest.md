@@ -51,7 +51,7 @@ metadata:
   namespace: default
 spec:
   imageRef:
-    name: ubuntu-cloud
+    name: ubuntu-noble
   guestClassRef:
     name: default
   seedProfileRef:
@@ -106,7 +106,7 @@ metadata:
   namespace: default
 spec:
   imageRef:
-    name: ubuntu-cloud
+    name: ubuntu-noble
   dataDiskRef:
     name: data-disk
   guestClassRef:

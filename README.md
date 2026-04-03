@@ -6,7 +6,7 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 
 ## Features
 
-- **Disk boot** — Cloud images (Ubuntu Focal, Rocky Linux, etc.) via rust-hypervisor-firmware
+- **Disk boot** — Cloud images (Ubuntu Noble, Rocky Linux, etc.) via CLOUDHV.fd (EDK2/OVMF UEFI firmware for Cloud Hypervisor)
 - **Kernel boot** — Direct bzImage + initramfs boot via SwiftKernel OCI artifacts; sub-second cold start
 - **GPU passthrough** — Three-tier model: PCIe GPUs on Cloud Hypervisor, HGX SXM GPUs on QEMU with PCIe topology, full HGX passthrough
 - **GPU Discovery** — DaemonSet auto-discovers GPUs, NUMA topology, NVSwitches, and Fabric Manager state per node
@@ -73,12 +73,12 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
 
 ```bash
 kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
-kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
 kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 
 # Wait for image import (5-15 minutes)
-kubectl get swiftimage ubuntu-cloud -w
+kubectl get swiftimage ubuntu-noble -w
 
 # Wait for VM to start
 kubectl get swiftguest sample -w

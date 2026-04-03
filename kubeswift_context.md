@@ -16,7 +16,7 @@ It is a VM platform where virtual machines are first-class Kubernetes workloads.
 
 It is similar in spirit to KubeVirt but with a much simpler architecture:
 - Runtime: Cloud Hypervisor (default) + QEMU (GPU workloads requiring PCIe topology)
-- Firmware: rust-hypervisor-firmware v0.5.0 (disk boot), direct bzImage (kernel boot), OVMF (QEMU/GPU boot)
+- Firmware: CLOUDHV.fd (EDK2/OVMF UEFI firmware for Cloud Hypervisor, disk boot), direct bzImage (kernel boot), OVMF (QEMU/GPU boot)
 - Distribution: OCI-native (Helm chart + container images)
 - Goal: minimal architecture, strong operability, fast iteration
 
@@ -64,10 +64,9 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - **Helm chart: gpuDiscovery.enabled gate for DaemonSet + RBAC templates**
 
 ### Known working configuration
-- Guest OS (disk boot): **Ubuntu Focal (20.04)** cloud image — Noble (24.04) is incompatible
-  with rust-hypervisor-firmware due to EFI protocol gaps (TPM, MOK, writable NVRAM)
+- Guest OS (disk boot): **Ubuntu Noble (24.04)** cloud image — all modern distributions supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12)
 - Guest OS (kernel boot): **faas-minimal** — Linux 6.6.44 + BusyBox musl, built with buildroot
-- Firmware (disk boot): rust-hypervisor-firmware v0.5.0, loaded via `--kernel` flag (NOT `--firmware`)
+- Firmware (disk boot): CLOUDHV.fd (EDK2/OVMF UEFI firmware for Cloud Hypervisor), loaded via `--kernel` flag (NOT `--firmware`)
 - Firmware (kernel boot): direct bzImage via `--kernel`, initramfs via `--initramfs`
 - Cloud Hypervisor: v51.1
 - Seed format: NoCloud flat layout (meta-data, user-data, network-config at ISO root)
@@ -108,7 +107,7 @@ SwiftGuest Pod
         │  entrypoint: launcher-entrypoint.sh starts dnsmasq when network=true in intent
         ▼
      Cloud Hypervisor v51.1 (default)
-        │  disk boot:   --kernel hypervisor-fw --disk image.raw --disk seed.iso --net tap=tap0
+        │  disk boot:   --kernel CLOUDHV.fd --disk image.raw --disk seed.iso --net tap=tap0
         │  kernel boot: --kernel bzImage --initramfs rootfs.cpio.gz --cmdline "..." --net tap=tap0
      OR
      QEMU (GPU workloads)
@@ -153,7 +152,7 @@ status:
 spec:
   source:
     http:
-      url: https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
   format: qcow2   # converted to raw during import
 status:
   phase: Ready | Importing | Validating | Preparing | Failed
@@ -224,7 +223,7 @@ spec:
     requiredVersion: "580.95.05"   # must match host Fabric Manager version
 ```
 
-Note: firmware selection is automatic — the controller sets "hypervisor-fw" for CH (tier=pcie)
+Note: firmware selection is automatic — the controller sets "cloudhv" for CH (tier=pcie)
 and "ovmf" for QEMU (tier=hgx-shared or tier=hgx-full). There is no `firmware` field on the CRD.
 
 **SwiftGPUNode** — per-node GPU inventory
@@ -477,7 +476,7 @@ KubeSwift GPU support covers three tiers based on hardware complexity:
 - Flat PCI topology is fine — CUDA initializes correctly
 - No NVSwitch, no Fabric Manager needed
 - Single NUMA node sufficient for 1-2 GPUs
-- No OVMF/UEFI required (rust-hypervisor-firmware works)
+- CLOUDHV.fd firmware (UEFI boot via `--kernel`)
 - Simplest path — works with existing CH architecture + VFIO
 
 **Tier 2: HGX SXM with shared NVSwitch (H100-SXM, H200-SXM, B200-SXM)**
@@ -559,7 +558,7 @@ status.phase = Ready
 **Disk boot:**
 ```
 cloud-hypervisor \
-  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \
+  --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
   --api-socket path=<runtime-dir>/ch.sock \
   --memory size=2048M \
   --cpus boot=2 \
@@ -586,7 +585,7 @@ cloud-hypervisor \
 **GPU boot (Cloud Hypervisor — Tier 1 PCIe GPUs only):**
 ```
 cloud-hypervisor \
-  --kernel /usr/share/kubeswift-firmware/hypervisor-fw \
+  --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
   --api-socket path=<runtime-dir>/ch.sock \
   --memory size=32768M,hugepages=on,hugepage_size=1G \
   --cpus boot=16 \
@@ -633,7 +632,7 @@ qemu-system-x86_64 \
 ```
 
 Critical:
-- `--kernel` with rust-hypervisor-firmware = PVH ELF binary (disk boot, CH only)
+- `--kernel` with CLOUDHV.fd = UEFI firmware binary (disk boot, CH only)
 - `--kernel` with bzImage = direct Linux kernel (kernel boot, CH only)
 - `--firmware` is for OVMF/EDK2 only — never use it in CH
 - QEMU uses `-drive if=pflash` for OVMF, not `--kernel`/`--firmware`
@@ -673,7 +672,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 6 | swiftimage/import.go | GRUB patch skipped BOOT partition (ttyS0 already present) | Add unconditional terminal patch block |
 | 7 | swiftimage/import.go | GRUB terminal patch order wrong (terminal_input before serial init) | Use awk rewrite for correct ordering |
 | 8 | swift-ch-client/config.rs | --firmware used instead of --kernel | Revert to --kernel |
-| 9 | config/samples/image.yaml | Ubuntu Noble incompatible with rust-hypervisor-firmware | Switch to Ubuntu Focal |
+| 9 | config/samples/image.yaml | Ubuntu Noble incompatible with rust-hypervisor-firmware | Switch to Ubuntu Focal (historical — resolved by migration to CLOUDHV.fd; Noble now works) |
 | 10 | swiftguest controller | No requeue when IP not yet discovered | Add RequeueAfter: 5s when Running + no IP |
 | 11 | CRD schema | status.network missing from OpenAPI schema | Regenerate CRD, add to make deploy |
 | 12 | smoke test | 2m network timeout too short | Increase to 5m, add --timeout-network flag |
@@ -1026,8 +1025,8 @@ When helping develop KubeSwift:
 - All pod containers currently run privileged: true — this is intentional during development. Do not attempt to harden security contexts until the feature surface is stable.
 - When writing Cursor prompts: be explicit about what NOT to change
 - CRD changes always require `make generate` + copy to charts/kubeswift/crds/ + redeploy
-- The working guest OS (disk boot) is Ubuntu Focal — do not suggest Noble
-- rust-hypervisor-firmware uses `--kernel`, not `--firmware`
+- The working guest OS (disk boot) is Ubuntu Noble (24.04) — all modern distributions supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12)
+- CLOUDHV.fd is loaded via `--kernel`, not `--firmware`
 - The GRUB terminal patch order is: serial init → terminal_input → terminal_output
 - swiftletd reports status via pod annotations, not direct SwiftGuest status patches
 - RestartPolicy on launcher pods is always Never — controller owns VM lifecycle
@@ -1057,7 +1056,7 @@ When helping develop KubeSwift:
 - **GPU: Deallocation uses kubeswift.io/gpu-allocation finalizer on SwiftGuest**
 - **GPU: Hypervisor override annotation kubeswift.io/hypervisor-override allows testing QEMU path without GPU hardware**
 - **GPU: swift-qemu-client QMP is synchronous (std::os::unix::net::UnixStream), not async tokio**
-- **GPU: SwiftGPUProfile has no `firmware` field — firmware is auto-selected based on tier (hypervisor-fw for CH, ovmf for QEMU)**
+- **GPU: SwiftGPUProfile has no `firmware` field — firmware is auto-selected based on tier (cloudhv for CH, ovmf for QEMU)**
 - **GPU: gpuProfileRef uses corev1.LocalObjectReference (same as imageRef/kernelRef), not a custom ObjectReference**
 - **Security: NO container uses privileged: true — all use drop ALL + specific capabilities**
 - **Security: network-init capabilities: NET_ADMIN, NET_RAW — do NOT add SYS_ADMIN**

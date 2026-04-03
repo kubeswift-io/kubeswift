@@ -18,7 +18,7 @@ kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 
 | Directory | Description | Hypervisor | GPU Required |
 |-----------|-------------|------------|--------------|
-| [disk-boot/](disk-boot/) | Ubuntu Focal cloud image boot | Cloud Hypervisor | No |
+| [disk-boot/](disk-boot/) | Ubuntu Noble 24.04 cloud image boot | Cloud Hypervisor | No |
 | [kernel-boot/](kernel-boot/) | faas-minimal direct kernel boot | Cloud Hypervisor | No |
 | [qemu-boot/](qemu-boot/) | Ubuntu Noble via QEMU/OVMF | QEMU | No |
 | [gpu-pcie/](gpu-pcie/) | Tier 1 PCIe GPU passthrough | Cloud Hypervisor | Yes |
@@ -32,8 +32,8 @@ kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 kubectl apply -k config/rbac
 kubectl apply -f config/samples/shared/swiftguestclass-default.yaml
 kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
-kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-focal.yaml
-kubectl get swiftimage ubuntu-cloud -w  # wait for Ready (5-15 min)
+kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
+kubectl get swiftimage ubuntu-noble -w  # wait for Ready (5-15 min)
 kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
 kubectl get swiftguest sample -w        # wait for Running + IP
 swiftctl console sample                 # serial console

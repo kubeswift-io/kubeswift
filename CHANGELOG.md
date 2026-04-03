@@ -8,6 +8,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Added
 
+**Firmware migration: CLOUDHV.fd replaces rust-hypervisor-firmware**
+- Replaced rust-hypervisor-firmware with CLOUDHV.fd (Cloud Hypervisor EDK2/OVMF UEFI firmware)
+- All modern Linux distributions now supported: Ubuntu 22.04+, Rocky 9, Fedora, Debian 12
+- Ubuntu Focal 20.04 is no longer required — Ubuntu Noble 24.04 is the primary guest OS
+- CLOUDHV.fd is pinned to release ch-13b4963ec4 with SHA256 verification
+- GPU Tier 1 (CH path) firmware changed from "hypervisor-fw" to "cloudhv"
+- QEMU path firmware (OVMF_CODE.fd / OVMF_VARS.fd) unchanged
+
 **dataDiskRef on SwiftGuest**
 - New optional field `spec.dataDiskRef` on SwiftGuest: references a SwiftImage as a secondary data disk
 - Data disk appears as /dev/vdb inside the guest (both Cloud Hypervisor and QEMU paths)

@@ -149,7 +149,7 @@ kubectl get pods -A | grep -E "kubeswift|controller"
 kubectl get sc
 
 # After smoke test
-kubectl get swiftimage ubuntu-cloud -o jsonpath='{.status.phase}'
+kubectl get swiftimage ubuntu-noble -o jsonpath='{.status.phase}'
 kubectl get swiftguest sample -o jsonpath='{.status.phase}'
 kubectl logs -l swift.kubeswift.io/guest=sample -c launcher --tail=50
 ```

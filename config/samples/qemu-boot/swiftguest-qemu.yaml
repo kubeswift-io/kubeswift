@@ -1,6 +1,5 @@
 # End-to-end QEMU path validation — Phase 1 hypervisor abstraction.
-# Uses Ubuntu 24.04 (Noble) — compatible with OVMF/UEFI used by the QEMU path.
-# (Noble is NOT compatible with rust-hypervisor-firmware on Cloud Hypervisor.)
+# Uses Ubuntu 24.04 (Noble) — compatible with both QEMU (OVMF) and Cloud Hypervisor (CLOUDHV.fd).
 #
 # Deploy all three resources:
 #   kubectl apply -f config/samples/qemu-boot/swiftguest-qemu.yaml

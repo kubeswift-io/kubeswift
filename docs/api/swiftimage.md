@@ -55,7 +55,7 @@ See `config/samples/swiftimage-pvc-clone.yaml`.
 ## Operator workflow
 
 1. Create SwiftImage.
-2. Wait for `phase=Ready`: `kubectl get swiftimage ubuntu-cloud -w`
+2. Wait for `phase=Ready`: `kubectl get swiftimage ubuntu-noble -w`
 3. Create SwiftGuest referencing it.
 
 **If import fails:** Check `format` matches image (Ubuntu = qcow2). See [troubleshooting](../operator/troubleshooting.md).

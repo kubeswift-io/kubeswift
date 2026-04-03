@@ -188,7 +188,7 @@ Node:        worker-1
 RunPolicy:   Running
 
 Spec:
-  Image:       ubuntu-cloud
+  Image:       ubuntu-noble
   Kernel:      (none)
   GuestClass:  default
   SeedProfile: ssh

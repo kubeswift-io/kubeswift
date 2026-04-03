@@ -83,11 +83,11 @@ CH has two separate concepts:
 | `--serial` | Legacy serial port (ttyS0) – used for boot logs, getty, kernel console |
 | `--console` | Virtio console – higher performance, different device |
 
-For disk boot with firmware (e.g. hypervisor-fw), the **serial** device is created when the VM is properly initialized. The kernel/OS must have `console=ttyS0,115200n8` in its cmdline for output to appear.
+For disk boot with firmware (e.g. CLOUDHV.fd), the **serial** device is created when the VM is properly initialized. The kernel/OS must have `console=ttyS0,115200n8` in its cmdline for output to appear.
 
 ### Firmware Boot and Cmdline
 
-- With `--kernel <firmware>`, CH boots from disk. The kernel cmdline comes from **GRUB on the disk**, not from CH's `--cmdline`.
+- With `--kernel <firmware>` (CLOUDHV.fd), CH boots from disk. The kernel cmdline comes from **GRUB on the disk**, not from CH's `--cmdline`.
 - KubeSwift already patches GRUB during import to add `console=ttyS0,115200n8`.
 
 ### Socket Creation

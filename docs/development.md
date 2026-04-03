@@ -274,10 +274,10 @@ kubectl describe swiftimage <name>
 | Component | Version | Notes |
 |-----------|---------|-------|
 | Cloud Hypervisor | v51.1 | Current production version |
-| rust-hypervisor-firmware | v0.5.0 | PVH ELF loader via `--kernel`, not `--firmware` |
+| CLOUDHV.fd | ch-13b4963ec4 | UEFI firmware via `--kernel`, not `--firmware` |
 | faas-minimal kernel tag | `6.6.1` | Use this. `6.6.0` has broken networking |
 | ORAS | v1.3.1 | Used in SwiftKernel pull jobs |
-| Guest OS (disk boot) | Ubuntu Focal 20.04 | Noble (24.04) incompatible with rust-hypervisor-firmware |
+| Guest OS (disk boot) | Ubuntu Noble 24.04 | All modern distributions supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12) |
 
 ## Commit guidelines
 

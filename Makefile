@@ -149,7 +149,7 @@ smoke-test-cleanup:
 	@NS="$${NAMESPACE:-default}"; \
 	echo "Cleaning up smoke-test resources in namespace $$NS..."; \
 	kubectl delete swiftguest sample faas-test qemu-test gpu-test datadisk-test -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
-	kubectl delete swiftimage ubuntu-cloud ubuntu-noble-qemu data-disk -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
+	kubectl delete swiftimage ubuntu-noble ubuntu-noble-qemu data-disk -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
 	kubectl delete swiftkernel faas-minimal -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
 	kubectl delete swiftseedprofile minimal qemu-test-seed -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
 	kubectl delete swiftguestclass default -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \

@@ -41,7 +41,7 @@ The `tier` field is the single decision point for hypervisor and topology select
 | `hgx-shared` | QEMU | Root port per device | Host-managed | Host (shared partition) | H100-SXM, H200-SXM |
 | `hgx-full` | QEMU | Full PCIe hierarchy | Passed to guest | Guest | 8-GPU HGX full passthrough |
 
-Firmware is auto-selected: `hypervisor-fw` for Cloud Hypervisor, `ovmf` for QEMU.
+Firmware is auto-selected: `CLOUDHV.fd` for Cloud Hypervisor, `OVMF` for QEMU.
 
 ## Partition Modes
 

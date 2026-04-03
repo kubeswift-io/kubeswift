@@ -56,11 +56,11 @@ The API server **silently drops** unknown fields if CRDs drift from Go types.
 ### Architecture
 - Cloud Hypervisor is the DEFAULT runtime — QEMU only when GPU hardware requires it
 - Runtime disks must be **raw** — qcow2 is input format only
-- rust-hypervisor-firmware loads via `--kernel`, NEVER `--firmware`
+- CLOUDHV.fd loads via `--kernel`, NEVER `--firmware`
 - `--firmware` is for OVMF/EDK2 only (QEMU path)
 - `imageRef` and `kernelRef` are mutually exclusive on SwiftGuest
 - `gpuProfileRef` can combine with `imageRef` but NOT with `kernelRef`
-- Working guest OS (disk boot): **Ubuntu Focal 20.04** — do NOT use Noble
+- Working guest OS (disk boot): **Ubuntu Noble 24.04** — all modern distributions supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12)
 - RestartPolicy on launcher pods is ALWAYS `Never`
 
 ### Status Reporting

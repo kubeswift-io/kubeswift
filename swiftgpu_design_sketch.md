@@ -21,7 +21,7 @@ the actual implementation closely follows the design with minor deviations noted
 
 1. **QMP client is synchronous, not async.** The sketch shows a tokio-based async QMP client. The actual implementation in `rust/swift-qemu-client/src/qmp.rs` uses `std::os::unix::net::UnixStream` (synchronous). This avoids pulling in tokio as a dependency for the QEMU client crate and simplifies lifecycle management.
 
-2. **SwiftGPUProfile has no `firmware` field.** The sketch's CRD YAML example shows `firmware: ovmf` on SwiftGPUProfile. The actual CRD does not have this field. Firmware selection is automatic in the controller: "hypervisor-fw" for Cloud Hypervisor (tier=pcie) and "ovmf" for QEMU (tier=hgx-shared or tier=hgx-full). See `internal/controller/swiftguest/gpu.go` `buildGPUIntent()`.
+2. **SwiftGPUProfile has no `firmware` field.** The sketch's CRD YAML example shows `firmware: ovmf` on SwiftGPUProfile. The actual CRD does not have this field. Firmware selection is automatic in the controller: "cloudhv" for Cloud Hypervisor (tier=pcie) and "ovmf" for QEMU (tier=hgx-shared or tier=hgx-full). See `internal/controller/swiftguest/gpu.go` `buildGPUIntent()`.
 
 3. **GPUProfileRef uses corev1.LocalObjectReference.** The sketch suggests a custom `ObjectReference` type. The actual implementation uses `*corev1.LocalObjectReference` for consistency with `imageRef`, `kernelRef`, and `seedProfileRef` on SwiftGuestSpec.
 
@@ -392,7 +392,7 @@ type GPUIntent struct {
     Devices []VFIODeviceIntent `json:"devices"`
 
     // Firmware specifies the guest firmware.
-    // "hypervisor-fw" for CH disk boot, "ovmf" for QEMU GPU boot.
+    // "cloudhv" for CH disk boot, "ovmf" for QEMU GPU boot.
     Firmware string `json:"firmware"`
 
     // NUMATopology describes the virtual NUMA layout for the guest.
@@ -469,7 +469,7 @@ type VCPUPin struct {
         "numaNode": 0
       }
     ],
-    "firmware": "hypervisor-fw",
+    "firmware": "cloudhv",
     "hugepages": "1G",
     "fabricManagerPartitionId": -1
   }
@@ -767,7 +767,7 @@ impl QemuConfig {
             }
         };
 
-        // Firmware: OVMF for GPU/QEMU, hypervisor-fw not applicable
+        // Firmware: OVMF for GPU/QEMU, CLOUDHV.fd not applicable
         let firmware = FirmwareConfig {
             code_path: PathBuf::from("/usr/share/OVMF/OVMF_CODE.fd"),
             vars_path: runtime_dir.join("OVMF_VARS.fd"),

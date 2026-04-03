@@ -20,7 +20,7 @@
 **Disk boot** (when `kernelBoot` is absent in the intent):
 
 ```
-cloud-hypervisor --api-socket path=<socket> --kernel hypervisor-fw \
+cloud-hypervisor --api-socket path=<socket> --kernel CLOUDHV.fd \
   --disk path=<root.raw> path=<seed.iso> \
   --memory size=<N>M --cpus boot=<N> \
   --serial socket=<serial.sock> --console off --net tap=tap0
@@ -35,7 +35,7 @@ cloud-hypervisor --api-socket path=<socket> \
   --serial socket=<serial.sock> --console off
 ```
 
-No `--disk`, no `--kernel hypervisor-fw`, no `--net` in kernel boot mode.
+No `--disk`, no `--kernel CLOUDHV.fd`, no `--net` in kernel boot mode.
 
 ## Mount paths
 

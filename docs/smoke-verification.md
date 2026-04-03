@@ -82,7 +82,7 @@ At least one node must be able to run guest pods. The node needs:
 
 The SwiftImage http source must point to a valid, accessible Linux cloud image. Default sample uses Ubuntu cloud image.
 
-**Verify:** Ensure the URL in `config/samples/disk-boot/swiftimage-ubuntu-focal.yaml` is reachable from the cluster (e.g., `curl -I <url>` from a pod).
+**Verify:** Ensure the URL in `config/samples/disk-boot/swiftimage-ubuntu-noble.yaml` is reachable from the cluster (e.g., `curl -I <url>` from a pod).
 
 ---
 
@@ -112,7 +112,7 @@ Default: `--timeout-image=15`, `--timeout-guest=5`. Use `NAMESPACE=my-ns` to ove
 
 **On failure:**
 ```bash
-kubectl describe swiftimage ubuntu-cloud -n <namespace>
+kubectl describe swiftimage ubuntu-noble -n <namespace>
 ```
 
 **Common causes:**
@@ -209,7 +209,7 @@ kubectl logs <pod-name> -n <namespace> -c launcher | grep -E "lease|guest IP|tim
 
 | Failure mode | Commands |
 |--------------|----------|
-| SwiftImage not Ready | `kubectl describe swiftimage ubuntu-cloud -n <namespace>` |
+| SwiftImage not Ready | `kubectl describe swiftimage ubuntu-noble -n <namespace>` |
 | Pod not scheduled | `kubectl describe pod <pod-name> -n <namespace>` |
 | Seed missing | `kubectl get configmap sample-seed -n <namespace>`; `kubectl get pod <pod> -o yaml` |
 | swiftletd error | `kubectl logs <pod-name> -n <namespace> -c launcher` |
