@@ -110,11 +110,21 @@ The API server **silently drops** unknown fields if CRDs drift from Go types.
 3. **No silent failures** — status fields must reflect real system state
 4. **Verified before merged** — never assume a fix worked without confirming output
 
-## Current Work: SwiftGPU
+## Current Work
 
-See @swiftgpu_design_sketch.md for full design (with implementation status notes at top).
+See @swiftgpu_design_sketch.md for GPU design and @kubeswift_context.md for full roadmap.
 
-Phase 1: QEMU runtime path in swiftletd -- COMPLETE
-Phase 2: GPU CRDs and resource model -- COMPLETE
-Phase 3: SwiftGPU controller, allocation, GPU pod building -- COMPLETE
-Phase 4: Full PCIe hierarchy for Tier 3 HGX full passthrough -- NEXT
+### Completed
+- SwiftGPU Phase 1: QEMU runtime path in swiftletd
+- SwiftGPU Phase 2: GPU CRDs and resource model
+- SwiftGPU Phase 3: SwiftGPU controller, allocation, GPU pod building
+- Host runtime hardening: all containers use minimum capabilities
+- GPU Discovery DaemonSet: auto-discovers GPUs, NUMA, NVSwitches, Fabric Manager
+- dataDiskRef on SwiftGuest: secondary data disk for all boot paths
+
+### Next Priorities
+1. Discovery DaemonSet validation on GPU hardware
+2. Tier 1 GPU end-to-end validation (bare-metal PCIe GPU)
+3. Additional kernel profiles (gpu-workload, vhost-user)
+4. Windows guest support
+5. SwiftGPU Phase 4: Full PCIe hierarchy for Tier 3 HGX full passthrough

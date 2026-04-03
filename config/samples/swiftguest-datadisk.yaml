@@ -1,0 +1,18 @@
+# SwiftGuest with a secondary data disk attached.
+# The data disk appears as /dev/vdb inside the guest.
+# Requires both ubuntu-cloud (imageRef) and data-disk (dataDiskRef) SwiftImages to be Ready.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: datadisk-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-cloud
+  dataDiskRef:
+    name: data-disk
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running

@@ -196,6 +196,146 @@ func TestResolve_SucceedsWhenAllChecksPass(t *testing.T) {
 	}
 }
 
+// --- dataDiskRef tests ---
+
+func TestResolve_DataDiskRef_Success(t *testing.T) {
+	scheme := testScheme()
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw, PVCRef: &imagev1alpha1.PVCObjectReference{Name: "pvc-root"}}},
+	}
+	dataDisk := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw, PVCRef: &imagev1alpha1.PVCObjectReference{Name: "pvc-data"}}},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guestClass, image, dataDisk).Build()
+	resolver := NewResolver(client)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid-dd"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "gc"},
+			DataDiskRef:   &corev1.LocalObjectReference{Name: "data-img"},
+		},
+	}
+
+	rg, err := resolver.Resolve(context.Background(), guest)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if rg.DataDisk == nil {
+		t.Fatal("DataDisk should be populated")
+	}
+	if !rg.DataDisk.Ready {
+		t.Error("DataDisk.Ready should be true")
+	}
+	if rg.DataDisk.PVCName != "pvc-data" {
+		t.Errorf("DataDisk.PVCName = %q, want pvc-data", rg.DataDisk.PVCName)
+	}
+}
+
+func TestResolve_DataDiskRef_Missing(t *testing.T) {
+	scheme := testScheme()
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guestClass, image).Build()
+	resolver := NewResolver(client)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "gc"},
+			DataDiskRef:   &corev1.LocalObjectReference{Name: "missing-data"},
+		},
+	}
+
+	rg, err := resolver.Resolve(context.Background(), guest)
+	if rg != nil {
+		t.Fatal("expected nil ResolvedGuest")
+	}
+	var re *ResolutionError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected ResolutionError, got %T: %v", err, err)
+	}
+	if re.AffectedResource != "missing-data" {
+		t.Errorf("AffectedResource = %q, want missing-data", re.AffectedResource)
+	}
+}
+
+func TestResolve_DataDiskRef_NotReady(t *testing.T) {
+	scheme := testScheme()
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}},
+	}
+	dataDisk := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseImporting},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guestClass, image, dataDisk).Build()
+	resolver := NewResolver(client)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "gc"},
+			DataDiskRef:   &corev1.LocalObjectReference{Name: "data-img"},
+		},
+	}
+
+	rg, err := resolver.Resolve(context.Background(), guest)
+	if rg != nil {
+		t.Fatal("expected nil ResolvedGuest when data disk not Ready")
+	}
+	var re *ResolutionError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected ResolutionError, got %T: %v", err, err)
+	}
+}
+
+func TestResolve_NoDataDiskRef_BackwardCompat(t *testing.T) {
+	scheme := testScheme()
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guestClass, image).Build()
+	resolver := NewResolver(client)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid-bc"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "gc"},
+		},
+	}
+
+	rg, err := resolver.Resolve(context.Background(), guest)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if rg.DataDisk != nil {
+		t.Error("DataDisk should be nil when dataDiskRef is not set")
+	}
+}
+
 // TestResolve_FailsWhenArchitectureMismatch: skipped - architecture validation not in MVP (API has no architecture field yet).
 func TestResolve_FailsWhenArchitectureMismatch(t *testing.T) {
 	t.Skip("architecture validation not implemented in MVP")

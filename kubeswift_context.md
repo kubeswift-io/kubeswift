@@ -847,21 +847,68 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Security audit findings SEC-01 through SEC-06 resolved or mitigated
 - Unit tests for all security contexts: `security_test.go`
 
+### Completed (dataDiskRef)
+- `spec.dataDiskRef` on SwiftGuest: optional secondary SwiftImage reference
+- Data disk appears as /dev/vdb inside guest (both CH `--disk` and QEMU `-drive`)
+- Works with all boot paths: disk boot, kernel boot, GPU boot
+- Resolver validates data disk SwiftImage exists and is Ready
+- Pod builders add PVC volume + mount at `/var/lib/kubeswift/disks/data/`
+- RuntimeIntent carries `dataDisk` field to swiftletd
+- Sample manifests: `swiftimage-datadisk.yaml`, `swiftguest-datadisk.yaml`
+- Comprehensive tests: resolver, runtime intent, pod builder, CH args, QEMU args
+
+### Completed (GPU Discovery DaemonSet)
+- Discovery binary at `cmd/gpu-discovery/`
+- DaemonSet runs on nodes labeled `kubeswift.io/gpu-node=true`
+- Discovers GPUs, NUMA topology, NVSwitches, Fabric Manager via sysfs + lspci + lscpu + fmpm
+- Merge logic preserves controller-owned allocation fields during status patches
+- Separate container image (`images/gpu-discovery/Containerfile`) with pciutils
+- Helm chart gate: `gpuDiscovery.enabled` for DaemonSet + RBAC templates
+- Validation report template at `docs/validation/discovery-daemonset-validation.md`
+
 ### Next Priorities (in order)
 
-**1. SwiftKernel additional profiles**
-- gpu-workload profile
-- vhost-user profile
+**1. Discovery DaemonSet validation on GPU hardware**
+- Validate on a node with real NVIDIA GPUs (Hetzner, Equinix, or similar)
+- Verify lspci parsing produces correct GPU inventory
+- Verify BAR size detection for large-BAR GPUs
+- Verify Fabric Manager discovery on HGX hardware (if available)
+
+**2. Tier 1 GPU end-to-end validation**
+- Rent a bare-metal server with a PCIe GPU (A100-PCIe, L40S, or RTX class)
+- Full flow: label node -> discovery -> create profile (tier=pcie) -> create guest -> nvidia-smi inside guest
+- Validate VFIO bind, Cloud Hypervisor --device passthrough, GPU driver init in guest
+
+**3. Additional kernel profiles**
+- gpu-workload profile: Linux kernel with NVIDIA driver modules, VFIO support
+- vhost-user profile: for vhost-user-net/blk offload scenarios
 - Build pipeline at build/kernels/<profile>/
 
-**2. dataDiskRef on SwiftGuest**
-- Kernel boot guests may need persistent storage
-- New optional field: spec.dataDiskRef pointing to a SwiftImage
-- Adds --disk to cloud-hypervisor invocation alongside --kernel/--initramfs
+**4. Windows guest support**
+- OVMF/UEFI boot path (already implemented for QEMU GPU path)
+- VirtIO driver ISO injection (virtio-win)
+- Cloudbase-init or unattend.xml for Windows provisioning
+- Guest agent for IP reporting (Windows doesn't use cloud-init)
 
-### SwiftGPU Roadmap
+**5. Multi-NIC support**
+- SwiftGuest spec supports multiple network interfaces
+- Per-NIC tap+bridge setup in network-init
+- Use cases: management vs data plane separation, SR-IOV passthrough
 
-**Phase 4: Full PCIe Topology — Tier 3 (HGX full passthrough)**
+**6. SwiftGuestPool**
+- New CRD: SwiftGuestPool with desired replica count and guest template
+- Controller creates/deletes SwiftGuests to match desired count
+- Use case: GPU inference fleets with identical VM configurations
+
+### SwiftGPU Continued (in order)
+
+**7. Tier 2 GPU validation (HGX SXM)**
+- Rent H100/H200 HGX bare-metal for validation sprint
+- Validate QEMU + pcie-root-port + Fabric Manager partition flow
+- Validate NUMA topology and vCPU pinning
+- Validate x-no-mmap=true for large-BAR GPUs
+
+**8. GPU Phase 4: Full PCIe Topology — Tier 3 (HGX full passthrough)**
 - QEMU launch builds full PCIe hierarchy per NVIDIA reference architecture:
   - PCIe expander buses (one per NUMA node)
   - Root ports under each expander bus
@@ -877,12 +924,34 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Deliverable: full HGX passthrough matching NVIDIA reference VM configuration
 
 ### Long-term (not yet prioritized)
-- Live migration
-- Snapshots / persistent disks
-- SR-IOV / Multus networking
-- High availability controllers
-- vGPU (mediated device) support
-- GPU health monitoring and automatic failover
+
+**9. Live migration**
+- VM memory state serialization and transfer
+- Shared storage requirement (network-attached PVCs)
+- Coordinated IP handoff between nodes
+- CH experimental migration support vs QEMU mature migration
+- Design doc required before implementation
+
+**10. Snapshots and persistent disks**
+- VM disk snapshots for backup/restore
+- Integration with CSI VolumeSnapshot (Ceph, Longhorn)
+- Local storage snapshot strategy
+
+**11. SR-IOV / Multus networking**
+- Hardware NIC passthrough via SR-IOV VFs
+- Multus CNI integration for multiple network attachments
+- Complements multi-NIC support
+
+**12. vGPU (mediated device) support**
+- NVIDIA GRID vGPU for fractional GPU sharing
+- Mediated device passthrough via mdev
+- Different use case from full passthrough (lighter workloads)
+
+**13. GPU health monitoring and automatic failover**
+- Monitor GPU health via nvidia-smi or NVML inside discovery DaemonSet
+- Detect Xid errors, ECC failures, thermal throttling
+- Mark unhealthy GPUs as unallocatable
+- Optional: migrate guest to different GPU on failure
 
 ---
 

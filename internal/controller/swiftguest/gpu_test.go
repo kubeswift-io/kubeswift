@@ -198,6 +198,54 @@ func TestBuildPod_NonGPU_Unchanged(t *testing.T) {
 	}
 }
 
+func TestBuildGPUDiskBootPod_DataDiskVolume(t *testing.T) {
+	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
+	rg := gpuResolvedGuest()
+	rg.DataDisk = &resolved.PreparedImage{PVCName: "pvc-data", Ready: true, Format: "raw"}
+
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+
+	foundVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "data-disk" {
+			foundVol = true
+			if v.VolumeSource.PersistentVolumeClaim.ClaimName != "pvc-data" {
+				t.Errorf("data-disk PVC = %q, want pvc-data", v.VolumeSource.PersistentVolumeClaim.ClaimName)
+			}
+		}
+	}
+	if !foundVol {
+		t.Error("GPU pod missing data-disk volume")
+	}
+
+	launcher := pod.Spec.Containers[0]
+	foundMount := false
+	for _, m := range launcher.VolumeMounts {
+		if m.Name == "data-disk" {
+			foundMount = true
+			if m.MountPath != DisksDataPath {
+				t.Errorf("data-disk mountPath = %q, want %q", m.MountPath, DisksDataPath)
+			}
+		}
+	}
+	if !foundMount {
+		t.Error("GPU launcher missing data-disk mount")
+	}
+}
+
+func TestBuildGPUDiskBootPod_NoDataDisk(t *testing.T) {
+	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
+	rg := gpuResolvedGuest()
+
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "data-disk" {
+			t.Error("GPU pod should not have data-disk volume when DataDisk is nil")
+		}
+	}
+}
+
 // --- expandCPURange tests ---
 
 func TestExpandCPURange_Complex(t *testing.T) {

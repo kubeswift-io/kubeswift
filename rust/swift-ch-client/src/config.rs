@@ -108,3 +108,81 @@ impl VmConfig {
         args
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_disk_boot_config() -> VmConfig {
+        VmConfig {
+            disk_path: "/data/image.raw".to_string(),
+            memory_mib: 2048,
+            cpus: 2,
+            api_socket: "/tmp/ch.sock".to_string(),
+            seed_path: "/data/seed".to_string(),
+            serial_socket_path: Some("/tmp/serial.sock".to_string()),
+            firmware_path: Some("/usr/share/kubeswift-firmware/hypervisor-fw".to_string()),
+            tap_name: Some("tap0".to_string()),
+            kernel_path: None,
+            initramfs_path: None,
+            kernel_cmdline: None,
+            data_disk_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_disk_boot_data_disk() {
+        let mut cfg = make_disk_boot_config();
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("path=/data/extra.raw"),
+            "missing data disk in disk boot args: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_disk_boot_no_data_disk() {
+        let cfg = make_disk_boot_config();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            !joined.contains("extra.raw"),
+            "unexpected data disk in args: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_kernel_boot_data_disk() {
+        let mut cfg = make_disk_boot_config();
+        cfg.kernel_path = Some("/kernels/bzImage".to_string());
+        cfg.initramfs_path = Some("/kernels/rootfs.cpio.gz".to_string());
+        cfg.kernel_cmdline = Some("console=ttyS0".to_string());
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("path=/data/extra.raw"),
+            "missing data disk in kernel boot args: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_kernel_boot_no_data_disk() {
+        let mut cfg = make_disk_boot_config();
+        cfg.kernel_path = Some("/kernels/bzImage".to_string());
+        cfg.initramfs_path = Some("/kernels/rootfs.cpio.gz".to_string());
+        cfg.kernel_cmdline = Some("console=ttyS0".to_string());
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            !joined.contains("extra.raw"),
+            "unexpected data disk in kernel boot args: {}",
+            joined
+        );
+    }
+}

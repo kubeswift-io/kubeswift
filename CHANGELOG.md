@@ -4,6 +4,33 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased] — April 3, 2026
+
+### Added
+
+**dataDiskRef on SwiftGuest**
+- New optional field `spec.dataDiskRef` on SwiftGuest: references a SwiftImage as a secondary data disk
+- Data disk appears as /dev/vdb inside the guest (both Cloud Hypervisor and QEMU paths)
+- Works with all three boot paths: disk boot, kernel boot, GPU boot
+- Resolver validates the referenced SwiftImage exists and is in Ready state
+- Pod builders (disk, kernel, GPU) add PVC volume + mount at `/var/lib/kubeswift/disks/data/`
+- RuntimeIntent carries `dataDisk` field; swiftletd passes as additional `--disk` (CH) or `-drive` (QEMU)
+- Sample manifests: `swiftimage-datadisk.yaml`, `swiftguest-datadisk.yaml`
+- Tests: resolver (success, missing, not ready, backward compat), runtime intent (disk boot, kernel boot, roundtrip), pod builder (disk boot, GPU boot, no data disk), CH args, QEMU args
+
+**GPU Discovery DaemonSet**
+- Discovery binary at `cmd/gpu-discovery/` auto-discovers GPUs, NUMA topology, NVSwitches, Fabric Manager
+- DaemonSet runs on nodes labeled `kubeswift.io/gpu-node=true` with 60s re-discovery cycle
+- Merge logic preserves controller-owned allocation fields during SwiftGPUNode status patches
+- Separate container image with pciutils for lspci
+- Helm chart: `gpuDiscovery.enabled` gate for DaemonSet + RBAC templates
+- Validation report template at `docs/validation/discovery-daemonset-validation.md`
+
+**Roadmap update**
+- Comprehensive roadmap through 13 priority items including GPU hardware validation, Windows guests, multi-NIC, SwiftGuestPool, live migration, vGPU
+
+---
+
 ## [Unreleased] — SwiftGPU Phases 1-3 Complete (April 2, 2026)
 
 ### Added

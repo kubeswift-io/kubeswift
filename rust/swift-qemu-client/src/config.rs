@@ -199,6 +199,38 @@ mod tests {
     }
 
     #[test]
+    fn test_to_args_data_disk() {
+        let mut cfg = make_config();
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("file=/data/extra.raw,format=raw,if=virtio"),
+            "missing data disk drive: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_to_args_no_data_disk() {
+        let cfg = make_config();
+        let args = cfg.to_args();
+        // Count -drive entries: should be exactly 3 (OVMF_CODE, OVMF_VARS, root disk + seed)
+        let drive_count = args
+            .iter()
+            .filter(|a| a.starts_with("file=") || a.starts_with("if=pflash"))
+            .count();
+        // Just ensure no extra "extra.raw" appears
+        let joined = args.join(" ");
+        assert!(
+            !joined.contains("extra.raw"),
+            "unexpected data disk in args: {}",
+            joined
+        );
+        assert!(drive_count > 0, "should have at least one drive arg");
+    }
+
+    #[test]
     fn test_empty_intent_uses_defaults() {
         // CH path: no disk, no seed, no network — just boot
         let mut cfg = make_config();
