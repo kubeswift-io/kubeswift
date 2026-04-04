@@ -121,6 +121,121 @@ func TestBuildPod_NoDataDisk_BackwardCompat(t *testing.T) {
 	}
 }
 
+func TestBuildPod_NoInterfaces_NoMultusAnnotation(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-no-multus", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces:    nil,
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	if pod.ObjectMeta.Annotations != nil {
+		if _, ok := pod.ObjectMeta.Annotations[MultusAnnotationKey]; ok {
+			t.Error("pod should not have Multus annotation when no interfaces are set")
+		}
+	}
+}
+
+func TestBuildPod_WithSecondaryNIC_MultusAnnotation(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-multus", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt", NetworkRef: nil},
+				{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{
+					Name: "sriov-net",
+				}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt", NetworkRef: nil},
+			{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{
+				Name: "sriov-net",
+			}},
+		},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	if pod.ObjectMeta.Annotations == nil {
+		t.Fatal("pod annotations are nil, want Multus annotation")
+	}
+	multus, ok := pod.ObjectMeta.Annotations[MultusAnnotationKey]
+	if !ok {
+		t.Fatal("pod missing Multus annotation")
+	}
+	if multus == "" {
+		t.Error("Multus annotation is empty")
+	}
+	// Verify it contains the expected NAD name
+	if !containsString(multus, "sriov-net") {
+		t.Errorf("Multus annotation %q does not contain sriov-net", multus)
+	}
+}
+
+func TestBuildPod_BackwardCompat_NoInterfacesField(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-compat", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			// Interfaces not set at all
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	// Should behave identically to a pod without multi-NIC: no Multus annotation
+	if pod.ObjectMeta.Annotations != nil {
+		if _, ok := pod.ObjectMeta.Annotations[MultusAnnotationKey]; ok {
+			t.Error("backward-compat pod should not have Multus annotation")
+		}
+	}
+
+	// Pod should still build successfully with a launcher container
+	if len(pod.Spec.Containers) == 0 {
+		t.Fatal("pod has no containers")
+	}
+	if pod.Spec.Containers[0].Name != "launcher" {
+		t.Errorf("container name = %q, want launcher", pod.Spec.Containers[0].Name)
+	}
+}
+
+// containsString is a simple substring check helper.
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
+}
+
+func stringContains(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildPod_NoInitContainerWhenNoSeed(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},

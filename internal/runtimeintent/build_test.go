@@ -34,6 +34,7 @@ func (m *mockResolvedGuest) GetKernelPath() string     { return m.kernelPath }
 func (m *mockResolvedGuest) GetInitramfsPath() string  { return m.initramfsPath }
 func (m *mockResolvedGuest) GetKernelCmdline() string  { return m.kernelCmdline }
 func (m *mockResolvedGuest) GetHypervisor() string     { return m.hypervisor }
+func (m *mockResolvedGuest) GetNICs() []NICIntent      { return nil }
 
 func TestBuild(t *testing.T) {
 	rg := &mockResolvedGuest{

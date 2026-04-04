@@ -5,6 +5,17 @@ use std::path::PathBuf;
 /// Default QEMU binary. Override with KUBESWIFT_QEMU_BINARY env.
 pub const DEFAULT_QEMU_BINARY: &str = "qemu-system-x86_64";
 
+/// Network interface configuration for multi-NIC mode.
+#[derive(Debug, Clone)]
+pub struct QemuNICConfig {
+    /// Tap device name (tap0, tap1, etc.)
+    pub tap_name: String,
+    /// MAC address for the interface.
+    pub mac: String,
+    /// Unique netdev ID (net0, net1, etc.)
+    pub netdev_id: String,
+}
+
 /// QEMU VM configuration for disk boot (Phase 1 — no GPU/NUMA/hugepages).
 #[derive(Debug, Clone)]
 pub struct QemuConfig {
@@ -22,10 +33,12 @@ pub struct QemuConfig {
     pub disk_path: String,
     /// Seed ISO path (cloud-init). Empty = no seed.
     pub seed_path: String,
-    /// TAP device name for virtio-net. None = no network.
+    /// TAP device name for virtio-net (legacy single-NIC mode). None = no network.
     pub tap_name: Option<String>,
-    /// MAC address for the virtio-net device.
+    /// MAC address for the virtio-net device (legacy single-NIC mode).
     pub mac: String,
+    /// Network interfaces for multi-NIC mode. When non-empty, overrides tap_name/mac.
+    pub nics: Vec<QemuNICConfig>,
     /// Serial console Unix socket path.
     pub serial_socket: PathBuf,
     /// QMP (QEMU Machine Protocol) Unix socket path.
@@ -89,7 +102,23 @@ impl QemuConfig {
         }
 
         // Virtio-net via TAP
-        if let Some(ref tap) = self.tap_name {
+        if !self.nics.is_empty() {
+            // Multi-NIC mode: one netdev+device pair per NIC.
+            for nic in &self.nics {
+                args.extend([
+                    "-netdev".to_string(),
+                    format!(
+                        "tap,id={},ifname={},script=no,downscript=no",
+                        nic.netdev_id, nic.tap_name
+                    ),
+                ]);
+                args.extend([
+                    "-device".to_string(),
+                    format!("virtio-net-pci,netdev={},mac={}", nic.netdev_id, nic.mac),
+                ]);
+            }
+        } else if let Some(ref tap) = self.tap_name {
+            // Legacy single-NIC mode.
             args.extend([
                 "-netdev".to_string(),
                 format!("tap,id=net0,ifname={},script=no,downscript=no", tap),
@@ -139,6 +168,7 @@ mod tests {
             seed_path: "/data/seed.iso".to_string(),
             tap_name: Some("tap0".to_string()),
             mac: "52:54:00:12:34:56".to_string(),
+            nics: vec![],
             serial_socket: PathBuf::from("/tmp/run/serial.sock"),
             qmp_socket: PathBuf::from("/tmp/run/qmp.sock"),
             data_disk_path: String::new(),
@@ -243,5 +273,77 @@ mod tests {
         assert!(joined.contains("OVMF_CODE.fd"));
         assert!(joined.contains("serial.sock"));
         assert!(joined.contains("qmp.sock"));
+    }
+
+    #[test]
+    fn test_qemu_args_single_nic() {
+        let mut cfg = make_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![QemuNICConfig {
+            tap_name: "tap0".to_string(),
+            mac: "52:54:00:aa:bb:cc".to_string(),
+            netdev_id: "net0".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("tap,id=net0,ifname=tap0"),
+            "netdev: {}",
+            joined
+        );
+        assert!(
+            joined.contains("virtio-net-pci,netdev=net0,mac=52:54:00:aa:bb:cc"),
+            "device: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_qemu_args_multi_nic() {
+        let mut cfg = make_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![
+            QemuNICConfig {
+                tap_name: "tap0".to_string(),
+                mac: "52:54:00:01:00:00".to_string(),
+                netdev_id: "net0".to_string(),
+            },
+            QemuNICConfig {
+                tap_name: "tap1".to_string(),
+                mac: "52:54:00:01:00:01".to_string(),
+                netdev_id: "net1".to_string(),
+            },
+            QemuNICConfig {
+                tap_name: "tap2".to_string(),
+                mac: "52:54:00:01:00:02".to_string(),
+                netdev_id: "net2".to_string(),
+            },
+        ];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        // 3 netdev + 3 device pairs
+        let netdev_count = args.iter().filter(|a| a.starts_with("tap,id=")).count();
+        assert_eq!(netdev_count, 3, "expected 3 netdevs: {}", joined);
+        assert!(joined.contains("ifname=tap0"), "missing tap0: {}", joined);
+        assert!(joined.contains("ifname=tap1"), "missing tap1: {}", joined);
+        assert!(joined.contains("ifname=tap2"), "missing tap2: {}", joined);
+    }
+
+    #[test]
+    fn test_qemu_args_no_nics_legacy() {
+        // Legacy mode: nics empty, tap_name set -> single netdev+device
+        let cfg = make_config(); // has tap_name=Some("tap0"), nics=vec![], mac="52:54:00:12:34:56"
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("tap,id=net0,ifname=tap0"),
+            "legacy netdev: {}",
+            joined
+        );
+        assert!(
+            joined.contains("mac=52:54:00:12:34:56"),
+            "legacy mac: {}",
+            joined
+        );
     }
 }

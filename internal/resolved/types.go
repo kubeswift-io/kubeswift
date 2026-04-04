@@ -1,7 +1,11 @@
 package resolved
 
 import (
+	"fmt"
+
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -30,6 +34,9 @@ type ResolvedGuest struct {
 	// "qemu" forces the QEMU path; empty or "cloud-hypervisor" uses Cloud Hypervisor.
 	// Set by the controller from the kubeswift.io/hypervisor-override annotation.
 	Hypervisor string `json:"hypervisor,omitempty"`
+	// Interfaces from SwiftGuest spec, used for multi-NIC support.
+	// Nil or empty means single default NIC (backward compatible).
+	Interfaces []swiftv1alpha1.GuestInterface `json:"interfaces,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -172,6 +179,36 @@ func (r *ResolvedGuest) GetGuestID() string {
 		return r.Meta.Namespace + "/" + r.Meta.Name
 	}
 	return string(r.Meta.UID)
+}
+
+// GetNICs builds the NICIntent list from spec.interfaces.
+// Returns nil when interfaces is nil/empty (backward compat — single default NIC).
+func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
+	if len(r.Interfaces) == 0 {
+		return nil
+	}
+	nics := make([]runtimeintent.NICIntent, 0, len(r.Interfaces))
+	tapIdx := 0
+	bridgeIdx := 0
+	multusIdx := 1 // Multus interfaces start at net1
+	for _, iface := range r.Interfaces {
+		nic := runtimeintent.NICIntent{
+			Name:      iface.Name,
+			TapDevice: fmt.Sprintf("tap%d", tapIdx),
+			MAC:       runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(r.Meta.Namespace, r.Meta.Name, iface.Name)),
+			Bridge:    fmt.Sprintf("br%d", bridgeIdx),
+		}
+		if iface.NetworkRef == nil {
+			nic.Primary = true
+		} else {
+			nic.MultusInterface = fmt.Sprintf("net%d", multusIdx)
+			multusIdx++
+		}
+		nics = append(nics, nic)
+		tapIdx++
+		bridgeIdx++
+	}
+	return nics
 }
 
 // ResolutionError is returned when resolution fails.

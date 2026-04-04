@@ -32,10 +32,12 @@ fn parse_first_lease(contents: &str) -> Option<String> {
 /// Spawns a background thread that polls the lease file and patches the pod annotation when IP found.
 /// Stops after patching or after max_attempts (default 120 = 4 min at 2s interval).
 /// First boot of cloud images can take 60–90s for cloud-init + DHCP.
+/// `nics` is passed to build the multi-NIC interfaces annotation.
 pub fn spawn_lease_poller(
     lease_path: impl AsRef<Path> + Send + 'static,
     namespace: String,
     pod_name: String,
+    nics: Option<Vec<crate::intent::NICIntent>>,
 ) {
     let path = lease_path.as_ref().to_path_buf();
     thread::spawn(move || {
@@ -63,6 +65,7 @@ pub fn spawn_lease_poller(
                 log::error!("failed to create runtime for pod patch");
                 return;
             };
+            let nics_ref = nics.as_deref();
             rt.block_on(async {
                 let client = match crate::kube_client::create_client().await {
                     Ok(c) => c,
@@ -71,7 +74,9 @@ pub fn spawn_lease_poller(
                         return;
                     }
                 };
-                if let Err(e) = patch_pod_annotation(&client, &namespace, &pod_name, &ip).await {
+                if let Err(e) =
+                    patch_pod_annotation(&client, &namespace, &pod_name, &ip, nics_ref).await
+                {
                     log::error!("patch_pod_annotation_failed: {}", e);
                 } else {
                     log::info!("pod_annotation_patched {}={}", ANNOTATION_GUEST_IP, ip);
@@ -83,16 +88,39 @@ pub fn spawn_lease_poller(
     });
 }
 
+/// Build the interfaces JSON for pod annotation.
+/// Includes the primary NIC with its discovered IP, plus any secondary NICs
+/// with their MACs (IPs not discoverable via dnsmasq for secondary NICs).
+fn build_interfaces_json(ip: &str, nics: Option<&[crate::intent::NICIntent]>) -> String {
+    match nics {
+        Some(nics) if !nics.is_empty() => {
+            let entries: Vec<serde_json::Value> = nics
+                .iter()
+                .map(|n| {
+                    if n.primary {
+                        json!({"name": n.name, "mac": n.mac, "ip": ip})
+                    } else {
+                        json!({"name": n.name, "mac": n.mac})
+                    }
+                })
+                .collect();
+            serde_json::to_string(&entries).unwrap_or_default()
+        }
+        _ => {
+            // Legacy single-NIC mode.
+            serde_json::to_string(&json!([{"name": "eth0", "ip": ip}])).unwrap_or_default()
+        }
+    }
+}
+
 async fn patch_pod_annotation(
     client: &Client,
     namespace: &str,
     name: &str,
     ip: &str,
+    nics: Option<&[crate::intent::NICIntent]>,
 ) -> Result<(), kube::Error> {
-    let interfaces_json = serde_json::to_string(&serde_json::json!([
-        {"name": "eth0", "ip": ip}
-    ]))
-    .unwrap_or_default();
+    let interfaces_json = build_interfaces_json(ip, nics);
 
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();

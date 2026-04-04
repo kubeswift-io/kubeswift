@@ -1,0 +1,14 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: single-nic-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+  # No interfaces field — single default NIC, identical to today

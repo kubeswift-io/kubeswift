@@ -21,6 +21,18 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	return buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName)
 }
 
+// podAnnotations returns the base annotations for a launcher pod,
+// including the Multus networks annotation if secondary NICs are configured.
+func podAnnotations(guest *swiftv1alpha1.SwiftGuest) map[string]string {
+	multus := BuildMultusAnnotation(guest)
+	if multus == "" {
+		return nil
+	}
+	return map[string]string{
+		MultusAnnotationKey: multus,
+	}
+}
+
 func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, intentConfigMapName string) *corev1.Pod {
 	volumes := []corev1.Volume{
 		{
@@ -94,8 +106,9 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      guest.Name,
-			Namespace: guest.Namespace,
+			Name:        guest.Name,
+			Namespace:   guest.Namespace,
+			Annotations: podAnnotations(guest),
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guest.Name,
 			},
@@ -215,8 +228,9 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      guest.Name,
-			Namespace: guest.Namespace,
+			Name:        guest.Name,
+			Namespace:   guest.Namespace,
+			Annotations: podAnnotations(guest),
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guest.Name,
 			},

@@ -5,7 +5,6 @@ set -e
 
 INTENT_PATH="${KUBESWIFT_INTENT_PATH:-/var/lib/kubeswift/intent/runtime-intent.json}"
 RUN_DIR="${KUBESWIFT_RUN_DIR:-/var/lib/kubeswift/run}"
-BRIDGE="${BRIDGE_NAME:-br0}"
 
 network_enabled() {
     [ -f "$INTENT_PATH" ] || return 1
@@ -13,14 +12,38 @@ network_enabled() {
     return 0
 }
 
+# Determine the primary bridge name.
+# Multi-NIC mode: read from nics array. Legacy mode: default br0.
+get_primary_bridge() {
+    if grep -q '"nics"' "$INTENT_PATH" 2>/dev/null; then
+        # Extract bridge name from the primary NIC entry
+        python3 -c "
+import json
+with open('$INTENT_PATH') as f:
+    intent = json.load(f)
+nics = intent.get('nics', [])
+for nic in nics:
+    if nic.get('primary', False):
+        print(nic['bridge'])
+        break
+else:
+    print('br0')
+" 2>/dev/null || echo "br0"
+    else
+        echo "${BRIDGE_NAME:-br0}"
+    fi
+}
+
 if network_enabled; then
+    BRIDGE=$(get_primary_bridge)
+
     guest_id=$(grep -o '"guestId"[[:space:]]*:[[:space:]]*"[^"]*"' "$INTENT_PATH" | cut -d'"' -f4)
     # Sanitize guest_id for path (default/rocky -> default-rocky)
     safe_id=$(echo "$guest_id" | tr '/' '-')
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
-    # Derive subnet from br0 (e.g. 10.244.125.1/24 -> 10.244.125.0/24)
+    # Derive subnet from bridge (e.g. 10.244.125.1/24 -> 10.244.125.0/24)
     br_addr=$(ip -4 addr show "$BRIDGE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | head -1)
     [ -z "$br_addr" ] && { echo "No IP on $BRIDGE"; exit 1; }
     base=$(echo "$br_addr" | cut -d'/' -f1 | sed 's/\.[0-9]*$/.0/')

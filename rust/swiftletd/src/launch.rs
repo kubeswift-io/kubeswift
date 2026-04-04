@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use swift_ch_client::{spawn_ch, wait_for_socket, VmConfig};
-use swift_qemu_client::{QemuConfig, QemuProcess};
+use swift_ch_client::{spawn_ch, wait_for_socket, NICConfig, VmConfig};
+use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess};
 use swift_runtime::RuntimeDir;
 
 use crate::intent::RuntimeIntent;
@@ -64,13 +64,11 @@ where
 
     let data_disk_path = intent.data_disk_path().to_string();
 
+    // Build NIC config from intent.
+    let (tap_name, ch_nics) = build_ch_nics(intent);
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
-        let tap_name = if intent.has_network() {
-            Some("tap0".to_string())
-        } else {
-            None
-        };
         VmConfig {
             disk_path: String::new(),
             memory_mib: intent.memory.max(128),
@@ -80,17 +78,13 @@ where
             serial_socket_path: Some(serial_socket_path.clone()),
             firmware_path: None,
             tap_name,
+            nics: ch_nics,
             kernel_path: Some(kb.kernel_path.clone()),
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
             data_disk_path: data_disk_path.clone(),
         }
     } else {
-        let tap_name = if intent.has_network() {
-            Some("tap0".to_string())
-        } else {
-            None
-        };
         VmConfig {
             disk_path: intent.disk_path().to_string(),
             memory_mib: intent.memory.max(128),
@@ -100,6 +94,7 @@ where
             serial_socket_path: Some(serial_socket_path.clone()),
             firmware_path: Some("/usr/share/kubeswift-firmware/CLOUDHV.fd".to_string()),
             tap_name,
+            nics: ch_nics,
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
@@ -153,6 +148,9 @@ where
         String::new()
     };
 
+    // Build NIC config from intent.
+    let (tap_name, mac, qemu_nics) = build_qemu_nics(intent);
+
     let config = QemuConfig {
         guest_id: intent.guest_id.clone(),
         cpus: intent.cpu.max(1),
@@ -161,13 +159,9 @@ where
         ovmf_vars,
         disk_path: intent.disk_path().to_string(),
         seed_path,
-        tap_name: if intent.has_network() {
-            Some("tap0".to_string())
-        } else {
-            None
-        },
-        // Fixed locally-administered MAC (sufficient for Phase 1 single-VM testing).
-        mac: "52:54:00:12:34:56".to_string(),
+        tap_name,
+        mac,
+        nics: qemu_nics,
         serial_socket: serial_socket.clone(),
         qmp_socket: qmp_socket.clone(),
         data_disk_path: intent.data_disk_path().to_string(),
@@ -186,4 +180,51 @@ where
 
     let status = process.wait()?;
     Ok((status, pid, serial_socket_path))
+}
+
+// ─── NIC helpers ────────────────────────────────────────────────────────────
+
+/// Build Cloud Hypervisor NIC config from intent.
+/// Returns (legacy_tap_name, multi_nics). If multi-NIC mode is active,
+/// legacy_tap_name is None and nics is populated. Otherwise the reverse.
+fn build_ch_nics(intent: &RuntimeIntent) -> (Option<String>, Vec<NICConfig>) {
+    if let Some(nics) = intent.nics() {
+        let ch_nics = nics
+            .iter()
+            .map(|n| NICConfig {
+                tap_name: n.tap_device.clone(),
+                mac: n.mac.clone(),
+            })
+            .collect();
+        (None, ch_nics)
+    } else if intent.has_network() {
+        (Some("tap0".to_string()), vec![])
+    } else {
+        (None, vec![])
+    }
+}
+
+/// Build QEMU NIC config from intent.
+/// Returns (legacy_tap, legacy_mac, multi_nics).
+fn build_qemu_nics(intent: &RuntimeIntent) -> (Option<String>, String, Vec<QemuNICConfig>) {
+    if let Some(nics) = intent.nics() {
+        let qemu_nics = nics
+            .iter()
+            .enumerate()
+            .map(|(i, n)| QemuNICConfig {
+                tap_name: n.tap_device.clone(),
+                mac: n.mac.clone(),
+                netdev_id: format!("net{}", i),
+            })
+            .collect();
+        (None, String::new(), qemu_nics)
+    } else if intent.has_network() {
+        (
+            Some("tap0".to_string()),
+            "52:54:00:12:34:56".to_string(),
+            vec![],
+        )
+    } else {
+        (None, String::new(), vec![])
+    }
 }

@@ -58,6 +58,34 @@ type SwiftGuestSpec struct {
 	// inside the guest. Works with all boot paths (disk, kernel, GPU).
 	// +optional
 	DataDiskRef *corev1.LocalObjectReference `json:"dataDiskRef,omitempty"`
+	// Interfaces defines the network interfaces for this guest.
+	// If nil or empty, a single default interface is created (backward compatible).
+	// The first interface without NetworkRef is the primary interface (DHCP, management).
+	// Interfaces with NetworkRef are secondary interfaces backed by Multus/NADs.
+	// +optional
+	Interfaces []GuestInterface `json:"interfaces,omitempty"`
+}
+
+// GuestInterface defines a single network interface for a SwiftGuest.
+type GuestInterface struct {
+	// Name is a unique identifier for this interface.
+	// Used in status reporting and logging.
+	Name string `json:"name"`
+	// NetworkRef references a NetworkAttachmentDefinition for this interface.
+	// If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
+	// If set, Multus attaches the pod to the referenced NAD.
+	// +optional
+	NetworkRef *NetworkReference `json:"networkRef,omitempty"`
+}
+
+// NetworkReference references a Multus NetworkAttachmentDefinition.
+type NetworkReference struct {
+	// Name of the NetworkAttachmentDefinition.
+	Name string `json:"name"`
+	// Namespace of the NetworkAttachmentDefinition.
+	// Defaults to the SwiftGuest's namespace if omitted.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // GuestRuntimeStatus holds runtime process information.
@@ -74,6 +102,7 @@ type GuestConsoleStatus struct {
 // GuestNetworkInterface represents a single network interface with its IP.
 type GuestNetworkInterface struct {
 	Name string `json:"name,omitempty"`
+	MAC  string `json:"mac,omitempty"`
 	IP   string `json:"ip,omitempty"`
 }
 

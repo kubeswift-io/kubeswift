@@ -428,8 +428,9 @@ func BuildGPUDiskBootPod(
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      guest.Name,
-			Namespace: guest.Namespace,
+			Name:        guest.Name,
+			Namespace:   guest.Namespace,
+			Annotations: podAnnotations(guest),
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guest.Name,
 			},
