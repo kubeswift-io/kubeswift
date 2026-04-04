@@ -99,6 +99,9 @@ fn build_interfaces_json(ip: &str, nics: Option<&[crate::intent::NICIntent]>) ->
                 .map(|n| {
                     if n.primary {
                         json!({"name": n.name, "mac": n.mac, "ip": ip})
+                    } else if n.is_sriov() {
+                        // SR-IOV: no MAC from controller, no DHCP IP discovery.
+                        json!({"name": n.name})
                     } else {
                         json!({"name": n.name, "mac": n.mac})
                     }

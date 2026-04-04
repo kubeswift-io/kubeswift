@@ -1,0 +1,28 @@
+# SwiftGuest with management NIC (bridge) + SR-IOV RDMA NIC (VFIO passthrough).
+# Prerequisites:
+#   1. SR-IOV NAD created (nad-sriov-vfio.yaml)
+#   2. SwiftImage, SwiftGuestClass, SwiftSeedProfile in namespace
+#   3. Guest image has the NIC driver (mlx5_core for Mellanox, i40e for Intel)
+#
+# The management NIC uses KubeSwift's tap+bridge+dnsmasq for DHCP/SSH.
+# The RDMA NIC is passed directly to the VM via VFIO — guest sees hardware NIC.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: sriov-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  interfaces:
+  - name: mgmt
+  - name: rdma
+    type: sriov
+    resourceName: intel.com/sriov_netdevice
+    networkRef:
+      name: sriov-rdma-net
+  runPolicy: Running

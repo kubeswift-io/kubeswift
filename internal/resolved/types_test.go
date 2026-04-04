@@ -144,6 +144,154 @@ func TestGetNICs_MACDeterminism(t *testing.T) {
 	}
 }
 
+func TestGetNICs_SRIOVInterface(t *testing.T) {
+	rg := &ResolvedGuest{
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt", Type: swiftv1alpha1.InterfaceTypeBridge},
+			{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+		},
+		Meta: Meta{Namespace: "default", Name: "sriov-test", UID: types.UID("uid-sriov-1")},
+	}
+	nics := rg.GetNICs()
+	if len(nics) != 2 {
+		t.Fatalf("GetNICs = %d NICs, want 2", len(nics))
+	}
+
+	// Primary bridge NIC.
+	if nics[0].Type != swiftv1alpha1.InterfaceTypeBridge {
+		t.Errorf("nics[0].Type = %q, want bridge", nics[0].Type)
+	}
+	if nics[0].TapDevice != "tap0" {
+		t.Errorf("nics[0].TapDevice = %q, want tap0", nics[0].TapDevice)
+	}
+	if nics[0].Bridge != "br0" {
+		t.Errorf("nics[0].Bridge = %q, want br0", nics[0].Bridge)
+	}
+	if !nics[0].Primary {
+		t.Error("nics[0].Primary = false, want true")
+	}
+	if nics[0].MAC == "" {
+		t.Error("nics[0].MAC is empty, bridge NIC should have MAC")
+	}
+
+	// SR-IOV NIC.
+	if nics[1].Type != swiftv1alpha1.InterfaceTypeSRIOV {
+		t.Errorf("nics[1].Type = %q, want sriov", nics[1].Type)
+	}
+	if nics[1].TapDevice != "" {
+		t.Errorf("nics[1].TapDevice = %q, want empty (sriov has no tap)", nics[1].TapDevice)
+	}
+	if nics[1].Bridge != "" {
+		t.Errorf("nics[1].Bridge = %q, want empty (sriov has no bridge)", nics[1].Bridge)
+	}
+	if nics[1].MAC != "" {
+		t.Errorf("nics[1].MAC = %q, want empty (sriov uses hardware MAC)", nics[1].MAC)
+	}
+	if nics[1].Primary {
+		t.Error("nics[1].Primary = true, want false")
+	}
+	if nics[1].SRIOVDevice == nil {
+		t.Fatal("nics[1].SRIOVDevice is nil, want non-nil")
+	}
+	if nics[1].SRIOVDevice.ResourceName != "intel.com/sriov_netdevice" {
+		t.Errorf("nics[1].SRIOVDevice.ResourceName = %q, want intel.com/sriov_netdevice", nics[1].SRIOVDevice.ResourceName)
+	}
+	if nics[1].MultusInterface != "net1" {
+		t.Errorf("nics[1].MultusInterface = %q, want net1", nics[1].MultusInterface)
+	}
+}
+
+func TestGetNICs_MixedBridgeAndSRIOV(t *testing.T) {
+	rg := &ResolvedGuest{
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt", Type: swiftv1alpha1.InterfaceTypeBridge},
+			{Name: "data", Type: swiftv1alpha1.InterfaceTypeBridge, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "overlay-net"}},
+			{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+		},
+		Meta: Meta{Namespace: "default", Name: "mixed-test", UID: types.UID("uid-mixed-1")},
+	}
+	nics := rg.GetNICs()
+	if len(nics) != 3 {
+		t.Fatalf("GetNICs = %d NICs, want 3", len(nics))
+	}
+
+	// Primary bridge NIC — tap0, br0.
+	if nics[0].Type != swiftv1alpha1.InterfaceTypeBridge {
+		t.Errorf("nics[0].Type = %q, want bridge", nics[0].Type)
+	}
+	if nics[0].TapDevice != "tap0" {
+		t.Errorf("nics[0].TapDevice = %q, want tap0", nics[0].TapDevice)
+	}
+	if nics[0].Bridge != "br0" {
+		t.Errorf("nics[0].Bridge = %q, want br0", nics[0].Bridge)
+	}
+	if !nics[0].Primary {
+		t.Error("nics[0].Primary = false, want true")
+	}
+
+	// Secondary bridge NIC — tap1, br1, net1.
+	if nics[1].Type != swiftv1alpha1.InterfaceTypeBridge {
+		t.Errorf("nics[1].Type = %q, want bridge", nics[1].Type)
+	}
+	if nics[1].TapDevice != "tap1" {
+		t.Errorf("nics[1].TapDevice = %q, want tap1", nics[1].TapDevice)
+	}
+	if nics[1].Bridge != "br1" {
+		t.Errorf("nics[1].Bridge = %q, want br1", nics[1].Bridge)
+	}
+	if nics[1].MultusInterface != "net1" {
+		t.Errorf("nics[1].MultusInterface = %q, want net1", nics[1].MultusInterface)
+	}
+
+	// SR-IOV NIC — no tap, no bridge, net2 (Multus index continues).
+	if nics[2].Type != swiftv1alpha1.InterfaceTypeSRIOV {
+		t.Errorf("nics[2].Type = %q, want sriov", nics[2].Type)
+	}
+	if nics[2].TapDevice != "" {
+		t.Errorf("nics[2].TapDevice = %q, want empty", nics[2].TapDevice)
+	}
+	if nics[2].Bridge != "" {
+		t.Errorf("nics[2].Bridge = %q, want empty", nics[2].Bridge)
+	}
+	if nics[2].MultusInterface != "net2" {
+		t.Errorf("nics[2].MultusInterface = %q, want net2", nics[2].MultusInterface)
+	}
+	if nics[2].SRIOVDevice == nil {
+		t.Fatal("nics[2].SRIOVDevice is nil")
+	}
+}
+
+func TestGetNICs_SRIOVDefaultType(t *testing.T) {
+	// Interface with type="" and networkRef should default to bridge, not sriov.
+	rg := &ResolvedGuest{
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"},
+			{Name: "data", Type: "", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "some-net"}},
+		},
+		Meta: Meta{Namespace: "default", Name: "default-type-test", UID: types.UID("uid-dt-1")},
+	}
+	nics := rg.GetNICs()
+	if len(nics) != 2 {
+		t.Fatalf("GetNICs = %d NICs, want 2", len(nics))
+	}
+
+	// Both should be bridge type.
+	for i, nic := range nics {
+		if nic.Type != swiftv1alpha1.InterfaceTypeBridge {
+			t.Errorf("nics[%d].Type = %q, want bridge (empty type defaults to bridge)", i, nic.Type)
+		}
+		if nic.SRIOVDevice != nil {
+			t.Errorf("nics[%d].SRIOVDevice should be nil for bridge type", i)
+		}
+		if nic.TapDevice == "" {
+			t.Errorf("nics[%d].TapDevice is empty, bridge NIC should have tap device", i)
+		}
+		if nic.Bridge == "" {
+			t.Errorf("nics[%d].Bridge is empty, bridge NIC should have bridge device", i)
+		}
+	}
+}
+
 func TestGetNICs_MACUniqueness(t *testing.T) {
 	rg := &ResolvedGuest{
 		Interfaces: []swiftv1alpha1.GuestInterface{

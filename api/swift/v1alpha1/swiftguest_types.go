@@ -66,16 +66,34 @@ type SwiftGuestSpec struct {
 	Interfaces []GuestInterface `json:"interfaces,omitempty"`
 }
 
+// InterfaceType constants for GuestInterface.Type.
+const (
+	InterfaceTypeBridge = "bridge"
+	InterfaceTypeSRIOV  = "sriov"
+)
+
 // GuestInterface defines a single network interface for a SwiftGuest.
 type GuestInterface struct {
 	// Name is a unique identifier for this interface.
 	// Used in status reporting and logging.
 	Name string `json:"name"`
+	// Type specifies the interface type.
+	//   bridge: (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
+	//   sriov:  SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+	// +kubebuilder:validation:Enum=bridge;sriov
+	// +kubebuilder:default=bridge
+	// +optional
+	Type string `json:"type,omitempty"`
 	// NetworkRef references a NetworkAttachmentDefinition for this interface.
 	// If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
 	// If set, Multus attaches the pod to the referenced NAD.
 	// +optional
 	NetworkRef *NetworkReference `json:"networkRef,omitempty"`
+	// ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
+	// Required when type is "sriov". The device plugin allocates a VF and the controller
+	// adds this resource to the pod's resource limits.
+	// +optional
+	ResourceName string `json:"resourceName,omitempty"`
 }
 
 // NetworkReference references a Multus NetworkAttachmentDefinition.

@@ -5,6 +5,13 @@ use std::path::PathBuf;
 /// Default QEMU binary. Override with KUBESWIFT_QEMU_BINARY env.
 pub const DEFAULT_QEMU_BINARY: &str = "qemu-system-x86_64";
 
+/// VFIO device for passthrough (GPU or SR-IOV NIC).
+#[derive(Debug, Clone)]
+pub struct QemuVFIODevice {
+    /// Host PCI BDF address (e.g., "0000:3b:0a.0").
+    pub host_address: String,
+}
+
 /// Network interface configuration for multi-NIC mode.
 #[derive(Debug, Clone)]
 pub struct QemuNICConfig {
@@ -45,6 +52,9 @@ pub struct QemuConfig {
     pub qmp_socket: PathBuf,
     /// Optional secondary data disk path. Empty = no data disk.
     pub data_disk_path: String,
+    /// VFIO devices to pass through (SR-IOV VFs, GPUs).
+    /// Each produces a -device vfio-pci,host=<address> argument.
+    pub vfio_devices: Vec<QemuVFIODevice>,
 }
 
 impl QemuConfig {
@@ -129,6 +139,14 @@ impl QemuConfig {
             ]);
         }
 
+        // VFIO passthrough devices (SR-IOV VFs, GPUs).
+        for dev in &self.vfio_devices {
+            args.extend([
+                "-device".to_string(),
+                format!("vfio-pci,host={}", dev.host_address),
+            ]);
+        }
+
         // Serial console socket — server=on so guest can connect after QEMU starts
         args.extend([
             "-chardev".to_string(),
@@ -169,6 +187,7 @@ mod tests {
             tap_name: Some("tap0".to_string()),
             mac: "52:54:00:12:34:56".to_string(),
             nics: vec![],
+            vfio_devices: vec![],
             serial_socket: PathBuf::from("/tmp/run/serial.sock"),
             qmp_socket: PathBuf::from("/tmp/run/qmp.sock"),
             data_disk_path: String::new(),
@@ -343,6 +362,55 @@ mod tests {
         assert!(
             joined.contains("mac=52:54:00:12:34:56"),
             "legacy mac: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_qemu_args_sriov_vfio_device() {
+        let mut cfg = make_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![];
+        cfg.vfio_devices = vec![QemuVFIODevice {
+            host_address: "0000:3b:0a.0".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("vfio-pci,host=0000:3b:0a.0"),
+            "missing vfio-pci device: {}",
+            joined
+        );
+        // Should NOT have virtio-net
+        assert!(
+            !joined.contains("virtio-net"),
+            "unexpected virtio-net with VFIO only: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_qemu_args_mixed_bridge_and_sriov() {
+        let mut cfg = make_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![QemuNICConfig {
+            tap_name: "tap0".to_string(),
+            mac: "52:54:00:01:00:00".to_string(),
+            netdev_id: "net0".to_string(),
+        }];
+        cfg.vfio_devices = vec![QemuVFIODevice {
+            host_address: "0000:3b:0a.0".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("virtio-net-pci"),
+            "missing virtio-net for bridge: {}",
+            joined
+        );
+        assert!(
+            joined.contains("vfio-pci,host=0000:3b:0a.0"),
+            "missing vfio-pci for SR-IOV: {}",
             joined
         );
     }

@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use swift_ch_client::{spawn_ch, wait_for_socket, NICConfig, VmConfig};
-use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess};
+use swift_ch_client::{spawn_ch, wait_for_socket, NICConfig, VFIODeviceConfig, VmConfig};
+use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
 
 use crate::intent::RuntimeIntent;
@@ -65,7 +65,7 @@ where
     let data_disk_path = intent.data_disk_path().to_string();
 
     // Build NIC config from intent.
-    let (tap_name, ch_nics) = build_ch_nics(intent);
+    let (tap_name, ch_nics, vfio_devices) = build_ch_nics(intent);
 
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
@@ -83,6 +83,7 @@ where
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
             data_disk_path: data_disk_path.clone(),
+            vfio_devices,
         }
     } else {
         VmConfig {
@@ -99,6 +100,7 @@ where
             initramfs_path: None,
             kernel_cmdline: None,
             data_disk_path: data_disk_path.clone(),
+            vfio_devices,
         }
     };
 
@@ -149,7 +151,7 @@ where
     };
 
     // Build NIC config from intent.
-    let (tap_name, mac, qemu_nics) = build_qemu_nics(intent);
+    let (tap_name, mac, qemu_nics, vfio_devices) = build_qemu_nics(intent);
 
     let config = QemuConfig {
         guest_id: intent.guest_id.clone(),
@@ -162,6 +164,7 @@ where
         tap_name,
         mac,
         nics: qemu_nics,
+        vfio_devices,
         serial_socket: serial_socket.clone(),
         qmp_socket: qmp_socket.clone(),
         data_disk_path: intent.data_disk_path().to_string(),
@@ -185,46 +188,95 @@ where
 // ─── NIC helpers ────────────────────────────────────────────────────────────
 
 /// Build Cloud Hypervisor NIC config from intent.
-/// Returns (legacy_tap_name, multi_nics). If multi-NIC mode is active,
-/// legacy_tap_name is None and nics is populated. Otherwise the reverse.
-fn build_ch_nics(intent: &RuntimeIntent) -> (Option<String>, Vec<NICConfig>) {
+/// Returns (legacy_tap_name, bridge_nics, vfio_devices).
+/// Bridge NICs get --net tap=<tap>,mac=<mac>; SR-IOV NICs get --device path=<sysfs>.
+fn build_ch_nics(
+    intent: &RuntimeIntent,
+) -> (Option<String>, Vec<NICConfig>, Vec<VFIODeviceConfig>) {
     if let Some(nics) = intent.nics() {
-        let ch_nics = nics
-            .iter()
-            .map(|n| NICConfig {
-                tap_name: n.tap_device.clone(),
-                mac: n.mac.clone(),
-            })
-            .collect();
-        (None, ch_nics)
+        let mut ch_nics = vec![];
+        let mut vfio_devs = vec![];
+        let mut sriov_idx = 0usize;
+        for n in nics {
+            if n.is_sriov() {
+                if let Some(dev) = &n.sriov_device {
+                    if let Some(addr) =
+                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
+                    {
+                        vfio_devs.push(VFIODeviceConfig {
+                            sysfs_path: format!("/sys/bus/pci/devices/{}/", addr),
+                        });
+                        sriov_idx += 1;
+                    } else {
+                        log::error!(
+                            "SR-IOV VF address not found for resource {}",
+                            dev.resource_name
+                        );
+                    }
+                }
+            } else {
+                ch_nics.push(NICConfig {
+                    tap_name: n.tap_device.clone(),
+                    mac: n.mac.clone(),
+                });
+            }
+        }
+        (None, ch_nics, vfio_devs)
     } else if intent.has_network() {
-        (Some("tap0".to_string()), vec![])
+        (Some("tap0".to_string()), vec![], vec![])
     } else {
-        (None, vec![])
+        (None, vec![], vec![])
     }
 }
 
 /// Build QEMU NIC config from intent.
-/// Returns (legacy_tap, legacy_mac, multi_nics).
-fn build_qemu_nics(intent: &RuntimeIntent) -> (Option<String>, String, Vec<QemuNICConfig>) {
+/// Returns (legacy_tap, legacy_mac, bridge_nics, vfio_devices).
+fn build_qemu_nics(
+    intent: &RuntimeIntent,
+) -> (
+    Option<String>,
+    String,
+    Vec<QemuNICConfig>,
+    Vec<QemuVFIODevice>,
+) {
     if let Some(nics) = intent.nics() {
-        let qemu_nics = nics
-            .iter()
-            .enumerate()
-            .map(|(i, n)| QemuNICConfig {
-                tap_name: n.tap_device.clone(),
-                mac: n.mac.clone(),
-                netdev_id: format!("net{}", i),
-            })
-            .collect();
-        (None, String::new(), qemu_nics)
+        let mut qemu_nics = vec![];
+        let mut vfio_devs = vec![];
+        let mut net_idx = 0usize;
+        let mut sriov_idx = 0usize;
+        for n in nics {
+            if n.is_sriov() {
+                if let Some(dev) = &n.sriov_device {
+                    if let Some(addr) =
+                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
+                    {
+                        vfio_devs.push(QemuVFIODevice { host_address: addr });
+                        sriov_idx += 1;
+                    } else {
+                        log::error!(
+                            "SR-IOV VF address not found for resource {}",
+                            dev.resource_name
+                        );
+                    }
+                }
+            } else {
+                qemu_nics.push(QemuNICConfig {
+                    tap_name: n.tap_device.clone(),
+                    mac: n.mac.clone(),
+                    netdev_id: format!("net{}", net_idx),
+                });
+                net_idx += 1;
+            }
+        }
+        (None, String::new(), qemu_nics, vfio_devs)
     } else if intent.has_network() {
         (
             Some("tap0".to_string()),
             "52:54:00:12:34:56".to_string(),
             vec![],
+            vec![],
         )
     } else {
-        (None, String::new(), vec![])
+        (None, String::new(), vec![], vec![])
     }
 }

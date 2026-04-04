@@ -139,6 +139,22 @@ spec:
                       required:
                       - name
                       type: object
+                    resourceName:
+                      description: |-
+                        ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
+                        Required when type is "sriov". The device plugin allocates a VF and the controller
+                        adds this resource to the pod's resource limits.
+                      type: string
+                    type:
+                      default: bridge
+                      description: |-
+                        Type specifies the interface type.
+                          bridge: (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
+                          sriov:  SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+                      enum:
+                      - bridge
+                      - sriov
+                      type: string
                   required:
                   - name
                   type: object

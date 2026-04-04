@@ -44,17 +44,54 @@ pub struct RuntimeIntent {
 pub struct NICIntent {
     /// Interface identifier (matches spec.interfaces[].name).
     pub name: String,
+    /// Interface type: "bridge" (tap+bridge+virtio-net) or "sriov" (VFIO passthrough).
+    /// Defaults to "bridge" if absent.
+    #[serde(default = "default_bridge_type")]
+    pub r#type: String,
     /// Tap device name inside the pod namespace (tap0, tap1, etc.)
+    /// Empty for SR-IOV interfaces.
+    #[serde(default)]
     pub tap_device: String,
-    /// MAC address for this interface.
+    /// MAC address for this interface (bridge type only).
+    #[serde(default)]
     pub mac: String,
     /// True if this is the primary NIC with DHCP/dnsmasq.
+    #[serde(default)]
     pub primary: bool,
     /// Multus-created interface name (net1, net2, etc.). Empty for primary.
     #[serde(default)]
     pub multus_interface: Option<String>,
-    /// Bridge device name (br0, br1, etc.)
+    /// Bridge device name (br0, br1, etc.). Empty for SR-IOV.
+    #[serde(default)]
     pub bridge: String,
+    /// SR-IOV VF device info for VFIO passthrough. Only set when type=sriov.
+    #[serde(default)]
+    pub sriov_device: Option<SRIOVDeviceIntent>,
+}
+
+/// SR-IOV VF device info for VFIO passthrough.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SRIOVDeviceIntent {
+    /// SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
+    /// Used to find the PCIDEVICE_* env var at runtime.
+    pub resource_name: String,
+}
+
+fn default_bridge_type() -> String {
+    "bridge".to_string()
+}
+
+impl NICIntent {
+    /// Returns true if this is a bridge-type NIC (tap+bridge+virtio-net).
+    pub fn is_bridge(&self) -> bool {
+        self.r#type.is_empty() || self.r#type == "bridge"
+    }
+
+    /// Returns true if this is an SR-IOV NIC (VFIO passthrough).
+    pub fn is_sriov(&self) -> bool {
+        self.r#type == "sriov"
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +165,28 @@ impl RuntimeIntent {
     }
 }
 
+/// Discover VF PCI address from the SR-IOV device plugin environment variable.
+/// The device plugin sets PCIDEVICE_<RESOURCE>=<BDF> where the resource name
+/// is uppercased and . / are replaced with _.
+/// If multiple VFs are allocated, the value is comma-separated; this returns
+/// the nth address (0-indexed).
+pub fn discover_sriov_vf_address(resource_name: &str, index: usize) -> Option<String> {
+    let env_key = format!(
+        "PCIDEVICE_{}",
+        resource_name
+            .to_uppercase()
+            .replace('.', "_")
+            .replace('/', "_")
+    );
+    if let Ok(val) = std::env::var(&env_key) {
+        let addrs: Vec<&str> = val.split(',').collect();
+        addrs.get(index).map(|s| s.to_string())
+    } else {
+        log::warn!("SR-IOV env var {} not found", env_key);
+        None
+    }
+}
+
 /// Load runtime intent from the canonical path.
 pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
     let contents = std::fs::read_to_string(path)
@@ -195,5 +254,51 @@ mod tests {
         }"#;
         let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
         assert!(intent.nics().is_none(), "empty nics should return None");
+    }
+
+    #[test]
+    fn test_intent_sriov_type() {
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test",
+            "network": true,
+            "nics": [
+                {"name": "mgmt", "type": "bridge", "tapDevice": "tap0", "mac": "52:54:00:aa:bb:01", "primary": true, "bridge": "br0"},
+                {"name": "rdma", "type": "sriov", "sriovDevice": {"resourceName": "intel.com/sriov_netdevice"}}
+            ]
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        let nics = intent.nics().expect("should have nics");
+        assert_eq!(nics.len(), 2);
+        assert!(nics[0].is_bridge());
+        assert!(!nics[0].is_sriov());
+        assert!(nics[1].is_sriov());
+        assert!(!nics[1].is_bridge());
+        assert_eq!(
+            nics[1].sriov_device.as_ref().unwrap().resource_name,
+            "intel.com/sriov_netdevice"
+        );
+    }
+
+    #[test]
+    fn test_intent_default_type() {
+        // NICIntent without explicit type defaults to bridge
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test",
+            "network": true,
+            "nics": [
+                {"name": "mgmt", "tapDevice": "tap0", "mac": "52:54:00:aa:bb:01", "primary": true, "bridge": "br0"}
+            ]
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        let nics = intent.nics().unwrap();
+        assert!(nics[0].is_bridge(), "default type should be bridge");
     }
 }

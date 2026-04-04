@@ -105,10 +105,17 @@ with open('$INTENT_PATH') as f:
     intent = json.load(f)
 nics = intent.get('nics', [])
 for nic in nics:
+    nic_type = nic.get('type', 'bridge')
     primary = '1' if nic.get('primary', False) else '0'
     multus = nic.get('multusInterface', '')
-    print(f\"{nic['tapDevice']}|{nic['bridge']}|{primary}|{multus}\")
-" | while IFS='|' read -r tap bridge primary multus; do
+    tap = nic.get('tapDevice', '')
+    bridge = nic.get('bridge', '')
+    print(f\"{nic_type}|{tap}|{bridge}|{primary}|{multus}|{nic['name']}\")
+" | while IFS='|' read -r nic_type tap bridge primary multus name; do
+        if [ "$nic_type" = "sriov" ]; then
+            echo "Skipping SR-IOV interface $name — VFIO passthrough handled by swiftletd"
+            continue
+        fi
         if [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"
         else

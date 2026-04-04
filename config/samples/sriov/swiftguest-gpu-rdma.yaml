@@ -1,0 +1,32 @@
+# SwiftGuest with GPU passthrough + SR-IOV RDMA NIC for GPUDirect RDMA.
+# Prerequisites:
+#   1. GPU profile created (e.g., gpu-hgx/swiftgpuprofile-h200-hgx.yaml)
+#   2. SR-IOV NAD created (nad-sriov-vfio.yaml)
+#   3. SwiftImage, SwiftGuestClass, SwiftSeedProfile in namespace
+#   4. Guest image has NVIDIA GPU driver + Mellanox OFED (mlx5_core + nv_peer_mem)
+#
+# For optimal GPUDirect RDMA performance, the SR-IOV VF and GPUs should be
+# on the same NUMA node. The SR-IOV device plugin can be configured with
+# NUMA-aware scheduling to ensure this.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: gpu-rdma-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  gpuProfileRef:
+    name: h200-hgx-4gpu
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  interfaces:
+  - name: mgmt
+  - name: rdma
+    type: sriov
+    resourceName: intel.com/sriov_netdevice
+    networkRef:
+      name: sriov-rdma-net
+  runPolicy: Running

@@ -192,8 +192,32 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 	bridgeIdx := 0
 	multusIdx := 1 // Multus interfaces start at net1
 	for _, iface := range r.Interfaces {
+		ifaceType := iface.Type
+		if ifaceType == "" {
+			ifaceType = swiftv1alpha1.InterfaceTypeBridge
+		}
+
+		if ifaceType == swiftv1alpha1.InterfaceTypeSRIOV {
+			// SR-IOV: VFIO passthrough — no tap, no bridge, no MAC from controller.
+			nic := runtimeintent.NICIntent{
+				Name: iface.Name,
+				Type: swiftv1alpha1.InterfaceTypeSRIOV,
+				SRIOVDevice: &runtimeintent.SRIOVDeviceIntent{
+					ResourceName: iface.ResourceName,
+				},
+			}
+			if iface.NetworkRef != nil {
+				nic.MultusInterface = fmt.Sprintf("net%d", multusIdx)
+				multusIdx++
+			}
+			nics = append(nics, nic)
+			continue
+		}
+
+		// Bridge type: tap+bridge+virtio-net.
 		nic := runtimeintent.NICIntent{
 			Name:      iface.Name,
+			Type:      swiftv1alpha1.InterfaceTypeBridge,
 			TapDevice: fmt.Sprintf("tap%d", tapIdx),
 			MAC:       runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(r.Meta.Namespace, r.Meta.Name, iface.Name)),
 			Bridge:    fmt.Sprintf("br%d", bridgeIdx),
