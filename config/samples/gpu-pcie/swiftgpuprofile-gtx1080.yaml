@@ -1,0 +1,27 @@
+# SwiftGPUProfile for NVIDIA GeForce GTX 1080 (Tier 1 PCIe).
+# Uses Cloud Hypervisor with flat PCI topology — no QEMU, no NVSwitch.
+# The GTX 1080 has small BARs (<256MB) so noMmap is not needed.
+# No hugepages required for Tier 1 consumer GPUs.
+#
+# Prerequisites:
+#   1. Node labeled kubeswift.io/gpu-node=true
+#   2. GPU discovery DaemonSet running (populates SwiftGPUNode)
+#   3. IOMMU enabled, VFIO modules loaded
+#
+# Apply: kubectl apply -f swiftgpuprofile-gtx1080.yaml
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: gtx1080-single
+  namespace: default
+spec:
+  count: 1
+  model: ""                 # accept any model on the node
+  tier: pcie                # Tier 1 — Cloud Hypervisor, --device passthrough
+  partitionMode: isolated   # no NVSwitch, no Fabric Manager
+  pcieTopology:
+    rootPortPerDevice: false
+    gpuDirectClique: 0
+    noMmap: false           # GTX 1080 BARs are small
+  hugepages: ""             # not required for Tier 1
+  vcpuPinning: false
