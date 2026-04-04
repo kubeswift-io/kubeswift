@@ -1,6 +1,8 @@
 # KubeSwift Makefile
 
-IMAGE_TAG ?= latest
+# IMAGE_TAG defaults to sha-<short-git-hash> matching CI's tagging convention.
+# Override with: make deploy IMAGE_TAG=v1.0.0
+IMAGE_TAG ?= sha-$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
 GPU_DISCOVERY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/gpu-discovery:$(IMAGE_TAG)
@@ -115,6 +117,7 @@ generate:
 	$(shell go env GOPATH)/bin/controller-gen object crd paths="./api/..." output:crd:dir=config/crd/bases
 
 deploy: generate
+	@echo "Deploying with IMAGE_TAG=$(IMAGE_TAG)"
 	kubectl apply -k config/crd
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftguests.swift.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftimages.image.kubeswift.io
@@ -123,7 +126,16 @@ deploy: generate
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftguestclasses.swift.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpuprofiles.gpu.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpunodes.gpu.kubeswift.io
+	@# Set controller-manager image tag via kustomize, apply, then reset.
+	cd config/manager && sed -i 's/newTag: .*/newTag: $(IMAGE_TAG)/' kustomization.yaml
 	kubectl apply -k config/default
+	cd config/manager && sed -i 's/newTag: .*/newTag: latest/' kustomization.yaml
+	@# Set KUBESWIFT_LAUNCHER_IMAGE so the controller creates pods with the correct swiftletd image.
+	kubectl set env deployment/controller-manager -n kubeswift-system \
+		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
+	@# GPU discovery: set image tag and deploy RBAC + DaemonSet.
+	kubectl apply -f config/rbac/gpu-discovery-rbac.yaml
+	sed 's|gpu-discovery:latest|gpu-discovery:$(IMAGE_TAG)|' config/daemonset/gpu-discovery.yaml | kubectl apply -f -
 
 undeploy:
 	kubectl delete -k config/default --ignore-not-found --timeout=60s
