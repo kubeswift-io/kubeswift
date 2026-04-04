@@ -342,6 +342,22 @@ For general multi-NIC configuration, see [Multi-NIC Support](multi-nic.md).
 > over overlay networks. See [SR-IOV NIC Passthrough](networking/sriov.md)
 > for setup, including the GPUDirect RDMA guide.
 
+## IOMMU Group Peer Handling
+
+VFIO requires all devices in an IOMMU group to be isolated (bound to vfio-pci or
+unbound). Consumer NVIDIA GPUs (GTX, RTX) share their IOMMU group with a companion
+HD Audio controller. HGX GPUs may share with NVSwitch or other devices.
+
+The `gpu-init` init container handles this automatically:
+1. For each GPU PCI address, it discovers the IOMMU group via sysfs
+2. It enumerates all devices in the group
+3. PCIe bridges (class `0x0604xx`) are skipped — VFIO handles them internally
+4. All other peer devices (audio controllers, USB, etc.) are bound to vfio-pci
+5. Only the GPU itself is passed to the VM — peers are bound solely for isolation
+
+This means consumer GPUs (GTX 1080, RTX 4090, etc.) work out of the box without
+manual pre-binding of companion devices.
+
 ## Troubleshooting
 
 **CUDA initialization fails ("no devices found")**
