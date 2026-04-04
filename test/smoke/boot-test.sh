@@ -316,6 +316,12 @@ scenario_multi_nic() {
   kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-noble.yaml" -n "$NAMESPACE" >/dev/null
   wait_image_ready "ubuntu-noble" || { RESULTS[multi-nic]="FAIL"; return; }
 
+  # Wait for any previous guest pods using the same image PVC to fully terminate.
+  # The disk-boot scenario deletes with --wait=false; CH will fail with AlreadyLocked
+  # if the old pod still holds a write lock on the image.
+  echo "  Waiting for previous pods to release image lock..."
+  kubectl wait --for=delete pod/sample -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+
   # Apply a SwiftGuest with explicit interfaces field (single primary, no Multus needed)
   cat <<'MULTINIC_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
 apiVersion: swift.kubeswift.io/v1alpha1
