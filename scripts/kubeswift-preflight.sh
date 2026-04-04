@@ -60,6 +60,14 @@ This script performs read-only checks for:
 - required networking modules/sysctls
 - container runtime presence
 - recommended capacity checks
+- (optional) IOMMU and VFIO for GPU/SR-IOV passthrough
+- (optional) SR-IOV VF availability
+- (optional) hugepage allocation
+- (optional) Multus CNI presence
+- (optional) IOMMU and VFIO for GPU/SR-IOV passthrough
+- (optional) SR-IOV VF availability
+- (optional) hugepage allocation
+- (optional) Multus CNI presence
 
 Exit codes:
   0  Ready (no hard failures; warnings may still be present)
@@ -608,6 +616,136 @@ check_disk_warning() {
   fi
 }
 
+# ─── Optional capability checks (WARN-level, not FAIL) ────────────────────
+
+check_iommu() {
+  local cmdline
+  cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+
+  local iommu_param=0
+  if echo "$cmdline" | grep -qE '(intel_iommu=on|amd_iommu=on)'; then
+    iommu_param=1
+  fi
+
+  local iommu_active=0
+  if dmesg 2>/dev/null | grep -qiE '(DMAR:.*IOMMU enabled|AMD-Vi.*loaded)'; then
+    iommu_active=1
+  fi
+
+  if [ "$iommu_active" -eq 1 ]; then
+    emit_pass "IOMMU: active (GPU/SR-IOV passthrough capable)"
+  elif [ "$iommu_param" -eq 1 ]; then
+    emit_warn "IOMMU: kernel parameter set but not confirmed active in dmesg (reboot may be needed)" \
+      "Reboot and verify with: dmesg | grep -e DMAR -e IOMMU"
+  else
+    emit_warn "IOMMU: not enabled (required for GPU passthrough and SR-IOV; add intel_iommu=on or amd_iommu=on to kernel cmdline)" \
+      "$(cat <<'EOF'
+# Enable IOMMU (Intel example):
+sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 intel_iommu=on iommu=pt"/' /etc/default/grub
+sudo update-grub
+sudo reboot
+EOF
+)"
+  fi
+}
+
+check_vfio_modules() {
+  local have_vfio=0 have_vfio_pci=0 have_iommu_type1=0
+
+  if [ -r /proc/modules ]; then
+    grep -qE '^vfio[[:space:]]' /proc/modules 2>/dev/null && have_vfio=1
+    grep -qE '^vfio_pci[[:space:]]' /proc/modules 2>/dev/null && have_vfio_pci=1
+    grep -qE '^vfio_iommu_type1[[:space:]]' /proc/modules 2>/dev/null && have_iommu_type1=1
+  fi
+
+  if [ "$have_vfio" -eq 1 ] && [ "$have_vfio_pci" -eq 1 ] && [ "$have_iommu_type1" -eq 1 ]; then
+    emit_pass "VFIO modules: vfio, vfio_pci, vfio_iommu_type1 loaded"
+  else
+    local missing=""
+    [ "$have_vfio" -eq 0 ] && missing="vfio "
+    [ "$have_vfio_pci" -eq 0 ] && missing="${missing}vfio_pci "
+    [ "$have_iommu_type1" -eq 0 ] && missing="${missing}vfio_iommu_type1 "
+    emit_warn "VFIO modules: missing ${missing}(required for GPU/SR-IOV passthrough)" \
+      "$(cat <<'EOF'
+# Load VFIO modules:
+sudo modprobe vfio vfio_iommu_type1 vfio_pci
+
+# Make permanent:
+cat <<'EOM' | sudo tee /etc/modules-load.d/kubeswift-vfio.conf
+vfio
+vfio_iommu_type1
+vfio_pci
+EOM
+EOF
+)"
+  fi
+}
+
+check_sriov_vfs() {
+  local vf_count=0
+  vf_count="$(lspci 2>/dev/null | grep -ci 'Virtual Function' || true)"
+
+  if [ "$vf_count" -gt 0 ]; then
+    emit_pass "SR-IOV VFs: $vf_count VF(s) detected"
+  else
+    emit_warn "SR-IOV VFs: none detected (required for SR-IOV NIC passthrough)" \
+      "$(cat <<'EOF'
+# Create VFs on an SR-IOV NIC (example):
+echo 8 | sudo tee /sys/class/net/<pf>/device/sriov_numvfs
+
+# Verify:
+lspci | grep "Virtual Function"
+
+# See docs/networking/sriov.md for the full setup guide.
+EOF
+)"
+  fi
+}
+
+check_hugepages() {
+  local total free
+  total="$(awk '/HugePages_Total:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  free="$(awk '/HugePages_Free:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+
+  if [ "$total" -gt 0 ]; then
+    emit_pass "Hugepages: ${total} total, ${free} free (1GiB pages)"
+  else
+    emit_warn "Hugepages: none allocated (required for GPU Tier 2/3 workloads)" \
+      "$(cat <<'EOF'
+# Allocate 1GiB hugepages (example: 400 pages = 400 GiB):
+echo 400 | sudo tee /proc/sys/vm/nr_hugepages
+
+# Make permanent:
+echo "vm.nr_hugepages = 400" | sudo tee /etc/sysctl.d/99-kubeswift-hugepages.conf
+sudo sysctl --system
+EOF
+)"
+  fi
+}
+
+check_multus() {
+  if ! command_exists kubectl; then
+    emit_warn "Multus: cannot check (kubectl not found)"
+    return
+  fi
+
+  local multus_pods
+  multus_pods="$(kubectl get pods -A 2>/dev/null | grep -c multus || true)"
+
+  if [ "$multus_pods" -gt 0 ]; then
+    emit_pass "Multus CNI: $multus_pods pod(s) detected in cluster"
+  else
+    emit_warn "Multus CNI: not detected in cluster (required for multi-NIC and SR-IOV guests)" \
+      "$(cat <<'EOF'
+# Install Multus CNI:
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset-thick.yml
+
+# See docs/multi-nic.md for multi-NIC setup.
+EOF
+)"
+  fi
+}
+
 print_actions() {
   local title="$1"
   shift
@@ -718,6 +856,14 @@ main() {
   check_containerd_config_warning
   check_memory_warning
   check_disk_warning
+
+  echo
+  echo "--- Optional capabilities (GPU, SR-IOV, Multi-NIC) ---"
+  check_iommu
+  check_vfio_modules
+  check_sriov_vfs
+  check_hugepages
+  check_multus
 
   print_summary
 
