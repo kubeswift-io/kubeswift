@@ -11,6 +11,10 @@ set -euo pipefail
 # Required environment variables:
 #   GPU_PCI_ADDRESSES  — comma-separated BDF addresses (e.g. "0000:17:00.0,0000:3d:00.0")
 #   GPU_PARTITION_ID   — Fabric Manager partition ID to activate, or -1 to skip
+#
+# The host sysfs is mounted at /host/sys/bus/pci (not /sys/bus/pci) to avoid
+# being shadowed by the container runtime's read-only sysfs mount.
+SYSFS_PCI="${SYSFS_PCI_PATH:-/host/sys/bus/pci}"
 
 # Validate PCI BDF address format (DDDD:BB:DD.F) to prevent path traversal
 # or injection via crafted addresses in the GPU_PCI_ADDRESSES env var.
@@ -31,7 +35,7 @@ bind_to_vfio() {
 
   # Check if already bound to vfio-pci.
   local current_driver
-  current_driver=$(basename "$(readlink /sys/bus/pci/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
+  current_driver=$(basename "$(readlink ${SYSFS_PCI}/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
   if [ "$current_driver" = "vfio-pci" ]; then
     echo "${addr} (${label}): already bound to vfio-pci"
     return 0
@@ -40,20 +44,20 @@ bind_to_vfio() {
   echo "Binding ${addr} (${label}) to vfio-pci"
 
   # Unbind from the current driver (ignore errors — device may already be unbound).
-  if [ -e "/sys/bus/pci/devices/${addr}/driver/unbind" ]; then
-    echo "${addr}" > /sys/bus/pci/devices/"${addr}"/driver/unbind 2>/dev/null || true
+  if [ -e "${SYSFS_PCI}/devices/${addr}/driver/unbind" ]; then
+    echo "${addr}" > ${SYSFS_PCI}/devices/"${addr}"/driver/unbind 2>/dev/null || true
   fi
 
   # Override to vfio-pci and probe.
-  echo vfio-pci > /sys/bus/pci/devices/"${addr}"/driver_override
-  echo "${addr}" > /sys/bus/pci/drivers_probe
+  echo vfio-pci > ${SYSFS_PCI}/devices/"${addr}"/driver_override
+  echo "${addr}" > ${SYSFS_PCI}/drivers_probe
 
   # Clear the override so it does not persist across future driver probes.
-  echo > /sys/bus/pci/devices/"${addr}"/driver_override
+  echo > ${SYSFS_PCI}/devices/"${addr}"/driver_override
 
   # Verify the binding succeeded.
   local driver
-  driver=$(basename "$(readlink /sys/bus/pci/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
+  driver=$(basename "$(readlink ${SYSFS_PCI}/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
   if [ "$driver" != "vfio-pci" ]; then
     echo "ERROR: ${addr} bound to '${driver}', expected 'vfio-pci'"
     exit 1
@@ -75,7 +79,7 @@ bind_iommu_group_peers() {
 
   # Find the IOMMU group for this device.
   local iommu_group_path
-  iommu_group_path=$(readlink -f /sys/bus/pci/devices/"${gpu_addr}"/iommu_group 2>/dev/null || true)
+  iommu_group_path=$(readlink -f ${SYSFS_PCI}/devices/"${gpu_addr}"/iommu_group 2>/dev/null || true)
   if [ -z "$iommu_group_path" ] || [ ! -d "$iommu_group_path/devices" ]; then
     echo "WARNING: could not determine IOMMU group for ${gpu_addr}"
     return 0
@@ -98,7 +102,7 @@ bind_iommu_group_peers() {
 
     # Read the PCI class to determine device type.
     local pci_class
-    pci_class=$(cat /sys/bus/pci/devices/"${peer_addr}"/class 2>/dev/null || echo "0x000000")
+    pci_class=$(cat ${SYSFS_PCI}/devices/"${peer_addr}"/class 2>/dev/null || echo "0x000000")
 
     # Skip PCI/PCIe bridges (class 0x0604xx). VFIO handles bridges internally
     # via the pci-stub or vfio-pci bridge support. Binding them to vfio-pci
@@ -130,7 +134,7 @@ for addr in "${ADDRS[@]}"; do
 
   # Bind IOMMU group peers first — they must be isolated before VFIO will
   # grant access to the GPU.
-  local_group=$(basename "$(readlink -f /sys/bus/pci/devices/"${addr}"/iommu_group 2>/dev/null)" 2>/dev/null || echo "")
+  local_group=$(basename "$(readlink -f ${SYSFS_PCI}/devices/"${addr}"/iommu_group 2>/dev/null)" 2>/dev/null || echo "")
   if [ -n "$local_group" ]; then
     case " $PROCESSED_GROUPS " in
       *" $local_group "*)
