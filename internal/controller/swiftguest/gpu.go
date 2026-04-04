@@ -399,7 +399,7 @@ func BuildGPUDiskBootPod(
 		SecurityContext: gpuInitSecurityContext(),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "dev-vfio", MountPath: "/dev/vfio"},
-			{Name: "sysfs-pci", MountPath: "/sys/bus/pci"},
+			{Name: "sysfs-pci", MountPath: "/host/sys/bus/pci"},
 		},
 	}
 
