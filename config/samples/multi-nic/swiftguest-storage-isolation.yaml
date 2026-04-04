@@ -1,0 +1,25 @@
+# SwiftGuest with dedicated storage NIC for Ceph/iSCSI/NFS traffic.
+# Prerequisites:
+#   1. NAD created (e.g., nad-ovn-layer2.yaml with name storage-net)
+#   2. SwiftImage, SwiftGuestClass, SwiftSeedProfile in namespace
+#
+# Management NIC: SSH, cloud-init, Kubernetes API
+# Storage NIC: dedicated path to storage cluster (L2 adjacency)
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: storage-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: storage-seed
+  interfaces:
+  - name: mgmt
+  - name: storage
+    networkRef:
+      name: storage-net
+  runPolicy: Running

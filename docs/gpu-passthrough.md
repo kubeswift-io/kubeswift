@@ -316,6 +316,31 @@ Fabric Manager (FM) is required for HGX SXM GPUs in shared or full passthrough m
 - `shared` — Host FM manages the partition. Guest uses NVLink through the NVSwitch fabric.
 - `full` — All GPUs + NVSwitches passed to a single VM. FM runs inside the guest. (Phase 4)
 
+## Network Separation for GPU Workloads
+
+GPU training workloads benefit from separating management traffic (SSH, monitoring)
+from GPU data plane traffic (NCCL collectives, GPUDirect RDMA). KubeSwift supports
+this via multi-NIC — add a secondary interface for GPU traffic:
+
+```yaml
+spec:
+  gpuProfileRef:
+    name: h200-hgx-4gpu
+  interfaces:
+  - name: mgmt        # Management: SSH, cloud-init
+  - name: gpu-data    # GPU: NCCL, GPUDirect
+    networkRef:
+      name: gpu-data-net
+```
+
+For OVN-Kubernetes secondary networks (Layer 2, localnet, CUDN), see the
+[OVN-Kubernetes Integration Guide](networking/ovn-kubernetes.md#2-gpu-data-plane-separation).
+
+For general multi-NIC configuration, see [Multi-NIC Support](multi-nic.md).
+
+> For true RDMA line-rate performance, SR-IOV NIC passthrough (Phase C) is
+> recommended over overlay networks.
+
 ## Troubleshooting
 
 **CUDA initialization fails ("no devices found")**

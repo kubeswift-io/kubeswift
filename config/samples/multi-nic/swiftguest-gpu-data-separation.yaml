@@ -1,0 +1,28 @@
+# SwiftGuest with GPU passthrough + dedicated data plane NIC.
+# Prerequisites:
+#   1. GPU profile created (e.g., config/samples/gpu-hgx/swiftgpuprofile-h200-hgx.yaml)
+#   2. NAD created (e.g., nad-ovn-layer2.yaml with name gpu-data-net)
+#   3. SwiftImage, SwiftGuestClass, SwiftSeedProfile in namespace
+#
+# Management NIC: SSH, cloud-init, Kubernetes API
+# GPU data NIC: NCCL traffic, GPUDirect, inter-node GPU communication
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: gpu-training-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  gpuProfileRef:
+    name: h200-hgx-4gpu
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: gpu-seed
+  interfaces:
+  - name: mgmt
+  - name: gpu-data
+    networkRef:
+      name: gpu-data-net
+  runPolicy: Running

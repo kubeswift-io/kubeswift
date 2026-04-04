@@ -1,0 +1,26 @@
+# OVN-Kubernetes Localnet secondary network for VLAN access to physical infrastructure.
+# Prerequisites:
+#   1. OVN-Kubernetes + Multus CNI installed
+#   2. OVS bridge mapping on worker nodes:
+#      - NodeNetworkConfigurationPolicy (nmstate) or manual OVS config
+#      - Maps localnet name "data-physnet" to OVS bridge "br-data"
+#      - br-data has physical NIC (e.g., eno2) as a port
+#
+# Apply order:
+#   1. Configure OVS bridge mappings on nodes (see docs/networking/ovn-kubernetes.md)
+#   2. kubectl apply -f nad-ovn-localnet.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: vlan100-net
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "data-physnet",
+      "type": "ovn-k8s-cni-overlay",
+      "topology": "localnet",
+      "vlanID": 100,
+      "netAttachDefName": "default/vlan100-net"
+    }

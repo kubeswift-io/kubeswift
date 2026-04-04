@@ -170,6 +170,11 @@ Any CNI that works with Multus is supported:
 | Cilium | eBPF networking | Via Multus secondary |
 | SR-IOV | Hardware NIC passthrough | Phase C (not yet implemented) |
 
+## OVN-Kubernetes
+
+For OVN-Kubernetes specific topologies (Layer 2, Layer 3, localnet, UDN, CUDN),
+see [OVN-Kubernetes Integration Guide](networking/ovn-kubernetes.md).
+
 ## Limitations
 
 - Secondary NIC IPs are not auto-discovered in `status.network.interfaces`
