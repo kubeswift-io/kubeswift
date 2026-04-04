@@ -146,17 +146,7 @@ smoke-test:
 # smoke-test-cleanup removes resources created by all smoke test scenarios.
 # Uses NAMESPACE (default: default). Run: make smoke-test-cleanup NAMESPACE=myns
 smoke-test-cleanup:
-	@NS="$${NAMESPACE:-default}"; \
-	echo "Cleaning up smoke-test resources in namespace $$NS..."; \
-	kubectl delete swiftguest sample faas-test qemu-test gpu-test datadisk-test -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
-	kubectl delete swiftimage ubuntu-noble ubuntu-noble-qemu data-disk -n "$$NS" --ignore-not-found --wait --timeout=60s 2>/dev/null || true; \
-	kubectl delete swiftkernel faas-minimal -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
-	kubectl delete swiftseedprofile minimal qemu-test-seed -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
-	kubectl delete swiftguestclass default -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
-	kubectl delete swiftgpuprofile a100-pcie-single -n "$$NS" --ignore-not-found --wait --timeout=30s 2>/dev/null || true; \
-	kubectl delete swiftgpunode mock-gpu-node --ignore-not-found --timeout=30s 2>/dev/null || true; \
-	kubectl delete configmap sample-seed sample-runtime-intent faas-test-runtime-intent qemu-test-seed qemu-test-runtime-intent gpu-test-seed gpu-test-runtime-intent -n "$$NS" --ignore-not-found --timeout=10s 2>/dev/null || true; \
-	echo "Smoke-test cleanup done"
+	@test/smoke/boot-test.sh --cleanup-only
 
 preflight:
 	@./scripts/kubeswift-preflight.sh
