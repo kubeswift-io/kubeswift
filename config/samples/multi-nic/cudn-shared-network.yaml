@@ -1,0 +1,26 @@
+# OVN-Kubernetes ClusterUserDefinedNetwork for shared cross-namespace GPU data plane.
+# Prerequisites: OVN-Kubernetes v0.6.0+ (or OpenShift 4.17+) with CUDN support.
+#
+# This creates a Layer 2 secondary network shared between the team-ml and team-infra
+# namespaces. OVN-Kubernetes creates a NAD named "shared-gpu-net" automatically in
+# each selected namespace. SwiftGuests in either namespace can reference it.
+#
+# Apply order:
+#   1. Create the team-ml and team-infra namespaces
+#   2. kubectl apply -f cudn-shared-network.yaml
+#   3. Create SwiftGuests with networkRef: {name: shared-gpu-net}
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: shared-gpu-net
+spec:
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values: ["team-ml", "team-infra"]
+  network:
+    topology: Layer2
+    layer2:
+      role: Secondary
+      subnets: ["10.200.0.0/16"]

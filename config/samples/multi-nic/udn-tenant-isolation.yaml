@@ -1,0 +1,30 @@
+# OVN-Kubernetes UserDefinedNetwork for tenant isolation.
+# Prerequisites: OVN-Kubernetes v0.6.0+ (or OpenShift 4.17+) with UDN support.
+#
+# This creates a primary UDN for the tenant-alpha namespace. VMs in this namespace
+# are isolated from VMs in other namespaces — even on the same node.
+#
+# Apply order:
+#   1. kubectl apply -f udn-tenant-isolation.yaml (creates namespace + UDN)
+#   2. Create SwiftGuestClass and SwiftSeedProfile in tenant-alpha namespace
+#   3. Create SwiftImage and SwiftGuest in tenant-alpha namespace
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-alpha
+  labels:
+    k8s.ovn.org/primary-user-defined-network: ""
+---
+apiVersion: k8s.ovn.org/v1
+kind: UserDefinedNetwork
+metadata:
+  name: tenant-alpha-net
+  namespace: tenant-alpha
+spec:
+  topology: Layer3
+  layer3:
+    role: Primary
+    subnets:
+    - cidr: 10.100.0.0/16
+      hostSubnet: 24

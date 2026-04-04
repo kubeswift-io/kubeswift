@@ -896,6 +896,18 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Sample manifests: config/samples/multi-nic/
 - Documentation: docs/multi-nic.md
 
+### Completed (OVN-Kubernetes Integration Guide — Phase B)
+- Comprehensive OVN-Kubernetes guide: docs/networking/ovn-kubernetes.md
+- Covers Layer 2, Layer 3, localnet, UDN, CUDN topologies
+- Use-case driven: storage isolation, GPU data plane, VLAN segmentation, tenant isolation
+- OVN-Kubernetes sample NADs: nad-ovn-layer2.yaml, nad-ovn-layer3.yaml, nad-ovn-localnet.yaml
+- UDN/CUDN samples: udn-tenant-isolation.yaml, cudn-shared-network.yaml
+- SwiftGuest samples: swiftguest-gpu-data-separation.yaml, swiftguest-storage-isolation.yaml, swiftguest-vlan.yaml
+- CNI compatibility matrix across OVN-Kubernetes, Calico, Cilium, macvlan, bridge
+- Telco/NFV considerations (DPDK, VPP limitations with tap+bridge model)
+- Networking docs index: docs/networking/README.md
+- Cross-references from docs/multi-nic.md and docs/gpu-passthrough.md
+
 ### Next Priorities (in order)
 
 **1. Discovery DaemonSet validation on GPU hardware**

@@ -1,0 +1,20 @@
+# OVN-Kubernetes Layer 3 secondary network for routed tenant data plane.
+# Prerequisites: OVN-Kubernetes + Multus CNI installed.
+# Each node gets a /24 subnet from the /16 CIDR. OVN handles inter-node routing.
+#
+# Apply: kubectl apply -f nad-ovn-layer3.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: tenant-data-net
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "tenant-data-net",
+      "type": "ovn-k8s-cni-overlay",
+      "topology": "layer3",
+      "subnets": "10.150.0.0/16/24",
+      "netAttachDefName": "default/tenant-data-net"
+    }

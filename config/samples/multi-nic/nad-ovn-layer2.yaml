@@ -1,0 +1,21 @@
+# OVN-Kubernetes Layer 2 secondary network for storage isolation.
+# Prerequisites: OVN-Kubernetes + Multus CNI installed.
+# All pods/VMs on this network share a flat L2 segment across nodes (Geneve overlay).
+# OVN-Kubernetes handles IPAM if "subnets" is specified.
+#
+# Apply: kubectl apply -f nad-ovn-layer2.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: storage-net
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "storage-net",
+      "type": "ovn-k8s-cni-overlay",
+      "topology": "layer2",
+      "subnets": "192.168.100.0/24",
+      "netAttachDefName": "default/storage-net"
+    }

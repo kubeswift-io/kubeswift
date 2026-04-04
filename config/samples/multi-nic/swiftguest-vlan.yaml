@@ -1,0 +1,26 @@
+# SwiftGuest on a specific VLAN via OVN-Kubernetes localnet.
+# Prerequisites:
+#   1. OVS bridge mapping on worker nodes (localnet "data-physnet" -> bridge "br-data")
+#   2. NAD created (nad-ovn-localnet.yaml with name vlan100-net)
+#   3. SwiftImage, SwiftGuestClass, SwiftSeedProfile in namespace
+#
+# Management NIC: Kubernetes overlay network
+# VLAN NIC: VLAN 100 on physical network via OVS bridge
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: vlan-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: vlan-seed
+  interfaces:
+  - name: mgmt
+  - name: legacy
+    networkRef:
+      name: vlan100-net
+  runPolicy: Running
