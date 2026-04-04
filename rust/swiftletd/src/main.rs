@@ -153,7 +153,8 @@ fn main() {
             if intent.has_network() {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let lease_path = runtime_dir.root().join("dnsmasq.leases");
-                    lease::spawn_lease_poller(lease_path, ns.clone(), n.clone());
+                    let nics_for_poller = intent.nics.clone();
+                    lease::spawn_lease_poller(lease_path, ns.clone(), n.clone(), nics_for_poller);
                 }
             }
 

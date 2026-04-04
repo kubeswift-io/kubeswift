@@ -1,0 +1,27 @@
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: multi-nic-seed
+  namespace: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: multi-nic-test
+    users:
+      - name: ubuntu
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+  metaData: |
+    instance-id: multi-nic-001
+    local-hostname: multi-nic-test
+  networkData: |
+    version: 2
+    ethernets:
+      enp0s3:
+        dhcp4: true
+      enp0s4:
+        addresses:
+          - 192.168.100.10/24

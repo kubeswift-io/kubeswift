@@ -3,6 +3,15 @@
 /// Cloud Hypervisor binary name. Override with KUBESWIFT_CH_BINARY env.
 pub const DEFAULT_CH_BINARY: &str = "cloud-hypervisor";
 
+/// Network interface configuration for multi-NIC mode.
+#[derive(Debug, Clone)]
+pub struct NICConfig {
+    /// Tap device name (tap0, tap1, etc.)
+    pub tap_name: String,
+    /// MAC address for the interface.
+    pub mac: String,
+}
+
 /// VM configuration derived from runtime intent.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -20,8 +29,12 @@ pub struct VmConfig {
     pub serial_socket_path: Option<String>,
     /// Optional path to UEFI firmware (CLOUDHV.fd). Required for disk boot; passed via --kernel flag.
     pub firmware_path: Option<String>,
-    /// Optional TAP device name for VM networking. When set, CH gets --net tap=<name>.
+    /// Optional TAP device name for VM networking (legacy single-NIC mode).
+    /// When set, CH gets --net tap=<name>.
     pub tap_name: Option<String>,
+    /// Network interfaces for multi-NIC mode. When non-empty, overrides tap_name.
+    /// Each entry produces a --net tap=<tap>,mac=<mac> argument.
+    pub nics: Vec<NICConfig>,
     /// When set, boot via --kernel + --initramfs instead of --disk for root.
     pub kernel_path: Option<String>,
     /// Path to initramfs image. Required when kernel_path is set.
@@ -100,7 +113,14 @@ impl VmConfig {
             args.push("off".to_string());
         }
 
-        if let Some(ref tap) = self.tap_name {
+        if !self.nics.is_empty() {
+            // Multi-NIC mode: one --net per NIC with tap and mac.
+            for nic in &self.nics {
+                args.push("--net".to_string());
+                args.push(format!("tap={},mac={}", nic.tap_name, nic.mac));
+            }
+        } else if let Some(ref tap) = self.tap_name {
+            // Legacy single-NIC mode.
             args.push("--net".to_string());
             args.push(format!("tap={}", tap));
         }
@@ -123,6 +143,7 @@ mod tests {
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
             firmware_path: Some("/usr/share/kubeswift-firmware/CLOUDHV.fd".to_string()),
             tap_name: Some("tap0".to_string()),
+            nics: vec![],
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
@@ -182,6 +203,78 @@ mod tests {
         assert!(
             !joined.contains("extra.raw"),
             "unexpected data disk in kernel boot args: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_single_nic() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None; // Clear legacy
+        cfg.nics = vec![NICConfig {
+            tap_name: "tap0".to_string(),
+            mac: "52:54:00:aa:bb:cc".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("tap=tap0,mac=52:54:00:aa:bb:cc"),
+            "single NIC: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_multi_nic() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![
+            NICConfig {
+                tap_name: "tap0".to_string(),
+                mac: "52:54:00:aa:bb:01".to_string(),
+            },
+            NICConfig {
+                tap_name: "tap1".to_string(),
+                mac: "52:54:00:aa:bb:02".to_string(),
+            },
+            NICConfig {
+                tap_name: "tap2".to_string(),
+                mac: "52:54:00:aa:bb:03".to_string(),
+            },
+        ];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        // Should have 3 --net flags
+        let net_count = args.iter().filter(|a| *a == "--net").count();
+        assert_eq!(net_count, 3, "expected 3 --net flags, got {}", net_count);
+        assert!(
+            joined.contains("tap=tap0,mac=52:54:00:aa:bb:01"),
+            "missing tap0: {}",
+            joined
+        );
+        assert!(
+            joined.contains("tap=tap1,mac=52:54:00:aa:bb:02"),
+            "missing tap1: {}",
+            joined
+        );
+        assert!(
+            joined.contains("tap=tap2,mac=52:54:00:aa:bb:03"),
+            "missing tap2: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_no_nics_legacy() {
+        // Legacy mode: nics empty, tap_name set -> single --net tap=tap0
+        let cfg = make_disk_boot_config(); // has tap_name=Some("tap0"), nics=vec![]
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(joined.contains("tap=tap0"), "legacy tap: {}", joined);
+        // Should NOT contain mac= (legacy mode doesn't set MAC in CH)
+        assert!(
+            !joined.contains("mac="),
+            "legacy should not have mac: {}",
             joined
         );
     }

@@ -54,6 +54,9 @@ func Merge(
 	// All guests get tap+bridge networking; the field exists for future per-guest opt-out.
 	rg.Network = true
 
+	// Copy interfaces from SwiftGuest spec for multi-NIC support.
+	rg.Interfaces = guest.Spec.Interfaces
+
 	return rg
 }
 

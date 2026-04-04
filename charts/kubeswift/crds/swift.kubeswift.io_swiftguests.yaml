@@ -107,6 +107,42 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              interfaces:
+                description: |-
+                  Interfaces defines the network interfaces for this guest.
+                  If nil or empty, a single default interface is created (backward compatible).
+                  The first interface without NetworkRef is the primary interface (DHCP, management).
+                  Interfaces with NetworkRef are secondary interfaces backed by Multus/NADs.
+                items:
+                  description: GuestInterface defines a single network interface for
+                    a SwiftGuest.
+                  properties:
+                    name:
+                      description: |-
+                        Name is a unique identifier for this interface.
+                        Used in status reporting and logging.
+                      type: string
+                    networkRef:
+                      description: |-
+                        NetworkRef references a NetworkAttachmentDefinition for this interface.
+                        If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
+                        If set, Multus attaches the pod to the referenced NAD.
+                      properties:
+                        name:
+                          description: Name of the NetworkAttachmentDefinition.
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace of the NetworkAttachmentDefinition.
+                            Defaults to the SwiftGuest's namespace if omitted.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
               kernelCmdline:
                 type: string
               kernelRef:
@@ -260,6 +296,8 @@ spec:
                         interface with its IP.
                       properties:
                         ip:
+                          type: string
+                        mac:
                           type: string
                         name:
                           type: string

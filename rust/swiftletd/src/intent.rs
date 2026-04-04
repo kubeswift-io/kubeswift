@@ -32,6 +32,29 @@ pub struct RuntimeIntent {
     /// Optional secondary data disk (appears as /dev/vdb in guest).
     #[serde(default)]
     pub data_disk: Option<RootDisk>,
+    /// Network interface list for multi-NIC support.
+    /// If empty/absent and network=true, a single default NIC is used (backward compat).
+    #[serde(default)]
+    pub nics: Option<Vec<NICIntent>>,
+}
+
+/// Describes a single network interface for the VM.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NICIntent {
+    /// Interface identifier (matches spec.interfaces[].name).
+    pub name: String,
+    /// Tap device name inside the pod namespace (tap0, tap1, etc.)
+    pub tap_device: String,
+    /// MAC address for this interface.
+    pub mac: String,
+    /// True if this is the primary NIC with DHCP/dnsmasq.
+    pub primary: bool,
+    /// Multus-created interface name (net1, net2, etc.). Empty for primary.
+    #[serde(default)]
+    pub multus_interface: Option<String>,
+    /// Bridge device name (br0, br1, etc.)
+    pub bridge: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +118,14 @@ impl RuntimeIntent {
             _ => "cloud-hypervisor",
         }
     }
+
+    /// Returns the NIC list if present and non-empty, or None for legacy single-NIC mode.
+    pub fn nics(&self) -> Option<&[NICIntent]> {
+        match &self.nics {
+            Some(nics) if !nics.is_empty() => Some(nics),
+            _ => None,
+        }
+    }
 }
 
 /// Load runtime intent from the canonical path.
@@ -102,4 +133,67 @@ pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read intent from {}: {}", path, e))?;
     serde_json::from_str(&contents).map_err(|e| format!("invalid intent JSON: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intent_no_nics() {
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test",
+            "network": true
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(
+            intent.nics().is_none(),
+            "nics should be None for legacy format"
+        );
+        assert!(intent.has_network());
+    }
+
+    #[test]
+    fn test_intent_with_nics() {
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test",
+            "network": true,
+            "nics": [
+                {"name": "mgmt", "tapDevice": "tap0", "mac": "52:54:00:aa:bb:01", "primary": true, "bridge": "br0"},
+                {"name": "data", "tapDevice": "tap1", "mac": "52:54:00:aa:bb:02", "primary": false, "multusInterface": "net1", "bridge": "br1"}
+            ]
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        let nics = intent.nics().expect("should have nics");
+        assert_eq!(nics.len(), 2);
+        assert_eq!(nics[0].name, "mgmt");
+        assert!(nics[0].primary);
+        assert_eq!(nics[0].tap_device, "tap0");
+        assert_eq!(nics[1].name, "data");
+        assert!(!nics[1].primary);
+        assert_eq!(nics[1].multus_interface.as_deref(), Some("net1"));
+    }
+
+    #[test]
+    fn test_intent_empty_nics() {
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test",
+            "network": true,
+            "nics": []
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(intent.nics().is_none(), "empty nics should return None");
+    }
 }

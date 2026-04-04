@@ -16,6 +16,7 @@ type ResolvedGuest interface {
 	GetInitramfsPath() string
 	GetKernelCmdline() string
 	GetHypervisor() string
+	GetNICs() []NICIntent
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -27,6 +28,8 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Format: "raw",
 		}
 	}
+
+	nics := rg.GetNICs()
 
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
@@ -43,6 +46,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Network:    rg.HasNetwork(),
 			Hypervisor: rg.GetHypervisor(),
 			DataDisk:   dataDisk,
+			NICs:       nics,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -72,5 +76,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Network:    rg.HasNetwork(),
 		Hypervisor: rg.GetHypervisor(),
 		DataDisk:   dataDisk,
+		NICs:       nics,
 	}
 }

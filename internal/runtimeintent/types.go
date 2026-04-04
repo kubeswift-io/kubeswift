@@ -14,6 +14,26 @@ type RuntimeIntent struct {
 	Hypervisor string          `json:"hypervisor,omitempty"` // "cloud-hypervisor" (default) or "qemu"
 	GPU        *GPUIntent      `json:"gpu,omitempty"`        // populated when gpuProfileRef is set
 	DataDisk   *RootDiskSpec   `json:"dataDisk,omitempty"`   // secondary data disk (appears as /dev/vdb)
+	// NICs is the list of network interfaces for the VM.
+	// If empty and Network is true, a single default NIC is created (backward compat).
+	NICs []NICIntent `json:"nics,omitempty"`
+}
+
+// NICIntent describes a single network interface for the VM.
+type NICIntent struct {
+	// Name is the interface identifier (matches spec.interfaces[].name).
+	Name string `json:"name"`
+	// TapDevice is the tap device name inside the pod namespace (tap0, tap1, etc.)
+	TapDevice string `json:"tapDevice"`
+	// MAC is the MAC address for this interface.
+	MAC string `json:"mac"`
+	// Primary indicates this is the primary NIC with DHCP/dnsmasq.
+	Primary bool `json:"primary"`
+	// MultusInterface is the name of the Multus-created interface (net1, net2, etc.)
+	// Empty for the primary NIC.
+	MultusInterface string `json:"multusInterface,omitempty"`
+	// Bridge is the bridge device name (br0, br1, etc.)
+	Bridge string `json:"bridge"`
 }
 
 // RootDiskSpec specifies the root disk for the VM.

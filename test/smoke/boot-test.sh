@@ -303,6 +303,49 @@ MOCK_EOF
   fi
 }
 
+# --- Scenario 5: Multi-NIC (backward compatibility — no Multus required) ---
+
+scenario_multi_nic() {
+  echo ""
+  echo "--- Scenario: multi-nic (explicit interfaces field, single primary NIC) ---"
+
+  apply_rbac
+  apply_shared
+
+  # Ensure image exists (reuse ubuntu-noble from disk-boot if present)
+  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-noble.yaml" -n "$NAMESPACE" >/dev/null
+  wait_image_ready "ubuntu-noble" || { RESULTS[multi-nic]="FAIL"; return; }
+
+  # Apply a SwiftGuest with explicit interfaces field (single primary, no Multus needed)
+  cat <<'MULTINIC_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: multi-nic-test
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  interfaces:
+  - name: mgmt
+  runPolicy: Running
+MULTINIC_EOF
+
+  wait_guest_running "multi-nic-test" || { RESULTS[multi-nic]="FAIL"; return; }
+  check_hypervisor "multi-nic-test" "cloud-hypervisor"
+  wait_guest_ip "multi-nic-test" || { RESULTS[multi-nic]="FAIL"; return; }
+
+  RESULTS[multi-nic]="PASS"
+  echo "  multi-nic: PASS"
+
+  if [[ "$NO_CLEANUP" != "true" ]]; then
+    kubectl delete swiftguest multi-nic-test -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
+  fi
+}
+
 # --- Run scenarios ---
 
 run_scenario() {
@@ -312,6 +355,7 @@ run_scenario() {
     kernel-boot)  scenario_kernel_boot ;;
     qemu-boot)    scenario_qemu_boot ;;
     gpu-alloc)    scenario_gpu_alloc ;;
+    multi-nic)    scenario_multi_nic ;;
     *) echo "Unknown scenario: $name"; exit 1 ;;
   esac
 }
@@ -338,6 +382,8 @@ else
   fi
 
   scenario_gpu_alloc
+
+  scenario_multi_nic
 fi
 
 # Cleanup shared resources
@@ -355,7 +401,7 @@ echo "=== Smoke Test Summary ==="
 printf "%-15s %s\n" "Scenario" "Result"
 printf "%-15s %s\n" "--------" "------"
 EXIT_CODE=0
-for scenario in disk-boot kernel-boot qemu-boot gpu-alloc; do
+for scenario in disk-boot kernel-boot qemu-boot gpu-alloc multi-nic; do
   result="${RESULTS[$scenario]:-N/A}"
   printf "%-15s %s\n" "$scenario" "$result"
   if [[ "$result" == "FAIL" ]]; then

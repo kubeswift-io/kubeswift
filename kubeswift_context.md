@@ -128,6 +128,11 @@ spec:
   seedProfileRef: # SwiftSeedProfile for cloud-init (disk boot only)
   runPolicy:      # Running | Stopped | RestartOnFailure | Always
   gpuProfileRef:  # SwiftGPUProfile for GPU passthrough (optional, triggers QEMU path)
+  interfaces:     # Network interfaces (optional; nil/empty = single default NIC)
+  - name: mgmt    # Primary NIC (no networkRef) — KubeSwift tap+bridge+dnsmasq
+  - name: data    # Secondary NIC (has networkRef) — Multus NAD
+    networkRef:
+      name: gpu-rdma-net
 status:
   phase:          # Pending | Scheduling | Running | Failed | Stopped
   conditions:     # Resolved | PodScheduled | GuestRunning | GPUAllocated
@@ -140,7 +145,7 @@ status:
     serialSocket: # path to serial.sock
   network:
     primaryIP:    # discovered from dnsmasq DHCP lease
-    interfaces:   # list of {name, ip}
+    interfaces:   # list of {name, mac, ip}
   gpu:            # populated when gpuProfileRef is set
     devices:      # list of allocated GPU PCI addresses
     partitionId:  # Fabric Manager partition ID (shared mode)
@@ -362,16 +367,17 @@ test/gpu/                 GPU passthrough smoke test
 ### Networking Model (both boot paths)
 ```
 Guest VM
-   │ virtio-net (eth0 inside guest)
+   │ virtio-net (eth0 inside guest) ─── primary NIC
+   │ virtio-net (eth1 inside guest) ─── secondary NIC (Multus, optional)
    │
-  tap0
-   │
-  br0 (10.244.125.1/24)
+  tap0 ──── br0 (10.244.125.1/24) ─── dnsmasq DHCP
+  tap1 ──── br1 ──── net1 (Multus interface, optional)
    │
   pod network (eth0, NOT bridged)
 
-dnsmasq: DHCP range 10.244.125.10–20, router 10.244.125.1
-iptables: MASQUERADE on eth0 for guest outbound traffic
+Primary NIC: dnsmasq DHCP range 10.244.125.10–20, router 10.244.125.1
+             iptables MASQUERADE on eth0 for guest outbound traffic
+Secondary NICs: bridged to Multus-created interfaces, no dnsmasq, no NAT
 ```
 
 Key facts:
@@ -384,6 +390,11 @@ Key facts:
 - Controller reads annotation and writes to `SwiftGuest.status.network.primaryIP`
 - Controller requeues every 5s while Running but no IP yet (cache staleness fix)
 - **GPU path**: QEMU uses same tap0/br0 networking model via `-netdev tap,ifname=tap0`
+- **Multi-NIC**: `spec.interfaces` defines multiple NICs; secondary NICs use Multus NADs
+- **Multi-NIC**: Each NIC gets its own tap+bridge pair; Multus interfaces bridged to secondary bridges
+- **Multi-NIC**: Controller generates deterministic MACs (hash of ns/name/iface-name)
+- **Multi-NIC**: Multus annotation `k8s.v1.cni.cncf.io/networks` added to pod when secondary NICs present
+- **Multi-NIC**: Backward compatible — omitting `interfaces` = single default NIC, identical to before
 
 ### SwiftKernel Architecture
 ```
@@ -865,6 +876,26 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Helm chart gate: `gpuDiscovery.enabled` for DaemonSet + RBAC templates
 - Validation report template at `docs/validation/discovery-daemonset-validation.md`
 
+### Completed (Multi-NIC / Multus Integration)
+- `spec.interfaces` on SwiftGuest: primary + secondary NIC definitions
+- GuestInterface and NetworkReference types in api/swift/v1alpha1
+- NICIntent in RuntimeIntent: tap device, bridge, MAC, Multus interface per NIC
+- Deterministic MAC generation: hash(ns/name/iface-name) with 52:54:00 OUI prefix
+- Multus annotation builder: `k8s.v1.cni.cncf.io/networks` JSON on launcher pod
+- Pod builder: all three paths (disk boot, kernel boot, GPU boot) add Multus annotations
+- network-init.sh: multi-NIC mode creates bridge+tap per NIC, bridges Multus interfaces
+- launcher-entrypoint.sh: reads primary bridge from intent for dnsmasq
+- Cloud Hypervisor: multiple `--net tap=<tap>,mac=<mac>` flags
+- QEMU: multiple `-netdev`/`-device virtio-net-pci` pairs with unique IDs
+- Rust intent deserialization: NICIntent with backward-compatible Option<Vec>
+- Lease poller: reports all interfaces with name, MAC, and IP (primary only)
+- GuestNetworkInterface status type: added MAC field
+- 100% backward compatible: nil/empty interfaces = single default NIC
+- Comprehensive tests: Go (MAC, Multus annotation, pod builder, GetNICs) + Rust (CH, QEMU, intent)
+- Smoke test scenario: multi-nic (single primary, no Multus required)
+- Sample manifests: config/samples/multi-nic/
+- Documentation: docs/multi-nic.md
+
 ### Next Priorities (in order)
 
 **1. Discovery DaemonSet validation on GPU hardware**
@@ -889,12 +920,7 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Cloudbase-init or unattend.xml for Windows provisioning
 - Guest agent for IP reporting (Windows doesn't use cloud-init)
 
-**5. Multi-NIC support**
-- SwiftGuest spec supports multiple network interfaces
-- Per-NIC tap+bridge setup in network-init
-- Use cases: management vs data plane separation, SR-IOV passthrough
-
-**6. SwiftGuestPool**
+**5. SwiftGuestPool**
 - New CRD: SwiftGuestPool with desired replica count and guest template
 - Controller creates/deletes SwiftGuests to match desired count
 - Use case: GPU inference fleets with identical VM configurations

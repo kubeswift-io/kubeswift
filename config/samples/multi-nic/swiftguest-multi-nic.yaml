@@ -1,0 +1,20 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: multi-nic-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: multi-nic-seed
+  interfaces:
+  - name: mgmt
+    # Primary NIC — KubeSwift tap+bridge+dnsmasq (DHCP, management, SSH)
+  - name: data
+    networkRef:
+      name: test-bridge-net
+      # Secondary NIC — Multus creates interface, KubeSwift bridges a tap to it
+  runPolicy: Running
