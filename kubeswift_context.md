@@ -908,6 +908,23 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Networking docs index: docs/networking/README.md
 - Cross-references from docs/multi-nic.md and docs/gpu-passthrough.md
 
+### Completed (SR-IOV NIC Passthrough — Phase C)
+- `type` field on GuestInterface: "bridge" (default) or "sriov"
+- `resourceName` field on GuestInterface: SR-IOV device plugin resource name
+- SRIOVDeviceIntent in RuntimeIntent: carries resource name to swiftletd
+- Pod builder: adds SR-IOV resource requests/limits to launcher container
+- Pod builder: adds /dev/vfio volume+mount when SR-IOV interfaces present (avoids duplicate with GPU pods)
+- network-init.sh: skips SR-IOV interfaces (no tap, no bridge — VFIO passthrough)
+- swiftletd VF discovery: reads PCIDEVICE_* env var from SR-IOV device plugin
+- Cloud Hypervisor: `--device path=/sys/bus/pci/devices/<vf>/` for SR-IOV VFs
+- QEMU: `-device vfio-pci,host=<vf-address>` for SR-IOV VFs
+- Mixed NIC support: bridge + SR-IOV interfaces in same guest (different hypervisor args per type)
+- Lease poller: reports SR-IOV interfaces in status (no IP — discovered by guest OS)
+- Comprehensive tests: Go (sriov_test.go, pod builder, GetNICs) + Rust (CH, QEMU, intent)
+- Sample manifests: config/samples/sriov/ (NAD, guest, GPU+RDMA guest)
+- Documentation: docs/networking/sriov.md (setup, GPUDirect RDMA, troubleshooting)
+- CRDs regenerated with type and resourceName fields
+
 ### Next Priorities (in order)
 
 **1. Discovery DaemonSet validation on GPU hardware**

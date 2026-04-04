@@ -1,0 +1,28 @@
+# SR-IOV NetworkAttachmentDefinition with vfio-pci device type.
+# Prerequisites:
+#   1. SR-IOV Network Operator or device plugin installed
+#   2. SR-IOV capable NIC with VFs configured (e.g., Mellanox ConnectX-6/7, Intel E810)
+#   3. Multus CNI installed
+#   4. IOMMU enabled on the node
+#
+# The annotation k8s.v1.cni.cncf.io/resourceName tells the device plugin
+# which resource to allocate. The deviceType "vfio-pci" ensures the VF is
+# bound to vfio-pci (not the kernel netdevice driver).
+#
+# Apply: kubectl apply -f nad-sriov-vfio.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: sriov-rdma-net
+  namespace: default
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/sriov_netdevice
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "sriov-rdma-net",
+      "type": "sriov",
+      "deviceType": "vfio-pci",
+      "vlan": 0
+    }

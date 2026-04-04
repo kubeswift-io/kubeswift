@@ -76,9 +76,11 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique interface identifier |
+| `type` | string | No | `bridge` (default) or `sriov` — see [SR-IOV Passthrough](networking/sriov.md) |
 | `networkRef` | object | No | Reference to a NetworkAttachmentDefinition |
 | `networkRef.name` | string | Yes (if networkRef) | NAD name |
 | `networkRef.namespace` | string | No | NAD namespace (defaults to guest's namespace) |
+| `resourceName` | string | No | SR-IOV device plugin resource name (required when type=sriov) |
 
 ## MAC Address Generation
 
@@ -168,7 +170,7 @@ Any CNI that works with Multus is supported:
 | OVN-Kubernetes | SDN with IPAM | Full network policy support |
 | Calico | Network policy enforcement | Via Multus secondary |
 | Cilium | eBPF networking | Via Multus secondary |
-| SR-IOV | Hardware NIC passthrough | Phase C (not yet implemented) |
+| SR-IOV | Hardware NIC passthrough | VFIO — see [SR-IOV guide](networking/sriov.md) |
 
 ## OVN-Kubernetes
 
@@ -178,6 +180,6 @@ see [OVN-Kubernetes Integration Guide](networking/ovn-kubernetes.md).
 ## Limitations
 
 - Secondary NIC IPs are not auto-discovered in `status.network.interfaces`
-- SR-IOV NIC passthrough (direct VF assignment to VM) is planned for a future phase
+- SR-IOV NIC passthrough uses VFIO — see [SR-IOV guide](networking/sriov.md) for setup
 - No live NIC hotplug — interfaces are fixed at pod creation time
 - Maximum number of NICs is limited by virtio-net PCI slot availability (practical limit ~28)

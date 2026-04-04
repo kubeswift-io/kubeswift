@@ -12,6 +12,13 @@ pub struct NICConfig {
     pub mac: String,
 }
 
+/// VFIO device for passthrough (GPU or SR-IOV NIC).
+#[derive(Debug, Clone)]
+pub struct VFIODeviceConfig {
+    /// Sysfs path (e.g., "/sys/bus/pci/devices/0000:3b:0a.0/")
+    pub sysfs_path: String,
+}
+
 /// VM configuration derived from runtime intent.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -43,6 +50,9 @@ pub struct VmConfig {
     pub kernel_cmdline: Option<String>,
     /// Optional secondary data disk path. Empty = no data disk.
     pub data_disk_path: String,
+    /// VFIO devices to pass through (SR-IOV VFs, GPUs).
+    /// Each produces a --device path=<sysfs_path> argument.
+    pub vfio_devices: Vec<VFIODeviceConfig>,
 }
 
 impl VmConfig {
@@ -125,6 +135,12 @@ impl VmConfig {
             args.push(format!("tap={}", tap));
         }
 
+        // VFIO passthrough devices (SR-IOV VFs, GPUs).
+        for dev in &self.vfio_devices {
+            args.push("--device".to_string());
+            args.push(format!("path={}", dev.sysfs_path));
+        }
+
         args
     }
 }
@@ -148,6 +164,7 @@ mod tests {
             initramfs_path: None,
             kernel_cmdline: None,
             data_disk_path: String::new(),
+            vfio_devices: vec![],
         }
     }
 
@@ -275,6 +292,59 @@ mod tests {
         assert!(
             !joined.contains("mac="),
             "legacy should not have mac: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_sriov_vfio_device() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![];
+        cfg.vfio_devices = vec![VFIODeviceConfig {
+            sysfs_path: "/sys/bus/pci/devices/0000:3b:0a.0/".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--device"),
+            "missing --device for VFIO: {}",
+            joined
+        );
+        assert!(
+            joined.contains("path=/sys/bus/pci/devices/0000:3b:0a.0/"),
+            "missing sysfs path: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_mixed_bridge_and_sriov() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![NICConfig {
+            tap_name: "tap0".to_string(),
+            mac: "52:54:00:aa:bb:01".to_string(),
+        }];
+        cfg.vfio_devices = vec![VFIODeviceConfig {
+            sysfs_path: "/sys/bus/pci/devices/0000:3b:0a.0/".to_string(),
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--net"),
+            "missing --net for bridge NIC: {}",
+            joined
+        );
+        assert!(joined.contains("tap=tap0"), "missing tap: {}", joined);
+        assert!(
+            joined.contains("--device"),
+            "missing --device for VFIO: {}",
+            joined
+        );
+        assert!(
+            joined.contains("path=/sys/bus/pci/devices/0000:3b:0a.0/"),
+            "missing sysfs: {}",
             joined
         );
     }

@@ -23,17 +23,33 @@ type RuntimeIntent struct {
 type NICIntent struct {
 	// Name is the interface identifier (matches spec.interfaces[].name).
 	Name string `json:"name"`
+	// Type is "bridge" (tap+bridge+virtio-net) or "sriov" (VFIO passthrough).
+	// Defaults to "bridge" if empty.
+	Type string `json:"type"`
 	// TapDevice is the tap device name inside the pod namespace (tap0, tap1, etc.)
-	TapDevice string `json:"tapDevice"`
-	// MAC is the MAC address for this interface.
-	MAC string `json:"mac"`
+	// Empty for SR-IOV interfaces (no tap device — VFIO passthrough).
+	TapDevice string `json:"tapDevice,omitempty"`
+	// MAC is the MAC address for this interface (bridge type only).
+	// SR-IOV interfaces use the VF's hardware MAC.
+	MAC string `json:"mac,omitempty"`
 	// Primary indicates this is the primary NIC with DHCP/dnsmasq.
 	Primary bool `json:"primary"`
 	// MultusInterface is the name of the Multus-created interface (net1, net2, etc.)
 	// Empty for the primary NIC.
 	MultusInterface string `json:"multusInterface,omitempty"`
 	// Bridge is the bridge device name (br0, br1, etc.)
-	Bridge string `json:"bridge"`
+	// Empty for SR-IOV interfaces.
+	Bridge string `json:"bridge,omitempty"`
+	// SRIOVDevice contains SR-IOV VF info for VFIO passthrough.
+	// Only populated when Type is "sriov".
+	SRIOVDevice *SRIOVDeviceIntent `json:"sriovDevice,omitempty"`
+}
+
+// SRIOVDeviceIntent describes an SR-IOV VF to pass through via VFIO.
+type SRIOVDeviceIntent struct {
+	// ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
+	// swiftletd reads the PCIDEVICE_<resource> env var at runtime to discover the VF BDF address.
+	ResourceName string `json:"resourceName"`
 }
 
 // RootDiskSpec specifies the root disk for the VM.

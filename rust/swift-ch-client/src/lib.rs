@@ -6,5 +6,5 @@
 mod config;
 mod spawn;
 
-pub use config::{NICConfig, VmConfig};
+pub use config::{NICConfig, VFIODeviceConfig, VmConfig};
 pub use spawn::{connect_socket, spawn_ch, wait_for_socket};

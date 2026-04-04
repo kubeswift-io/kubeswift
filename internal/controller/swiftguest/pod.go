@@ -99,10 +99,25 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		mem = 128
 	}
 
+	// SR-IOV: add /dev/vfio volume+mount if any interface is type=sriov.
+	addSRIOVVolumesIfNeeded(&volumes, &mounts, guest)
+
 	var initContainers []corev1.Container
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
 	}
+
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+		},
+	}
+	AddSRIOVResourceLimits(&resources, guest)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -139,16 +154,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 							},
 						},
 					},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
-						},
-					},
+					Resources:    resources,
 					VolumeMounts: mounts,
 				},
 			},
@@ -212,6 +218,9 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
 
+	// SR-IOV: add /dev/vfio volume+mount if any interface is type=sriov.
+	addSRIOVVolumesIfNeeded(&volumes, &mounts, guest)
+
 	cpu := rg.Resources.CPU
 	if cpu < 1 {
 		cpu = 1
@@ -225,6 +234,18 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
 	}
+
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+		},
+	}
+	AddSRIOVResourceLimits(&resources, guest)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -258,16 +279,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 							},
 						},
 					},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
-						},
-						Limits: corev1.ResourceList{
-							corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-							corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
-						},
-					},
+					Resources:    resources,
 					VolumeMounts: mounts,
 				},
 			},

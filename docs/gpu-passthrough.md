@@ -338,8 +338,9 @@ For OVN-Kubernetes secondary networks (Layer 2, localnet, CUDN), see the
 
 For general multi-NIC configuration, see [Multi-NIC Support](multi-nic.md).
 
-> For true RDMA line-rate performance, SR-IOV NIC passthrough (Phase C) is
-> recommended over overlay networks.
+> For true RDMA line-rate performance, SR-IOV NIC passthrough is recommended
+> over overlay networks. See [SR-IOV NIC Passthrough](networking/sriov.md)
+> for setup, including the GPUDirect RDMA guide.
 
 ## Troubleshooting
 

@@ -6,7 +6,7 @@
 mod config;
 mod qmp;
 
-pub use config::{QemuConfig, QemuNICConfig, DEFAULT_QEMU_BINARY};
+pub use config::{QemuConfig, QemuNICConfig, QemuVFIODevice, DEFAULT_QEMU_BINARY};
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};

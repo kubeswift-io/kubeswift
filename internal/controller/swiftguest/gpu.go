@@ -420,6 +420,7 @@ func BuildGPUDiskBootPod(
 			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
 		},
 	}
+	AddSRIOVResourceLimits(&resources, guest)
 
 	nodeName := ""
 	if guest.Status.GPU != nil {

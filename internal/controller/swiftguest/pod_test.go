@@ -236,6 +236,178 @@ func stringContains(s, sub string) bool {
 	return false
 }
 
+func TestBuildPod_SRIOVResourceLimits(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-sriov", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"},
+			{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+		},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	launcher := pod.Spec.Containers[0]
+	rn := corev1.ResourceName("intel.com/sriov_netdevice")
+	lim, ok := launcher.Resources.Limits[rn]
+	if !ok {
+		t.Fatal("launcher missing intel.com/sriov_netdevice in Limits")
+	}
+	if lim.Value() != 1 {
+		t.Errorf("Limits[intel.com/sriov_netdevice] = %d, want 1", lim.Value())
+	}
+	req, ok := launcher.Resources.Requests[rn]
+	if !ok {
+		t.Fatal("launcher missing intel.com/sriov_netdevice in Requests")
+	}
+	if req.Value() != 1 {
+		t.Errorf("Requests[intel.com/sriov_netdevice] = %d, want 1", req.Value())
+	}
+}
+
+func TestBuildPod_SRIOVVFIOVolume(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-sriov-vfio", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"},
+			{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-net"}},
+		},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	// Check dev-vfio volume exists.
+	foundVol := false
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "dev-vfio" {
+			foundVol = true
+			if v.HostPath == nil || v.HostPath.Path != "/dev/vfio" {
+				t.Errorf("dev-vfio volume path = %v, want /dev/vfio", v.HostPath)
+			}
+		}
+	}
+	if !foundVol {
+		t.Error("pod missing dev-vfio volume for SR-IOV")
+	}
+
+	// Check dev-vfio mount on launcher.
+	launcher := pod.Spec.Containers[0]
+	foundMount := false
+	for _, m := range launcher.VolumeMounts {
+		if m.Name == "dev-vfio" {
+			foundMount = true
+			if m.MountPath != "/dev/vfio" {
+				t.Errorf("dev-vfio mount path = %q, want /dev/vfio", m.MountPath)
+			}
+		}
+	}
+	if !foundMount {
+		t.Error("launcher missing dev-vfio mount for SR-IOV")
+	}
+}
+
+func TestBuildPod_BridgeOnly_NoSRIOVResources(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bridge-only", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt", Type: swiftv1alpha1.InterfaceTypeBridge},
+				{Name: "data", Type: swiftv1alpha1.InterfaceTypeBridge, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "net-a"}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt", Type: swiftv1alpha1.InterfaceTypeBridge},
+			{Name: "data", Type: swiftv1alpha1.InterfaceTypeBridge, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "net-a"}},
+		},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	// No SR-IOV extended resources.
+	launcher := pod.Spec.Containers[0]
+	for rn := range launcher.Resources.Limits {
+		if rn != corev1.ResourceCPU && rn != corev1.ResourceMemory {
+			t.Errorf("unexpected resource in Limits: %s", rn)
+		}
+	}
+
+	// No dev-vfio volume.
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == "dev-vfio" {
+			t.Error("bridge-only pod should not have dev-vfio volume")
+		}
+	}
+}
+
+func TestBuildPod_SRIOVMultusAnnotation(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-sriov-multus", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-nad"}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"},
+			{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "sriov-nad"}},
+		},
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent")
+
+	if pod.ObjectMeta.Annotations == nil {
+		t.Fatal("pod annotations are nil, want Multus annotation for SR-IOV NAD")
+	}
+	multus, ok := pod.ObjectMeta.Annotations[MultusAnnotationKey]
+	if !ok {
+		t.Fatal("pod missing Multus annotation")
+	}
+	if !containsString(multus, "sriov-nad") {
+		t.Errorf("Multus annotation %q does not contain sriov-nad", multus)
+	}
+}
+
 func TestBuildPod_NoInitContainerWhenNoSeed(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
