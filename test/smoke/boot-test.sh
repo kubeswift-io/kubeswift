@@ -7,7 +7,8 @@
 #   --timeout-guest MIN   Guest running timeout (default: 5)
 #   --timeout-network MIN Network IP timeout (default: 5)
 #   --no-cleanup          Skip resource cleanup after tests
-#   --scenario NAME       Run a single scenario (disk-boot, kernel-boot, qemu-boot, gpu-alloc)
+#   --cleanup-only        Run only the cleanup function and exit
+#   --scenario NAME       Run a single scenario (disk-boot, kernel-boot, qemu-boot, gpu-alloc, multi-nic)
 #   --skip-qemu           Skip QEMU boot scenario
 #   --skip-kernel         Skip kernel boot scenario
 
@@ -22,6 +23,7 @@ TIMEOUT_IMAGE=15
 TIMEOUT_GUEST=5
 TIMEOUT_NETWORK=5
 NO_CLEANUP=false
+CLEANUP_ONLY=false
 SCENARIO=""
 SKIP_QEMU=false
 SKIP_KERNEL=false
@@ -35,12 +37,72 @@ while [[ $# -gt 0 ]]; do
     --timeout-guest)  TIMEOUT_GUEST="$2"; shift 2 ;;
     --timeout-network) TIMEOUT_NETWORK="$2"; shift 2 ;;
     --no-cleanup)     NO_CLEANUP=true; shift ;;
+    --cleanup-only)   CLEANUP_ONLY=true; shift ;;
     --scenario)       SCENARIO="$2"; shift 2 ;;
     --skip-qemu)      SKIP_QEMU=true; shift ;;
     --skip-kernel)    SKIP_KERNEL=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# --- Cleanup function ---
+# Deletes all resources created by any scenario. Safe to call multiple times.
+# All deletes use --ignore-not-found so missing resources are not errors.
+
+cleanup_all() {
+  echo ""
+  echo "=== Cleaning up smoke-test resources ==="
+
+  # 1. Guests first (they own launcher pods)
+  echo "  Deleting SwiftGuests..."
+  kubectl delete swiftguest sample multi-nic-test faas-test qemu-test gpu-test \
+    -n "$NAMESPACE" --ignore-not-found --wait --timeout=60s 2>/dev/null || true
+
+  # 2. Images (each has a backing PVC)
+  echo "  Deleting SwiftImages..."
+  kubectl delete swiftimage ubuntu-noble ubuntu-noble-qemu ubuntu-noble-multinic \
+    -n "$NAMESPACE" --ignore-not-found --wait --timeout=60s 2>/dev/null || true
+
+  # 3. Kernels
+  echo "  Deleting SwiftKernels..."
+  kubectl delete swiftkernel faas-minimal \
+    -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
+
+  # 4. GPU resources (cluster-scoped SwiftGPUNode, namespaced SwiftGPUProfile)
+  echo "  Deleting GPU resources..."
+  kubectl delete swiftgpunode mock-gpu-node \
+    --ignore-not-found --timeout=30s 2>/dev/null || true
+  kubectl delete swiftgpuprofile a100-pcie-single \
+    -n "$NAMESPACE" --ignore-not-found --timeout=30s 2>/dev/null || true
+
+  # 5. Seed profiles
+  echo "  Deleting SwiftSeedProfiles..."
+  kubectl delete swiftseedprofile minimal qemu-test-seed \
+    -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
+
+  # 6. Shared resources (guest class)
+  echo "  Deleting SwiftGuestClass..."
+  kubectl delete swiftguestclass default \
+    -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
+
+  # 7. ConfigMaps created by the controller for seed/intent
+  echo "  Deleting ConfigMaps..."
+  kubectl delete configmap \
+    sample-seed sample-runtime-intent \
+    multi-nic-test-seed multi-nic-test-runtime-intent \
+    faas-test-runtime-intent \
+    qemu-test-seed qemu-test-runtime-intent \
+    gpu-test-seed gpu-test-runtime-intent \
+    -n "$NAMESPACE" --ignore-not-found --timeout=10s 2>/dev/null || true
+
+  echo "  Cleanup done."
+}
+
+# If --cleanup-only, run cleanup and exit immediately
+if [[ "$CLEANUP_ONLY" == "true" ]]; then
+  cleanup_all
+  exit 0
+fi
 
 echo "=== KubeSwift smoke test ==="
 echo "Namespace: $NAMESPACE"
@@ -137,11 +199,6 @@ scenario_disk_boot() {
 
   RESULTS[disk-boot]="PASS"
   echo "  disk-boot: PASS"
-
-  if [[ "$NO_CLEANUP" != "true" ]]; then
-    kubectl delete swiftguest sample -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    kubectl delete swiftimage ubuntu-noble -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-  fi
 }
 
 # --- Scenario 2: Kernel Boot (Cloud Hypervisor) ---
@@ -177,11 +234,6 @@ scenario_kernel_boot() {
 
   RESULTS[kernel-boot]="PASS"
   echo "  kernel-boot: PASS"
-
-  if [[ "$NO_CLEANUP" != "true" ]]; then
-    kubectl delete swiftguest faas-test -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    kubectl delete swiftkernel faas-minimal -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-  fi
 }
 
 # --- Scenario 3: QEMU Boot ---
@@ -201,12 +253,6 @@ scenario_qemu_boot() {
 
   RESULTS[qemu-boot]="PASS"
   echo "  qemu-boot: PASS"
-
-  if [[ "$NO_CLEANUP" != "true" ]]; then
-    kubectl delete swiftguest qemu-test -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    kubectl delete swiftimage ubuntu-noble-qemu -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    kubectl delete swiftseedprofile qemu-test-seed -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-  fi
 }
 
 # --- Scenario 4: GPU Allocation (control plane only, no hardware) ---
@@ -293,14 +339,6 @@ MOCK_EOF
       RESULTS[gpu-alloc]="FAIL"
     fi
   fi
-
-  # Cleanup: delete guest (triggers deallocation), then mock node and profile
-  if [[ "$NO_CLEANUP" != "true" ]]; then
-    kubectl delete swiftguest gpu-test -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-    sleep 2
-    kubectl delete swiftgpunode mock-gpu-node --ignore-not-found >/dev/null 2>&1
-    kubectl delete swiftgpuprofile a100-pcie-single -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1
-  fi
 }
 
 # --- Scenario 5: Multi-NIC (backward compatibility — no Multus required) ---
@@ -312,15 +350,23 @@ scenario_multi_nic() {
   apply_rbac
   apply_shared
 
-  # Ensure image exists (reuse ubuntu-noble from disk-boot if present)
-  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-noble.yaml" -n "$NAMESPACE" >/dev/null
-  wait_image_ready "ubuntu-noble" || { RESULTS[multi-nic]="FAIL"; return; }
+  # Create a dedicated SwiftImage for this scenario to avoid PVC lock races
+  # with other scenarios (e.g., disk-boot) that use a different SwiftImage.
+  cat <<'IMG_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble-multinic
+spec:
+  format: qcow2
+  rootDisk:
+    size: "40Gi"
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+IMG_EOF
 
-  # Wait for any previous guest pods using the same image PVC to fully terminate.
-  # The disk-boot scenario deletes with --wait=false; CH will fail with AlreadyLocked
-  # if the old pod still holds a write lock on the image.
-  echo "  Waiting for previous pods to release image lock..."
-  kubectl wait --for=delete pod/sample -n "$NAMESPACE" --timeout=60s 2>/dev/null || true
+  wait_image_ready "ubuntu-noble-multinic" || { RESULTS[multi-nic]="FAIL"; return; }
 
   # Apply a SwiftGuest with explicit interfaces field (single primary, no Multus needed)
   cat <<'MULTINIC_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
@@ -330,7 +376,7 @@ metadata:
   name: multi-nic-test
 spec:
   imageRef:
-    name: ubuntu-noble
+    name: ubuntu-noble-multinic
   guestClassRef:
     name: default
   seedProfileRef:
@@ -346,10 +392,6 @@ MULTINIC_EOF
 
   RESULTS[multi-nic]="PASS"
   echo "  multi-nic: PASS"
-
-  if [[ "$NO_CLEANUP" != "true" ]]; then
-    kubectl delete swiftguest multi-nic-test -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-  fi
 }
 
 # --- Run scenarios ---
@@ -392,12 +434,10 @@ else
   scenario_multi_nic
 fi
 
-# Cleanup shared resources
-if [[ "$NO_CLEANUP" != "true" ]] && [[ -z "$SCENARIO" ]]; then
-  echo ""
-  echo "Cleaning up shared resources..."
-  kubectl delete swiftseedprofile minimal -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
-  kubectl delete swiftguestclass default -n "$NAMESPACE" --ignore-not-found --wait=false >/dev/null 2>&1
+# --- Cleanup ---
+
+if [[ "$NO_CLEANUP" != "true" ]]; then
+  cleanup_all
 fi
 
 # --- Summary ---
