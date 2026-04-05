@@ -3,6 +3,7 @@ package swiftguestpool
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -338,4 +339,301 @@ func intSliceEqual(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// computeTemplateHash tests
+// ---------------------------------------------------------------------------
+
+func TestComputeTemplateHash_Stable(t *testing.T) {
+	tmpl := swiftv1alpha1.SwiftGuestTemplateSpec{
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-noble"},
+			RunPolicy: swiftv1alpha1.RunPolicyRunning,
+		},
+	}
+	h1 := computeTemplateHash(&tmpl)
+	h2 := computeTemplateHash(&tmpl)
+	if h1 != h2 {
+		t.Errorf("same template produced different hashes: %s vs %s", h1, h2)
+	}
+	if h1 == "" || h1 == "unknown" {
+		t.Errorf("expected valid hash, got %q", h1)
+	}
+}
+
+func TestComputeTemplateHash_DifferentSpec(t *testing.T) {
+	tmpl1 := swiftv1alpha1.SwiftGuestTemplateSpec{
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-noble"},
+		},
+	}
+	tmpl2 := swiftv1alpha1.SwiftGuestTemplateSpec{
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-jammy"},
+		},
+	}
+	h1 := computeTemplateHash(&tmpl1)
+	h2 := computeTemplateHash(&tmpl2)
+	if h1 == h2 {
+		t.Errorf("different imageRef should produce different hashes, both got %s", h1)
+	}
+}
+
+func TestComputeTemplateHash_MetadataIgnored(t *testing.T) {
+	spec := swiftv1alpha1.SwiftGuestSpec{
+		ImageRef:  &corev1.LocalObjectReference{Name: "ubuntu-noble"},
+		RunPolicy: swiftv1alpha1.RunPolicyRunning,
+	}
+	tmpl1 := swiftv1alpha1.SwiftGuestTemplateSpec{
+		Metadata: swiftv1alpha1.PoolObjectMeta{
+			Labels: map[string]string{"env": "dev"},
+		},
+		Spec: spec,
+	}
+	tmpl2 := swiftv1alpha1.SwiftGuestTemplateSpec{
+		Metadata: swiftv1alpha1.PoolObjectMeta{
+			Labels: map[string]string{"env": "prod"},
+		},
+		Spec: spec,
+	}
+	h1 := computeTemplateHash(&tmpl1)
+	h2 := computeTemplateHash(&tmpl2)
+	if h1 != h2 {
+		t.Errorf("metadata-only change should not affect hash: %s vs %s", h1, h2)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// hasOutdatedGuests tests
+// ---------------------------------------------------------------------------
+
+func makeGuestWithHash(name, hash string) swiftv1alpha1.SwiftGuest {
+	return swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Annotations: map[string]string{
+				swiftv1alpha1.AnnotationTemplateHash: hash,
+			},
+		},
+	}
+}
+
+func TestHasOutdatedGuests_None(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	indexMap := map[int]swiftv1alpha1.SwiftGuest{
+		0: makeGuestWithHash("pool-0", "abc123"),
+		1: makeGuestWithHash("pool-1", "abc123"),
+		2: makeGuestWithHash("pool-2", "abc123"),
+	}
+	if r.hasOutdatedGuests(indexMap, "abc123") {
+		t.Error("expected no outdated guests when all hashes match")
+	}
+}
+
+func TestHasOutdatedGuests_Some(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	indexMap := map[int]swiftv1alpha1.SwiftGuest{
+		0: makeGuestWithHash("pool-0", "abc123"),
+		1: makeGuestWithHash("pool-1", "old-hash"),
+		2: makeGuestWithHash("pool-2", "abc123"),
+	}
+	if !r.hasOutdatedGuests(indexMap, "abc123") {
+		t.Error("expected outdated guests when one hash differs")
+	}
+}
+
+func TestHasOutdatedGuests_Empty(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	indexMap := map[int]swiftv1alpha1.SwiftGuest{}
+	if r.hasOutdatedGuests(indexMap, "abc123") {
+		t.Error("expected no outdated guests when map is empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildTopologyConstraints tests
+// ---------------------------------------------------------------------------
+
+func TestBuildTopologyConstraints_Pack(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			SpreadPolicy: swiftv1alpha1.SpreadPolicyPack,
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	if constraints != nil {
+		t.Errorf("expected nil constraints for Pack policy, got %v", constraints)
+	}
+}
+
+func TestBuildTopologyConstraints_Spread(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			SpreadPolicy: swiftv1alpha1.SpreadPolicySpread,
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	if len(constraints) != 1 {
+		t.Fatalf("expected 1 constraint for Spread policy, got %d", len(constraints))
+	}
+	c := constraints[0]
+	if c.TopologyKey != "kubernetes.io/hostname" {
+		t.Errorf("expected hostname topology key, got %s", c.TopologyKey)
+	}
+	if c.MaxSkew != 1 {
+		t.Errorf("expected maxSkew=1, got %d", c.MaxSkew)
+	}
+	if c.WhenUnsatisfiable != corev1.ScheduleAnyway {
+		t.Errorf("expected ScheduleAnyway, got %v", c.WhenUnsatisfiable)
+	}
+}
+
+func TestBuildTopologyConstraints_Explicit(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	explicit := corev1.TopologySpreadConstraint{
+		MaxSkew:           2,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+	}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			SpreadPolicy:              swiftv1alpha1.SpreadPolicySpread, // should be ignored
+			TopologySpreadConstraints: []corev1.TopologySpreadConstraint{explicit},
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	if len(constraints) != 1 {
+		t.Fatalf("expected 1 explicit constraint, got %d", len(constraints))
+	}
+	c := constraints[0]
+	if c.TopologyKey != "topology.kubernetes.io/zone" {
+		t.Errorf("expected zone topology key, got %s", c.TopologyKey)
+	}
+	if c.MaxSkew != 2 {
+		t.Errorf("expected maxSkew=2 from explicit constraint, got %d", c.MaxSkew)
+	}
+}
+
+func TestBuildTopologyConstraints_LabelSelector(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			SpreadPolicy: swiftv1alpha1.SpreadPolicySpread,
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	if len(constraints) != 1 {
+		t.Fatalf("expected 1 constraint, got %d", len(constraints))
+	}
+	sel := constraints[0].LabelSelector
+	if sel == nil {
+		t.Fatal("expected label selector on spread constraint, got nil")
+	}
+	val, ok := sel.MatchLabels[swiftv1alpha1.LabelPoolName]
+	if !ok {
+		t.Fatal("expected pool label in selector matchLabels")
+	}
+	if val != "fleet" {
+		t.Errorf("expected pool name 'fleet' in selector, got %s", val)
+	}
+}
+
+func TestBuildTopologyConstraints_ExplicitAddsSelector(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	// Explicit constraint without a label selector -- controller should add one.
+	explicit := corev1.TopologySpreadConstraint{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector:     nil,
+	}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			TopologySpreadConstraints: []corev1.TopologySpreadConstraint{explicit},
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	if constraints[0].LabelSelector == nil {
+		t.Fatal("expected controller to inject label selector on explicit constraint without one")
+	}
+	val := constraints[0].LabelSelector.MatchLabels[swiftv1alpha1.LabelPoolName]
+	if val != "fleet" {
+		t.Errorf("expected pool name in injected selector, got %s", val)
+	}
+}
+
+func TestBuildTopologyConstraints_ExplicitPreservesExistingSelector(t *testing.T) {
+	r := &SwiftGuestPoolReconciler{}
+	explicit := corev1.TopologySpreadConstraint{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"custom": "selector"},
+		},
+	}
+	pool := &swiftv1alpha1.SwiftGuestPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet"},
+		Spec: swiftv1alpha1.SwiftGuestPoolSpec{
+			TopologySpreadConstraints: []corev1.TopologySpreadConstraint{explicit},
+		},
+	}
+	constraints := r.buildTopologyConstraints(pool)
+	sel := constraints[0].LabelSelector
+	if _, ok := sel.MatchLabels["custom"]; !ok {
+		t.Error("expected existing custom selector to be preserved")
+	}
+	if _, ok := sel.MatchLabels[swiftv1alpha1.LabelPoolName]; ok {
+		t.Error("expected controller NOT to overwrite user-provided selector")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pvcName tests
+// ---------------------------------------------------------------------------
+
+func TestPVCName(t *testing.T) {
+	tests := []struct {
+		templateName string
+		poolName     string
+		index        int
+		want         string
+	}{
+		{"cache", "fleet", 3, "cache-fleet-3"},
+		{"data", "gpu-pool", 0, "data-gpu-pool-0"},
+		{"scratch", "p", 99, "scratch-p-99"},
+	}
+	for _, tt := range tests {
+		got := pvcName(tt.templateName, tt.poolName, tt.index)
+		if got != tt.want {
+			t.Errorf("pvcName(%q, %q, %d) = %q, want %q",
+				tt.templateName, tt.poolName, tt.index, got, tt.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// updatedReason tests
+// ---------------------------------------------------------------------------
+
+func TestUpdatedReason_AllUpdated(t *testing.T) {
+	got := updatedReason(3, 3)
+	if got != "AllReplicasUpdated" {
+		t.Errorf("expected AllReplicasUpdated, got %s", got)
+	}
+}
+
+func TestUpdatedReason_InProgress(t *testing.T) {
+	got := updatedReason(1, 3)
+	if got != "RollingUpdateInProgress" {
+		t.Errorf("expected RollingUpdateInProgress, got %s", got)
+	}
 }

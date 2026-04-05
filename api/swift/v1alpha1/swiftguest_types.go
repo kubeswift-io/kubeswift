@@ -64,6 +64,29 @@ type SwiftGuestSpec struct {
 	// Interfaces with NetworkRef are secondary interfaces backed by Multus/NADs.
 	// +optional
 	Interfaces []GuestInterface `json:"interfaces,omitempty"`
+	// TopologySpreadConstraints applied to the launcher pod.
+	// Typically set by SwiftGuestPool controller for fleet spread.
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+	// DataDiskRefs is a list of additional data disks.
+	// Each entry references either a SwiftImage or a PVC directly.
+	// +optional
+	DataDiskRefs []DataDiskRef `json:"dataDiskRefs,omitempty"`
+}
+
+// DataDiskRef references either a SwiftImage or a PVC for a data disk.
+type DataDiskRef struct {
+	// Name identifies this data disk (used for volume naming).
+	Name string `json:"name"`
+	// ImageRef references a SwiftImage for this data disk.
+	// Mutually exclusive with PVCRef.
+	// +optional
+	ImageRef *corev1.LocalObjectReference `json:"imageRef,omitempty"`
+	// PVCRef references a PersistentVolumeClaim directly.
+	// Used by SwiftGuestPool for per-replica persistent storage.
+	// Mutually exclusive with ImageRef.
+	// +optional
+	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
 }
 
 // InterfaceType constants for GuestInterface.Type.

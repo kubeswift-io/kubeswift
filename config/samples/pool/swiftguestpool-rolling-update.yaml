@@ -1,0 +1,28 @@
+# SwiftGuestPool with rolling update strategy.
+# When the template changes, VMs are replaced one at a time.
+# maxUnavailable=1: at most 1 VM can be down during update.
+# maxSurge=0: never exceed the desired replica count.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: rolling-pool
+  namespace: default
+spec:
+  replicas: 4
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  template:
+    metadata:
+      labels:
+        app: rolling-demo
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: minimal
+      runPolicy: Running
