@@ -348,7 +348,7 @@ func intSliceEqual(a, b []int) bool {
 func TestComputeTemplateHash_Stable(t *testing.T) {
 	tmpl := swiftv1alpha1.SwiftGuestTemplateSpec{
 		Spec: swiftv1alpha1.SwiftGuestSpec{
-			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-noble"},
+			ImageRef:  &corev1.LocalObjectReference{Name: "ubuntu-noble"},
 			RunPolicy: swiftv1alpha1.RunPolicyRunning,
 		},
 	}

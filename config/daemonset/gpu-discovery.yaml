@@ -31,7 +31,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: gpu-discovery
-          image: ghcr.io/projectbeskar/kubeswift/gpu-discovery:sha-1347ad7
+          image: ghcr.io/projectbeskar/kubeswift/gpu-discovery:sha-762941d
           args:
             - --interval=60s
             - --v=2
