@@ -13,6 +13,12 @@ import (
 // IntentConfigMapSuffix is the suffix for the runtime intent ConfigMap name.
 const IntentConfigMapSuffix = "-runtime-intent"
 
+// LauncherMemoryOverheadMiB is the extra memory added to the container limit
+// beyond the guest memory. Accounts for the hypervisor process (CH or QEMU),
+// swiftletd, dnsmasq, and kernel cgroup overhead. Without this, the container
+// is OOMKilled because the guest RAM is allocated inside the container's cgroup.
+const LauncherMemoryOverheadMiB = 512
+
 // BuildPod creates a pod spec for the SwiftGuest.
 func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
 	if rg.HasKernel() {
@@ -110,11 +116,11 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 	}
 	AddSRIOVResourceLimits(&resources, guest)
@@ -238,11 +244,11 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 	}
 	AddSRIOVResourceLimits(&resources, guest)
