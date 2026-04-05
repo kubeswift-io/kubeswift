@@ -7,6 +7,10 @@ All notable changes to KubeSwift are documented here.
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- SwiftGuestPool CRD and controller for VM fleet management (ReplicaSet semantics)
+- kubectl scale support for SwiftGuestPool via scale subresource
+- Stable naming, failed VM replacement, cascade deletion
+- Multi-vendor GPU discovery (AMD, Intel, NVIDIA) -- class-based PCI detection
 - Tier 1 GPU passthrough validated on real hardware (GeForce GTX 1080)
 - GPU discovery DaemonSet validated on Hetzner bare-metal
 - IOMMU group peer auto-binding in gpu-init.sh (consumer NVIDIA GPUs)
