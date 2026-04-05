@@ -1,6 +1,8 @@
 package swiftguest
 
 import (
+	"fmt"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,10 +23,50 @@ const LauncherMemoryOverheadMiB = 512
 
 // BuildPod creates a pod spec for the SwiftGuest.
 func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
+	var pod *corev1.Pod
 	if rg.HasKernel() {
-		return buildKernelBootPod(guest, rg, intentConfigMapName)
+		pod = buildKernelBootPod(guest, rg, intentConfigMapName)
+	} else {
+		pod = buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName)
 	}
-	return buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName)
+	applyTopologyConstraints(pod, guest)
+	applyDataDiskRefs(pod, guest)
+	return pod
+}
+
+// applyTopologyConstraints copies topology spread constraints from the SwiftGuest
+// spec to the launcher pod. Typically set by SwiftGuestPool controller.
+func applyTopologyConstraints(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if len(guest.Spec.TopologySpreadConstraints) > 0 {
+		pod.Spec.TopologySpreadConstraints = guest.Spec.TopologySpreadConstraints
+	}
+}
+
+// applyDataDiskRefs adds PVC volumes and mounts for dataDiskRefs with pvcRef.
+// ImageRef-backed dataDiskRefs are resolved by the resolver, not here.
+func applyDataDiskRefs(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	for i, ref := range guest.Spec.DataDiskRefs {
+		if ref.PVCRef == nil {
+			continue
+		}
+		volName := fmt.Sprintf("data-disk-pvc-%d", i)
+		mountPath := fmt.Sprintf("/var/lib/kubeswift/disks/pvc-%s", ref.Name)
+
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: ref.PVCRef.Name,
+				},
+			},
+		})
+		if len(pod.Spec.Containers) > 0 {
+			pod.Spec.Containers[0].VolumeMounts = append(
+				pod.Spec.Containers[0].VolumeMounts,
+				corev1.VolumeMount{Name: volName, MountPath: mountPath},
+			)
+		}
+	}
 }
 
 // podAnnotations returns the base annotations for a launcher pod,

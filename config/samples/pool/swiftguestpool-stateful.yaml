@@ -1,0 +1,37 @@
+# SwiftGuestPool with per-replica PVCs for persistent storage.
+# Each replica gets its own PVC named model-cache-stateful-pool-<index>.
+# PVCs survive VM replacement -- when a Failed VM is replaced, the new VM
+# at the same index gets the same PVC. PVCs are deleted when the pool is deleted.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: stateful-pool
+  namespace: default
+spec:
+  replicas: 3
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  spreadPolicy: Spread
+  volumeClaimTemplates:
+  - metadata:
+      name: model-cache
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+  template:
+    metadata:
+      labels:
+        app: stateful-demo
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: minimal
+      runPolicy: Running

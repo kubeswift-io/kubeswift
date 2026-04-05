@@ -1,0 +1,23 @@
+# SwiftGuestPool with topology spread -- replicas spread across nodes.
+# spreadPolicy: Spread adds a hostname-based topology constraint so
+# VMs are distributed across available nodes instead of packed on one.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: spread-pool
+  namespace: default
+spec:
+  replicas: 4
+  spreadPolicy: Spread
+  template:
+    metadata:
+      labels:
+        app: spread-demo
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: minimal
+      runPolicy: Running
