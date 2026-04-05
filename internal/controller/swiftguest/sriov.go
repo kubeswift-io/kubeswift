@@ -46,7 +46,7 @@ func sriovVFIOVolume() corev1.Volume {
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
 				Path: "/dev/vfio",
-				Type: ptr.To(corev1.HostPathDirectory),
+				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 			},
 		},
 	}
