@@ -413,11 +413,11 @@ func BuildGPUDiskBootPod(
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceCPU:    *resource.NewQuantity(int64(cpu), resource.DecimalSI),
-			corev1.ResourceMemory: *resource.NewQuantity(int64(mem)*1024*1024, resource.BinarySI),
+			corev1.ResourceMemory: *resource.NewQuantity(int64(mem+LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI),
 		},
 	}
 	AddSRIOVResourceLimits(&resources, guest)
