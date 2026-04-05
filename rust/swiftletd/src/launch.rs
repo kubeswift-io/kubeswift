@@ -64,8 +64,22 @@ where
 
     let data_disk_path = intent.data_disk_path().to_string();
 
-    // Build NIC config from intent.
-    let (tap_name, ch_nics, vfio_devices) = build_ch_nics(intent);
+    // Build NIC config from intent (SR-IOV NICs produce VFIO devices).
+    let (tap_name, ch_nics, mut vfio_devices) = build_ch_nics(intent);
+
+    // Add GPU VFIO devices from the GPU intent.
+    if let Some(ref gpu) = intent.gpu {
+        for dev in &gpu.devices {
+            log::info!(
+                "gpu_device host_path={} clique={}",
+                dev.host_path,
+                dev.gpu_direct_clique
+            );
+            vfio_devices.push(VFIODeviceConfig {
+                sysfs_path: dev.host_path.clone(),
+            });
+        }
+    }
 
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
@@ -150,8 +164,22 @@ where
         String::new()
     };
 
-    // Build NIC config from intent.
-    let (tap_name, mac, qemu_nics, vfio_devices) = build_qemu_nics(intent);
+    // Build NIC config from intent (SR-IOV NICs produce VFIO devices).
+    let (tap_name, mac, qemu_nics, mut vfio_devices) = build_qemu_nics(intent);
+
+    // Add GPU VFIO devices from the GPU intent.
+    if let Some(ref gpu) = intent.gpu {
+        for dev in &gpu.devices {
+            log::info!(
+                "gpu_device host={} root_port={}",
+                dev.pci_address,
+                dev.pcie_root_port
+            );
+            vfio_devices.push(QemuVFIODevice {
+                host_address: dev.pci_address.clone(),
+            });
+        }
+    }
 
     let config = QemuConfig {
         guest_id: intent.guest_id.clone(),

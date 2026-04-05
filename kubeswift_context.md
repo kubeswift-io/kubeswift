@@ -938,7 +938,13 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Full flow: label node -> discovery -> create profile (tier=pcie) -> create guest -> nvidia-smi inside guest
 - Validate VFIO bind, Cloud Hypervisor --device passthrough, GPU driver init in guest
 
-**3. Additional kernel profiles**
+**3. Root disk resize during image import**
+- SwiftImage import pipeline should resize image.raw to the SwiftGuestClass rootDisk.size after qcow2-to-raw conversion
+- Currently the raw image is only as large as the cloud image (~3.5G for Ubuntu Noble)
+- Guest expects rootDisk.size (e.g., 40Gi) but sees the raw file size
+- Fix: `qemu-img resize image.raw <size>` in the import job, then growpart/cloud-init expands the partition on first boot
+
+**4. Additional kernel profiles**
 - gpu-workload profile: Linux kernel with NVIDIA driver modules, VFIO support
 - vhost-user profile: for vhost-user-net/blk offload scenarios
 - Build pipeline at build/kernels/<profile>/

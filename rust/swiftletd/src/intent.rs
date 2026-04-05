@@ -36,6 +36,42 @@ pub struct RuntimeIntent {
     /// If empty/absent and network=true, a single default NIC is used (backward compat).
     #[serde(default)]
     pub nics: Option<Vec<NICIntent>>,
+    /// GPU passthrough configuration. Populated when gpuProfileRef is set.
+    #[serde(default)]
+    pub gpu: Option<GPUIntent>,
+}
+
+/// GPU passthrough configuration from the controller.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPUIntent {
+    /// VFIO GPU devices to pass through.
+    pub devices: Vec<GPUDeviceIntent>,
+    /// Firmware type: "cloudhv" or "ovmf".
+    #[serde(default)]
+    pub firmware: String,
+    /// Fabric Manager partition ID (-1 = none).
+    #[serde(default)]
+    pub fabric_manager_partition_id: i32,
+}
+
+/// A single GPU VFIO device.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPUDeviceIntent {
+    /// Sysfs path (e.g., "/sys/bus/pci/devices/0000:01:00.0/").
+    pub host_path: String,
+    /// PCI BDF address (e.g., "0000:01:00.0").
+    pub pci_address: String,
+    /// Place behind pcie-root-port (QEMU Tier 2/3 only).
+    #[serde(default)]
+    pub pcie_root_port: bool,
+    /// x_nv_gpudirect_clique value (CH Tier 1 only).
+    #[serde(default)]
+    pub gpu_direct_clique: i32,
+    /// Add x-no-mmap=true (QEMU, large BARs).
+    #[serde(default)]
+    pub no_mmap: bool,
 }
 
 /// Describes a single network interface for the VM.
