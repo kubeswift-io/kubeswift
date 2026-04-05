@@ -311,13 +311,35 @@ status:
       allocatedTo: ""
 ```
 
+**SwiftGuestPool** — manages a fleet of identical SwiftGuests (ReplicaSet semantics)
+```yaml
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+spec:
+  replicas: 4
+  template:
+    metadata:
+      labels:
+        role: inference
+    spec:
+      imageRef: ...
+      guestClassRef: ...
+      gpuProfileRef: ...
+      runPolicy: Running
+status:
+  replicas: 4
+  readyReplicas: 3
+  failedReplicas: 1
+  conditions: [Available, Progressing]
+```
+
 ### Repository Structure
 ```
 api/
   image/v1alpha1/         SwiftImage types
   kernel/v1alpha1/        SwiftKernel types
   seed/v1alpha1/          SwiftSeedProfile types
-  swift/v1alpha1/         SwiftGuest, SwiftGuestClass types
+  swift/v1alpha1/         SwiftGuest, SwiftGuestClass, SwiftGuestPool types
   gpu/v1alpha1/           SwiftGPUProfile, SwiftGPUNode types
   shared/                 common types
 
@@ -332,6 +354,7 @@ internal/
   controller/swiftimage/  SwiftImage controller
   controller/swiftkernel/ SwiftKernel controller (per-node pull)
   controller/swiftgpu/    SwiftGPU controller (controller.go, allocate.go, status.go + tests)
+  controller/swiftguestpool/ SwiftGuestPool controller (ReplicaSet-style fleet management)
   runtimeintent/          VM launch spec builder (disk + kernel + GPU boot paths)
   resolved/               Resolution and merge logic
   seed/                   cloud-init ConfigMap builder
@@ -947,6 +970,21 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Documentation: docs/networking/sriov.md (setup, GPUDirect RDMA, troubleshooting)
 - CRDs regenerated with type and resourceName fields
 
+### Completed (SwiftGuestPool)
+- SwiftGuestPool CRD: replicas, template (metadata + SwiftGuestSpec), status subresource
+- Scale subresource: `kubectl scale sgpool <name> --replicas=N`
+- Controller: reconciles desired vs actual SwiftGuest count
+- Stable naming: `<pool>-<index>` with sequential zero-based indices
+- Scale down: highest-index-first (StatefulSet convention)
+- Failed VM replacement: deletes Failed guests for automatic recreation
+- Owner references: pool deletion cascades to all SwiftGuests
+- Controller-managed labels: `swift.kubeswift.io/pool` and `swift.kubeswift.io/pool-index`
+- Conditions: Available (ready > 0), Progressing (not at desired state)
+- RBAC: swiftguestpools + status + scale permissions
+- 21 unit tests for index management, scale up/down, status, conditions
+- Sample manifests: basic pool, GPU inference fleet
+- Printer columns: Desired, Ready, Available, Failed, Age
+
 ### Completed (GPU Discovery Validation — Tier 1 Hardware)
 - Validated on Hetzner bare-metal node (boba) with NVIDIA GeForce GTX 1080 (GP104)
 - Discovery DaemonSet correctly detects GPU model, PCI address, IOMMU group, BAR sizes, NUMA node
@@ -1000,11 +1038,6 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Cloudbase-init or unattend.xml for Windows provisioning
 - Guest agent for IP reporting (Windows doesn't use cloud-init)
 
-**4. SwiftGuestPool**
-- New CRD: SwiftGuestPool with desired replica count and guest template
-- Controller creates/deletes SwiftGuests to match desired count
-- Use case: GPU inference fleets with identical VM configurations
-
 ### SwiftGPU Continued (in order)
 
 **7. Tier 2 GPU validation (HGX SXM)**
@@ -1052,7 +1085,13 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Mediated device passthrough via mdev
 - Different use case from full passthrough (lighter workloads)
 
-**13. GPU health monitoring and automatic failover**
+**13. SwiftGuestPool Enhancements**
+- Rolling updates (gradual replacement of VMs when template changes)
+- PVC per replica (StatefulSet-like persistent volumes)
+- Anti-affinity / topology spread (spread replicas across nodes/zones)
+- Auto-scaling (HPA integration via custom metrics adapter)
+
+**14. GPU health monitoring and automatic failover**
 - Monitor GPU health via nvidia-smi or NVML inside discovery DaemonSet
 - Detect Xid errors, ECC failures, thermal throttling
 - Mark unhealthy GPUs as unallocatable
@@ -1181,3 +1220,6 @@ When helping develop KubeSwift:
 - **GPU VFIO devices from intent.gpu.devices must be merged into CH --device and QEMU -device args in launch.rs**
 - **Import pipeline must run sgdisk -e after qemu-img resize to fix GPT backup header location**
 - **Import pipeline must use qemu-img resize -f raw (explicit format) to avoid block 0 write restrictions**
+- **SwiftGuestPool controller manages count only, not spec conformance (ReplicaSet semantics)**
+- **Pool guests are named <pool-name>-<index> with stable sequential indices**
+- **Scale down deletes highest indices first**
