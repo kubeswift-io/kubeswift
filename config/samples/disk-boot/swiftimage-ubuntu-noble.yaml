@@ -6,7 +6,7 @@ metadata:
 spec:
   format: qcow2  # Ubuntu .img is qcow2; import job converts to raw
   rootDisk:
-    size: "40Gi"
+    size: "10Gi"  # Template PVC size (holds the raw image). VM disk size comes from SwiftGuestClass.
   source:
     http:
       url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
