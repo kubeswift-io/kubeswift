@@ -15,7 +15,15 @@ set -euo pipefail
 # The full host sysfs is mounted at /host/sys (not /sys) to avoid being
 # shadowed by the container runtime's read-only sysfs mount. Device symlinks
 # under /sys/bus/pci/devices/ resolve to /sys/devices/ so the full tree is needed.
-SYSFS_PCI="${SYSFS_PCI_PATH:-/host/sys/bus/pci}"
+#
+# IMPORTANT: readlink -f cannot be used on paths under $HOST_SYS because symlink
+# targets are relative to the real /sys, not our $HOST_SYS mount. We use readlink
+# (without -f) and resolve paths manually.
+HOST_SYS="${HOST_SYS_PATH:-/host/sys}"
+SYSFS_PCI="${HOST_SYS}/bus/pci"
+
+echo "gpu-init: HOST_SYS=$HOST_SYS SYSFS_PCI=$SYSFS_PCI"
+echo "gpu-init: GPU_PCI_ADDRESSES=${GPU_PCI_ADDRESSES:-}"
 
 # Validate PCI BDF address format (DDDD:BB:DD.F) to prevent path traversal
 # or injection via crafted addresses in the GPU_PCI_ADDRESSES env var.
@@ -27,6 +35,20 @@ validate_bdf() {
   fi
 }
 
+# Resolve IOMMU group ID for a PCI device by reading the iommu_group symlink.
+# Returns the group ID (e.g., "1") or empty string if not found.
+get_iommu_group_id() {
+  local addr="$1"
+  local link_target
+  link_target=$(readlink "${SYSFS_PCI}/devices/${addr}/iommu_group" 2>/dev/null || true)
+  if [ -z "$link_target" ]; then
+    echo ""
+    return
+  fi
+  # link_target is relative like "../../../../kernel/iommu_groups/1"
+  basename "$link_target"
+}
+
 # Bind a single PCI device to vfio-pci.
 bind_to_vfio() {
   local addr="$1"
@@ -36,29 +58,29 @@ bind_to_vfio() {
 
   # Check if already bound to vfio-pci.
   local current_driver
-  current_driver=$(basename "$(readlink ${SYSFS_PCI}/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
+  current_driver=$(basename "$(readlink ${SYSFS_PCI}/devices/${addr}/driver 2>/dev/null)" 2>/dev/null || echo "none")
   if [ "$current_driver" = "vfio-pci" ]; then
     echo "${addr} (${label}): already bound to vfio-pci"
     return 0
   fi
 
-  echo "Binding ${addr} (${label}) to vfio-pci"
+  echo "Binding ${addr} (${label}) to vfio-pci (current driver: ${current_driver})"
 
   # Unbind from the current driver (ignore errors -- device may already be unbound).
   if [ -e "${SYSFS_PCI}/devices/${addr}/driver/unbind" ]; then
-    echo "${addr}" > ${SYSFS_PCI}/devices/"${addr}"/driver/unbind 2>/dev/null || true
+    echo "${addr}" > "${SYSFS_PCI}/devices/${addr}/driver/unbind" 2>/dev/null || true
   fi
 
   # Override to vfio-pci and probe.
-  echo vfio-pci > ${SYSFS_PCI}/devices/"${addr}"/driver_override
-  echo "${addr}" > ${SYSFS_PCI}/drivers_probe
+  echo vfio-pci > "${SYSFS_PCI}/devices/${addr}/driver_override"
+  echo "${addr}" > "${SYSFS_PCI}/drivers_probe"
 
   # Clear the override so it does not persist across future driver probes.
-  echo > ${SYSFS_PCI}/devices/"${addr}"/driver_override
+  echo > "${SYSFS_PCI}/devices/${addr}/driver_override"
 
   # Verify the binding succeeded.
   local driver
-  driver=$(basename "$(readlink ${SYSFS_PCI}/devices/"${addr}"/driver 2>/dev/null)" 2>/dev/null || echo "none")
+  driver=$(basename "$(readlink ${SYSFS_PCI}/devices/${addr}/driver 2>/dev/null)" 2>/dev/null || echo "none")
   if [ "$driver" != "vfio-pci" ]; then
     echo "ERROR: ${addr} bound to '${driver}', expected 'vfio-pci'"
     exit 1
@@ -67,30 +89,26 @@ bind_to_vfio() {
 }
 
 # Bind all non-bridge devices in the same IOMMU group as the given GPU.
-# VFIO requires all devices in an IOMMU group to be either:
-#   - bound to vfio-pci, or
-#   - not bound to any driver (unbound)
-#   - PCI/PCIe bridges (class 0x0604xx) are handled by VFIO internally
-#
-# Consumer NVIDIA GPUs (GTX, RTX) typically share their IOMMU group with
-# a companion HD Audio controller. HGX GPUs may share with NVSwitch or
-# other devices. This function handles all cases.
 bind_iommu_group_peers() {
   local gpu_addr="$1"
 
-  # Find the IOMMU group for this device.
-  local iommu_group_path
-  iommu_group_path=$(readlink -f ${SYSFS_PCI}/devices/"${gpu_addr}"/iommu_group 2>/dev/null || true)
-  if [ -z "$iommu_group_path" ] || [ ! -d "$iommu_group_path/devices" ]; then
+  local group_id
+  group_id=$(get_iommu_group_id "$gpu_addr")
+  if [ -z "$group_id" ]; then
     echo "WARNING: could not determine IOMMU group for ${gpu_addr}"
     return 0
   fi
 
-  local group_id
-  group_id=$(basename "$iommu_group_path")
+  # The IOMMU group devices directory under our host sysfs mount.
+  local group_devices="${HOST_SYS}/kernel/iommu_groups/${group_id}/devices"
+  if [ ! -d "$group_devices" ]; then
+    echo "WARNING: IOMMU group ${group_id} devices dir not found at ${group_devices}"
+    return 0
+  fi
+
   echo "IOMMU group ${group_id}: scanning peer devices for ${gpu_addr}"
 
-  for dev_link in "$iommu_group_path"/devices/*; do
+  for dev_link in "$group_devices"/*; do
     local peer_addr
     peer_addr=$(basename "$dev_link")
 
@@ -103,7 +121,7 @@ bind_iommu_group_peers() {
 
     # Read the PCI class to determine device type.
     local pci_class
-    pci_class=$(cat ${SYSFS_PCI}/devices/"${peer_addr}"/class 2>/dev/null || echo "0x000000")
+    pci_class=$(cat "${SYSFS_PCI}/devices/${peer_addr}/class" 2>/dev/null || echo "0x000000")
 
     # Skip PCI/PCIe bridges (class 0x0604xx). VFIO handles bridges internally
     # via the pci-stub or vfio-pci bridge support. Binding them to vfio-pci
@@ -116,8 +134,7 @@ bind_iommu_group_peers() {
     esac
 
     # Bind the peer device to vfio-pci.
-    local peer_label="IOMMU group ${group_id} peer"
-    bind_to_vfio "$peer_addr" "$peer_label"
+    bind_to_vfio "$peer_addr" "IOMMU group ${group_id} peer"
   done
 }
 
@@ -135,7 +152,7 @@ for addr in "${ADDRS[@]}"; do
 
   # Bind IOMMU group peers first -- they must be isolated before VFIO will
   # grant access to the GPU.
-  local_group=$(basename "$(readlink -f ${SYSFS_PCI}/devices/"${addr}"/iommu_group 2>/dev/null)" 2>/dev/null || echo "")
+  local_group=$(get_iommu_group_id "$addr")
   if [ -n "$local_group" ]; then
     case " $PROCESSED_GROUPS " in
       *" $local_group "*)
@@ -159,3 +176,5 @@ if [ "${GPU_PARTITION_ID}" -ge 0 ]; then
   fmpm -a "${GPU_PARTITION_ID}"
   echo "Partition ${GPU_PARTITION_ID} activated"
 fi
+
+echo "gpu-init: complete"
