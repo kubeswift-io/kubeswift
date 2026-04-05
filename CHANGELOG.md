@@ -4,6 +4,32 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased] - 2026-04-05
+
+### Added
+- Tier 1 GPU passthrough validated on real hardware (GeForce GTX 1080)
+- GPU discovery DaemonSet validated on Hetzner bare-metal
+- IOMMU group peer auto-binding in gpu-init.sh (consumer NVIDIA GPUs)
+- Root disk resize pipeline: qemu-img resize + sgdisk -e during import
+- SwiftGuestClass default bumped to 4Gi RAM
+- GTX 1080 sample manifests (swiftgpuprofile-gtx1080.yaml, swiftguest-gpu-gtx1080.yaml)
+
+### Fixed
+- gpu-init: mount host /sys at /host/sys to avoid container sysfs shadow (bug 35)
+- gpu-init: use DirectoryOrCreate for /dev/vfio hostPath (bug 36)
+- gpu-init: replace Unicode em dashes with ASCII (bug 37)
+- gpu-init: use readlink without -f for host sysfs symlinks (bug 40)
+- Containerfile: use explicit /bin/sh interpreter in ENTRYPOINT (bug 38)
+- Init containers: use explicit interpreter in command array (bug 39)
+- launch.rs: read intent.gpu.devices for CH --device and QEMU -device args (bug 41)
+- Pod builder: add 512MiB memory overhead to container limits (bug 42)
+- RBAC: add pods/log permission to controller-manager ClusterRole (bug 43)
+- Makefile: default IMAGE_TAG to sha-$(git rev-parse --short HEAD) (bug 44)
+- Import pipeline: resize image.raw to rootDisk.size (bug 45)
+- Import pipeline: fix GPT backup header with sgdisk -e after resize (bug 46)
+
+---
+
 ## [Unreleased] — April 3, 2026
 
 ### Added
