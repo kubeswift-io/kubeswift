@@ -20,11 +20,11 @@ setup_primary_nic() {
     # VM subnet (internal only; must not conflict with pod network)
     local bridge_ip="${BRIDGE_IP:-10.244.125.1/24}"
 
-    # Create bridge (internal only — do NOT add eth0)
+    # Create bridge (internal only -- do NOT add eth0)
     ip link add "$bridge" type bridge stp_state 0
     ip link set "$bridge" up
 
-    # Give the bridge an IP — dnsmasq will bind here, and this is the VM's gateway
+    # Give the bridge an IP -- dnsmasq will bind here, and this is the VM's gateway
     ip addr add "$bridge_ip" dev "$bridge"
 
     # Create tap interface for the VM's virtio-net
@@ -86,7 +86,7 @@ has_nics() {
 
 if has_nics; then
     # Multi-NIC mode: parse NIC list from intent JSON
-    # Uses lightweight JSON parsing with grep/sed — no jq dependency
+    # Uses lightweight JSON parsing with grep/sed -- no jq dependency
     # Extract the nics array content
     NIC_COUNT=$(grep -o '"tapDevice"' "$INTENT_PATH" | wc -l)
 
@@ -113,7 +113,7 @@ for nic in nics:
     print(f\"{nic_type}|{tap}|{bridge}|{primary}|{multus}|{nic['name']}\")
 " | while IFS='|' read -r nic_type tap bridge primary multus name; do
         if [ "$nic_type" = "sriov" ]; then
-            echo "Skipping SR-IOV interface $name — VFIO passthrough handled by swiftletd"
+            echo "Skipping SR-IOV interface $name -- VFIO passthrough handled by swiftletd"
             continue
         fi
         if [ "$primary" = "1" ]; then
