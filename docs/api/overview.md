@@ -1,12 +1,13 @@
 # API Overview
 
-Seven CRDs across five API groups. All `v1alpha1` (no stability guarantee).
+Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 
 ## CRDs
 
 | CRD | Short | Scope | Operator use |
 |-----|-------|-------|--------------|
 | SwiftGuest | `sg` | Namespaced | One VM; references class + image or kernel, optional seed and GPU profile |
+| SwiftGuestPool | `sgpool` | Namespaced | Fleet of identical VMs; replicas, rolling updates, spread, PVCs |
 | SwiftGuestClass | `sgc` | Cluster | CPU/memory/disk template; reusable |
 | SwiftImage | `si` | Namespaced | Disk source (HTTP or PVC clone); must be Ready before SwiftGuest |
 | SwiftSeedProfile | `ssp` | Namespaced | NoCloud cloud-init; optional (disk boot only) |
@@ -18,7 +19,7 @@ Seven CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 
 | Group | CRDs |
 |-------|------|
-| `swift.kubeswift.io` | SwiftGuest, SwiftGuestClass |
+| `swift.kubeswift.io` | SwiftGuest, SwiftGuestPool, SwiftGuestClass |
 | `image.kubeswift.io` | SwiftImage |
 | `seed.kubeswift.io` | SwiftSeedProfile |
 | `kernel.kubeswift.io` | SwiftKernel |
@@ -51,4 +52,12 @@ Seven CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 5. Create SwiftGuest with `imageRef` + `gpuProfileRef`.
 6. SwiftGPU controller allocates GPUs; SwiftGuest controller creates pod with VFIO devices.
 
-[SwiftGuest](swiftguest.md) · [SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [SwiftKernel](swiftkernel.md) · [SwiftGPUProfile](swiftgpuprofile.md) · [SwiftGPUNode](swiftgpunode.md)
+### Fleet management
+
+1. Create prerequisite resources (SwiftGuestClass, SwiftImage, optional SwiftSeedProfile and SwiftGPUProfile).
+2. Create SwiftGuestPool with `replicas` and a `template` containing the SwiftGuest spec.
+3. Controller creates replicas named `<pool>-0` through `<pool>-<N-1>`.
+4. Scale with `kubectl scale sgpool <name> --replicas=N`.
+5. Update `template.spec` to trigger a rolling update.
+
+[SwiftGuest](swiftguest.md) · [SwiftGuestPool](swiftguestpool.md) · [SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [SwiftKernel](swiftkernel.md) · [SwiftGPUProfile](swiftgpuprofile.md) · [SwiftGPUNode](swiftgpunode.md)

@@ -10,6 +10,7 @@ KubeSwift is a Kubernetes-native VM runtime built on Cloud Hypervisor (default) 
 | Understand how it works | [architecture.md](architecture.md) |
 | Look up a CRD field | [crds.md](crds.md) |
 | Set up GPU passthrough | [gpu-passthrough.md](gpu-passthrough.md) |
+| Manage VM fleets | [swiftguestpool-guide.md](swiftguestpool-guide.md) |
 | Use the swiftctl CLI | [swiftctl.md](swiftctl.md) |
 | Build and contribute | [development.md](development.md) |
 
@@ -28,6 +29,9 @@ Full CRD reference for all 7 resources: SwiftGuest, SwiftGuestClass, SwiftImage,
 
 ### [gpu-passthrough.md](gpu-passthrough.md)
 GPU operator guide. Prerequisites (IOMMU, vfio-pci, Fabric Manager), GPU compatibility tier table, step-by-step workflow (label node → discovery → profile → guest), SwiftGPUProfile examples for each tier, SwiftGPUNode inspection, Fabric Manager setup, and troubleshooting.
+
+### [swiftguestpool-guide.md](swiftguestpool-guide.md)
+SwiftGuestPool operational guide. Creating pools, scaling, rolling updates, high availability with topology spread, persistent data with volumeClaimTemplates, GPU inference fleets, CI/CD runner pools, monitoring, and troubleshooting.
 
 ### [swiftctl.md](swiftctl.md)
 CLI reference for all commands: `console`, `ssh`, `start`, `stop`, `restart`, `describe`, `logs`, `debug`. Covers flags, behavior, requirements, examples, and transport details for console and SSH.
@@ -53,6 +57,12 @@ The `docs/` directory also contains these focused reference documents:
 - [api/swiftguest.md](api/swiftguest.md) — SwiftGuest deep-dive
 - [api/swiftimage.md](api/swiftimage.md) — SwiftImage deep-dive
 - [api/swiftkernel.md](api/swiftkernel.md) — SwiftKernel deep-dive
+
+### Fleet Management
+
+- [swiftguestpool-guide.md](swiftguestpool-guide.md) — Operational guide: scaling, rolling updates, spread, PVCs
+- [swiftguestpool-use-cases.md](swiftguestpool-use-cases.md) — GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
+- [api/swiftguestpool.md](api/swiftguestpool.md) — SwiftGuestPool API reference
 
 ### Kernel boot
 
@@ -94,6 +104,7 @@ kubectl get sgc      # SwiftGuestClass
 kubectl get si       # SwiftImage
 kubectl get ssp      # SwiftSeedProfile
 kubectl get sk       # SwiftKernel
+kubectl get sgpool   # SwiftGuestPool
 kubectl get sgp      # SwiftGPUProfile
 kubectl get sgn      # SwiftGPUNode
 ```
