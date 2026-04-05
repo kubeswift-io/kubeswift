@@ -127,19 +127,19 @@ type PoolObjectMeta struct {
 // SwiftGuestPoolStatus defines the observed state of SwiftGuestPool.
 type SwiftGuestPoolStatus struct {
 	// Replicas is the total number of SwiftGuests owned by this pool.
-	Replicas int32 `json:"replicas"`
+	Replicas int32 `json:"replicas,omitempty"`
 
 	// ReadyReplicas is the number of SwiftGuests with phase=Running and GuestRunning=True.
-	ReadyReplicas int32 `json:"readyReplicas"`
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
 	// AvailableReplicas is the number of available replicas (same as readyReplicas).
-	AvailableReplicas int32 `json:"availableReplicas"`
+	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
 
 	// FailedReplicas is the number of SwiftGuests with phase=Failed.
-	FailedReplicas int32 `json:"failedReplicas"`
+	FailedReplicas int32 `json:"failedReplicas,omitempty"`
 
 	// UpdatedReplicas is the number of SwiftGuests matching the current template hash.
-	UpdatedReplicas int32 `json:"updatedReplicas"`
+	UpdatedReplicas int32 `json:"updatedReplicas,omitempty"`
 
 	// CurrentTemplateHash is the hash of the current template spec.
 	CurrentTemplateHash string `json:"currentTemplateHash,omitempty"`
