@@ -326,15 +326,16 @@ func BuildGPUDiskBootPod(
 				},
 			},
 		},
-		// /sys/bus/pci is needed by gpu-init to bind devices to vfio-pci via sysfs
-		// (driver_override, drivers_probe, driver/unbind). Without this volume, sysfs
-		// writes fail even with SYS_ADMIN because the container's mount namespace
-		// does not include the host sysfs.
+		// /sys is needed by gpu-init to bind devices to vfio-pci via sysfs
+		// (driver_override, drivers_probe, driver/unbind). We mount the full host
+		// sysfs (not just /sys/bus/pci) because device symlinks under /sys/bus/pci/devices/
+		// resolve to paths under /sys/devices/ which must also be accessible.
+		// Mounted at /host/sys to avoid being shadowed by the container's own /sys.
 		{
-			Name: "sysfs-pci",
+			Name: "host-sys",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: "/sys/bus/pci",
+					Path: "/sys",
 					Type: ptr.To(corev1.HostPathDirectory),
 				},
 			},
@@ -399,7 +400,7 @@ func BuildGPUDiskBootPod(
 		SecurityContext: gpuInitSecurityContext(),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "dev-vfio", MountPath: "/dev/vfio"},
-			{Name: "sysfs-pci", MountPath: "/host/sys/bus/pci"},
+			{Name: "host-sys", MountPath: "/host/sys"},
 		},
 	}
 

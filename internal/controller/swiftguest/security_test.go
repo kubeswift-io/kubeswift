@@ -121,15 +121,15 @@ func TestGPUPod_SysfsPCIVolume(t *testing.T) {
 
 	found := false
 	for _, v := range pod.Spec.Volumes {
-		if v.Name == "sysfs-pci" {
+		if v.Name == "host-sys" {
 			found = true
-			if v.VolumeSource.HostPath == nil || v.VolumeSource.HostPath.Path != "/sys/bus/pci" {
-				t.Errorf("sysfs-pci volume path = %v, want /sys/bus/pci", v.VolumeSource.HostPath)
+			if v.VolumeSource.HostPath == nil || v.VolumeSource.HostPath.Path != "/sys" {
+				t.Errorf("host-sys volume path = %v, want /sys", v.VolumeSource.HostPath)
 			}
 		}
 	}
 	if !found {
-		t.Error("GPU pod should have sysfs-pci volume")
+		t.Error("GPU pod should have host-sys volume")
 	}
 }
 

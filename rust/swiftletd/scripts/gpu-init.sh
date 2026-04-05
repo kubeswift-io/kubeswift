@@ -12,8 +12,9 @@ set -euo pipefail
 #   GPU_PCI_ADDRESSES  — comma-separated BDF addresses (e.g. "0000:17:00.0,0000:3d:00.0")
 #   GPU_PARTITION_ID   — Fabric Manager partition ID to activate, or -1 to skip
 #
-# The host sysfs is mounted at /host/sys/bus/pci (not /sys/bus/pci) to avoid
-# being shadowed by the container runtime's read-only sysfs mount.
+# The full host sysfs is mounted at /host/sys (not /sys) to avoid being
+# shadowed by the container runtime's read-only sysfs mount. Device symlinks
+# under /sys/bus/pci/devices/ resolve to /sys/devices/ so the full tree is needed.
 SYSFS_PCI="${SYSFS_PCI_PATH:-/host/sys/bus/pci}"
 
 # Validate PCI BDF address format (DDDD:BB:DD.F) to prevent path traversal
