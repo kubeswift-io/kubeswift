@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   cpu: "2"
-  memory: "2Gi"
+  memory: "4Gi"
   rootDisk:
     size: "40Gi"
     format: raw

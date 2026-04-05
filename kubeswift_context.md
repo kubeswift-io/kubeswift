@@ -708,6 +708,17 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 31 | swiftgpu controller | Duplicate controller name collision with swiftguest (both watch SwiftGuest) | Add explicit .Named("swiftgpu") to controller builder |
 | 32 | swiftletd/report.rs + status.go | Hypervisor annotation never reported — status.runtime.hypervisor hardcoded to "cloud-hypervisor" | Add kubeswift.io/guest-hypervisor annotation in report.rs, read it in status.go |
 | 33 | pod.go + security.go | network-init fails with "open: No such file or directory" — missing /dev/net/tun | Add dev-net-tun hostPath volume + mount on network-init and launcher when networking enabled |
+| 34 | gpu-init.sh | IOMMU group peers (audio controller) not bound to vfio-pci — VFIO refuses group access | Auto-detect and bind all non-bridge peers in IOMMU group |
+| 35 | gpu.go | /sys/bus/pci hostPath at /sys/bus/pci shadowed by container sysfs — sysfs writes fail | Mount full host /sys at /host/sys |
+| 36 | gpu.go | /dev/vfio HostPathDirectory fails if dir doesn't exist before gpu-init creates it | Use DirectoryOrCreate |
+| 37 | gpu-init.sh, network-init.sh | Unicode em dashes (U+2014) cause "exec format error" in container | Replace with ASCII double dashes |
+| 38 | Containerfile | ENTRYPOINT shebang exec fails on some containerd/node combinations | Use explicit /bin/sh interpreter |
+| 39 | security.go, gpu.go | Init container commands relied on shebang exec | Use explicit interpreter in command array |
+| 40 | gpu-init.sh | readlink -f resolves symlinks outside /host/sys mount — silent exit under set -e | Use readlink without -f, construct paths manually |
+| 41 | launch.rs (Rust) | swiftletd did not read intent.gpu.devices for CH --device args — GPU not passed to VM | Add GPUIntent deserialization, build --device args from GPU devices |
+| 42 | pod.go, gpu.go | Container memory limit = guest memory — OOMKilled (no headroom for hypervisor) | Add 512MiB LauncherMemoryOverheadMiB constant |
+| 43 | controller-manager-rbac.yaml | Missing pods/log permission — SwiftImage stuck in Validating (Bug 20 regression) | Add pods/log to ClusterRole |
+| 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes — ErrImagePull on every deploy | Default to sha-$(git rev-parse --short HEAD) |
 
 ---
 
@@ -925,20 +936,39 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Documentation: docs/networking/sriov.md (setup, GPUDirect RDMA, troubleshooting)
 - CRDs regenerated with type and resourceName fields
 
+### Completed (GPU Discovery Validation — Tier 1 Hardware)
+- Validated on Hetzner bare-metal node (boba) with NVIDIA GeForce GTX 1080 (GP104)
+- Discovery DaemonSet correctly detects GPU model, PCI address, IOMMU group, BAR sizes, NUMA node
+- SwiftGPUNode status populated: 1 GPU, IOMMU enabled, host CPU topology
+
+### Completed (Tier 1 GPU End-to-End Validation)
+- Full flow validated: label node -> discovery -> create profile (tier=pcie) -> create guest -> GPU visible in guest
+- Hardware: GeForce GTX 1080 on Hetzner bare-metal (k0s cluster, Calico CNI, local-path-provisioner)
+- Cloud Hypervisor `--device path=/sys/bus/pci/devices/0000:01:00.0/` passthrough working
+- Guest sees `NVIDIA Corporation GP104 [GeForce GTX 1080]` at `00:05.0` via lspci
+- GPU profile: tier=pcie, partitionMode=isolated, no hugepages, no NUMA pinning
+- Sample manifests: swiftgpuprofile-gtx1080.yaml, swiftguest-gpu-gtx1080.yaml
+- Default SwiftGuestClass bumped to 4Gi RAM (2Gi caused OOMKill with hypervisor overhead)
+
+### Bugs Found and Fixed During Tier 1 GPU Validation
+
+| # | Component | Bug | Fix | Commit |
+|---|-----------|-----|-----|--------|
+| 34 | gpu-init.sh | IOMMU group peers (audio controller) not bound to vfio-pci | Auto-detect and bind all non-bridge peers in IOMMU group | 9703749 |
+| 35 | gpu.go | /sys/bus/pci hostPath mounted at /sys/bus/pci — shadowed by container sysfs | Mount full host /sys at /host/sys | f29ebac |
+| 36 | gpu.go | /dev/vfio hostPath type=Directory — fails if dir doesn't exist | Use DirectoryOrCreate | 50ae73c |
+| 37 | gpu-init.sh, network-init.sh | Unicode em dashes (U+2014) in comments caused exec format error | Replace with ASCII double dashes | 49a08e1 |
+| 38 | Containerfile | ENTRYPOINT used shebang exec — failed on some nodes | Use explicit /bin/sh interpreter | fd5b023 |
+| 39 | security.go, gpu.go | Init container commands used shebang exec | Use explicit /bin/bash or /bin/sh interpreter | b4eca16 |
+| 40 | gpu-init.sh | readlink -f resolves symlinks to absolute paths outside /host/sys mount | Use readlink without -f, construct paths manually under $HOST_SYS | 94ad4a1 |
+| 41 | launch.rs | swiftletd did not read intent.gpu.devices for CH --device args | Add GPUIntent deserialization, merge GPU VFIO devices into CH/QEMU args | 2b7f996 |
+| 42 | pod.go, gpu.go | Container memory limit = guest memory (no headroom for hypervisor) | Add 512MiB LauncherMemoryOverheadMiB | 877872c |
+| 43 | controller-manager-rbac.yaml | Missing pods/log permission (Bug 20 regression) | Add pods/log to ClusterRole | 881f731 |
+| 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes | Default to sha-$(git rev-parse --short HEAD) | 5ddf9af |
+
 ### Next Priorities (in order)
 
-**1. Discovery DaemonSet validation on GPU hardware**
-- Validate on a node with real NVIDIA GPUs (Hetzner, Equinix, or similar)
-- Verify lspci parsing produces correct GPU inventory
-- Verify BAR size detection for large-BAR GPUs
-- Verify Fabric Manager discovery on HGX hardware (if available)
-
-**2. Tier 1 GPU end-to-end validation**
-- Rent a bare-metal server with a PCIe GPU (A100-PCIe, L40S, or RTX class)
-- Full flow: label node -> discovery -> create profile (tier=pcie) -> create guest -> nvidia-smi inside guest
-- Validate VFIO bind, Cloud Hypervisor --device passthrough, GPU driver init in guest
-
-**3. Root disk resize during image import**
+**1. Root disk resize during image import**
 - SwiftImage import pipeline should resize image.raw to the SwiftGuestClass rootDisk.size after qcow2-to-raw conversion
 - Currently the raw image is only as large as the cloud image (~3.5G for Ubuntu Noble)
 - Guest expects rootDisk.size (e.g., 40Gi) but sees the raw file size
@@ -949,13 +979,13 @@ swiftctl ssh gpu-test -- nvidia-smi
 - vhost-user profile: for vhost-user-net/blk offload scenarios
 - Build pipeline at build/kernels/<profile>/
 
-**4. Windows guest support**
+**3. Windows guest support**
 - OVMF/UEFI boot path (already implemented for QEMU GPU path)
 - VirtIO driver ISO injection (virtio-win)
 - Cloudbase-init or unattend.xml for Windows provisioning
 - Guest agent for IP reporting (Windows doesn't use cloud-init)
 
-**5. SwiftGuestPool**
+**4. SwiftGuestPool**
 - New CRD: SwiftGuestPool with desired replica count and guest template
 - Controller creates/deletes SwiftGuests to match desired count
 - Use case: GPU inference fleets with identical VM configurations
