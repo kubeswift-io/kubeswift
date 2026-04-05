@@ -20,7 +20,7 @@ func networkInitContainer() corev1.Container {
 		Name:            "network-init",
 		Image:           LauncherImage(),
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"/usr/local/bin/network-init.sh"},
+		Command:         []string{"/bin/sh", "/usr/local/bin/network-init.sh"},
 		SecurityContext: privilegedContext(),
 	}
 }
