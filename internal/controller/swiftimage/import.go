@@ -92,7 +92,7 @@ rmdir /mnt/disk 2>/dev/null || true
 	if targetSize != "" {
 		// After qemu-img resize, the GPT backup header is at the old disk end.
 		// sgdisk -e moves it to the new end so growpart works on first guest boot.
-		resizeStep = fmt.Sprintf("\necho \"Resizing image to %s\"\nqemu-img resize \"$OUTPUT\" %s\necho \"Fixing GPT backup header\"\nsgdisk -e \"$OUTPUT\" 2>/dev/null || true\necho \"Resize complete\"", targetSize, targetSize)
+		resizeStep = fmt.Sprintf("\necho \"Resizing image to %s\"\nqemu-img resize -f raw \"$OUTPUT\" %s\necho \"Fixing GPT backup header\"\nsgdisk -e \"$OUTPUT\"\necho \"Resize complete\"", targetSize, targetSize)
 	}
 
 	if sourceFormat == "qcow2" {
