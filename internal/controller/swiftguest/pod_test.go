@@ -35,8 +35,8 @@ func TestBuildPod_HasInitContainerWhenHasSeed(t *testing.T) {
 	if ic.Name != "network-init" {
 		t.Errorf("init container name = %q, want network-init", ic.Name)
 	}
-	if len(ic.Command) != 1 || ic.Command[0] != "/usr/local/bin/network-init.sh" {
-		t.Errorf("init container command = %v, want [network-init.sh]", ic.Command)
+	if len(ic.Command) != 2 || ic.Command[0] != "/bin/sh" || ic.Command[1] != "/usr/local/bin/network-init.sh" {
+		t.Errorf("init container command = %v, want [/bin/sh /usr/local/bin/network-init.sh]", ic.Command)
 	}
 }
 

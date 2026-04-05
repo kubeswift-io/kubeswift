@@ -391,7 +391,7 @@ func BuildGPUDiskBootPod(
 		Name:            "gpu-init",
 		Image:           LauncherImage(),
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"/usr/local/bin/gpu-init.sh"},
+		Command:         []string{"/bin/bash", "/usr/local/bin/gpu-init.sh"},
 		Env: []corev1.EnvVar{
 			{Name: "GPU_PCI_ADDRESSES", Value: gpuAddresses},
 			{Name: "GPU_PARTITION_ID", Value: strconv.Itoa(partitionID)},
