@@ -89,13 +89,13 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 			return "", fmt.Errorf("deleted orphaned clone PVC %s, will recreate", cloneName)
 		}
 
-		if existingPVC.Status.Phase != corev1.ClaimBound {
-			return "", fmt.Errorf("clone PVC %s not yet Bound (phase=%s)", cloneName, existingPVC.Status.Phase)
-		}
-
-		// PVC is Bound. Check Job status.
+		// Check Job status first — the Job is the consumer that triggers PVC binding
+		// with WaitForFirstConsumer storage classes (e.g. local-path-provisioner).
 		if jobExists {
 			if isJobComplete(&existingJob) {
+				if existingPVC.Status.Phase != corev1.ClaimBound {
+					return "", fmt.Errorf("clone PVC %s not yet Bound (phase=%s)", cloneName, existingPVC.Status.Phase)
+				}
 				return cloneName, nil // Ready
 			}
 			if isJobFailed(&existingJob) {
@@ -104,7 +104,8 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 			return "", fmt.Errorf("clone Job %s in progress", jobName)
 		}
 
-		// PVC Bound but no Job -- create the clone Job.
+		// No Job yet — create the clone Job. The Job pod will be the first consumer
+		// of the PVC, triggering binding for WaitForFirstConsumer storage classes.
 		if err := r.createCloneJob(ctx, guest, jobName, sourcePVC, cloneName, targetSize); err != nil {
 			return "", err
 		}
