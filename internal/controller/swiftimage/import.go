@@ -90,16 +90,18 @@ rmdir /mnt/disk 2>/dev/null || true
 	// and BEFORE size measurement (so stat reports the full size).
 	resizeStep := ""
 	if targetSize != "" {
-		resizeStep = fmt.Sprintf("\necho \"Resizing image to %s\"\nqemu-img resize \"$OUTPUT\" %s\necho \"Resize complete\"", targetSize, targetSize)
+		// After qemu-img resize, the GPT backup header is at the old disk end.
+		// sgdisk -e moves it to the new end so growpart works on first guest boot.
+		resizeStep = fmt.Sprintf("\necho \"Resizing image to %s\"\nqemu-img resize \"$OUTPUT\" %s\necho \"Fixing GPT backup header\"\nsgdisk -e \"$OUTPUT\" 2>/dev/null || true\necho \"Resize complete\"", targetSize, targetSize)
 	}
 
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, resizeStep, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils gdisk util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, resizeStep, grubPatch)
 	}
-	// Raw format also needs qemu-utils when resize is requested.
+	// Raw format also needs qemu-utils and gdisk when resize is requested.
 	packages := "curl util-linux"
 	if targetSize != "" {
-		packages = "curl qemu-utils util-linux"
+		packages = "curl qemu-utils gdisk util-linux"
 	}
 	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq %s >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, packages, sourceURL, resizeStep, grubPatch)
 }
