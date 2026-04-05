@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: April 2, 2026 — SwiftGPU Phases 1-3 complete, host runtime hardening done
+> Last updated: April 5, 2026 — Tier 1 GPU validation complete, root disk resize fix
 
 ---
 
@@ -62,6 +62,10 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - **Discovery merge logic preserves controller-owned allocation fields during status patches**
 - **Separate gpu-discovery container image (images/gpu-discovery/Containerfile) with pciutils**
 - **Helm chart: gpuDiscovery.enabled gate for DaemonSet + RBAC templates**
+- **Image resize pipeline: qemu-img resize + sgdisk -e GPT fix during import**
+- **Cloud-init growpart handles partition + filesystem expansion on first guest boot**
+- **Tier 1 GPU passthrough: GTX 1080 via Cloud Hypervisor --device on Hetzner bare-metal**
+- **IOMMU group peer binding: auto-detects and binds companion devices (HD Audio) to vfio-pci**
 
 ### Known working configuration
 - Guest OS (disk boot): **Ubuntu Noble (24.04)** cloud image — all modern distributions supported (Ubuntu 22.04+, Rocky 9, Fedora, Debian 12)
@@ -77,6 +81,8 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - GPU (Tier 2): SwiftGPUProfile tier=hgx-shared, QEMU, pcie-root-port per device, OVMF, 1Gi hugepages
 - GPU runtime: QEMU from qemu-system-x86 package (Debian bookworm), OVMF at /usr/share/OVMF/
 - GPU init: gpu-init.sh binds GPUs to vfio-pci, activates FM partition via fmpm
+- GPU passthrough (Tier 1): GeForce GTX 1080 (GP104), vfio-pci driver, Cloud Hypervisor --device, IOMMU group 1
+- Default SwiftGuestClass: 4Gi RAM (was 2Gi)
 
 ### Deployed images (latest)
 - `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-<latest>`
@@ -553,6 +559,8 @@ SwiftImage created
 Import Job (ubuntu:22.04, privileged)
   │  curl download
   │  qemu-img convert qcow2 → raw (if needed)
+  │  qemu-img resize -f raw image.raw <rootDisk.size>  (if rootDisk.size set)
+  │  sgdisk -e image.raw                               (fix GPT backup header after resize)
   │  GPT partition detection via od (NOT fdisk — fails on GPT)
   │  mount each partition, patch grub.cfg for serial console
   │  stat -c %s image.raw > image.raw.size
@@ -562,6 +570,7 @@ Measure Job (ubuntu:22.04)
   ▼
 image.raw stored in PVC
 status.phase = Ready
+Guest first boot: cloud-init growpart expands partition + filesystem
 ```
 
 ### Cloud Hypervisor Invocation
@@ -720,6 +729,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 43 | controller-manager-rbac.yaml | Missing pods/log permission — SwiftImage stuck in Validating (Bug 20 regression) | Add pods/log to ClusterRole |
 | 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes — ErrImagePull on every deploy | Default to sha-$(git rev-parse --short HEAD) |
 | 45 | import.go | image.raw stays at cloud image size (~3.5G) — guest sees small disk despite rootDisk.size 40Gi | Add qemu-img resize to import script using spec.rootDisk.size |
+| 46 | import.go | GPT backup header at old disk end after qemu-img resize — growpart fails with "PMBR size mismatch" | Add sgdisk -e after resize, install gdisk package in import job |
 
 ---
 
@@ -968,12 +978,14 @@ swiftctl ssh gpu-test -- nvidia-smi
 | 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes | Default to sha-$(git rev-parse --short HEAD) | 5ddf9af |
 
 ### Completed (Root Disk Resize During Image Import)
-- Import script now runs `qemu-img resize image.raw <target-bytes>` after qcow2-to-raw conversion
+- Import script now runs `qemu-img resize -f raw image.raw <target-bytes>` after qcow2-to-raw conversion
 - Target size is `spec.rootDisk.size` from the SwiftImage (same value used for the PVC)
 - Resize happens before GRUB patching and size measurement
-- Raw format imports also resize when rootDisk.size is set (installs qemu-utils)
+- `sgdisk -e` runs after resize to relocate GPT backup header to new end of disk
+- Raw format imports also resize when rootDisk.size is set (installs qemu-utils + gdisk)
 - Guest cloud-init/growpart expands the partition and filesystem on first boot automatically
 - Bug 45: image.raw stayed at cloud image size (~3.5G) instead of rootDisk.size (40Gi)
+- Bug 46: GPT backup header at old disk end after resize — growpart fails with "PMBR size mismatch"
 
 ### Next Priorities (in order)
 
@@ -1160,3 +1172,12 @@ When helping develop KubeSwift:
 - **Security: gpu-init.sh validates PCI BDF format before sysfs writes — do NOT remove validation**
 - **Security: FM partition ownership checked via isFMPartitionOwnedBy() before pod creation**
 - **Security: All containers set allowPrivilegeEscalation: false — do NOT revert to privileged: true**
+- **gpu-init.sh uses /host/sys (not /sys) for sysfs writes — container runtime shadows /sys**
+- **All shell scripts in container images must be pure ASCII — no Unicode characters (em dashes, etc.)**
+- **Container ENTRYPOINT and init container commands must use explicit interpreter (/bin/sh or /bin/bash) — never rely on shebang exec**
+- **readlink -f cannot be used on paths under /host/sys — symlink targets resolve outside the mount**
+- **Container memory limits must include LauncherMemoryOverheadMiB (512MiB) above guest RAM**
+- **/dev/vfio hostPath must use DirectoryOrCreate — the directory doesn't exist until first vfio-pci bind**
+- **GPU VFIO devices from intent.gpu.devices must be merged into CH --device and QEMU -device args in launch.rs**
+- **Import pipeline must run sgdisk -e after qemu-img resize to fix GPT backup header location**
+- **Import pipeline must use qemu-img resize -f raw (explicit format) to avoid block 0 write restrictions**
