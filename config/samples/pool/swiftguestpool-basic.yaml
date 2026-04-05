@@ -1,0 +1,27 @@
+# Basic SwiftGuestPool with 2 Ubuntu Noble replicas.
+# Prerequisites:
+#   1. SwiftImage ubuntu-noble in Ready state
+#   2. SwiftGuestClass default created
+#   3. SwiftSeedProfile minimal created
+#
+# Scale: kubectl scale sgpool basic-pool --replicas=4
+# List guests: kubectl get swiftguest -l swift.kubeswift.io/pool=basic-pool
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: basic-pool
+  namespace: default
+spec:
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: basic-pool
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: minimal
+      runPolicy: Running
