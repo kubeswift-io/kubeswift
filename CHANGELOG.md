@@ -10,6 +10,11 @@ All notable changes to KubeSwift are documented here.
 - SwiftGuestPool CRD and controller for VM fleet management (ReplicaSet semantics)
 - kubectl scale support for SwiftGuestPool via scale subresource
 - Stable naming, failed VM replacement, cascade deletion
+- Rolling updates for SwiftGuestPool (RollingUpdate/Recreate strategy, maxUnavailable/maxSurge)
+- Topology spread for SwiftGuestPool (spreadPolicy shorthand, topologySpreadConstraints)
+- PVC per replica for SwiftGuestPool (volumeClaimTemplates, StatefulSet-like persistent storage)
+- dataDiskRefs on SwiftGuest for multiple data disk references (SwiftImage or PVC)
+- TopologySpreadConstraints on SwiftGuest (flows to launcher pod)
 - Multi-vendor GPU discovery (AMD, Intel, NVIDIA) -- class-based PCI detection
 - Tier 1 GPU passthrough validated on real hardware (GeForce GTX 1080)
 - GPU discovery DaemonSet validated on Hetzner bare-metal

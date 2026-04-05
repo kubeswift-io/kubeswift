@@ -311,12 +311,30 @@ status:
       allocatedTo: ""
 ```
 
-**SwiftGuestPool** — manages a fleet of identical SwiftGuests (ReplicaSet semantics)
+**SwiftGuestPool** — manages a fleet of identical SwiftGuests (ReplicaSet semantics + rolling updates)
 ```yaml
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuestPool
 spec:
   replicas: 4
+  updateStrategy:
+    type: RollingUpdate        # RollingUpdate | Recreate
+    rollingUpdate:
+      maxUnavailable: 1        # max VMs down during rollout
+      maxSurge: 0              # max extra VMs during rollout
+  spreadPolicy: Spread         # Pack | Spread (shorthand for topology spread)
+  topologySpreadConstraints:   # optional — flows to launcher pod
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+  volumeClaimTemplates:        # per-replica PVCs (StatefulSet-like)
+  - metadata:
+      name: scratch
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 100Gi
   template:
     metadata:
       labels:
@@ -326,11 +344,18 @@ spec:
       guestClassRef: ...
       gpuProfileRef: ...
       runPolicy: Running
+      dataDiskRefs:            # can reference volumeClaimTemplate PVCs
+      - name: scratch
+        pvcRef:
+          name: "{{pool}}-scratch-{{index}}"
+      topologySpreadConstraints: [...]  # inherited from pool or set directly
 status:
   replicas: 4
   readyReplicas: 3
   failedReplicas: 1
+  updatedReplicas: 2           # VMs running latest template hash
   conditions: [Available, Progressing]
+  templateHash: "abc123"       # hash of spec.template.spec (not metadata)
 ```
 
 ### Repository Structure
@@ -984,6 +1009,15 @@ swiftctl ssh gpu-test -- nvidia-smi
 - 21 unit tests for index management, scale up/down, status, conditions
 - Sample manifests: basic pool, GPU inference fleet
 - Printer columns: Desired, Ready, Available, Failed, Age
+- **Rolling updates**: UpdateStrategy (RollingUpdate/Recreate), maxUnavailable/maxSurge, template hash tracking
+- Template hash computed from spec.template.spec only (metadata changes do not trigger rollout)
+- Rolling update processes one VM per reconcile cycle, requeues after 10s
+- status.updatedReplicas tracks VMs running latest template hash
+- **Topology spread**: spreadPolicy shorthand (Pack/Spread), topologySpreadConstraints on pool
+- TopologySpreadConstraints flow from pool to SwiftGuest to launcher pod
+- **PVC per replica**: volumeClaimTemplates for StatefulSet-like persistent storage
+- Per-index PVCs named `<pool>-<template-name>-<index>`, survive VM replacement
+- PVCs owned by the pool (not by individual SwiftGuests), deleted on pool deletion
 
 ### Completed (GPU Discovery Validation — Tier 1 Hardware)
 - Validated on Hetzner bare-metal node (boba) with NVIDIA GeForce GTX 1080 (GP104)
@@ -1086,9 +1120,6 @@ swiftctl ssh gpu-test -- nvidia-smi
 - Different use case from full passthrough (lighter workloads)
 
 **13. SwiftGuestPool Enhancements**
-- Rolling updates (gradual replacement of VMs when template changes)
-- PVC per replica (StatefulSet-like persistent volumes)
-- Anti-affinity / topology spread (spread replicas across nodes/zones)
 - Auto-scaling (HPA integration via custom metrics adapter)
 
 **14. GPU health monitoring and automatic failover**
@@ -1220,6 +1251,10 @@ When helping develop KubeSwift:
 - **GPU VFIO devices from intent.gpu.devices must be merged into CH --device and QEMU -device args in launch.rs**
 - **Import pipeline must run sgdisk -e after qemu-img resize to fix GPT backup header location**
 - **Import pipeline must use qemu-img resize -f raw (explicit format) to avoid block 0 write restrictions**
-- **SwiftGuestPool controller manages count only, not spec conformance (ReplicaSet semantics)**
+- **SwiftGuestPool controller manages count and spec conformance (rolling updates)**
 - **Pool guests are named <pool-name>-<index> with stable sequential indices**
 - **Scale down deletes highest indices first**
+- **SwiftGuestPool template hash is spec-only -- metadata changes do not trigger rollout**
+- **SwiftGuestPool PVCs are owned by the pool, not by individual SwiftGuests**
+- **SwiftGuestPool rolling updates process one VM per reconcile cycle, requeue after 10s**
+- **TopologySpreadConstraints on SwiftGuest flow directly to the launcher pod**
