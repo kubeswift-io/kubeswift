@@ -19,6 +19,7 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [SwiftImage](api/swiftimage.md) — Disk image source (HTTP, PVC)
 - [SwiftSeedProfile](api/swiftseedprofile.md) — Cloud-init datasource (NoCloud)
 - [SwiftKernel](api/swiftkernel.md) — Kernel + initramfs OCI artifact
+- [SwiftGuestPool](api/swiftguestpool.md) — VM fleet management
 
 ### Kernel Boot
 
@@ -30,6 +31,11 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [Local cluster](install/local-cluster.md) — kind, minikube, build and deploy
 - [Remote cluster](install/remote-cluster.md) — Prerequisites, OCI Helm install
 - [Helm OCI](install/helm-oci.md) — Version selection, webhooks, image overrides
+
+### Fleet Management
+
+- [SwiftGuestPool Guide](swiftguestpool-guide.md) — Scaling, rolling updates, spread, PVCs, monitoring
+- [SwiftGuestPool Use Cases](swiftguestpool-use-cases.md) — GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
 
 ### Operator
 
