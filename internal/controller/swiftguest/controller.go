@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -280,6 +281,21 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
+	// For disk boot, ensure per-guest root disk clone exists and is ready.
+	if rg.PreparedImage.PVCName != "" && !rg.HasKernel() {
+		clonePVC, err := r.EnsureRootDiskClone(ctx, &guest, rg)
+		if err != nil {
+			// Clone not ready — requeue
+			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		// Override the PVC name to use the clone instead of the shared image PVC.
+		rg.PreparedImage.PVCName = clonePVC
+	}
+
 	// Build and create/update pod
 	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName)
 	if err != nil {
@@ -419,6 +435,8 @@ func (r *SwiftGuestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&swiftv1alpha1.SwiftGuest{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Pod{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&batchv1.Job{}).
 		Watches(&imagev1alpha1.SwiftImage{}, handler.EnqueueRequestsFromMapFunc(r.swiftImageToSwiftGuests)).
 		Complete(r)
 }
