@@ -76,4 +76,4 @@ ENV KUBESWIFT_RUN_DIR=/var/lib/kubeswift/run
 # Intent path default
 ENV KUBESWIFT_INTENT_PATH=/var/lib/kubeswift/intent/runtime-intent.json
 
-ENTRYPOINT ["/usr/local/bin/launcher-entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/launcher-entrypoint.sh"]
