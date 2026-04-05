@@ -1,0 +1,358 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftguestpools.swift.kubeswift.io
+spec:
+  group: swift.kubeswift.io
+  names:
+    kind: SwiftGuestPool
+    listKind: SwiftGuestPoolList
+    plural: swiftguestpools
+    shortNames:
+    - sgpool
+    singular: swiftguestpool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.replicas
+      name: Desired
+      type: integer
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .status.availableReplicas
+      name: Available
+      type: integer
+    - jsonPath: .status.failedReplicas
+      name: Failed
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SwiftGuestPool manages a fleet of identical SwiftGuest replicas.
+          It creates, deletes, and monitors SwiftGuests to maintain the desired count.
+          Similar to ReplicaSet but for VMs — stable names (<pool>-<index>), highest-index-first
+          scale-down, automatic replacement of failed VMs.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SwiftGuestPoolSpec defines the desired state of a SwiftGuestPool.
+            properties:
+              replicas:
+                default: 1
+                description: Replicas is the desired number of SwiftGuest replicas.
+                format: int32
+                minimum: 0
+                type: integer
+              template:
+                description: Template describes the SwiftGuest to create for each
+                  replica.
+                properties:
+                  metadata:
+                    description: |-
+                      Metadata to apply to each SwiftGuest (labels, annotations).
+                      The controller adds pool-management labels in addition to these.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations to apply to each SwiftGuest.
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: Labels to apply to each SwiftGuest.
+                        type: object
+                    type: object
+                  spec:
+                    description: Spec is the SwiftGuestSpec for each replica.
+                    properties:
+                      dataDiskRef:
+                        description: |-
+                          DataDiskRef references a SwiftImage to attach as a secondary data disk.
+                          The referenced image must be in Ready state. The disk appears as /dev/vdb
+                          inside the guest. Works with all boot paths (disk, kernel, GPU).
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      gpuProfileRef:
+                        description: |-
+                          GPUProfileRef references a SwiftGPUProfile for GPU passthrough.
+                          When set, the SwiftGPU controller allocates GPUs before the pod is created.
+                          Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      guestClassRef:
+                        description: |-
+                          LocalObjectReference contains enough information to let you locate the
+                          referenced object inside the same namespace.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      imageRef:
+                        description: |-
+                          ImageRef references the SwiftImage to boot from (disk boot).
+                          Mutually exclusive with kernelRef.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      interfaces:
+                        description: |-
+                          Interfaces defines the network interfaces for this guest.
+                          If nil or empty, a single default interface is created (backward compatible).
+                          The first interface without NetworkRef is the primary interface (DHCP, management).
+                          Interfaces with NetworkRef are secondary interfaces backed by Multus/NADs.
+                        items:
+                          description: GuestInterface defines a single network interface
+                            for a SwiftGuest.
+                          properties:
+                            name:
+                              description: |-
+                                Name is a unique identifier for this interface.
+                                Used in status reporting and logging.
+                              type: string
+                            networkRef:
+                              description: |-
+                                NetworkRef references a NetworkAttachmentDefinition for this interface.
+                                If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
+                                If set, Multus attaches the pod to the referenced NAD.
+                              properties:
+                                name:
+                                  description: Name of the NetworkAttachmentDefinition.
+                                  type: string
+                                namespace:
+                                  description: |-
+                                    Namespace of the NetworkAttachmentDefinition.
+                                    Defaults to the SwiftGuest's namespace if omitted.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            resourceName:
+                              description: |-
+                                ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
+                                Required when type is "sriov". The device plugin allocates a VF and the controller
+                                adds this resource to the pod's resource limits.
+                              type: string
+                            type:
+                              default: bridge
+                              description: |-
+                                Type specifies the interface type.
+                                  bridge: (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
+                                  sriov:  SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+                              enum:
+                              - bridge
+                              - sriov
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                      kernelCmdline:
+                        type: string
+                      kernelRef:
+                        description: |-
+                          KernelRef references the SwiftKernel to boot from (kernel boot).
+                          Mutually exclusive with imageRef and gpuProfileRef.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      runPolicy:
+                        description: RunPolicy defines the desired run state of a
+                          guest.
+                        enum:
+                        - Running
+                        - Stopped
+                        - RestartOnFailure
+                        - Always
+                        type: string
+                      seedProfileRef:
+                        description: SeedProfileRef references a SwiftSeedProfile
+                          for cloud-init (disk boot only).
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - guestClassRef
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - replicas
+            - template
+            type: object
+          status:
+            description: SwiftGuestPoolStatus defines the observed state of SwiftGuestPool.
+            properties:
+              availableReplicas:
+                description: AvailableReplicas is the number of available replicas
+                  (same as readyReplicas).
+                format: int32
+                type: integer
+              conditions:
+                description: Conditions represent the latest observations of the pool's
+                  state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              failedReplicas:
+                description: FailedReplicas is the number of SwiftGuests with phase=Failed.
+                format: int32
+                type: integer
+              readyReplicas:
+                description: ReadyReplicas is the number of SwiftGuests with phase=Running
+                  and GuestRunning=True.
+                format: int32
+                type: integer
+              replicas:
+                description: Replicas is the total number of SwiftGuests owned by
+                  this pool.
+                format: int32
+                type: integer
+            required:
+            - availableReplicas
+            - failedReplicas
+            - readyReplicas
+            - replicas
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      scale:
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
+      status: {}

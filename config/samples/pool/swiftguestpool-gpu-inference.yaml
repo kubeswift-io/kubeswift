@@ -1,0 +1,31 @@
+# GPU inference fleet -- 4 identical GPU VMs for model serving.
+# Prerequisites:
+#   1. SwiftImage ubuntu-noble in Ready state
+#   2. SwiftGuestClass gpu-large created (high CPU/memory)
+#   3. SwiftGPUProfile a100-pcie-single created
+#   4. SwiftSeedProfile inference-seed created
+#   5. Enough GPU nodes with free GPUs
+#
+# Scale: kubectl scale sgpool inference-fleet --replicas=8
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: inference-fleet
+  namespace: default
+spec:
+  replicas: 4
+  template:
+    metadata:
+      labels:
+        role: inference
+        model: llama-70b
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: gpu-large
+      seedProfileRef:
+        name: inference-seed
+      gpuProfileRef:
+        name: a100-pcie-single
+      runPolicy: Running

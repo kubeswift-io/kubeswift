@@ -10,6 +10,10 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests", "swiftguests/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftGuestPool
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguestpools", "swiftguestpools/status", "swiftguestpools/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguestclasses"]
     verbs: ["get", "list", "watch"]

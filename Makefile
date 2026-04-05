@@ -126,6 +126,7 @@ deploy: generate
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftguestclasses.swift.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpuprofiles.gpu.kubeswift.io
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftgpunodes.gpu.kubeswift.io
+	kubectl wait --for=condition=Established --timeout=30s crd/swiftguestpools.swift.kubeswift.io
 	@# Set controller-manager image tag via kustomize, apply, then reset.
 	cd config/manager && sed -i 's/newTag: .*/newTag: $(IMAGE_TAG)/' kustomization.yaml
 	kubectl apply -k config/default
