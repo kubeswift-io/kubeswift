@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# gpu-init.sh — runs as an init container before network-init and swiftletd.
+# gpu-init.sh -- runs as an init container before network-init and swiftletd.
 # Binds GPU PCI devices to the vfio-pci driver so the VM can access them via
 # VFIO passthrough. Also binds all IOMMU group peer devices (e.g., NVIDIA HD
 # Audio controllers on consumer GPUs) since VFIO requires all devices in an
@@ -9,8 +9,8 @@ set -euo pipefail
 # for shared NVSwitch mode (Tier 2 HGX workloads).
 #
 # Required environment variables:
-#   GPU_PCI_ADDRESSES  — comma-separated BDF addresses (e.g. "0000:17:00.0,0000:3d:00.0")
-#   GPU_PARTITION_ID   — Fabric Manager partition ID to activate, or -1 to skip
+#   GPU_PCI_ADDRESSES  -- comma-separated BDF addresses (e.g. "0000:17:00.0,0000:3d:00.0")
+#   GPU_PARTITION_ID   -- Fabric Manager partition ID to activate, or -1 to skip
 #
 # The full host sysfs is mounted at /host/sys (not /sys) to avoid being
 # shadowed by the container runtime's read-only sysfs mount. Device symlinks
@@ -44,7 +44,7 @@ bind_to_vfio() {
 
   echo "Binding ${addr} (${label}) to vfio-pci"
 
-  # Unbind from the current driver (ignore errors — device may already be unbound).
+  # Unbind from the current driver (ignore errors -- device may already be unbound).
   if [ -e "${SYSFS_PCI}/devices/${addr}/driver/unbind" ]; then
     echo "${addr}" > ${SYSFS_PCI}/devices/"${addr}"/driver/unbind 2>/dev/null || true
   fi
@@ -94,7 +94,7 @@ bind_iommu_group_peers() {
     local peer_addr
     peer_addr=$(basename "$dev_link")
 
-    # Skip the GPU itself — we handle it in the main loop.
+    # Skip the GPU itself -- we handle it in the main loop.
     if [ "$peer_addr" = "$gpu_addr" ]; then
       continue
     fi
@@ -110,7 +110,7 @@ bind_iommu_group_peers() {
     # would break the PCI hierarchy.
     case "$pci_class" in
       0x0604*)
-        echo "${peer_addr}: PCIe bridge (class ${pci_class}) — skipping (VFIO handles internally)"
+        echo "${peer_addr}: PCIe bridge (class ${pci_class}) -- skipping (VFIO handles internally)"
         continue
         ;;
     esac
@@ -133,7 +133,7 @@ for addr in "${ADDRS[@]}"; do
     continue
   fi
 
-  # Bind IOMMU group peers first — they must be isolated before VFIO will
+  # Bind IOMMU group peers first -- they must be isolated before VFIO will
   # grant access to the GPU.
   local_group=$(basename "$(readlink -f ${SYSFS_PCI}/devices/"${addr}"/iommu_group 2>/dev/null)" 2>/dev/null || echo "")
   if [ -n "$local_group" ]; then
