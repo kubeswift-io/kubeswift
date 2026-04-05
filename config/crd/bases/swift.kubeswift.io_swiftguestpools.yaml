@@ -1031,12 +1031,6 @@ spec:
                   the current template hash.
                 format: int32
                 type: integer
-            required:
-            - availableReplicas
-            - failedReplicas
-            - readyReplicas
-            - replicas
-            - updatedReplicas
             type: object
         required:
         - spec
