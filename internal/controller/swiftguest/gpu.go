@@ -56,6 +56,13 @@ func (r *SwiftGuestReconciler) buildGPUIntent(ctx context.Context, guest *swiftv
 		gpuDirectClique = profile.Spec.PCIeTopology.GPUDirectClique
 	}
 
+	// x_nv_gpudirect_clique is NVIDIA-specific. For non-NVIDIA GPUs, set to -1
+	// so swiftletd omits the flag from the hypervisor command line.
+	isNVIDIA := gpuNode.Status.GPUVendor == "NVIDIA"
+	if !isNVIDIA {
+		gpuDirectClique = -1
+	}
+
 	// Build per-device intent, looking up NUMA affinity from the node inventory.
 	devices := make([]runtimeintent.VFIODeviceIntent, 0, len(guest.Status.GPU.Devices))
 	for _, pciAddr := range guest.Status.GPU.Devices {

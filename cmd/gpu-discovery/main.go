@@ -158,6 +158,7 @@ func mergeStatus(discovered *SwiftGPUNodeStatus, existing *gpuv1alpha1.SwiftGPUN
 		gpus[i] = gpuv1alpha1.GPUDevice{
 			Index:      dg.Index,
 			PCIAddress: dg.PCIAddress,
+			Vendor:     dg.Vendor,
 			Model:      dg.Model,
 			DeviceID:   dg.DeviceID,
 			NUMANode:   dg.NUMANode,
@@ -195,6 +196,7 @@ func mergeStatus(discovered *SwiftGPUNodeStatus, existing *gpuv1alpha1.SwiftGPUN
 	status.FreeGPUs = countFreeGPUs(gpus)
 	if len(gpus) > 0 {
 		status.GPUModel = gpus[0].Model
+		status.GPUVendor = gpus[0].Vendor
 	}
 
 	// Merge Fabric Manager status.
@@ -243,16 +245,24 @@ func discoverHardware() (*SwiftGPUNodeStatus, error) {
 		return nil, fmt.Errorf("host topology discovery: %w", err)
 	}
 
-	nvSwitches, err := discoverNVSwitches()
-	if err != nil {
-		klog.V(2).InfoS("NVSwitch discovery skipped", "reason", err)
-		nvSwitches = nil
-	}
+	// NVSwitch and Fabric Manager are NVIDIA-specific. Only discover them
+	// when NVIDIA GPUs are present on the node.
+	var nvSwitches []gpuv1alpha1.NVSwitchDevice
+	var fm *gpuv1alpha1.FabricManagerStatus
+	if HasNVIDIAGPUs(gpus) {
+		nvSwitches, err = discoverNVSwitches()
+		if err != nil {
+			klog.V(2).InfoS("NVSwitch discovery skipped", "reason", err)
+			nvSwitches = nil
+		}
 
-	fm, err := discoverFabricManager()
-	if err != nil {
-		klog.V(2).InfoS("Fabric Manager discovery skipped", "reason", err)
-		fm = nil
+		fm, err = discoverFabricManager()
+		if err != nil {
+			klog.V(2).InfoS("Fabric Manager discovery skipped", "reason", err)
+			fm = nil
+		}
+	} else {
+		klog.V(2).InfoS("NVSwitch/Fabric Manager discovery skipped (no NVIDIA GPUs)")
 	}
 
 	return &SwiftGPUNodeStatus{

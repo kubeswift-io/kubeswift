@@ -77,6 +77,7 @@ where
             );
             vfio_devices.push(VFIODeviceConfig {
                 sysfs_path: dev.host_path.clone(),
+                gpu_direct_clique: dev.gpu_direct_clique,
             });
         }
     }
@@ -233,6 +234,7 @@ fn build_ch_nics(
                     {
                         vfio_devs.push(VFIODeviceConfig {
                             sysfs_path: format!("/sys/bus/pci/devices/{}/", addr),
+                            gpu_direct_clique: -1, // Not applicable for SR-IOV NICs
                         });
                         sriov_idx += 1;
                     } else {

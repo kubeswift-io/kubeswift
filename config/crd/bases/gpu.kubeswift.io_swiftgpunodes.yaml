@@ -109,6 +109,10 @@ spec:
                 description: GPUModel is the model of the GPUs (assumes homogeneous
                   node).
                 type: string
+              gpuVendor:
+                description: 'GPUVendor is the vendor of the GPUs (assumes homogeneous
+                  node): "NVIDIA", "AMD", "Intel".'
+                type: string
               gpus:
                 description: GPUs is the list of individual GPU devices on this node.
                 items:
@@ -162,6 +166,10 @@ spec:
                     pciAddress:
                       description: PCIAddress is the full PCI BDF address (e.g. "0000:17:00.0").
                       type: string
+                    vendor:
+                      description: 'Vendor is the GPU manufacturer: "NVIDIA", "AMD",
+                        "Intel", or "Unknown (<vendor-id>)".'
+                      type: string
                   required:
                   - allocated
                   - deviceId
@@ -171,6 +179,7 @@ spec:
                   - model
                   - numaNode
                   - pciAddress
+                  - vendor
                   type: object
                 type: array
               host:
