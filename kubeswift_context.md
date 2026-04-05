@@ -719,6 +719,7 @@ kube-rs DynamicObject patch (not via pod annotation).
 | 42 | pod.go, gpu.go | Container memory limit = guest memory — OOMKilled (no headroom for hypervisor) | Add 512MiB LauncherMemoryOverheadMiB constant |
 | 43 | controller-manager-rbac.yaml | Missing pods/log permission — SwiftImage stuck in Validating (Bug 20 regression) | Add pods/log to ClusterRole |
 | 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes — ErrImagePull on every deploy | Default to sha-$(git rev-parse --short HEAD) |
+| 45 | import.go | image.raw stays at cloud image size (~3.5G) — guest sees small disk despite rootDisk.size 40Gi | Add qemu-img resize to import script using spec.rootDisk.size |
 
 ---
 
@@ -966,13 +967,15 @@ swiftctl ssh gpu-test -- nvidia-smi
 | 43 | controller-manager-rbac.yaml | Missing pods/log permission (Bug 20 regression) | Add pods/log to ClusterRole | 881f731 |
 | 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes | Default to sha-$(git rev-parse --short HEAD) | 5ddf9af |
 
-### Next Priorities (in order)
+### Completed (Root Disk Resize During Image Import)
+- Import script now runs `qemu-img resize image.raw <target-bytes>` after qcow2-to-raw conversion
+- Target size is `spec.rootDisk.size` from the SwiftImage (same value used for the PVC)
+- Resize happens before GRUB patching and size measurement
+- Raw format imports also resize when rootDisk.size is set (installs qemu-utils)
+- Guest cloud-init/growpart expands the partition and filesystem on first boot automatically
+- Bug 45: image.raw stayed at cloud image size (~3.5G) instead of rootDisk.size (40Gi)
 
-**1. Root disk resize during image import**
-- SwiftImage import pipeline should resize image.raw to the SwiftGuestClass rootDisk.size after qcow2-to-raw conversion
-- Currently the raw image is only as large as the cloud image (~3.5G for Ubuntu Noble)
-- Guest expects rootDisk.size (e.g., 40Gi) but sees the raw file size
-- Fix: `qemu-img resize image.raw <size>` in the import job, then growpart/cloud-init expands the partition on first boot
+### Next Priorities (in order)
 
 **4. Additional kernel profiles**
 - gpu-workload profile: Linux kernel with NVIDIA driver modules, VFIO support

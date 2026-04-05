@@ -26,10 +26,12 @@ const (
 
 // importScript returns a shell script that downloads and converts the image.
 // When sourceFormat is qcow2, converts to raw (CH does not support qcow2 compressed blocks).
-// After conversion, patches GRUB to add console=ttyS0 for serial console (firmware boot uses disk's cmdline).
+// After conversion, resizes the raw image to targetSize so the guest sees the full disk.
+// Then patches GRUB to add console=ttyS0 for serial console (firmware boot uses disk's cmdline).
 // Supports Ubuntu, Debian, Fedora, Rocky Linux, and common layouts. Uses fdisk to discover
 // Linux/LVM partitions first, then falls back to known offsets. Patches both grub.cfg and grub.conf.
-func importScript(sourceURL, sourceFormat string) string {
+// targetSize is the desired disk size (e.g., "40G") — empty string skips resize.
+func importScript(sourceURL, sourceFormat, targetSize string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
@@ -83,10 +85,23 @@ for offset in $GPT_OFFSETS $FALLBACK_OFFSETS; do
 done
 rmdir /mnt/disk 2>/dev/null || true
 `
-	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, grubPatch)
+	// Resize step: expand raw image to target size after conversion/download.
+	// This must happen BEFORE GRUB patching (so partition offsets are correct)
+	// and BEFORE size measurement (so stat reports the full size).
+	resizeStep := ""
+	if targetSize != "" {
+		resizeStep = fmt.Sprintf("\necho \"Resizing image to %s\"\nqemu-img resize \"$OUTPUT\" %s\necho \"Resize complete\"", targetSize, targetSize)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, sourceURL, grubPatch)
+
+	if sourceFormat == "qcow2" {
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, resizeStep, grubPatch)
+	}
+	// Raw format also needs qemu-utils when resize is requested.
+	packages := "curl util-linux"
+	if targetSize != "" {
+		packages = "curl qemu-utils util-linux"
+	}
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq %s >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, packages, sourceURL, resizeStep, grubPatch)
 }
 
 // ImportResult holds the outcome of an import attempt.
@@ -140,11 +155,18 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 		return nil, err
 	}
 
-	// Import job: download and convert qcow2→raw when needed.
+	// Import job: download, convert qcow2→raw, resize to target size.
 	// CH does not support qcow2 compressed blocks; runtime format is always raw.
 	sourceURL := img.Spec.Source.HTTP.URL
 	sourceFormat := string(img.Spec.Format)
-	script := importScript(sourceURL, sourceFormat)
+
+	// Target size for qemu-img resize: use the PVC storage request (which comes
+	// from spec.rootDisk.size). Format as bytes for qemu-img (e.g., "42949672960").
+	targetSize := ""
+	if storageReq.Value() > 0 {
+		targetSize = fmt.Sprintf("%d", storageReq.Value())
+	}
+	script := importScript(sourceURL, sourceFormat, targetSize)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
 		Spec: batchv1.JobSpec{
