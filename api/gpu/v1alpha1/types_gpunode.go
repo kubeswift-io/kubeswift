@@ -36,6 +36,9 @@ type SwiftGPUNodeStatus struct {
 	// GPUModel is the model of the GPUs (assumes homogeneous node).
 	GPUModel string `json:"gpuModel,omitempty"`
 
+	// GPUVendor is the vendor of the GPUs (assumes homogeneous node): "NVIDIA", "AMD", "Intel".
+	GPUVendor string `json:"gpuVendor,omitempty"`
+
 	// Host describes the physical host topology.
 	Host HostTopology `json:"host,omitempty"`
 
@@ -90,6 +93,8 @@ type GPUDevice struct {
 	Index int `json:"index"`
 	// PCIAddress is the full PCI BDF address (e.g. "0000:17:00.0").
 	PCIAddress string `json:"pciAddress"`
+	// Vendor is the GPU manufacturer: "NVIDIA", "AMD", "Intel", or "Unknown (<vendor-id>)".
+	Vendor string `json:"vendor"`
 	// Model is the human-readable GPU model string.
 	Model string `json:"model"`
 	// DeviceID is the PCI vendor:device ID (e.g. "10de:2336").

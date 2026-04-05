@@ -18,10 +18,40 @@ import (
 
 // --- GPU Discovery ---
 
-// lspciGPUPattern matches NVIDIA 3D controller and VGA compatible controller lines.
-// Example: "0000:17:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)"
+// GPU PCI class codes (from the PCI specification).
+// 0300 = VGA compatible controller (consumer GPUs, some data center GPUs)
+// 0302 = 3D controller (most data center GPUs: T4, A100, H100, etc.)
+// 0380 = Display controller (some AMD and Intel data center GPUs)
+var gpuPCIClasses = map[string]bool{
+	"0300": true,
+	"0302": true,
+	"0380": true,
+}
+
+// Known GPU vendor IDs mapped to human-readable names.
+var gpuVendorNames = map[string]string{
+	"10de": "NVIDIA",
+	"1002": "AMD",
+	"8086": "Intel",
+}
+
+// VendorName returns the human-readable vendor name for a PCI vendor ID.
+func VendorName(vendorID string) string {
+	if name, ok := gpuVendorNames[strings.ToLower(vendorID)]; ok {
+		return name
+	}
+	return fmt.Sprintf("Unknown (%s)", vendorID)
+}
+
+// lspciGPUPattern matches GPU lines by PCI class code, vendor-agnostic.
+// Captures: (1) PCI address, (2) class code, (3) description, (4) vendor:device ID.
+// Example lines:
+//
+//	0000:17:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
+//	0000:03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [1002:73bf] (rev c8)
+//	0000:56:00.0 Display controller [0380]: Intel Corporation Data Center GPU Flex 170 [8086:56c0]
 var lspciGPUPattern = regexp.MustCompile(
-	`^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])\s+(?:3D controller|VGA compatible controller)\s+\[[0-9a-fA-F]{4}\]:\s+NVIDIA Corporation\s+(.+?)\s+\[([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\]`)
+	`^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])\s+.+?\[([0-9a-fA-F]{4})\]:\s+(.+?)\s+\[([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\]`)
 
 func discoverGPUs() ([]gpuv1alpha1.GPUDevice, error) {
 	output, err := runCommand("lspci", "-Dnn")
@@ -32,22 +62,36 @@ func discoverGPUs() ([]gpuv1alpha1.GPUDevice, error) {
 }
 
 // parseGPUsFromLspci parses lspci -Dnn output and returns GPU devices.
+// Detects GPUs from any vendor by PCI class code (0300, 0302, 0380).
 func parseGPUsFromLspci(output string) ([]gpuv1alpha1.GPUDevice, error) {
 	var gpus []gpuv1alpha1.GPUDevice
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.Contains(line, "NVIDIA") {
-			continue
-		}
 		matches := lspciGPUPattern.FindStringSubmatch(line)
 		if matches == nil {
 			continue
 		}
 
 		pciAddr := matches[1]
-		model := "NVIDIA " + strings.TrimSpace(matches[2])
-		deviceID := matches[3]
+		classCode := matches[2]
+		description := strings.TrimSpace(matches[3])
+		vendorID := matches[4]
+		deviceID := matches[5]
+
+		// Filter by GPU PCI class codes.
+		if !gpuPCIClasses[classCode] {
+			continue
+		}
+
+		vendor := VendorName(vendorID)
+		fullDeviceID := vendorID + ":" + deviceID
+
+		// Extract model name from the description.
+		// lspci descriptions look like "NVIDIA Corporation H200 SXM" or
+		// "Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX]".
+		// We use the full description as the model — it's already human-readable.
+		model := description
 
 		numaNode := readNUMANode(pciAddr)
 		iommuGroup := readIOMMUGroup(pciAddr)
@@ -56,8 +100,9 @@ func parseGPUsFromLspci(output string) ([]gpuv1alpha1.GPUDevice, error) {
 
 		gpus = append(gpus, gpuv1alpha1.GPUDevice{
 			PCIAddress: pciAddr,
+			Vendor:     vendor,
 			Model:      model,
-			DeviceID:   deviceID,
+			DeviceID:   fullDeviceID,
 			NUMANode:   numaNode,
 			IOMMUGroup: iommuGroup,
 			Driver:     driver,
@@ -76,6 +121,16 @@ func parseGPUsFromLspci(output string) ([]gpuv1alpha1.GPUDevice, error) {
 	}
 
 	return gpus, nil
+}
+
+// HasNVIDIAGPUs returns true if any discovered GPU is from NVIDIA.
+func HasNVIDIAGPUs(gpus []gpuv1alpha1.GPUDevice) bool {
+	for _, g := range gpus {
+		if g.Vendor == "NVIDIA" {
+			return true
+		}
+	}
+	return false
 }
 
 func readNUMANode(pciAddr string) int {

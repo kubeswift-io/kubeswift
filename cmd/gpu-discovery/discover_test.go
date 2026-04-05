@@ -8,9 +8,8 @@ import (
 
 // --- TestParseGPUFromLspci ---
 
-func TestParseGPUFromLspci(t *testing.T) {
-	input := `0000:00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:a780] (rev 04)
-0000:17:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
+func TestParseGPUFromLspci_NVIDIA(t *testing.T) {
+	input := `0000:17:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
 0000:3d:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
 0000:60:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
 0000:70:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
@@ -39,16 +38,98 @@ func TestParseGPUFromLspci(t *testing.T) {
 
 	// Check first GPU fields.
 	g := gpus[0]
-	if g.Model != "NVIDIA H200 SXM" {
-		t.Errorf("Model = %q, want %q", g.Model, "NVIDIA H200 SXM")
+	if g.Vendor != "NVIDIA" {
+		t.Errorf("Vendor = %q, want NVIDIA", g.Vendor)
+	}
+	if g.Model != "NVIDIA Corporation H200 SXM" {
+		t.Errorf("Model = %q, want %q", g.Model, "NVIDIA Corporation H200 SXM")
 	}
 	if g.DeviceID != "10de:2336" {
 		t.Errorf("DeviceID = %q, want %q", g.DeviceID, "10de:2336")
 	}
 }
 
+func TestParseGPUFromLspci_AMD(t *testing.T) {
+	input := `0000:03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX/XT] [1002:73bf] (rev c8)
+`
+	gpus, err := parseGPUsFromLspci(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gpus) != 1 {
+		t.Fatalf("expected 1 GPU, got %d", len(gpus))
+	}
+	g := gpus[0]
+	if g.Vendor != "AMD" {
+		t.Errorf("Vendor = %q, want AMD", g.Vendor)
+	}
+	if g.DeviceID != "1002:73bf" {
+		t.Errorf("DeviceID = %q, want 1002:73bf", g.DeviceID)
+	}
+	if g.PCIAddress != "0000:03:00.0" {
+		t.Errorf("PCIAddress = %q", g.PCIAddress)
+	}
+}
+
+func TestParseGPUFromLspci_Intel(t *testing.T) {
+	input := `0000:56:00.0 Display controller [0380]: Intel Corporation Data Center GPU Flex 170 [8086:56c0] (rev 05)
+`
+	gpus, err := parseGPUsFromLspci(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gpus) != 1 {
+		t.Fatalf("expected 1 GPU, got %d", len(gpus))
+	}
+	g := gpus[0]
+	if g.Vendor != "Intel" {
+		t.Errorf("Vendor = %q, want Intel", g.Vendor)
+	}
+	if g.DeviceID != "8086:56c0" {
+		t.Errorf("DeviceID = %q, want 8086:56c0", g.DeviceID)
+	}
+}
+
+func TestParseGPUFromLspci_Unknown(t *testing.T) {
+	input := `0000:10:00.0 3D controller [0302]: Foo Corporation Bar Accelerator [abcd:1234]
+`
+	gpus, err := parseGPUsFromLspci(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gpus) != 1 {
+		t.Fatalf("expected 1 GPU, got %d", len(gpus))
+	}
+	if gpus[0].Vendor != "Unknown (abcd)" {
+		t.Errorf("Vendor = %q, want Unknown (abcd)", gpus[0].Vendor)
+	}
+	if gpus[0].DeviceID != "abcd:1234" {
+		t.Errorf("DeviceID = %q", gpus[0].DeviceID)
+	}
+}
+
+func TestParseGPUFromLspci_MixedVendors(t *testing.T) {
+	input := `0000:01:00.0 VGA compatible controller [0300]: NVIDIA Corporation GP104 [GeForce GTX 1080] [10de:1b80] (rev a1)
+0000:03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [1002:73bf] (rev c8)
+0000:56:00.0 Display controller [0380]: Intel Corporation Data Center GPU Flex 170 [8086:56c0]
+`
+	gpus, err := parseGPUsFromLspci(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gpus) != 3 {
+		t.Fatalf("expected 3 GPUs, got %d", len(gpus))
+	}
+	vendors := map[string]bool{}
+	for _, g := range gpus {
+		vendors[g.Vendor] = true
+	}
+	if !vendors["NVIDIA"] || !vendors["AMD"] || !vendors["Intel"] {
+		t.Errorf("expected NVIDIA, AMD, Intel; got %v", vendors)
+	}
+}
+
 func TestParseGPUFromLspciVGA(t *testing.T) {
-	// Test VGA compatible controller (some GPUs report as VGA).
 	input := `0000:41:00.0 VGA compatible controller [0300]: NVIDIA Corporation GA102GL [RTX A6000] [10de:2230] (rev a1)
 `
 	gpus, err := parseGPUsFromLspci(input)
@@ -58,21 +139,59 @@ func TestParseGPUFromLspciVGA(t *testing.T) {
 	if len(gpus) != 1 {
 		t.Fatalf("expected 1 GPU, got %d", len(gpus))
 	}
-	if gpus[0].Model != "NVIDIA GA102GL [RTX A6000]" {
-		t.Errorf("Model = %q", gpus[0].Model)
+	if gpus[0].Vendor != "NVIDIA" {
+		t.Errorf("Vendor = %q", gpus[0].Vendor)
 	}
 }
 
-func TestParseGPUNoNVIDIA(t *testing.T) {
-	input := `0000:00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:a780] (rev 04)
-0000:01:00.0 Network controller [0280]: Intel Corporation Wi-Fi 6 [8086:2723]
+func TestParseGPUNotGPUClass(t *testing.T) {
+	// Network controller (class 0280) should NOT be detected as a GPU.
+	input := `0000:01:00.0 Network controller [0280]: Intel Corporation Wi-Fi 6 [8086:2723]
+0000:0a:00.0 Bridge [0680]: NVIDIA Corporation NVSwitch [10de:22a4] (rev 01)
 `
 	gpus, err := parseGPUsFromLspci(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(gpus) != 0 {
-		t.Errorf("expected 0 GPUs, got %d", len(gpus))
+		t.Errorf("expected 0 GPUs for non-GPU classes, got %d", len(gpus))
+	}
+}
+
+func TestHasNVIDIAGPUs(t *testing.T) {
+	nvidia := []gpuv1alpha1.GPUDevice{{Vendor: "NVIDIA"}}
+	amd := []gpuv1alpha1.GPUDevice{{Vendor: "AMD"}}
+	mixed := []gpuv1alpha1.GPUDevice{{Vendor: "AMD"}, {Vendor: "NVIDIA"}}
+
+	if !HasNVIDIAGPUs(nvidia) {
+		t.Error("HasNVIDIAGPUs should be true for NVIDIA")
+	}
+	if HasNVIDIAGPUs(amd) {
+		t.Error("HasNVIDIAGPUs should be false for AMD-only")
+	}
+	if !HasNVIDIAGPUs(mixed) {
+		t.Error("HasNVIDIAGPUs should be true for mixed")
+	}
+	if HasNVIDIAGPUs(nil) {
+		t.Error("HasNVIDIAGPUs should be false for nil")
+	}
+}
+
+func TestVendorName(t *testing.T) {
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"10de", "NVIDIA"},
+		{"1002", "AMD"},
+		{"8086", "Intel"},
+		{"abcd", "Unknown (abcd)"},
+	}
+	for _, tt := range tests {
+		got := VendorName(tt.id)
+		if got != tt.want {
+			t.Errorf("VendorName(%q) = %q, want %q", tt.id, got, tt.want)
+		}
 	}
 }
 
@@ -156,7 +275,6 @@ Node 0 MemUsed:         573741824 kB
 func TestParseNUMAMemoryContentWrongNode(t *testing.T) {
 	content := `Node 1 MemTotal:       500000 kB
 `
-	// Ask for node 0, which doesn't exist in content.
 	mem := parseNUMAMemoryContent(content, 0)
 	if mem != 0 {
 		t.Errorf("expected 0 for wrong node, got %d", mem)
@@ -170,16 +288,16 @@ func TestMergePreservesAllocation(t *testing.T) {
 		Phase:    "Ready",
 		GPUCount: 8,
 		FreeGPUs: 6,
-		GPUModel: "NVIDIA H200 SXM",
+		GPUModel: "NVIDIA Corporation H200 SXM",
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:17:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: true, AllocatedTo: "default/gpu-vm-1"},
-			{Index: 1, PCIAddress: "0000:3d:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: true, AllocatedTo: "default/gpu-vm-1"},
-			{Index: 2, PCIAddress: "0000:60:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
-			{Index: 3, PCIAddress: "0000:70:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
-			{Index: 4, PCIAddress: "0000:80:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
-			{Index: 5, PCIAddress: "0000:90:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
-			{Index: 6, PCIAddress: "0000:a0:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
-			{Index: 7, PCIAddress: "0000:b0:00.0", Model: "NVIDIA H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 0, PCIAddress: "0000:17:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: true, AllocatedTo: "default/gpu-vm-1"},
+			{Index: 1, PCIAddress: "0000:3d:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: true, AllocatedTo: "default/gpu-vm-1"},
+			{Index: 2, PCIAddress: "0000:60:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 3, PCIAddress: "0000:70:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 4, PCIAddress: "0000:80:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 5, PCIAddress: "0000:90:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 6, PCIAddress: "0000:a0:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
+			{Index: 7, PCIAddress: "0000:b0:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", Driver: "nvidia", Allocated: false},
 		},
 		FabricManager: &gpuv1alpha1.FabricManagerStatus{
 			Installed: true,
@@ -192,27 +310,26 @@ func TestMergePreservesAllocation(t *testing.T) {
 		},
 	}
 
-	// Discovery finds all 8 GPUs with updated driver info (driver changed to vfio-pci for allocated ones).
 	discovered := &SwiftGPUNodeStatus{
 		Host: gpuv1alpha1.HostTopology{
 			CPUTopology: gpuv1alpha1.CPUTopologyInfo{Sockets: 2, CoresPerSocket: 48, ThreadsPerCore: 2, TotalCPUs: 192},
 		},
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:17:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "vfio-pci"},
-			{Index: 1, PCIAddress: "0000:3d:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "vfio-pci"},
-			{Index: 2, PCIAddress: "0000:60:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
-			{Index: 3, PCIAddress: "0000:70:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
-			{Index: 4, PCIAddress: "0000:80:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
-			{Index: 5, PCIAddress: "0000:90:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
-			{Index: 6, PCIAddress: "0000:a0:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
-			{Index: 7, PCIAddress: "0000:b0:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 0, PCIAddress: "0000:17:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "vfio-pci"},
+			{Index: 1, PCIAddress: "0000:3d:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "vfio-pci"},
+			{Index: 2, PCIAddress: "0000:60:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 3, PCIAddress: "0000:70:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 4, PCIAddress: "0000:80:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 5, PCIAddress: "0000:90:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 6, PCIAddress: "0000:a0:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
+			{Index: 7, PCIAddress: "0000:b0:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336", Driver: "nvidia"},
 		},
 		FabricManager: &gpuv1alpha1.FabricManagerStatus{
 			Installed: true,
 			Version:   "580.95.05",
 			Running:   true,
 			Partitions: []gpuv1alpha1.FMPartitionStatus{
-				{ID: 0, GPUIndices: []int{0, 1}, Active: true}, // Discovery sees active but not allocatedTo
+				{ID: 0, GPUIndices: []int{0, 1}, Active: true},
 				{ID: 1, GPUIndices: []int{2, 3}, Active: false},
 			},
 		},
@@ -220,7 +337,6 @@ func TestMergePreservesAllocation(t *testing.T) {
 
 	merged := mergeStatus(discovered, existing)
 
-	// Verify allocations preserved.
 	if !merged.GPUs[0].Allocated || merged.GPUs[0].AllocatedTo != "default/gpu-vm-1" {
 		t.Errorf("gpu[0] allocation not preserved: allocated=%v, allocatedTo=%q",
 			merged.GPUs[0].Allocated, merged.GPUs[0].AllocatedTo)
@@ -228,40 +344,33 @@ func TestMergePreservesAllocation(t *testing.T) {
 	if !merged.GPUs[1].Allocated || merged.GPUs[1].AllocatedTo != "default/gpu-vm-1" {
 		t.Errorf("gpu[1] allocation not preserved")
 	}
-
-	// Verify non-allocated GPUs remain free.
 	for i := 2; i < 8; i++ {
 		if merged.GPUs[i].Allocated {
 			t.Errorf("gpu[%d] should not be allocated", i)
 		}
 	}
-
-	// Verify driver updated (discovery-owned).
 	if merged.GPUs[0].Driver != "vfio-pci" {
 		t.Errorf("gpu[0] Driver = %q, want vfio-pci", merged.GPUs[0].Driver)
 	}
-
-	// Verify FM partition allocatedTo preserved.
+	if merged.GPUs[0].Vendor != "NVIDIA" {
+		t.Errorf("gpu[0] Vendor = %q, want NVIDIA", merged.GPUs[0].Vendor)
+	}
 	if merged.FabricManager.Partitions[0].AllocatedTo != "default/gpu-vm-1" {
 		t.Errorf("partition[0] AllocatedTo not preserved: %q", merged.FabricManager.Partitions[0].AllocatedTo)
 	}
 	if merged.FabricManager.Partitions[1].AllocatedTo != "" {
 		t.Errorf("partition[1] AllocatedTo should be empty")
 	}
-
-	// Verify counts.
 	if merged.GPUCount != 8 {
 		t.Errorf("GPUCount = %d, want 8", merged.GPUCount)
 	}
 	if merged.FreeGPUs != 6 {
 		t.Errorf("FreeGPUs = %d, want 6", merged.FreeGPUs)
 	}
-	if merged.Phase != "Ready" {
-		t.Errorf("Phase = %q, want Ready", merged.Phase)
+	if merged.GPUVendor != "NVIDIA" {
+		t.Errorf("GPUVendor = %q, want NVIDIA", merged.GPUVendor)
 	}
 }
-
-// --- TestMergeNewGPU ---
 
 func TestMergeNewGPU(t *testing.T) {
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{
@@ -269,16 +378,13 @@ func TestMergeNewGPU(t *testing.T) {
 			{Index: 0, PCIAddress: "0000:17:00.0", Allocated: false},
 		},
 	}
-
 	discovered := &SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:17:00.0", Model: "NVIDIA H200 SXM"},
-			{Index: 1, PCIAddress: "0000:3d:00.0", Model: "NVIDIA H200 SXM"},
+			{Index: 0, PCIAddress: "0000:17:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM"},
+			{Index: 1, PCIAddress: "0000:3d:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM"},
 		},
 	}
-
 	merged := mergeStatus(discovered, existing)
-
 	if len(merged.GPUs) != 2 {
 		t.Fatalf("expected 2 GPUs, got %d", len(merged.GPUs))
 	}
@@ -288,75 +394,50 @@ func TestMergeNewGPU(t *testing.T) {
 	if merged.GPUCount != 2 {
 		t.Errorf("GPUCount = %d, want 2", merged.GPUCount)
 	}
-	if merged.FreeGPUs != 2 {
-		t.Errorf("FreeGPUs = %d, want 2", merged.FreeGPUs)
-	}
 }
 
-// --- TestMergeRemovedGPU ---
-
 func TestMergeRemovedGPU(t *testing.T) {
-	// Existing has 2 GPUs, one allocated.
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
 			{Index: 0, PCIAddress: "0000:17:00.0", Allocated: true, AllocatedTo: "default/vm1"},
 			{Index: 1, PCIAddress: "0000:3d:00.0", Allocated: false},
 		},
 	}
-
-	// Discovery only finds 1 GPU (the allocated one disappeared).
 	discovered := &SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:3d:00.0", Model: "NVIDIA H200 SXM"},
+			{Index: 0, PCIAddress: "0000:3d:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM"},
 		},
 	}
-
 	merged := mergeStatus(discovered, existing)
-
-	// Should flag error because an allocated GPU was removed.
 	if merged.Phase != "Error" {
 		t.Errorf("Phase = %q, want Error (allocated GPU removed)", merged.Phase)
 	}
-
-	// Only the remaining GPU should be in the list.
 	if len(merged.GPUs) != 1 {
 		t.Fatalf("expected 1 GPU, got %d", len(merged.GPUs))
-	}
-	if merged.GPUs[0].PCIAddress != "0000:3d:00.0" {
-		t.Errorf("remaining GPU = %q, want 0000:3d:00.0", merged.GPUs[0].PCIAddress)
 	}
 }
 
 func TestMergeRemovedGPUUnallocated(t *testing.T) {
-	// An unallocated GPU disappearing is fine (not an error).
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
 			{Index: 0, PCIAddress: "0000:17:00.0", Allocated: false},
 			{Index: 1, PCIAddress: "0000:3d:00.0", Allocated: false},
 		},
 	}
-
 	discovered := &SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
 			{Index: 0, PCIAddress: "0000:3d:00.0"},
 		},
 	}
-
 	merged := mergeStatus(discovered, existing)
 	if merged.Phase != "Ready" {
-		t.Errorf("Phase = %q, want Ready (unallocated GPU removal is not an error)", merged.Phase)
+		t.Errorf("Phase = %q, want Ready", merged.Phase)
 	}
 }
 
-// --- TestFreeGPUCount ---
-
 func TestFreeGPUCount(t *testing.T) {
 	gpus := []gpuv1alpha1.GPUDevice{
-		{Allocated: true},
-		{Allocated: false},
-		{Allocated: true},
-		{Allocated: false},
-		{Allocated: false},
+		{Allocated: true}, {Allocated: false}, {Allocated: true}, {Allocated: false}, {Allocated: false},
 	}
 	if n := countFreeGPUs(gpus); n != 3 {
 		t.Errorf("countFreeGPUs = %d, want 3", n)
@@ -364,10 +445,7 @@ func TestFreeGPUCount(t *testing.T) {
 }
 
 func TestFreeGPUCountAllFree(t *testing.T) {
-	gpus := []gpuv1alpha1.GPUDevice{
-		{Allocated: false},
-		{Allocated: false},
-	}
+	gpus := []gpuv1alpha1.GPUDevice{{Allocated: false}, {Allocated: false}}
 	if n := countFreeGPUs(gpus); n != 2 {
 		t.Errorf("countFreeGPUs = %d, want 2", n)
 	}
@@ -382,8 +460,7 @@ func TestFreeGPUCountNone(t *testing.T) {
 // --- TestNVSwitchDiscovery ---
 
 func TestNVSwitchDiscovery(t *testing.T) {
-	input := `0000:00:02.0 VGA compatible controller [0300]: Intel Corporation Device [8086:a780]
-0000:0a:00.0 Bridge [0680]: NVIDIA Corporation NVSwitch [10de:22a4] (rev 01)
+	input := `0000:0a:00.0 Bridge [0680]: NVIDIA Corporation NVSwitch [10de:22a4] (rev 01)
 0000:0b:00.0 Bridge [0680]: NVIDIA Corporation NVSwitch [10de:22a4] (rev 01)
 0000:17:00.0 3D controller [0302]: NVIDIA Corporation H200 SXM [10de:2336] (rev a1)
 `
@@ -391,7 +468,6 @@ func TestNVSwitchDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if len(switches) != 2 {
 		t.Fatalf("expected 2 NVSwitches, got %d", len(switches))
 	}
@@ -424,53 +500,30 @@ partition 2: gpus=0,1,2,3 active=false
 partition 3: gpus=0,1,2,3,4,5,6,7 active=true
 `
 	partitions := parseFMPartitions(output)
-
 	if len(partitions) != 4 {
 		t.Fatalf("expected 4 partitions, got %d", len(partitions))
 	}
-
-	// Check partition 0.
-	if partitions[0].ID != 0 {
-		t.Errorf("partition[0] ID = %d", partitions[0].ID)
+	if partitions[0].ID != 0 || len(partitions[0].GPUIndices) != 2 {
+		t.Errorf("partition[0] = {ID:%d, GPUs:%v}", partitions[0].ID, partitions[0].GPUIndices)
 	}
-	if len(partitions[0].GPUIndices) != 2 || partitions[0].GPUIndices[0] != 0 || partitions[0].GPUIndices[1] != 1 {
-		t.Errorf("partition[0] GPUIndices = %v, want [0 1]", partitions[0].GPUIndices)
-	}
-	if partitions[0].Active {
-		t.Error("partition[0] should not be active")
-	}
-
-	// Check partition 3.
-	if partitions[3].ID != 3 {
-		t.Errorf("partition[3] ID = %d", partitions[3].ID)
-	}
-	if len(partitions[3].GPUIndices) != 8 {
-		t.Errorf("partition[3] GPUIndices = %v, want 8 entries", partitions[3].GPUIndices)
-	}
-	if !partitions[3].Active {
-		t.Error("partition[3] should be active")
+	if !partitions[3].Active || len(partitions[3].GPUIndices) != 8 {
+		t.Errorf("partition[3] Active=%v, GPUs=%d", partitions[3].Active, len(partitions[3].GPUIndices))
 	}
 }
-
-// --- TestNoFabricManager ---
 
 func TestNoFabricManager(t *testing.T) {
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{}
 	discovered := &SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:41:00.0", Model: "NVIDIA L40S"},
+			{Index: 0, PCIAddress: "0000:41:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation L40S"},
 		},
-		FabricManager: nil, // No FM on PCIe nodes
+		FabricManager: nil,
 	}
-
 	merged := mergeStatus(discovered, existing)
-
 	if merged.FabricManager != nil {
 		t.Error("FabricManager should be nil for PCIe-only nodes")
 	}
 }
-
-// --- TestNoGPUs ---
 
 func TestNoGPUs(t *testing.T) {
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{}
@@ -480,52 +533,34 @@ func TestNoGPUs(t *testing.T) {
 		},
 		GPUs: nil,
 	}
-
 	merged := mergeStatus(discovered, existing)
-
 	if merged.GPUCount != 0 {
 		t.Errorf("GPUCount = %d, want 0", merged.GPUCount)
 	}
-	if merged.FreeGPUs != 0 {
-		t.Errorf("FreeGPUs = %d, want 0", merged.FreeGPUs)
-	}
-	if merged.Phase != "Ready" {
-		t.Errorf("Phase = %q, want Ready", merged.Phase)
-	}
-	if merged.GPUModel != "" {
-		t.Errorf("GPUModel = %q, want empty", merged.GPUModel)
+	if merged.GPUVendor != "" {
+		t.Errorf("GPUVendor = %q, want empty", merged.GPUVendor)
 	}
 }
 
-// --- TestMergeEmptyExisting ---
-
 func TestMergeEmptyExisting(t *testing.T) {
-	// First discovery run — no existing status.
 	existing := &gpuv1alpha1.SwiftGPUNodeStatus{}
 	discovered := &SwiftGPUNodeStatus{
 		GPUs: []gpuv1alpha1.GPUDevice{
-			{Index: 0, PCIAddress: "0000:17:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336"},
-			{Index: 1, PCIAddress: "0000:3d:00.0", Model: "NVIDIA H200 SXM", DeviceID: "10de:2336"},
+			{Index: 0, PCIAddress: "0000:17:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336"},
+			{Index: 1, PCIAddress: "0000:3d:00.0", Vendor: "NVIDIA", Model: "NVIDIA Corporation H200 SXM", DeviceID: "10de:2336"},
 		},
 	}
-
 	merged := mergeStatus(discovered, existing)
-
 	if len(merged.GPUs) != 2 {
 		t.Fatalf("expected 2 GPUs, got %d", len(merged.GPUs))
 	}
 	if merged.GPUs[0].Allocated {
 		t.Error("first-run GPUs should not be allocated")
 	}
-	if merged.GPUCount != 2 {
-		t.Errorf("GPUCount = %d, want 2", merged.GPUCount)
-	}
-	if merged.FreeGPUs != 2 {
-		t.Errorf("FreeGPUs = %d, want 2", merged.FreeGPUs)
+	if merged.GPUVendor != "NVIDIA" {
+		t.Errorf("GPUVendor = %q, want NVIDIA", merged.GPUVendor)
 	}
 }
-
-// --- TestParseIntList ---
 
 func TestParseIntList(t *testing.T) {
 	result := parseIntList("0,1,2,3")

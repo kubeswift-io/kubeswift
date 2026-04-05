@@ -17,6 +17,8 @@ pub struct NICConfig {
 pub struct VFIODeviceConfig {
     /// Sysfs path (e.g., "/sys/bus/pci/devices/0000:3b:0a.0/")
     pub sysfs_path: String,
+    /// x_nv_gpudirect_clique value for NVIDIA GPUs. -1 = omit (non-NVIDIA or SR-IOV).
+    pub gpu_direct_clique: i32,
 }
 
 /// VM configuration derived from runtime intent.
@@ -138,7 +140,15 @@ impl VmConfig {
         // VFIO passthrough devices (SR-IOV VFs, GPUs).
         for dev in &self.vfio_devices {
             args.push("--device".to_string());
-            args.push(format!("path={}", dev.sysfs_path));
+            if dev.gpu_direct_clique >= 0 {
+                // NVIDIA-specific: x_nv_gpudirect_clique enables PCIe P2P DMA between GPUs.
+                args.push(format!(
+                    "path={},x_nv_gpudirect_clique={}",
+                    dev.sysfs_path, dev.gpu_direct_clique
+                ));
+            } else {
+                args.push(format!("path={}", dev.sysfs_path));
+            }
         }
 
         args
@@ -303,6 +313,7 @@ mod tests {
         cfg.nics = vec![];
         cfg.vfio_devices = vec![VFIODeviceConfig {
             sysfs_path: "/sys/bus/pci/devices/0000:3b:0a.0/".to_string(),
+            gpu_direct_clique: -1,
         }];
         let args = cfg.to_args();
         let joined = args.join(" ");
@@ -328,6 +339,7 @@ mod tests {
         }];
         cfg.vfio_devices = vec![VFIODeviceConfig {
             sysfs_path: "/sys/bus/pci/devices/0000:3b:0a.0/".to_string(),
+            gpu_direct_clique: -1,
         }];
         let args = cfg.to_args();
         let joined = args.join(" ");
@@ -345,6 +357,47 @@ mod tests {
         assert!(
             joined.contains("path=/sys/bus/pci/devices/0000:3b:0a.0/"),
             "missing sysfs: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_gpu_with_clique() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![];
+        cfg.vfio_devices = vec![VFIODeviceConfig {
+            sysfs_path: "/sys/bus/pci/devices/0000:41:00.0/".to_string(),
+            gpu_direct_clique: 0,
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("x_nv_gpudirect_clique=0"),
+            "NVIDIA GPU should have clique: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_gpu_no_clique() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![];
+        cfg.vfio_devices = vec![VFIODeviceConfig {
+            sysfs_path: "/sys/bus/pci/devices/0000:03:00.0/".to_string(),
+            gpu_direct_clique: -1, // AMD/Intel -- no clique
+        }];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            !joined.contains("x_nv_gpudirect_clique"),
+            "non-NVIDIA GPU should NOT have clique: {}",
+            joined
+        );
+        assert!(
+            joined.contains("path=/sys/bus/pci/devices/0000:03:00.0/"),
+            "missing device path: {}",
             joined
         );
     }
