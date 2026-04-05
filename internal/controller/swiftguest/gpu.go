@@ -312,17 +312,16 @@ func BuildGPUDiskBootPod(
 			},
 		},
 		// /dev/vfio provides VFIO character devices for IOMMU group access.
-		// Ideally this would be scoped to specific IOMMU group devices (e.g.
-		// /dev/vfio/15), but the VFIO group device files are created by the kernel
-		// during gpu-init's driver bind — they may not exist when the pod spec is
-		// generated. Mounting the directory is the pragmatic choice; IOMMU hardware
-		// isolation prevents cross-group DMA regardless.
+		// Uses DirectoryOrCreate because /dev/vfio does not exist on the host
+		// until the first device is bound to vfio-pci — which gpu-init does.
+		// IOMMU hardware isolation prevents cross-group DMA regardless of
+		// mounting the full directory.
 		{
 			Name: "dev-vfio",
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: "/dev/vfio",
-					Type: ptr.To(corev1.HostPathDirectory),
+					Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 				},
 			},
 		},
