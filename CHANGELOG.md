@@ -7,6 +7,8 @@ All notable changes to KubeSwift are documented here.
 ## [Unreleased] - 2026-04-05
 
 ### Added
+- Comprehensive networking operations guide for physical networks, VLANs, bonds, and isolated networks
+- VMware ESXi and Proxmox VE concept mapping for platform migration
 - SwiftGuestPool CRD and controller for VM fleet management (ReplicaSet semantics)
 - kubectl scale support for SwiftGuestPool via scale subresource
 - Stable naming, failed VM replacement, cascade deletion

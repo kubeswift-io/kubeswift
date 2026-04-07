@@ -262,9 +262,28 @@ Success criteria:
 - SwiftGuest reaches `phase=Running` with `GuestRunning=True`
 - `status.network.primaryIP` is populated
 
+## Adding a second NIC
+
+To connect a VM to an additional network (storage, VLAN, or isolated segment), add
+a secondary interface referencing a Multus NetworkAttachmentDefinition:
+
+```yaml
+interfaces:
+- name: mgmt
+- name: data
+  networkRef:
+    name: my-network
+```
+
+This requires Multus CNI and a NAD. See the
+[Networking Operations Guide](networking/operations-guide.md) for full setup
+instructions covering physical networks, VLANs, bonds, and isolated networks.
+
 ## Next steps
 
-- [CRD reference](crds.md) — full field documentation for all 7 CRDs
-- [GPU passthrough](gpu-passthrough.md) — GPU workload setup
-- [swiftctl reference](swiftctl.md) — all CLI commands and flags
-- [Architecture](architecture.md) — how the system works
+- [Networking Operations Guide](networking/operations-guide.md) -- connect VMs to physical networks and VLANs
+- [CRD reference](crds.md) -- full field documentation for all CRDs
+- [GPU passthrough](gpu-passthrough.md) -- GPU workload setup
+- [SwiftGuestPool Guide](swiftguestpool-guide.md) -- manage VM fleets
+- [swiftctl reference](swiftctl.md) -- all CLI commands and flags
+- [Architecture](architecture.md) -- how the system works

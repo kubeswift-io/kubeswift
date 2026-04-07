@@ -1,5 +1,9 @@
 # OVN-Kubernetes Integration Guide
 
+> **Don't need OVN-Kubernetes?** For simpler approaches that don't require
+> OVN-Kubernetes (macvlan, bridge, vlan CNI), see the
+> [Networking Operations Guide](operations-guide.md).
+
 This guide covers how to use OVN-Kubernetes secondary networks with KubeSwift VMs.
 It assumes you have read [Multi-NIC Support](../multi-nic.md) for the general
 multi-interface architecture.
