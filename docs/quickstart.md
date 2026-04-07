@@ -239,10 +239,67 @@ swiftctl debug sample
 swiftctl debug sample --shell   # interactive shell in launcher container
 ```
 
+## Step 6: Run a VM fleet (SwiftGuestPool)
+
+SwiftGuestPool manages a fleet of identical VMs with ReplicaSet semantics, rolling updates, topology spread, and per-replica PVCs.
+
+```bash
+kubectl apply -f config/samples/pool/swiftguestpool-basic.yaml
+kubectl get sgpool basic-pool -w
+```
+
+Expected progression:
+
+```
+NAME         DESIRED   READY   UPDATED   AVAILABLE   FAILED   AGE
+basic-pool   2         2       2         2                     60s
+```
+
+Scale the pool:
+
+```bash
+kubectl scale sgpool basic-pool --replicas=4
+```
+
+Check pool members:
+
+```bash
+kubectl get sg -l swift.kubeswift.io/pool=basic-pool
+```
+
+## Step 7: Add a secondary NIC
+
+Secondary NICs connect VMs to additional networks (storage, VLANs, isolated segments) via Multus CNI.
+
+```bash
+# Install Multus (if not already installed)
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset-thick.yml
+
+# Create a network
+kubectl apply -f config/samples/multi-nic/nad-bridge.yaml
+
+# Create a VM with two NICs
+kubectl apply -f config/samples/multi-nic/swiftguest-multi-nic.yaml
+```
+
+The SwiftGuest `spec.interfaces` defines primary and secondary NICs:
+
+```yaml
+interfaces:
+- name: mgmt
+- name: data
+  networkRef:
+    name: my-network
+```
+
+See the [Networking Operations Guide](networking/operations-guide.md) for full setup
+instructions covering physical networks, VLANs, bonds, and isolated networks.
+
 ## Cleanup
 
 ```bash
 kubectl delete swiftguest sample faas-test
+kubectl delete swiftguestpool basic-pool
 kubectl delete swiftkernel faas-minimal
 kubectl delete swiftimage ubuntu-noble
 kubectl delete swiftseedprofile ssh
@@ -262,22 +319,52 @@ Success criteria:
 - SwiftGuest reaches `phase=Running` with `GuestRunning=True`
 - `status.network.primaryIP` is populated
 
-## Adding a second NIC
+---
 
-To connect a VM to an additional network (storage, VLAN, or isolated segment), add
-a secondary interface referencing a Multus NetworkAttachmentDefinition:
+## Status
 
-```yaml
-interfaces:
-- name: mgmt
-- name: data
-  networkRef:
-    name: my-network
+**Working:** disk boot (CLOUDHV.fd), kernel boot, QEMU boot (OVMF), networking (tap+bridge+dnsmasq),
+multi-NIC (Multus integration), SR-IOV NIC passthrough (VFIO), SwiftGuestPool (scaling, rolling updates,
+topology spread, PVC per replica), per-guest root disk cloning (class-based sizing), swiftctl CLI,
+cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3), multi-vendor GPU discovery (NVIDIA/AMD/Intel),
+GPU Discovery DaemonSet, dataDiskRef/dataDiskRefs, security-hardened containers, OVN-Kubernetes
+integration guide, VMware/Proxmox comparison guide.
+
+**Next:** Tier 2 GPU validation (HGX SXM), Multi-NIC hardware validation (Multus + macvlan),
+SR-IOV hardware validation (ConnectX NIC), additional kernel profiles (gpu-workload, vhost-user),
+Windows guest support, HPA auto-scaling for pools, GPU Phase 4 (full HGX passthrough).
+
+## CRD short names
+
+```bash
+kubectl get sg       # SwiftGuest
+kubectl get sgc      # SwiftGuestClass
+kubectl get si       # SwiftImage
+kubectl get ssp      # SwiftSeedProfile
+kubectl get sk       # SwiftKernel
+kubectl get sgpool   # SwiftGuestPool
+kubectl get sgp      # SwiftGPUProfile
+kubectl get sgn      # SwiftGPUNode
 ```
 
-This requires Multus CNI and a NAD. See the
-[Networking Operations Guide](networking/operations-guide.md) for full setup
-instructions covering physical networks, VLANs, bonds, and isolated networks.
+## Documentation
+
+| Topic | Document |
+|-------|----------|
+| Multi-NIC networking | [docs/multi-nic.md](../multi-nic.md) |
+| Networking operations | [docs/networking/operations-guide.md](networking/operations-guide.md) |
+| SR-IOV passthrough | [docs/networking/sriov.md](networking/sriov.md) |
+| OVN-Kubernetes | [docs/networking/ovn-kubernetes.md](networking/ovn-kubernetes.md) |
+| VMware/Proxmox comparison | [docs/networking/virtualization-comparison.md](networking/virtualization-comparison.md) |
+| SwiftGuestPool API | [docs/api/swiftguestpool.md](api/swiftguestpool.md) |
+| SwiftGuestPool guide | [docs/swiftguestpool-guide.md](swiftguestpool-guide.md) |
+| SwiftGuestPool use cases | [docs/swiftguestpool-use-cases.md](swiftguestpool-use-cases.md) |
+| Security audit | [docs/security-audit.md](security-audit.md) |
+| GPU passthrough | [docs/gpu-passthrough.md](gpu-passthrough.md) |
+| CRD reference | [docs/crds.md](crds.md) |
+| Architecture | [docs/architecture.md](architecture.md) |
+| swiftctl CLI | [docs/swiftctl.md](swiftctl.md) |
+| Development | [docs/development.md](development.md) |
 
 ## Next steps
 
