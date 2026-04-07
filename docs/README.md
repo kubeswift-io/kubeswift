@@ -9,6 +9,8 @@ KubeSwift is a Kubernetes-native VM runtime built on Cloud Hypervisor (default) 
 | Get started fast | [quickstart.md](quickstart.md) |
 | Understand how it works | [architecture.md](architecture.md) |
 | Look up a CRD field | [crds.md](crds.md) |
+| Connect VMs to physical networks | [networking/operations-guide.md](networking/operations-guide.md) |
+| Migrate from VMware/Proxmox | [networking/virtualization-comparison.md](networking/virtualization-comparison.md) |
 | Set up GPU passthrough | [gpu-passthrough.md](gpu-passthrough.md) |
 | Manage VM fleets | [swiftguestpool-guide.md](swiftguestpool-guide.md) |
 | Use the swiftctl CLI | [swiftctl.md](swiftctl.md) |

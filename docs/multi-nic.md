@@ -1,5 +1,11 @@
 # Multi-NIC Support
 
+> **Looking for setup instructions?** For practical guides on connecting VMs to
+> physical networks, VLANs, and bonds, see the
+> [Networking Operations Guide](networking/operations-guide.md). For VMware/Proxmox
+> concept mapping, see the
+> [Virtualization Platform Comparison](networking/virtualization-comparison.md).
+
 KubeSwift supports multiple network interfaces per VM via Multus CNI integration.
 This enables use cases like GPU data plane separation (RDMA + management), storage
 isolation (dedicated Ceph/iSCSI NIC), and VLAN segmentation.

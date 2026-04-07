@@ -32,10 +32,18 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [Remote cluster](install/remote-cluster.md) — Prerequisites, OCI Helm install
 - [Helm OCI](install/helm-oci.md) — Version selection, webhooks, image overrides
 
+### Networking
+
+- [Networking Operations Guide](networking/operations-guide.md) -- Physical networks, VLANs, bonds, isolated networks
+- [Virtualization Platform Comparison](networking/virtualization-comparison.md) -- VMware ESXi and Proxmox VE concept mapping
+- [Multi-NIC Support](multi-nic.md) -- CRD spec, MAC generation, architecture
+- [OVN-Kubernetes Integration](networking/ovn-kubernetes.md) -- Layer 2/3, localnet, UDN, CUDN
+- [SR-IOV NIC Passthrough](networking/sriov.md) -- VFIO passthrough for GPUDirect RDMA, DPDK
+
 ### Fleet Management
 
-- [SwiftGuestPool Guide](swiftguestpool-guide.md) — Scaling, rolling updates, spread, PVCs, monitoring
-- [SwiftGuestPool Use Cases](swiftguestpool-use-cases.md) — GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
+- [SwiftGuestPool Guide](swiftguestpool-guide.md) -- Scaling, rolling updates, spread, PVCs, monitoring
+- [SwiftGuestPool Use Cases](swiftguestpool-use-cases.md) -- GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
 
 ### Operator
 
@@ -79,6 +87,8 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 | Boot a kernel VM | [Kernel boot quickstart](kernel-boot-quickstart.md) |
 | Run smoke test | [Smoke verification](operator/smoke-verification.md) |
 | Validate worker node | [Worker-node preflight](operator/worker-node-preflight.md) |
+| Connect VMs to physical networks | [Networking Operations Guide](networking/operations-guide.md) |
+| Migrate from VMware/Proxmox | [Virtualization Comparison](networking/virtualization-comparison.md) |
 | Build locally | [Build](developer/build.md) |
 | Understand CRDs | [API overview](api/overview.md) |
 | Add a kernel profile | [Contributing kernel profiles](contributing/kernel-profiles.md) |

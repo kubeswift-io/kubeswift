@@ -13,6 +13,10 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguestclasses"]
     verbs: ["get", "list", "watch"]
+  # SwiftGuestPool
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguestpools", "swiftguestpools/status", "swiftguestpools/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftImage
   - apiGroups: ["image.kubeswift.io"]
     resources: ["swiftimages", "swiftimages/status"]
