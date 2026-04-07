@@ -6,13 +6,17 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 
 ## Features
 
-- **Disk boot** — Cloud images (Ubuntu Noble, Rocky Linux, etc.) via CLOUDHV.fd (EDK2/OVMF UEFI firmware for Cloud Hypervisor)
+- **Disk boot** — Cloud images (Ubuntu Noble, Rocky Linux, etc.) via CLOUDHV.fd firmware. Per-guest root disk cloning with class-based sizing from SwiftGuestClass
 - **Kernel boot** — Direct bzImage + initramfs boot via SwiftKernel OCI artifacts; sub-second cold start
-- **GPU passthrough** — Three-tier model: PCIe GPUs on Cloud Hypervisor, HGX SXM GPUs on QEMU with PCIe topology, full HGX passthrough
-- **GPU Discovery** — DaemonSet auto-discovers GPUs, NUMA topology, NVSwitches, and Fabric Manager state per node
+- **GPU passthrough** — Three-tier model: PCIe GPUs on Cloud Hypervisor, HGX SXM GPUs on QEMU with PCIe topology, full HGX passthrough. Multi-vendor discovery (NVIDIA, AMD, Intel)
+- **GPU Discovery** — DaemonSet auto-discovers GPUs by PCI class, NUMA topology, NVSwitches, and Fabric Manager state per node. NVIDIA-specific features (x_nv_gpudirect_clique, NVSwitch, Fabric Manager) only applied for NVIDIA devices
+- **Multi-NIC networking** — Multiple network interfaces per VM via Multus CNI. Primary NIC (management) + secondary NICs backed by NetworkAttachmentDefinitions. Supports macvlan, bridge, OVN-Kubernetes, and any Multus-compatible CNI
+- **SR-IOV NIC passthrough** — Hardware NIC VFs passed directly to VMs via VFIO for native performance. GPUDirect RDMA, DPDK, NFV workloads
+- **SwiftGuestPool** — Fleet management for identical VMs. ReplicaSet semantics with rolling updates (maxUnavailable/maxSurge), topology spread (Pack/Spread), and PVC per replica (StatefulSet-like persistent storage). Scale via `kubectl scale sgpool`
+- **Per-guest root disk cloning** — Each VM gets its own writable copy of the SwiftImage, sized from SwiftGuestClass. SwiftImage PVC is a compact template. Enables SwiftGuestPool and concurrent VMs from the same image
 - **Data disks** — Optional secondary data disk (`dataDiskRef`) on any boot path; appears as /dev/vdb in guest
+- **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status. Multi-NIC via Multus, macvlan, VLANs, OVN-Kubernetes overlay and localnet topologies
 - **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
-- **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status
 - **Observability** — Prometheus metrics: boot time, running count, failure count, import time
 - **cloud-init** — SwiftSeedProfile (NoCloud datasource) for user-data, SSH keys, network config
 - **RunPolicy** — Running, Stopped, RestartOnFailure, Always with exponential backoff
@@ -26,10 +30,11 @@ kubectl / swiftctl
 Kubernetes API Server  (CRDs)
         |
 KubeSwift Controllers (Go, controller-runtime)
-  |- SwiftImage controller   (import, convert, prepare)
-  |- SwiftGuest controller   (pod lifecycle, status)
-  |- SwiftKernel controller  (per-node OCI pull)
-  |- SwiftGPU controller     (allocation, VFIO, Fabric Manager)
+  |- SwiftImage controller      (import, convert, prepare)
+  |- SwiftGuest controller      (pod lifecycle, root disk clone, status)
+  |- SwiftKernel controller     (per-node OCI pull)
+  |- SwiftGPU controller        (allocation, VFIO, Fabric Manager)
+  |- SwiftGuestPool controller  (fleet management, rolling updates)
         |
 SwiftGuest Pod
   |- init: network-init  (bridge, tap, iptables)
@@ -55,8 +60,9 @@ See [docs/architecture.md](docs/architecture.md) for the full diagram, networkin
 | SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | Kernel + initramfs OCI artifact |
 | SwiftGPUProfile | `sgp` | `gpu.kubeswift.io` | Namespaced | GPU passthrough request |
 | SwiftGPUNode | `sgn` | `gpu.kubeswift.io` | Cluster | Per-node GPU inventory (populated by discovery) |
+| SwiftGuestPool | `sgpool` | `swift.kubeswift.io` | Namespaced | Fleet of identical VMs with scaling, rolling updates, and per-replica PVCs |
 
-All CRDs are `v1alpha1`.
+8 CRDs, all `v1alpha1`.
 
 ## Quick start
 
@@ -118,6 +124,32 @@ swiftctl ssh gpu-test -- nvidia-smi
 
 See [docs/gpu-passthrough.md](docs/gpu-passthrough.md) for Tier 2 HGX SXM setup and detailed prerequisites.
 
+### Run a VM fleet (SwiftGuestPool)
+
+```bash
+kubectl apply -f config/samples/pool/swiftguestpool-basic.yaml
+kubectl get sgpool basic-pool -w
+
+# Scale
+kubectl scale sgpool basic-pool --replicas=4
+
+# Check members
+kubectl get sg -l swift.kubeswift.io/pool=basic-pool
+```
+
+### Add a secondary NIC
+
+```bash
+# Install Multus (if not already installed)
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset-thick.yml
+
+# Create a network
+kubectl apply -f config/samples/multi-nic/nad-bridge.yaml
+
+# Create a VM with two NICs
+kubectl apply -f config/samples/multi-nic/swiftguest-multi-nic.yaml
+```
+
 ### Smoke test
 
 ```bash
@@ -133,6 +165,15 @@ make smoke-test
 | Quickstart | [docs/quickstart.md](docs/quickstart.md) |
 | GPU passthrough | [docs/gpu-passthrough.md](docs/gpu-passthrough.md) |
 | swiftctl CLI | [docs/swiftctl.md](docs/swiftctl.md) |
+| Multi-NIC networking | [docs/multi-nic.md](docs/multi-nic.md) |
+| Networking operations | [docs/networking/operations-guide.md](docs/networking/operations-guide.md) |
+| SR-IOV passthrough | [docs/networking/sriov.md](docs/networking/sriov.md) |
+| OVN-Kubernetes | [docs/networking/ovn-kubernetes.md](docs/networking/ovn-kubernetes.md) |
+| VMware/Proxmox comparison | [docs/networking/virtualization-comparison.md](docs/networking/virtualization-comparison.md) |
+| SwiftGuestPool API | [docs/api/swiftguestpool.md](docs/api/swiftguestpool.md) |
+| SwiftGuestPool guide | [docs/swiftguestpool-guide.md](docs/swiftguestpool-guide.md) |
+| SwiftGuestPool use cases | [docs/swiftguestpool-use-cases.md](docs/swiftguestpool-use-cases.md) |
+| Security audit | [docs/security-audit.md](docs/security-audit.md) |
 | Development | [docs/development.md](docs/development.md) |
 | Docs index | [docs/README.md](docs/README.md) |
 
@@ -152,11 +193,24 @@ cargo test
 
 Experimental / pre-1.0. API may change. Linux x86_64 only.
 
-**Working:** disk boot, kernel boot, networking, swiftctl, cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3), GPU discovery DaemonSet, dataDiskRef, security-hardened containers.
+**Working:** disk boot (CLOUDHV.fd), kernel boot, QEMU boot (OVMF), networking (tap+bridge+dnsmasq), multi-NIC (Multus integration), SR-IOV NIC passthrough (VFIO), SwiftGuestPool (scaling, rolling updates, topology spread, PVC per replica), per-guest root disk cloning (class-based sizing), swiftctl CLI, cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3), multi-vendor GPU discovery (NVIDIA/AMD/Intel), GPU Discovery DaemonSet, dataDiskRef/dataDiskRefs, security-hardened containers, OVN-Kubernetes integration guide, VMware/Proxmox comparison guide.
 
-**Next:** GPU hardware validation (Tier 1 PCIe end-to-end, Tier 2 HGX SXM), additional kernel profiles, Windows guest support, multi-NIC, SwiftGuestPool, GPU Phase 4 (full HGX passthrough).
+**Next:** Tier 2 GPU validation (HGX SXM), Multi-NIC hardware validation (Multus + macvlan), SR-IOV hardware validation (ConnectX NIC), additional kernel profiles (gpu-workload, vhost-user), Windows guest support, HPA auto-scaling for pools, GPU Phase 4 (full HGX passthrough).
 
 See [kubeswift_context.md](kubeswift_context.md) for the full roadmap.
+
+## CRD short names
+
+```bash
+kubectl get sg       # SwiftGuest
+kubectl get sgc      # SwiftGuestClass
+kubectl get si       # SwiftImage
+kubectl get ssp      # SwiftSeedProfile
+kubectl get sk       # SwiftKernel
+kubectl get sgpool   # SwiftGuestPool
+kubectl get sgp      # SwiftGPUProfile
+kubectl get sgn      # SwiftGPUNode
+```
 
 ## License
 
