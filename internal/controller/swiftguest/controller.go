@@ -298,10 +298,8 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Override the PVC name to use the clone instead of the shared image PVC.
 		rg.PreparedImage.PVCName = res.PVCName
 	}
-	_ = rootDiskClone // consumed by buildPod in the next commit
-
 	// Build and create/update pod
-	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName)
+	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
 	if err != nil {
 		logger.Error(err, "failed to build pod spec")
 		return ctrl.Result{}, err
