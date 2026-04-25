@@ -21,6 +21,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
@@ -133,6 +134,14 @@ func main() {
 		Client: mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuestPool controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftsnapshot.SwiftSnapshotReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
 		os.Exit(1)
 	}
 
