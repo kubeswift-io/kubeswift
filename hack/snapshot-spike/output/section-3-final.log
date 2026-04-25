@@ -1,0 +1,97 @@
+=== confirm GPU device attached ===
+{
+  "state": "Running",
+  "devices": [
+    {
+      "path": "/sys/bus/pci/devices/0000:01:00.0/",
+      "iommu": false,
+      "id": "_vfio1",
+      "pci_segment": 0,
+      "x_nv_gpudirect_clique": 0
+    }
+  ]
+}
+
+=== pause + snapshot ===
+pause HTTP=204
+
+snapshot HTTP=204
+total 2.1G
+-rw------- 1 root root 1.5K Apr 25 10:59 config.json
+-rw------- 1 root root 2.0G Apr 25 10:59 memory-ranges
+-rw------- 1 root root  54K Apr 25 10:59 state.json
+
+=== kill the original CH process (NOT the launcher script) ===
+root           1       0  0 10:58 ?        00:00:00 /bin/sh -c apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || true mkdir -p /run-dir/spike-gpu # Use a small empty raw file as a placeholder disk (CH wants at least # something to scan). We never expect to boot an OS ??? UEFI will sit # at the shell. dd if=/dev/zero of=/run-dir/spike-gpu/dummy.raw bs=1M count=64 2>/dev/null # Spawn cloud-hypervisor with --device for the GTX 1080. nohup cloud-hypervisor \   --api-socket path=/run-dir/spike-gpu/ch.sock \   --memory size=2048M \   --cpus boot=2 \   --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \   --disk path=/run-dir/spike-gpu/dummy.raw \   --serial socket=/run-dir/spike-gpu/serial.sock \   --console off \   --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0 \   >/tmp/ch.log 2>&1 & echo "CH PID=$!" sleep 6 curl --silent --unix-socket /run-dir/spike-gpu/ch.sock \   http://localhost/api/v1/vm.info \   | jq '{state, dev_count: (.config.devices | length), mem: .config.memory.size}' 2>&1 \   || (echo "vm.info FAILED ??? CH log:"; cat /tmp/ch.log) sleep infinity 
+root         150       1 14 10:58 ?        00:00:03 cloud-hypervisor --api-socket path=/run-dir/spike-gpu/ch.sock --memory size=2048M --cpus boot=2 --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd --disk path=/run-dir/spike-gpu/dummy.raw --serial socket=/run-dir/spike-gpu/serial.sock --console off --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0
+root         165       0  0 10:59 ?        00:00:00 sh -c  echo "=== confirm GPU device attached ===" curl --silent --unix-socket /run-dir/spike-gpu/ch.sock http://localhost/api/v1/vm.info \   | jq "{state, devices: .config.devices}"  echo "" echo "=== pause + snapshot ===" curl --silent --unix-socket /run-dir/spike-gpu/ch.sock -X PUT http://localhost/api/v1/vm.pause -w "pause HTTP=%{http_code}\n" mkdir -p /run-dir/spike-gpu/snap curl --silent --unix-socket /run-dir/spike-gpu/ch.sock -X PUT \   -H "Content-Type: application/json" \   -d "{\"destination_url\":\"file:///run-dir/spike-gpu/snap/\"}" \   http://localhost/api/v1/vm.snapshot -w "\nsnapshot HTTP=%{http_code}\n" ls -lh /run-dir/spike-gpu/snap/  echo "" echo "=== kill the original CH process (NOT the launcher script) ===" # Find CH pid; pkill with explicit binary name ps -ef | grep "[c]loud-hypervisor" | head CH_PID=$(pgrep -x cloud-hypervisor | head -1) echo "killing $CH_PID" kill -9 $CH_PID 2>&1 sleep 2 ps -ef | grep "[c]loud-hypervisor" | head -3 || echo "(no CH running)"  echo "" echo "=== copy snapshot to clean restore dir ===" mkdir -p /run-dir/restore-snap cp -a /run-dir/spike-gpu/snap/. /run-dir/restore-snap/  echo "" echo "=== ATTEMPT RESTORE on VFIO-tainted snapshot (clean target) ===" mkdir -p /run-dir/restore-target nohup cloud-hypervisor \   --api-socket path=/run-dir/restore-target/ch.sock \   --restore source_url=file:///run-dir/restore-snap \   >/tmp/restore.log 2>&1 & RPID=$! sleep 6 echo "--- restore log ---" cat /tmp/restore.log echo "" echo "--- restored vm.info ---" curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info \   | jq "{state}" 2>&1 || echo "(API failed)" echo "" if kill -0 $RPID 2>/dev/null; then   echo "RESTORE PROCESS ALIVE ??? attempting resume"   curl --silent --unix-socket /run-dir/restore-target/ch.sock -X PUT http://localhost/api/v1/vm.resume -w "resume HTTP=%{http_code}\n"   sleep 2   echo "--- vm.info after resume ---"   curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info | jq ".state" else   echo "RESTORE PROCESS DEAD" fi 
+killing 
+sh: 22: kill: Usage: kill [-s sigspec | -signum | -sigspec] [pid | job]... or
+kill -l [exitstatus]
+pgrep: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pgrep -f' option to match against the complete command line.
+root           1       0  0 10:58 ?        00:00:00 /bin/sh -c apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || true mkdir -p /run-dir/spike-gpu # Use a small empty raw file as a placeholder disk (CH wants at least # something to scan). We never expect to boot an OS ??? UEFI will sit # at the shell. dd if=/dev/zero of=/run-dir/spike-gpu/dummy.raw bs=1M count=64 2>/dev/null # Spawn cloud-hypervisor with --device for the GTX 1080. nohup cloud-hypervisor \   --api-socket path=/run-dir/spike-gpu/ch.sock \   --memory size=2048M \   --cpus boot=2 \   --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \   --disk path=/run-dir/spike-gpu/dummy.raw \   --serial socket=/run-dir/spike-gpu/serial.sock \   --console off \   --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0 \   >/tmp/ch.log 2>&1 & echo "CH PID=$!" sleep 6 curl --silent --unix-socket /run-dir/spike-gpu/ch.sock \   http://localhost/api/v1/vm.info \   | jq '{state, dev_count: (.config.devices | length), mem: .config.memory.size}' 2>&1 \   || (echo "vm.info FAILED ??? CH log:"; cat /tmp/ch.log) sleep infinity 
+root         150       1 13 10:58 ?        00:00:03 cloud-hypervisor --api-socket path=/run-dir/spike-gpu/ch.sock --memory size=2048M --cpus boot=2 --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd --disk path=/run-dir/spike-gpu/dummy.raw --serial socket=/run-dir/spike-gpu/serial.sock --console off --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0
+root         165       0  0 10:59 ?        00:00:00 sh -c  echo "=== confirm GPU device attached ===" curl --silent --unix-socket /run-dir/spike-gpu/ch.sock http://localhost/api/v1/vm.info \   | jq "{state, devices: .config.devices}"  echo "" echo "=== pause + snapshot ===" curl --silent --unix-socket /run-dir/spike-gpu/ch.sock -X PUT http://localhost/api/v1/vm.pause -w "pause HTTP=%{http_code}\n" mkdir -p /run-dir/spike-gpu/snap curl --silent --unix-socket /run-dir/spike-gpu/ch.sock -X PUT \   -H "Content-Type: application/json" \   -d "{\"destination_url\":\"file:///run-dir/spike-gpu/snap/\"}" \   http://localhost/api/v1/vm.snapshot -w "\nsnapshot HTTP=%{http_code}\n" ls -lh /run-dir/spike-gpu/snap/  echo "" echo "=== kill the original CH process (NOT the launcher script) ===" # Find CH pid; pkill with explicit binary name ps -ef | grep "[c]loud-hypervisor" | head CH_PID=$(pgrep -x cloud-hypervisor | head -1) echo "killing $CH_PID" kill -9 $CH_PID 2>&1 sleep 2 ps -ef | grep "[c]loud-hypervisor" | head -3 || echo "(no CH running)"  echo "" echo "=== copy snapshot to clean restore dir ===" mkdir -p /run-dir/restore-snap cp -a /run-dir/spike-gpu/snap/. /run-dir/restore-snap/  echo "" echo "=== ATTEMPT RESTORE on VFIO-tainted snapshot (clean target) ===" mkdir -p /run-dir/restore-target nohup cloud-hypervisor \   --api-socket path=/run-dir/restore-target/ch.sock \   --restore source_url=file:///run-dir/restore-snap \   >/tmp/restore.log 2>&1 & RPID=$! sleep 6 echo "--- restore log ---" cat /tmp/restore.log echo "" echo "--- restored vm.info ---" curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info \   | jq "{state}" 2>&1 || echo "(API failed)" echo "" if kill -0 $RPID 2>/dev/null; then   echo "RESTORE PROCESS ALIVE ??? attempting resume"   curl --silent --unix-socket /run-dir/restore-target/ch.sock -X PUT http://localhost/api/v1/vm.resume -w "resume HTTP=%{http_code}\n"   sleep 2   echo "--- vm.info after resume ---"   curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info | jq ".state" else   echo "RESTORE PROCESS DEAD" fi 
+
+=== copy snapshot to clean restore dir ===
+
+=== ATTEMPT RESTORE on VFIO-tainted snapshot (clean target) ===
+--- restore log ---
+cloud-hypervisor:   0.002035s: <vmm> ERROR:vmm/src/lib.rs:1772 -- VM Restore failed: CreateConsoleDevices(CreateConsoleDevice(Os { code: 98, kind: AddrInUse, message: "Address in use" }))
+cloud-hypervisor:   0.002559s: <main> ERROR:/home/runner/work/cloud-hypervisor/cloud-hypervisor/cloud-hypervisor/src/lib.rs:23 -- Fatal error: VmRestore(VmRestore(CreateConsoleDevices(CreateConsoleDevice(Os { code: 98, kind: AddrInUse, message: "Address in use" }))))
+Error: Cloud Hypervisor exited with the following chain of errors:
+  0: Error restoring VM
+  1: The VM could not be restored
+  2: Error creating console devices
+  3: Error creating console device
+  4: Address in use (os error 98)
+
+--- restored vm.info ---
+
+RESTORE PROCESS DEAD
+=== kill original CH (PID 150) ===
+root           1       0  0 10:58 ?        00:00:00 /bin/sh -c apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || true mkdir -p /run-dir/spike-gpu # Use a small empty raw file as a placeholder disk (CH wants at least # something to scan). We never expect to boot an OS ??? UEFI will sit # at the shell. dd if=/dev/zero of=/run-dir/spike-gpu/dummy.raw bs=1M count=64 2>/dev/null # Spawn cloud-hypervisor with --device for the GTX 1080. nohup cloud-hypervisor \   --api-socket path=/run-dir/spike-gpu/ch.sock \   --memory size=2048M \   --cpus boot=2 \   --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \   --disk path=/run-dir/spike-gpu/dummy.raw \   --serial socket=/run-dir/spike-gpu/serial.sock \   --console off \   --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0 \   >/tmp/ch.log 2>&1 & echo "CH PID=$!" sleep 6 curl --silent --unix-socket /run-dir/spike-gpu/ch.sock \   http://localhost/api/v1/vm.info \   | jq '{state, dev_count: (.config.devices | length), mem: .config.memory.size}' 2>&1 \   || (echo "vm.info FAILED ??? CH log:"; cat /tmp/ch.log) sleep infinity 
+root         198       0  0 10:59 ?        00:00:00 sh -c  echo "=== kill original CH (PID 150) ===" kill -9 150 2>&1 sleep 2 ps -ef | grep -i hypervisor | head  echo "" echo "=== now retry restore with original CH actually dead ===" rm -rf /run-dir/restore-target mkdir -p /run-dir/restore-target nohup cloud-hypervisor \   --api-socket path=/run-dir/restore-target/ch.sock \   --restore source_url=file:///run-dir/restore-snap \   >/tmp/restore3.log 2>&1 & RPID=$! sleep 6 echo "--- restore log ---" cat /tmp/restore3.log echo "" echo "--- restored vm.info ---" curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info \   | jq "{state, devices: (.config.devices // []), mem: .config.memory.size}" 2>&1 || echo "(API failed ??? process probably dead)" echo "" if kill -0 $RPID 2>/dev/null; then   echo "RESTORE ALIVE ??? resume + vm.info"   curl --silent --unix-socket /run-dir/restore-target/ch.sock -X PUT http://localhost/api/v1/vm.resume -w "resume HTTP=%{http_code}\n"   sleep 2   curl --silent --unix-socket /run-dir/restore-target/ch.sock http://localhost/api/v1/vm.info | jq "{state}" else   echo "RESTORE PROCESS DEAD ??? exit-code:"   wait $RPID 2>&1 || echo "code $?" fi 
+root         206     198  0 10:59 ?        00:00:00 grep -i hypervisor
+
+=== now retry restore with original CH actually dead ===
+--- restore log ---
+cloud-hypervisor:   0.002245s: <vmm> ERROR:vmm/src/lib.rs:1772 -- VM Restore failed: CreateConsoleDevices(CreateConsoleDevice(Os { code: 98, kind: AddrInUse, message: "Address in use" }))
+cloud-hypervisor:   0.002917s: <main> ERROR:/home/runner/work/cloud-hypervisor/cloud-hypervisor/cloud-hypervisor/src/lib.rs:23 -- Fatal error: VmRestore(VmRestore(CreateConsoleDevices(CreateConsoleDevice(Os { code: 98, kind: AddrInUse, message: "Address in use" }))))
+Error: Cloud Hypervisor exited with the following chain of errors:
+  0: Error restoring VM
+  1: The VM could not be restored
+  2: Error creating console devices
+  3: Error creating console device
+  4: Address in use (os error 98)
+
+--- restored vm.info ---
+
+RESTORE PROCESS DEAD — exit-code:
+code 1
+=== clean stale serial.sock from snapshot path ===
+total 65552
+drwxr-xr-x 3 root root     4096 Apr 25 10:59 .
+drwxrwxrwx 5 root root     4096 Apr 25 10:59 ..
+srwx------ 1 root root        0 Apr 25 10:58 ch.sock
+-rw-r--r-- 1 root root 67108864 Apr 25 10:58 dummy.raw
+srwx------ 1 root root        0 Apr 25 10:58 serial.sock
+drwxr-xr-x 2 root root     4096 Apr 25 10:59 snap
+
+=== retry restore — VFIO snapshot, fresh paths ===
+--- restore log ---
+cloud-hypervisor:   2.812883s: <vmm> ERROR:vmm/src/lib.rs:1772 -- VM Restore failed: DeviceManager(AllocateBars(IoRegistrationFailed(3221225472, BarInUse(0))))
+cloud-hypervisor:   2.813422s: <main> ERROR:/home/runner/work/cloud-hypervisor/cloud-hypervisor/cloud-hypervisor/src/lib.rs:23 -- Fatal error: VmRestore(VmRestore(DeviceManager(AllocateBars(IoRegistrationFailed(3221225472, BarInUse(0))))))
+Error: Cloud Hypervisor exited with the following chain of errors:
+  0: Error restoring VM
+  1: The VM could not be restored
+  2: Error from device manager
+  3: Cannot allocate PCI BARs
+  4: Registering an IO BAR failed
+  5: bar 0 already used
+
+--- restored vm.info ---
+
+RESTORE PROCESS DEAD
+code 1

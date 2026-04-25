@@ -1,0 +1,67 @@
+
+========== verify mounts and CH binary inside restore pod ==========
+cloud-hypervisor v51.1
+/spike-snapshot/:
+total 4.1G
+-rw------- 1 root root 2.2K Apr 25 10:26 config.json
+-rw------- 1 root root 4.0G Apr 25 10:26 memory-ranges
+-rw-r--r-- 1 root root 368K Apr 25 10:35 seed.iso
+-rw------- 1 root root  62K Apr 25 10:26 state.json
+
+/var/lib/kubeswift/disks/root/:
+total 1.9G
+-rw-r--r-- 1 root root 20G Apr 25 10:38 image.raw
+drwx------ 2 root root 16K Apr 25 10:10 lost+found
+
+========== spawn cloud-hypervisor with --restore ==========
+PID=179
+total 8
+drwxr-xr-x 2 root root 4096 Apr 25 10:41 .
+drwxrwxrwt 1 root root 4096 Apr 25 10:41 ..
+srwx------ 1 root root    0 Apr 25 10:41 ch.sock
+--- last 30 lines of restore log ---
+
+========== vm.info on restored VM (should be Paused) ==========
+{
+  "state": "Paused",
+  "mem": 4294967296,
+  "cpus": 2
+}
+
+========== RESUME the restored VM ==========
+HTTP=204
+resume took 0.355s
+
+========== vm.info AFTER resume (should be Running) ==========
+"Running"
+
+========== wait 8s for guest to settle, then verify in-guest state survived ==========
+restored CH PID: 179
+
+========== find restored VM IP (dnsmasq.leases on br0 inside restore pod's netns) ==========
+original MAC from snapshot: 2e:e5:a8:0b:66:47
+--- ip a inside the restore pod ---
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+2: eth0@if16: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UP group default qlen 1000
+    link/ether 4a:98:96:ad:64:6a brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 10.244.213.13/32 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::4898:96ff:fead:646a/64 scope link 
+       valid_lft forever preferred_lft forever
+3: tap0: <BROADCAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 1000
+    link/ether 96:c1:db:a6:81:ed brd ff:ff:ff:ff:ff:ff
+    inet6 fe80::94c1:dbff:fea6:81ed/64 scope link 
+       valid_lft forever preferred_lft forever
+--- arp table — VM may show up ---
+5.9.122.244 dev eth0 lladdr ee:ee:ee:ee:ee:ee STALE 
+169.254.1.1 dev eth0 lladdr ee:ee:ee:ee:ee:ee STALE 
+
+========== scan tap interfaces for the restored VM IP ==========
+
+========== summary ==========
+see /tmp/restore.log inside the pod for full CH output

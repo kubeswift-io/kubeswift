@@ -1,0 +1,31 @@
+# Throwaway: writer pod that holds spike-clone-40g-from-snap mounted RW
+# while we attempt to delete its source VolumeSnapshot.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spike-clone-writer
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  restartPolicy: Never
+  containers:
+    - name: writer
+      image: alpine:3.19
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "writer up at $(date -u)"
+          touch /clone/spike-marker
+          while true; do
+            date -u +%s.%N >> /clone/spike-counter.log
+            sleep 0.5
+          done
+      volumeMounts:
+        - name: clone
+          mountPath: /clone
+  volumes:
+    - name: clone
+      persistentVolumeClaim:
+        claimName: spike-clone-40g-from-snap

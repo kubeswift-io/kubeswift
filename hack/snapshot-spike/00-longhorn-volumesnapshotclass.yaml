@@ -1,0 +1,14 @@
+# Throwaway: Longhorn VolumeSnapshotClass for Phase 0 spike.
+# type: snap = in-engine snapshot (fast, co-located on Longhorn replicas).
+# deletionPolicy: Retain so we can observe lifecycle behavior without losing
+# state when an experiment deletes a snapshot mid-test.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: longhorn-snapshot
+  labels:
+    swift.kubeswift.io/spike: phase-0
+driver: driver.longhorn.io
+deletionPolicy: Retain
+parameters:
+  type: snap

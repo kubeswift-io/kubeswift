@@ -1,0 +1,31 @@
+=== copy snapshot to host-visible path for restore test ===
+total 2.1G
+-rw------- 1 root root 1.5K Apr 25 10:57 config.json
+-rw------- 1 root root 2.0G Apr 25 10:57 memory-ranges
+-rw------- 1 root root  54K Apr 25 10:57 state.json
+
+=== shut down current VM ===
+HTTP=204
+root           1       0  0 10:56 ?        00:00:00 /bin/sh -c apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || true mkdir -p /run-dir/spike-gpu # Use a small empty raw file as a placeholder disk (CH wants at least # something to scan). We never expect to boot an OS ??? UEFI will sit # at the shell. dd if=/dev/zero of=/run-dir/spike-gpu/dummy.raw bs=1M count=64 2>/dev/null # Spawn cloud-hypervisor with --device for the GTX 1080. nohup cloud-hypervisor \   --api-socket path=/run-dir/spike-gpu/ch.sock \   --memory size=2048M \   --cpus boot=2 \   --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \   --disk path=/run-dir/spike-gpu/dummy.raw \   --serial socket=/run-dir/spike-gpu/serial.sock \   --console off \   --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0 \   >/tmp/ch.log 2>&1 & echo "CH PID=$!" sleep 6 curl --silent --unix-socket /run-dir/spike-gpu/ch.sock \   http://localhost/api/v1/vm.info \   | jq '{state, dev_count: (.config.devices | length), mem: .config.memory.size}' 2>&1 \   || (echo "vm.info FAILED ??? CH log:"; cat /tmp/ch.log) sleep infinity 
+root         150       1  7 10:56 ?        00:00:04 cloud-hypervisor --api-socket path=/run-dir/spike-gpu/ch.sock --memory size=2048M --cpus boot=2 --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd --disk path=/run-dir/spike-gpu/dummy.raw --serial socket=/run-dir/spike-gpu/serial.sock --console off --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0
+
+=== ATTEMPT RESTORE on VFIO-tainted snapshot ===
+restore CH PID=197
+--- restore log ---
+cloud-hypervisor:   2.798961s: <vmm> ERROR:vmm/src/lib.rs:1772 -- VM Restore failed: DeviceManager(AllocateBars(IoRegistrationFailed(3221225472, BarInUse(0))))
+cloud-hypervisor:   2.799595s: <main> ERROR:/home/runner/work/cloud-hypervisor/cloud-hypervisor/cloud-hypervisor/src/lib.rs:23 -- Fatal error: VmRestore(VmRestore(DeviceManager(AllocateBars(IoRegistrationFailed(3221225472, BarInUse(0))))))
+Error: Cloud Hypervisor exited with the following chain of errors:
+  0: Error restoring VM
+  1: The VM could not be restored
+  2: Error from device manager
+  3: Cannot allocate PCI BARs
+  4: Registering an IO BAR failed
+  5: bar 0 already used
+
+--- restore vm.info ---
+
+--- restored CH process status ---
+DEAD — wait status:
+exit code 1
+=== kill original CH process (PID 150) ===
+command terminated with exit code 143

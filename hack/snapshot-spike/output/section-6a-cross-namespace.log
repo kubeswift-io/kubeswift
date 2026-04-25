@@ -1,0 +1,59 @@
+=== set up: small source PVC in kubeswift-system ===
+persistentvolumeclaim/spike-xns-source created
+pod/spike-xns-populate created
+pod/spike-xns-populate condition met
+pod "spike-xns-populate" deleted
+
+=== snapshot it in kubeswift-system ===
+volumesnapshot.snapshot.storage.k8s.io/spike-xns-snap created
+snapshot ready elapsed=10.877s
+
+=== ATTEMPT cross-namespace dataSource clone (default ns -> kubeswift-system snap) ===
+--- using dataSourceRef (k8s 1.27+ supports cross-namespace via XNamespaceVolumeDataSource gate) ---
+persistentvolumeclaim/spike-xns-clone created
+
+=== status ===
+NAME              STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+spike-xns-clone   Bound    pvc-2ece6b88-a522-4039-b5d2-800c383299c1   1Gi        RWO            longhorn       <unset>                 8s
+
+=== events on clone ===
+LAST SEEN   TYPE     REASON                  OBJECT                                  MESSAGE
+8s          Normal   Provisioning            persistentvolumeclaim/spike-xns-clone   External provisioner is provisioning volume for claim "default/spike-xns-clone"
+8s          Normal   ExternalProvisioning    persistentvolumeclaim/spike-xns-clone   Waiting for a volume to be created either by the external provisioner 'driver.longhorn.io' or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+6s          Normal   ProvisioningSucceeded   persistentvolumeclaim/spike-xns-clone   Successfully provisioned volume pvc-2ece6b88-a522-4039-b5d2-800c383299c1
+
+--- also try with dataSource (legacy, expected to fail for cross-namespace) ---
+persistentvolumeclaim/spike-xns-clone-legacy created
+NAME                     STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+spike-xns-clone-legacy   Pending                                      longhorn       <unset>                 5s
+
+--- legacy events ---
+LAST SEEN   TYPE      REASON                 OBJECT                                         MESSAGE
+5s          Normal    ExternalProvisioning   persistentvolumeclaim/spike-xns-clone-legacy   Waiting for a volume to be created either by the external provisioner 'driver.longhorn.io' or manually by the system administrator. If volume creation is delayed, please verify that the provisioner is running and correctly registered.
+2s          Normal    Provisioning           persistentvolumeclaim/spike-xns-clone-legacy   External provisioner is provisioning volume for claim "default/spike-xns-clone-legacy"
+2s          Warning   ProvisioningFailed     persistentvolumeclaim/spike-xns-clone-legacy   failed to provision volume with StorageClass "longhorn": error getting handle for DataSource Type VolumeSnapshot by Name spike-xns-snap: error getting snapshot spike-xns-snap from api server: volumesnapshots.snapshot.storage.k8s.io "spike-xns-snap" not found
+=== verify cross-namespace clone has source data ===
+pod/spike-xns-verify created
+pod/spike-xns-verify condition met
+--- /data contents:
+total 24
+drwxr-xr-x    3 root     root          4096 Apr 25 11:56 .
+drwxr-xr-x    1 root     root          4096 Apr 25 11:56 ..
+drwx------    2 root     root         16384 Apr 25 11:56 lost+found
+--- marker.txt:
+cat: can't open '/data/marker.txt': No such file or directory
+
+=== feature gates / k8s version check ===
+Client Version: v1.32.3
+Kustomize Version: v5.5.0
+Server Version: v1.34.3+k0s
+
+=== check if CrossNamespaceVolumeDataSource feature gate present ===
+v1.groupsnapshot.storage.k8s.io        Local                        True        4h6m
+v1.snapshot.storage.k8s.io             Local                        True        4h6m
+v1beta1.groupsnapshot.storage.k8s.io   Local                        True        4h6m
+
+=== summary: cross-namespace dataSourceRef works on this cluster ===
+
+=== cleanup legacy attempt (failed) ===
+persistentvolumeclaim "spike-xns-clone-legacy" deleted

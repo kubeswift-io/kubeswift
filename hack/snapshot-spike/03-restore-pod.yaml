@@ -1,0 +1,60 @@
+# Throwaway: restore pod for Section 2.
+# Spawns a fresh cloud-hypervisor with --restore source_url=file:///.../snap
+# pointing at the snapshot captured from spike-vm-4g.
+#
+# Path requirements (from CH config.json captured at snapshot time):
+#   /var/lib/kubeswift/disks/root/image.raw  ← root PVC, mounted at this path
+#   /var/lib/kubeswift/run/default-spike-vm-4g/seed.iso  ← seed (from hostPath)
+# Plus the snapshot itself reachable as /var/lib/kubeswift/spike-restore/snap
+#
+# Pinned to boba (where the original spike-vm-4g lived, where the hostPath
+# /tmp/snap/spike-vm-4g/ was created).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spike-restore-4g
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  nodeName: boba
+  restartPolicy: Never
+  containers:
+    - name: restore
+      # Use the launcher image so cloud-hypervisor + CLOUDHV.fd are present.
+      image: ghcr.io/projectbeskar/kubeswift/swiftletd:v0.2.0-rc.1
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          # Bring curl + jq for API calls.
+          apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || \
+            (apk add --no-cache curl jq >/dev/null 2>&1 || true)
+          mkdir -p /var/lib/kubeswift/run/default-spike-vm-4g
+          # Place seed.iso at the path CH recorded.
+          cp /spike-snapshot/seed.iso /var/lib/kubeswift/run/default-spike-vm-4g/seed.iso
+          ls -lh /spike-snapshot/ /var/lib/kubeswift/run/default-spike-vm-4g/ /var/lib/kubeswift/disks/root/
+          echo "ready"
+          sleep infinity
+      volumeMounts:
+        - name: root-disk
+          mountPath: /var/lib/kubeswift/disks/root
+        - name: spike-snapshot
+          mountPath: /spike-snapshot
+        - name: dev-kvm
+          mountPath: /dev/kvm
+      securityContext:
+        privileged: true
+  volumes:
+    - name: root-disk
+      persistentVolumeClaim:
+        claimName: swiftguest-root-spike-vm-4g
+    - name: spike-snapshot
+      hostPath:
+        path: /var/lib/kubeswift/spike-snapshots/spike-vm-4g
+        type: Directory
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm
+        type: CharDevice
