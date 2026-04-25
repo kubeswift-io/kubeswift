@@ -6,17 +6,62 @@ import (
 )
 
 // SwiftImagePhase is the phase of a SwiftImage.
-// +kubebuilder:validation:Enum=Pending;Importing;Validating;Preparing;Ready;Failed
+// +kubebuilder:validation:Enum=Pending;Importing;Validating;Preparing;Snapshotting;Ready;Failed
 type SwiftImagePhase string
 
 const (
-	SwiftImagePhasePending    SwiftImagePhase = "Pending"
-	SwiftImagePhaseImporting  SwiftImagePhase = "Importing"
-	SwiftImagePhaseValidating SwiftImagePhase = "Validating"
-	SwiftImagePhasePreparing  SwiftImagePhase = "Preparing"
-	SwiftImagePhaseReady      SwiftImagePhase = "Ready"
-	SwiftImagePhaseFailed     SwiftImagePhase = "Failed"
+	SwiftImagePhasePending      SwiftImagePhase = "Pending"
+	SwiftImagePhaseImporting    SwiftImagePhase = "Importing"
+	SwiftImagePhaseValidating   SwiftImagePhase = "Validating"
+	SwiftImagePhasePreparing    SwiftImagePhase = "Preparing"
+	SwiftImagePhaseSnapshotting SwiftImagePhase = "Snapshotting"
+	SwiftImagePhaseReady        SwiftImagePhase = "Ready"
+	SwiftImagePhaseFailed       SwiftImagePhase = "Failed"
 )
+
+// CloneStrategy controls how per-guest root disk PVCs are created from a
+// SwiftImage. See docs/design/snapshots.md "SwiftImage Clone Strategy".
+// +kubebuilder:validation:Enum=copy;snapshot
+type CloneStrategy string
+
+const (
+	// CloneStrategyCopy is the legacy path: each SwiftGuest gets a Copy Job
+	// that runs cp + qemu-img resize + sgdisk -e. Slow but works on any
+	// CSI driver, including non-snapshot-capable ones (local-path, NFS).
+	CloneStrategyCopy CloneStrategy = "copy"
+	// CloneStrategySnapshot uses CSI VolumeSnapshot + dataSource clones for
+	// per-guest root disks. Requires a snapshot-capable CSI driver and a
+	// VolumeSnapshotClass. Substantially faster than copy on most drivers.
+	CloneStrategySnapshot CloneStrategy = "snapshot"
+)
+
+// CloneSeedKind selects which kind of resource serves as the per-guest
+// clone seed. Only VolumeSnapshot is implemented in Phase 1.
+// +kubebuilder:validation:Enum=VolumeSnapshot
+type CloneSeedKind string
+
+const (
+	CloneSeedKindVolumeSnapshot CloneSeedKind = "VolumeSnapshot"
+)
+
+// CloneSeed describes the resource used as the dataSource for per-guest
+// clone PVCs derived from this SwiftImage. Populated by the SwiftImage
+// controller when CloneStrategy is "snapshot" and the snapshot is ready.
+type CloneSeed struct {
+	// Kind is "VolumeSnapshot" for the Phase 1 csi-volume-snapshot path.
+	Kind CloneSeedKind `json:"kind"`
+	// Name of the seed resource, in the same namespace as the SwiftImage.
+	// Same-namespace is enforced — see Phase 0 spike finding §6a.
+	Name string `json:"name"`
+	// Namespace of the seed resource. Always equal to the SwiftImage's
+	// namespace; recorded for callers that consume CloneSeed without
+	// re-resolving the SwiftImage.
+	Namespace string `json:"namespace"`
+	// SourceSizeBytes is the size of the seed's underlying volume. Phase 1
+	// uses this to pick the clone PVC's initial requested size (must equal
+	// source size on Longhorn; see Phase 0 §5).
+	SourceSizeBytes int64 `json:"sourceSizeBytes,omitempty"`
+}
 
 // HTTPSource specifies an HTTP(S) URL to fetch the image from.
 type HTTPSource struct {
@@ -75,6 +120,26 @@ type SwiftImageSpec struct {
 	Source   ImageSource             `json:"source"`
 	Format   DiskFormat              `json:"format"`
 	RootDisk *SwiftImageRootDiskSpec `json:"rootDisk,omitempty"`
+	// CloneStrategy controls how per-guest root disk PVCs are produced.
+	// Defaults to "copy" for backward compatibility — existing images keep
+	// working without changes. "snapshot" requires a snapshot-capable CSI
+	// driver (see docs/images/clone-strategies.md for the validated list).
+	// +kubebuilder:default=copy
+	// +optional
+	CloneStrategy CloneStrategy `json:"cloneStrategy,omitempty"`
+	// CloneStorageClassName overrides the storage class used for per-guest
+	// clone PVCs. Defaults to the import PVC's storage class. Most CSI
+	// drivers cannot snapshot/clone across storage classes, so changing
+	// this on a snapshot-strategy image is generally an operator error and
+	// will surface as a provisioning failure.
+	// +optional
+	CloneStorageClassName string `json:"cloneStorageClassName,omitempty"`
+	// VolumeSnapshotClassName names the snapshot.storage.k8s.io
+	// VolumeSnapshotClass used when CloneStrategy is "snapshot". Required
+	// for that strategy; ignored otherwise. The validation webhook
+	// rejects "snapshot" without this field set.
+	// +optional
+	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 }
 
 // SwiftImageStatus defines the observed state of SwiftImage.
@@ -84,6 +149,10 @@ type SwiftImageStatus struct {
 	PreparedArtifact *PreparedArtifactRef `json:"preparedArtifact,omitempty"`
 	SourceFormat     DiskFormat           `json:"sourceFormat,omitempty"`
 	PreparedFormat   DiskFormat           `json:"preparedFormat,omitempty"`
+	// CloneSeed describes the resource per-guest cloning will reference.
+	// Populated when CloneStrategy is "snapshot" and the seed VolumeSnapshot
+	// reaches readyToUse=true. Nil for the legacy copy strategy.
+	CloneSeed *CloneSeed `json:"cloneSeed,omitempty"`
 	// SizeHint is an internal field used to pass measured size between Validating and Preparing phases.
 	SizeHint int64 `json:"sizeHint,omitempty"`
 }
