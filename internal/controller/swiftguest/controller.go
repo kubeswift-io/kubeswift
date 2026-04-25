@@ -20,6 +20,7 @@ import (
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/imageref"
 	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
@@ -415,16 +416,13 @@ func (r *SwiftGuestReconciler) swiftImageToSwiftGuests(ctx context.Context, obj 
 	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &img); err != nil {
 		return nil
 	}
-	var list swiftv1alpha1.SwiftGuestList
-	if err := r.List(ctx, &list, client.InNamespace(img.Namespace)); err != nil {
+	guests, err := imageref.ListGuestsReferencingImage(ctx, r.Client, &img)
+	if err != nil {
 		return nil
 	}
-	var reqs []reconcile.Request
-	for i := range list.Items {
-		g := &list.Items[i]
-		if g.Spec.ImageRef != nil && g.Spec.ImageRef.Name == img.Name {
-			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
-		}
+	reqs := make([]reconcile.Request, 0, len(guests))
+	for i := range guests {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&guests[i])})
 	}
 	return reqs
 }
