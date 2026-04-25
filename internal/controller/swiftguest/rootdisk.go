@@ -28,6 +28,13 @@ const (
 	CloneJobPrefix          = "swiftguest-rootclone-"
 	CloneJobImage           = "ubuntu:22.04"
 	ConditionRootDiskCloned = "RootDiskCloned"
+
+	// RestoreSeededLabel marks a per-guest root-disk PVC that was
+	// pre-populated by SwiftRestore from a VolumeSnapshot. When set to
+	// "true", the SwiftGuest controller skips both the Copy Job and the
+	// snapshot-strategy expand-and-wait — the PVC is treated as
+	// authoritative once Bound.
+	RestoreSeededLabel = "swift.kubeswift.io/restore-seeded"
 )
 
 // RootDiskCloneName returns the deterministic clone PVC name for a guest.
@@ -142,6 +149,21 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 			}
 			return nil, fmt.Errorf("deleted orphaned clone PVC %s, will recreate", cloneName)
 		}
+		// Restore-seeded PVCs are pre-populated from a VolumeSnapshot by
+		// SwiftRestore. Skip the Copy Job entirely — its cp from the source
+		// SwiftImage's PVC would overwrite the restore data. Wait for Bound,
+		// then hand the PVC straight to the launcher pod.
+		if existingPVC.Labels[RestoreSeededLabel] == "true" {
+			if existingPVC.Status.Phase != corev1.ClaimBound {
+				return nil, fmt.Errorf("restore-seeded PVC %s not yet Bound (phase=%s)", cloneName, existingPVC.Status.Phase)
+			}
+			if jobExists {
+				// Defensive — a stale Copy Job from a previous run could
+				// still be lingering. Delete it.
+				_ = r.Delete(ctx, &existingJob)
+			}
+			return &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
+		}
 		if jobExists {
 			if isJobComplete(&existingJob) {
 				if existingPVC.Status.Phase != corev1.ClaimBound {
@@ -251,9 +273,9 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromSnapshot(
 				Name:      cloneName,
 				Namespace: guest.Namespace,
 				Labels: map[string]string{
-					"swift.kubeswift.io/guest":                 guest.Name,
-					"swift.kubeswift.io/role":                  "root-disk",
-					"swift.kubeswift.io/clone-strategy":        "snapshot",
+					"swift.kubeswift.io/guest":          guest.Name,
+					"swift.kubeswift.io/role":           "root-disk",
+					"swift.kubeswift.io/clone-strategy": "snapshot",
 				},
 				OwnerReferences: []metav1.OwnerReference{
 					*metav1.NewControllerRef(guest, swiftGuestGVK),
