@@ -1,0 +1,72 @@
+# Throwaway: hand-rolled cloud-hypervisor pod with GPU passthrough.
+# Pure CH+VFIO test for Section 3. The GPU is bound to vfio-pci out of band.
+# This pod runs CH with --device and just gets to UEFI; we don't need a
+# fully booted guest to attempt snapshot — VFIO presence in the VM config
+# is the trigger for the snapshot incompatibility (CH constraint #1).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spike-gpu-manual
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  nodeName: boba
+  restartPolicy: Never
+  containers:
+    - name: launcher
+      image: ghcr.io/projectbeskar/kubeswift/swiftletd:v0.2.0-rc.1
+      command:
+        - /bin/sh
+        - -c
+        - |
+          apt-get update -qq && apt-get install -y -qq curl jq >/dev/null 2>&1 || true
+          mkdir -p /run-dir/spike-gpu
+          # Use a small empty raw file as a placeholder disk (CH wants at least
+          # something to scan). We never expect to boot an OS — UEFI will sit
+          # at the shell.
+          dd if=/dev/zero of=/run-dir/spike-gpu/dummy.raw bs=1M count=64 2>/dev/null
+          # Spawn cloud-hypervisor with --device for the GTX 1080.
+          nohup cloud-hypervisor \
+            --api-socket path=/run-dir/spike-gpu/ch.sock \
+            --memory size=2048M \
+            --cpus boot=2 \
+            --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
+            --disk path=/run-dir/spike-gpu/dummy.raw \
+            --serial socket=/run-dir/spike-gpu/serial.sock \
+            --console off \
+            --device path=/sys/bus/pci/devices/0000:01:00.0/,x_nv_gpudirect_clique=0 \
+            >/tmp/ch.log 2>&1 &
+          echo "CH PID=$!"
+          sleep 6
+          curl --silent --unix-socket /run-dir/spike-gpu/ch.sock \
+            http://localhost/api/v1/vm.info \
+            | jq '{state, dev_count: (.config.devices | length), mem: .config.memory.size}' 2>&1 \
+            || (echo "vm.info FAILED — CH log:"; cat /tmp/ch.log)
+          sleep infinity
+      volumeMounts:
+        - name: dev-vfio
+          mountPath: /dev/vfio
+        - name: dev-kvm
+          mountPath: /dev/kvm
+        - name: host-sys
+          mountPath: /sys
+        - name: run-dir
+          mountPath: /run-dir
+      securityContext:
+        privileged: true
+  volumes:
+    - name: dev-vfio
+      hostPath:
+        path: /dev/vfio
+        type: Directory
+    - name: dev-kvm
+      hostPath:
+        path: /dev/kvm
+        type: CharDevice
+    - name: host-sys
+      hostPath:
+        path: /sys
+        type: Directory
+    - name: run-dir
+      emptyDir: {}

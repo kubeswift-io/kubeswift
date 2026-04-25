@@ -1,0 +1,13 @@
+=== Section 5: clone-larger-than-source — SUMMARY ===
+
+Attempt 1: dataSource clone with target=40Gi (source=10Gi) → REJECTED by Longhorn
+  see section-5-longhorn-size-mismatch.log (verbatim 500 error)
+
+Attempt 2 (workaround): clone at source size (10Gi), then patch to 40Gi
+  bound: 2.443s
+  expand: 49.062s (background, while no pod mounted)
+  total: 51.5s vs <30s design target
+
+Final state:
+NAME                      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+spike-clone-then-expand   Bound    pvc-5870de39-64d5-4294-8eb0-cb2dc2a0afef   40Gi       RWO            longhorn       <unset>                 80s

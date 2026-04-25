@@ -1,0 +1,27 @@
+=== source PVC contents ===
+total 2480288
+drwxr-xr-x 3 root root       4096 Apr 25 11:02 .
+drwxr-xr-x 1 root root       4096 Apr 25 11:02 ..
+-rw-r--r-- 1 root root 3758096384 Apr 13 13:47 image.raw
+-rw-r--r-- 1 root root         11 Apr 13 13:47 image.raw.size
+drwx------ 2 root root      16384 Apr 13 13:46 lost+found
+-rw-r--r-- 1 root root  629987328 Apr 13 13:46 source.img
+1.8G	/src/image.raw
+
+=== clone PVC contents ===
+total 2480288
+drwxr-xr-x 3 root root       4096 Apr 25 11:02 .
+drwxr-xr-x 1 root root       4096 Apr 25 11:02 ..
+-rw-r--r-- 1 root root 3758096384 Apr 13 13:47 image.raw
+-rw-r--r-- 1 root root         11 Apr 13 13:47 image.raw.size
+drwx------ 2 root root      16384 Apr 13 13:46 lost+found
+-rw-r--r-- 1 root root  629987328 Apr 13 13:46 source.img
+1.8G	/clone/image.raw
+
+=== sha256 first 1GiB of source/image.raw ===
+f2650cf0032e49abf3f7a15fc4f4c4e5204828d3deebfea03efb013d8101a978  (took 3.493649895s)
+
+=== sha256 first 1GiB of clone/image.raw ===
+f2650cf0032e49abf3f7a15fc4f4c4e5204828d3deebfea03efb013d8101a978  (took 3.317404694s)
+
+=== INTEGRITY: MATCH ===

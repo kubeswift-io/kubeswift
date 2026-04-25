@@ -1,0 +1,78 @@
+
+========== guest pre-check ==========
+spike-vm-16g: phase=Running ip=10.244.125.15
+pod-uid=a0fecc21-b439-416c-9e6d-163b1dd4cafe  vm-ip=10.244.125.15  ch-pid=2311667
+launcher snapshot dir (CH view):    /var/lib/kubeswift/run/default-spike-vm-16g/snap
+launcher snapshot dir (debug view): /host/kubelet-pods/a0fecc21-b439-416c-9e6d-163b1dd4cafe/volumes/kubernetes.io~empty-dir/run/default-spike-vm-16g/snap
+command terminated with exit code 255
+
+========== vm.info BEFORE pause ==========
+HTTP=200
+{
+  "state": "Running",
+  "mem": 17179869184,
+  "cpus": 2
+}
+
+========== guest uptime BEFORE pause (boot-time anchor) ==========
+boot=2026-04-25 10:13:43
+now=2026-04-25T10:28:14Z
+proc-uptime=870.59 1719.43
+
+========== start in-guest tmpfs timestamp writer (proves memory state survival) ==========
+2 /run/spike-ts.log
+1777112895.341714217
+1777112896.350325887
+
+========== PAUSE  2026-04-25T10:28:19.377Z ==========
+HTTP=204
+pause T0=1777112899.379789426 T1=1777112899.689304982  delta=0.310s
+
+========== SNAPSHOT to file:///var/lib/kubeswift/run/default-spike-vm-16g/snap/  2026-04-25T10:28:19.692Z ==========
+HTTP=204
+snapshot T0=1777112899.693728633 T1=1777112944.345014978  delta=44.651s
+
+========== RESUME  2026-04-25T10:29:04.349Z ==========
+HTTP=204
+resume T0=1777112944.352293164 T1=1777112944.703222369  delta=0.351s
+
+========== PAUSE WINDOW SUMMARY (operator-visible downtime) ==========
+pause→resume:    45.323s  (full operator-visible downtime)
+snapshot only:   44.651s  (capture phase)
+
+========== vm.info AFTER resume ==========
+HTTP=200
+{
+  "state": "Running",
+  "mem": 17179869184
+}
+
+========== snapshot directory contents (file names + sizes — opaque to KubeSwift) ==========
+total 17G
+-rw------- 1 root root 2.2K Apr 25 10:28 config.json
+-rw------- 1 root root  16G Apr 25 10:29 memory-ranges
+-rw------- 1 root root  62K Apr 25 10:28 state.json
+total: 17G
+
+========== copy snapshot to stable hostPath /tmp/snap/spike-vm-16g (so it survives pod teardown for Section 2) ==========
+total 17G
+-rw------- 1 root root 2.2K Apr 25 10:28 config.json
+-rw------- 1 root root  16G Apr 25 10:29 memory-ranges
+-rw------- 1 root root  62K Apr 25 10:28 state.json
+total: 17G
+
+========== verify guest state survived (uptime continuity + writer file gap) ==========
+--- uptime AFTER resume (boot must match BEFORE) ---
+boot=2026-04-25 10:13:43
+now=2026-04-25T10:29:48Z
+proc-uptime=964.49 1904.28
+--- timestamp writer file: line count + first/last + gap ---
+96 /run/spike-ts.log
+1777112895.341714217
+1777112988.248636559
+max-gap=45.294s at sample 1777112899.410091380
+--- writer process still alive? ---
+1366 sudo nohup sh -c while true; do date -u +%s.%N >> /run/spike-ts.log; sleep 0.5; done
+1368 sh -c while true; do date -u +%s.%N >> /run/spike-ts.log; sleep 0.5; done
+1631 sh -c  echo "--- uptime AFTER resume (boot must match BEFORE) ---" echo boot=$(uptime -s); echo now=$(date -u +%Y-%m-%dT%H:%M:%SZ); echo proc-uptime=$(cat /proc/uptime) echo "--- timestamp writer file: line count + first/last + gap ---" sudo wc -l /run/spike-ts.log sudo head -1 /run/spike-ts.log; sudo tail -1 /run/spike-ts.log sudo awk "BEGIN{prev=0;maxd=0;maxat=0}           {if (prev>0){d=\$1-prev; if (d>maxd){maxd=d;maxat=prev}} prev=\$1}           END{printf \"max-gap=%.3fs at sample %s\\n\", maxd, maxat}" /run/spike-ts.log echo "--- writer process still alive? ---" sudo pgrep -af "spike-ts" | head -3 || echo "(no match — writer died?)" 
+(trap) re-trying resume in case pause is left dangling

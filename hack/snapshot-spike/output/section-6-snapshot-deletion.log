@@ -1,0 +1,30 @@
+=== state BEFORE attempting snapshot deletion ===
+spike-source-snap: ready=true content=snapcontent-79550a66-29c8-4add-9211-85746ecef479
+snapshot content: snapcontent-79550a66-29c8-4add-9211-85746ecef479
+snapcontent-79550a66-29c8-4add-9211-85746ecef479: deletionPolicy=Retain ready=true
+
+=== writer pod state ===
+47 /clone/spike-counter.log
+
+=== ATTEMPT: kubectl delete volumesnapshot spike-source-snap (Retain policy) ===
+volumesnapshot.snapshot.storage.k8s.io "spike-source-snap" deleted
+delete API call returned in 0.170s
+
+=== state IMMEDIATELY AFTER delete API ===
+Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "spike-source-snap" not found
+NAME                                               READYTOUSE   RESTORESIZE   DELETIONPOLICY   DRIVER               VOLUMESNAPSHOTCLASS   VOLUMESNAPSHOT      VOLUMESNAPSHOTNAMESPACE   AGE
+snapcontent-79550a66-29c8-4add-9211-85746ecef479   true         10737418240   Retain           driver.longhorn.io   longhorn-snapshot     spike-source-snap   default                   47m
+
+=== writer still healthy? (should keep writing) ===
+lines now=55, after-2s=59 — DELTA=4 (should be ~4 if writer is alive and disk is responsive)
+
+=== wait 30s, recheck snapshot/content state ===
+Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "spike-source-snap" not found
+NAME                                               READYTOUSE   RESTORESIZE   DELETIONPOLICY   DRIVER               VOLUMESNAPSHOTCLASS   VOLUMESNAPSHOT      VOLUMESNAPSHOTNAMESPACE   AGE
+snapcontent-79550a66-29c8-4add-9211-85746ecef479   true         10737418240   Retain           driver.longhorn.io   longhorn-snapshot     spike-source-snap   default                   48m
+
+=== writer file integrity post-delete ===
+marker file present: /clone/spike-marker
+yes
+counter lines: 120
+image.raw still readable: 00000000: eb63 9000 0000 0000 0000 0000 0000 0000  .c..............

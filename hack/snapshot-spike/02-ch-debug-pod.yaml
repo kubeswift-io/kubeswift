@@ -1,0 +1,88 @@
+# Throwaway: debug pods for driving Cloud Hypervisor HTTP API.
+# Deployed on every node that runs a spike VM. The launcher pod's runtime
+# dir is an emptyDir; we reach ch.sock via /var/lib/kubelet/pods/<uid>/.
+# Spike VMs scattered across boba and frida, so two debug pods.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ch-debug-boba
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  nodeName: boba
+  hostPID: true
+  restartPolicy: Never
+  containers:
+    - name: debug
+      image: alpine:3.19
+      command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache curl jq coreutils findutils openssh-client >/dev/null 2>&1
+          echo "ready: $(hostname)"
+          sleep infinity
+      volumeMounts:
+        - name: kubelet-pods
+          mountPath: /host/kubelet-pods
+        - name: ks-snap
+          mountPath: /tmp/snap
+      securityContext:
+        runAsUser: 0
+        privileged: true
+  volumes:
+    - name: kubelet-pods
+      hostPath:
+        path: /var/lib/kubelet/pods
+        type: Directory
+    - name: ks-snap
+      hostPath:
+        path: /var/lib/kubeswift/spike-snapshots
+        type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ch-debug-frida
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  nodeName: frida
+  hostPID: true
+  restartPolicy: Never
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  containers:
+    - name: debug
+      image: alpine:3.19
+      command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache curl jq coreutils findutils openssh-client >/dev/null 2>&1
+          echo "ready: $(hostname)"
+          sleep infinity
+      volumeMounts:
+        - name: kubelet-pods
+          mountPath: /host/kubelet-pods
+        - name: ks-snap
+          mountPath: /tmp/snap
+      securityContext:
+        runAsUser: 0
+        privileged: true
+  volumes:
+    - name: kubelet-pods
+      hostPath:
+        path: /var/lib/kubelet/pods
+        type: Directory
+    - name: ks-snap
+      hostPath:
+        path: /var/lib/kubeswift/spike-snapshots
+        type: DirectoryOrCreate

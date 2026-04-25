@@ -1,0 +1,90 @@
+# Throwaway: SwiftGuestClasses + SwiftGuests for Phase 0 spike.
+# Three memory sizes for the pause-window-vs-memory curve.
+# rootDisk.size = 20Gi keeps Longhorn footprint small while exceeding the
+# 10Gi source image so clone+resize is exercised.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: spike-1g
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  cpu: "2"
+  memory: 1Gi
+  rootDisk:
+    format: raw
+    size: 20Gi
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: spike-4g
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  cpu: "2"
+  memory: 4Gi
+  rootDisk:
+    format: raw
+    size: 20Gi
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: spike-16g
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  cpu: "2"
+  memory: 16Gi
+  rootDisk:
+    format: raw
+    size: 20Gi
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: spike-vm-1g
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: spike-1g
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: spike-vm-4g
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: spike-4g
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: spike-vm-16g
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: spike-16g
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running

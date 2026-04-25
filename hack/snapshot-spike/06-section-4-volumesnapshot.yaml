@@ -1,0 +1,16 @@
+# Throwaway: Section 4 — VolumeSnapshot of the SwiftImage source PVC.
+# The existing SwiftImage 'ubuntu-noble' has prepared PVC 'swiftimage-import-ubuntu-noble'
+# at 10Gi. We snapshot it, then clone via dataSource.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: spike-source-snap
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  volumeSnapshotClassName: longhorn-snapshot
+  source:
+    persistentVolumeClaimName: swiftimage-import-ubuntu-noble
+---
+# Will create the clone PVC after snapshot is ready.

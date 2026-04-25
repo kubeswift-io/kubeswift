@@ -1,0 +1,61 @@
+# Throwaway: integrity check between source PVC and snapshot-clone PVC.
+# Mounts both, sha256s first 1GiB of image.raw on each, compares.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: spike-integrity-check
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  restartPolicy: Never
+  containers:
+    - name: check
+      image: alpine:3.19
+      command:
+        - /bin/sh
+        - -c
+        - |
+          apk add --no-cache coreutils >/dev/null 2>&1
+          echo "=== source PVC contents ==="
+          ls -la /src/
+          du -sh /src/image.raw
+          echo ""
+          echo "=== clone PVC contents ==="
+          ls -la /clone/
+          du -sh /clone/image.raw
+          echo ""
+          echo "=== sha256 first 1GiB of source/image.raw ==="
+          T0=$(date +%s.%N)
+          SRC_SHA=$(dd if=/src/image.raw bs=1M count=1024 status=none | sha256sum | awk '{print $1}')
+          T1=$(date +%s.%N)
+          echo "$SRC_SHA  (took $(echo $T1-$T0|bc -l)s)"
+          echo ""
+          echo "=== sha256 first 1GiB of clone/image.raw ==="
+          T0=$(date +%s.%N)
+          CLN_SHA=$(dd if=/clone/image.raw bs=1M count=1024 status=none | sha256sum | awk '{print $1}')
+          T1=$(date +%s.%N)
+          echo "$CLN_SHA  (took $(echo $T1-$T0|bc -l)s)"
+          echo ""
+          if [ "$SRC_SHA" = "$CLN_SHA" ]; then
+            echo "=== INTEGRITY: MATCH ==="
+          else
+            echo "=== INTEGRITY: MISMATCH ==="
+          fi
+          sleep 30
+      volumeMounts:
+        - name: src
+          mountPath: /src
+          readOnly: true
+        - name: clone
+          mountPath: /clone
+          readOnly: true
+  volumes:
+    - name: src
+      persistentVolumeClaim:
+        claimName: swiftimage-import-ubuntu-noble
+        readOnly: true
+    - name: clone
+      persistentVolumeClaim:
+        claimName: spike-clone-40g-from-snap
+        readOnly: true

@@ -1,0 +1,29 @@
+=== create VolumeSnapshotClass with deletionPolicy: Delete ===
+volumesnapshotclass.snapshot.storage.k8s.io/longhorn-snapshot-delete created
+
+=== take a NEW snapshot with Delete policy ===
+volumesnapshot.snapshot.storage.k8s.io/spike-source-snap-delete-policy created
+snapshot ready elapsed=10.968s
+
+=== clone the new snapshot ===
+persistentvolumeclaim/spike-clone-from-delete-policy created
+clone bound.
+
+=== writer pod on the new clone ===
+pod/spike-writer-2 created
+error: timed out waiting for the condition on pods/spike-writer-2
+error: Internal error occurred: unable to upgrade connection: container not found ("writer")
+
+=== ATTEMPT: delete VolumeSnapshot (deletionPolicy: Delete) ===
+volumesnapshot.snapshot.storage.k8s.io "spike-source-snap-delete-policy" deleted
+delete API: 0.187s
+Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "spike-source-snap-delete-policy" not found
+
+=== writer still healthy? ===
+error: Internal error occurred: unable to upgrade connection: container not found ("writer")
+
+=== wait 30s, observe content ===
+Error from server (NotFound): volumesnapshots.snapshot.storage.k8s.io "spike-source-snap-delete-policy" not found
+
+=== writer file integrity post-delete ===
+error: Internal error occurred: unable to upgrade connection: container not found ("writer")

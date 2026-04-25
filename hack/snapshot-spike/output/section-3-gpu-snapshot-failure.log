@@ -1,0 +1,69 @@
+=== vm.info confirm GPU device attached ===
+{
+  "state": "Running",
+  "devices": [
+    {
+      "path": "/sys/bus/pci/devices/0000:01:00.0/",
+      "iommu": false,
+      "id": "_vfio1",
+      "pci_segment": 0,
+      "x_nv_gpudirect_clique": 0
+    }
+  ],
+  "dev_count": 1
+}
+
+=== mkdir snapshot target ===
+
+=== PAUSE ===
+HTTP=204
+
+=== ATTEMPT SNAPSHOT (expect failure due to VFIO) ===
+
+HTTP=204
+
+=== vm.info after attempted snapshot (state?) ===
+"Paused"
+
+=== anything in the snapshot dir? ===
+total 2097220
+drwxr-xr-x 2 root root       4096 Apr 25 10:57 .
+drwxr-xr-x 3 root root       4096 Apr 25 10:57 ..
+-rw------- 1 root root       1510 Apr 25 10:57 config.json
+-rw------- 1 root root 2147483648 Apr 25 10:57 memory-ranges
+-rw------- 1 root root      54868 Apr 25 10:57 state.json
+
+=== last 30 lines of CH log ===
+    Boot0002: UEFI Misc Device 		 0x0001
+    Boot0003: EFI Internal Shell 		 0x0101
+  PlatformRecovery Options:
+    PlatformRecovery0000: Default PlatformRecovery 		 0x0001
+[Bds]=============End Load Options Dumping=============
+[Bds]BdsWait ...Zzzzzzzzzzzz...
+[Bds]Exit the waiting!
+[Bds]Stop Hotkey Service!
+[Bds]UnregisterKeyNotify: 000C/0000 Success
+[Bds]UnregisterKeyNotify: 0017/0000 Success
+[Bds]UnregisterKeyNotify: 0000/000D Success
+Memory  Previous  Current    Next   
+ Type    Pages     Pages     Pages  
+======  ========  ========  ========
+  0A    00000080  00000000  00000080
+  09    00000010  00000007  00000010
+  00    00000080  00000006  00000080
+  05    00000100  0000003D  00000100
+  06    00000100  000000B4  00000100
+[Bds]Booting UEFI Misc Device
+ BlockSize : 512 
+ LastBlock : 1FFFF 
+[Bds] Expand PciRoot(0x0)/Pci(0x1,0x0) -> <null string>
+Process PlatformRecovery0000 (Default PlatformRecovery) ...
+ BlockSize : 512 
+ LastBlock : 1FFFF 
+ BlockSize : 512 
+ LastBlock : 1FFFF 
+[Bds] Expand \EFI\BOOT\BOOTX64.EFI -> <null string>
+[Bds] Unable to boot!
+
+=== resume to clean up ===
+HTTP=204

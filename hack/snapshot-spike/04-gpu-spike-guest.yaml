@@ -1,0 +1,33 @@
+# Throwaway: GPU guest for Section 3 — snapshot failure-mode validation.
+# Uses the existing gtx1080-single profile + a smaller class (we don't need
+# 4G RAM or 40G root disk to prove VFIO breaks snapshot).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: spike-gpu
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  cpu: "2"
+  memory: 2Gi
+  rootDisk:
+    format: raw
+    size: 20Gi
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: spike-gpu-vm
+  namespace: default
+  labels:
+    swift.kubeswift.io/spike: phase-0
+spec:
+  imageRef:
+    name: ubuntu-noble
+  gpuProfileRef:
+    name: gtx1080-single
+  guestClassRef:
+    name: spike-gpu
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running

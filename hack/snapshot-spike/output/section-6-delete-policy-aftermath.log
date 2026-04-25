@@ -1,0 +1,136 @@
+=== updated state ===
+NAME             READY   STATUS              RESTARTS   AGE
+spike-writer-2   0/1     ContainerCreating   0          2m10s
+NAME                             STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+spike-clone-from-delete-policy   Bound    pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   10Gi       RWO            longhorn       <unset>                 2m13s
+
+=== Longhorn volume CR ===
+NAME                                       DATA ENGINE   STATE      ROBUSTNESS   SCHEDULED   SIZE          NODE   AGE
+pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   v1            attached   degraded                 10737418240   boba   2m13s
+looking up Longhorn volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a
+Name:         pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a
+Namespace:    longhorn-system
+Labels:       backup-target=default
+              longhornvolume=pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a
+              recurring-job-group.longhorn.io/default=enabled
+              setting.longhorn.io/remove-snapshots-during-filesystem-trim=ignored
+              setting.longhorn.io/replica-auto-balance=ignored
+              setting.longhorn.io/snapshot-data-integrity=ignored
+Annotations:  <none>
+API Version:  longhorn.io/v1beta2
+Kind:         Volume
+Metadata:
+  Creation Timestamp:  2026-04-25T11:50:16Z
+  Finalizers:
+    longhorn.io
+  Generation:        4
+  Resource Version:  11668023
+  UID:               3e8feaad-1437-4103-9f81-b2c13c985a76
+Spec:
+  Standby:                    false
+  Access Mode:                rwo
+  Backing Image:              
+  Backup Block Size:          2097152
+  Backup Compression Method:  lz4
+  Backup Target Name:         default
+  Clone Mode:                 full-copy
+  Data Engine:                v1
+  Data Locality:              disabled
+  Data Source:                snap://pvc-cb90f2e9-549d-45c7-baa4-be7ca73d4085/snapshot-3e3be7ba-af78-40db-905e-c0012bf5829b
+  Disable Frontend:           false
+  Disk Selector:
+  Encrypted:                       false
+  Freeze Filesystem For Snapshot:  ignored
+  From Backup:                     
+  Frontend:                        blockdev
+  Image:                           docker.io/longhornio/longhorn-engine:v1.11.1
+  Last Attached By:                
+  Migratable:                      false
+  Migration Node ID:               
+  Node ID:                         boba
+  Node Selector:
+  Number Of Replicas:                  3
+  Offline Rebuilding:                  ignored
+  Rebuild Concurrent Sync Limit:       0
+  Replica Auto Balance:                ignored
+  Replica Disk Soft Anti Affinity:     ignored
+  Replica Rebuilding Bandwidth Limit:  0
+  Replica Soft Anti Affinity:          ignored
+  Replica Zone Soft Anti Affinity:     ignored
+  Restore Volume Recurring Job:        ignored
+=== Longhorn Volume STATUS section ===
+{
+  "state": "attached",
+  "robustness": "degraded",
+  "currentNodeID": "boba",
+  "conditions": [
+    {
+      "type": "WaitForBackingImage",
+      "status": "False",
+      "reason": "",
+      "message": ""
+    },
+    {
+      "type": "TooManySnapshots",
+      "status": "False",
+      "reason": "",
+      "message": ""
+    },
+    {
+      "type": "Scheduled",
+      "status": "False",
+      "reason": "ReplicaSchedulingFailure",
+      "message": "disks are unavailable"
+    },
+    {
+      "type": "OfflineRebuilding",
+      "status": "False",
+      "reason": "",
+      "message": ""
+    },
+    {
+      "type": "Restore",
+      "status": "False",
+      "reason": "",
+      "message": ""
+    }
+  ]
+}
+
+=== Engine + Replica state ===
+NAME                                           DATA ENGINE   STATE     NODE   INSTANCEMANAGER                                     IMAGE                                          AGE
+pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a-e-0   v1            running   boba   instance-manager-671f2e3500e1367a825938cb0216eaac   docker.io/longhornio/longhorn-engine:v1.11.1   2m25s
+NAME                                                  DATA ENGINE   STATE     NODE    DISK                                   INSTANCEMANAGER                                     IMAGE                                          AGE
+pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a-r-83bc9f56   v1            stopped                                                                                                                                                     72s
+pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a-r-ceab4dad   v1            running   miles   428e895c-68c2-43f6-91cf-20b9f56905b4   instance-manager-95377adc5780e6a26ae25ee8e44b92df   docker.io/longhornio/longhorn-engine:v1.11.1   72s
+pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a-r-e82e7c65   v1            running   frida   29e6bd70-dfa6-4419-8678-34e5f8091e0e   instance-manager-4eceebbfa67a246b07fd6208f77f7ebe   docker.io/longhornio/longhorn-engine:v1.11.1   2m25s
+
+=== events on Longhorn volume ===
+2m23s       Normal    Start                                    volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   Persistent Volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a started to use/reuse Longhorn volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a
+2m23s       Normal    Attached                                 volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a has been attached to miles
+2m17s       Normal    VolumeCloneInitiated                     volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   source volume pvc-cb90f2e9-549d-45c7-baa4-be7ca73d4085, snapshot snapshot-3e3be7ba-af78-40db-905e-c0012bf5829b
+107s        Normal    Degraded                                 volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a became degraded
+107s        Warning   VolumeCloneCopyCompleteAwaitingHealthy   volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   copied the data from snapshot snapshot-3e3be7ba-af78-40db-905e-c0012bf5829b of the source volume pvc-cb90f2e9-549d-45c7-baa4-be7ca73d4085. Waiting for volume to be fully HA before marking the clone as completed
+106s        Normal    Detached                                 volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a has been detached
+77s         Normal    Attached                                 volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a has been attached to boba
+71s         Normal    Degraded                                 volume/pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a   volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a became degraded
+
+=== let's wait one more time for writer-2 ===
+NAME             READY   STATUS    RESTARTS   AGE     IP              NODE   NOMINATED NODE   READINESS GATES
+spike-writer-2   1/1     Running   0          3m22s   10.244.213.20   boba   <none>           <none>
+2m15s       Warning   FailedAttachVolume       pod/spike-writer-2   AttachVolume.Attach failed for volume "pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a" : rpc error: code = Aborted desc = volume pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a is not ready for workloads
+71s         Normal    SuccessfulAttachVolume   pod/spike-writer-2   AttachVolume.Attach succeeded for volume "pvc-24e6cf27-f1ba-4de9-9c55-4374ce1cfe7a"
+68s         Normal    Pulled                   pod/spike-writer-2   Container image "alpine:3.19" already present on machine
+68s         Normal    Created                  pod/spike-writer-2   Created container: writer
+68s         Normal    Started                  pod/spike-writer-2   Started container writer
+=== final check writer-2 + delete-policy clone ===
+NAME             READY   STATUS    RESTARTS   AGE
+spike-writer-2   1/1     Running   0          4m3s
+lines now=224 after-2s=228 delta=4 — writer is alive: YES
+clone PVC backed by snapshot whose VolumeSnapshot was Delete-policy deleted: still works
+
+=== VolumeSnapshotContent state for delete-policy snap (was content actually deleted?) ===
+no content matching
+
+=== also: original spike-source-snap content (Retain policy) — should still be there ===
+snapcontent-79550a66-29c8-4add-9211-85746ecef479   true         10737418240   Retain           driver.longhorn.io   longhorn-snapshot     spike-source-snap   default                   53m
