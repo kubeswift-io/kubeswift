@@ -53,4 +53,32 @@ webhooks:
         apiGroups: ["seed.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftseedprofiles"]
+  - name: vswiftsnapshot.snapshot.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-snapshot-kubeswift-io-v1alpha1-swiftsnapshot
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["snapshot.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftsnapshots"]
+  - name: vswiftrestore.snapshot.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-snapshot-kubeswift-io-v1alpha1-swiftrestore
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["snapshot.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftrestores"]
 {{- end }}
