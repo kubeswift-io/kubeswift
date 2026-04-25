@@ -1,6 +1,7 @@
 package scheme
 
 import (
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
@@ -36,4 +37,5 @@ func init() {
 	gvSnapshot := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvSnapshot, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{}, &snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftRestoreList{})
 	metav1.AddToGroupVersion(Scheme, gvSnapshot)
+	utilruntime.Must(volumesnapshotv1.AddToScheme(Scheme))
 }

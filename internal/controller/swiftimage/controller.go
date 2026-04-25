@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -103,16 +104,47 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if !prepareRes.Success {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
 			SetFailedCondition(status, ReasonPrepareFailed, prepareRes.Error)
+			break
+		}
+		SetPreparedArtifact(status, prepareRes.PVCRef, prepareRes.Format, prepareRes.Size)
+		status.SourceFormat = img.Spec.Format
+		status.PreparedFormat = imagev1alpha1.DiskFormatRaw
+		status.SizeHint = 0
+		elapsed := time.Since(img.CreationTimestamp.Time).Seconds()
+		metrics.ImageImportSeconds.WithLabelValues(img.Namespace).Observe(elapsed)
+		// Branch: snapshot strategy needs a clone-seed VolumeSnapshot before
+		// reaching Ready. Copy strategy goes Ready immediately.
+		if img.Spec.CloneStrategy == imagev1alpha1.CloneStrategySnapshot {
+			SetPhase(status, imagev1alpha1.SwiftImagePhaseSnapshotting)
 		} else {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseReady)
-			SetPreparedArtifact(status, prepareRes.PVCRef, prepareRes.Format, prepareRes.Size)
-			status.SourceFormat = img.Spec.Format
-			status.PreparedFormat = imagev1alpha1.DiskFormatRaw
 			SetReadyCondition(status)
-			status.SizeHint = 0
-			elapsed := time.Since(img.CreationTimestamp.Time).Seconds()
-			metrics.ImageImportSeconds.WithLabelValues(img.Namespace).Observe(elapsed)
 		}
+
+	case imagev1alpha1.SwiftImagePhaseSnapshotting:
+		ready, sourceSizeBytes, err := r.EnsureCloneSeed(ctx, &img)
+		if err != nil {
+			SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
+			SetFailedCondition(status, ReasonSnapshotFailed, err.Error())
+			break
+		}
+		if !ready {
+			// Persist any progress (no-op currently) and requeue to re-poll.
+			img.Status = *status
+			if updateErr := r.Status().Update(ctx, &img); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		// Snapshot is readyToUse. Populate cloneSeed + Ready.
+		status.CloneSeed = &imagev1alpha1.CloneSeed{
+			Kind:            imagev1alpha1.CloneSeedKindVolumeSnapshot,
+			Name:            CloneSeedSnapshotName(img.Name),
+			Namespace:       img.Namespace,
+			SourceSizeBytes: sourceSizeBytes,
+		}
+		SetPhase(status, imagev1alpha1.SwiftImagePhaseReady)
+		SetReadyCondition(status)
 
 	case imagev1alpha1.SwiftImagePhaseReady, imagev1alpha1.SwiftImagePhaseFailed:
 		return ctrl.Result{}, nil
@@ -131,5 +163,6 @@ func (r *SwiftImageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&imagev1alpha1.SwiftImage{}).
 		Owns(&batchv1.Job{}).
+		Owns(&volumesnapshotv1.VolumeSnapshot{}).
 		Complete(r)
 }
