@@ -252,11 +252,16 @@ func expandCPURange(s string) ([]int, error) {
 
 // buildPod dispatches to the appropriate pod builder based on whether the guest
 // uses GPU passthrough, kernel boot, or standard disk boot.
+//
+// rootDiskClone is non-nil for disk-boot guests after EnsureRootDiskClone
+// has succeeded. It controls whether a clone-grow-init init container is
+// added on the snapshot clone strategy.
 func (r *SwiftGuestReconciler) buildPod(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
 	seedConfigMapName, intentConfigMapName string,
+	rootDiskClone *RootDiskCloneResult,
 ) (*corev1.Pod, error) {
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
 		// Load profile to get hugepages size for the pod spec.
@@ -267,19 +272,23 @@ func (r *SwiftGuestReconciler) buildPod(
 		}, &profile); err != nil {
 			return nil, fmt.Errorf("load SwiftGPUProfile for pod: %w", err)
 		}
-		return BuildGPUDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, profile.Spec.Hugepages), nil
+		return BuildGPUDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, profile.Spec.Hugepages, rootDiskClone), nil
 	}
-	return BuildPod(guest, rg, seedConfigMapName, intentConfigMapName), nil
+	return BuildPod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone), nil
 }
 
 // BuildGPUDiskBootPod constructs a launcher pod for a GPU-backed SwiftGuest.
 // guest.Status.GPU must be populated (GPUAllocated=True) before calling this.
 // hugepages is the Kubernetes quantity string ("1Gi", "2Mi", or "") from the profile.
+//
+// rootDiskClone follows the same contract as BuildPod: when non-nil with
+// NeedsGrowInit=true, a clone-grow-init init container runs before gpu-init.
 func BuildGPUDiskBootPod(
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
 	seedConfigMapName, intentConfigMapName string,
 	hugepages string,
+	rootDiskClone *RootDiskCloneResult,
 ) *corev1.Pod {
 	cpu := rg.Resources.CPU
 	if cpu < 1 {
@@ -411,6 +420,9 @@ func BuildGPUDiskBootPod(
 	}
 
 	var initContainers []corev1.Container
+	if rootDiskClone != nil && rootDiskClone.NeedsGrowInit {
+		initContainers = append(initContainers, cloneGrowInitContainer(rootDiskClone.TargetSizeBytes))
+	}
 	initContainers = append(initContainers, gpuInitContainer)
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())

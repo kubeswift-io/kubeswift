@@ -46,7 +46,7 @@ func TestBuildGPUDiskBootPod_NodeSelector(t *testing.T) {
 	guest := gpuGuest("gpu-node-42", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	hostname, ok := pod.Spec.NodeSelector["kubernetes.io/hostname"]
 	if !ok {
@@ -61,7 +61,7 @@ func TestBuildGPUDiskBootPod_InitContainers(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0", "0000:3d:00.0"}, 2)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	if len(pod.Spec.InitContainers) < 2 {
 		t.Fatalf("initContainers = %d, want at least 2 (gpu-init + network-init)", len(pod.Spec.InitContainers))
@@ -93,7 +93,7 @@ func TestBuildGPUDiskBootPod_Volumes(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	volNames := map[string]bool{}
 	for _, v := range pod.Spec.Volumes {
@@ -137,7 +137,7 @@ func TestBuildGPUDiskBootPod_NoHugepages(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "", nil)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "hugepages" {
@@ -156,7 +156,7 @@ func TestBuildGPUDiskBootPod_RestartPolicy(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("restartPolicy = %v, want Never", pod.Spec.RestartPolicy)
@@ -180,7 +180,7 @@ func TestBuildPod_NonGPU_Unchanged(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "test-seed", "test-intent")
+	pod := BuildPod(guest, rg, "test-seed", "test-intent", nil)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "dev-vfio" {
@@ -203,7 +203,7 @@ func TestBuildGPUDiskBootPod_DataDiskVolume(t *testing.T) {
 	rg := gpuResolvedGuest()
 	rg.DataDisk = &resolved.PreparedImage{PVCName: "pvc-data", Ready: true, Format: "raw"}
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	foundVol := false
 	for _, v := range pod.Spec.Volumes {
@@ -237,7 +237,7 @@ func TestBuildGPUDiskBootPod_NoDataDisk(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "data-disk" {

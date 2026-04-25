@@ -57,7 +57,7 @@ func TestNonGPUPod_NoGPUInit(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "test-seed", "test-intent")
+	pod := BuildPod(guest, rg, "test-seed", "test-intent", nil)
 
 	for _, ic := range pod.Spec.InitContainers {
 		if ic.Name == "gpu-init" {
@@ -82,7 +82,7 @@ func TestDiskBootPod_ContainersPrivileged(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "test-seed", "test-intent")
+	pod := BuildPod(guest, rg, "test-seed", "test-intent", nil)
 
 	if len(pod.Spec.InitContainers) < 1 {
 		t.Fatal("expected at least 1 init container")
@@ -95,7 +95,7 @@ func TestGPUPod_AllContainersPrivileged(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	// gpu-init
 	if pod.Spec.InitContainers[0].Name != "gpu-init" {
@@ -117,7 +117,7 @@ func TestGPUPod_SysfsPCIVolume(t *testing.T) {
 	guest := gpuGuest("gpu-node-1", []string{"0000:17:00.0"}, -1)
 	rg := gpuResolvedGuest()
 
-	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi")
+	pod := BuildGPUDiskBootPod(guest, rg, "test-seed", "test-intent", "1Gi", nil)
 
 	found := false
 	for _, v := range pod.Spec.Volumes {

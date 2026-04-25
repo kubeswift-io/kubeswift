@@ -26,7 +26,7 @@ func TestBuildPod_HasInitContainerWhenHasSeed(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "test-seed", "test-intent")
+	pod := BuildPod(guest, rg, "test-seed", "test-intent", nil)
 
 	if len(pod.Spec.InitContainers) != 1 {
 		t.Fatalf("initContainers = %d, want 1", len(pod.Spec.InitContainers))
@@ -56,7 +56,7 @@ func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
 		DataDisk:      &resolved.PreparedImage{PVCName: "pvc-data", Ready: true, Format: "raw"},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	// Check volume exists.
 	foundVol := false
@@ -106,7 +106,7 @@ func TestBuildPod_NoDataDisk_BackwardCompat(t *testing.T) {
 		Network:       false,
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == "data-disk" {
@@ -136,7 +136,7 @@ func TestBuildPod_NoInterfaces_NoMultusAnnotation(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	if pod.ObjectMeta.Annotations != nil {
 		if _, ok := pod.ObjectMeta.Annotations[MultusAnnotationKey]; ok {
@@ -171,7 +171,7 @@ func TestBuildPod_WithSecondaryNIC_MultusAnnotation(t *testing.T) {
 		},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	if pod.ObjectMeta.Annotations == nil {
 		t.Fatal("pod annotations are nil, want Multus annotation")
@@ -204,7 +204,7 @@ func TestBuildPod_BackwardCompat_NoInterfacesField(t *testing.T) {
 		Network:       true,
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	// Should behave identically to a pod without multi-NIC: no Multus annotation
 	if pod.ObjectMeta.Annotations != nil {
@@ -258,7 +258,7 @@ func TestBuildPod_SRIOVResourceLimits(t *testing.T) {
 		},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	launcher := pod.Spec.Containers[0]
 	rn := corev1.ResourceName("intel.com/sriov_netdevice")
@@ -300,7 +300,7 @@ func TestBuildPod_SRIOVVFIOVolume(t *testing.T) {
 		},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	// Check dev-vfio volume exists.
 	foundVol := false
@@ -354,7 +354,7 @@ func TestBuildPod_BridgeOnly_NoSRIOVResources(t *testing.T) {
 		},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	// No SR-IOV extended resources.
 	launcher := pod.Spec.Containers[0]
@@ -394,7 +394,7 @@ func TestBuildPod_SRIOVMultusAnnotation(t *testing.T) {
 		},
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	if pod.ObjectMeta.Annotations == nil {
 		t.Fatal("pod annotations are nil, want Multus annotation for SR-IOV NAD")
@@ -422,9 +422,100 @@ func TestBuildPod_NoInitContainerWhenNoSeed(t *testing.T) {
 		Seed:          nil,
 	}
 
-	pod := BuildPod(guest, rg, "", "test-intent")
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	if len(pod.Spec.InitContainers) != 0 {
 		t.Errorf("initContainers = %d, want 0 when no seed", len(pod.Spec.InitContainers))
 	}
+}
+
+func TestBuildPod_CloneGrowInit_WhenNeedsGrowInit(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+	clone := &RootDiskCloneResult{
+		PVCName:         "pvc",
+		NeedsGrowInit:   true,
+		SourceSizeBytes: 10 * 1024 * 1024 * 1024,
+		TargetSizeBytes: 40 * 1024 * 1024 * 1024,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", clone)
+
+	if len(pod.Spec.InitContainers) != 2 {
+		t.Fatalf("initContainers = %d, want 2 (clone-grow-init + network-init)", len(pod.Spec.InitContainers))
+	}
+	grow := pod.Spec.InitContainers[0]
+	if grow.Name != "clone-grow-init" {
+		t.Errorf("initContainers[0] name = %q, want clone-grow-init", grow.Name)
+	}
+	if grow.Image != CloneGrowInitImage {
+		t.Errorf("initContainers[0] image = %q, want %q", grow.Image, CloneGrowInitImage)
+	}
+	if pod.Spec.InitContainers[1].Name != "network-init" {
+		t.Errorf("initContainers[1] name = %q, want network-init (clone-grow-init must run first)", pod.Spec.InitContainers[1].Name)
+	}
+	// Script must reference target size and call qemu-img resize + sgdisk -e.
+	if len(grow.Command) < 3 {
+		t.Fatalf("clone-grow-init command too short: %v", grow.Command)
+	}
+	script := grow.Command[2]
+	for _, want := range []string{"qemu-img resize", "sgdisk -e", "42949672960"} {
+		if !contains(script, want) {
+			t.Errorf("clone-grow-init script missing %q; got %q", want, script)
+		}
+	}
+	// Must mount root-disk at DisksRootPath.
+	mounted := false
+	for _, m := range grow.VolumeMounts {
+		if m.Name == "root-disk" && m.MountPath == DisksRootPath {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("clone-grow-init missing root-disk mount at %s", DisksRootPath)
+	}
+}
+
+func TestBuildPod_NoCloneGrowInit_WhenCopyStrategy(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+	// Copy path returns NeedsGrowInit=false.
+	clone := &RootDiskCloneResult{PVCName: "pvc", NeedsGrowInit: false}
+
+	pod := BuildPod(guest, rg, "", "test-intent", clone)
+
+	for _, ic := range pod.Spec.InitContainers {
+		if ic.Name == "clone-grow-init" {
+			t.Errorf("clone-grow-init must not be added on copy strategy")
+		}
+	}
+}
+
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
