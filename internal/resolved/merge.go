@@ -127,11 +127,20 @@ func mergePreparedImage(image *imagev1alpha1.SwiftImage) PreparedImage {
 	if pa.PVCRef != nil {
 		pvcName = pa.PVCRef.Name
 	}
-	return PreparedImage{
+	pi := PreparedImage{
 		Path:    "", // Controller sets mount path
 		Format:  string(pa.Format),
 		Size:    size,
 		Ready:   true,
 		PVCName: pvcName,
 	}
+	if image.Status.CloneSeed != nil {
+		pi.CloneSeed = &PreparedCloneSeed{
+			Kind:            string(image.Status.CloneSeed.Kind),
+			Name:            image.Status.CloneSeed.Name,
+			Namespace:       image.Status.CloneSeed.Namespace,
+			SourceSizeBytes: image.Status.CloneSeed.SourceSizeBytes,
+		}
+	}
+	return pi
 }

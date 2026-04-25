@@ -4,14 +4,19 @@ import (
 	"context"
 	"time"
 
+	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
@@ -30,6 +35,39 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var img imagev1alpha1.SwiftImage
 	if err := r.Get(ctx, req.NamespacedName, &img); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Deletion path: must run before the Ready early-return so that an
+	// already-Ready SwiftImage still has its clone-seed finalizer
+	// processed when the operator deletes it.
+	if !img.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&img, CloneSeedFinalizer) {
+			// No finalizer (legacy copy strategy or never had snapshot)
+			// - nothing to do; let GC reap.
+			return ctrl.Result{}, nil
+		}
+		canRemove, blocking, err := r.HandleCloneSeedDeletion(ctx, &img)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !canRemove {
+			logger.Info("SwiftImage deletion blocked by dependent SwiftGuests",
+				"image", img.Name, "namespace", img.Namespace, "guests", blocking)
+			// Reconcile is also triggered by SwiftGuest deletions via
+			// swiftguest controller's owns/watch chain; requeue defensively
+			// in case something else holds it.
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		controllerutil.RemoveFinalizer(&img, CloneSeedFinalizer)
+		if updateErr := r.Update(ctx, &img); updateErr != nil {
+			return ctrl.Result{}, updateErr
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add clone-seed finalizers when cloneStrategy=snapshot. Idempotent.
+	if err := r.EnsureCloneSeedFinalizers(ctx, &img); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Immutability: reject spec update when Ready
@@ -103,16 +141,47 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if !prepareRes.Success {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
 			SetFailedCondition(status, ReasonPrepareFailed, prepareRes.Error)
+			break
+		}
+		SetPreparedArtifact(status, prepareRes.PVCRef, prepareRes.Format, prepareRes.Size)
+		status.SourceFormat = img.Spec.Format
+		status.PreparedFormat = imagev1alpha1.DiskFormatRaw
+		status.SizeHint = 0
+		elapsed := time.Since(img.CreationTimestamp.Time).Seconds()
+		metrics.ImageImportSeconds.WithLabelValues(img.Namespace).Observe(elapsed)
+		// Branch: snapshot strategy needs a clone-seed VolumeSnapshot before
+		// reaching Ready. Copy strategy goes Ready immediately.
+		if img.Spec.CloneStrategy == imagev1alpha1.CloneStrategySnapshot {
+			SetPhase(status, imagev1alpha1.SwiftImagePhaseSnapshotting)
 		} else {
 			SetPhase(status, imagev1alpha1.SwiftImagePhaseReady)
-			SetPreparedArtifact(status, prepareRes.PVCRef, prepareRes.Format, prepareRes.Size)
-			status.SourceFormat = img.Spec.Format
-			status.PreparedFormat = imagev1alpha1.DiskFormatRaw
 			SetReadyCondition(status)
-			status.SizeHint = 0
-			elapsed := time.Since(img.CreationTimestamp.Time).Seconds()
-			metrics.ImageImportSeconds.WithLabelValues(img.Namespace).Observe(elapsed)
 		}
+
+	case imagev1alpha1.SwiftImagePhaseSnapshotting:
+		ready, sourceSizeBytes, err := r.EnsureCloneSeed(ctx, &img)
+		if err != nil {
+			SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
+			SetFailedCondition(status, ReasonSnapshotFailed, err.Error())
+			break
+		}
+		if !ready {
+			// Persist any progress (no-op currently) and requeue to re-poll.
+			img.Status = *status
+			if updateErr := r.Status().Update(ctx, &img); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		// Snapshot is readyToUse. Populate cloneSeed + Ready.
+		status.CloneSeed = &imagev1alpha1.CloneSeed{
+			Kind:            imagev1alpha1.CloneSeedKindVolumeSnapshot,
+			Name:            CloneSeedSnapshotName(img.Name),
+			Namespace:       img.Namespace,
+			SourceSizeBytes: sourceSizeBytes,
+		}
+		SetPhase(status, imagev1alpha1.SwiftImagePhaseReady)
+		SetReadyCondition(status)
 
 	case imagev1alpha1.SwiftImagePhaseReady, imagev1alpha1.SwiftImagePhaseFailed:
 		return ctrl.Result{}, nil
@@ -126,10 +195,24 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
+// swiftGuestToSwiftImage enqueues the SwiftImage referenced by a
+// SwiftGuest. Used so SwiftImage deletion blocked on dependent guests
+// is unblocked immediately when those guests are deleted, rather than
+// waiting for the 30s defensive requeue.
+func (r *SwiftImageReconciler) swiftGuestToSwiftImage(_ context.Context, obj client.Object) []reconcile.Request {
+	g, ok := obj.(*swiftv1alpha1.SwiftGuest)
+	if !ok || g.Spec.ImageRef == nil || g.Spec.ImageRef.Name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: client.ObjectKey{Name: g.Spec.ImageRef.Name, Namespace: g.Namespace}}}
+}
+
 // SetupWithManager registers the reconciler with the manager.
 func (r *SwiftImageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&imagev1alpha1.SwiftImage{}).
 		Owns(&batchv1.Job{}).
+		Owns(&volumesnapshotv1.VolumeSnapshot{}).
+		Watches(&swiftv1alpha1.SwiftGuest{}, handler.EnqueueRequestsFromMapFunc(r.swiftGuestToSwiftImage)).
 		Complete(r)
 }

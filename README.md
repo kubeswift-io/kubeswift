@@ -13,7 +13,8 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 - **Multi-NIC networking** — Multiple network interfaces per VM via Multus CNI. Primary NIC (management) + secondary NICs backed by NetworkAttachmentDefinitions. Supports macvlan, bridge, OVN-Kubernetes, and any Multus-compatible CNI
 - **SR-IOV NIC passthrough** — Hardware NIC VFs passed directly to VMs via VFIO for native performance. GPUDirect RDMA, DPDK, NFV workloads
 - **SwiftGuestPool** — Fleet management for identical VMs. ReplicaSet semantics with rolling updates (maxUnavailable/maxSurge), topology spread (Pack/Spread), and PVC per replica (StatefulSet-like persistent storage). Scale via `kubectl scale sgpool`
-- **Per-guest root disk cloning** — Each VM gets its own writable copy of the SwiftImage, sized from SwiftGuestClass. SwiftImage PVC is a compact template. Enables SwiftGuestPool and concurrent VMs from the same image
+- **Per-guest root disk cloning** — Each VM gets its own writable copy of the SwiftImage, sized from SwiftGuestClass. SwiftImage PVC is a compact template. Two clone strategies: `copy` (default, works on any CSI driver) and `snapshot` (CSI VolumeSnapshot + dataSource clones, faster on snapshot-capable drivers) — see [docs/images/clone-strategies.md](docs/images/clone-strategies.md)
+- **VM snapshots and restore** — Disk-only, crash-consistent snapshots via `SwiftSnapshot` and `SwiftRestore` CRDs backed by CSI VolumeSnapshots; `swiftctl snapshot` / `swiftctl restore` subcommands — see [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md)
 - **Data disks** — Optional secondary data disk (`dataDiskRef`) on any boot path; appears as /dev/vdb in guest
 - **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status. Multi-NIC via Multus, macvlan, VLANs, OVN-Kubernetes overlay and localnet topologies
 - **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
@@ -173,6 +174,8 @@ make smoke-test
 | SwiftGuestPool API | [docs/api/swiftguestpool.md](docs/api/swiftguestpool.md) |
 | SwiftGuestPool guide | [docs/swiftguestpool-guide.md](docs/swiftguestpool-guide.md) |
 | SwiftGuestPool use cases | [docs/swiftguestpool-use-cases.md](docs/swiftguestpool-use-cases.md) |
+| VM snapshots and restore | [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md) |
+| SwiftImage clone strategies | [docs/images/clone-strategies.md](docs/images/clone-strategies.md) |
 | Security audit | [docs/security-audit.md](docs/security-audit.md) |
 | Development | [docs/development.md](docs/development.md) |
 | Docs index | [docs/README.md](docs/README.md) |

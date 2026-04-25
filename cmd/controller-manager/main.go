@@ -15,17 +15,22 @@ import (
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftgpu"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftimage"
+	swiftrestorewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftrestore"
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
+	swiftsnapshotwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftsnapshot"
 )
 
 const (
@@ -136,6 +141,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&swiftsnapshot.SwiftSnapshotReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftrestore.SwiftRestoreReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftRestore controller")
+		os.Exit(1)
+	}
+
 	if *webhookEnabled {
 		if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftGuest{}).
 			WithCustomValidator(&swiftguestwebhook.Validator{}).
@@ -156,6 +177,18 @@ func main() {
 			WithCustomDefaulter(&swiftseedprofilewebhook.Defaulter{}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftSeedProfile webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &snapshotv1alpha1.SwiftSnapshot{}).
+			WithCustomValidator(&swiftsnapshotwebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftSnapshot webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &snapshotv1alpha1.SwiftRestore{}).
+			WithCustomValidator(&swiftrestorewebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftRestore webhook")
 			os.Exit(1)
 		}
 	}

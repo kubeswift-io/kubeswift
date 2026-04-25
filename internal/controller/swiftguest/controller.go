@@ -20,6 +20,7 @@ import (
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/imageref"
 	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
@@ -282,8 +283,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
+	var rootDiskClone *RootDiskCloneResult
 	if rg.PreparedImage.PVCName != "" && !rg.HasKernel() {
-		clonePVC, err := r.EnsureRootDiskClone(ctx, &guest, rg)
+		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
 			// Clone not ready — requeue
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
@@ -292,12 +294,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
+		rootDiskClone = res
 		// Override the PVC name to use the clone instead of the shared image PVC.
-		rg.PreparedImage.PVCName = clonePVC
+		rg.PreparedImage.PVCName = res.PVCName
 	}
-
 	// Build and create/update pod
-	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName)
+	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
 	if err != nil {
 		logger.Error(err, "failed to build pod spec")
 		return ctrl.Result{}, err
@@ -415,16 +417,13 @@ func (r *SwiftGuestReconciler) swiftImageToSwiftGuests(ctx context.Context, obj 
 	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &img); err != nil {
 		return nil
 	}
-	var list swiftv1alpha1.SwiftGuestList
-	if err := r.List(ctx, &list, client.InNamespace(img.Namespace)); err != nil {
+	guests, err := imageref.ListGuestsReferencingImage(ctx, r.Client, &img)
+	if err != nil {
 		return nil
 	}
-	var reqs []reconcile.Request
-	for i := range list.Items {
-		g := &list.Items[i]
-		if g.Spec.ImageRef != nil && g.Spec.ImageRef.Name == img.Name {
-			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(g)})
-		}
+	reqs := make([]reconcile.Request, 0, len(guests))
+	for i := range guests {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&guests[i])})
 	}
 	return reqs
 }

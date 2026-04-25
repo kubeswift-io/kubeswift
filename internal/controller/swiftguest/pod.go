@@ -22,12 +22,18 @@ const IntentConfigMapSuffix = "-runtime-intent"
 const LauncherMemoryOverheadMiB = 512
 
 // BuildPod creates a pod spec for the SwiftGuest.
-func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
+//
+// rootDiskClone is non-nil for disk-boot guests after EnsureRootDiskClone
+// has succeeded. When rootDiskClone.NeedsGrowInit is true (snapshot clone
+// strategy), an extra clone-grow-init init container is added before
+// network-init to run qemu-img resize + sgdisk -e on the per-guest clone.
+// nil is the legacy/copy path and is treated as "no grow-init needed".
+func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string, rootDiskClone *RootDiskCloneResult) *corev1.Pod {
 	var pod *corev1.Pod
 	if rg.HasKernel() {
 		pod = buildKernelBootPod(guest, rg, intentConfigMapName)
 	} else {
-		pod = buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName)
+		pod = buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
 	}
 	applyTopologyConstraints(pod, guest)
 	applyDataDiskRefs(pod, guest)
@@ -212,7 +218,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 	return pod
 }
 
-func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string) *corev1.Pod {
+func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedConfigMapName, intentConfigMapName string, rootDiskClone *RootDiskCloneResult) *corev1.Pod {
 	volumes := []corev1.Volume{
 		{
 			Name: "run",
@@ -279,6 +285,9 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	}
 
 	var initContainers []corev1.Container
+	if rootDiskClone != nil && rootDiskClone.NeedsGrowInit {
+		initContainers = append(initContainers, cloneGrowInitContainer(rootDiskClone.TargetSizeBytes))
+	}
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
 	}
