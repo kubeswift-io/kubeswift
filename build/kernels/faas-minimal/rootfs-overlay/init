@@ -26,8 +26,5 @@ echo "kernel: $(uname -r)"
 ip addr show eth0 2>/dev/null | grep 'inet ' || echo "no IP on eth0"
 echo ""
 
-# In production: exec workload here
-# Keep PID 1 alive
-while true; do
-    sleep 30
-done
+# Spawn interactive shell on console
+exec /bin/sh
