@@ -283,8 +283,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
+	var rootDiskClone *RootDiskCloneResult
 	if rg.PreparedImage.PVCName != "" && !rg.HasKernel() {
-		clonePVC, err := r.EnsureRootDiskClone(ctx, &guest, rg)
+		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
 			// Clone not ready — requeue
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
@@ -293,9 +294,11 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
+		rootDiskClone = res
 		// Override the PVC name to use the clone instead of the shared image PVC.
-		rg.PreparedImage.PVCName = clonePVC
+		rg.PreparedImage.PVCName = res.PVCName
 	}
+	_ = rootDiskClone // consumed by buildPod in the next commit
 
 	// Build and create/update pod
 	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName)
