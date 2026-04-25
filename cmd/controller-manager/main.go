@@ -21,6 +21,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
@@ -142,6 +143,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftrestore.SwiftRestoreReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftRestore controller")
 		os.Exit(1)
 	}
 
