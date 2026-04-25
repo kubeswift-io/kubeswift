@@ -5,6 +5,14 @@ This guide covers day-to-day operation of SwiftGuestPool, from creating your fir
 For CRD field reference, see [api/swiftguestpool.md](api/swiftguestpool.md).
 For complete use-case manifests, see [swiftguestpool-use-cases.md](swiftguestpool-use-cases.md).
 
+> **Tip — fast pool scale-up.** When the pool's `template.spec.imageRef`
+> targets a SwiftImage with `cloneStrategy: snapshot`, scale-up is
+> dramatically faster on snapshot-capable CSI drivers because each new
+> replica's root-disk PVC is provisioned via `dataSource: VolumeSnapshot`
+> instead of a per-replica Copy Job. See
+> [images/clone-strategies.md](images/clone-strategies.md). The default
+> `copy` strategy keeps working on any CSI driver — no migration required.
+
 ---
 
 ## 1. Getting Started

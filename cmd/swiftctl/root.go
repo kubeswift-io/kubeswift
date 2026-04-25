@@ -41,6 +41,8 @@ func init() {
 	rootCmd.AddCommand(consoleCmd)
 	rootCmd.AddCommand(sshCmd)
 	rootCmd.AddCommand(debugCmd)
+	rootCmd.AddCommand(snapshotCmd)
+	rootCmd.AddCommand(restoreCmd)
 }
 
 func getNamespace() string {

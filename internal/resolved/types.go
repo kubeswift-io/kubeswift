@@ -90,6 +90,20 @@ type PreparedImage struct {
 	Size    int64  `json:"size"`
 	Ready   bool   `json:"ready"`
 	PVCName string `json:"pvcName"` // PVC name for pod volume creation (from preparedArtifact.pvcRef)
+	// CloneSeed is non-nil when SwiftImage.spec.cloneStrategy is "snapshot"
+	// AND the clone-seed VolumeSnapshot is readyToUse=true. When non-nil,
+	// per-guest cloning uses CSI dataSource instead of the legacy Copy Job
+	// path. Empty/nil means the legacy Copy Job path is used.
+	CloneSeed *PreparedCloneSeed `json:"cloneSeed,omitempty"`
+}
+
+// PreparedCloneSeed denormalises SwiftImage.status.cloneSeed for use by
+// the SwiftGuest controller's clone path.
+type PreparedCloneSeed struct {
+	Kind            string `json:"kind"`            // "VolumeSnapshot"
+	Name            string `json:"name"`            // VolumeSnapshot name
+	Namespace       string `json:"namespace"`       // same as SwiftImage; same-namespace constraint
+	SourceSizeBytes int64  `json:"sourceSizeBytes"` // Longhorn refuses different-size dataSource clones
 }
 
 // Meta holds guest identity for pod naming and logging.

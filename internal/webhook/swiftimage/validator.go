@@ -64,6 +64,34 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 	if img.Spec.Format == "" {
 		return fmt.Errorf("spec.format is required (raw or qcow2)")
 	}
+	if err := validateCloneStrategy(img); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCloneStrategy enforces the rules around cloneStrategy /
+// volumeSnapshotClassName / cloneStorageClassName described in
+// docs/images/clone-strategies.md.
+//
+//   - cloneStrategy "" (default) is treated as "copy" and accepts no
+//     snapshot fields.
+//   - cloneStrategy "snapshot" requires volumeSnapshotClassName.
+//   - volumeSnapshotClassName is meaningful only with cloneStrategy=snapshot.
+func validateCloneStrategy(img *imagev1alpha1.SwiftImage) error {
+	strategy := img.Spec.CloneStrategy
+	switch strategy {
+	case "", imagev1alpha1.CloneStrategyCopy:
+		if img.Spec.VolumeSnapshotClassName != "" {
+			return fmt.Errorf("spec.volumeSnapshotClassName is only valid when spec.cloneStrategy is 'snapshot'")
+		}
+	case imagev1alpha1.CloneStrategySnapshot:
+		if img.Spec.VolumeSnapshotClassName == "" {
+			return fmt.Errorf("spec.volumeSnapshotClassName is required when spec.cloneStrategy is 'snapshot'")
+		}
+	default:
+		return fmt.Errorf("spec.cloneStrategy: unsupported value %q (allowed: copy, snapshot)", strategy)
+	}
 	return nil
 }
 
@@ -75,6 +103,15 @@ func validateSwiftImageUpdate(oldImg, img *imagev1alpha1.SwiftImage) error {
 		if oldImg.Spec.Source != img.Spec.Source || oldImg.Spec.Format != img.Spec.Format {
 			return fmt.Errorf("SwiftImage spec is immutable when status.phase is Ready")
 		}
+	}
+	// CloneStrategy is immutable after import has progressed past Pending.
+	// Switching strategies on a partially imported image leaves the prepared
+	// PVC in an ambiguous state (no clone seed for snapshot path, no
+	// guarantee of size match for copy path).
+	if oldImg.Spec.CloneStrategy != img.Spec.CloneStrategy &&
+		oldImg.Status.Phase != "" &&
+		oldImg.Status.Phase != imagev1alpha1.SwiftImagePhasePending {
+		return fmt.Errorf("spec.cloneStrategy is immutable once import has started (current phase=%s)", oldImg.Status.Phase)
 	}
 	return nil
 }

@@ -13,4 +13,8 @@ vendor/
 .vscode/
 *.swp
 *.swo
-swiftctl
+
+# Built binaries (top-level only — never the cmd/swiftctl/ source)
+/swiftctl
+/controller-manager
+/gpu-discovery

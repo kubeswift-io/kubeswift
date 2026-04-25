@@ -24,7 +24,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 help:
 	@echo "Targets:"
 	@echo "  build                 Build Go and Rust"
-	@echo "  build-go              Build Go binaries (controller-manager, webhook-server, swiftctl)"
+	@echo "  build-go              Build Go binaries (controller-manager, swiftctl, gpu-discovery)"
 	@echo "  build-rust            Build Rust crates"
 	@echo "  build-images          Build all container images (with version stamping)"
 	@echo "  build-controller-image  Build controller-manager image"
