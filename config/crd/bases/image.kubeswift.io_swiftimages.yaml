@@ -41,6 +41,25 @@ spec:
           spec:
             description: SwiftImageSpec defines the desired state of SwiftImage.
             properties:
+              cloneStorageClassName:
+                description: |-
+                  CloneStorageClassName overrides the storage class used for per-guest
+                  clone PVCs. Defaults to the import PVC's storage class. Most CSI
+                  drivers cannot snapshot/clone across storage classes, so changing
+                  this on a snapshot-strategy image is generally an operator error and
+                  will surface as a provisioning failure.
+                type: string
+              cloneStrategy:
+                default: copy
+                description: |-
+                  CloneStrategy controls how per-guest root disk PVCs are produced.
+                  Defaults to "copy" for backward compatibility — existing images keep
+                  working without changes. "snapshot" requires a snapshot-capable CSI
+                  driver (see docs/images/clone-strategies.md for the validated list).
+                enum:
+                - copy
+                - snapshot
+                type: string
               format:
                 description: DiskFormat is the disk image format.
                 enum:
@@ -88,6 +107,13 @@ spec:
                       Not yet implemented.
                     type: object
                 type: object
+              volumeSnapshotClassName:
+                description: |-
+                  VolumeSnapshotClassName names the snapshot.storage.k8s.io
+                  VolumeSnapshotClass used when CloneStrategy is "snapshot". Required
+                  for that strategy; ignored otherwise. The validation webhook
+                  rejects "snapshot" without this field set.
+                type: string
             required:
             - format
             - source
@@ -95,6 +121,41 @@ spec:
           status:
             description: SwiftImageStatus defines the observed state of SwiftImage.
             properties:
+              cloneSeed:
+                description: |-
+                  CloneSeed describes the resource per-guest cloning will reference.
+                  Populated when CloneStrategy is "snapshot" and the seed VolumeSnapshot
+                  reaches readyToUse=true. Nil for the legacy copy strategy.
+                properties:
+                  kind:
+                    description: Kind is "VolumeSnapshot" for the Phase 1 csi-volume-snapshot
+                      path.
+                    enum:
+                    - VolumeSnapshot
+                    type: string
+                  name:
+                    description: |-
+                      Name of the seed resource, in the same namespace as the SwiftImage.
+                      Same-namespace is enforced — see Phase 0 spike finding §6a.
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the seed resource. Always equal to the SwiftImage's
+                      namespace; recorded for callers that consume CloneSeed without
+                      re-resolving the SwiftImage.
+                    type: string
+                  sourceSizeBytes:
+                    description: |-
+                      SourceSizeBytes is the size of the seed's underlying volume. Phase 1
+                      uses this to pick the clone PVC's initial requested size (must equal
+                      source size on Longhorn; see Phase 0 §5).
+                    format: int64
+                    type: integer
+                required:
+                - kind
+                - name
+                - namespace
+                type: object
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -158,6 +219,7 @@ spec:
                 - Importing
                 - Validating
                 - Preparing
+                - Snapshotting
                 - Ready
                 - Failed
                 type: string
