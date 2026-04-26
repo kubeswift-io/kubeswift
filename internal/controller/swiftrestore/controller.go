@@ -33,6 +33,13 @@ import (
 type SwiftRestoreReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// CurrentHypervisorVersion is the cluster's current CH version
+	// string (e.g. "v51.1"), set at controller startup. Used by the
+	// Tier B restore path's version check (architect risk #3).
+	// Empty string disables the check — controller surfaces a Warning
+	// rather than blocking.
+	CurrentHypervisorVersion string
 }
 
 // Reconcile drives the SwiftRestore state machine.
@@ -134,11 +141,22 @@ func (r *SwiftRestoreReconciler) handlePending(
 		return false, 10 * time.Second, nil
 	}
 
-	// Phase 1: only csi-volume-snapshot is supported.
-	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
+	// Backend dispatch:
+	//   csi-volume-snapshot (Phase 1): pre-create restore PVC + target SwiftGuest.
+	//   local              (Phase 2): version check + Tier B handler. The
+	//     actual restore-launcher-pod creation is wired in commit 12 along
+	//     with config.json patching for identity regen — splitting them
+	//     would require two passes over the snapshot's config.json.
+	//   s3                 (Phase 3, reserved): rejected by webhook.
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
+		// Continue to existing CSI flow below.
+	case snapshotv1alpha1.SnapshotBackendLocal:
+		return r.handlePendingLocal(ctx, restore, &snap, status)
+	default:
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-			"backend "+string(snap.Spec.Backend.Type)+" is not implemented in Phase 1")
+			"backend "+string(snap.Spec.Backend.Type)+" is not implemented")
 		return true, 0, nil
 	}
 
