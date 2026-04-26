@@ -15,11 +15,13 @@ import (
 )
 
 var (
-	restoreSnapshot  string
-	restoreTarget    string
-	restoreOverwrite bool
-	restoreNoResume  bool
-	restoreListAllNS bool
+	restoreSnapshot          string
+	restoreTarget            string
+	restoreOverwrite         bool
+	restoreNoResume          bool
+	restoreListAllNS         bool
+	restoreIdentityRegen     []string
+	restoreSkipVersionCheck  bool
 )
 
 var restoreCmd = &cobra.Command{
@@ -73,6 +75,11 @@ func init() {
 	restoreCreateCmd.Flags().StringVar(&restoreTarget, "target", "", "Name of the resulting SwiftGuest (required)")
 	restoreCreateCmd.Flags().BoolVar(&restoreOverwrite, "overwrite-existing", false, "Replace an existing SwiftGuest with the same target name")
 	restoreCreateCmd.Flags().BoolVar(&restoreNoResume, "no-resume", false, "Leave the restored SwiftGuest in runPolicy=Stopped")
+	restoreCreateCmd.Flags().StringSliceVar(&restoreIdentityRegen, "identity-regenerate", nil,
+		"Identity attributes to reset on the restored guest (any of: hostname, machineId, sshHostKeys, macAddresses). "+
+			"Required for cloning a memory snapshot to a different target name — must include macAddresses.")
+	restoreCreateCmd.Flags().BoolVar(&restoreSkipVersionCheck, "skip-hypervisor-version-check", false,
+		"Bypass the cluster CH-version-vs-snapshot check; for disaster-recovery restores after major upgrades")
 	_ = restoreCreateCmd.MarkFlagRequired("snapshot")
 	_ = restoreCreateCmd.MarkFlagRequired("target")
 
@@ -102,12 +109,66 @@ func runRestoreCreate(cmd *cobra.Command, args []string) error {
 			ResumeAfterRestore: !restoreNoResume,
 		},
 	}
+	if len(restoreIdentityRegen) > 0 {
+		items, err := parseIdentityFlags(restoreIdentityRegen)
+		if err != nil {
+			return err
+		}
+		r.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{Regenerate: items}
+	}
+	if restoreSkipVersionCheck {
+		r.Annotations = map[string]string{
+			"kubeswift.io/skip-hypervisor-version-check": "true",
+		}
+	}
 	if err := c.Create(context.Background(), r); err != nil {
 		return fmt.Errorf("create SwiftRestore: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Created SwiftRestore %s/%s (snapshot=%s -> target=%s)\n",
 		ns, name, restoreSnapshot, restoreTarget)
 	return nil
+}
+
+// parseIdentityFlags maps the comma-separated --identity-regenerate
+// values to IdentityRegenerationItem constants. Catches typos at the
+// CLI level rather than letting them surface as a webhook rejection.
+func parseIdentityFlags(values []string) ([]snapshotv1alpha1.IdentityRegenerationItem, error) {
+	known := map[string]snapshotv1alpha1.IdentityRegenerationItem{
+		"hostname":     snapshotv1alpha1.RegenHostname,
+		"machineid":    snapshotv1alpha1.RegenMachineID,
+		"machine-id":   snapshotv1alpha1.RegenMachineID,
+		"sshhostkeys":  snapshotv1alpha1.RegenSSHHostKeys,
+		"ssh-host-keys": snapshotv1alpha1.RegenSSHHostKeys,
+		"macaddresses": snapshotv1alpha1.RegenMACAddresses,
+		"mac-addresses": snapshotv1alpha1.RegenMACAddresses,
+		"macs":         snapshotv1alpha1.RegenMACAddresses,
+	}
+	var out []snapshotv1alpha1.IdentityRegenerationItem
+	seen := map[snapshotv1alpha1.IdentityRegenerationItem]bool{}
+	for _, v := range values {
+		item, ok := known[normalizeIdentityFlag(v)]
+		if !ok {
+			return nil, fmt.Errorf("unknown identity item %q (want any of: hostname, machineId, sshHostKeys, macAddresses)", v)
+		}
+		if seen[item] {
+			continue // de-dupe — webhook rejects duplicates anyway
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func normalizeIdentityFlag(v string) string {
+	out := make([]byte, 0, len(v))
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c - 'A' + 'a'
+		}
+		out = append(out, c)
+	}
+	return string(out)
 }
 
 func runRestoreList(cmd *cobra.Command, _ []string) error {
