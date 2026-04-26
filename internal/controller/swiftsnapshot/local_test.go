@@ -1,0 +1,248 @@
+package swiftsnapshot
+
+import (
+	"encoding/json"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+)
+
+// makeLocalSnap returns a Phase-2 local-backend SwiftSnapshot with a
+// single explicit hostPath under the operator-controlled prefix.
+func makeLocalSnap(name, ns, guestName string) *snapshotv1alpha1.SwiftSnapshot {
+	return &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       ns,
+			ResourceVersion: "42",
+		},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: guestName},
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendLocal,
+				Local: &snapshotv1alpha1.LocalBackend{
+					HostPath: HostPathBaseDir + ns + "-" + name,
+				},
+			},
+			IncludeMemory:       true,
+			ResumeAfterSnapshot: true,
+		},
+	}
+}
+
+// makeLauncherPod fabricates a launcher pod with the same name as the
+// guest, scheduled on `node`, in PodRunning phase by default. Tests
+// override Status.Phase as needed.
+func makeLauncherPod(ns, name, node string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       corev1.PodSpec{NodeName: node},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+		t.Fatalf("phase = %s, want Capturing", got.Status.Phase)
+	}
+	if got.Status.NodeName != "boba" {
+		t.Errorf("status.nodeName = %q, want boba", got.Status.NodeName)
+	}
+	if got.Status.SnapshotDirVersion != SnapshotDirVersionV1 {
+		t.Errorf("status.snapshotDirVersion = %q, want %q", got.Status.SnapshotDirVersion, SnapshotDirVersionV1)
+	}
+
+	// The action annotations must be set on the launcher pod.
+	var p corev1.Pod
+	if err := c.Get(t.Context(), client.ObjectKey{Name: "g1", Namespace: "default"}, &p); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if p.Annotations[annoAction] != verbCapture {
+		t.Errorf("pod annotation %s = %q, want %q", annoAction, p.Annotations[annoAction], verbCapture)
+	}
+	wantID := "snap1-42"
+	if p.Annotations[annoActionID] != wantID {
+		t.Errorf("pod annotation %s = %q, want %q", annoActionID, p.Annotations[annoActionID], wantID)
+	}
+	// Args must be valid JSON containing the expected destination URL.
+	var args captureArgs
+	if err := json.Unmarshal([]byte(p.Annotations[annoActionArgs]), &args); err != nil {
+		t.Fatalf("parse action args: %v (raw=%s)", err, p.Annotations[annoActionArgs])
+	}
+	wantURL := "file://" + HostPathBaseDir + "default-snap1/"
+	if args.DestinationURL != wantURL {
+		t.Errorf("destination_url = %q, want %q", args.DestinationURL, wantURL)
+	}
+	if !args.ResumeAfterSnapshot {
+		t.Errorf("resume_after_snapshot = false, want true (per spec)")
+	}
+}
+
+func TestLocal_Pending_GuestNotFound_StaysPending(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "missing")
+	r, c := newReconciler(t, snap)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhasePending {
+		t.Errorf("phase = %s, want Pending", got.Status.Phase)
+	}
+	if cond := findReady(got); cond == nil || cond.Reason != ReasonGuestNotFound {
+		t.Errorf("Ready reason = %q, want GuestNotFound", reasonOrEmpty(cond))
+	}
+}
+
+func TestLocal_Pending_PodNotYetPresent_StaysPending(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	guest := makeGuest("default", "g1")
+
+	r, c := newReconciler(t, snap, guest)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhasePending {
+		t.Errorf("phase = %s, want Pending", got.Status.Phase)
+	}
+}
+
+func TestLocal_Pending_PodNotRunning_StaysPending(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Status.Phase = corev1.PodPending
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhasePending {
+		t.Errorf("phase = %s, want Pending", got.Status.Phase)
+	}
+}
+
+func TestLocal_Capturing_StatusIDMismatch_Requeues(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	// Annotations carry a stale status-id from a prior run.
+	pod.Annotations = map[string]string{
+		annoStatusID: "snap1-OLD",
+		annoStatus:   "ready",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+		t.Errorf("phase = %s, want Capturing (stale status-id should not finalize)", got.Status.Phase)
+	}
+}
+
+func TestLocal_Capturing_StatusReady_FinalizesWithPauseWindow(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	snap.Status.NodeName = "boba"
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Annotations = map[string]string{
+		annoStatusID:      "snap1-42",
+		annoStatus:        "ready",
+		annoStatusDetail:  "captured to file:///x (1234ms pause window, resumed)",
+		annoPauseWindowMs: "1234",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseReady {
+		t.Errorf("phase = %s, want Ready", got.Status.Phase)
+	}
+	if got.Status.ObservedPauseWindowMs != 1234 {
+		t.Errorf("observedPauseWindowMs = %d, want 1234", got.Status.ObservedPauseWindowMs)
+	}
+	if got.Status.MemorySnapshot == nil || got.Status.MemorySnapshot.Handle == "" {
+		t.Errorf("memorySnapshot.handle empty, want %q", snap.Spec.Backend.Local.HostPath)
+	}
+	if got.Status.CapturedAt == nil {
+		t.Errorf("capturedAt nil, want set")
+	}
+}
+
+func TestLocal_Capturing_StatusFailed_TransitionsToFailed(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Annotations = map[string]string{
+		annoStatusID:     "snap1-42",
+		annoStatus:       "failed",
+		annoStatusDetail: "snapshot: VM not in Paused state",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Errorf("phase = %s, want Failed", got.Status.Phase)
+	}
+	if cond := findReady(got); cond == nil || cond.Reason != ReasonSnapshotFailed {
+		t.Errorf("Ready reason = %q, want SnapshotFailed", reasonOrEmpty(cond))
+	}
+}
+
+func TestLocal_Capturing_StatusRejected_TransitionsToFailed(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Annotations = map[string]string{
+		annoStatusID:     "snap1-42",
+		annoStatus:       "rejected",
+		annoStatusDetail: "rejected: action snap0-9 already in flight",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Errorf("phase = %s, want Failed (rejected = hard fail; operator can retry by reapplying)", got.Status.Phase)
+	}
+}
+
+func TestLocal_Capturing_PodPhaseFailed_Surfaces_Failed(t *testing.T) {
+	// Pre-commit-9 behavior: even without the dedicated Pod watcher,
+	// a Capturing reconcile that observes Pod.Status.Phase=Failed must
+	// not loop forever. Commit 9 adds the Watches() to make this
+	// observation prompt; this test pins the basic transition that
+	// already works on the next reconcile pass.
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Status.Phase = corev1.PodFailed
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Errorf("phase = %s, want Failed", got.Status.Phase)
+	}
+}

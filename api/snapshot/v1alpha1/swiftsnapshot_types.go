@@ -142,6 +142,25 @@ type SwiftSnapshotStatus struct {
 	Disks             []SnapshotDiskRef  `json:"disks,omitempty"`
 	MemorySnapshot    *MemorySnapshotRef `json:"memorySnapshot,omitempty"`
 	TotalSizeBytes    int64              `json:"totalSizeBytes,omitempty"`
+
+	// NodeName is the Kubernetes node where the snapshot was taken.
+	// Only set for the local backend (Tier B) — local snapshots live in
+	// hostPath storage on a single node, and SwiftRestore uses this to
+	// pin the restore-receive launcher pod to the same node.
+	NodeName string `json:"nodeName,omitempty"`
+
+	// ObservedPauseWindowMs is the wall-clock duration the source VM
+	// was paused during capture, measured by swiftletd at the action
+	// handler. Set on a successful local-backend capture; absent for
+	// csi-volume-snapshot (which does not pause the VM).
+	ObservedPauseWindowMs int64 `json:"observedPauseWindowMs,omitempty"`
+
+	// SnapshotDirVersion is the on-disk format version of the snapshot
+	// directory, set at capture time. Currently always "v1". The
+	// SwiftRestore controller's hypervisor-version check (architect
+	// risk #3) compares this alongside major.minor of the CH version
+	// before allowing a restore to proceed.
+	SnapshotDirVersion string `json:"snapshotDirVersion,omitempty"`
 }
 
 // SwiftSnapshot is a point-in-time capture of a SwiftGuest's disk (and

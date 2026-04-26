@@ -105,15 +105,19 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, time.Duration, error) {
-	// Only csi-volume-snapshot is wired up in this controller revision. The
-	// local-backend handler lands in a later commit on the Phase 2 branch;
-	// until then the webhook accepts local-backend SwiftSnapshots but the
-	// controller fails them with UnsupportedBackend so the operator sees a
-	// clear error rather than an indefinite Pending.
-	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
+	// Backend dispatch:
+	//   csi-volume-snapshot (Phase 1): create snapshot.storage VolumeSnapshot
+	//   local              (Phase 2): drive launcher pod via action annotations
+	//   s3                 (reserved Phase 3): rejected by webhook
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
+		// Falls through to the existing csi-volume-snapshot path.
+	case snapshotv1alpha1.SnapshotBackendLocal:
+		return r.handlePendingLocal(ctx, snap, status)
+	default:
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonUnsupportedBackend,
-			"backend "+string(snap.Spec.Backend.Type)+" is not yet implemented in this controller; use csi-volume-snapshot")
+			"backend "+string(snap.Spec.Backend.Type)+" is not yet implemented in this controller")
 		return true, 0, nil
 	}
 
@@ -173,6 +177,11 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, string, error) {
+	// Backend dispatch — local takes its own path (poll launcher pod
+	// status annotations); CSI continues to drive VolumeSnapshot below.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+		return r.handleCapturingLocal(ctx, snap, status)
+	}
 	pvc, err := r.guestRootPVC(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
 	if err != nil {
 		return false, "", err
