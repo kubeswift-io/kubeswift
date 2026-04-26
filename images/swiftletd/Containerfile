@@ -1,5 +1,9 @@
-# Multi-stage build for swiftletd + Cloud Hypervisor
-# Build swiftletd
+# Multi-stage build for swiftletd + Cloud Hypervisor.
+#
+# Build context is the repo root (the Makefile passes `.`). This lets
+# us build both the Rust launcher (under rust/) and the small Go
+# snapshot-stager init-container helper (under cmd/snapshot-stager,
+# which depends on internal/snapshot/configjson) from the same image.
 FROM rust:1-bookworm AS builder
 WORKDIR /build
 
@@ -7,16 +11,29 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-# Copy workspace
-COPY Cargo.toml Cargo.lock ./
-COPY swiftletd ./swiftletd
-COPY swift-runtime ./swift-runtime
-COPY swift-seed ./swift-seed
-COPY swift-ch-client ./swift-ch-client
-COPY swift-qemu-client ./swift-qemu-client
+# Copy the Rust workspace from the rust/ subtree of the repo.
+COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY rust/swiftletd ./swiftletd
+COPY rust/swift-runtime ./swift-runtime
+COPY rust/swift-seed ./swift-seed
+COPY rust/swift-ch-client ./swift-ch-client
+COPY rust/swift-qemu-client ./swift-qemu-client
 
 RUN KUBESWIFT_VERSION=$VERSION KUBESWIFT_GIT_COMMIT=$GIT_COMMIT KUBESWIFT_BUILD_DATE=$BUILD_DATE \
     cargo build -p swiftletd --release
+
+# Build snapshot-stager (Go init-container helper) from the same
+# repo-root context. snapshot-stager imports
+# internal/snapshot/configjson — the source-of-truth for the narrow
+# config.json edits applied to a Tier B clone (see commits 12/13).
+FROM golang:1.25-bookworm AS go-builder
+WORKDIR /go-build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+COPY api ./api
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/snapshot-stager ./cmd/snapshot-stager
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -66,9 +83,10 @@ RUN mkdir -p /usr/share/kubeswift-firmware && \
     chmod 644 /usr/share/kubeswift-firmware/CLOUDHV.fd
 
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
-COPY swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh
-COPY swiftletd/scripts/launcher-entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
-COPY swiftletd/scripts/gpu-init.sh /usr/local/bin/gpu-init.sh
+COPY --from=go-builder /out/snapshot-stager /usr/local/bin/snapshot-stager
+COPY rust/swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh
+COPY rust/swiftletd/scripts/launcher-entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
+COPY rust/swiftletd/scripts/gpu-init.sh /usr/local/bin/gpu-init.sh
 RUN chmod +x /usr/local/bin/network-init.sh /usr/local/bin/launcher-entrypoint.sh /usr/local/bin/gpu-init.sh
 
 # Runtime paths (must match internal/controller/swiftguest constants)

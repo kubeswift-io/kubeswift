@@ -138,6 +138,101 @@ SwiftRestore (or pass `--skip-hypervisor-version-check` to
 used`-style errors; the override exists because in DR scenarios
 "try the restore" is preferable to "give up".
 
+## Restore staging — disk cost & the in-place fast path
+
+When SwiftRestore brings a Tier B snapshot back up, the launcher pod
+needs the snapshot directory in its mount namespace. There are two
+shapes the controller can produce:
+
+### In-place fast path (no staging copy)
+
+When `targetGuest.name` equals the source SwiftGuest name AND
+`spec.identity.regenerate` is empty (or omitted), the launcher pod
+mounts the snapshot directory **read-only** from its on-node hostPath
+directly. No staging emptyDir, no init container, no `cp -r`. The
+restored VM resumes against the original snapshot bytes verbatim.
+
+This is the right path for **disaster recovery**: the original VM
+crashed or was deleted and you want the same VM back, byte-for-byte,
+including its machine-id, SSH host keys, and MAC.
+
+```yaml
+spec:
+  snapshotRef:
+    name: db-mem-2026-04-26
+  targetGuest:
+    name: db                       # same as source — fast path
+    overwriteExisting: true        # required when source SwiftGuest still exists
+  resumeAfterRestore: true
+  # no spec.identity → in-place fast path
+```
+
+Disk cost: 0 bytes beyond the snapshot itself.
+
+### Clone path (stage + patch — disk cost ≈ snapshot size per clone)
+
+When the target name differs from the source OR any identity
+attribute is regenerated, the launcher pod gets:
+
+- A **read-only** hostPath mount of the snapshot directory at
+  `/var/lib/kubeswift/restore/source` (init container only).
+- A **writable** pod-local `emptyDir` at
+  `/var/lib/kubeswift/restore/staging`.
+- A `snapshot-stager` init container that copies the snapshot into
+  the emptyDir and applies the requested config.json patches
+  (`kubeswift.clone=true` cmdline marker for the in-guest bootcmd
+  and per-clone MAC rewrites). Sentinel-guarded for restart safety.
+
+The launcher boots from the staged copy, never the read-only source.
+This keeps the on-disk snapshot pristine across multiple concurrent
+clones — important because two clones cannot in-place-patch the same
+config.json without the second clone reading the first clone's MAC.
+
+**Disk cost: roughly the snapshot size, per concurrent clone, on the
+source node, for the lifetime of the cloned launcher pod.** A 16 GiB
+VM clone allocates ~16 GiB of pod-local emptyDir on the source node.
+Two simultaneous clones of a 64 GiB VM consume ~128 GiB of additional
+disk. The staging emptyDir is freed when the clone's launcher pod is
+deleted (Kubernetes `emptyDir` lifecycle — node-local scratch space
+that lives with the pod).
+
+If disk pressure on the source node is a concern, **prefer the CSI
+backend** (`backend: csi-volume-snapshot`) for cloning workflows.
+That backend captures only disk state and uses CSI VolumeSnapshots
+that the storage system handles efficiently (often via copy-on-write
+references rather than full copies). The trade-off: CSI does not
+capture in-memory state, so cloned VMs reboot from disk rather than
+resuming from a snapshot's RAM.
+
+Phase 3 (S3 backend) is intended to lift the node-local constraint
+entirely — clones materialize from S3 directly into the launcher pod
+without consuming source-node disk — but that's not in Phase 2 scope.
+
+### Why the staging copy
+
+The ostensibly simpler design — patch the snapshot's `config.json`
+**in place** on the read-only source — would corrupt multi-clone
+workflows: clone B would read clone A's MAC (the patched value)
+rather than its own. The staging copy gives each clone its own
+config.json to mutate, leaving the on-disk snapshot strictly
+read-only.
+
+### Disk caveat — clone-mode root disk
+
+A Tier B memory snapshot does **not** capture the disk. The clone's
+root disk is a fresh copy from the source SwiftImage (KubeSwift's
+existing per-guest clone path), not a snapshot of the source VM's
+disk at capture time. The clone resumes a memory state that may
+expect filesystem writes the fresh disk doesn't have.
+
+For workloads where this matters (mostly anything that depends on
+on-disk writes between cloud-init and snapshot), use the CSI backend
+or take a fresh CSI snapshot of the source VM's per-guest PVC and
+restore both backends together. The identity-regeneration test
+suite intentionally targets workloads where the in-guest cloud-init
+bootcmd is the only post-resume disk write of consequence
+(machine-id, SSH host keys, hostname).
+
 ## Cleanup
 
 Deleting a SwiftSnapshot triggers a one-shot cleanup pod on the

@@ -121,18 +121,21 @@ func TestLocal_Pending_MinorVersionMismatch_FailsWithVersionReason(t *testing.T)
 
 func TestLocal_Pending_PatchDrift_DoesNotBlockRestore(t *testing.T) {
 	// Patch-only difference is allowed (architect risk #3 mitigation:
-	// don't block routine upgrades). The Pending->Failed transition
-	// here is from the deferred-wiring message, NOT the version check.
+	// don't block routine upgrades). With 10b wiring in, the restore
+	// proceeds past the version check; we use a same-name target to
+	// avoid the macAddresses-required gate (in-place fast path).
 	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1.0")
-	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
+	restore := makeRestore("restore1", "default", "snap1", "g1", true)
+	restore.Spec.TargetGuest.OverwriteExisting = true
+	source := makeSourceGuest("default", "g1", "ubuntu-noble")
 
-	r, c := newReconciler(t, snap, restore)
+	r, c := newReconciler(t, snap, restore, source)
 	r.CurrentHypervisorVersion = "v51.1.2"
 	reconcile(t, r, "restore1", "default")
 
 	got := get(t, c, "restore1", "default")
-	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
-		t.Fatalf("phase = %s, want Failed", got.Status.Phase)
+	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseRestoring {
+		t.Fatalf("phase = %s, want Restoring", got.Status.Phase)
 	}
 	cond := findReady(got)
 	if cond == nil {
@@ -141,21 +144,20 @@ func TestLocal_Pending_PatchDrift_DoesNotBlockRestore(t *testing.T) {
 	if contains(cond.Message, "version mismatch") {
 		t.Errorf("patch drift should not surface as version mismatch; got %q", cond.Message)
 	}
-	if !contains(cond.Message, "deferred") {
-		t.Errorf("expected deferred-wiring message; got %q", cond.Message)
-	}
 }
 
 func TestLocal_Pending_SkipAnnotationBypassesCheck(t *testing.T) {
 	// Operator override for disaster-recovery: even a major mismatch
-	// passes the version gate when the skip annotation is set. The
-	// restore still hits the deferred-wiring failure (commit 12 wires
-	// it), but the message is the deferred one, not version-mismatch.
+	// passes the version gate when the skip annotation is set. With
+	// the in-place target name + OverwriteExisting we sail through
+	// to Restoring rather than failing on either gate.
 	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v50.0")
-	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
+	restore := makeRestore("restore1", "default", "snap1", "g1", true)
+	restore.Spec.TargetGuest.OverwriteExisting = true
 	restore.Annotations = map[string]string{SkipHypervisorVersionCheckAnnotation: "true"}
+	source := makeSourceGuest("default", "g1", "ubuntu-noble")
 
-	r, c := newReconciler(t, snap, restore)
+	r, c := newReconciler(t, snap, restore, source)
 	r.CurrentHypervisorVersion = "v52.5"
 	reconcile(t, r, "restore1", "default")
 
@@ -174,9 +176,11 @@ func TestLocal_Pending_NoCurrentVersionConfigured_AllowsRestore(t *testing.T) {
 	// controller deployed without the env wiring). Restores proceed
 	// rather than blocking.
 	snap := makeLocalSnap("snap1", "default", "g1", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
-	restore := makeRestore("restore1", "default", "snap1", "g1-restored", true)
+	restore := makeRestore("restore1", "default", "snap1", "g1", true)
+	restore.Spec.TargetGuest.OverwriteExisting = true
+	source := makeSourceGuest("default", "g1", "ubuntu-noble")
 
-	r, c := newReconciler(t, snap, restore)
+	r, c := newReconciler(t, snap, restore, source)
 	r.CurrentHypervisorVersion = ""
 	reconcile(t, r, "restore1", "default")
 

@@ -81,6 +81,27 @@ func (r *SwiftRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 	case snapshotv1alpha1.SwiftRestorePhaseRestoring:
+		// Resolve the snapshot to dispatch by backend.
+		isTierB, dispatchErr := r.snapshotIsTierB(ctx, restore.Namespace, restore.Spec.SnapshotRef.Name)
+		if dispatchErr != nil {
+			return ctrl.Result{}, dispatchErr
+		}
+		if isTierB {
+			advanced, requeue, errMsg, err := r.handleRestoringLocal(ctx, &restore, status)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if errMsg != "" {
+				setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+				setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed, errMsg)
+			} else if !advanced {
+				if updateErr := r.persist(ctx, &restore, status); updateErr != nil {
+					return ctrl.Result{}, updateErr
+				}
+				return ctrl.Result{RequeueAfter: requeue}, nil
+			}
+			break
+		}
 		advanced, requeue, errMsg, err := r.handleRestoring(ctx, &restore, status)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -96,6 +117,23 @@ func (r *SwiftRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 	case snapshotv1alpha1.SwiftRestorePhaseResuming:
+		isTierB, dispatchErr := r.snapshotIsTierB(ctx, restore.Namespace, restore.Spec.SnapshotRef.Name)
+		if dispatchErr != nil {
+			return ctrl.Result{}, dispatchErr
+		}
+		if isTierB {
+			advanced, requeue, err := r.handleResumingLocal(ctx, &restore, status)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if !advanced {
+				if updateErr := r.persist(ctx, &restore, status); updateErr != nil {
+					return ctrl.Result{}, updateErr
+				}
+				return ctrl.Result{RequeueAfter: requeue}, nil
+			}
+			break
+		}
 		advanced, requeue, err := r.handleResuming(ctx, &restore, status)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -314,6 +352,28 @@ func (r *SwiftRestoreReconciler) persist(ctx context.Context, restore *snapshotv
 
 func isNotFound(err error) bool {
 	return client.IgnoreNotFound(err) == nil
+}
+
+// snapshotIsTierB resolves the SwiftSnapshot referenced by a
+// SwiftRestore and returns true when its backend is local. Used by
+// the Restoring/Resuming phase dispatch to route Tier B restores
+// through their dedicated handlers.
+//
+// A NotFound on the snapshot is reported as (false, nil) — the
+// caller treats this as "fall through to CSI handler" which then
+// fails fast with a meaningful error. We don't surface the error
+// here because the snapshot must already have been Ready when the
+// restore was advanced past Pending; a mid-flight delete is best
+// described by the per-handler error path.
+func (r *SwiftRestoreReconciler) snapshotIsTierB(ctx context.Context, namespace, name string) (bool, error) {
+	var snap snapshotv1alpha1.SwiftSnapshot
+	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &snap); err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return IsTierBRestore(&snap), nil
 }
 
 // SetupWithManager registers the reconciler. Owns the target SwiftGuest so
