@@ -1,11 +1,18 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# All KubeSwift CRDs. The list MUST stay in lockstep with config/crd/bases/
+# so `make deploy` (which runs `kubectl apply -k config/crd`) actually
+# applies every CRD. The `make verify-crd-sync` target detects drift; CI
+# runs it to prevent the gap from recurring (see hack/verify-crd-sync.sh).
 resources:
   - bases/swift.kubeswift.io_swiftguests.yaml
   - bases/swift.kubeswift.io_swiftguestclasses.yaml
+  - bases/swift.kubeswift.io_swiftguestpools.yaml
   - bases/image.kubeswift.io_swiftimages.yaml
   - bases/seed.kubeswift.io_swiftseedprofiles.yaml
   - bases/kernel.kubeswift.io_swiftkernels.yaml
   - bases/gpu.kubeswift.io_swiftgpuprofiles.yaml
   - bases/gpu.kubeswift.io_swiftgpunodes.yaml
+  - bases/snapshot.kubeswift.io_swiftsnapshots.yaml
+  - bases/snapshot.kubeswift.io_swiftrestores.yaml

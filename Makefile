@@ -36,7 +36,8 @@ help:
 	@echo "  release-rc            Build, push images + chart (RC tag)"
 	@echo "  release-stable        Build, push images + chart (stable tag) + GitHub Release"
 	@echo "  print-version         Print version info from hack/version.sh"
-	@echo "  generate              Generate CRDs and deepcopy"
+	@echo "  generate              Generate CRDs and deepcopy (also syncs charts/ + runs verify-crd-sync)"
+	@echo "  verify-crd-sync       Fail if config/crd/kustomization.yaml drifts from config/crd/bases/"
 	@echo "  deploy                Apply CRDs and KubeSwift to cluster"
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
@@ -115,8 +116,16 @@ release-stable:
 
 generate:
 	$(shell go env GOPATH)/bin/controller-gen object crd paths="./api/..." output:crd:dir=config/crd/bases
+	@# After regen, copy the canonical CRDs into the Helm chart and run
+	@# the sync check. Without these two steps, deploys silently skip
+	@# new CRDs (the bug that produced the Phase 1 cluster gap).
+	cp config/crd/bases/*.yaml charts/kubeswift/crds/
+	./hack/verify-crd-sync.sh
 
-deploy: generate
+verify-crd-sync:
+	./hack/verify-crd-sync.sh
+
+deploy: generate verify-crd-sync
 	@echo "Deploying with IMAGE_TAG=$(IMAGE_TAG)"
 	kubectl apply -k config/crd
 	kubectl wait --for=condition=Established --timeout=30s crd/swiftguests.swift.kubeswift.io
