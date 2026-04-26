@@ -1,3 +1,4 @@
+mod action;
 mod intent;
 mod kube_client;
 mod launch;
@@ -98,7 +99,15 @@ fn main() {
                 };
             log::info!("runtime_dir path={}", runtime_dir.root().display());
 
-            if intent.has_seed() && !intent.has_kernel() {
+            // Restore-receive mode (Phase 2): the seed is baked into
+            // the snapshot's memory state — cloud-init already ran on
+            // the original VM. Skip seed.iso construction entirely.
+            if intent.is_restore() {
+                log::info!(
+                    "restore_receive_mode snapshot_path={} (skipping seed.iso)",
+                    intent.restore_snapshot_path()
+                );
+            } else if intent.has_seed() && !intent.has_kernel() {
                 let configmap_path = Path::new(intent.seed_path());
                 let nocloud_output = runtime_dir.seed_dir();
                 if let Err(e) = swift_seed::build_nocloud_dir(configmap_path, &nocloud_output) {
@@ -156,6 +165,17 @@ fn main() {
                     let nics_for_poller = intent.nics.clone();
                     lease::spawn_lease_poller(lease_path, ns.clone(), n.clone(), nics_for_poller);
                 }
+            }
+
+            // Snapshot/restore action handler. Phase 2 commit 5: skeleton
+            // only — handlers are no-ops; commits 6 and 7 wire in the
+            // pause/snapshot/resume and restore-prepare flows. Spawning
+            // it here means it's running before launch::run blocks, so
+            // the controller can drive it as soon as the launcher pod is
+            // up (it does not require the VM to have already booted).
+            if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                let api_socket = runtime_dir.root().join("ch.sock");
+                action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
             }
 
             let on_socket_ready = namespace.as_ref().zip(name.as_ref()).map(|_| {

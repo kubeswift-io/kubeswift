@@ -258,6 +258,21 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              nodeName:
+                description: |-
+                  NodeName is the Kubernetes node where the snapshot was taken.
+                  Only set for the local backend (Tier B) — local snapshots live in
+                  hostPath storage on a single node, and SwiftRestore uses this to
+                  pin the restore-receive launcher pod to the same node.
+                type: string
+              observedPauseWindowMs:
+                description: |-
+                  ObservedPauseWindowMs is the wall-clock duration the source VM
+                  was paused during capture, measured by swiftletd at the action
+                  handler. Set on a successful local-backend capture; absent for
+                  csi-volume-snapshot (which does not pause the VM).
+                format: int64
+                type: integer
               phase:
                 description: |-
                   SwiftSnapshotPhase is the lifecycle phase of a SwiftSnapshot. The set of
@@ -271,6 +286,14 @@ spec:
                 - Uploading
                 - Ready
                 - Failed
+                type: string
+              snapshotDirVersion:
+                description: |-
+                  SnapshotDirVersion is the on-disk format version of the snapshot
+                  directory, set at capture time. Currently always "v1". The
+                  SwiftRestore controller's hypervisor-version check (architect
+                  risk #3) compares this alongside major.minor of the CH version
+                  before allowing a restore to proceed.
                 type: string
               totalSizeBytes:
                 format: int64

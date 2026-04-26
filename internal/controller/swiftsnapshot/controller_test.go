@@ -105,8 +105,13 @@ func get(t *testing.T, c client.Client, name, ns string) *snapshotv1alpha1.Swift
 }
 
 func TestPending_UnsupportedBackend_FlipsToFailed(t *testing.T) {
+	// Phase 2: csi-volume-snapshot and local are wired up. S3 remains
+	// reserved and is the only backend that should hit the controller's
+	// UnsupportedBackend path. (The webhook rejects S3 too, but defense
+	// in depth: existing pre-Phase-2 SwiftSnapshot resources can sneak
+	// through if upgraded in place.)
 	snap := makeSwiftSnapshot("snap1", "default", "g1", "")
-	snap.Spec.Backend.Type = snapshotv1alpha1.SnapshotBackendLocal
+	snap.Spec.Backend.Type = snapshotv1alpha1.SnapshotBackendS3
 
 	r, c := newReconciler(t, snap)
 	reconcile(t, r, "snap1", "default")

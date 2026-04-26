@@ -1,0 +1,34 @@
+# Source SwiftGuest for Tier B (local-backend) memory snapshot tests.
+#
+# The seedProfileRef references config/samples/seed-profiles/clone-
+# identity-regen.yaml so the in-guest cloud-init bootcmd regenerates
+# machine-id, SSH host keys, and hostname when a clone is restored
+# from a memory snapshot of this guest.
+#
+# IMPORTANT: this sample is wired for the snapshot/restore e2e tests
+# (test/snapshot/local-roundtrip-test.sh and
+#  test/snapshot/local-clone-identity-test.sh). For production use,
+# adjust ssh_authorized_keys and resource sizes.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: snapshot-local-source
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: snapshot-local-class
+  seedProfileRef:
+    name: clone-identity-regen
+  runPolicy: Running
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: snapshot-local-class
+spec:
+  cpu: 2
+  memory: "2Gi"
+  rootDisk:
+    size: "10Gi"
+    format: raw

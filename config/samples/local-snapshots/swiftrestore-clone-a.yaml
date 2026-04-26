@@ -1,0 +1,35 @@
+# Clone restore "A": creates a NEW SwiftGuest named snapshot-local-clone-a
+# from the snapshot, with full identity regeneration.
+#
+# Different target name → clone path. The controller materializes a
+# new SwiftGuest at this name with the full set of restore annotations:
+#
+#   - snapshot.kubeswift.io/active-restore: snapshot-local-clone-a
+#   - snapshot.kubeswift.io/restore-mode: clone
+#   - snapshot.kubeswift.io/restore-mac-rewrites: <deterministic from
+#     namespace/name/iface-name>
+#   - snapshot.kubeswift.io/restore-append-cmdline-marker: "true"
+#
+# The SwiftGuest controller picks these up and routes to BuildRestorePod,
+# which adds the snapshot-stager init container that copies the snapshot
+# into a pod-local emptyDir and patches its config.json before swiftletd
+# starts CH in --restore mode.
+#
+# The macAddresses regen is REQUIRED for clone restores — the webhook
+# (and the SwiftRestore controller) reject clones that omit it.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: snapshot-local-clone-a
+spec:
+  snapshotRef:
+    name: snapshot-local-mem
+  targetGuest:
+    name: snapshot-local-clone-a       # different from source → clone
+  resumeAfterRestore: true
+  identity:
+    regenerate:
+      - macAddresses                    # required for clones (L2 collision)
+      - hostname
+      - machineId
+      - sshHostKeys

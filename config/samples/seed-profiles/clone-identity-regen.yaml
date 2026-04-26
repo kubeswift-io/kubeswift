@@ -1,0 +1,116 @@
+# SwiftSeedProfile that gives a guest the in-VM identity-regeneration
+# tooling SwiftRestore relies on for clones of memory snapshots.
+#
+# # When this matters
+#
+# A Tier B (local-backend) memory snapshot captures every byte of the
+# guest's state — including /etc/machine-id, /etc/ssh/ssh_host_*_key*,
+# and (effectively) the kernel's view of the network device's MAC. A
+# fresh-boot VM gets these from cloud-init or systemd-firstboot. A
+# *cloned* memory-snapshot VM doesn't boot fresh: it resumes the
+# captured state, so without intervention every clone shares identity
+# with the source.
+#
+# The SwiftRestore controller patches MACs at the hypervisor level
+# (commit 13). The other three (machine-id, SSH keys, hostname) are
+# in-guest concerns — the controller can't safely modify them while
+# the VM is paused. Instead, the controller appends the cmdline
+# marker `kubeswift.clone=true` to the snapshot's config.json before
+# CH boots from it (commit 12). When the guest wakes, /proc/cmdline
+# carries the marker, and this seed-profile's bootcmd module triggers
+# regeneration.
+#
+# # Why bootcmd, not runcmd
+#
+# cloud-init's `runcmd` runs once per *instance-id*. Snapshot/restore
+# preserves the original instance-id (it's part of the captured cloud-
+# init state), so runcmd would be a no-op on every clone after the
+# first. `bootcmd` runs every boot, gated by a sentinel file we touch
+# once regeneration is done — that combination gives us "exactly once
+# per clone" semantics without depending on instance-id detection.
+#
+# # How it works
+#
+# 1. Guest wakes from CH restore. /proc/cmdline contains
+#    `kubeswift.clone=true` (controller-appended).
+# 2. cloud-init bootcmd runs the script below.
+# 3. Script checks /proc/cmdline AND absence of the sentinel file
+#    /var/lib/kubeswift/.clone-regenerated. Both must hold.
+# 4. Regenerate /etc/machine-id, SSH host keys, and hostname.
+# 5. Touch the sentinel so the next boot is a no-op.
+#
+# Apply this SwiftSeedProfile to your *source* SwiftGuest spec via
+# spec.seedProfileRef.name. Cloned VMs inherit the seed automatically
+# because the seed contents are baked into the snapshot's memory
+# state at capture time.
+
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: clone-identity-regen
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    # bootcmd runs every boot. Gated on /proc/cmdline marker AND
+    # absence of sentinel — together: regenerate at most once per
+    # clone, deterministically, without depending on instance-id.
+    bootcmd:
+      - |
+        SENTINEL=/var/lib/kubeswift/.clone-regenerated
+        if ! grep -qw kubeswift.clone=true /proc/cmdline; then
+          # Source VM (or a normal restore on the same name) — leave
+          # identity alone.
+          exit 0
+        fi
+        if [ -f "$SENTINEL" ]; then
+          # Already regenerated on a prior boot. Idempotent no-op so
+          # repeated boot cycles don't churn machine-id.
+          exit 0
+        fi
+        mkdir -p "$(dirname "$SENTINEL")"
+
+        # /etc/machine-id: dbus, systemd, journald, and many app
+        # daemons key on this. Empty + systemd-machine-id-setup
+        # regenerates from /sys/class/dmi/id/product_uuid (best
+        # available randomness inside a guest); falls back to a
+        # generated UUID if the host doesn't expose product_uuid.
+        : > /etc/machine-id
+        if [ -d /run/systemd/system ]; then
+          systemd-machine-id-setup || true
+        elif command -v uuidgen >/dev/null 2>&1; then
+          uuidgen | tr -d - > /etc/machine-id
+        fi
+
+        # SSH host keys: bare-key files (ssh_host_rsa_key,
+        # ssh_host_ecdsa_key, etc.) — remove all then regenerate.
+        # ssh-keygen -A reads the algorithms from sshd_config and
+        # creates each missing key with default sizes.
+        rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+        ssh-keygen -A
+        # Reload sshd so it picks up the new host keys without a
+        # restart that would drop active sessions (there shouldn't be
+        # any on a freshly-restored VM, but defensive).
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl reload-or-restart ssh.service 2>/dev/null \
+            || systemctl reload-or-restart sshd.service 2>/dev/null \
+            || true
+        fi
+
+        # Hostname: cloud-init's metadata may carry a fresh hostname
+        # (the controller can write one when shaping the seed for the
+        # clone). If absent, derive from the host UUID for uniqueness.
+        if [ -r /run/cloud-init/instance-data.json ]; then
+          NEW_HOSTNAME="$(jq -r '.v1.local_hostname // empty' /run/cloud-init/instance-data.json 2>/dev/null || true)"
+        fi
+        if [ -z "$NEW_HOSTNAME" ] && [ -r /etc/machine-id ]; then
+          NEW_HOSTNAME="kubeswift-$(cut -c1-8 /etc/machine-id)"
+        fi
+        if [ -n "$NEW_HOSTNAME" ]; then
+          hostnamectl set-hostname "$NEW_HOSTNAME" 2>/dev/null \
+            || echo "$NEW_HOSTNAME" > /etc/hostname
+        fi
+
+        # Write sentinel last so a partial regeneration (e.g. SIGTERM
+        # mid-script) is retried on next boot rather than skipped.
+        touch "$SENTINEL"

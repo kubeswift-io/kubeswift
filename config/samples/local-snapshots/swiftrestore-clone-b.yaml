@@ -1,0 +1,25 @@
+# Clone restore "B": a second clone of the same memory snapshot.
+#
+# Each clone gets its own deterministic MAC, machine-id, SSH host
+# keys, and hostname — derived from the target SwiftGuest namespace
+# and name. Two clones from the same snapshot are guaranteed to
+# diverge in identity once first boot completes the in-guest bootcmd.
+#
+# Used by test/snapshot/local-clone-identity-test.sh to verify
+# identity regeneration end-to-end.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: snapshot-local-clone-b
+spec:
+  snapshotRef:
+    name: snapshot-local-mem
+  targetGuest:
+    name: snapshot-local-clone-b
+  resumeAfterRestore: true
+  identity:
+    regenerate:
+      - macAddresses
+      - hostname
+      - machineId
+      - sshHostKeys

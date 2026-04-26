@@ -2,7 +2,13 @@
 
 > Audience: KubeSwift operators
 >
-> Status: Phase 1 (csi-volume-snapshot backend). Local and S3 backends are reserved for later phases — see [`docs/design/snapshots.md`](../design/snapshots.md).
+> This page covers the **csi-volume-snapshot** backend: disk-only,
+> crash-consistent snapshots backed by `snapshot.storage.k8s.io/
+> VolumeSnapshot`. The VM is **not paused**.
+>
+> For full-VM-state (memory + disk) snapshots that pause the VM, see
+> [local-snapshots.md](local-snapshots.md). For cloning workflows,
+> see [identity-regeneration.md](identity-regeneration.md).
 
 ## What you get
 

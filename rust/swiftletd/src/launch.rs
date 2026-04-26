@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use swift_ch_client::{spawn_ch, wait_for_socket, NICConfig, VFIODeviceConfig, VmConfig};
+use swift_ch_client::{
+    spawn_ch, spawn_ch_restore, wait_for_socket, NICConfig, VFIODeviceConfig, VmConfig,
+};
 use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
 
@@ -21,6 +23,11 @@ fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
 ///
 /// Calls `on_socket_ready(pid, serial_socket_path)` once the hypervisor is ready
 /// (API/QMP socket appeared). Returns `(exit_status, pid, serial_socket_path)`.
+///
+/// Restore-receive mode (Phase 2): when `intent.is_restore()` is true,
+/// dispatch goes to [`run_ch_restore`] instead of the normal CH/QEMU
+/// path. Cloud Hypervisor is the only hypervisor supported for restore;
+/// the validation webhook (commit 11) rejects restore intents with QEMU.
 pub fn run<F>(
     intent: &RuntimeIntent,
     runtime_dir: &RuntimeDir,
@@ -30,10 +37,84 @@ where
     F: FnOnce(u32, String, String),
 {
     remove_stale_sockets(runtime_dir);
+    if intent.is_restore() {
+        return run_ch_restore(intent, runtime_dir, on_socket_ready);
+    }
     match intent.hypervisor() {
         "qemu" => run_qemu(intent, runtime_dir, on_socket_ready),
         _ => run_ch(intent, runtime_dir, on_socket_ready),
     }
+}
+
+// ─── Restore-receive path (Cloud Hypervisor) ────────────────────────────────
+
+/// Restore-receive mode: bring up CH from a Tier B local snapshot
+/// rather than from a fresh boot. Differences from [`run_ch`]:
+///
+///   - No seed.iso construction. The original VM's seed (if any) is
+///     baked into the snapshot's memory state; cloud-init has already
+///     run.
+///   - No VmConfig assembly. CH reads disks, network, kernel, memory,
+///     and CPU layout from `config.json` inside the snapshot directory.
+///     The launcher only passes `--api-socket=...` and `--restore
+///     source_url=file://<path>/`.
+///   - The VM comes up Paused. The SwiftRestore controller (commit 10)
+///     drives the resume through the snapshot-action annotation surface,
+///     same as every other hypervisor action — there is intentionally
+///     no inline resume here.
+///   - Network-init and gpu-init still run as init containers (the new
+///     pod has its own netns and host-side tap/bridge/dnsmasq must be
+///     re-created); restore-receive is a launcher-process-mode change,
+///     not a pod-shape change. The validation webhook rejects
+///     gpuProfileRef + memory snapshot upfront so gpu-init never runs
+///     for a real restore in practice (Phase 0 Constraint #1).
+///
+/// The serial socket path returned is the runtime-dir-local path. CH
+/// during restore re-uses paths from the snapshot's config.json, so if
+/// the snapshot was taken on a pod with a different runtime-dir,
+/// `swiftctl console` may not bind. The controller's config.json
+/// patching (commit 12) keeps paths in sync; this function does not
+/// re-validate.
+fn run_ch_restore<F>(
+    intent: &RuntimeIntent,
+    runtime_dir: &RuntimeDir,
+    on_socket_ready: Option<F>,
+) -> Result<(std::process::ExitStatus, u32, String), String>
+where
+    F: FnOnce(u32, String, String),
+{
+    let api_socket = runtime_dir.api_socket();
+    let source_url = intent.restore_source_url();
+    if source_url.is_empty() {
+        return Err("restore intent has empty snapshot path".to_string());
+    }
+    log::info!(
+        "spawning cloud-hypervisor (restore) api_socket={} source_url={}",
+        api_socket.display(),
+        source_url
+    );
+    let mut child = spawn_ch_restore(&api_socket, &source_url)
+        .map_err(|e| format!("failed to spawn cloud-hypervisor (restore): {}", e))?;
+    let pid = child.id();
+
+    wait_for_socket(&api_socket, Duration::from_secs(30))?;
+
+    let serial_socket_path = runtime_dir
+        .root()
+        .join("serial.sock")
+        .to_string_lossy()
+        .to_string();
+
+    if let Some(cb) = on_socket_ready {
+        cb(
+            pid,
+            serial_socket_path.clone(),
+            "cloud-hypervisor".to_string(),
+        );
+    }
+
+    let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
+    Ok((status, pid, serial_socket_path))
 }
 
 // ─── Cloud Hypervisor path ───────────────────────────────────────────────────
