@@ -44,9 +44,31 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Terminal states: nothing to do.
-	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseReady ||
-		snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+	// Deletion path: when the SwiftSnapshot is being deleted and our
+	// finalizer is present, run the hostPath cleanup pod. Drop the
+	// finalizer once cleanup completes so the apiserver can GC. This
+	// runs before the terminal-state check because deletion can
+	// happen from any phase.
+	if snap.DeletionTimestamp != nil {
+		done, err := r.handleDeletion(ctx, &snap)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if done {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Terminal states: ensure the cleanup finalizer is in place
+	// (no-op for csi-volume-snapshot) and otherwise nothing to do.
+	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseReady {
+		if err := r.ensureFinalizer(ctx, &snap); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
 		return ctrl.Result{}, nil
 	}
 
