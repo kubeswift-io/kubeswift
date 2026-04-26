@@ -150,6 +150,17 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		intent.GPU = gpuIntent
 	}
+	// Tier B restore: when the SwiftGuest is marked as the target of
+	// an active SwiftRestore, the intent points swiftletd at the
+	// in-pod snapshot path (read-only mount for in-place, staged copy
+	// for clone). swiftletd reads `restore.snapshotPath`, builds
+	// `--restore source_url=file://<path>/`, and skips the normal
+	// CH/QEMU spawn. See rust/swiftletd/src/launch.rs run_ch_restore.
+	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
+		intent.Restore = &runtimeintent.RestoreIntent{
+			SnapshotPath: params.InPodSnapshotPath(),
+		}
+	}
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		logger.Error(err, "failed to serialize runtime intent")

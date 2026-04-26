@@ -1,0 +1,22 @@
+# Tier B local-backend SwiftSnapshot of snapshot-local-source.
+#
+# Captures the source VM's memory state to an on-node hostPath under
+# /var/lib/kubeswift/snapshots/. The webhook enforces that prefix.
+# `includeMemory: true` is the default — explicit here for clarity.
+#
+# After Ready, swiftrestore-inplace.yaml or swiftrestore-clone.yaml
+# can restore this snapshot back into the same VM (in-place fast
+# path) or into a fresh clone.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: snapshot-local-mem
+spec:
+  guestRef:
+    name: snapshot-local-source
+  backend:
+    type: local
+    local:
+      hostPath: /var/lib/kubeswift/snapshots/default-snapshot-local-mem
+  includeMemory: true
+  resumeAfterSnapshot: true

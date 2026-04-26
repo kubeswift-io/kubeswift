@@ -59,7 +59,7 @@ build-controller-image:
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
 build-swiftletd-image:
-	docker build -f images/swiftletd/Containerfile rust/ -t $(SWIFTLETD_IMAGE) \
+	docker build -f images/swiftletd/Containerfile . -t $(SWIFTLETD_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
 build-gpu-discovery-image:

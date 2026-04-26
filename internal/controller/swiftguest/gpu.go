@@ -263,6 +263,20 @@ func (r *SwiftGuestReconciler) buildPod(
 	seedConfigMapName, intentConfigMapName string,
 	rootDiskClone *RootDiskCloneResult,
 ) (*corev1.Pod, error) {
+	// Tier B (local-backend) restore: the SwiftRestore controller has
+	// stamped the SwiftGuest with snapshot.kubeswift.io/active-restore.
+	// The restore-mode launcher mounts the snapshot directory hostPath,
+	// optionally stages+patches it via the snapshot-stager init
+	// container, and runs CH in --restore mode. See restore.go.
+	//
+	// The webhook rejects gpuProfileRef + Tier B at admission time
+	// (Phase 0 spike Constraint #1: VFIO + memory snapshot fails on
+	// restore with `bar 0 already used`), so the restore branch sits
+	// before the GPU branch and the two are mutually exclusive in
+	// practice.
+	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
+		return BuildRestorePod(guest, rg, intentConfigMapName, rootDiskClone, params), nil
+	}
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
 		// Load profile to get hugepages size for the pod spec.
 		var profile gpuv1alpha1.SwiftGPUProfile

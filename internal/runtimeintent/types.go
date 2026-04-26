@@ -17,6 +17,27 @@ type RuntimeIntent struct {
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
+	// Restore is set when this launcher pod is meant to bring up the VM
+	// from a Tier B local snapshot via Cloud Hypervisor's --restore.
+	// When non-nil, swiftletd skips seed.iso construction and the normal
+	// CH spawn, and instead invokes
+	// `cloud-hypervisor --api-socket=... --restore source_url=file://<path>/`.
+	// The VM comes up Paused; the SwiftRestore controller drives the
+	// resume separately via the snapshot-action annotation surface.
+	Restore *RestoreIntent `json:"restore,omitempty"`
+}
+
+// RestoreIntent points swiftletd at a snapshot directory for a
+// restore-receive launch. The directory must already be present in
+// the launcher pod's mount namespace at SnapshotPath; the SwiftGuest
+// pod builder mounts it from the on-node hostPath (read-only for an
+// in-place restore, or via a stager init container that materializes
+// a patched copy in a writable emptyDir for clones — see
+// docs/snapshots/local-snapshots.md).
+type RestoreIntent struct {
+	// SnapshotPath is the absolute in-pod path of the snapshot directory
+	// (the dir CH reads config.json, state.json, and memory-ranges from).
+	SnapshotPath string `json:"snapshotPath"`
 }
 
 // NICIntent describes a single network interface for the VM.
