@@ -21,7 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -42,9 +44,31 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Terminal states: nothing to do.
-	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseReady ||
-		snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+	// Deletion path: when the SwiftSnapshot is being deleted and our
+	// finalizer is present, run the hostPath cleanup pod. Drop the
+	// finalizer once cleanup completes so the apiserver can GC. This
+	// runs before the terminal-state check because deletion can
+	// happen from any phase.
+	if snap.DeletionTimestamp != nil {
+		done, err := r.handleDeletion(ctx, &snap)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if done {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Terminal states: ensure the cleanup finalizer is in place
+	// (no-op for csi-volume-snapshot) and otherwise nothing to do.
+	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseReady {
+		if err := r.ensureFinalizer(ctx, &snap); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
 		return ctrl.Result{}, nil
 	}
 
@@ -105,11 +129,19 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, time.Duration, error) {
-	// Phase 1: only the csi-volume-snapshot backend is supported.
-	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
+	// Backend dispatch:
+	//   csi-volume-snapshot (Phase 1): create snapshot.storage VolumeSnapshot
+	//   local              (Phase 2): drive launcher pod via action annotations
+	//   s3                 (reserved Phase 3): rejected by webhook
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
+		// Falls through to the existing csi-volume-snapshot path.
+	case snapshotv1alpha1.SnapshotBackendLocal:
+		return r.handlePendingLocal(ctx, snap, status)
+	default:
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonUnsupportedBackend,
-			"backend "+string(snap.Spec.Backend.Type)+" is not implemented in Phase 1; use csi-volume-snapshot")
+			"backend "+string(snap.Spec.Backend.Type)+" is not yet implemented in this controller")
 		return true, 0, nil
 	}
 
@@ -169,6 +201,11 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, string, error) {
+	// Backend dispatch — local takes its own path (poll launcher pod
+	// status annotations); CSI continues to drive VolumeSnapshot below.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+		return r.handleCapturingLocal(ctx, snap, status)
+	}
 	pvc, err := r.guestRootPVC(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
 	if err != nil {
 		return false, "", err
@@ -226,12 +263,62 @@ func isNotFound(err error) bool {
 
 // SetupWithManager registers the reconciler.
 //
-// Owns(VolumeSnapshot) ensures readyToUse transitions trigger an immediate
-// reconcile rather than waiting for a periodic resync. The controller does
-// not own SwiftGuest (the source is observed read-only).
+// Owns(VolumeSnapshot) gives the csi-volume-snapshot path immediate
+// requeue when readyToUse flips. The local-backend (Tier B) path
+// uses Watches on Pod to make pod-phase transitions (Failed/Succeeded
+// mid-capture) observable without waiting for periodic resync — the
+// architect Q1 pod-death-recovery requirement. We can't Owns(Pod)
+// because the launcher pod is owned by the SwiftGuest, not the
+// SwiftSnapshot, so EnqueueRequestsFromMapFunc maps Pod events to
+// the SwiftSnapshots that reference that pod's guest.
 func (r *SwiftSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&snapshotv1alpha1.SwiftSnapshot{}).
 		Owns(&volumesnapshotv1.VolumeSnapshot{}).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.podToSnapshots),
+		).
 		Complete(r)
+}
+
+// podToSnapshots maps a Pod event to the SwiftSnapshots that target
+// the Pod's guest. Returns at most one Request: launcher pods are
+// 1:1 with SwiftGuests, and we filter to SwiftSnapshots in the same
+// namespace whose guestRef.name matches the pod name AND whose phase
+// is Capturing (terminal phases don't need re-reconcile).
+//
+// The mapper returns no requests for non-launcher pods (e.g. CSI
+// driver pods, image-import jobs); the guestRef-name filter is the
+// cheap lever that gates the list operation.
+func (r *SwiftSnapshotReconciler) podToSnapshots(ctx context.Context, obj client.Object) []ctrlreconcile.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil
+	}
+	var snaps snapshotv1alpha1.SwiftSnapshotList
+	if err := r.List(ctx, &snaps, client.InNamespace(pod.Namespace)); err != nil {
+		// Drop the event silently; the periodic resync (10h default)
+		// will eventually pick up the transition. Logging at info
+		// level would be noisy on every Pod event.
+		return nil
+	}
+	var out []ctrlreconcile.Request
+	for i := range snaps.Items {
+		s := &snaps.Items[i]
+		if s.Spec.GuestRef.Name != pod.Name {
+			continue
+		}
+		// Only Capturing snapshots care about Pod transitions —
+		// Pending hasn't dispatched the action, terminal phases are
+		// done. Skipping the rest keeps the reconcile-rate budget
+		// for the SwiftSnapshots that actually need it.
+		if s.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+			continue
+		}
+		out = append(out, ctrlreconcile.Request{
+			NamespacedName: client.ObjectKey{Name: s.Name, Namespace: s.Namespace},
+		})
+	}
+	return out
 }

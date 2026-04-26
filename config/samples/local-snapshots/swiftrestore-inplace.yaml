@@ -1,0 +1,22 @@
+# In-place restore: same target name as the source SwiftGuest, no
+# identity regeneration. Triggers the in-place fast path — the
+# launcher pod mounts the snapshot directory read-only directly,
+# no init container, no staging copy, no patcher invocation.
+#
+# OverwriteExisting=true is required because the source SwiftGuest
+# is the target. The controller stamps the source guest with restore
+# annotations and force-deletes its launcher pod so it gets rebuilt
+# in restore mode.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: snapshot-local-inplace
+spec:
+  snapshotRef:
+    name: snapshot-local-mem
+  targetGuest:
+    name: snapshot-local-source       # same name as source → in-place
+    overwriteExisting: true
+  resumeAfterRestore: true
+  # No spec.identity — in-place restore preserves the original VM's
+  # machine-id, SSH host keys, hostname, and MAC byte-for-byte.

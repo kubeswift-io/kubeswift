@@ -39,6 +39,28 @@ pub struct RuntimeIntent {
     /// GPU passthrough configuration. Populated when gpuProfileRef is set.
     #[serde(default)]
     pub gpu: Option<GPUIntent>,
+    /// Restore-receive configuration. Populated by the SwiftRestore
+    /// controller when this launcher pod is meant to bring up a VM
+    /// from a Tier B local snapshot rather than from a fresh boot.
+    /// When set, swiftletd skips seed.iso creation, skips the normal
+    /// CH spawn path, and instead invokes
+    /// `cloud-hypervisor --api-socket=... --restore source_url=file://<path>`.
+    /// The VM comes up Paused; the SwiftRestore controller drives the
+    /// resume through the snapshot-action annotation surface, the
+    /// same path used for every other hypervisor action.
+    #[serde(default)]
+    pub restore: Option<RestoreIntent>,
+}
+
+/// Restore-receive configuration for swiftletd.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreIntent {
+    /// Absolute path to the snapshot directory inside the launcher
+    /// container — the controller mounts the on-node hostPath dir
+    /// here as readOnly. CH reads `config.json`, `state.json`, and
+    /// `memory-ranges` from this directory.
+    pub snapshot_path: String,
 }
 
 /// GPU passthrough configuration from the controller.
@@ -182,6 +204,37 @@ impl RuntimeIntent {
     /// Returns true if a data disk is attached.
     pub fn has_data_disk(&self) -> bool {
         !self.data_disk_path().is_empty()
+    }
+
+    /// Returns true when this launcher pod is meant to restore a VM
+    /// from a local snapshot rather than perform a fresh boot.
+    pub fn is_restore(&self) -> bool {
+        self.restore.is_some()
+    }
+
+    /// Returns the snapshot path for restore-receive mode, or empty
+    /// string when not restoring.
+    pub fn restore_snapshot_path(&self) -> &str {
+        match &self.restore {
+            Some(r) if !r.snapshot_path.is_empty() => &r.snapshot_path,
+            _ => "",
+        }
+    }
+
+    /// Returns the snapshot URL CH expects on `--restore source_url=`.
+    /// Empty when not restoring.
+    pub fn restore_source_url(&self) -> String {
+        let p = self.restore_snapshot_path();
+        if p.is_empty() {
+            return String::new();
+        }
+        // CH wants `file:///abs/path/`. Trailing slash is required by
+        // CH's URL parser; tolerate either form in the intent.
+        if p.ends_with('/') {
+            format!("file://{}", p)
+        } else {
+            format!("file://{}/", p)
+        }
     }
 
     /// Returns the hypervisor to use. Defaults to "cloud-hypervisor".
@@ -336,5 +389,80 @@ mod tests {
         let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
         let nics = intent.nics().unwrap();
         assert!(nics[0].is_bridge(), "default type should be bridge");
+    }
+
+    #[test]
+    fn test_intent_no_restore_by_default() {
+        let json = r#"{
+            "rootDisk": {"path": "/data/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/test"
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(!intent.is_restore());
+        assert!(intent.restore_snapshot_path().is_empty());
+        assert!(intent.restore_source_url().is_empty());
+    }
+
+    #[test]
+    fn test_intent_restore_with_trailing_slash() {
+        let json = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/restored",
+            "restore": {"snapshotPath": "/var/lib/kubeswift/snapshots/default-snap1/"}
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(intent.is_restore());
+        assert_eq!(
+            intent.restore_snapshot_path(),
+            "/var/lib/kubeswift/snapshots/default-snap1/"
+        );
+        assert_eq!(
+            intent.restore_source_url(),
+            "file:///var/lib/kubeswift/snapshots/default-snap1/"
+        );
+    }
+
+    #[test]
+    fn test_intent_restore_without_trailing_slash_normalizes() {
+        // Tolerate intent that omits the trailing slash; restore URL
+        // always carries one (CH's URL parser requires it).
+        let json = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/restored",
+            "restore": {"snapshotPath": "/var/lib/kubeswift/snapshots/default-snap1"}
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            intent.restore_source_url(),
+            "file:///var/lib/kubeswift/snapshots/default-snap1/"
+        );
+    }
+
+    #[test]
+    fn test_intent_empty_restore_snapshot_path_treated_as_no_restore() {
+        let json = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/restored",
+            "restore": {"snapshotPath": ""}
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        // is_restore() is purely structural — the field is set, even
+        // if empty. The launcher's run_ch_restore rejects empty source
+        // URLs at runtime, so we don't second-guess it here.
+        assert!(intent.is_restore());
+        // ...but the URL is empty, which run_ch_restore checks.
+        assert!(intent.restore_source_url().is_empty());
     }
 }

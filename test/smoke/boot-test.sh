@@ -289,6 +289,7 @@ MOCK_EOF
       "gpus": [{
         "index": 0,
         "pciAddress": "0000:41:00.0",
+        "vendor": "NVIDIA",
         "model": "NVIDIA A100-PCIe",
         "deviceId": "10de:20b0",
         "numaNode": 0,

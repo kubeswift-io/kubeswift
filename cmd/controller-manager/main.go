@@ -180,13 +180,13 @@ func main() {
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &snapshotv1alpha1.SwiftSnapshot{}).
-			WithCustomValidator(&swiftsnapshotwebhook.Validator{}).
+			WithCustomValidator(&swiftsnapshotwebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftSnapshot webhook")
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &snapshotv1alpha1.SwiftRestore{}).
-			WithCustomValidator(&swiftrestorewebhook.Validator{}).
+			WithCustomValidator(&swiftrestorewebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftRestore webhook")
 			os.Exit(1)
