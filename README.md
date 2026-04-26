@@ -14,7 +14,7 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 - **SR-IOV NIC passthrough** — Hardware NIC VFs passed directly to VMs via VFIO for native performance. GPUDirect RDMA, DPDK, NFV workloads
 - **SwiftGuestPool** — Fleet management for identical VMs. ReplicaSet semantics with rolling updates (maxUnavailable/maxSurge), topology spread (Pack/Spread), and PVC per replica (StatefulSet-like persistent storage). Scale via `kubectl scale sgpool`
 - **Per-guest root disk cloning** — Each VM gets its own writable copy of the SwiftImage, sized from SwiftGuestClass. SwiftImage PVC is a compact template. Two clone strategies: `copy` (default, works on any CSI driver) and `snapshot` (CSI VolumeSnapshot + dataSource clones, faster on snapshot-capable drivers) — see [docs/images/clone-strategies.md](docs/images/clone-strategies.md)
-- **VM snapshots and restore** — Disk-only, crash-consistent snapshots via `SwiftSnapshot` and `SwiftRestore` CRDs backed by CSI VolumeSnapshots; `swiftctl snapshot` / `swiftctl restore` subcommands — see [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md)
+- **VM snapshots and restore** — Two backends: `csi-volume-snapshot` (disk-only, crash-consistent, CSI VolumeSnapshot-backed — see [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md)) and `local` (memory + disk, hostPath-backed, with clone identity regeneration — see [docs/snapshots/local-snapshots.md](docs/snapshots/local-snapshots.md), [docs/snapshots/identity-regeneration.md](docs/snapshots/identity-regeneration.md), [docs/snapshots/pause-window.md](docs/snapshots/pause-window.md)). `swiftctl snapshot` / `swiftctl restore` drive both backends.
 - **Data disks** — Optional secondary data disk (`dataDiskRef`) on any boot path; appears as /dev/vdb in guest
 - **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status. Multi-NIC via Multus, macvlan, VLANs, OVN-Kubernetes overlay and localnet topologies
 - **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
@@ -174,7 +174,10 @@ make smoke-test
 | SwiftGuestPool API | [docs/api/swiftguestpool.md](docs/api/swiftguestpool.md) |
 | SwiftGuestPool guide | [docs/swiftguestpool-guide.md](docs/swiftguestpool-guide.md) |
 | SwiftGuestPool use cases | [docs/swiftguestpool-use-cases.md](docs/swiftguestpool-use-cases.md) |
-| VM snapshots and restore | [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md) |
+| VM snapshots — disk-only (CSI) | [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md) |
+| VM snapshots — memory + disk (local) | [docs/snapshots/local-snapshots.md](docs/snapshots/local-snapshots.md) |
+| Clone identity regeneration | [docs/snapshots/identity-regeneration.md](docs/snapshots/identity-regeneration.md) |
+| Snapshot pause window | [docs/snapshots/pause-window.md](docs/snapshots/pause-window.md) |
 | SwiftImage clone strategies | [docs/images/clone-strategies.md](docs/images/clone-strategies.md) |
 | Security audit | [docs/security-audit.md](docs/security-audit.md) |
 | Development | [docs/development.md](docs/development.md) |
