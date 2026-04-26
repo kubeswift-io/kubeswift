@@ -105,11 +105,15 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, time.Duration, error) {
-	// Phase 1: only the csi-volume-snapshot backend is supported.
+	// Only csi-volume-snapshot is wired up in this controller revision. The
+	// local-backend handler lands in a later commit on the Phase 2 branch;
+	// until then the webhook accepts local-backend SwiftSnapshots but the
+	// controller fails them with UnsupportedBackend so the operator sees a
+	// clear error rather than an indefinite Pending.
 	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonUnsupportedBackend,
-			"backend "+string(snap.Spec.Backend.Type)+" is not implemented in Phase 1; use csi-volume-snapshot")
+			"backend "+string(snap.Spec.Backend.Type)+" is not yet implemented in this controller; use csi-volume-snapshot")
 		return true, 0, nil
 	}
 
