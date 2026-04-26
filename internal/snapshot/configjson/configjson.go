@@ -44,12 +44,20 @@ const ConfigJSONFilename = "config.json"
 // already-marked config is a no-op so retried restores don't double-
 // append.
 //
-// RewriteMACs is wired in commit 13. Holds (per-NIC-name) the new
-// MAC the controller computed via deterministic hash. Empty map is
-// a no-op.
+// RewriteMACs is an index-keyed list of new MAC addresses for the
+// virtio-net devices in config.net[]. Position N replaces the MAC
+// of config.net[N]; an empty string at N leaves that device's MAC
+// unchanged. Slice length need not equal len(config.net) — a shorter
+// slice leaves trailing devices alone, a longer one is an error
+// (caller has the device count wrong).
+//
+// The caller (SwiftRestore controller) computes new MACs via
+// runtimeintent.GenerateMAC(InterfaceMACSeed(targetNs, targetName,
+// ifaceName)). The patcher only writes them; the policy of "what is
+// the right MAC?" lives one layer up.
 type PatchOptions struct {
 	AppendCmdlineMarker bool
-	RewriteMACs         map[string]string
+	RewriteMACs         []string
 }
 
 // Read returns the parsed config.json from the given snapshot
@@ -177,13 +185,64 @@ func navigateToPayload(cfg map[string]any) (map[string]any, error) {
 	return payload, nil
 }
 
-// rewriteMACs is wired in commit 13. Stub here so commit 12's tests
-// can lock the public API shape now and commit 13 fills in the body
-// without breaking callers.
-func rewriteMACs(cfg map[string]any, byName map[string]string) ([]string, error) {
-	_ = cfg
-	_ = byName
-	return nil, fmt.Errorf("rewriteMACs not yet implemented (commit 13)")
+// rewriteMACs replaces MACs on virtio-net devices in config.net[]
+// by position. macsByIndex[N] is the new MAC for net[N]; an empty
+// string at index N leaves that device's MAC unchanged. macsByIndex
+// length must not exceed len(config.net) (catches caller bugs that
+// pass too many MACs).
+//
+// CH's config layout (v51):
+//
+//	{ "config": { "net": [ {"id": "_net0", "tap": "tap0", "mac": "52:54:00:..."} ] } }
+//
+// `mac` is the only field this function touches. `tap`, `id`, queue
+// counts, MTU, etc. pass through.
+//
+// We don't validate MAC format here — runtimeintent.GenerateMAC
+// always produces valid AA:BB:CC:DD:EE:FF strings, and validating
+// in two places risks divergence. Bad input from a future caller
+// will surface as a CH startup error during restore-receive.
+func rewriteMACs(cfg map[string]any, macsByIndex []string) ([]string, error) {
+	configMap, ok := cfg["config"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("config.json: top-level 'config' missing or not an object")
+	}
+	netRaw, ok := configMap["net"]
+	if !ok {
+		// Source VM has no net devices — caller asked us to rewrite
+		// MACs for a netless VM, which is meaningless.
+		return nil, fmt.Errorf("config.json: 'config.net' missing — caller passed RewriteMACs for a VM with no NICs")
+	}
+	net, ok := netRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("config.json: config.net is %T, want array", netRaw)
+	}
+	if len(macsByIndex) > len(net) {
+		return nil, fmt.Errorf("config.json: RewriteMACs has %d entries but config.net has only %d devices",
+			len(macsByIndex), len(net))
+	}
+	var changes []string
+	for i, newMAC := range macsByIndex {
+		if newMAC == "" {
+			continue
+		}
+		device, ok := net[i].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config.json: config.net[%d] is %T, want object", i, net[i])
+		}
+		oldMAC, _ := device["mac"].(string)
+		if oldMAC == newMAC {
+			// Idempotent: caller passed the same MAC we already have.
+			continue
+		}
+		device["mac"] = newMAC
+		ifaceID, _ := device["id"].(string)
+		if ifaceID == "" {
+			ifaceID = fmt.Sprintf("net[%d]", i)
+		}
+		changes = append(changes, fmt.Sprintf("rewrote MAC on %s: %s -> %s", ifaceID, oldMAC, newMAC))
+	}
+	return changes, nil
 }
 
 func configPath(dir string) string {

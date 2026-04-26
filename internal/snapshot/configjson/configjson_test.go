@@ -216,17 +216,152 @@ func TestWrite_RoundTripPreservesCmdline(t *testing.T) {
 	}
 }
 
-func TestRewriteMACs_StubReturnsErrInCommit12(t *testing.T) {
-	// Commit 13 implements the body. Commit 12 ships the stub that
-	// returns a clear error if a caller passes a non-empty MAC map.
-	// Locks the API shape so commit 13 doesn't break callers.
-	cfg := map[string]any{
-		"config": map[string]any{"payload": map[string]any{}},
+// -------- MAC rewriting tests (commit 13) --------
+
+// configWithNet builds a minimal CH config.json shape for net-rewrite
+// tests. Each device is a map with id/tap/mac so the patcher can find
+// the MAC field. Other CH fields (queue size, MTU, num queues) are
+// omitted — they pass through untouched.
+func configWithNet(devices ...map[string]any) map[string]any {
+	netList := make([]any, len(devices))
+	for i, d := range devices {
+		netList[i] = d
 	}
-	_, err := Patch(cfg, PatchOptions{
-		RewriteMACs: map[string]string{"eth0": "52:54:00:de:ad:be"},
+	return map[string]any{
+		"config": map[string]any{
+			"payload": map[string]any{"cmdline": "console=ttyS0"},
+			"net":     netList,
+		},
+	}
+}
+
+func TestPatch_RewriteMACs_SingleDevice(t *testing.T) {
+	cfg := configWithNet(map[string]any{
+		"id":  "_net0",
+		"tap": "tap0",
+		"mac": "52:54:00:aa:bb:01",
 	})
-	if err == nil || !strings.Contains(err.Error(), "commit 13") {
-		t.Errorf("expected commit-13 stub error, got: %v", err)
+	changes, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:de:ad:be"},
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 1 || !strings.Contains(changes[0], "_net0") {
+		t.Errorf("expected one _net0 change, got %v", changes)
+	}
+	got := cfg["config"].(map[string]any)["net"].([]any)[0].(map[string]any)["mac"]
+	if got != "52:54:00:de:ad:be" {
+		t.Errorf("MAC = %v, want 52:54:00:de:ad:be", got)
+	}
+}
+
+func TestPatch_RewriteMACs_MultiDevice_PreservesUnspecified(t *testing.T) {
+	cfg := configWithNet(
+		map[string]any{"id": "_net0", "tap": "tap0", "mac": "52:54:00:aa:bb:01"},
+		map[string]any{"id": "_net1", "tap": "tap1", "mac": "52:54:00:aa:bb:02"},
+		map[string]any{"id": "_net2", "tap": "tap2", "mac": "52:54:00:aa:bb:03"},
+	)
+	// Rewrite only _net0 and _net2; _net1 stays.
+	changes, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:11:22:33", "", "52:54:00:44:55:66"},
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Errorf("expected 2 changes, got %d: %v", len(changes), changes)
+	}
+	net := cfg["config"].(map[string]any)["net"].([]any)
+	if got := net[0].(map[string]any)["mac"]; got != "52:54:00:11:22:33" {
+		t.Errorf("net[0].mac = %v, want rewritten", got)
+	}
+	if got := net[1].(map[string]any)["mac"]; got != "52:54:00:aa:bb:02" {
+		t.Errorf("net[1].mac = %v, want preserved", got)
+	}
+	if got := net[2].(map[string]any)["mac"]; got != "52:54:00:44:55:66" {
+		t.Errorf("net[2].mac = %v, want rewritten", got)
+	}
+}
+
+func TestPatch_RewriteMACs_Idempotent(t *testing.T) {
+	cfg := configWithNet(map[string]any{
+		"id":  "_net0",
+		"mac": "52:54:00:aa:bb:01",
+	})
+	// Pass the same MAC back — should produce no change.
+	changes, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:aa:bb:01"},
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("expected no changes (idempotent), got %v", changes)
+	}
+}
+
+func TestPatch_RewriteMACs_ShorterThanNet_OnlyRewritesPrefix(t *testing.T) {
+	// MAC list shorter than net[]: trailing devices keep their MACs.
+	// Useful when only the primary NIC's MAC needs regen.
+	cfg := configWithNet(
+		map[string]any{"id": "_net0", "mac": "52:54:00:aa:bb:01"},
+		map[string]any{"id": "_net1", "mac": "52:54:00:aa:bb:02"},
+	)
+	_, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:11:22:33"},
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	net := cfg["config"].(map[string]any)["net"].([]any)
+	if got := net[0].(map[string]any)["mac"]; got != "52:54:00:11:22:33" {
+		t.Errorf("net[0].mac = %v, want rewritten", got)
+	}
+	if got := net[1].(map[string]any)["mac"]; got != "52:54:00:aa:bb:02" {
+		t.Errorf("net[1].mac = %v, want preserved", got)
+	}
+}
+
+func TestPatch_RewriteMACs_LongerThanNet_Errors(t *testing.T) {
+	// MAC list longer than net[]: caller bug.
+	cfg := configWithNet(map[string]any{"id": "_net0", "mac": "52:54:00:aa:bb:01"})
+	_, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:11:22:33", "52:54:00:44:55:66"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "RewriteMACs has 2 entries") {
+		t.Errorf("expected length-mismatch error, got: %v", err)
+	}
+}
+
+func TestPatch_RewriteMACs_NoNetDevices_Errors(t *testing.T) {
+	// Caller asked to rewrite MACs for a VM with no NICs — bug.
+	cfg := map[string]any{"config": map[string]any{"payload": map[string]any{}}}
+	_, err := Patch(cfg, PatchOptions{
+		RewriteMACs: []string{"52:54:00:de:ad:be"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "config.net") {
+		t.Errorf("expected missing-net error, got: %v", err)
+	}
+}
+
+func TestPatch_RewriteMACs_AndCmdlineMarker_TogetherProducesBothChanges(t *testing.T) {
+	// Composability: a single Patch call with both options applies
+	// them both. The controller does this in one pass for clones.
+	cfg := configWithNet(map[string]any{
+		"id":  "_net0",
+		"mac": "52:54:00:aa:bb:01",
+	})
+	cfg["config"].(map[string]any)["payload"].(map[string]any)["cmdline"] = "console=ttyS0 root=/dev/vda1"
+
+	changes, err := Patch(cfg, PatchOptions{
+		AppendCmdlineMarker: true,
+		RewriteMACs:         []string{"52:54:00:de:ad:be"},
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Errorf("expected 2 changes (cmdline + MAC), got %d: %v", len(changes), changes)
 	}
 }
