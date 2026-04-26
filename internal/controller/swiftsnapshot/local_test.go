@@ -2,7 +2,9 @@ package swiftsnapshot
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -227,11 +229,9 @@ func TestLocal_Capturing_StatusRejected_TransitionsToFailed(t *testing.T) {
 }
 
 func TestLocal_Capturing_PodPhaseFailed_Surfaces_Failed(t *testing.T) {
-	// Pre-commit-9 behavior: even without the dedicated Pod watcher,
-	// a Capturing reconcile that observes Pod.Status.Phase=Failed must
-	// not loop forever. Commit 9 adds the Watches() to make this
-	// observation prompt; this test pins the basic transition that
-	// already works on the next reconcile pass.
+	// Pod-phase observation. The Pod watcher in SetupWithManager makes
+	// this observation prompt; the controller-side transition itself
+	// works on any reconcile pass that sees PodFailed/PodSucceeded.
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
 	guest := makeGuest("default", "g1")
@@ -244,5 +244,89 @@ func TestLocal_Capturing_PodPhaseFailed_Surfaces_Failed(t *testing.T) {
 	got := get(t, c, "snap1", "default")
 	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
 		t.Errorf("phase = %s, want Failed", got.Status.Phase)
+	}
+}
+
+func TestLocal_Capturing_DeadlineExceeded_TransitionsToFailed(t *testing.T) {
+	// Wall-clock safety net: a SwiftSnapshot stuck in Capturing past
+	// its deadline force-fails even when the launcher pod is otherwise
+	// alive (e.g. swiftletd hung on a kernel I/O wait).
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	// Pretend the SwiftSnapshot is older than the default deadline.
+	snap.CreationTimestamp = metav1.Time{
+		Time: metav1.Now().Add(-(time.Duration(DefaultCaptureDeadlineSeconds) + 60) * time.Second),
+	}
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Annotations = map[string]string{
+		annoStatusID: "snap1-42",
+		annoStatus:   "running",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Fatalf("phase = %s, want Failed", got.Status.Phase)
+	}
+	if cond := findReady(got); cond == nil || !strings.Contains(cond.Message, "deadline") {
+		t.Errorf("Ready message %q, want substring 'deadline'", cond.Message)
+	}
+}
+
+func TestLocal_Capturing_AnnotationOverride_ExtendsDeadline(t *testing.T) {
+	// Operator override via kubeswift.io/snapshot-deadline-seconds:
+	// extending the deadline keeps a long-running snapshot in Capturing.
+	snap := makeLocalSnap("snap1", "default", "g1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	snap.Annotations = map[string]string{CaptureDeadlineAnnotation: "86400"} // 1 day
+	// Snapshot is older than the default deadline but within the override.
+	snap.CreationTimestamp = metav1.Time{
+		Time: metav1.Now().Add(-(time.Duration(DefaultCaptureDeadlineSeconds) + 60) * time.Second),
+	}
+	guest := makeGuest("default", "g1")
+	pod := makeLauncherPod("default", "g1", "boba")
+	pod.Annotations = map[string]string{
+		annoStatusID: "snap1-42",
+		annoStatus:   "running",
+	}
+
+	r, c := newReconciler(t, snap, guest, pod)
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+		t.Errorf("phase = %s, want Capturing (deadline override should keep us running)", got.Status.Phase)
+	}
+}
+
+func TestLocal_PodWatcher_MapsCapturingSnapshotsOnly(t *testing.T) {
+	// podToSnapshots must enqueue only Capturing snapshots that match
+	// the pod's namespace and guest-name. Pending or terminal phases
+	// are filtered out so we don't waste reconcile budget on snapshots
+	// that don't observe Pod state.
+	pod := makeLauncherPod("default", "g1", "boba")
+
+	cap := makeLocalSnap("cap-snap", "default", "g1")
+	cap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	pending := makeLocalSnap("pending-snap", "default", "g1")
+	pending.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhasePending
+	ready := makeLocalSnap("ready-snap", "default", "g1")
+	ready.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseReady
+	otherGuest := makeLocalSnap("other-snap", "default", "g2")
+	otherGuest.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+	otherNS := makeLocalSnap("ns-snap", "other", "g1")
+	otherNS.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
+
+	r, _ := newReconciler(t, pod, cap, pending, ready, otherGuest, otherNS)
+
+	reqs := r.podToSnapshots(t.Context(), pod)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d reqs, want 1", len(reqs))
+	}
+	if reqs[0].Name != "cap-snap" {
+		t.Errorf("req name = %q, want cap-snap", reqs[0].Name)
 	}
 }
