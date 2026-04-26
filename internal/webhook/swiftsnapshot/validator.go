@@ -9,11 +9,20 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
+
+// HypervisorOverrideAnnotation matches the constant in the SwiftGuest
+// controller (internal/controller/swiftguest/controller.go); duplicated
+// here to avoid a controller -> webhook import (the webhook package
+// imports swiftguest types; a reverse import would cycle).
+const HypervisorOverrideAnnotation = "kubeswift.io/hypervisor-override"
 
 // LocalBackendHostPathPrefix is the only filesystem prefix permitted for
 // the local backend's hostPath. Operator-set paths anywhere else on the
@@ -23,17 +32,26 @@ import (
 const LocalBackendHostPathPrefix = "/var/lib/kubeswift/snapshots/"
 
 // Validator validates SwiftSnapshot resources.
-type Validator struct{}
+//
+// Client is optional: when set, the validator looks up the source
+// SwiftGuest to enforce the GPU/QEMU/SR-IOV + memory-snapshot rules
+// (architect risk #3). When unset (e.g. unit tests that only exercise
+// the spec-shape rules), source-guest lookups are skipped — defense
+// in depth comes from the controller's own pre-flight checks before
+// it dispatches the capture action.
+type Validator struct {
+	Client client.Client
+}
 
-func (v *Validator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	snap, ok := obj.(*snapshotv1alpha1.SwiftSnapshot)
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", obj)
 	}
-	return nil, validateSwiftSnapshot(snap)
+	return nil, v.validateSwiftSnapshot(ctx, snap)
 }
 
-func (v *Validator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	snap, ok := newObj.(*snapshotv1alpha1.SwiftSnapshot)
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", newObj)
@@ -42,7 +60,7 @@ func (v *Validator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Obj
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", oldObj)
 	}
-	if err := validateSwiftSnapshot(snap); err != nil {
+	if err := v.validateSwiftSnapshot(ctx, snap); err != nil {
 		return nil, err
 	}
 	// Spec is immutable after creation: snapshots are point-in-time
@@ -57,7 +75,68 @@ func (v *Validator) ValidateDelete(_ context.Context, _ runtime.Object) (admissi
 	return nil, nil
 }
 
-func validateSwiftSnapshot(snap *snapshotv1alpha1.SwiftSnapshot) error {
+func (v *Validator) validateSwiftSnapshot(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
+	if err := validateShape(snap); err != nil {
+		return err
+	}
+	// Source-guest-dependent rules (memory + VFIO/QEMU/SR-IOV). Only
+	// applied when IncludeMemory=true — disk-only captures are unaffected
+	// by these constraints (CSI VolumeSnapshot doesn't pause the VM).
+	if snap.Spec.IncludeMemory && v.Client != nil {
+		return v.validateMemoryCaptureCompat(ctx, snap)
+	}
+	return nil
+}
+
+// validateMemoryCaptureCompat enforces the Phase 0 spike's hard
+// constraints on memory-snapshot compatibility:
+//
+//   - VFIO devices on the source VM: snapshot succeeds silently then
+//     restore fails with "bar 0 already used" (Constraint #1). Reject
+//     gpuProfileRef and SR-IOV interfaces upfront.
+//   - QEMU runtime: Phase 2 ships CH memory snapshots only. The
+//     hypervisor is determined by gpuProfileRef tier OR the
+//     hypervisor-override annotation. Reject either path.
+//
+// Source guest may not exist yet (operator can apply SwiftSnapshot
+// alongside SwiftGuest in a single pass); when the lookup returns
+// NotFound, defer to the controller's own pre-flight check.
+func (v *Validator) validateMemoryCaptureCompat(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
+	var guest swiftv1alpha1.SwiftGuest
+	err := v.Client.Get(ctx, client.ObjectKey{Name: snap.Spec.GuestRef.Name, Namespace: snap.Namespace}, &guest)
+	if apierrors.IsNotFound(err) {
+		// Defer to controller. The webhook is best-effort here; the
+		// controller's handlePendingLocal will see the same conditions
+		// when the guest exists.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("look up source SwiftGuest: %w", err)
+	}
+	if guest.Spec.GPUProfileRef != nil {
+		return fmt.Errorf("includeMemory=true is not supported when source SwiftGuest %s has gpuProfileRef "+
+			"(VFIO + memory snapshot fails on restore with 'bar 0 already used' — Phase 0 Constraint #1)",
+			guest.Name)
+	}
+	for _, iface := range guest.Spec.Interfaces {
+		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV {
+			return fmt.Errorf("includeMemory=true is not supported when source SwiftGuest %s has SR-IOV interfaces "+
+				"(VFIO + memory snapshot — same failure mode as gpuProfileRef)", guest.Name)
+		}
+	}
+	if guest.Annotations[HypervisorOverrideAnnotation] == "qemu" {
+		return fmt.Errorf("includeMemory=true is not supported when source SwiftGuest %s uses the QEMU runtime "+
+			"(annotation %s=qemu); Phase 2 supports memory snapshots on Cloud Hypervisor only",
+			guest.Name, HypervisorOverrideAnnotation)
+	}
+	return nil
+}
+
+// validateShape covers the rules that depend only on the SwiftSnapshot
+// itself: required fields, backend allowlist, hostPath rules, carrier-
+// field exclusivity. Extracted so unit tests can exercise it without
+// a Client.
+func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	if snap.Spec.GuestRef.Name == "" {
 		return fmt.Errorf("spec.guestRef.name is required")
 	}
