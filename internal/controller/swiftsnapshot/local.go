@@ -73,6 +73,17 @@ const HostPathBaseDir = "/var/lib/kubeswift/snapshots/"
 // (architect risk #3).
 const SnapshotDirVersionV1 = "v1"
 
+// CaptureDeadlineAnnotation lets the operator override the wall-clock
+// deadline for a Capturing SwiftSnapshot. Value is seconds; missing or
+// unparseable falls back to DefaultCaptureDeadlineSeconds.
+const CaptureDeadlineAnnotation = "kubeswift.io/snapshot-deadline-seconds"
+
+// DefaultCaptureDeadlineSeconds caps the time a SwiftSnapshot can sit
+// in Capturing before the controller forces it to Failed. 600s covers
+// a ~200 GiB VM at the Phase 0 ~2.8s/GiB Longhorn curve with margin;
+// operators with larger VMs override via CaptureDeadlineAnnotation.
+const DefaultCaptureDeadlineSeconds = 600
+
 // captureArgs is the JSON shape we emit on the launcher pod's
 // kubeswift.io/snapshot-action-args annotation when the action is
 // "capture". Kept structurally identical to swiftletd's CaptureArgs
@@ -178,18 +189,29 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, string, error) {
+	// Wall-clock deadline. Without this a launcher that died silently
+	// (no Failed/Succeeded transition because, e.g., the Pod object was
+	// force-deleted) would leave the SwiftSnapshot stuck in Capturing
+	// indefinitely. The Pod watcher (SetupWithManager) handles the
+	// fast path; this is the slow-path safety net.
+	if exceeded, deadlineSecs := captureDeadlineExceeded(snap); exceeded {
+		return false, fmt.Sprintf("capture deadline (%ds) exceeded", deadlineSecs), nil
+	}
+
 	pod, err := r.findLauncherPod(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
 	if err != nil {
 		return false, "", err
 	}
 	if pod == nil {
-		// Pod death recovery — commit 9 wires the dedicated Watches.
-		// For now: pod gone mid-capture is a hard failure.
+		// Launcher pod gone mid-capture: cannot recover. The Pod watcher
+		// in SetupWithManager makes this observation prompt — without
+		// it we'd wait for the next periodic resync.
 		return false, "launcher pod for SwiftGuest " + snap.Spec.GuestRef.Name + " disappeared during capture", nil
 	}
 	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
-		// Pod-phase recovery handled fully in commit 9; surface the
-		// failure here so the operator isn't stuck in Capturing.
+		// Launcher exited (RestartPolicy=Never) before reporting status
+		// ready. The Pod watcher in SetupWithManager surfaces this on
+		// the same reconcile pass as the phase transition.
 		return false, "launcher pod " + pod.Name + " phase=" + string(pod.Status.Phase) + " before capture completed", nil
 	}
 
@@ -291,3 +313,24 @@ func (r *SwiftSnapshotReconciler) patchPodActionAnnotations(
 // here because the action constants logically live with the
 // snapshot controller.
 var _ = []string{verbResume, verbPrepare}
+
+// captureDeadlineExceeded returns (true, deadlineSeconds) when the
+// SwiftSnapshot has been in a non-terminal state past its deadline.
+// Reads kubeswift.io/snapshot-deadline-seconds (operator override)
+// with DefaultCaptureDeadlineSeconds fallback. The "since" reference
+// is the SwiftSnapshot's CreationTimestamp — capture is a
+// from-creation-to-Ready operation, so the deadline applies to the
+// whole run, not just the Capturing phase.
+func captureDeadlineExceeded(snap *snapshotv1alpha1.SwiftSnapshot) (bool, int64) {
+	deadline := int64(DefaultCaptureDeadlineSeconds)
+	if v, ok := snap.Annotations[CaptureDeadlineAnnotation]; ok && v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+			deadline = parsed
+		}
+	}
+	if snap.CreationTimestamp.IsZero() {
+		return false, deadline
+	}
+	elapsed := time.Since(snap.CreationTimestamp.Time)
+	return elapsed.Seconds() > float64(deadline), deadline
+}
