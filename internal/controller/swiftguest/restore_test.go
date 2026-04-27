@@ -149,7 +149,7 @@ func TestBuildRestorePod_InPlaceFastPath_NoStagerInitContainer(t *testing.T) {
 		Mode:         RestoreModeInPlace,
 	}
 
-	pod := BuildRestorePod(guest, rg, "g1-runtime-intent", nil, params)
+	pod := BuildRestorePod(guest, rg, "", "g1-runtime-intent", nil, params)
 
 	if pod.Name != "g1" {
 		t.Errorf("pod.Name = %q, want g1", pod.Name)
@@ -199,7 +199,7 @@ func TestBuildRestorePod_CloneAddsStagerAndStagingVolume(t *testing.T) {
 	}
 	clone := &RootDiskCloneResult{PVCName: "swiftguest-root-clone1"}
 
-	pod := BuildRestorePod(guest, rg, "g1-runtime-intent", clone, params)
+	pod := BuildRestorePod(guest, rg, "", "g1-runtime-intent", clone, params)
 
 	staging := findVolume(pod, snapshotStagingVolume)
 	if staging == nil {
@@ -260,20 +260,73 @@ func TestBuildRestorePod_CloneAddsStagerAndStagingVolume(t *testing.T) {
 	}
 }
 
-func TestBuildRestorePod_RestartPolicyNeverAndNoSeedVolume(t *testing.T) {
+func TestBuildRestorePod_RestartPolicyNever(t *testing.T) {
 	guest := minimalGuest()
 	rg := minimalResolved()
 	params := RestoreParams{Mode: RestoreModeInPlace, NodeName: "n1"}
 
-	pod := BuildRestorePod(guest, rg, "intent-cm", nil, params)
+	pod := BuildRestorePod(guest, rg, "", "intent-cm", nil, params)
 
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("RestartPolicy = %s, want Never", pod.Spec.RestartPolicy)
 	}
-	// Seed ConfigMap must NOT be mounted — the source VM's cloud-init
-	// state is baked into the snapshot's memory.
+}
+
+func TestBuildRestorePod_NoSeedMountWhenSourceHadNoSeed(t *testing.T) {
+	guest := minimalGuest()
+	rg := minimalResolved() // Seed is nil by default
+	params := RestoreParams{Mode: RestoreModeInPlace, NodeName: "n1"}
+
+	pod := BuildRestorePod(guest, rg, "", "intent-cm", nil, params)
+
 	if findVolume(pod, "seed") != nil {
-		t.Errorf("restore pod must not have seed volume — cloud-init state is in the snapshot")
+		t.Errorf("restore pod must not have seed volume when source has no seed")
+	}
+}
+
+func TestBuildRestorePod_SeedMountWhenSourceHadSeed(t *testing.T) {
+	// CH on --restore re-opens every disk listed in config.json,
+	// including the seed.iso. swiftletd reconstructs seed.iso
+	// deterministically from the seed dir before spawn_ch_restore;
+	// for that to work, the restore pod must mount the seed
+	// ConfigMap at the canonical SeedPath.
+	guest := minimalGuest()
+	rg := minimalResolved()
+	rg.Seed = &resolved.Seed{Datasource: "NoCloud"}
+	params := RestoreParams{Mode: RestoreModeInPlace, NodeName: "n1"}
+
+	pod := BuildRestorePod(guest, rg, "g1-seed", "intent-cm", nil, params)
+
+	seedVol := findVolume(pod, "seed")
+	if seedVol == nil {
+		t.Fatal("restore pod missing seed volume despite source having a seed")
+	}
+	if seedVol.ConfigMap == nil {
+		t.Fatal("seed volume must be a ConfigMap")
+	}
+	if seedVol.ConfigMap.Name != "g1-seed" {
+		t.Errorf("seed ConfigMap name = %q, want g1-seed", seedVol.ConfigMap.Name)
+	}
+	launcher := pod.Spec.Containers[0]
+	mount := findMount(&launcher, "seed")
+	if mount == nil || mount.MountPath != SeedPath {
+		t.Errorf("launcher missing seed mount or wrong path: %+v", mount)
+	}
+}
+
+func TestBuildRestorePod_SkipsSeedWhenConfigMapNameEmpty(t *testing.T) {
+	// Defensive: even if rg.HasSeed() is true, an empty
+	// seedConfigMapName means the controller didn't materialize
+	// the ConfigMap yet — better to skip the mount than break the
+	// pod with a missing ConfigMap reference.
+	guest := minimalGuest()
+	rg := minimalResolved()
+	rg.Seed = &resolved.Seed{Datasource: "NoCloud"}
+	params := RestoreParams{Mode: RestoreModeInPlace, NodeName: "n1"}
+
+	pod := BuildRestorePod(guest, rg, "", "intent-cm", nil, params)
+	if findVolume(pod, "seed") != nil {
+		t.Errorf("seed volume must not be added when seedConfigMapName is empty")
 	}
 }
 
@@ -283,7 +336,7 @@ func TestBuildRestorePod_NetworkInitOnlyWhenHasNetwork(t *testing.T) {
 	rg.Network = false
 
 	params := RestoreParams{Mode: RestoreModeInPlace, NodeName: "n1"}
-	pod := BuildRestorePod(guest, rg, "intent-cm", nil, params)
+	pod := BuildRestorePod(guest, rg, "", "intent-cm", nil, params)
 	for _, ic := range pod.Spec.InitContainers {
 		if ic.Name == "network-init" {
 			t.Errorf("network-init must not run when guest has no network")
@@ -291,7 +344,7 @@ func TestBuildRestorePod_NetworkInitOnlyWhenHasNetwork(t *testing.T) {
 	}
 
 	rg.Network = true
-	pod = BuildRestorePod(guest, rg, "intent-cm", nil, params)
+	pod = BuildRestorePod(guest, rg, "", "intent-cm", nil, params)
 	found := false
 	for _, ic := range pod.Spec.InitContainers {
 		if ic.Name == "network-init" {
@@ -309,7 +362,7 @@ func TestBuildRestorePod_StagerHasNoPrivilege(t *testing.T) {
 	rg := minimalResolved()
 	params := RestoreParams{Mode: RestoreModeClone, NodeName: "n1"}
 
-	pod := BuildRestorePod(guest, rg, "intent-cm", &RootDiskCloneResult{PVCName: "p"}, params)
+	pod := BuildRestorePod(guest, rg, "", "intent-cm", &RootDiskCloneResult{PVCName: "p"}, params)
 	stager := findInit(pod, SnapshotStagerInitContainerName)
 	if stager == nil {
 		t.Fatal("stager missing")

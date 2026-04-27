@@ -99,15 +99,32 @@ fn main() {
                 };
             log::info!("runtime_dir path={}", runtime_dir.root().display());
 
-            // Restore-receive mode (Phase 2): the seed is baked into
-            // the snapshot's memory state — cloud-init already ran on
-            // the original VM. Skip seed.iso construction entirely.
+            // Seed.iso construction.
+            //
+            // Fresh boot: cloud-init reads the seed.iso at first wake to
+            // configure the VM. Required path.
+            //
+            // Restore-receive (Phase 2): cloud-init has already run, but
+            // CH on `--restore` re-opens every disk listed in the
+            // snapshot's config.json — and the snapshot's config.json
+            // still references the seed.iso disk path. CH bails with
+            // "no such file or directory" if the file is missing.
+            //
+            // The build is deterministic and idempotent, so we run it
+            // for both fresh boot and restore-receive whenever the
+            // intent carries a seed. For in-place restore, the
+            // runtime_dir name matches the source pod's, so the
+            // rebuilt seed.iso lands at the same path config.json
+            // expects. Clone restores have a different runtime_dir
+            // and need a config.json disk-path patch in addition
+            // (Phase 2 follow-up).
             if intent.is_restore() {
                 log::info!(
-                    "restore_receive_mode snapshot_path={} (skipping seed.iso)",
+                    "restore_receive_mode snapshot_path={}",
                     intent.restore_snapshot_path()
                 );
-            } else if intent.has_seed() && !intent.has_kernel() {
+            }
+            if intent.has_seed() && !intent.has_kernel() {
                 let configmap_path = Path::new(intent.seed_path());
                 let nocloud_output = runtime_dir.seed_dir();
                 if let Err(e) = swift_seed::build_nocloud_dir(configmap_path, &nocloud_output) {

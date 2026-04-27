@@ -163,10 +163,21 @@ func (p RestoreParams) InPodSnapshotPath() string {
 // when the per-guest PVC already exists, but Phase 2 commit 10b
 // callers don't need to do it). For clones, rootDiskClone names the
 // freshly-cloned per-guest PVC that EnsureRootDiskClone produced.
+//
+// seedConfigMapName names the seed ConfigMap to mount when the source
+// guest had a seed profile. The snapshot's config.json references the
+// original seed.iso disk path; CH refuses to restore when that file is
+// missing, so the launcher rebuilds seed.iso (deterministically — the
+// bytes are the same as the original since the seed dir contents are
+// the same). For in-place restore the runtime_dir name matches the
+// source so the rebuilt path matches what config.json expects. For
+// clones the runtime_dir differs; clone restore relies on the
+// snapshot-stager + a future config.json disk-path patch (not in
+// commit 10b). Empty seedConfigMapName skips the seed mount.
 func BuildRestorePod(
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
-	intentConfigMapName string,
+	seedConfigMapName, intentConfigMapName string,
 	rootDiskClone *RootDiskCloneResult,
 	params RestoreParams,
 ) *corev1.Pod {
@@ -234,12 +245,25 @@ func BuildRestorePod(
 			},
 		})
 	}
+	// Seed ConfigMap mount — required for restore-receive even though
+	// cloud-init has already run (the seed dir is baked into the
+	// snapshot's memory state). The snapshot's config.json still
+	// references the seed.iso disk path; CH on --restore re-opens
+	// every disk listed and refuses with "no such file or directory"
+	// when the file is missing. swiftletd reconstructs seed.iso
+	// deterministically from the seed ConfigMap before spawn_ch_restore.
+	if rg.HasSeed() && seedConfigMapName != "" {
+		AddSeedVolume(&volumes, seedConfigMapName)
+	}
 
 	mounts := []corev1.VolumeMount{
 		{Name: "run", MountPath: RunDirPath},
 		{Name: "root-disk", MountPath: DisksRootPath},
 		{Name: "runtime-intent", MountPath: IntentPath},
 		{Name: "dev-kvm", MountPath: "/dev/kvm"},
+	}
+	if rg.HasSeed() && seedConfigMapName != "" {
+		mounts = append(mounts, corev1.VolumeMount{Name: "seed", MountPath: SeedPath})
 	}
 	if params.IsClone() {
 		// In clone mode the launcher reads the staged+patched copy.
