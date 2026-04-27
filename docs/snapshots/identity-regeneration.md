@@ -2,18 +2,33 @@
 
 When a memory snapshot is restored to a **different** SwiftGuest name
 (a clone), the new VM resumes the captured guest's state byte-for-byte
-— including its `/etc/machine-id`, `/etc/ssh/ssh_host_*_key*`, kernel-
-captured network MAC, and whatever the guest had set as its hostname.
-Without intervention every clone shares network and identity state
-with the source: same MACs (L2 collisions), same machine-id (dbus,
-journald, systemd, license-anchored apps confused), same SSH host
-keys (man-in-the-middle warnings on connect).
+— including its `/etc/machine-id`, `/etc/ssh/ssh_host_*_key*`, the
+guest-visible MAC on the virtio-net device, and whatever the guest
+had set as its hostname. Without intervention every clone shares
+identity state with the source: same machine-id (dbus, journald,
+systemd, license-anchored apps confused), same SSH host keys
+(man-in-the-middle warnings on connect), same hostname.
 
-KubeSwift handles regeneration in two halves: a **hypervisor-level**
-half done by the controller before CH boots from the snapshot, and an
-**in-guest** half done by a cloud-init module on first wake.
+This document describes what KubeSwift does at the hypervisor layer,
+what does NOT happen automatically inside the guest, and the
+workarounds operators have today.
 
-## Hypervisor-level: MAC rewriting
+## The fundamental constraint: resume is not a boot
+
+CH `--restore` resumes the captured guest state byte-for-byte. The
+kernel does not re-init, systemd does not re-init, and cloud-init
+does not re-run. Anything cached in RAM at snapshot time is restored
+into the resumed VM exactly as it was — including the contents of
+`/etc/machine-id`, the SSH host key files (already loaded into the
+sshd process and cached on the filesystem), the hostname (cached in
+the kernel and exposed via `gethostname(2)`), and the virtio-net
+driver's view of its MAC address.
+
+Mechanisms that depend on a fresh boot — cloud-init `bootcmd`,
+systemd unit ordering, kernel cmdline parsing — do not fire on
+resume. There is no boot.
+
+## Hypervisor-level: MAC rewriting in `config.json` (visible only to the bridge)
 
 The SwiftRestore controller patches `config.json` inside the snapshot
 directory before kicking off the restore-receive launcher. For each
@@ -24,115 +39,176 @@ new_mac = first 24 bits of sha256(target-namespace/target-name/iface-name)
           OR'd with locally-administered bit, multicast bit cleared
 ```
 
-(`internal/runtimeintent/GenerateMAC` + `InterfaceMACSeed`). Same
+(`internal/runtimeintent.GenerateMAC` + `InterfaceMACSeed`). Same
 inputs always produce the same MAC, so re-running a restore against
 the same target name doesn't churn MACs across pod recreations.
 
 The patch only writes the `mac` field on `config.net[]` entries; all
-other fields (queue counts, MTU, tap names) pass through. CH on
-restore reads the patched config and brings up the virtio-net devices
-with the new MAC values.
+other fields (queue counts, MTU, tap names) pass through.
 
-## In-guest: cloud-init `bootcmd` module
+**What this rewrite actually affects.** The new MAC is visible in
+CH's `vm.info` output, in the bridge fdb of the launcher pod, and on
+the host-side tap device. It is **not** visible to the guest's
+`ip link show` output: the guest's virtio-net driver state — including
+the MAC the guest believes its NIC has — is captured in the snapshot's
+RAM image and restored verbatim. The guest keeps using the source's
+MAC at the kernel network stack layer.
 
-The MAC change is a hypervisor-level fait accompli. The other three
-(machine-id, SSH host keys, hostname) need to happen inside the
-guest — the controller can't safely modify a paused guest's
-filesystem. Mechanism:
+In practice, L2 collisions between clones running on the same node
+are avoided not by the MAC rewrite but by **Kubernetes pod network
+namespace isolation**: each launcher pod has its own bridge in its
+own network namespace, so cross-clone bridge fdbs never overlap even
+when the guest-visible MACs are identical.
 
-1. The controller appends `kubeswift.clone=true` to the kernel
-   cmdline in the snapshot's `config.json` (idempotent — re-running
-   doesn't double-append).
-2. CH boots the restored VM. `/proc/cmdline` carries the marker.
-3. cloud-init runs the `bootcmd` from the SwiftSeedProfile shipped
-   in `config/samples/seed-profiles/clone-identity-regen.yaml`. The
-   bootcmd:
-   - Checks `/proc/cmdline` for `kubeswift.clone=true`.
-   - Checks `/var/lib/kubeswift/.clone-regenerated` for absence.
-   - If both: regenerates `/etc/machine-id` (via
-     `systemd-machine-id-setup` or `uuidgen`), removes and
-     re-creates SSH host keys (`ssh-keygen -A`), sets the hostname
-     (`hostnamectl` with `/etc/hostname` fallback), and touches
-     the sentinel.
-   - If either condition fails: exit 0 (idempotent no-op).
+The `host_mac` field in `config.json` is nulled by the same patcher
+pass so CH's `open_tap` auto-discovers the clone tap's MAC at restore
+time instead of forcing the source value (which would conflict if
+two clones somehow ended up bridged together).
 
-### Why `bootcmd`, not `runcmd`?
+## In-guest identity (machine-id, SSH host keys, hostname): inherited from source
 
-cloud-init's `runcmd` runs once per *instance-id*. Snapshot/restore
-preserves the original instance-id (it's part of the captured cloud-
-init state), so `runcmd` would be a no-op on every clone after the
-first. `bootcmd` runs every boot, gated by the sentinel file, which
-gives "exactly once per clone" without depending on instance-id
-detection.
+These three fields are filesystem and kernel state, captured and
+restored along with the rest of the guest's RAM. There is no
+hypervisor-layer mechanism that can rewrite them safely without
+knowing the guest OS layout.
 
-### Bind your guests to the seed profile
+Empirical evidence captured during Phase 2 e2e (April 2026,
+commit `a40c17f`): source, clone-a, and clone-b all showed identical
+`machine-id`, SSH host fingerprint, hostname, and guest-side MAC,
+despite the snapshot-stager patcher correctly rewriting the
+hypervisor-side `config.net[0].mac` per clone.
 
-Apply this seed profile to your *source* SwiftGuest (the one you'll
-take the snapshot of) via `spec.seedProfileRef.name`:
+### The cmdline-marker / bootcmd design (and why it doesn't work for memory snapshots)
 
-```yaml
-apiVersion: swift.kubeswift.io/v1alpha1
-kind: SwiftGuest
-metadata:
-  name: db
-spec:
-  seedProfileRef:
-    name: clone-identity-regen
-  # ... rest of spec
+The `snapshot-stager` patcher appends `kubeswift.clone=true` to
+`config.payload.cmdline` for clones. The original design intent was
+that an in-guest cloud-init `bootcmd` module would `grep` for this
+marker on each boot and run the regen sequence.
+
+This does not work for memory-snapshot resume:
+
+1. **The marker may not propagate to `/proc/cmdline` at all on disk
+   boot.** CH 51.1 disk-boot snapshots use CLOUDHV.fd as the kernel
+   payload. CH writes the cmdline into guest memory at
+   `arch::layout::CMDLINE_START` and PVH boot info points at it,
+   but whether CLOUDHV.fd then forwards it through GRUB to the
+   kernel is firmware-dependent. On Ubuntu Noble (cloud-images.ubuntu.com)
+   the source guest's `/proc/cmdline` is the GRUB-supplied cmdline
+   (`BOOT_IMAGE=/vmlinuz-… root=LABEL=cloudimg-rootfs ro …`) with no
+   trace of any value CH supplied.
+2. **Even if the marker did reach `/proc/cmdline`, the bootcmd
+   never fires on resume.** cloud-init `bootcmd` runs on every
+   *boot*, gated by systemd's cloud-init service ordering. A memory-
+   snapshot resume is not a boot — systemd is already in `Completed`
+   state, cloud-init has already exited, and nothing re-invokes it.
+
+The patcher still installs the marker (and the configjson package
+exports `CloneCmdlineMarker = "kubeswift.clone=true"`) because:
+
+- It is needed for the future vsock-based regen path (the in-guest
+  agent may consult `config.payload.cmdline` to confirm "this is a
+  clone resume" if the cmdline does propagate via that boot path).
+- Writing it costs nothing and is idempotent.
+- For workflows that **do** reboot the clone after first resume,
+  the marker is then visible in the post-reboot `/proc/cmdline`
+  and the existing bootcmd works as originally designed.
+
+But the marker alone, without a reboot, does not regenerate identity.
+
+## What operators have today
+
+### Workaround 1: reboot the clone after first resume
+
+If your workflow tolerates a fast reboot post-clone-restore, this
+is the simplest path. Issue `reboot` inside the clone via SSH or
+serial console. The kernel cold-starts, cloud-init re-runs, and
+the bootcmd in the SwiftSeedProfile fires normally — regenerating
+machine-id, SSH host keys, and hostname on the cold-start kernel.
+
+Sample bootcmd at
+`config/samples/local-snapshots/swiftseedprofile-test.yaml`. Fires
+correctly on every fresh boot of a clone that carries the
+`kubeswift.clone=true` cmdline marker.
+
+### Workaround 2: manual regen inside the clone
+
+If you can't reboot (e.g. the clone is mid-task and you want to
+preserve the in-RAM state), regenerate identity manually:
+
+```sh
+# machine-id: dbus, systemd, journald all key on this
+: > /etc/machine-id
+systemd-machine-id-setup
+
+# SSH host keys: regenerate from scratch
+rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+ssh-keygen -A
+systemctl reload-or-restart ssh.service 2>/dev/null \
+  || systemctl reload-or-restart sshd.service 2>/dev/null
+
+# Hostname
+hostnamectl set-hostname <unique-name>
+
+# Optionally, force the guest to re-DHCP so the clone gets a
+# fresh lease from the clone's pod-local dnsmasq instead of using
+# the source's cached lease
+dhclient -r eth0 2>/dev/null || ip addr flush dev ens3
+dhclient eth0 2>/dev/null || dhclient ens3
 ```
 
-The seed contents are baked into the snapshot's memory state at
-capture time — clones inherit the seed automatically. You don't need
-to apply the seed profile separately to each clone.
+The MAC at the guest level cannot be changed without unbinding
+and rebinding the virtio-net driver (or rebooting). For most
+workloads this isn't necessary because pod network isolation
+prevents the cross-clone L2 collision the rewrite was meant to
+solve.
 
-If your existing source guests use a different seed profile, you can
-merge the bootcmd module into your existing profile's `userData`
-instead of switching profiles wholesale.
+## Future work: in-guest agent over vsock
 
-## What to verify after a clone
+The "fast clone, unique identity, no reboot" combination requires
+an in-guest mechanism that fires on resume without needing
+cloud-init to re-run. The targeted design is:
 
-After cloning and waiting for the restored guest to reach Running:
+- A small one-shot service inside the guest image
+  (`kubeswift-clone-regen.service`) listens on a vsock port at
+  boot and remains idle.
+- When swiftletd resumes a clone, it sends a "clone activated"
+  message to the in-guest service via vsock (`vhost-vsock` is
+  already supported by CH).
+- The service runs the regen sequence (machine-id, SSH host
+  keys, hostname, optionally a DHCP refresh, optionally a
+  `ip link set` MAC change), reports completion, and exits.
+- The service is idempotent: a sentinel file
+  (`/var/lib/kubeswift/.clone-regenerated`) guards against
+  repeated execution if the message is delivered twice.
+
+This requires modifying the guest image build (the image needs
+the vsock service shipped) and adding vsock plumbing on the
+hypervisor side (CH config.json, swiftletd post-resume logic).
+Tracked for a future phase; not in Phase 2 scope.
+
+## What to verify after a clone today
 
 ```bash
 # Compare /etc/machine-id between source and clone
-swiftctl ssh db --       cat /etc/machine-id
-swiftctl ssh db-clone -- cat /etc/machine-id
-# Must differ.
+swiftctl ssh source-name -- cat /etc/machine-id
+swiftctl ssh clone-name  -- cat /etc/machine-id
+# Phase 2: these MATCH (the documented limitation)
 
 # Compare SSH host fingerprints
-swiftctl ssh db --       ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-swiftctl ssh db-clone -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-# Must differ.
+swiftctl ssh source-name -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+swiftctl ssh clone-name  -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+# Phase 2: these MATCH
 
 # Compare hostname
-swiftctl ssh db --       hostname
-swiftctl ssh db-clone -- hostname
-# Must differ.
+swiftctl ssh source-name -- hostname
+swiftctl ssh clone-name  -- hostname
+# Phase 2: these MATCH
 
-# Compare MAC
-swiftctl ssh db --       cat /sys/class/net/eth0/address
-swiftctl ssh db-clone -- cat /sys/class/net/eth0/address
-# Must differ.
+# Compare guest-visible eth0 MAC
+swiftctl ssh source-name -- ip -br link show ens3
+swiftctl ssh clone-name  -- ip -br link show ens3
+# Phase 2: these MATCH (despite hypervisor config.net[0].mac being unique)
 ```
 
-If any of these match, the clone identity regeneration didn't fire.
-Common causes:
-
-- Guest doesn't have the seed profile applied to its source —
-  bootcmd never ran.
-- Sentinel file was created in a snapshot taken AFTER first
-  regeneration: bootcmd correctly skips on restore. Take a fresh
-  snapshot from the un-regenerated source.
-- Image is missing `ssh-keygen` or `systemd-machine-id-setup` —
-  bootcmd silently no-ops on missing tools. Check
-  `/var/log/cloud-init.log` in the guest for errors.
-
-## Future work
-
-- Per-clone hostname template (operator-set) is plumbed through
-  cloud-init metadata but the seed profile only consumes it when
-  present. A controller-driven hostname-from-targetGuest-name
-  override would tighten this in a future commit.
-- IPv6 SLAAC addresses derive from MAC under EUI-64; the MAC change
-  fixes those automatically. IPv6 ULAs configured via DHCPv6 are
-  unaffected (DHCPv6 issues a fresh prefix from the new MAC).
+If you need them to differ, apply one of the workarounds above
+or wait for the vsock-agent phase.
