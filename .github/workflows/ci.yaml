@@ -110,7 +110,7 @@ jobs:
       - name: Build swiftletd image
         uses: docker/build-push-action@v6
         with:
-          context: ./rust
+          context: .
           file: ./images/swiftletd/Containerfile
           push: false
           load: true

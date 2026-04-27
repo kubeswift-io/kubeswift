@@ -81,7 +81,7 @@ jobs:
       - name: Build and push swiftletd
         uses: docker/build-push-action@v6
         with:
-          context: ./rust
+          context: .
           file: ./images/swiftletd/Containerfile
           push: true
           tags: |
