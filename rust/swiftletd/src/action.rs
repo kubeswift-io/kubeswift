@@ -342,18 +342,32 @@ async fn dispatch_capture(
         args.resume_after_snapshot
     );
 
-    // CH's vm.snapshot endpoint REQUIRES the destination directory to
-    // already exist — it writes config.json, state.json, and
-    // memory-ranges into it without auto-creating the dir. The
-    // SwiftSnapshot controller owns naming the path (under
-    // /var/lib/kubeswift/snapshots/<ns>-<name>/) but cannot mkdir on
-    // the source node's filesystem itself; the launcher pod has the
-    // hostPath mount and is the only place this can happen safely.
-    // Idempotent: re-running an action with the same destination is
-    // a no-op when the directory already exists.
+    // CH's vm.snapshot endpoint requires the destination directory to
+    // exist AND be empty. It writes config.json, state.json, and
+    // memory-ranges into the dir without auto-creating it, and refuses
+    // when those files already exist with "File exists (os error 17)".
+    //
+    // The SwiftSnapshot controller owns naming the path (under
+    // /var/lib/kubeswift/snapshots/<ns>-<name>/) but cannot mkdir or
+    // rm on the source node's filesystem itself; the launcher pod has
+    // the hostPath mount and is the only place this can happen.
+    //
+    // We wipe-and-recreate before each capture so:
+    //   - A stale prior attempt that didn't get cleaned (cleanup
+    //     finalizer didn't run, partial failure left files) doesn't
+    //     block the new capture.
+    //   - An idempotent retry (same action-id, same destination) gets
+    //     a fresh empty dir each time.
+    //
+    // This is safe because the action loop is single-threaded per
+    // launcher pod (one capture-action in flight at a time, gated by
+    // action-id) and across launchers each SwiftSnapshot owns a
+    // unique destination subdirectory.
     if let Some(local_path) = args.destination_url.strip_prefix("file://") {
-        // strip a trailing slash so create_dir_all sees a single path.
         let local_path = local_path.trim_end_matches('/');
+        // remove_dir_all on a missing path returns an error we ignore;
+        // the create_dir_all below is the only authoritative step.
+        let _ = std::fs::remove_dir_all(local_path);
         if let Err(e) = std::fs::create_dir_all(local_path) {
             return Err(format!("create destination dir {}: {}", local_path, e));
         }
@@ -1013,6 +1027,34 @@ mod tests {
         let dest_url = format!("file://{}/", pre_existing.display());
         let action = capture_action(serde_json::json!({"destination_url": dest_url}));
         dispatch(&action, &server.path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_wipes_stale_files_in_destination() {
+        // CH refuses to vm.snapshot when config.json / state.json /
+        // memory-ranges already exist. The handler wipes the dir
+        // before snapshotting so a stale prior attempt (cleanup
+        // finalizer didn't fire, controller-driven retry, etc.)
+        // doesn't block the new capture.
+        let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let dest_tmp = tempfile::tempdir().unwrap();
+        let snap_dir = dest_tmp.path().join("stale-snap");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        // Pre-populate with the three known CH outputs.
+        std::fs::write(snap_dir.join("config.json"), b"{stale}").unwrap();
+        std::fs::write(snap_dir.join("state.json"), b"{stale}").unwrap();
+        std::fs::write(snap_dir.join("memory-ranges"), vec![0u8; 1024]).unwrap();
+        let dest_url = format!("file://{}/", snap_dir.display());
+        let action = capture_action(serde_json::json!({"destination_url": dest_url}));
+        dispatch(&action, &server.path).await.unwrap();
+        // Snapshot completed; mkdir-after-wipe gave CH a clean dir.
+        // (CH itself is mocked here so it doesn't write files; the
+        // assertion is that the wipe + mkdir didn't error.)
+        assert!(snap_dir.is_dir());
+        // The stale files we pre-populated are gone (wiped).
+        assert!(!snap_dir.join("config.json").exists());
+        assert!(!snap_dir.join("state.json").exists());
+        assert!(!snap_dir.join("memory-ranges").exists());
     }
 
     #[tokio::test]
