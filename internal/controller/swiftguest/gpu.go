@@ -275,7 +275,7 @@ func (r *SwiftGuestReconciler) buildPod(
 	// before the GPU branch and the two are mutually exclusive in
 	// practice.
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
-		return BuildRestorePod(guest, rg, intentConfigMapName, rootDiskClone, params), nil
+		return BuildRestorePod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone, params), nil
 	}
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
 		// Load profile to get hugepages size for the pod spec.
