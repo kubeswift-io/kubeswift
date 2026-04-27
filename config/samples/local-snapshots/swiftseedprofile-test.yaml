@@ -1,16 +1,27 @@
 # Combined SwiftSeedProfile for the Tier B local-snapshot e2e tests.
 #
 # Merges two concerns into one profile so the e2e scripts can SSH into
-# the guest *and* trigger the identity-regen bootcmd on clone:
+# the guest *and* run the identity-regen bootcmd ONCE THE GUEST REBOOTS:
 #
 # 1. The swiftctl ssh defaults (user "kubeswift", key id_ed25519)
 #    — same as config/samples/shared/swiftseedprofile-minimal.yaml.
-# 2. The clone-identity-regen bootcmd
+# 2. The identity-regen bootcmd
 #    — same as config/samples/seed-profiles/clone-identity-regen.yaml.
 #
-# The doc (docs/snapshots/identity-regeneration.md) explicitly suggests
-# merging the bootcmd into your existing seed profile; this sample
-# does exactly that for the tests' purposes.
+# IMPORTANT — bootcmd does NOT fire on snapshot resume:
+#
+# CH `--restore` resumes the captured guest state byte-for-byte. The
+# kernel does not re-init, systemd does not re-init, and cloud-init
+# does not re-run. The bootcmd below only executes on a fresh boot
+# (kernel cold-start), e.g. after `reboot` inside a clone or after
+# the guest is power-cycled.
+#
+# Phase 2 ships clones that share machine-id, hostname, SSH host keys,
+# and the guest-visible MAC with the source. To get unique identity on
+# a clone today, either reboot the clone after first resume, or run
+# the regen commands manually inside each clone. See
+# docs/snapshots/identity-regeneration.md and the
+# kubeswift_context.md "Snapshots Phase 2 — Known limitation" section.
 apiVersion: seed.kubeswift.io/v1alpha1
 kind: SwiftSeedProfile
 metadata:
