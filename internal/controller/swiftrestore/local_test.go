@@ -219,6 +219,94 @@ func TestIsTierBRestore(t *testing.T) {
 	}
 }
 
+// -------- handlePendingLocal: clone re-entrancy guard --------
+
+func TestLocal_Pending_Clone_ReentrantReconcileDoesNotConflict(t *testing.T) {
+	// Reproduces the failure mode that surfaced in the f41a310 e2e:
+	// a prior reconcile of this same SwiftRestore created the clone
+	// target and queued a status update to phase=Restoring, but the
+	// controller cache served stale phase=Pending while the new
+	// SwiftGuest was already visible. handlePendingLocal must
+	// recognize "this is our own work" via the swift-restore label
+	// and not fail with TargetConflict.
+	snap := makeLocalSnap("snap1", "default", "src", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseReady
+	snap.Status.NodeName = "boba"
+	restore := makeRestore("restore-clone", "default", "snap1", "clone-a", true)
+	restore.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{
+		Regenerate: []snapshotv1alpha1.IdentityRegenerationItem{
+			snapshotv1alpha1.RegenMACAddresses,
+		},
+	}
+	source := makeSourceGuest("default", "src", "ubuntu-noble")
+
+	// Pre-existing clone-a SwiftGuest from the prior reconcile.
+	preExisting := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clone-a",
+			Namespace: "default",
+			Labels: map[string]string{
+				swiftRestoreOwnerLabel: "restore-clone", // owned by THIS SwiftRestore
+			},
+		},
+		Spec: source.Spec,
+	}
+
+	r, c := newReconciler(t, snap, restore, source, preExisting)
+	r.CurrentHypervisorVersion = "v51.1"
+	reconcile(t, r, "restore-clone", "default")
+
+	got := get(t, c, "restore-clone", "default")
+	if got.Status.Phase == snapshotv1alpha1.SwiftRestorePhaseFailed {
+		cond := findReady(got)
+		t.Fatalf("re-entrant reconcile must not Fail; got phase=Failed reason=%s msg=%q",
+			reasonOrEmpty(cond), msgOrEmpty(cond))
+	}
+}
+
+func TestLocal_Pending_Clone_ExistingSwiftGuestNotOwnedByUs_StillConflicts(t *testing.T) {
+	// Counter-case: the user (or another controller) created a
+	// SwiftGuest with the target name. Without OverwriteExisting,
+	// this MUST still trip TargetConflict — we can't silently take
+	// over someone else's resource.
+	snap := makeLocalSnap("snap1", "default", "src", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
+	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseReady
+	snap.Status.NodeName = "boba"
+	restore := makeRestore("restore-clone", "default", "snap1", "clone-a", true)
+	restore.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{
+		Regenerate: []snapshotv1alpha1.IdentityRegenerationItem{
+			snapshotv1alpha1.RegenMACAddresses,
+		},
+	}
+	source := makeSourceGuest("default", "src", "ubuntu-noble")
+
+	// Clone-a exists but with a DIFFERENT label value (owned by
+	// another SwiftRestore, or no label at all because user-created).
+	foreign := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clone-a",
+			Namespace: "default",
+			Labels: map[string]string{
+				swiftRestoreOwnerLabel: "different-restore",
+			},
+		},
+		Spec: source.Spec,
+	}
+
+	r, c := newReconciler(t, snap, restore, source, foreign)
+	r.CurrentHypervisorVersion = "v51.1"
+	reconcile(t, r, "restore-clone", "default")
+
+	got := get(t, c, "restore-clone", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
+		t.Fatalf("phase = %s, want Failed (foreign SwiftGuest)", got.Status.Phase)
+	}
+	cond := findReady(got)
+	if cond == nil || cond.Reason != ReasonTargetConflict {
+		t.Errorf("reason = %q, want TargetConflict", reasonOrEmpty(cond))
+	}
+}
+
 // -------- restoreAnnotations: clone-mode wiring --------
 
 func TestRestoreAnnotations_Clone_SetsRuntimeDirPrefixAndNullifyHostMAC(t *testing.T) {
