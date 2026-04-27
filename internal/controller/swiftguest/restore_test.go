@@ -1,6 +1,7 @@
 package swiftguest
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -93,12 +94,15 @@ func TestRestoreParamsFromAnnotations_DefaultsModeToInPlace(t *testing.T) {
 
 func TestRestoreParamsFromAnnotations_PicksUpAllFields(t *testing.T) {
 	annos := map[string]string{
-		AnnotationActiveRestore:              "r1",
-		AnnotationRestoreSnapshotPath:        "/var/lib/kubeswift/snapshots/x",
-		AnnotationRestoreNodeName:            "n1",
-		AnnotationRestoreMode:                RestoreModeClone,
-		AnnotationRestoreMACRewrites:         "52:54:00:aa:bb:01",
-		AnnotationRestoreAppendCmdlineMarker: "true",
+		AnnotationActiveRestore:               "r1",
+		AnnotationRestoreSnapshotPath:         "/var/lib/kubeswift/snapshots/x",
+		AnnotationRestoreNodeName:             "n1",
+		AnnotationRestoreMode:                 RestoreModeClone,
+		AnnotationRestoreMACRewrites:          "52:54:00:aa:bb:01",
+		AnnotationRestoreAppendCmdlineMarker:  "true",
+		AnnotationRestoreRuntimeDirFromPrefix: "/var/lib/kubeswift/run/default-src/",
+		AnnotationRestoreRuntimeDirToPrefix:   "/var/lib/kubeswift/run/default-clone-a/",
+		AnnotationRestoreNullifyHostMAC:       "true",
 	}
 	p, ok := RestoreParamsFromAnnotations(annos)
 	if !ok {
@@ -119,8 +123,69 @@ func TestRestoreParamsFromAnnotations_PicksUpAllFields(t *testing.T) {
 	if !p.AppendCmdlineMarker {
 		t.Errorf("AppendCmdlineMarker = false, want true")
 	}
+	if p.RuntimeDirFromPrefix != "/var/lib/kubeswift/run/default-src/" {
+		t.Errorf("RuntimeDirFromPrefix = %q", p.RuntimeDirFromPrefix)
+	}
+	if p.RuntimeDirToPrefix != "/var/lib/kubeswift/run/default-clone-a/" {
+		t.Errorf("RuntimeDirToPrefix = %q", p.RuntimeDirToPrefix)
+	}
+	if !p.NullifyHostMAC {
+		t.Errorf("NullifyHostMAC = false, want true")
+	}
 	if got := p.InPodSnapshotPath(); got != RestoreStagingPath {
 		t.Errorf("InPodSnapshotPath() = %q, want %q", got, RestoreStagingPath)
+	}
+}
+
+func TestSnapshotStagerInitContainer_WiresCloneFlags(t *testing.T) {
+	// The clone-mode stager invocation must surface every patch option
+	// as a CLI flag. Missing any flag means the corresponding rewrite
+	// is silently skipped — the launcher would then bring CH up against
+	// stale source paths, which fails with "no such file or directory".
+	params := RestoreParams{
+		Mode:                 RestoreModeClone,
+		AppendCmdlineMarker:  true,
+		MACRewrites:          "52:54:00:de:ad:be",
+		RuntimeDirFromPrefix: "/var/lib/kubeswift/run/default-src/",
+		RuntimeDirToPrefix:   "/var/lib/kubeswift/run/default-clone-a/",
+		NullifyHostMAC:       true,
+	}
+	c := snapshotStagerInitContainer(params)
+	args := strings.Join(c.Args, " ")
+	wants := []string{
+		"--src",
+		"--dst",
+		"--append-cmdline-marker=true",
+		"--rewrite-macs 52:54:00:de:ad:be",
+		"--rewrite-runtime-dir-from /var/lib/kubeswift/run/default-src/",
+		"--rewrite-runtime-dir-to /var/lib/kubeswift/run/default-clone-a/",
+		"--nullify-host-mac=true",
+	}
+	for _, w := range wants {
+		if !strings.Contains(args, w) {
+			t.Errorf("stager args missing %q\n  got: %s", w, args)
+		}
+	}
+}
+
+func TestSnapshotStagerInitContainer_OmitsCloneFlagsWhenUnset(t *testing.T) {
+	// When the controller doesn't ask for a particular rewrite, the
+	// flag must be omitted (not passed empty) so the stager's
+	// patchRequested() short-circuit can skip the read/write of
+	// config.json entirely.
+	params := RestoreParams{Mode: RestoreModeClone}
+	c := snapshotStagerInitContainer(params)
+	args := strings.Join(c.Args, " ")
+	for _, flag := range []string{
+		"--append-cmdline-marker",
+		"--rewrite-macs",
+		"--rewrite-runtime-dir-from",
+		"--rewrite-runtime-dir-to",
+		"--nullify-host-mac",
+	} {
+		if strings.Contains(args, flag) {
+			t.Errorf("stager args should not include %q when unset; got: %s", flag, args)
+		}
 	}
 }
 

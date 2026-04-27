@@ -55,9 +55,28 @@ const ConfigJSONFilename = "config.json"
 // runtimeintent.GenerateMAC(InterfaceMACSeed(targetNs, targetName,
 // ifaceName)). The patcher only writes them; the policy of "what is
 // the right MAC?" lives one layer up.
+//
+// RewriteRuntimeDirPrefix performs a prefix substitution on every
+// runtime_dir-shaped path in config.json (currently disks[].path and
+// serial.socket). For clone restores the launcher pod's runtime_dir
+// has a different name from the source's, so paths the source baked
+// into config.json (e.g. /var/lib/kubeswift/run/<source-ns>-<source>/seed.iso)
+// must be rewritten to point at the clone's runtime_dir. From and To
+// are the source and target prefix strings; both must end in "/" or
+// the patcher errors. Empty From or To skips this transformation.
+//
+// NullifyHostMAC sets net[N].host_mac to null on every virtio-net
+// device. CH's open_tap (cloud-hypervisor v51.1 net_util/src/open_tap.rs)
+// forces the tap MAC to the saved value when host_mac is Some, which
+// would make the clone's freshly-created tap take the source's host
+// MAC — colliding with the source if both pods run on the same node.
+// Nulling host_mac lets CH auto-discover the clone tap's MAC instead.
 type PatchOptions struct {
-	AppendCmdlineMarker bool
-	RewriteMACs         []string
+	AppendCmdlineMarker   bool
+	RewriteMACs           []string
+	RewriteRuntimeDirFrom string
+	RewriteRuntimeDirTo   string
+	NullifyHostMAC        bool
 }
 
 // Read returns the parsed config.json from the given snapshot
@@ -114,7 +133,37 @@ func Patch(cfg map[string]any, opts PatchOptions) ([]string, error) {
 		}
 		changes = append(changes, cs...)
 	}
+	if opts.RewriteRuntimeDirFrom != "" || opts.RewriteRuntimeDirTo != "" {
+		cs, err := rewriteRuntimeDirPrefix(cfg, opts.RewriteRuntimeDirFrom, opts.RewriteRuntimeDirTo)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, cs...)
+	}
+	if opts.NullifyHostMAC {
+		cs, err := nullifyHostMAC(cfg)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, cs...)
+	}
 	return changes, nil
+}
+
+// unwrapConfig returns the inner config map — either cfg["config"]
+// (when CH wraps the snapshot fields) or cfg itself (CH 51.1 writes
+// the snapshot config flat). Callers traverse from the returned map.
+//
+// Both layouts have been observed in the wild: CH's HTTP API returns
+// the wrapped form (vm.config response), whereas the snapshot file
+// CH writes via vm.snapshot is flat. The patcher must work against
+// the snapshot-file layout because it runs from the staging init
+// container before any HTTP API is up.
+func unwrapConfig(cfg map[string]any) map[string]any {
+	if inner, ok := cfg["config"].(map[string]any); ok {
+		return inner
+	}
+	return cfg
 }
 
 // appendCloneMarker adds CloneCmdlineMarker to the payload's cmdline
@@ -159,28 +208,18 @@ func appendCloneMarker(cfg map[string]any) (string, error) {
 	return "appended " + CloneCmdlineMarker + " to kernel cmdline", nil
 }
 
-// navigateToPayload returns the inner config.payload object. It exists
-// to centralize the "this is what CH's config.json looks like"
-// assumption — when CH bumps its config version this is the function
-// that needs updating, not every call site.
+// navigateToPayload returns the payload object containing the kernel
+// cmdline. Tolerates both layouts (wrapped under "config" or flat at
+// the top level) by going through unwrapConfig.
 func navigateToPayload(cfg map[string]any) (map[string]any, error) {
-	configRaw, ok := cfg["config"]
-	if !ok {
-		return nil, fmt.Errorf("config.json: top-level 'config' missing")
-	}
-	configMap, ok := configRaw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("config.json: top-level 'config' is %T, want object", configRaw)
-	}
+	configMap := unwrapConfig(cfg)
 	payloadRaw, ok := configMap["payload"]
 	if !ok {
-		// CH's config.json sometimes has "payload" inline at top level;
-		// allow either nesting.
-		return configMap, nil
+		return nil, fmt.Errorf("config.json: 'payload' missing")
 	}
 	payload, ok := payloadRaw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("config.json: config.payload is %T, want object", payloadRaw)
+		return nil, fmt.Errorf("config.json: payload is %T, want object", payloadRaw)
 	}
 	return payload, nil
 }
@@ -203,10 +242,7 @@ func navigateToPayload(cfg map[string]any) (map[string]any, error) {
 // in two places risks divergence. Bad input from a future caller
 // will surface as a CH startup error during restore-receive.
 func rewriteMACs(cfg map[string]any, macsByIndex []string) ([]string, error) {
-	configMap, ok := cfg["config"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("config.json: top-level 'config' missing or not an object")
-	}
+	configMap := unwrapConfig(cfg)
 	netRaw, ok := configMap["net"]
 	if !ok {
 		// Source VM has no net devices — caller asked us to rewrite
@@ -241,6 +277,118 @@ func rewriteMACs(cfg map[string]any, macsByIndex []string) ([]string, error) {
 			ifaceID = fmt.Sprintf("net[%d]", i)
 		}
 		changes = append(changes, fmt.Sprintf("rewrote MAC on %s: %s -> %s", ifaceID, oldMAC, newMAC))
+	}
+	return changes, nil
+}
+
+// rewriteRuntimeDirPrefix replaces every occurrence of `from` with `to`
+// at the start of path-shaped fields in config.json that reference the
+// source pod's runtime_dir. Currently scoped to:
+//
+//   - disks[].path  (e.g. .../run/<source>/seed.iso → .../run/<clone>/seed.iso)
+//   - serial.socket (e.g. .../run/<source>/serial.sock → .../run/<clone>/serial.sock)
+//
+// disks[].path that does NOT start with `from` is left alone — the
+// root disk PVC ("/var/lib/kubeswift/disks/root/image.raw") is mounted
+// at the same in-pod path on every launcher pod and shouldn't be
+// rewritten.
+//
+// Both `from` and `to` must end in "/" so a substring match doesn't
+// accidentally clip e.g. "<source>" out of a path that happens to
+// contain the source name as part of a longer segment.
+func rewriteRuntimeDirPrefix(cfg map[string]any, from, to string) ([]string, error) {
+	if from == "" || to == "" {
+		return nil, fmt.Errorf("config.json: rewriteRuntimeDirPrefix requires non-empty from and to")
+	}
+	if !strings.HasSuffix(from, "/") || !strings.HasSuffix(to, "/") {
+		return nil, fmt.Errorf("config.json: rewriteRuntimeDirPrefix from/to must end in '/' (got %q -> %q)", from, to)
+	}
+	configMap := unwrapConfig(cfg)
+	var changes []string
+
+	// disks[].path
+	if disksRaw, ok := configMap["disks"]; ok && disksRaw != nil {
+		disks, ok := disksRaw.([]any)
+		if !ok {
+			return nil, fmt.Errorf("config.json: disks is %T, want array", disksRaw)
+		}
+		for i, d := range disks {
+			disk, ok := d.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("config.json: disks[%d] is %T, want object", i, d)
+			}
+			pathRaw, ok := disk["path"]
+			if !ok {
+				continue
+			}
+			oldPath, ok := pathRaw.(string)
+			if !ok {
+				return nil, fmt.Errorf("config.json: disks[%d].path is %T, want string", i, pathRaw)
+			}
+			if !strings.HasPrefix(oldPath, from) {
+				continue
+			}
+			newPath := to + strings.TrimPrefix(oldPath, from)
+			disk["path"] = newPath
+			diskID, _ := disk["id"].(string)
+			if diskID == "" {
+				diskID = fmt.Sprintf("disks[%d]", i)
+			}
+			changes = append(changes, fmt.Sprintf("rewrote %s.path: %s -> %s", diskID, oldPath, newPath))
+		}
+	}
+
+	// serial.socket
+	if serialRaw, ok := configMap["serial"]; ok && serialRaw != nil {
+		serial, ok := serialRaw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config.json: serial is %T, want object", serialRaw)
+		}
+		if sockRaw, ok := serial["socket"]; ok && sockRaw != nil {
+			oldSock, ok := sockRaw.(string)
+			if !ok {
+				return nil, fmt.Errorf("config.json: serial.socket is %T, want string", sockRaw)
+			}
+			if strings.HasPrefix(oldSock, from) {
+				newSock := to + strings.TrimPrefix(oldSock, from)
+				serial["socket"] = newSock
+				changes = append(changes, fmt.Sprintf("rewrote serial.socket: %s -> %s", oldSock, newSock))
+			}
+		}
+	}
+
+	return changes, nil
+}
+
+// nullifyHostMAC sets net[].host_mac to nil on every virtio-net device.
+// CH's open_tap (cloud-hypervisor v51.1 net_util/src/open_tap.rs)
+// forces the tap MAC to the saved value when host_mac is Some, which
+// would force the clone's tap to take the source's host MAC. Nulling
+// it lets CH auto-discover the clone tap's MAC at restore time.
+func nullifyHostMAC(cfg map[string]any) ([]string, error) {
+	configMap := unwrapConfig(cfg)
+	netRaw, ok := configMap["net"]
+	if !ok || netRaw == nil {
+		return nil, nil
+	}
+	net, ok := netRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("config.json: net is %T, want array", netRaw)
+	}
+	var changes []string
+	for i, n := range net {
+		device, ok := n.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config.json: net[%d] is %T, want object", i, n)
+		}
+		if hostRaw, present := device["host_mac"]; present && hostRaw != nil {
+			device["host_mac"] = nil
+			ifaceID, _ := device["id"].(string)
+			if ifaceID == "" {
+				ifaceID = fmt.Sprintf("net[%d]", i)
+			}
+			changes = append(changes, fmt.Sprintf("nulled host_mac on %s (was %v)", ifaceID, hostRaw))
+		}
 	}
 	return changes, nil
 }
