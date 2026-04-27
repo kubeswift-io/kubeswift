@@ -514,8 +514,32 @@ func (r *SwiftRestoreReconciler) restoreAnnotations(
 		if regenIncludes(restore, snapshotv1alpha1.RegenMACAddresses) {
 			annos[swiftguestctrl.AnnotationRestoreMACRewrites] = computeMACRewrites(restore.Namespace, restore.Spec.TargetGuest.Name, source)
 		}
+		// Always set on clones — the snapshot's config.json bakes in
+		// the source pod's runtime_dir name (e.g.
+		// /var/lib/kubeswift/run/<source-ns>-<source>/seed.iso). The
+		// clone pod's runtime_dir has a different name, so CH
+		// --restore would fail to open those paths without the
+		// stager rewriting them.
+		annos[swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix] = runtimeDirPrefix(source.Namespace, source.Name)
+		annos[swiftguestctrl.AnnotationRestoreRuntimeDirToPrefix] = runtimeDirPrefix(restore.Namespace, restore.Spec.TargetGuest.Name)
+		// Always set on clones — CH otherwise forces the clone tap's
+		// host MAC to the saved source value, colliding on the bridge
+		// when both pods run on the same node.
+		annos[swiftguestctrl.AnnotationRestoreNullifyHostMAC] = "true"
 	}
 	return annos
+}
+
+// runtimeDirPrefix returns the per-pod runtime_dir prefix that the
+// snapshot-stager substitutes in disks[].path and serial.socket.
+// Mirrors swift-runtime's create_runtime_dir naming
+// (rust/swift-runtime/src/runtime_dir.rs): base is
+// /var/lib/kubeswift/run, the per-guest directory is "<ns>-<name>"
+// (slashes in guest_id become hyphens), trailing "/" is required so
+// the patcher's prefix match doesn't clip a longer name that happens
+// to start with a shorter one.
+func runtimeDirPrefix(namespace, name string) string {
+	return "/var/lib/kubeswift/run/" + namespace + "-" + name + "/"
 }
 
 // computeMACRewrites returns a CSV of new MACs indexed by NIC ordinal
@@ -667,12 +691,15 @@ func (r *SwiftRestoreReconciler) unstampGuestRestoreAnnotations(
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{
-				swiftguestctrl.AnnotationActiveRestore:              nil,
-				swiftguestctrl.AnnotationRestoreSnapshotPath:        nil,
-				swiftguestctrl.AnnotationRestoreNodeName:            nil,
-				swiftguestctrl.AnnotationRestoreMode:                nil,
-				swiftguestctrl.AnnotationRestoreMACRewrites:         nil,
-				swiftguestctrl.AnnotationRestoreAppendCmdlineMarker: nil,
+				swiftguestctrl.AnnotationActiveRestore:               nil,
+				swiftguestctrl.AnnotationRestoreSnapshotPath:         nil,
+				swiftguestctrl.AnnotationRestoreNodeName:             nil,
+				swiftguestctrl.AnnotationRestoreMode:                 nil,
+				swiftguestctrl.AnnotationRestoreMACRewrites:          nil,
+				swiftguestctrl.AnnotationRestoreAppendCmdlineMarker:  nil,
+				swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix: nil,
+				swiftguestctrl.AnnotationRestoreRuntimeDirToPrefix:   nil,
+				swiftguestctrl.AnnotationRestoreNullifyHostMAC:       nil,
 			},
 		},
 	}

@@ -89,6 +89,22 @@ const (
 	// host keys, and hostname on first wake (see
 	// docs/snapshots/identity-regeneration.md).
 	AnnotationRestoreAppendCmdlineMarker = "snapshot.kubeswift.io/restore-append-cmdline-marker"
+	// AnnotationRestoreRuntimeDirFromPrefix is the source pod's
+	// runtime_dir prefix that the stager must rewrite in
+	// disks[].path and serial.socket. Must end in "/". Empty disables
+	// the rewrite (in-place restores reuse the source's runtime_dir
+	// name and don't need the patch).
+	AnnotationRestoreRuntimeDirFromPrefix = "snapshot.kubeswift.io/restore-runtime-dir-from"
+	// AnnotationRestoreRuntimeDirToPrefix is the clone pod's runtime_dir
+	// prefix that source-runtime_dir paths must be rewritten to. Must
+	// end in "/".
+	AnnotationRestoreRuntimeDirToPrefix = "snapshot.kubeswift.io/restore-runtime-dir-to"
+	// AnnotationRestoreNullifyHostMAC, when "true", asks the stager to
+	// set net[].host_mac to null in config.json. Required for clones
+	// because CH on restore would otherwise force the clone tap's MAC
+	// to the source's saved value (cloud-hypervisor v51.1
+	// net_util/src/open_tap.rs sets the tap MAC when host_mac is Some).
+	AnnotationRestoreNullifyHostMAC = "snapshot.kubeswift.io/restore-nullify-host-mac"
 )
 
 // Restore mode values for AnnotationRestoreMode.
@@ -136,6 +152,16 @@ type RestoreParams struct {
 	// AppendCmdlineMarker asks the stager to mark the kernel cmdline
 	// for the in-guest identity-regeneration bootcmd.
 	AppendCmdlineMarker bool
+	// RuntimeDirFromPrefix is the source pod's runtime_dir prefix
+	// (must end in '/') that the stager substitutes in disks[].path
+	// and serial.socket. Empty disables the rewrite.
+	RuntimeDirFromPrefix string
+	// RuntimeDirToPrefix is the clone pod's runtime_dir prefix
+	// (must end in '/') that source paths are rewritten to.
+	RuntimeDirToPrefix string
+	// NullifyHostMAC asks the stager to set net[].host_mac to null in
+	// config.json. Required for clones (see configjson.PatchOptions).
+	NullifyHostMAC bool
 }
 
 // IsClone reports whether the restore must stage and patch the
@@ -367,6 +393,15 @@ func snapshotStagerInitContainer(params RestoreParams) corev1.Container {
 	if strings.TrimSpace(params.MACRewrites) != "" {
 		args = append(args, "--rewrite-macs", params.MACRewrites)
 	}
+	if params.RuntimeDirFromPrefix != "" && params.RuntimeDirToPrefix != "" {
+		args = append(args,
+			"--rewrite-runtime-dir-from", params.RuntimeDirFromPrefix,
+			"--rewrite-runtime-dir-to", params.RuntimeDirToPrefix,
+		)
+	}
+	if params.NullifyHostMAC {
+		args = append(args, "--nullify-host-mac=true")
+	}
 	return corev1.Container{
 		Name:            SnapshotStagerInitContainerName,
 		Image:           LauncherImage(),
@@ -406,10 +441,13 @@ func RestoreParamsFromAnnotations(annotations map[string]string) (RestoreParams,
 		mode = RestoreModeInPlace
 	}
 	return RestoreParams{
-		SnapshotPath:        annotations[AnnotationRestoreSnapshotPath],
-		NodeName:            annotations[AnnotationRestoreNodeName],
-		Mode:                mode,
-		MACRewrites:         annotations[AnnotationRestoreMACRewrites],
-		AppendCmdlineMarker: annotations[AnnotationRestoreAppendCmdlineMarker] == "true",
+		SnapshotPath:         annotations[AnnotationRestoreSnapshotPath],
+		NodeName:             annotations[AnnotationRestoreNodeName],
+		Mode:                 mode,
+		MACRewrites:          annotations[AnnotationRestoreMACRewrites],
+		AppendCmdlineMarker:  annotations[AnnotationRestoreAppendCmdlineMarker] == "true",
+		RuntimeDirFromPrefix: annotations[AnnotationRestoreRuntimeDirFromPrefix],
+		RuntimeDirToPrefix:   annotations[AnnotationRestoreRuntimeDirToPrefix],
+		NullifyHostMAC:       annotations[AnnotationRestoreNullifyHostMAC] == "true",
 	}, true
 }
