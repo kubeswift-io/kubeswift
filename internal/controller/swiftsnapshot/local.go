@@ -153,9 +153,14 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	}
 	srcURL = "file://" + srcURL
 
-	// Generate idempotent action-id: snapshot-name + resourceVersion.
-	// swiftletd treats repeated action-ids as no-ops.
-	actionID := snap.Name + "-" + snap.ResourceVersion
+	// Generate stable action-id: snapshot-name + first 8 chars of UID.
+	// UID is immutable for the lifetime of the SwiftSnapshot; using it
+	// (instead of ResourceVersion) means handleCapturingLocal can
+	// re-derive the same id on later reconciles even though
+	// ResourceVersion bumps every time the controller writes status.
+	// swiftletd treats repeated action-ids as no-ops, so the launcher
+	// only processes the capture once.
+	actionID := capturingActionID(snap)
 
 	args := captureArgs{
 		DestinationURL:      srcURL,
@@ -216,7 +221,7 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 	}
 
 	annotations := pod.GetAnnotations()
-	expectedID := snap.Name + "-" + snap.ResourceVersion
+	expectedID := capturingActionID(snap)
 	statusID := annotations[annoStatusID]
 	statusVal := annotations[annoStatus]
 	statusDetail := annotations[annoStatusDetail]
@@ -313,6 +318,31 @@ func (r *SwiftSnapshotReconciler) patchPodActionAnnotations(
 // here because the action constants logically live with the
 // snapshot controller.
 var _ = []string{verbResume, verbPrepare}
+
+// capturingActionID returns a stable per-SwiftSnapshot action-id used
+// to drive (and later observe) the launcher pod's snapshot-action
+// annotations.
+//
+// Stable across status updates: derived from snap.Name and snap.UID,
+// both of which are immutable for the lifetime of the resource.
+// The original implementation used snap.ResourceVersion which mutates
+// on every status write — handlePendingLocal would send id=N, the
+// status update bumped resourceVersion to N+2, handleCapturingLocal
+// would compute expectedID=N+2 and never match the launcher's mirror
+// (still pinned to N). Tier B captures got stuck in Capturing until
+// the wall-clock deadline tripped them to Failed.
+//
+// First 8 chars of the UID are sufficient — UIDs are random UUIDs,
+// collisions on the first 8 hex chars across concurrent SwiftSnapshots
+// in the same namespace are not a concern (and the resource Name is a
+// uniqueness prefix anyway).
+func capturingActionID(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	uid := string(snap.UID)
+	if len(uid) > 8 {
+		uid = uid[:8]
+	}
+	return snap.Name + "-" + uid
+}
 
 // captureDeadlineExceeded returns (true, deadlineSeconds) when the
 // SwiftSnapshot has been in a non-terminal state past its deadline.
