@@ -25,20 +25,76 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-default}"
 NO_CLEANUP=false
 SAMPLES_DIR="$(cd "$(dirname "$0")/../../config/samples/local-snapshots" && pwd)"
-IMAGE_DIR="$(cd "$(dirname "$0")/../../config/samples/images" 2>/dev/null && pwd || true)"
+IDENTITY="${KUBESWIFT_TEST_IDENTITY:-${HOME}/.ssh/id_ed25519}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-cleanup) NO_CLEANUP=true; shift ;;
     --namespace)  NAMESPACE="$2"; shift 2 ;;
+    --identity)   IDENTITY="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
 
+if [[ ! -r "$IDENTITY" ]]; then
+  echo "ERROR: SSH identity $IDENTITY not readable. Override with --identity or KUBESWIFT_TEST_IDENTITY." >&2
+  exit 2
+fi
+
 echo "=== KubeSwift Tier B round-trip e2e ==="
 echo "Namespace:    $NAMESPACE"
 echo "Samples:      $SAMPLES_DIR"
+echo "Identity:     $IDENTITY (must match seed profile's ssh_authorized_keys)"
 echo ""
+
+# guest_exec runs a one-line bash command inside the guest VM by
+# exec-ing into the launcher pod and running ssh from there. The
+# host's private key is fed via stdin into the launcher, written to a
+# tmpfile, used, then removed. swiftctl ssh insists on a TTY which
+# doesn't compose with scripted command runs; this helper avoids that
+# limitation.
+#
+# The input is piped: { key contents \0 SSH_COMMAND }. The launcher's
+# sh splits the stdin into the key (everything up to a sentinel line)
+# and the remote command (the rest of the lines).
+#
+# Usage: guest_exec <guest-name> <bash one-liner>
+# Returns the remote command's exit code; remote stdout on stdout.
+guest_exec() {
+  local guest="$1"; shift
+  local cmd="$*"
+  local ip
+  ip=$(kubectl get swiftguest "$guest" -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}' 2>/dev/null)
+  if [[ -z "$ip" ]]; then
+    echo "guest_exec: $guest has no primaryIP" >&2
+    return 1
+  fi
+  # Build the in-launcher script. The host's identity bytes are
+  # interpolated via heredoc into the script body, so we don't depend
+  # on env-var propagation across kubectl exec.
+  # The remote command is base64-encoded so it can carry quotes,
+  # newlines, and shell metachars unchanged through the heredoc.
+  # The launcher decodes and runs via bash -c. Avoids fragile
+  # shell-quoting in the kubectl/sh/ssh/bash chain.
+  local cmd_b64
+  cmd_b64=$(printf '%s' "$cmd" | base64 -w0)
+  local launcher_script
+  launcher_script=$(cat <<LAUNCHER_EOF
+set -eu
+KEY=\$(mktemp); chmod 600 "\$KEY"
+cat > "\$KEY" <<'KUBESWIFT_TEST_KEY'
+$(cat "$IDENTITY")
+KUBESWIFT_TEST_KEY
+CMD=\$(printf %s '$cmd_b64' | base64 -d)
+RC=0
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5 -i "\$KEY" kubeswift@$ip "\$CMD" || RC=\$?
+rm -f "\$KEY"
+exit \$RC
+LAUNCHER_EOF
+)
+  printf '%s\n' "$launcher_script" \
+    | kubectl exec -n "$NAMESPACE" -i "$guest" -c launcher -- sh
+}
 
 cleanup() {
   if [[ "$NO_CLEANUP" == "true" ]]; then
@@ -52,13 +108,14 @@ cleanup() {
     swiftsnapshot/snapshot-local-mem \
     swiftguest/snapshot-local-source \
     swiftguestclass/snapshot-local-class \
-    swiftseedprofile/clone-identity-regen >/dev/null 2>&1 || true
+    swiftseedprofile/snapshot-local-test-seed >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# 1. Apply the seed profile + source SwiftGuest manifests.
+# 1. Apply the combined seed profile (kubeswift user for swiftctl ssh +
+#    clone-identity-regen bootcmd) and the source SwiftGuest.
 echo "--- Step 1: Apply source manifests ---"
-kubectl apply -n "$NAMESPACE" -f "$(cd "$(dirname "$0")/../../config/samples/seed-profiles" && pwd)/clone-identity-regen.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftseedprofile-test.yaml" >/dev/null
 kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftguest-source.yaml" >/dev/null
 
 # Ensure Ubuntu Noble image is present (most clusters running these
@@ -85,13 +142,13 @@ echo "  Waiting for source SwiftGuest Running (5m)..."
 kubectl wait --for=jsonpath='{.status.phase}'=Running \
   swiftguest/snapshot-local-source -n "$NAMESPACE" --timeout=5m
 
-# Wait for the guest to actually be reachable via swiftctl ssh. The
-# Running phase asserts CH is bound; the SSH usability comes a few
-# seconds later when sshd reports.
-echo "  Waiting up to 2m for SSH reachability via swiftctl..."
+# Wait for the guest to actually be reachable via SSH. The Running
+# phase asserts CH is bound; SSH usability comes a few seconds later
+# when sshd reports.
+echo "  Waiting up to 3m for SSH reachability..."
 SSH_READY=false
-for _ in $(seq 1 24); do
-  if swiftctl ssh -n "$NAMESPACE" snapshot-local-source -- true >/dev/null 2>&1; then
+for _ in $(seq 1 36); do
+  if guest_exec snapshot-local-source true >/dev/null 2>&1; then
     SSH_READY=true
     break
   fi
@@ -101,22 +158,20 @@ if [[ "$SSH_READY" != "true" ]]; then
   echo "  FAIL: SSH never became reachable on snapshot-local-source"
   exit 1
 fi
+echo "  OK: SSH reachable"
 
 # 2. Plant the tmpfs sentinel — RAM-only, NOT persisted to disk.
 echo ""
 echo "--- Step 2: Plant tmpfs sentinel inside the guest (in-memory only) ---"
 SENTINEL_VALUE="kubeswift-roundtrip-$(date +%s)-$RANDOM"
-swiftctl ssh -n "$NAMESPACE" snapshot-local-source -- sudo bash -c "
-  mkdir -p /run/kubeswift-mem
-  echo '$SENTINEL_VALUE' > /run/kubeswift-mem/sentinel
-  # Verify it actually landed on tmpfs (not a disk).
-  fs_type=\$(stat -fc %T /run/kubeswift-mem)
-  if [[ \"\$fs_type\" != \"tmpfs\" ]]; then
-    echo \"sentinel dir not tmpfs: fs_type=\$fs_type\"
-    exit 1
-  fi
-"
-echo "  Planted: SENTINEL_VALUE=$SENTINEL_VALUE"
+guest_exec snapshot-local-source "sudo mkdir -p /run/kubeswift-mem"
+guest_exec snapshot-local-source "echo $SENTINEL_VALUE | sudo tee /run/kubeswift-mem/sentinel >/dev/null"
+fs_type=$(guest_exec snapshot-local-source "stat -fc %T /run/kubeswift-mem" | tr -d '\r\n')
+if [[ "$fs_type" != "tmpfs" ]]; then
+  echo "  FAIL: /run/kubeswift-mem is not tmpfs (got '$fs_type')"
+  exit 1
+fi
+echo "  Planted: SENTINEL_VALUE=$SENTINEL_VALUE on tmpfs"
 
 # 3. Snapshot with includeMemory: true.
 echo ""
@@ -169,15 +224,14 @@ echo "  OK: launcher pod is in restore-receive mode, no stager (in-place fast pa
 # 6. Verify the tmpfs sentinel survived.
 echo ""
 echo "--- Step 6: Verify tmpfs sentinel survived (the headline Phase 2 promise) ---"
-echo "  Waiting up to 2m for SSH reachability via swiftctl post-restore..."
-for _ in $(seq 1 24); do
-  if swiftctl ssh -n "$NAMESPACE" snapshot-local-source -- true >/dev/null 2>&1; then
+echo "  Waiting up to 3m for SSH reachability post-restore..."
+for _ in $(seq 1 36); do
+  if guest_exec snapshot-local-source true >/dev/null 2>&1; then
     break
   fi
   sleep 5
 done
-GOT_VALUE=$(swiftctl ssh -n "$NAMESPACE" snapshot-local-source -- cat /run/kubeswift-mem/sentinel 2>/dev/null || echo "<missing>")
-GOT_VALUE=$(echo "$GOT_VALUE" | tr -d '\r\n')
+GOT_VALUE=$(guest_exec snapshot-local-source "cat /run/kubeswift-mem/sentinel 2>/dev/null || echo MISSING" | tr -d '\r\n')
 if [[ "$GOT_VALUE" != "$SENTINEL_VALUE" ]]; then
   echo "  FAIL: sentinel mismatch"
   echo "    expected: $SENTINEL_VALUE"

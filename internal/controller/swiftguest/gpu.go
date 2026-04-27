@@ -407,6 +407,12 @@ func BuildGPUDiskBootPod(
 	if rg.HasDataDisk() {
 		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
+	// /var/lib/kubeswift/snapshots/ — writable hostPath. Tier B
+	// captures on GPU guests are rejected by the webhook (Phase 0
+	// Constraint #1: VFIO + memory snapshot fails on restore), but
+	// the mount is present for symmetry and to support potential
+	// future disk-only Tier B captures of GPU guests.
+	AddSnapshotsHostPathMount(&volumes, &mounts)
 
 	// gpu-init runs before network-init: binds devices to vfio-pci and activates
 	// the Fabric Manager partition (if applicable) before swiftletd starts.
