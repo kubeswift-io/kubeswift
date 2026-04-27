@@ -1049,6 +1049,73 @@ swiftctl ssh gpu-test -- nvidia-smi
 | 43 | controller-manager-rbac.yaml | Missing pods/log permission (Bug 20 regression) | Add pods/log to ClusterRole | 881f731 |
 | 44 | Makefile | IMAGE_TAG defaulted to :latest which CI never pushes | Default to sha-$(git rev-parse --short HEAD) | 5ddf9af |
 
+### Completed (Snapshots Phase 2 — Tier B local-backend memory snapshots)
+- SwiftSnapshot CRD with `backend.type: local` for memory snapshots stored
+  on the source VM's node via hostPath (`/var/lib/kubeswift/snapshots/`)
+- SwiftRestore CRD with `targetGuest.name == source` (in-place) and
+  `!= source` (clone) paths, both wired through to the launcher pod
+  via `snapshot.kubeswift.io/active-restore` annotation set
+- swiftletd action loop (`rust/swiftletd/src/action.rs`) handles
+  pause/snapshot/resume via CH HTTP API with sentinel-guarded
+  destination wipe-and-recreate before `vm.snapshot`
+- snapshot-stager init container (`cmd/snapshot-stager/`) for clone
+  restores: sentinel-guarded copy, then config.json patches via
+  `internal/snapshot/configjson` (cmdline marker, MAC rewrite,
+  runtime_dir prefix substitution on disks[].path and serial.socket,
+  host_mac null for tap auto-discovery)
+- In-place restore validated end-to-end: tmpfs sentinel survives
+  kill+restore cycle (`test/snapshot/local-roundtrip-test.sh`)
+- Clone restore validated end-to-end: both clones reach `GuestRunning`
+  + `SwiftRestore Ready` with deterministic per-clone hypervisor MAC,
+  unique runtime_dir paths, deterministic seed.iso rebuild
+  (`test/snapshot/local-clone-identity-test.sh`)
+
+#### Known limitation: identity regeneration on clone resume
+
+CH `--restore` resumes the captured guest state byte-for-byte —
+**this is not a fresh boot**. The kernel does not re-init, systemd
+does not re-init, and cloud-init does not re-run. As a result:
+
+| Identity field | After clone resume |
+| --- | --- |
+| `/etc/machine-id` | Inherited from source |
+| `/etc/ssh/ssh_host_*_key*` | Inherited from source |
+| `hostname` | Inherited from source |
+| Guest-visible eth0 MAC | Inherited from source (cached in virtio-net driver state) |
+| Hypervisor `config.net[0].mac` | Rewritten per clone (visible to bridge fdb, but not to guest) |
+| Pod network namespace | Per-clone (Kubernetes-isolated, prevents cross-clone L2 collision) |
+
+Empirical evidence captured during Phase 2 e2e (commit `a40c17f`):
+all three guests (source, clone-a, clone-b) showed identical
+`machine-id`, SSH host fingerprint, hostname, and guest-side MAC.
+The hypervisor-layer MAC rewrite from the snapshot-stager patcher
+landed correctly in `config.json` but is not observed by the guest's
+virtio-net driver, whose MAC is cached in the snapshot's RAM image.
+
+Operators using clones must either:
+- Reboot each clone after first resume (cloud-init bootcmd then fires
+  normally; the existing `swiftseedprofile-test.yaml` bootcmd works
+  on fresh boots), or
+- Manually regenerate identity inside each clone (`systemd-machine-id-setup`,
+  `rm /etc/ssh/ssh_host_*_key*; ssh-keygen -A`, `hostnamectl set-hostname …`)
+
+Identity regeneration without reboot is targeted for a future phase
+via an in-guest agent communicating over vsock. The agent listens for
+a "clone activated" message from swiftletd post-resume and runs the
+regen sequence in-place.
+
+#### Snapshot bugs fixed during Phase 2 validation
+
+| # | Component | Bug | PR |
+|---|-----------|-----|-----|
+| 47 | swiftsnapshot/local.go | action-id changed across status patches (ResourceVersion-derived); launcher's mirrored status never matched | #14 |
+| 48 | swiftletd/action.rs | `vm.snapshot` failed with "Destination is not a directory" — controller didn't pre-create the snapshot dir | #12 |
+| 49 | swiftletd/action.rs | `vm.snapshot` failed with "File exists (os error 17)" — stale destination from prior partial attempt | #13 |
+| 50 | swiftguest pod builder + swiftletd/main.rs | seed.iso missing on restore-receive — Go-side BuildRestorePod omitted the seed mount AND Rust-side main.rs gated the seed.iso build on `!is_restore()` | #15 |
+| 51 | configjson + stager | Patcher targeted wrong layout (cfg["config"]) when CH 51.1 writes flat top-level | #16 |
+| 52 | configjson | `appendCloneMarker` crashed on `cmdline: null` (CH 51.1 disk boot) — type assertion expected string, got JSON nil | #17 |
+| 53 | swiftrestore/local.go | `handlePendingLocal` clone branch tripped TargetConflict against its own freshly-created SwiftGuest when reconcile re-entered with stale phase | #18 |
+
 ### Completed (Root Disk Resize During Image Import)
 - Import script now runs `qemu-img resize -f raw image.raw <target-bytes>` after qcow2-to-raw conversion
 - Target size is `spec.rootDisk.size` from the SwiftImage (same value used for the PVC)
