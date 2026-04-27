@@ -144,6 +144,11 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
 
+	// /var/lib/kubeswift/snapshots/ — writable hostPath so the launcher's
+	// CH process can write Tier B snapshot directories when the
+	// SwiftSnapshot controller triggers a capture action.
+	AddSnapshotsHostPathMount(&volumes, &mounts)
+
 	cpu := rg.Resources.CPU
 	if cpu < 1 {
 		cpu = 1
@@ -272,6 +277,11 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
 
+	// /var/lib/kubeswift/snapshots/ — writable hostPath so the launcher's
+	// CH process can write Tier B snapshot directories when the
+	// SwiftSnapshot controller triggers a capture action.
+	AddSnapshotsHostPathMount(&volumes, &mounts)
+
 	// SR-IOV: add /dev/vfio volume+mount if any interface is type=sriov.
 	addSRIOVVolumesIfNeeded(&volumes, &mounts, guest)
 
@@ -378,5 +388,39 @@ func AddSeedVolume(volumes *[]corev1.Volume, configMapName string) {
 				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
 			},
 		},
+	})
+}
+
+// snapshotsHostPathVolumeName is the volume name for the writable
+// SnapshotsHostPath mount on every launcher pod.
+const snapshotsHostPathVolumeName = "kubeswift-snapshots"
+
+// AddSnapshotsHostPathMount adds the writable hostPath volume + mount
+// for /var/lib/kubeswift/snapshots/ to the launcher pod, so Cloud
+// Hypervisor's vm.snapshot endpoint can write Tier B snapshot
+// directories without pod recreation when SwiftSnapshot drives a
+// capture action. DirectoryOrCreate handles first-snapshot bootstrap
+// (the parent dir doesn't necessarily exist before the first capture).
+//
+// Idempotent: if the volume name already exists on volumes, neither
+// the volume nor the mount is duplicated.
+func AddSnapshotsHostPathMount(volumes *[]corev1.Volume, mounts *[]corev1.VolumeMount) {
+	for _, v := range *volumes {
+		if v.Name == snapshotsHostPathVolumeName {
+			return
+		}
+	}
+	*volumes = append(*volumes, corev1.Volume{
+		Name: snapshotsHostPathVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: SnapshotsHostPath,
+				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
+			},
+		},
+	})
+	*mounts = append(*mounts, corev1.VolumeMount{
+		Name:      snapshotsHostPathVolumeName,
+		MountPath: SnapshotsHostPath,
 	})
 }
