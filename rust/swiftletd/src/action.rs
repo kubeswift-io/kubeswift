@@ -342,6 +342,23 @@ async fn dispatch_capture(
         args.resume_after_snapshot
     );
 
+    // CH's vm.snapshot endpoint REQUIRES the destination directory to
+    // already exist — it writes config.json, state.json, and
+    // memory-ranges into it without auto-creating the dir. The
+    // SwiftSnapshot controller owns naming the path (under
+    // /var/lib/kubeswift/snapshots/<ns>-<name>/) but cannot mkdir on
+    // the source node's filesystem itself; the launcher pod has the
+    // hostPath mount and is the only place this can happen safely.
+    // Idempotent: re-running an action with the same destination is
+    // a no-op when the directory already exists.
+    if let Some(local_path) = args.destination_url.strip_prefix("file://") {
+        // strip a trailing slash so create_dir_all sees a single path.
+        let local_path = local_path.trim_end_matches('/');
+        if let Err(e) = std::fs::create_dir_all(local_path) {
+            return Err(format!("create destination dir {}: {}", local_path, e));
+        }
+    }
+
     let timeout =
         std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
     let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
@@ -879,12 +896,22 @@ mod tests {
         }
     }
 
+    /// Build a destination_url whose path is inside a tempdir so the
+    /// dispatch_capture mkdir step (added when CH started rejecting
+    /// non-existent destination dirs at runtime) succeeds in tests
+    /// without root permissions.
+    fn tmp_dest_url(tmp: &tempfile::TempDir, sub: &str) -> String {
+        format!("file://{}/{}/", tmp.path().display(), sub)
+    }
+
     #[tokio::test]
     async fn capture_drives_pause_then_snapshot_then_resume() {
         // Three responses for three sequential calls.
         let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let dest_tmp = tempfile::tempdir().unwrap();
+        let dest_url = tmp_dest_url(&dest_tmp, "default-snap1");
         let action = capture_action(serde_json::json!({
-            "destination_url": "file:///var/lib/kubeswift/snapshots/default-snap1/",
+            "destination_url": dest_url,
         }));
         let outcome = dispatch(&action, &server.path).await.unwrap();
         let reqs = server.collect();
@@ -897,16 +924,17 @@ mod tests {
         // Snapshot body must carry the destination_url.
         let (_, body) = r1.split_once("\r\n\r\n").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
-        assert_eq!(
-            parsed["destination_url"],
-            "file:///var/lib/kubeswift/snapshots/default-snap1/"
-        );
+        assert_eq!(parsed["destination_url"], dest_url);
         assert!(r2.starts_with("PUT /api/v1/vm.resume "), "got {}", r2);
         // pause_window_ms is set on success.
         assert!(outcome.pause_window_ms.is_some());
         let detail = outcome.detail.unwrap();
-        assert!(detail.contains("captured to file:///var/lib/kubeswift/snapshots/default-snap1/"));
+        assert!(detail.contains(&format!("captured to {}", dest_url)));
         assert!(detail.contains("resumed"));
+        // mkdir created the destination directory.
+        assert!(std::path::Path::new(dest_tmp.path())
+            .join("default-snap1")
+            .is_dir());
     }
 
     #[tokio::test]
@@ -915,8 +943,9 @@ mod tests {
         // third call (resume) the test would hang on accept; we cap
         // the test runtime via the action-handler's own timeout.
         let server = MultiMockServer::spawn(vec![no_content(), no_content()]);
+        let dest_tmp = tempfile::tempdir().unwrap();
         let action = capture_action(serde_json::json!({
-            "destination_url": "file:///snap1/",
+            "destination_url": tmp_dest_url(&dest_tmp, "snap1"),
             "resume_after_snapshot": false,
         }));
         let outcome = dispatch(&action, &server.path).await.unwrap();
@@ -942,8 +971,9 @@ mod tests {
                 .to_vec(),
             no_content(),
         ]);
+        let dest_tmp = tempfile::tempdir().unwrap();
         let action = capture_action(serde_json::json!({
-            "destination_url": "file:///snap1/",
+            "destination_url": tmp_dest_url(&dest_tmp, "snap1"),
         }));
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("snapshot:"), "got {}", err);
@@ -960,14 +990,29 @@ mod tests {
         let server = MultiMockServer::spawn(vec![
             b"HTTP/1.1 500 Internal\r\nContent-Length: 0\r\n\r\n".to_vec(),
         ]);
+        let dest_tmp = tempfile::tempdir().unwrap();
         let action = capture_action(serde_json::json!({
-            "destination_url": "file:///snap1/",
+            "destination_url": tmp_dest_url(&dest_tmp, "snap1"),
         }));
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("pause:"), "got {}", err);
         let reqs = server.collect();
         assert_eq!(reqs.len(), 1);
         assert!(String::from_utf8_lossy(&reqs[0]).starts_with("PUT /api/v1/vm.pause "));
+    }
+
+    #[tokio::test]
+    async fn capture_creates_destination_dir_idempotently() {
+        // Re-running the action handler with the same destination must
+        // be a no-op on the directory (mkdir -p semantics): the dir
+        // already exists, no error, snapshot proceeds.
+        let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
+        let dest_tmp = tempfile::tempdir().unwrap();
+        let pre_existing = dest_tmp.path().join("preexisting");
+        std::fs::create_dir_all(&pre_existing).unwrap();
+        let dest_url = format!("file://{}/", pre_existing.display());
+        let action = capture_action(serde_json::json!({"destination_url": dest_url}));
+        dispatch(&action, &server.path).await.unwrap();
     }
 
     #[tokio::test]
