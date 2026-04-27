@@ -15,13 +15,13 @@ import (
 )
 
 var (
-	restoreSnapshot          string
-	restoreTarget            string
-	restoreOverwrite         bool
-	restoreNoResume          bool
-	restoreListAllNS         bool
-	restoreIdentityRegen     []string
-	restoreSkipVersionCheck  bool
+	restoreSnapshot         string
+	restoreTarget           string
+	restoreOverwrite        bool
+	restoreNoResume         bool
+	restoreListAllNS        bool
+	restoreIdentityRegen    []string
+	restoreSkipVersionCheck bool
 )
 
 var restoreCmd = &cobra.Command{
@@ -134,14 +134,14 @@ func runRestoreCreate(cmd *cobra.Command, args []string) error {
 // CLI level rather than letting them surface as a webhook rejection.
 func parseIdentityFlags(values []string) ([]snapshotv1alpha1.IdentityRegenerationItem, error) {
 	known := map[string]snapshotv1alpha1.IdentityRegenerationItem{
-		"hostname":     snapshotv1alpha1.RegenHostname,
-		"machineid":    snapshotv1alpha1.RegenMachineID,
-		"machine-id":   snapshotv1alpha1.RegenMachineID,
-		"sshhostkeys":  snapshotv1alpha1.RegenSSHHostKeys,
+		"hostname":      snapshotv1alpha1.RegenHostname,
+		"machineid":     snapshotv1alpha1.RegenMachineID,
+		"machine-id":    snapshotv1alpha1.RegenMachineID,
+		"sshhostkeys":   snapshotv1alpha1.RegenSSHHostKeys,
 		"ssh-host-keys": snapshotv1alpha1.RegenSSHHostKeys,
-		"macaddresses": snapshotv1alpha1.RegenMACAddresses,
+		"macaddresses":  snapshotv1alpha1.RegenMACAddresses,
 		"mac-addresses": snapshotv1alpha1.RegenMACAddresses,
-		"macs":         snapshotv1alpha1.RegenMACAddresses,
+		"macs":          snapshotv1alpha1.RegenMACAddresses,
 	}
 	var out []snapshotv1alpha1.IdentityRegenerationItem
 	seen := map[snapshotv1alpha1.IdentityRegenerationItem]bool{}
