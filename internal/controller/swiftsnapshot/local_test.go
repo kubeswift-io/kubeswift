@@ -13,14 +13,19 @@ import (
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 )
 
+// fakeUID is a deterministic UID for test fixtures. The action-id
+// helper takes the first 8 chars, so the expected action-id for any
+// makeLocalSnap("name", ...) is "name-deadbeef".
+const fakeUID = "deadbeef-1234-5678-9abc-def012345678"
+
 // makeLocalSnap returns a Phase-2 local-backend SwiftSnapshot with a
 // single explicit hostPath under the operator-controlled prefix.
 func makeLocalSnap(name, ns, guestName string) *snapshotv1alpha1.SwiftSnapshot {
 	return &snapshotv1alpha1.SwiftSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            name,
-			Namespace:       ns,
-			ResourceVersion: "42",
+			Name:      name,
+			Namespace: ns,
+			UID:       fakeUID,
 		},
 		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
 			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: guestName},
@@ -74,7 +79,7 @@ func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing
 	if p.Annotations[annoAction] != verbCapture {
 		t.Errorf("pod annotation %s = %q, want %q", annoAction, p.Annotations[annoAction], verbCapture)
 	}
-	wantID := "snap1-42"
+	wantID := "snap1-deadbeef"
 	if p.Annotations[annoActionID] != wantID {
 		t.Errorf("pod annotation %s = %q, want %q", annoActionID, p.Annotations[annoActionID], wantID)
 	}
@@ -161,7 +166,7 @@ func TestLocal_Capturing_StatusReady_FinalizesWithPauseWindow(t *testing.T) {
 	guest := makeGuest("default", "g1")
 	pod := makeLauncherPod("default", "g1", "boba")
 	pod.Annotations = map[string]string{
-		annoStatusID:      "snap1-42",
+		annoStatusID:      "snap1-deadbeef",
 		annoStatus:        "ready",
 		annoStatusDetail:  "captured to file:///x (1234ms pause window, resumed)",
 		annoPauseWindowMs: "1234",
@@ -191,7 +196,7 @@ func TestLocal_Capturing_StatusFailed_TransitionsToFailed(t *testing.T) {
 	guest := makeGuest("default", "g1")
 	pod := makeLauncherPod("default", "g1", "boba")
 	pod.Annotations = map[string]string{
-		annoStatusID:     "snap1-42",
+		annoStatusID:     "snap1-deadbeef",
 		annoStatus:       "failed",
 		annoStatusDetail: "snapshot: VM not in Paused state",
 	}
@@ -214,7 +219,7 @@ func TestLocal_Capturing_StatusRejected_TransitionsToFailed(t *testing.T) {
 	guest := makeGuest("default", "g1")
 	pod := makeLauncherPod("default", "g1", "boba")
 	pod.Annotations = map[string]string{
-		annoStatusID:     "snap1-42",
+		annoStatusID:     "snap1-deadbeef",
 		annoStatus:       "rejected",
 		annoStatusDetail: "rejected: action snap0-9 already in flight",
 	}
@@ -260,7 +265,7 @@ func TestLocal_Capturing_DeadlineExceeded_TransitionsToFailed(t *testing.T) {
 	guest := makeGuest("default", "g1")
 	pod := makeLauncherPod("default", "g1", "boba")
 	pod.Annotations = map[string]string{
-		annoStatusID: "snap1-42",
+		annoStatusID: "snap1-deadbeef",
 		annoStatus:   "running",
 	}
 
@@ -289,7 +294,7 @@ func TestLocal_Capturing_AnnotationOverride_ExtendsDeadline(t *testing.T) {
 	guest := makeGuest("default", "g1")
 	pod := makeLauncherPod("default", "g1", "boba")
 	pod.Annotations = map[string]string{
-		annoStatusID: "snap1-42",
+		annoStatusID: "snap1-deadbeef",
 		annoStatus:   "running",
 	}
 
