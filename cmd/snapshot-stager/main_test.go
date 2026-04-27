@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/projectbeskar/kubeswift/internal/snapshot/configjson"
 )
 
 // writeMockSnapshot creates a directory layout that resembles a CH
@@ -64,7 +66,10 @@ func TestRun_AppliesPatchesAndWritesSentinel(t *testing.T) {
 	dst := t.TempDir()
 	writeMockSnapshot(t, src, "console=ttyS0 root=/dev/vda", "52:54:00:01:01:01")
 
-	if err := run(src, dst, true, []string{"52:54:00:aa:bb:cc"}); err != nil {
+	if err := run(src, dst, configjson.PatchOptions{
+		AppendCmdlineMarker: true,
+		RewriteMACs:         []string{"52:54:00:aa:bb:cc"},
+	}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -115,7 +120,10 @@ func TestRun_SentinelPresentIsIdempotentNoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := run(src, dst, true, []string{"52:54:00:aa:bb:cc"}); err != nil {
+	if err := run(src, dst, configjson.PatchOptions{
+		AppendCmdlineMarker: true,
+		RewriteMACs:         []string{"52:54:00:aa:bb:cc"},
+	}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -147,7 +155,7 @@ func TestRun_PartialPriorRunIsWipedAndRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := run(src, dst, false, nil); err != nil {
+	if err := run(src, dst, configjson.PatchOptions{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -171,7 +179,7 @@ func TestRun_NoPatchesRequestedSkipsConfigJSONRewrite(t *testing.T) {
 	dst := t.TempDir()
 	writeMockSnapshot(t, src, "console=ttyS0", "52:54:00:11:22:33")
 
-	if err := run(src, dst, false, nil); err != nil {
+	if err := run(src, dst, configjson.PatchOptions{}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -190,9 +198,84 @@ func TestRun_NoPatchesRequestedSkipsConfigJSONRewrite(t *testing.T) {
 
 func TestRun_MissingSourceFails(t *testing.T) {
 	dst := t.TempDir()
-	err := run("/this/path/does/not/exist", dst, true, nil)
+	err := run("/this/path/does/not/exist", dst, configjson.PatchOptions{AppendCmdlineMarker: true})
 	if err == nil {
 		t.Fatal("expected error for missing source")
+	}
+}
+
+// TestRun_RewritesRuntimeDirAndNullifiesHostMAC mirrors the clone path
+// end-to-end through run() against a flat-layout config.json (real CH
+// 51.1 snapshot output): seed.iso disk path + serial.socket carry the
+// source pod's runtime_dir prefix; net[0].host_mac is populated. After
+// run completes, both paths are rewritten to the target prefix and the
+// host_mac is null. Mirrors what the clone restore-receive launcher
+// will see.
+func TestRun_RewritesRuntimeDirAndNullifiesHostMAC(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	from := "/var/lib/kubeswift/run/default-source/"
+	to := "/var/lib/kubeswift/run/default-clone-a/"
+	cfg := map[string]any{
+		"payload": map[string]any{"cmdline": "console=ttyS0"},
+		"disks": []any{
+			map[string]any{"id": "_disk0", "path": "/var/lib/kubeswift/disks/root/image.raw"},
+			map[string]any{"id": "_disk1", "path": from + "seed.iso"},
+		},
+		"net": []any{
+			map[string]any{
+				"id":       "_net0",
+				"mac":      "52:54:00:aa:bb:01",
+				"host_mac": "be:b2:1e:5e:38:40",
+			},
+		},
+		"serial": map[string]any{"socket": from + "serial.sock"},
+	}
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := os.WriteFile(filepath.Join(src, "config.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "state.json"), []byte("opaque"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "memory-ranges"), []byte("opaque"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(src, dst, configjson.PatchOptions{
+		RewriteRuntimeDirFrom: from,
+		RewriteRuntimeDirTo:   to,
+		NullifyHostMAC:        true,
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Read back the patched config.json.
+	out, err := os.ReadFile(filepath.Join(dst, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patched map[string]any
+	if err := json.Unmarshal(out, &patched); err != nil {
+		t.Fatal(err)
+	}
+	disks := patched["disks"].([]any)
+	if got := disks[0].(map[string]any)["path"]; got != "/var/lib/kubeswift/disks/root/image.raw" {
+		t.Errorf("root disk path mutated: %v", got)
+	}
+	if got := disks[1].(map[string]any)["path"]; got != to+"seed.iso" {
+		t.Errorf("seed.iso path = %v, want %s", got, to+"seed.iso")
+	}
+	if got := patched["serial"].(map[string]any)["socket"]; got != to+"serial.sock" {
+		t.Errorf("serial.socket = %v, want %s", got, to+"serial.sock")
+	}
+	dev := patched["net"].([]any)[0].(map[string]any)
+	if dev["host_mac"] != nil {
+		t.Errorf("host_mac = %v, want nil", dev["host_mac"])
+	}
+	if dev["mac"] != "52:54:00:aa:bb:01" {
+		t.Errorf("guest mac mutated: %v", dev["mac"])
 	}
 }
 
@@ -230,7 +313,10 @@ func TestSentinelWrittenLast(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
 	writeMockSnapshot(t, src, "console=ttyS0", "52:54:00:11:22:33")
-	if err := run(src, dst, true, []string{"52:54:00:aa:bb:cc"}); err != nil {
+	if err := run(src, dst, configjson.PatchOptions{
+		AppendCmdlineMarker: true,
+		RewriteMACs:         []string{"52:54:00:aa:bb:cc"},
+	}); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	cfgInfo, err := os.Stat(filepath.Join(dst, "config.json"))

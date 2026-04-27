@@ -365,3 +365,222 @@ func TestPatch_RewriteMACs_AndCmdlineMarker_TogetherProducesBothChanges(t *testi
 		t.Errorf("expected 2 changes (cmdline + MAC), got %d: %v", len(changes), changes)
 	}
 }
+
+// -------- Flat-layout tests (real CH 51.1 snapshot output) --------
+//
+// CH's snapshot file is written flat (no top-level "config" wrapper);
+// the wrapped form only appears in the HTTP API response. The patcher
+// must work against the snapshot-file layout because it runs from the
+// staging init container before any HTTP API is up. These tests assert
+// the flat layout works without needing the wrapper.
+
+// flatConfigWithNet builds a flat-layout CH config.json as
+// produced by vm.snapshot in v51.1.
+func flatConfigWithNet(devices ...map[string]any) map[string]any {
+	netList := make([]any, len(devices))
+	for i, d := range devices {
+		netList[i] = d
+	}
+	return map[string]any{
+		"payload": map[string]any{"cmdline": "console=ttyS0"},
+		"net":     netList,
+	}
+}
+
+func TestPatch_FlatLayout_AppendCmdlineMarker(t *testing.T) {
+	cfg := map[string]any{
+		"payload": map[string]any{"cmdline": "console=ttyS0"},
+	}
+	changes, err := Patch(cfg, PatchOptions{AppendCmdlineMarker: true})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Errorf("expected one change, got %v", changes)
+	}
+	got := cfg["payload"].(map[string]any)["cmdline"]
+	want := "console=ttyS0 " + CloneCmdlineMarker
+	if got != want {
+		t.Errorf("cmdline = %q, want %q", got, want)
+	}
+}
+
+func TestPatch_FlatLayout_RewriteMACs(t *testing.T) {
+	cfg := flatConfigWithNet(map[string]any{"id": "_net0", "mac": "52:54:00:aa:bb:01"})
+	if _, err := Patch(cfg, PatchOptions{RewriteMACs: []string{"52:54:00:de:ad:be"}}); err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	got := cfg["net"].([]any)[0].(map[string]any)["mac"]
+	if got != "52:54:00:de:ad:be" {
+		t.Errorf("MAC = %v, want rewritten", got)
+	}
+}
+
+// -------- RewriteRuntimeDirPrefix tests --------
+
+func TestPatch_RewriteRuntimeDirPrefix_DiskAndSerial(t *testing.T) {
+	from := "/var/lib/kubeswift/run/default-source/"
+	to := "/var/lib/kubeswift/run/default-clone-a/"
+	cfg := map[string]any{
+		"disks": []any{
+			// Root disk — same path on every pod, NOT under "from", must pass through.
+			map[string]any{"id": "_disk0", "path": "/var/lib/kubeswift/disks/root/image.raw"},
+			// Seed.iso — under source runtime_dir, MUST be rewritten.
+			map[string]any{"id": "_disk1", "path": from + "seed.iso"},
+		},
+		"serial": map[string]any{"socket": from + "serial.sock"},
+	}
+	changes, err := Patch(cfg, PatchOptions{
+		RewriteRuntimeDirFrom: from,
+		RewriteRuntimeDirTo:   to,
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Errorf("expected 2 changes (disks[1] + serial), got %d: %v", len(changes), changes)
+	}
+	rootPath := cfg["disks"].([]any)[0].(map[string]any)["path"]
+	if rootPath != "/var/lib/kubeswift/disks/root/image.raw" {
+		t.Errorf("root disk path mutated: %v", rootPath)
+	}
+	seedPath := cfg["disks"].([]any)[1].(map[string]any)["path"]
+	if seedPath != to+"seed.iso" {
+		t.Errorf("seed.iso path = %v, want rewritten to %s", seedPath, to+"seed.iso")
+	}
+	serialSock := cfg["serial"].(map[string]any)["socket"]
+	if serialSock != to+"serial.sock" {
+		t.Errorf("serial.socket = %v, want rewritten to %s", serialSock, to+"serial.sock")
+	}
+}
+
+func TestPatch_RewriteRuntimeDirPrefix_RequiresTrailingSlash(t *testing.T) {
+	cfg := map[string]any{
+		"disks":  []any{map[string]any{"id": "_disk0", "path": "/run/foo/seed.iso"}},
+		"serial": map[string]any{"socket": "/run/foo/serial.sock"},
+	}
+	_, err := Patch(cfg, PatchOptions{
+		RewriteRuntimeDirFrom: "/run/foo",
+		RewriteRuntimeDirTo:   "/run/bar/",
+	})
+	if err == nil || !strings.Contains(err.Error(), "trailing") &&
+		!strings.Contains(err.Error(), "must end in '/'") {
+		t.Errorf("expected trailing-slash error, got: %v", err)
+	}
+}
+
+func TestPatch_RewriteRuntimeDirPrefix_NoMatchingPaths_NoChanges(t *testing.T) {
+	cfg := map[string]any{
+		"disks":  []any{map[string]any{"id": "_disk0", "path": "/var/lib/kubeswift/disks/root/image.raw"}},
+		"serial": map[string]any{"socket": nil},
+	}
+	changes, err := Patch(cfg, PatchOptions{
+		RewriteRuntimeDirFrom: "/var/lib/kubeswift/run/default-source/",
+		RewriteRuntimeDirTo:   "/var/lib/kubeswift/run/default-clone-a/",
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("expected no changes (no matching prefixes), got %v", changes)
+	}
+}
+
+// -------- NullifyHostMAC tests --------
+
+func TestPatch_NullifyHostMAC_OneDevice(t *testing.T) {
+	cfg := flatConfigWithNet(map[string]any{
+		"id":       "_net0",
+		"mac":      "52:54:00:aa:bb:01",
+		"host_mac": "be:b2:1e:5e:38:40",
+	})
+	changes, err := Patch(cfg, PatchOptions{NullifyHostMAC: true})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Errorf("expected one change, got %v", changes)
+	}
+	dev := cfg["net"].([]any)[0].(map[string]any)
+	if dev["host_mac"] != nil {
+		t.Errorf("host_mac = %v, want nil", dev["host_mac"])
+	}
+	// The guest-side MAC ("mac") must be untouched — only host_mac is nulled.
+	if dev["mac"] != "52:54:00:aa:bb:01" {
+		t.Errorf("mac mutated: %v", dev["mac"])
+	}
+}
+
+func TestPatch_NullifyHostMAC_AlreadyNull_NoChange(t *testing.T) {
+	cfg := flatConfigWithNet(map[string]any{
+		"id":       "_net0",
+		"mac":      "52:54:00:aa:bb:01",
+		"host_mac": nil,
+	})
+	changes, err := Patch(cfg, PatchOptions{NullifyHostMAC: true})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("expected no change (already null), got %v", changes)
+	}
+}
+
+// -------- End-to-end clone patch (all four together) --------
+
+func TestPatch_AllCloneOptionsTogether(t *testing.T) {
+	from := "/var/lib/kubeswift/run/default-source/"
+	to := "/var/lib/kubeswift/run/default-clone-a/"
+	cfg := map[string]any{
+		"payload": map[string]any{"cmdline": "console=ttyS0"},
+		"disks": []any{
+			map[string]any{"id": "_disk0", "path": "/var/lib/kubeswift/disks/root/image.raw"},
+			map[string]any{"id": "_disk1", "path": from + "seed.iso"},
+		},
+		"net": []any{
+			map[string]any{
+				"id":       "_net0",
+				"mac":      "52:54:00:aa:bb:01",
+				"host_mac": "be:b2:1e:5e:38:40",
+			},
+		},
+		"serial": map[string]any{"socket": from + "serial.sock"},
+	}
+	changes, err := Patch(cfg, PatchOptions{
+		AppendCmdlineMarker:   true,
+		RewriteMACs:           []string{"52:54:00:de:ad:be"},
+		RewriteRuntimeDirFrom: from,
+		RewriteRuntimeDirTo:   to,
+		NullifyHostMAC:        true,
+	})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	// Expected: cmdline + MAC + 2 path rewrites + host_mac null = 5 changes
+	if len(changes) != 5 {
+		t.Errorf("expected 5 changes, got %d: %v", len(changes), changes)
+	}
+	// Cmdline marker
+	if got := cfg["payload"].(map[string]any)["cmdline"]; got != "console=ttyS0 "+CloneCmdlineMarker {
+		t.Errorf("cmdline = %q", got)
+	}
+	// Disk paths
+	if got := cfg["disks"].([]any)[0].(map[string]any)["path"]; got != "/var/lib/kubeswift/disks/root/image.raw" {
+		t.Errorf("root disk path mutated: %v", got)
+	}
+	if got := cfg["disks"].([]any)[1].(map[string]any)["path"]; got != to+"seed.iso" {
+		t.Errorf("seed disk path = %v", got)
+	}
+	// Net device
+	dev := cfg["net"].([]any)[0].(map[string]any)
+	if dev["mac"] != "52:54:00:de:ad:be" {
+		t.Errorf("mac = %v", dev["mac"])
+	}
+	if dev["host_mac"] != nil {
+		t.Errorf("host_mac = %v, want nil", dev["host_mac"])
+	}
+	// Serial
+	if got := cfg["serial"].(map[string]any)["socket"]; got != to+"serial.sock" {
+		t.Errorf("serial.socket = %v", got)
+	}
+}

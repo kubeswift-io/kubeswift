@@ -7,6 +7,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftguestctrl "github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
 // -------- Pure version-comparison tests --------
@@ -214,6 +216,110 @@ func TestIsTierBRestore(t *testing.T) {
 	}
 	if !IsTierBRestore(local) {
 		t.Errorf("local snapshot should be Tier B")
+	}
+}
+
+// -------- restoreAnnotations: clone-mode wiring --------
+
+func TestRestoreAnnotations_Clone_SetsRuntimeDirPrefixAndNullifyHostMAC(t *testing.T) {
+	r := &SwiftRestoreReconciler{}
+	restore := &snapshotv1alpha1.SwiftRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "rst1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftRestoreSpec{
+			TargetGuest: snapshotv1alpha1.SwiftRestoreTarget{Name: "clone-a"},
+			Identity: &snapshotv1alpha1.IdentityRegeneration{
+				Regenerate: []snapshotv1alpha1.IdentityRegenerationItem{
+					snapshotv1alpha1.RegenMACAddresses,
+					snapshotv1alpha1.RegenMachineID,
+					snapshotv1alpha1.RegenSSHHostKeys,
+					snapshotv1alpha1.RegenHostname,
+				},
+			},
+		},
+	}
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type:  snapshotv1alpha1.SnapshotBackendLocal,
+				Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/default-snap1"},
+			},
+		},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "boba"},
+	}
+	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
+
+	annos := r.restoreAnnotations(restore, snap, source, false /* inPlace */)
+
+	wantFrom := "/var/lib/kubeswift/run/default-src/"
+	wantTo := "/var/lib/kubeswift/run/default-clone-a/"
+	if got := annos[swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix]; got != wantFrom {
+		t.Errorf("from prefix = %q, want %q", got, wantFrom)
+	}
+	if got := annos[swiftguestctrl.AnnotationRestoreRuntimeDirToPrefix]; got != wantTo {
+		t.Errorf("to prefix = %q, want %q", got, wantTo)
+	}
+	if got := annos[swiftguestctrl.AnnotationRestoreNullifyHostMAC]; got != "true" {
+		t.Errorf("nullify-host-mac = %q, want \"true\"", got)
+	}
+	if got := annos[swiftguestctrl.AnnotationRestoreMode]; got != swiftguestctrl.RestoreModeClone {
+		t.Errorf("mode = %q, want clone", got)
+	}
+}
+
+func TestRestoreAnnotations_InPlace_DoesNotSetCloneOnlyAnnotations(t *testing.T) {
+	// In-place restore reuses the source's runtime_dir name and does
+	// not need any of the clone-only patches. The fast path bypasses
+	// the stager entirely; setting these annotations would still
+	// trigger a stager pass on a future pod recreation, so they must
+	// be omitted.
+	r := &SwiftRestoreReconciler{}
+	restore := &snapshotv1alpha1.SwiftRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "rst1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftRestoreSpec{
+			TargetGuest: snapshotv1alpha1.SwiftRestoreTarget{Name: "src"},
+		},
+	}
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type:  snapshotv1alpha1.SnapshotBackendLocal,
+				Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/default-snap1"},
+			},
+		},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "boba"},
+	}
+	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
+
+	annos := r.restoreAnnotations(restore, snap, source, true /* inPlace */)
+
+	for _, key := range []string{
+		swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix,
+		swiftguestctrl.AnnotationRestoreRuntimeDirToPrefix,
+		swiftguestctrl.AnnotationRestoreNullifyHostMAC,
+		swiftguestctrl.AnnotationRestoreMACRewrites,
+		swiftguestctrl.AnnotationRestoreAppendCmdlineMarker,
+	} {
+		if _, set := annos[key]; set {
+			t.Errorf("in-place restore set clone-only annotation %s = %q", key, annos[key])
+		}
+	}
+	if got := annos[swiftguestctrl.AnnotationRestoreMode]; got != swiftguestctrl.RestoreModeInPlace {
+		t.Errorf("mode = %q, want in-place", got)
+	}
+}
+
+func TestRuntimeDirPrefix_FormatMatchesSwiftRuntime(t *testing.T) {
+	// Format must match swift-runtime's create_runtime_dir naming
+	// (rust/swift-runtime/src/runtime_dir.rs:48): "<ns>-<name>" under
+	// /var/lib/kubeswift/run, with a trailing "/" so the patcher's
+	// prefix match doesn't clip a longer name.
+	got := runtimeDirPrefix("default", "guest1")
+	want := "/var/lib/kubeswift/run/default-guest1/"
+	if got != want {
+		t.Errorf("runtimeDirPrefix(\"default\", \"guest1\") = %q, want %q", got, want)
+	}
+	if !strings.HasSuffix(got, "/") {
+		t.Errorf("runtimeDirPrefix must end in '/' — patcher requires it")
 	}
 }
 
