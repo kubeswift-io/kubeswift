@@ -185,10 +185,12 @@ func appendCloneMarker(cfg map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmdlineRaw, ok := payload["cmdline"]
-	if !ok {
-		// No cmdline at all — that's unusual for CH but possible for
-		// initramfs-only boots. Set it directly to the marker.
+	cmdlineRaw, present := payload["cmdline"]
+	// CH 51.1 disk-boot snapshots emit `cmdline: null` — the field is
+	// present but the value is JSON null (the boot loader inside the
+	// guest sets the kernel cmdline, so CH has nothing to record).
+	// Treat that the same as a missing field: install the marker.
+	if !present || cmdlineRaw == nil {
 		payload["cmdline"] = CloneCmdlineMarker
 		return "set cmdline to " + CloneCmdlineMarker + " (no prior cmdline)", nil
 	}
