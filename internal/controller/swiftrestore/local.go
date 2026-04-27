@@ -402,7 +402,7 @@ func (r *SwiftRestoreReconciler) handleResumingLocal(
 		return true, 0, nil
 	}
 
-	actionID := restore.Name + "-" + restore.ResourceVersion
+	actionID := resumeActionID(restore)
 
 	// First reconcile in Resuming: write the resume action onto the
 	// launcher pod. Idempotent — patchPodActionAnnotations is a merge
@@ -720,4 +720,23 @@ func (r *SwiftRestoreReconciler) patchPodActionAnnotations(
 		return err
 	}
 	return r.Patch(ctx, pod, client.RawPatch(types.MergePatchType, data))
+}
+
+// resumeActionID returns a stable per-SwiftRestore action-id used to
+// drive (and later observe) the launcher pod's snapshot-action
+// annotations during the Resuming phase.
+//
+// Mirrors capturingActionID in internal/controller/swiftsnapshot:
+// derived from restore.Name and restore.UID (both immutable). Using
+// restore.ResourceVersion here would diverge across reconciles
+// because each status write bumps it — by the time the launcher
+// mirrors the action-id, the controller is computing a new one and
+// the comparison never matches. The same bug bit Tier B captures
+// before this fix.
+func resumeActionID(restore *snapshotv1alpha1.SwiftRestore) string {
+	uid := string(restore.UID)
+	if len(uid) > 8 {
+		uid = uid[:8]
+	}
+	return restore.Name + "-" + uid
 }
