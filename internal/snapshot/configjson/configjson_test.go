@@ -101,6 +101,30 @@ func TestPatch_AppendCloneMarker_Idempotent(t *testing.T) {
 	}
 }
 
+func TestPatch_AppendCloneMarker_ExplicitNullCmdline(t *testing.T) {
+	// CH 51.1 disk-boot snapshots write payload.cmdline = null (the
+	// field is present but the JSON value is null). The patcher must
+	// treat this as "no cmdline" and set the marker, not crash with a
+	// type assertion error.
+	cfg := map[string]any{
+		"payload": map[string]any{
+			"cmdline": nil,
+			"kernel":  "/usr/share/kubeswift-firmware/CLOUDHV.fd",
+		},
+	}
+	changes, err := Patch(cfg, PatchOptions{AppendCmdlineMarker: true})
+	if err != nil {
+		t.Fatalf("Patch: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Errorf("expected one change, got %v", changes)
+	}
+	got := cfg["payload"].(map[string]any)["cmdline"]
+	if got != CloneCmdlineMarker {
+		t.Errorf("cmdline = %v, want %q", got, CloneCmdlineMarker)
+	}
+}
+
 func TestPatch_AppendCloneMarker_NoCmdlineField(t *testing.T) {
 	cfg := map[string]any{
 		"config": map[string]any{
