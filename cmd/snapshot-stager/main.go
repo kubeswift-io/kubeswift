@@ -56,6 +56,12 @@ func main() {
 		"append the kubeswift.clone=true marker to the kernel cmdline in config.json")
 	rewriteMACsCSV := flag.String("rewrite-macs", "",
 		"comma-separated MAC list, indexed by config.net[]; empty entries leave the source MAC unchanged")
+	rewriteRuntimeDirFrom := flag.String("rewrite-runtime-dir-from", "",
+		"source runtime_dir prefix (must end in '/') to substitute in disks[].path and serial.socket")
+	rewriteRuntimeDirTo := flag.String("rewrite-runtime-dir-to", "",
+		"target runtime_dir prefix (must end in '/'); empty disables prefix rewrite")
+	nullifyHostMAC := flag.Bool("nullify-host-mac", false,
+		"set net[].host_mac to null so CH auto-discovers the clone tap's host MAC instead of forcing the source value")
 	flag.Parse()
 
 	if *src == "" || *dst == "" {
@@ -63,13 +69,20 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*src, *dst, *appendCmdlineMarker, parseMACsCSV(*rewriteMACsCSV)); err != nil {
+	opts := configjson.PatchOptions{
+		AppendCmdlineMarker:   *appendCmdlineMarker,
+		RewriteMACs:           parseMACsCSV(*rewriteMACsCSV),
+		RewriteRuntimeDirFrom: *rewriteRuntimeDirFrom,
+		RewriteRuntimeDirTo:   *rewriteRuntimeDirTo,
+		NullifyHostMAC:        *nullifyHostMAC,
+	}
+	if err := run(*src, *dst, opts); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-stager:", err)
 		os.Exit(1)
 	}
 }
 
-func run(src, dst string, appendCmdlineMarker bool, rewriteMACs []string) error {
+func run(src, dst string, opts configjson.PatchOptions) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("source dir not accessible: %w", err)
 	}
@@ -96,16 +109,13 @@ func run(src, dst string, appendCmdlineMarker bool, rewriteMACs []string) error 
 		return fmt.Errorf("copy: %w", err)
 	}
 
-	if appendCmdlineMarker || len(rewriteMACs) > 0 {
+	if patchRequested(opts) {
 		fmt.Println("snapshot-stager: patching config.json")
 		cfg, err := configjson.Read(dst)
 		if err != nil {
 			return fmt.Errorf("read config.json: %w", err)
 		}
-		changes, err := configjson.Patch(cfg, configjson.PatchOptions{
-			AppendCmdlineMarker: appendCmdlineMarker,
-			RewriteMACs:         rewriteMACs,
-		})
+		changes, err := configjson.Patch(cfg, opts)
 		if err != nil {
 			return fmt.Errorf("patch config.json: %w", err)
 		}
@@ -124,6 +134,17 @@ func run(src, dst string, appendCmdlineMarker bool, rewriteMACs []string) error 
 	}
 	fmt.Println("snapshot-stager: complete")
 	return nil
+}
+
+// patchRequested reports whether any PatchOptions field is set, so we
+// can skip the read/write round-trip on config.json when the stager
+// only needs to copy the snapshot tree.
+func patchRequested(opts configjson.PatchOptions) bool {
+	return opts.AppendCmdlineMarker ||
+		len(opts.RewriteMACs) > 0 ||
+		opts.RewriteRuntimeDirFrom != "" ||
+		opts.RewriteRuntimeDirTo != "" ||
+		opts.NullifyHostMAC
 }
 
 // parseMACsCSV splits a comma-separated MAC list. Empty input produces
