@@ -22,7 +22,6 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-default}"
 NO_CLEANUP=false
 SAMPLES_DIR="$(cd "$(dirname "$0")/../../config/samples/local-snapshots" && pwd)"
-SEED_DIR="$(cd "$(dirname "$0")/../../config/samples/seed-profiles" && pwd)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -51,7 +50,7 @@ cleanup() {
     swiftsnapshot/snapshot-local-mem \
     swiftguest/snapshot-local-source \
     swiftguestclass/snapshot-local-class \
-    swiftseedprofile/clone-identity-regen >/dev/null 2>&1 || true
+    swiftseedprofile/snapshot-local-test-seed >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -86,9 +85,10 @@ wait_for_ssh() {
   return 1
 }
 
-# 1. Source VM with the clone-identity-regen seed profile.
+# 1. Source VM with the combined seed profile (kubeswift user for
+#    swiftctl ssh + clone-identity-regen bootcmd).
 echo "--- Step 1: Apply source manifests + seed profile ---"
-kubectl apply -n "$NAMESPACE" -f "$SEED_DIR/clone-identity-regen.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftseedprofile-test.yaml" >/dev/null
 kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftguest-source.yaml" >/dev/null
 
 if ! kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" >/dev/null 2>&1; then
