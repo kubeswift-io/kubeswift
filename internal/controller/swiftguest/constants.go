@@ -39,4 +39,17 @@ const (
 	IntentPath    = "/var/lib/kubeswift/intent"
 	IntentFile    = "runtime-intent.json"
 	RunDirPath    = "/var/lib/kubeswift/run"
+
+	// SnapshotsHostPath is the on-node directory Cloud Hypervisor writes
+	// Tier B snapshot directories into (config.json, state.json, memory-
+	// ranges) when the SwiftSnapshot controller drives a vm.snapshot
+	// action. It is mounted on every launcher pod (writable hostPath)
+	// so the source-guest's CH process can write to it without pod
+	// recreation. The validation webhook constrains operator-provided
+	// hostPaths to live under this prefix.
+	//
+	// The path also doubles as the read-side mount for restore-receive
+	// pods, but those mount the specific snapshot subdirectory (not
+	// this parent) — see internal/controller/swiftguest/restore.go.
+	SnapshotsHostPath = "/var/lib/kubeswift/snapshots"
 )
