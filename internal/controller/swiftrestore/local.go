@@ -74,6 +74,14 @@ const (
 	verbResume       = "resume"
 )
 
+// swiftRestoreOwnerLabel is set by the SwiftRestore controller on
+// every clone-target SwiftGuest it materializes. The handlePendingLocal
+// re-entrancy guard reads this label to distinguish "this SwiftGuest
+// is our own work from a prior reconcile" from "this SwiftGuest was
+// created by the user/another controller", which is the case
+// targetGuest.overwriteExisting protects against.
+const swiftRestoreOwnerLabel = "snapshot.kubeswift.io/swift-restore"
+
 // VersionCompatibility is the result of comparing snapshot's
 // HypervisorVersion to the current cluster CH version.
 type VersionCompatibility int
@@ -318,14 +326,24 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 		// Clone: target SwiftGuest doesn't exist (or exists and
 		// OverwriteExisting=true). Create from source.Spec with the
 		// restore annotations stamped on metadata.
+		//
+		// Re-entrancy: a prior reconcile of this same SwiftRestore may
+		// have created the target already. Status updates from that
+		// reconcile can lag behind the SwiftGuest create in the cache,
+		// so a follow-up reconcile re-enters this function with phase
+		// still reading as Pending. Without the label check below, the
+		// controller would mark its own work as a TargetConflict.
 		var existing swiftv1alpha1.SwiftGuest
 		err := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existing)
-		if err == nil && !restore.Spec.TargetGuest.OverwriteExisting {
-			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-			setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
-				"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; "+
-					"set targetGuest.overwriteExisting=true to replace")
-			return true, 0, nil
+		if err == nil {
+			ownedByThisRestore := existing.Labels[swiftRestoreOwnerLabel] == restore.Name
+			if !ownedByThisRestore && !restore.Spec.TargetGuest.OverwriteExisting {
+				setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+				setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
+					"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; "+
+						"set targetGuest.overwriteExisting=true to replace")
+				return true, 0, nil
+			}
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			return false, 0, err
@@ -649,7 +667,7 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 			Namespace:   restore.Namespace,
 			Annotations: annos,
 			Labels: map[string]string{
-				"snapshot.kubeswift.io/swift-restore": restore.Name,
+				swiftRestoreOwnerLabel: restore.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(restore, swiftRestoreGVK),

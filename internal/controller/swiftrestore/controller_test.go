@@ -351,3 +351,10 @@ func reasonOrEmpty(c *metav1.Condition) string {
 	}
 	return c.Reason
 }
+
+func msgOrEmpty(c *metav1.Condition) string {
+	if c == nil {
+		return ""
+	}
+	return c.Message
+}
