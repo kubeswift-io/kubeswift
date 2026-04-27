@@ -174,7 +174,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			Name:      podName,
 			Namespace: snap.Namespace,
 			Labels: map[string]string{
-				"snapshot.kubeswift.io/role":         "hostpath-cleanup",
+				"snapshot.kubeswift.io/role":           "hostpath-cleanup",
 				"snapshot.kubeswift.io/swift-snapshot": snap.Name,
 			},
 			OwnerReferences: []metav1.OwnerReference{
