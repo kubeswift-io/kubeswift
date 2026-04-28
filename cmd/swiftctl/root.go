@@ -43,6 +43,8 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(restoreCmd)
+	rootCmd.AddCommand(migrateCmd)
+	rootCmd.AddCommand(migrationCmd)
 }
 
 func getNamespace() string {
