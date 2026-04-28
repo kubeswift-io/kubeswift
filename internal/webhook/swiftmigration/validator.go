@@ -331,6 +331,11 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 // is nil/empty OR every interface has NetworkRef==nil AND Type is
 // "" or "bridge".
 //
+// Keep in sync with internal/controller/swiftmigration/validating.go's
+// isDefaultNodeLocalNetworking. Both copies must remain textually
+// identical; the controller can't import the webhook (cycle) and the
+// webhook only imports api types.
+//
 // type==sriov on its own interface counts as multi-node-capable from
 // a hypothetical "the VF survives migration" standpoint, BUT the GPU
 // cross-node refusal above already blocks SR-IOV migrations
