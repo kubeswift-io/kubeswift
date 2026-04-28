@@ -104,15 +104,23 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Terminal phases: nothing more to do. Idempotency: re-reconcile
-	// of a Completed/Failed/Cancelled SwiftMigration is a no-op.
-	// Drop the finalizer in case it's still attached (cleanup runs
-	// on transition into the terminal phase, but a re-reconcile
-	// after a controller restart could observe the terminal state
-	// with the finalizer still present).
-	switch mig.Status.Phase {
-	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
-		migrationv1alpha1.SwiftMigrationPhaseFailed,
-		migrationv1alpha1.SwiftMigrationPhaseCancelled:
+	// of a Completed/Failed/Cancelled SwiftMigration is a no-op. The
+	// SwiftMigration controller watches Pod and SwiftGuest events
+	// (SetupWithManager) and a single completed migration receives
+	// many spurious enqueues over its lifetime — anything past this
+	// point should be skipped on stale terminal-phase resources.
+	//
+	// Order: check phase first, then short-circuit immediately when
+	// no work is left. The finalizer-cleanup branch only runs when
+	// the finalizer is still present (e.g., after a controller crash
+	// between the terminal-phase patch and the finalizer-removal
+	// patch in dispatchResult/handleCancellation). Skipping the
+	// removeFinalizer call when the finalizer is already gone avoids
+	// an unnecessary API roundtrip on every spurious enqueue.
+	if isTerminalPhase(mig.Status.Phase) {
+		if !hasFinalizer(&mig) {
+			return ctrl.Result{}, nil
+		}
 		if err := r.removeFinalizer(ctx, &mig); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -225,6 +233,35 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 // handleResuming is in resuming.go.
 
 // --- Helpers ---
+
+// isTerminalPhase returns true for SwiftMigration phases where the
+// outcome has been decided. Used by Reconcile's terminal-phase short-
+// circuit and (textually duplicated) by the validating webhook to
+// skip cluster-state validation on metadata-only patches against
+// already-decided migrations. Both copies must remain in sync; the
+// controller can't import the webhook (cycle) and the webhook only
+// imports api types.
+func isTerminalPhase(phase migrationv1alpha1.SwiftMigrationPhase) bool {
+	switch phase {
+	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
+		migrationv1alpha1.SwiftMigrationPhaseFailed,
+		migrationv1alpha1.SwiftMigrationPhaseCancelled:
+		return true
+	}
+	return false
+}
+
+// hasFinalizer returns true when FinalizerName is attached to the
+// SwiftMigration. Used to skip the removeFinalizer roundtrip on the
+// terminal-phase short-circuit when there's nothing to remove.
+func hasFinalizer(mig *migrationv1alpha1.SwiftMigration) bool {
+	for _, f := range mig.Finalizers {
+		if f == FinalizerName {
+			return true
+		}
+	}
+	return false
+}
 
 // setPhase advances the SwiftMigration to phase p, leaving conditions
 // alone (callers set Ready/Compatible separately).
