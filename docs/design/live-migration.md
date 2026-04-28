@@ -1086,39 +1086,86 @@ workloads that can never live migrate.
    for now).
 2. Add `Ready` condition.
 3. Implement `internal/controller/swiftmigration/` controller with
-   offline mode:
-   - Validating phase: check PVC storage class, target node availability,
-     network attachment compatibility (for cross-node)
-   - Preparing phase: stop the SwiftGuest gracefully, wait for pod
-     termination
-   - StopAndCopy phase: this is just snapshot+restore reusing the
-     SwiftSnapshot/SwiftRestore primitives:
-       - Create internal SwiftSnapshot (Tier A — CSI VolumeSnapshot)
-       - When ready, create the new SwiftGuest pod on target node
-         with PVCs derived from the snapshot
-       - Delete the internal SwiftSnapshot when migration completes
-   - Update SwiftGuest's nodeName/podRef
-   - Handle failures with rollback (restart SwiftGuest on source node)
-4. SwiftGuest extensions: add `spec.migration` block with defaults
+   offline mode using **direct PVC reuse** (NOT snapshot+restore):
+   - Validating phase: re-resolve guest + class (defense in depth);
+     stamp source/destination/mode on status; **manual capacity
+     check** on target node (read Allocatable, sum running pod
+     requests, compare against guest needs + LauncherMemoryOverhead).
+     The webhook (rule set) catches submission-time errors; the
+     controller catches transient cluster-state issues.
+   - Preparing phase: write `kubeswift.io/migration-in-progress`
+     annotation on the SwiftGuest as the idempotency marker
+     (Risk 3); patch `runPolicy=Stopped` in the same combined
+     `client.MergeFrom` so the SwiftGuest controller cannot observe
+     a half-claimed state; `Delete(pod)` with grace=30s; **dual-
+     poll** for Pod NotFound AND no VolumeAttachment for the per-
+     guest root PV (the second gate is critical — without it the
+     destination pod hits Multi-Attach errors on RWO storage; the
+     Phase 1 spike measured ~13s gap on Longhorn).
+   - StopAndCopy phase: **single combined `client.MergeFrom` patch**
+     of `runPolicy=Running` AND `nodeName=target` on the same
+     SwiftGuest CR (Approach A from the spike; the SwiftGuest CR
+     identity is unchanged across the migration, only these two
+     fields are toggled). Atomicity matters — split patches race
+     the SwiftGuest controller's reconciler. Then poll for the
+     destination launcher pod to appear pinned to target.
+   - Resuming phase: poll for `GuestRunning=True` on the destination
+     SwiftGuest; compute `observedDowntime` from Preparing entry to
+     GuestRunning.
+   - Completed phase: clear the in-progress annotation; set
+     `Ready=True`.
+   - Failure handling: drive forward post-cutover (architect Risk 2).
+     Once `Delete(pod)` runs, never roll back to source — the
+     migration is committed. Pre-cutover failures (Validating,
+     Preparing-before-Delete) are pure rollbacks (annotation
+     cleared, source untouched).
+
+   The original Phase 1 plan called for snapshot+restore reuse
+   (creating an internal SwiftSnapshot, hydrating a new SwiftGuest
+   on the target). That plan was overridden after the Phase 1 spike
+   showed direct PVC reuse via in-place SwiftGuest patch is simpler
+   (no PVC ownerRef transition; the per-guest PVC stays owned by
+   the same SwiftGuest UID throughout) and forward-compatible with
+   Phase 3 live mode (which will also patch SwiftGuest fields rather
+   than recreate the CR). See
+   `docs/design/live-migration-phase-1-spike.md` for the empirical
+   findings that drove the change.
+4. SwiftGuest extensions: add `spec.migration` block (`enabled`,
+   `preferredMode`) and `spec.nodeName`. The pod builder honors
+   `spec.nodeName` via direct `pod.Spec.NodeName` binding (bypasses
+   the scheduler — gives fast kubelet rejection on bad fits). When
+   `spec.NodeName` and `status.GPU.NodeName` are both set, they MUST
+   agree (the validation webhook enforces this; the pod builder
+   refuses to build with a Resolved=False condition on disagreement).
 5. swiftctl: `swiftctl migrate <guest> --to <node>`,
    `swiftctl migration list`, `swiftctl migration describe`
-6. RBAC: SwiftMigration permissions
+6. RBAC: SwiftMigration permissions; controller needs SwiftGuest
+   patch + Pod delete + Node get + VolumeAttachment list
 7. Helm chart updates
 8. Tests:
-   - Unit tests for the controller's state machine
+   - Unit tests for each phase handler
    - e2e test in `test/migration/`: create a SwiftGuest, migrate to
-     another node, verify it runs there
+     another node, verify the sentinel disk content survives
+   - VFIO migration test: webhook REJECTS cross-node GPU migration
+     (Phase 1 has no release-and-reallocate primitive)
    - Failure mode test: kill destination during preparation, verify
-     source resumes
+     source can be resumed
 9. Documentation:
    - `docs/migration/overview.md` — concepts, modes, when to use each
-   - `docs/migration/offline-migration.md` — offline migration deep dive
+   - `docs/migration/offline-migration.md` — offline migration deep
+     dive with the spike's measured timing table for Longhorn vs.
+     true CoW drivers
+   - `docs/migration/networking-requirements.md` — storage class +
+     network attachment requirements for cross-node migration
+   - `docs/migration/troubleshooting.md` — common issues
    - swiftctl reference
 
 **Deliverable:** operators can move SwiftGuests between nodes via
-SwiftMigration. Downtime is measured in seconds (from the
-SwiftSnapshot+SwiftRestore cycle). Works for all VM types including GPU
-and SR-IOV.
+SwiftMigration. Downtime is bounded by storage detach + VM boot:
+~70s on Longhorn full-copy, ~25s on true CoW drivers (Rook Ceph
+RBD, EBS). Works for non-VFIO workloads cross-node; VFIO/SR-IOV
+guests are rejected by the webhook (Phase 4+ work — no release-
+and-reallocate primitive yet).
 
 **Acceptance:**
 - e2e test passes
