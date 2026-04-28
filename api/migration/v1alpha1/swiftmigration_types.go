@@ -236,4 +236,3 @@ const (
 	// SwiftMigration-controller idempotency marker.
 	AnnotationMigrationInProgress = "kubeswift.io/migration-in-progress"
 )
-

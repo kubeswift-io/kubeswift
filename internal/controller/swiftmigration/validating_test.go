@@ -365,7 +365,7 @@ func TestValidating_InsufficientMemory_NeedHaveSubstrings(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "big-class")
 	class := newGuestClass("big-class", 1, 64*1024) // 64 GiB memory
-	node := newSpaciousNode("miles", 8, 4096)        // 4 GiB allocatable
+	node := newSpaciousNode("miles", 8, 4096)       // 4 GiB allocatable
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
