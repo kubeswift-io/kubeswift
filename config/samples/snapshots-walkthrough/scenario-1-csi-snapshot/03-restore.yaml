@@ -1,0 +1,20 @@
+# Scenario 1: restore the disk-only snapshot into a NEW SwiftGuest.
+#
+# Different target name than the source guest. The controller copies
+# the source guest's spec, pre-creates the target's per-guest root-disk
+# PVC sourced from the snapshot's VolumeSnapshot, then creates the
+# target SwiftGuest. The source SwiftGuest must still exist at restore
+# time (the controller reads its spec) — UNLESS you deleted it; in
+# that case the restore fails fast with reason=SourceGuestGone.
+#
+# State machine: Pending -> Restoring -> Resuming -> Ready.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: s1-disk-restore
+spec:
+  snapshotRef:
+    name: s1-disk-snap
+  targetGuest:
+    name: s1-restored
+  resumeAfterRestore: true

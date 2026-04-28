@@ -1,0 +1,59 @@
+# Scenario 1: source SwiftImage + seed profile + SwiftGuest.
+#
+# Operators apply this manifest into the scenario namespace, wait for
+# the SwiftImage to reach phase=Ready, then for the SwiftGuest to
+# reach Running with status.network.primaryIP populated. After that,
+# they SSH in and write a sentinel file before snapshotting.
+#
+# Same-namespace constraint: SwiftSnapshot, SwiftRestore, source
+# SwiftGuest, target SwiftGuest, and the underlying VolumeSnapshot all
+# live in the same namespace as this SwiftImage.
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble
+spec:
+  format: qcow2
+  rootDisk:
+    size: "10Gi"
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+---
+# SSH-friendly seed profile. The kubeswift user's authorized key matches
+# ~/.ssh/id_ed25519.pub of the test environment; replace with your own
+# public key for production use.
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: walkthrough-seed
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: scenario-1-source
+    users:
+      - name: kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: walkthrough-s1-source
+    local-hostname: scenario-1-source
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: s1-source
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: walkthrough-seed
+  runPolicy: Running

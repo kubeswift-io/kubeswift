@@ -1,0 +1,59 @@
+# Scenario 2: one SwiftGuest from each SwiftImage, for cold-boot
+# comparison. Apply after both SwiftImages reach phase=Ready.
+---
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: walkthrough-seed
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: scenario-2-guest
+    users:
+      - name: kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: walkthrough-s2
+    local-hostname: scenario-2-guest
+---
+# Boots from the cloneStrategy: copy SwiftImage. Per-guest PVC is
+# provisioned via a Copy Job (cp from SwiftImage PVC + qemu-img
+# resize). Time-to-Running scales with disk size and CSI throughput.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: s2-copy
+spec:
+  imageRef:
+    name: ubuntu-noble-copy
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: walkthrough-seed
+  runPolicy: Running
+---
+# Boots from the cloneStrategy: snapshot SwiftImage. Per-guest PVC
+# is provisioned via dataSource: VolumeSnapshot (clones the
+# SwiftImage's clone-seed VolumeSnapshot). On copy-on-write drivers
+# this is near-instantaneous; on Longhorn (full-copy) it's still
+# faster than the Copy Job because there's no apt-get install +
+# qemu-utils overhead.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: s2-snapshot
+spec:
+  imageRef:
+    name: ubuntu-noble-fast
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: walkthrough-seed
+  runPolicy: Running
