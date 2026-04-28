@@ -90,6 +90,8 @@ State machine: `Pending → Restoring → Resuming → Ready`. With `resumeAfter
 
 The controller copies the source guest's spec to the target, pre-creates the target's per-guest root-disk PVC sourced from the snapshot's VolumeSnapshot (label `swift.kubeswift.io/restore-seeded=true` so the SwiftGuest controller skips the Copy Job), and finally creates the SwiftGuest. The source SwiftGuest must still exist at restore time — its spec is read by the controller.
 
+> **The `Restoring → Resuming` transition can take 30–90 s on full-copy CSI drivers.** Most of that time is the per-guest PVC clone from the snapshot reaching `Bound` at the SwiftGuestClass-driven target size. On copy-on-write drivers (Rook Ceph RBD, EBS, GCE PD) the same step is near-instantaneous; on Longhorn (full-copy) it scales linearly with disk size. If your restore stays in `Restoring` longer than expected, the PVC clone is the place to inspect — see the per-driver behaviour in [Storage class compatibility](../images/clone-strategies.md#storage-class-compatibility-matrix).
+
 ## Constraints
 
 - **Same-namespace.** SwiftSnapshot, SwiftRestore, the source guest, the target guest, and the underlying VolumeSnapshot all live in the same namespace. Cross-namespace references are not expressible (the API has no `namespace` field on `guestRef` / `snapshotRef` / `targetGuest`). This is structural, not configurable — Phase 0 spike §6a showed cross-namespace `dataSourceRef` silently fails on k0s 1.34.
@@ -119,6 +121,8 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 | `Phase=Failed reason=UnsupportedBackend` | `backend.type` is `local` or `s3` | Phase 1 only — use `csi-volume-snapshot` |
 | Restore `Phase=Failed reason=TargetConflict` | Target name already in use | Set `targetGuest.overwriteExisting=true` or pick a different name |
 | Restore `Phase=Pending reason=SnapshotNotReady` | Source SwiftSnapshot not yet `Ready` | Wait for the snapshot to complete first |
+| Restore stuck in `Restoring` for 30–90 s | Per-guest PVC clone from snapshot still binding (Longhorn full-copy) | Wait — this is normal on full-copy CSI drivers. `kubectl describe pvc swiftguest-root-<target>` shows the bind progress. |
+| Restore `Ready` but restored guest looks like a fresh boot | Per-guest PVC has no `dataSource` and no `swift.kubeswift.io/restore-seeded` label | The SwiftGuest controller fell back to the SwiftImage Copy Job. `kubectl get pvc swiftguest-root-<target> -o yaml` will show the missing fields; this should not happen on KubeSwift versions that include PR #21. |
 
 ## Reference
 

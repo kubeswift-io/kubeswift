@@ -231,4 +231,45 @@ scale, not single-guest.
 
 ---
 
-(Findings F8+ added as Scenarios 3–8 surface them.)
+## F8 (Doc gap, Polish) — pool sizing accounts only for replica CPU, not system overhead
+
+**Surfaced in:** Scenario 3, scaling pool-fast from 5 → 10 replicas.
+
+**What happened.** On a 3-node cluster with 8 vCPU/node (24 total),
+nine 2-vCPU SwiftGuestClass-default replicas + system overhead
+(controller-manager, Longhorn instance-managers, snapshot-controller,
+gpu-discovery, kube-system) consumed enough CPU that the 10th replica
+hit `Insufficient cpu, no preemption victims found`. Operators sizing
+pools from `replicas * guestclass.cpu` will under-estimate.
+
+**Disposition:** Fix-in-walkthrough-PR (paragraph in
+[`swiftguestpool-guide.md`](../swiftguestpool-guide.md) "Sizing"
+section: "When sizing a pool, account for ~500–1000 mCPU per node of
+KubeSwift + Longhorn overhead before computing how many replicas
+fit").
+
+---
+
+## F9 (UX issue, Polish) — restore TargetConflict surfaces at controller level, not webhook
+
+**Surfaced in:** Scenario 8 Test B.
+
+**What happened.** A SwiftRestore targeting an existing SwiftGuest
+without `targetGuest.overwriteExisting: true` is accepted by the
+admission webhook and only fails at the next reconcile pass as
+`status.phase: Failed reason: TargetConflict`. Other validation
+errors in the same scenario (hostPath prefix, missing MAC regen,
+mutually-exclusive refs) reject at apply-time.
+
+**Why it works this way.** The conflict check requires looking up the
+existing SwiftGuest, which the webhook intentionally avoids
+(reduces dependencies and latency). Defensible architecturally.
+
+**Disposition:** Polish; not a bug. Note the slower feedback loop in
+[`csi-snapshots.md`](csi-snapshots.md) Troubleshooting so operators
+expecting webhook-time feedback aren't surprised when the kubectl
+apply succeeds but the restore Fails on first reconcile.
+
+---
+
+(Findings list complete for Scenarios 1–8.)

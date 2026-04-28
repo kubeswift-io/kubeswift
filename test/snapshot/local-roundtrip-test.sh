@@ -115,8 +115,8 @@ trap cleanup EXIT
 # 1. Apply the combined seed profile (kubeswift user for swiftctl ssh +
 #    clone-identity-regen bootcmd) and the source SwiftGuest.
 echo "--- Step 1: Apply source manifests ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftseedprofile-test.yaml" >/dev/null
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftguest-source.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/01-seed-profile.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/02-source-guest.yaml" >/dev/null
 
 # Ensure Ubuntu Noble image is present (most clusters running these
 # tests already have it from the snapshot-test.sh prior runs).
@@ -176,7 +176,7 @@ echo "  Planted: SENTINEL_VALUE=$SENTINEL_VALUE on tmpfs"
 # 3. Snapshot with includeMemory: true.
 echo ""
 echo "--- Step 3: Take Tier B memory snapshot ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftsnapshot-memory.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/03-snapshot.yaml" >/dev/null
 echo "  Waiting for SwiftSnapshot Ready (5m)..."
 kubectl wait --for=jsonpath='{.status.phase}'=Ready \
   swiftsnapshot/snapshot-local-mem -n "$NAMESPACE" --timeout=5m
@@ -201,7 +201,7 @@ sleep 5
 # 5. In-place restore.
 echo ""
 echo "--- Step 5: In-place restore (fast path: no init container, no patcher) ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftrestore-inplace.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/04-restore-inplace.yaml" >/dev/null
 echo "  Waiting for SwiftRestore Ready (5m)..."
 kubectl wait --for=jsonpath='{.status.phase}'=Ready \
   swiftrestore/snapshot-local-inplace -n "$NAMESPACE" --timeout=5m

@@ -126,7 +126,7 @@ the bootcmd in the SwiftSeedProfile fires normally — regenerating
 machine-id, SSH host keys, and hostname on the cold-start kernel.
 
 Sample bootcmd at
-`config/samples/local-snapshots/swiftseedprofile-test.yaml`. Fires
+`config/samples/local-snapshots/01-seed-profile.yaml`. Fires
 correctly on every fresh boot of a clone that carries the
 `kubeswift.clone=true` cmdline marker.
 
