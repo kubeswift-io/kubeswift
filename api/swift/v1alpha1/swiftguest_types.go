@@ -72,6 +72,49 @@ type SwiftGuestSpec struct {
 	// Each entry references either a SwiftImage or a PVC directly.
 	// +optional
 	DataDiskRefs []DataDiskRef `json:"dataDiskRefs,omitempty"`
+	// NodeName pins the launcher pod to a specific Kubernetes node by
+	// setting pod.spec.nodeName directly (bypassing the scheduler).
+	// Set by the SwiftMigration controller during the StopAndCopy phase
+	// to recreate the launcher pod on the migration target node.
+	// Operators may also set it manually for static placement.
+	//
+	// When set, the pod builder writes pod.Spec.NodeName = NodeName.
+	// Direct binding gives fast kubelet rejection on bad fits (~5s
+	// OutOfcpu) vs. the indefinite Pending state from a nodeSelector
+	// path; the SwiftMigration controller relies on this for clean
+	// failure detection.
+	//
+	// Precedence with gpuProfileRef: when both are set, the validation
+	// webhook enforces NodeName == status.GPU.NodeName. The pod builder
+	// refuses to build with a Resolved=False condition if they disagree.
+	// +optional
+	NodeName string `json:"nodeName,omitempty"`
+	// Migration is the per-guest migration policy. If nil, migration is
+	// permitted with default settings (preferredMode: auto). Set
+	// migration.enabled=false to pin a guest in place — the SwiftMigration
+	// validation webhook rejects migrations of pinned guests.
+	// +optional
+	Migration *MigrationSpec `json:"migration,omitempty"`
+}
+
+// MigrationSpec is the per-SwiftGuest migration policy. Defaults are
+// enabled=true and preferredMode=auto. To pin a guest in place, set
+// enabled=false; the SwiftMigration validation webhook then rejects any
+// SwiftMigration referencing this guest.
+type MigrationSpec struct {
+	// Enabled controls whether SwiftMigrations targeting this guest are
+	// allowed. Default true. Set false to pin the guest in place.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+	// PreferredMode is the migration mode the SwiftMigration controller
+	// should pick when spec.mode on the SwiftMigration is "auto".
+	// Phase 1 always resolves to offline regardless of this field; the
+	// field is here for forward compatibility with Phase 3 (live mode).
+	// +kubebuilder:validation:Enum=auto;live;offline
+	// +kubebuilder:default=auto
+	// +optional
+	PreferredMode string `json:"preferredMode,omitempty"`
 }
 
 // DataDiskRef references either a SwiftImage or a PVC for a data disk.
