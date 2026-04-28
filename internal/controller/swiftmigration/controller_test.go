@@ -2,6 +2,7 @@ package swiftmigration
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -226,6 +227,89 @@ func TestReconcile_TerminalPhase_StaleFinalizer_RemovesIt(t *testing.T) {
 	}
 	if counter.patches != priorPatches {
 		t.Errorf("second reconcile on terminal+finalizer-absent should issue zero further Patch calls; got %d new", counter.patches-priorPatches)
+	}
+}
+
+// TestReconcile_InFlight_GuestDisappeared_DrivesToFailed — Bug C
+// regression at the controller level. An in-flight (Validating)
+// SwiftMigration whose source SwiftGuest has been deleted mid-flight
+// must be driven to Failed, not trapped in a non-terminal phase.
+// The companion webhook test (TestValidateUpdate_InFlight_NoClusterState)
+// proves the metadata patches the controller issues here are admitted;
+// this test proves the controller's state machine actually uses that
+// permission to drive cleanup.
+//
+// Flow:
+//
+//  1. Reconcile #1: phase=Validating, source guest absent.
+//     - ensureFinalizer adds finalizer (idempotent, no-op if already there).
+//     - handleValidating returns errMsg "source SwiftGuest no longer exists".
+//     - dispatchResult sets phase=Failed and persists status.
+//  2. Reconcile #2: phase=Failed, finalizer still present.
+//     - Terminal-phase short-circuit drops the finalizer and returns.
+//  3. Reconcile #3 (idempotent check): phase=Failed, finalizer absent.
+//     - Zero API roundtrips.
+//
+// Pre-fix the live cluster trapped this scenario: the validating
+// webhook rejected ensureFinalizer's metadata patch on every reconcile
+// because it tried to validate cluster state against a missing source
+// guest. The controller couldn't make forward progress; the migration
+// stayed Validating forever.
+func TestReconcile_InFlight_GuestDisappeared_DrivesToFailed(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+	// Source SwiftGuest intentionally absent — operator deleted it
+	// mid-migration.
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{
+		Client:   c,
+		Scheme:   scheme,
+		Recorder: record.NewFakeRecorder(10),
+	}
+	key := client.ObjectKey{Name: "m", Namespace: "default"}
+
+	// Reconcile #1: should drive Validating → Failed.
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile #1: %v", err)
+	}
+	var got migrationv1alpha1.SwiftMigration
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("Get after #1: %v", err)
+	}
+	if got.Status.Phase != migrationv1alpha1.SwiftMigrationPhaseFailed {
+		t.Errorf("phase after Reconcile #1 = %q, want Failed", got.Status.Phase)
+	}
+	if got.Status.FailureMessage == "" || !strings.Contains(got.Status.FailureMessage, "no longer exists") {
+		t.Errorf("FailureMessage = %q, want mention of missing source guest", got.Status.FailureMessage)
+	}
+	if !hasFinalizer(&got) {
+		t.Error("finalizer should still be present after Reconcile #1 (transition to Failed)")
+	}
+
+	// Reconcile #2: terminal phase → drop finalizer.
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile #2: %v", err)
+	}
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("Get after #2: %v", err)
+	}
+	if hasFinalizer(&got) {
+		t.Errorf("finalizer should be removed after Reconcile #2; got %v", got.Finalizers)
+	}
+
+	// Reconcile #3 (idempotent): zero work expected.
+	counter := &patchCountingClient{Client: c}
+	r.Client = counter
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile #3: %v", err)
+	}
+	if counter.patches != 0 {
+		t.Errorf("Reconcile #3 on Failed+finalizer-absent should issue zero patches; got %d", counter.patches)
 	}
 }
 
