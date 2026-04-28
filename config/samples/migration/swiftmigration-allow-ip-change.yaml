@@ -1,0 +1,27 @@
+# SwiftMigration with allowIPChange opt-in. KubeSwift's default
+# networking is a node-local bridge (10.244.125.0/24 by default,
+# served by per-node dnsmasq). The guest's IP is local to the node;
+# cross-node migration produces a fresh IP from the destination
+# node's bridge.
+#
+# The validation webhook rejects cross-node migrations of guests on
+# default networking unless this flag is set. When it is set and
+# triggers, the controller writes the IPWillChange=True warning
+# condition for visibility.
+#
+# For IP preservation, attach the guest to a multi-node network
+# instead — Multus + macvlan, OVN-K layer-2, or a similar attachment
+# that spans multiple nodes. See docs/migration/networking-
+# requirements.md.
+apiVersion: migration.kubeswift.io/v1alpha1
+kind: SwiftMigration
+metadata:
+  name: web-to-worker-3-fresh-ip
+spec:
+  guestRef:
+    name: web
+  target:
+    nodeName: worker-3
+  mode: auto
+  allowIPChange: true
+  reason: "rebalance for node-3 capacity"
