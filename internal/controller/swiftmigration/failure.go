@@ -206,4 +206,3 @@ func (r *SwiftMigrationReconciler) onTerminalPhase(
 	}
 	return r.cleanupSourceGuest(ctx, mig, !postCutover)
 }
-
