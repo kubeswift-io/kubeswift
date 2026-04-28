@@ -1,0 +1,20 @@
+# Scenario 1: disk-only crash-consistent snapshot via the CSI backend.
+#
+# Backend type is csi-volume-snapshot. The controller creates an
+# underlying snapshot.storage.k8s.io/VolumeSnapshot of the source
+# guest's per-guest root-disk PVC; the VM is NOT paused. The
+# resulting snapshot represents disk state at one instant — equivalent
+# to a hard reboot at restore time.
+#
+# State machine: Pending -> Capturing -> Ready (or Failed).
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: s1-disk-snap
+spec:
+  guestRef:
+    name: s1-source
+  backend:
+    type: csi-volume-snapshot
+    csiVolumeSnapshot:
+      volumeSnapshotClassName: longhorn-snapshot

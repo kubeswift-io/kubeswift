@@ -1,0 +1,42 @@
+# Scenario 2: two SwiftImages from the same source URL — one with
+# cloneStrategy: copy (default; the per-guest path uses a Copy Job),
+# one with cloneStrategy: snapshot (the per-guest path uses
+# `dataSource: VolumeSnapshot` against a deterministic clone-seed
+# VolumeSnapshot of the SwiftImage's PVC).
+#
+# Apply both, then create a SwiftGuest from each and compare cold-boot
+# time. On snapshot-capable CSI drivers (Longhorn, Rook Ceph, EBS,
+# GCE PD) the snapshot strategy is faster because it skips the
+# per-guest Copy Job's cp + apt-get install qemu-utils.
+---
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble-copy
+spec:
+  format: qcow2
+  rootDisk:
+    size: "10Gi"
+  # cloneStrategy: copy is the default. State machine: Pending ->
+  # Importing -> Validating -> Preparing -> Ready.
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+---
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble-fast
+spec:
+  format: qcow2
+  rootDisk:
+    size: "10Gi"
+  cloneStrategy: snapshot
+  volumeSnapshotClassName: longhorn-snapshot
+  # State machine adds a Snapshotting phase before Ready: Pending ->
+  # Importing -> Validating -> Preparing -> Snapshotting -> Ready.
+  # status.cloneSeed populates with the deterministic clone-seed
+  # VolumeSnapshot once readyToUse=true.
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
