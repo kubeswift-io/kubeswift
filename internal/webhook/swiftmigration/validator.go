@@ -74,6 +74,36 @@ type Validator struct {
 	Client client.Client
 }
 
+// Per-operation validation discipline.
+//
+// Admission webhooks fire on every operation that touches the resource.
+// A "validate everything every time" default is the bug pattern that
+// produced this PR's three defects:
+//
+//   - Bug A (HIGH): finalizer-removal patches issued during DELETE flow
+//     hit ValidateUpdate; cluster-state validation tripped on a missing
+//     source SwiftGuest. Result: SwiftMigration could not be deleted
+//     via any normal kubectl operation.
+//   - Bug B (MEDIUM): finalizer-removal patches on terminal-phase
+//     migrations (Completed/Failed/Cancelled) hit the same
+//     cluster-state validation, rejected because source==target post-
+//     cutover. Result: stale completed migrations re-reconciled forever.
+//   - Bug C (MEDIUM): in-flight migrations (Pending/Validating/Preparing)
+//     whose source guest was deleted mid-flight hit the same rejection
+//     on every metadata patch (finalizer add, status flips that bring
+//     the controller back through ensureFinalizer). Result: trapped
+//     in-flight migrations the controller couldn't fail-and-clean-up.
+//
+// The discipline is "default to explicit": each operation enumerates
+// what validation fires and why. Future SwiftMigration phases (live
+// mode, drain integration) and other webhooks in this codebase should
+// follow the same pattern.
+
+// ValidateCreate runs full validation: spec shape AND cluster state.
+// CREATE is the submission point — when the operator's intent first
+// hits the API server. This is the right place to gate on cluster-
+// state matching that intent (source guest exists, target node Ready,
+// no conflicting in-flight migration, etc).
 func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	mig, ok := obj.(*migrationv1alpha1.SwiftMigration)
 	if !ok {
@@ -82,6 +112,29 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 	return v.validate(ctx, mig)
 }
 
+// ValidateUpdate runs spec immutability + spec shape ONLY.
+// Cluster-state validation is intentionally skipped because:
+//
+//  1. Spec immutability (enforced below) means the spec on UPDATE is
+//     byte-identical to the spec admitted at CREATE — and CREATE
+//     already validated cluster-state. Re-validating against currently-
+//     evolving cluster state cannot detect new spec problems (none
+//     exist) and only blocks legitimate metadata churn.
+//  2. Cluster-state changes between CREATE and UPDATE — source guest
+//     deleted, target node moved, source==target after cutover — are
+//     the controller's domain to detect and react to (mark migration
+//     Failed, drive cleanup), not the webhook's domain to gate. The
+//     webhook gating those state changes turns transient cluster
+//     conditions into stuck resources.
+//  3. UPDATE patches in this codebase are exclusively controller-
+//     issued: finalizer add/remove, annotation flips. Status changes
+//     don't reach this webhook (we don't subscribe to the status
+//     subresource). All controller-issued patches need to succeed
+//     idempotently for the controller to make forward progress.
+//
+// validateShape is kept as a defense-in-depth (cheap, no-op on an
+// already-validated unchanged spec) but cluster-state lookups are
+// skipped wholesale.
 func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	mig, ok := newObj.(*migrationv1alpha1.SwiftMigration)
 	if !ok {
@@ -94,13 +147,25 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !specsEqual(&oldMig.Spec, &mig.Spec) {
 		return nil, fmt.Errorf("SwiftMigration spec is immutable after creation; create a new SwiftMigration to retry with different inputs")
 	}
-	return v.validate(ctx, mig)
+	return nil, validateShape(mig)
 }
 
+// ValidateDelete is a pass-through. Deletion is always permitted at
+// the webhook layer — the controller's finalizer cleanup is the gate
+// that ensures cleanup runs before the resource is removed from
+// storage.
 func (v *Validator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
+// validate runs the full validation suite (shape + cluster state).
+// Called from ValidateCreate ONLY. ValidateUpdate intentionally does
+// not call this — see ValidateUpdate's doc comment for the rationale.
+//
+// Defense-in-depth: should a future caller re-route an UPDATE through
+// this function, the per-operation discipline is undermined. Reviewers
+// should reject any such change unless the corresponding rationale is
+// updated explicitly.
 func (v *Validator) validate(ctx context.Context, mig *migrationv1alpha1.SwiftMigration) (admission.Warnings, error) {
 	if err := validateShape(mig); err != nil {
 		return nil, err
@@ -108,37 +173,15 @@ func (v *Validator) validate(ctx context.Context, mig *migrationv1alpha1.SwiftMi
 	if v.Client == nil {
 		return nil, nil
 	}
-	// Skip cluster-state validation on UPDATE patches against migrations
-	// that are either being deleted or already in a terminal phase.
-	//
-	// Both cases produce metadata-only patches (finalizer removal) issued
-	// by the controller after the migration's outcome is decided. There's
-	// nothing left to gate, and re-running validateClusterState here can
-	// reject the patch on conditions that were valid at submission time
-	// but no longer hold (source SwiftGuest deleted, source==target after
-	// cutover succeeded). That rejection traps the resource: the
-	// finalizer can't be removed, which means the SwiftMigration can't
-	// be deleted via any normal kubectl operation, and stale completed
-	// migrations re-reconcile in a tight loop because each finalizer-
-	// removal patch fails admission.
-	//
-	// The shared pattern is "treat terminal states as terminal": once a
-	// resource is being deleted or has reached a terminal phase, spec
-	// validation against current cluster state has no value, only cost.
-	// Future SwiftMigration phases (live, drain integration) should
-	// preserve this discipline.
-	if mig.DeletionTimestamp != nil {
-		return nil, nil
-	}
-	if isTerminalPhase(mig.Status.Phase) {
-		return nil, nil
-	}
 	return v.validateClusterState(ctx, mig)
 }
 
 // isTerminalPhase returns true for SwiftMigration phases where the
-// outcome has been decided. Mirrors the controller's terminal-phase
-// short-circuit; the two must remain in sync.
+// outcome has been decided. The webhook does not consult this helper
+// directly anymore (per-operation discipline obviates the need), but
+// the controller's Reconcile short-circuit does, and tests in this
+// package lock in the canonical phase set so the controller's
+// duplicated copy can be cross-checked against it.
 func isTerminalPhase(phase migrationv1alpha1.SwiftMigrationPhase) bool {
 	switch phase {
 	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
