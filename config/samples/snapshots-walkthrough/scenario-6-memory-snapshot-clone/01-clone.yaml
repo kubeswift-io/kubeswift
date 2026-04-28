@@ -1,0 +1,28 @@
+# Scenario 6: clone restore from the Tier B memory snapshot taken
+# in Scenario 5 (s5-mem-snap). Different target name (s6-clone-a)
+# triggers the clone path: the snapshot-stager init container
+# patches config.json (cmdline marker, MAC rewrite, runtime_dir
+# prefix substitution, host_mac null) before swiftletd starts CH
+# in --restore mode.
+#
+# identity.regenerate is REQUIRED for memory clones — webhook
+# rejects clones without macAddresses. The other three items
+# (hostname, machineId, sshHostKeys) are the in-guest concerns
+# that don't actually fire on resume — see
+# docs/snapshots/identity-regeneration.md for why.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: s6-clone-restore
+spec:
+  snapshotRef:
+    name: s5-mem-snap
+  targetGuest:
+    name: s6-clone-a
+  resumeAfterRestore: true
+  identity:
+    regenerate:
+      - macAddresses
+      - hostname
+      - machineId
+      - sshHostKeys
