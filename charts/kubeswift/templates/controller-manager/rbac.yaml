@@ -90,6 +90,21 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotclasses"]
     verbs: ["get", "list", "watch"]
+  # SwiftMigration (migration.kubeswift.io). Phase 1 controller patches
+  # SwiftGuest spec fields (runPolicy + nodeName) using the existing
+  # swift.kubeswift.io/swiftguests grant; no additional grant needed
+  # there.
+  - apiGroups: ["migration.kubeswift.io"]
+    resources: ["swiftmigrations", "swiftmigrations/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # storage.k8s.io VolumeAttachment — read-only. The SwiftMigration
+  # controller's Preparing phase polls VolumeAttachments to verify
+  # the source-node CSI ControllerUnpublishVolume has completed
+  # before advancing to StopAndCopy (cross-node attach gate; without
+  # this the destination pod hits Multi-Attach errors on RWO storage).
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
