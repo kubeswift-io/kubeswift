@@ -22,6 +22,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftmigration"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
@@ -157,6 +158,15 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftRestore controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftmigration.SwiftMigrationReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftmigration-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftMigration controller")
 		os.Exit(1)
 	}
 
