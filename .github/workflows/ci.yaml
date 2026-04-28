@@ -17,6 +17,8 @@ on:
       - 'rust/**'
       - 'go.mod'
       - 'go.sum'
+      - 'test/**'
+      - 'Makefile'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -30,6 +32,8 @@ on:
       - 'rust/**'
       - 'go.mod'
       - 'go.sum'
+      - 'test/**'
+      - 'Makefile'
       - '.github/workflows/**'
 
 jobs:
@@ -96,6 +100,26 @@ jobs:
             echo "Generated code is out of date. Run: make generate"
             exit 1
           fi
+
+  e2e-scripts:
+    name: E2E script syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Static check (bash -n) of every script under test/. Catches typos,
+      # unclosed quotes, syntax-level breakage on every PR. Does NOT run
+      # the scripts against a cluster — that's the workflow_dispatch
+      # `cluster-e2e` job in e2e-on-cluster.yaml.
+      #
+      # This job exists because the cluster-side e2e suite (snapshot-test,
+      # local-roundtrip-test, etc.) sits behind a path-touch trigger and
+      # is rare to invoke; if a script gets corrupted between runs no one
+      # notices until someone tries to run it manually. PR #21 surfaced
+      # the broader pattern: e2es exist, never run, bugs accumulate.
+      # bash -n on every PR keeps the suite from rotting silently.
+      - name: bash -n every test script
+        run: make verify-e2e-scripts
 
   swiftletd-image:
     name: swiftletd image
