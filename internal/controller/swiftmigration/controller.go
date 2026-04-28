@@ -213,16 +213,7 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 // --- Phase handlers ---
 //
 // handleValidating is in validating.go.
-
-// handlePreparing is implemented in commit 7.
-func (r *SwiftMigrationReconciler) handlePreparing(
-	ctx context.Context,
-	mig *migrationv1alpha1.SwiftMigration,
-	status *migrationv1alpha1.SwiftMigrationStatus,
-) (advanced bool, requeue time.Duration, errMsg string, err error) {
-	_, _, _ = ctx, mig, status
-	return false, 0, "", fmt.Errorf("Preparing phase not yet implemented (commit 7)")
-}
+// handlePreparing is in preparing.go.
 
 // handleStopAndCopy is implemented in commit 8.
 func (r *SwiftMigrationReconciler) handleStopAndCopy(
