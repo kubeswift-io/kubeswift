@@ -28,9 +28,12 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftimage"
+	swiftmigrationwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftmigration"
 	swiftrestorewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftrestore"
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftsnapshot"
+
+	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 )
 
 const (
@@ -189,6 +192,12 @@ func main() {
 			WithCustomValidator(&swiftrestorewebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftRestore webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &migrationv1alpha1.SwiftMigration{}).
+			WithCustomValidator(&swiftmigrationwebhook.Validator{Client: mgr.GetClient()}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftMigration webhook")
 			os.Exit(1)
 		}
 	}
