@@ -635,3 +635,134 @@ func TestValidateUpdate_NoSpecChange(t *testing.T) {
 		t.Errorf("ValidateUpdate with metadata-only change should accept; got %v", err)
 	}
 }
+
+// --- Terminal-state pass-through (Bug A + Bug B fix) ---
+//
+// Background: in the deployed cluster, finalizer-removal patches issued
+// by the controller after a migration finished were rejected by this
+// webhook because the source SwiftGuest had moved to the destination
+// node (or had been deleted entirely). That trapped completed and
+// being-deleted migrations: the finalizer could not be removed, so
+// the SwiftMigration object could not be cleaned up via any normal
+// kubectl operation. The fix is to skip cluster-state validation
+// when the migration is terminal or being deleted — there's nothing
+// left to gate on metadata-only patches.
+
+// TestValidateUpdate_DeletionTimestamp_SkipsClusterState verifies that
+// an UPDATE patch on a SwiftMigration with deletionTimestamp set is
+// admitted even when the source SwiftGuest has been deleted. Mirrors
+// the headline bug: operator deletes the SwiftGuest, then deletes the
+// SwiftMigration; the controller's removeFinalizer Patch must not be
+// rejected. Source guest is intentionally absent from the fake client.
+func TestValidateUpdate_DeletionTimestamp_SkipsClusterState(t *testing.T) {
+	scheme := migrationScheme(t)
+	// No source SwiftGuest in the cluster.
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	v := &Validator{Client: c}
+
+	old := newSwiftMigration("m", "default")
+	old.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseCompleted
+	now := metav1.Now()
+	old.DeletionTimestamp = &now
+	old.Finalizers = []string{"migration.kubeswift.io/cleanup"}
+
+	// Same-spec update with finalizer removed (the controller's
+	// removeFinalizer patch shape).
+	new := old.DeepCopy()
+	new.Finalizers = nil
+
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+		t.Errorf("ValidateUpdate on deleting SwiftMigration should skip cluster-state validation; got %v", err)
+	}
+}
+
+// TestValidateUpdate_TerminalPhase_SkipsClusterState verifies that an
+// UPDATE patch on a Completed SwiftMigration is admitted even when
+// the source SwiftGuest now sits on what used to be the target node.
+// Pre-fix this rejected with "spec.target.nodeName equals SwiftGuest's
+// current node" because the migration had finished and the guest had
+// moved to boba — the very condition the webhook was designed to
+// reject at submission.
+func TestValidateUpdate_TerminalPhase_SkipsClusterState(t *testing.T) {
+	scheme := migrationScheme(t)
+	// Source guest exists but lives on the target node now (post-cutover).
+	guest := newSwiftGuest("guest", "default")
+	guest.Status.NodeName = "miles" // matches mig.Spec.Target.NodeName
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	for _, phase := range []migrationv1alpha1.SwiftMigrationPhase{
+		migrationv1alpha1.SwiftMigrationPhaseCompleted,
+		migrationv1alpha1.SwiftMigrationPhaseFailed,
+		migrationv1alpha1.SwiftMigrationPhaseCancelled,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			old := newSwiftMigration("m", "default")
+			old.Status.Phase = phase
+			old.Finalizers = []string{"migration.kubeswift.io/cleanup"}
+			new := old.DeepCopy()
+			new.Finalizers = nil
+			if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+				t.Errorf("ValidateUpdate on phase=%s SwiftMigration should skip cluster-state validation; got %v", phase, err)
+			}
+		})
+	}
+}
+
+// TestValidateUpdate_NonTerminalPhase_StillValidates verifies the skip
+// is scoped: a SwiftMigration in flight (Validating/Preparing/etc.)
+// still runs cluster-state validation. Otherwise the skip would
+// silently disable webhook gating mid-migration.
+func TestValidateUpdate_NonTerminalPhase_StillValidates(t *testing.T) {
+	scheme := migrationScheme(t)
+	// No source guest — would normally reject.
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	v := &Validator{Client: c}
+
+	for _, phase := range []migrationv1alpha1.SwiftMigrationPhase{
+		"",
+		migrationv1alpha1.SwiftMigrationPhasePending,
+		migrationv1alpha1.SwiftMigrationPhaseValidating,
+		migrationv1alpha1.SwiftMigrationPhasePreparing,
+		migrationv1alpha1.SwiftMigrationPhaseStopAndCopy,
+		migrationv1alpha1.SwiftMigrationPhaseResuming,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			old := newSwiftMigration("m", "default")
+			old.Status.Phase = phase
+			new := old.DeepCopy()
+			new.ObjectMeta.Annotations = map[string]string{"x": "y"}
+			_, err := v.ValidateUpdate(context.Background(), old, new)
+			if err == nil || !strings.Contains(err.Error(), "not found") {
+				t.Errorf("ValidateUpdate on non-terminal phase=%s should still validate cluster-state; got %v", phase, err)
+			}
+		})
+	}
+}
+
+// TestIsTerminalPhase covers the helper directly to lock in the set of
+// phases treated as terminal. Adding a new terminal phase in a future
+// release must be reflected here AND in the controller's mirror copy.
+func TestIsTerminalPhase(t *testing.T) {
+	for _, tc := range []struct {
+		phase migrationv1alpha1.SwiftMigrationPhase
+		want  bool
+	}{
+		{migrationv1alpha1.SwiftMigrationPhaseCompleted, true},
+		{migrationv1alpha1.SwiftMigrationPhaseFailed, true},
+		{migrationv1alpha1.SwiftMigrationPhaseCancelled, true},
+		{migrationv1alpha1.SwiftMigrationPhasePending, false},
+		{migrationv1alpha1.SwiftMigrationPhaseValidating, false},
+		{migrationv1alpha1.SwiftMigrationPhasePreparing, false},
+		{migrationv1alpha1.SwiftMigrationPhaseStopAndCopy, false},
+		{migrationv1alpha1.SwiftMigrationPhaseResuming, false},
+		{"", false},
+		{"future-phase", false},
+	} {
+		t.Run(string(tc.phase), func(t *testing.T) {
+			if got := isTerminalPhase(tc.phase); got != tc.want {
+				t.Errorf("isTerminalPhase(%q) = %v, want %v", tc.phase, got, tc.want)
+			}
+		})
+	}
+}
