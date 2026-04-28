@@ -22,15 +22,19 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftimage"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftkernel"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftmigration"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftimage"
+	swiftmigrationwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftmigration"
 	swiftrestorewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftrestore"
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftsnapshot"
+
+	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 )
 
 const (
@@ -157,6 +161,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&swiftmigration.SwiftMigrationReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftmigration-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftMigration controller")
+		os.Exit(1)
+	}
+
 	if *webhookEnabled {
 		if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftGuest{}).
 			WithCustomValidator(&swiftguestwebhook.Validator{}).
@@ -189,6 +202,12 @@ func main() {
 			WithCustomValidator(&swiftrestorewebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftRestore webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &migrationv1alpha1.SwiftMigration{}).
+			WithCustomValidator(&swiftmigrationwebhook.Validator{Client: mgr.GetClient()}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftMigration webhook")
 			os.Exit(1)
 		}
 	}

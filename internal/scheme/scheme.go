@@ -5,6 +5,7 @@ import (
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
+	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -37,5 +38,8 @@ func init() {
 	gvSnapshot := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvSnapshot, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{}, &snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftRestoreList{})
 	metav1.AddToGroupVersion(Scheme, gvSnapshot)
+	gvMigration := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
+	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
+	metav1.AddToGroupVersion(Scheme, gvMigration)
 	utilruntime.Must(volumesnapshotv1.AddToScheme(Scheme))
 }

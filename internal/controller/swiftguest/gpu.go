@@ -274,8 +274,25 @@ func (r *SwiftGuestReconciler) buildPod(
 	// restore with `bar 0 already used`), so the restore branch sits
 	// before the GPU branch and the two are mutually exclusive in
 	// practice.
+	// Precedence check: when both spec.NodeName and a GPU allocation are
+	// present, they MUST agree. The SwiftMigration validation webhook
+	// rejects cross-node GPU migrations in Phase 1 (no release-and-
+	// reallocate primitive yet — Phase 4+ work) so disagreement here is a
+	// either an operator bypass of the webhook OR a future Phase 4 bug.
+	// Either way: refuse to build, surface as Resolved=False via the
+	// controller's existing ResolutionError mapping.
+	if guest.Spec.NodeName != "" &&
+		guest.Status.GPU != nil &&
+		guest.Status.GPU.NodeName != "" &&
+		guest.Status.GPU.NodeName != guest.Spec.NodeName {
+		return nil, fmt.Errorf("spec.nodeName=%q disagrees with status.gpu.nodeName=%q; cross-node GPU migration is not supported in Phase 1",
+			guest.Spec.NodeName, guest.Status.GPU.NodeName)
+	}
+
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
-		return BuildRestorePod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone, params), nil
+		pod := BuildRestorePod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone, params)
+		applyNodeName(pod, guest)
+		return pod, nil
 	}
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
 		// Load profile to get hugepages size for the pod spec.
@@ -286,6 +303,13 @@ func (r *SwiftGuestReconciler) buildPod(
 		}, &profile); err != nil {
 			return nil, fmt.Errorf("load SwiftGPUProfile for pod: %w", err)
 		}
+		// GPU pods pin via kubernetes.io/hostname=<status.GPU.NodeName>
+		// nodeSelector. We do not also set pod.Spec.NodeName because the
+		// existing GPU dispatch path handled it through the selector;
+		// adding direct binding here would risk regression on the GPU
+		// e2e validated on Hetzner. The precedence check above ensures
+		// spec.NodeName (if set) matches GPU.NodeName, so the effective
+		// pinned node is the same either way.
 		return BuildGPUDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, profile.Spec.Hugepages, rootDiskClone), nil
 	}
 	return BuildPod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone), nil

@@ -1,0 +1,23 @@
+# Basic SwiftMigration: move SwiftGuest "db" to worker-3.
+# Phase 1 ships offline migration only — the source guest is fully
+# stopped, the per-guest root-disk PVC is detached on the source node,
+# and the guest is recreated on the target node with the same disk
+# content. Downtime is bounded by storage detach + VM boot.
+apiVersion: migration.kubeswift.io/v1alpha1
+kind: SwiftMigration
+metadata:
+  name: db-to-worker-3
+spec:
+  guestRef:
+    name: db
+  target:
+    nodeName: worker-3
+  mode: auto
+  # Optional: spec.allowIPChange=true is required when migrating a
+  # guest on default node-local-bridge networking cross-node (the
+  # webhook rejects otherwise). Set true to acknowledge the IP will
+  # change on the destination side.
+  # allowIPChange: true
+  # Optional: timeout caps the entire operation (default 30m, max 24h
+  # per webhook). On timeout, behavior depends on timeoutStrategy.
+  # timeout: 10m
