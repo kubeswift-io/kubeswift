@@ -1,0 +1,20 @@
+# Scenario 3: SwiftGuestPool with replicas: 5, template referencing
+# the snapshot-backed SwiftImage. Per-replica root-disk PVCs are
+# provisioned via dataSource: VolumeSnapshot — five concurrent
+# clones from the same clone-seed instead of five serialized Copy
+# Jobs against the SwiftImage's PVC.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: pool-fast
+spec:
+  replicas: 5
+  template:
+    spec:
+      imageRef:
+        name: ubuntu-noble-pool
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: walkthrough-seed
+      runPolicy: Running

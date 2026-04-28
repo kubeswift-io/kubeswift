@@ -1,0 +1,21 @@
+# Scenario 4: the same pool from Scenario 3 (pool-fast) with an
+# updated template. The seedProfileRef now points to
+# walkthrough-seed-v2 (different hostname). spec.template.spec
+# changed -> pool.status.templateHash changes -> rolling update
+# fires. maxUnavailable defaults to 1; the controller cycles one
+# replica at a time.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: pool-fast
+spec:
+  replicas: 3
+  template:
+    spec:
+      imageRef:
+        name: ubuntu-noble-pool
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: walkthrough-seed-v2  # was walkthrough-seed in Scenario 3
+      runPolicy: Running

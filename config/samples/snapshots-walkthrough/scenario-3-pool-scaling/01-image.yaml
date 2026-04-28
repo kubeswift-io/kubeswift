@@ -1,0 +1,39 @@
+# Scenario 3: snapshot-backed SwiftImage that the pool's template
+# references. The pool's per-replica PVCs each clone from this
+# image's status.cloneSeed VolumeSnapshot via dataSource — the
+# pool-scale advantage of cloneStrategy: snapshot.
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: ubuntu-noble-pool
+spec:
+  format: qcow2
+  rootDisk:
+    size: "10Gi"
+  cloneStrategy: snapshot
+  volumeSnapshotClassName: longhorn-snapshot
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+---
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: walkthrough-seed
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: scenario-3-pool
+    users:
+      - name: kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: walkthrough-s3
+    local-hostname: scenario-3-pool

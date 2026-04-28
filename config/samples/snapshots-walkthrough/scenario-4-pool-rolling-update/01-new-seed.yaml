@@ -1,0 +1,25 @@
+# Scenario 4: a v2 seed profile to update the pool template to.
+# The hostname differs from walkthrough-seed (used in Scenario 3),
+# which gives operators a visible signal in the post-update guests
+# that the rolling update actually happened.
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: walkthrough-seed-v2
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: scenario-4-pool-v2
+    users:
+      - name: kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: walkthrough-s4-v2
+    local-hostname: scenario-4-pool-v2

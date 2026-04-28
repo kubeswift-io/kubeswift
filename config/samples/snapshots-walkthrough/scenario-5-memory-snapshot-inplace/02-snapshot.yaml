@@ -1,0 +1,16 @@
+# Scenario 5: Tier B local-backend memory snapshot. Pauses the VM
+# and serialises RAM to a node hostPath under
+# /var/lib/kubeswift/snapshots/. The webhook enforces that prefix.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: s5-mem-snap
+spec:
+  guestRef:
+    name: s5-source
+  backend:
+    type: local
+    local:
+      hostPath: /var/lib/kubeswift/snapshots/snapshots-wt-s5-s5-mem-snap
+  includeMemory: true
+  resumeAfterSnapshot: true
