@@ -26,10 +26,8 @@ func (r *SwiftMigrationReconciler) ensureFinalizer(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 ) error {
-	for _, f := range mig.Finalizers {
-		if f == FinalizerName {
-			return nil
-		}
+	if hasFinalizer(mig) {
+		return nil
 	}
 	patch := client.MergeFrom(mig.DeepCopy())
 	mig.Finalizers = append(mig.Finalizers, FinalizerName)
@@ -84,14 +82,7 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 	mig *migrationv1alpha1.SwiftMigration,
 ) (ctrl.Result, error) {
 	// Idempotent: if our finalizer is already gone, nothing to do.
-	hasFinalizer := false
-	for _, f := range mig.Finalizers {
-		if f == FinalizerName {
-			hasFinalizer = true
-			break
-		}
-	}
-	if !hasFinalizer {
+	if !hasFinalizer(mig) {
 		return ctrl.Result{}, nil
 	}
 
