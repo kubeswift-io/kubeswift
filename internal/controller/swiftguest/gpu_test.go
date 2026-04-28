@@ -1,10 +1,15 @@
 package swiftguest
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -453,5 +458,234 @@ func TestGPUIntentDeviceConstruction(t *testing.T) {
 	}
 	if !dev.NoMmap {
 		t.Error("noMmap should be true")
+	}
+}
+
+// TestBuildPodDispatcher_NodeNameGPUDisagreement verifies the architect's
+// precedence rule (Q2(d)): when both spec.NodeName and a GPU allocation
+// are present and they disagree, the dispatcher refuses to build with a
+// clear error. This is defense-in-depth — the SwiftMigration validation
+// webhook (commit 4) rejects cross-node GPU migrations at submission
+// time, so this branch normally never fires; the check exists to catch
+// any webhook bypass or future Phase 4 controller bug.
+func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
+	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
+	guest.Spec.NodeName = "boba" // disagrees with status.GPU.NodeName
+	// Mark GPUAllocated=True so the dispatcher reaches the GPU branch
+	// (not strictly necessary — the precedence check fires first — but
+	// matches the realistic state).
+	guest.Status.Conditions = []metav1.Condition{
+		{Type: swiftv1alpha1.ConditionGPUAllocated, Status: metav1.ConditionTrue},
+	}
+	rg := gpuResolvedGuest()
+
+	// Precedence check fires before any API call, so an empty fake client
+	// is sufficient.
+	scheme := runtime.NewScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+
+	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
+	if err == nil {
+		t.Fatal("buildPod should reject NodeName/GPU.NodeName disagreement; got nil error")
+	}
+	if pod != nil {
+		t.Error("buildPod should not return a pod when NodeName disagrees with GPU.NodeName")
+	}
+	// Operators reading the Resolved=False condition need to see both
+	// node names in the message to diagnose; assert both appear.
+	if !strings.Contains(err.Error(), "cross-node GPU migration is not supported") {
+		t.Errorf("error message should mention cross-node GPU migration; got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "boba") || !strings.Contains(err.Error(), "miles") {
+		t.Errorf("error message should name both spec.nodeName (boba) and status.gpu.nodeName (miles); got %q", err.Error())
+	}
+}
+
+// TestBuildPodDispatcher_NodeNameSetGPUNil verifies the realistic
+// startup-order state: SwiftGuest has gpuProfileRef AND spec.NodeName
+// set, but status.GPU is nil because the SwiftGPU controller hasn't
+// allocated yet. The precedence guard short-circuits (status.GPU != nil
+// is false), and the dispatcher's GPUAllocated gate higher up in
+// Reconcile would prevent reaching buildPod in practice — but if it
+// does reach here, the precedence check must not error spuriously.
+func TestBuildPodDispatcher_NodeNameSetGPUNil(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-pending", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef:  corev1.LocalObjectReference{Name: "class"},
+			SeedProfileRef: &corev1.LocalObjectReference{Name: "seed"},
+			GPUProfileRef:  &corev1.LocalObjectReference{Name: "gpu-profile"},
+			NodeName:       "miles",
+		},
+		// Status.GPU intentionally nil.
+	}
+	rg := gpuResolvedGuest()
+	scheme := runtime.NewScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+
+	// Precedence check should NOT fire (status.GPU is nil). The dispatcher
+	// will then skip the GPU branch (status.GPU != nil is false) and fall
+	// through to BuildPod which honors spec.NodeName.
+	_, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
+	if err != nil && strings.Contains(err.Error(), "cross-node GPU migration is not supported") {
+		t.Errorf("precedence check fired spuriously when status.GPU is nil; err=%v", err)
+	}
+}
+
+// TestBuildPodDispatcher_NodeName_RestoreBranch verifies that a guest
+// in active Tier B restore (annotated with active-restore) honors
+// spec.NodeName. Without this, a SwiftMigration of a guest that's
+// mid-restore would silently drop pinning when the restore-branch
+// pod is built. This is load-bearing for Phase 1's drive-forward-
+// post-cutover pattern (Risk 2 from the architect review): the
+// migration controller must be able to recreate launcher pods
+// reliably regardless of which dispatcher branch they take.
+func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restoring",
+			Namespace: "default",
+			Annotations: map[string]string{
+				// The exact annotation key/value comes from
+				// RestoreParamsFromAnnotations; it is enough that the
+				// annotation is present and parseable. Use the same
+				// constant the controller writes.
+				"snapshot.kubeswift.io/active-restore": `{"snapshotName":"snap-1","backendType":"local","snapshotPath":"/var/lib/kubeswift/snapshots/default-snap-1","sourceGuest":"src","clone":false}`,
+			},
+		},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef:  corev1.LocalObjectReference{Name: "class"},
+			SeedProfileRef: &corev1.LocalObjectReference{Name: "seed"},
+			NodeName:       "miles",
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
+		Seed:          &resolved.Seed{Datasource: "NoCloud", UserData: "x", MetaData: "y"},
+		Network:       true,
+	}
+	scheme := runtime.NewScheme()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+
+	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
+	if err != nil {
+		t.Fatalf("buildPod returned err = %v on restore branch, want nil", err)
+	}
+	if pod == nil {
+		t.Fatal("buildPod returned nil pod on restore branch")
+	}
+	if pod.Spec.NodeName != "miles" {
+		t.Errorf("restore-branch pod.Spec.NodeName = %q, want miles (applyNodeName must run on restore branch)", pod.Spec.NodeName)
+	}
+}
+
+// TestBuildPodDispatcher_NodeNameGPUAgreement verifies that when
+// spec.NodeName matches status.GPU.NodeName, the dispatcher builds the
+// pod normally (does not error out).
+func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
+	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
+	guest.Spec.NodeName = "miles" // matches status.GPU.NodeName
+	guest.Status.Conditions = []metav1.Condition{
+		{Type: swiftv1alpha1.ConditionGPUAllocated, Status: metav1.ConditionTrue},
+	}
+	rg := gpuResolvedGuest()
+
+	// Provide a SwiftGPUProfile in the fake client so the dispatcher's
+	// r.Get call succeeds. Use a minimal profile.
+	scheme := runtime.NewScheme()
+	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
+	scheme.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	metav1.AddToGroupVersion(scheme, gvSwift)
+	gvGPU := schema.GroupVersion{Group: "gpu.kubeswift.io", Version: "v1alpha1"}
+	scheme.AddKnownTypes(gvGPU, &gpuv1alpha1.SwiftGPUProfile{}, &gpuv1alpha1.SwiftGPUProfileList{})
+	metav1.AddToGroupVersion(scheme, gvGPU)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1: %v", err)
+	}
+
+	profile := &gpuv1alpha1.SwiftGPUProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-profile", Namespace: "default"},
+		Spec: gpuv1alpha1.SwiftGPUProfileSpec{
+			Count:         1,
+			Tier:          "pcie",
+			PartitionMode: "isolated",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(profile).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+
+	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
+	if err != nil {
+		t.Fatalf("buildPod returned err = %v, want nil when NodeName matches GPU.NodeName", err)
+	}
+	if pod == nil {
+		t.Fatal("buildPod returned nil pod")
+	}
+	// GPU pods pin via NodeSelector kubernetes.io/hostname, not spec.NodeName.
+	// The architect's Q2(d) rationale: don't risk regression on the GPU e2e
+	// validated on Hetzner by switching the GPU path to direct binding;
+	// the precedence check above guarantees the pinned node matches either
+	// way.
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "miles" {
+		t.Errorf("GPU pod NodeSelector hostname = %q, want miles", pod.Spec.NodeSelector["kubernetes.io/hostname"])
+	}
+	// Lock in the architect's "GPU pods stay on selector, not direct
+	// binding" decision: pod.Spec.NodeName must remain empty even when
+	// spec.NodeName was set (because spec.NodeName == GPU.NodeName, the
+	// effective pinning is via the selector).
+	if pod.Spec.NodeName != "" {
+		t.Errorf("GPU pod.Spec.NodeName = %q, want empty (GPU pods pin via NodeSelector, not direct binding)", pod.Spec.NodeName)
+	}
+}
+
+// TestBuildPodDispatcher_GPUOnlyNoMigrationNodeName verifies the normal
+// (non-migration) GPU flow: spec.NodeName is empty, status.GPU.NodeName
+// is set by the SwiftGPU controller, and the dispatcher proceeds to the
+// GPU branch. The precedence guard short-circuits cleanly. This is the
+// pre-Phase-1 GPU happy path and must not regress.
+func TestBuildPodDispatcher_GPUOnlyNoMigrationNodeName(t *testing.T) {
+	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
+	// spec.NodeName intentionally empty.
+	guest.Status.Conditions = []metav1.Condition{
+		{Type: swiftv1alpha1.ConditionGPUAllocated, Status: metav1.ConditionTrue},
+	}
+	rg := gpuResolvedGuest()
+
+	scheme := runtime.NewScheme()
+	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
+	scheme.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	metav1.AddToGroupVersion(scheme, gvSwift)
+	gvGPU := schema.GroupVersion{Group: "gpu.kubeswift.io", Version: "v1alpha1"}
+	scheme.AddKnownTypes(gvGPU, &gpuv1alpha1.SwiftGPUProfile{}, &gpuv1alpha1.SwiftGPUProfileList{})
+	metav1.AddToGroupVersion(scheme, gvGPU)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1: %v", err)
+	}
+	profile := &gpuv1alpha1.SwiftGPUProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu-profile", Namespace: "default"},
+		Spec: gpuv1alpha1.SwiftGPUProfileSpec{
+			Count:         1,
+			Tier:          "pcie",
+			PartitionMode: "isolated",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(profile).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+
+	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
+	if err != nil {
+		t.Fatalf("buildPod returned err = %v on normal GPU flow (no migration), want nil", err)
+	}
+	if pod == nil {
+		t.Fatal("buildPod returned nil pod")
+	}
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "miles" {
+		t.Errorf("GPU pod NodeSelector hostname = %q, want miles", pod.Spec.NodeSelector["kubernetes.io/hostname"])
 	}
 }

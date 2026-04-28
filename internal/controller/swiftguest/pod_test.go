@@ -519,3 +519,91 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestBuildPod_NodeName_DiskBoot verifies that spec.NodeName, when set,
+// is propagated to pod.Spec.NodeName for disk-boot guests. The Phase 1
+// SwiftMigration controller relies on this to pin the launcher pod to
+// the destination node during StopAndCopy.
+func TestBuildPod_NodeName_DiskBoot(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pin", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			NodeName:      "miles",
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	if pod.Spec.NodeName != "miles" {
+		t.Errorf("pod.Spec.NodeName = %q, want miles", pod.Spec.NodeName)
+	}
+	if pod.Spec.NodeSelector != nil {
+		t.Errorf("disk-boot pod should not have NodeSelector when spec.NodeName is set; got %v", pod.Spec.NodeSelector)
+	}
+}
+
+// TestBuildPod_NodeName_KernelBoot verifies that for kernel-boot guests,
+// spec.NodeName is honored AND the existing kubeswift.io/kernel-node
+// nodeSelector is preserved. This is the architect's defense-in-depth
+// pattern: the webhook validates that NodeName is a kernel-labeled node,
+// and the selector remains as a kubelet-time admission backstop.
+func TestBuildPod_NodeName_KernelBoot(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-kpin", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			KernelRef:     &corev1.LocalObjectReference{Name: "k"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			NodeName:      "miles",
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources: resolved.Resources{CPU: 2, Memory: 2048},
+		KernelBoot: &resolved.KernelBoot{
+			LocalPath:     "/var/lib/kubeswift/kernels/default-k",
+			KernelCmdline: "console=ttyS0",
+		},
+		Network: true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	if pod.Spec.NodeName != "miles" {
+		t.Errorf("pod.Spec.NodeName = %q, want miles", pod.Spec.NodeName)
+	}
+	if pod.Spec.NodeSelector["kubeswift.io/kernel-node"] != "true" {
+		t.Errorf("kubeswift.io/kernel-node selector should be preserved; got %v", pod.Spec.NodeSelector)
+	}
+}
+
+// TestBuildPod_NodeName_Empty verifies the default behavior: when
+// spec.NodeName is unset, pod.Spec.NodeName is empty (the scheduler picks).
+// This is the pre-Phase-1 behavior and must be preserved for all existing
+// SwiftGuests that haven't been touched by SwiftMigration.
+func TestBuildPod_NodeName_Empty(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-nopin", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			// NodeName intentionally empty.
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	if pod.Spec.NodeName != "" {
+		t.Errorf("pod.Spec.NodeName = %q, want empty (scheduler-picked)", pod.Spec.NodeName)
+	}
+}

@@ -36,6 +36,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 		pod = buildDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
 	}
 	applyTopologyConstraints(pod, guest)
+	applyNodeName(pod, guest)
 	applyDataDiskRefs(pod, guest)
 	return pod
 }
@@ -45,6 +46,36 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 func applyTopologyConstraints(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	if len(guest.Spec.TopologySpreadConstraints) > 0 {
 		pod.Spec.TopologySpreadConstraints = guest.Spec.TopologySpreadConstraints
+	}
+}
+
+// applyNodeName pins the launcher pod to a specific node when
+// guest.Spec.NodeName is set. Direct binding via pod.Spec.NodeName
+// (not via a kubernetes.io/hostname nodeSelector) is deliberate — it
+// gives fast kubelet-time rejection on bad fits, which the
+// SwiftMigration controller relies on for clean failure detection.
+//
+// pod.Spec.NodeName is set on Create only — it is immutable post-binding
+// in Kubernetes. The SwiftMigration StopAndCopy phase (commit 8) relies
+// on this contract: the controller delete-then-recreates the pod to
+// move the guest, never patches an in-flight pod's nodeName.
+//
+// For kernel-boot pods, the existing kubeswift.io/kernel-node=true
+// nodeSelector is preserved as defense-in-depth: the SwiftMigration
+// validation webhook ensures the chosen NodeName is a kernel node, but
+// leaving the selector in place catches any webhook bypass (the pod
+// will fail to admit on a non-kernel node — which is the correct
+// failure mode rather than silently running on a node that lacks the
+// /var/lib/kubeswift/kernels/ hostPath).
+//
+// For GPU-backed pods, BuildGPUDiskBootPod's existing kubernetes.io/
+// hostname=<status.GPU.NodeName> nodeSelector path is unchanged. The
+// dispatcher (buildPod in gpu.go) enforces NodeName == GPU.NodeName
+// when both are set; if they disagree the dispatcher returns an
+// error and applyNodeName never runs.
+func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if guest.Spec.NodeName != "" {
+		pod.Spec.NodeName = guest.Spec.NodeName
 	}
 }
 

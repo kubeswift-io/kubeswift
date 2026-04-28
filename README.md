@@ -15,6 +15,7 @@ KubeSwift is **not** a container sandbox (it is not Kata Containers). It is a VM
 - **SwiftGuestPool** — Fleet management for identical VMs. ReplicaSet semantics with rolling updates (maxUnavailable/maxSurge), topology spread (Pack/Spread), and PVC per replica (StatefulSet-like persistent storage). Scale via `kubectl scale sgpool`
 - **Per-guest root disk cloning** — Each VM gets its own writable copy of the SwiftImage, sized from SwiftGuestClass. SwiftImage PVC is a compact template. Two clone strategies: `copy` (default, works on any CSI driver) and `snapshot` (CSI VolumeSnapshot + dataSource clones, faster on snapshot-capable drivers) — see [docs/images/clone-strategies.md](docs/images/clone-strategies.md)
 - **VM snapshots and restore** — Two backends: `csi-volume-snapshot` (disk-only, crash-consistent, CSI VolumeSnapshot-backed — see [docs/snapshots/csi-snapshots.md](docs/snapshots/csi-snapshots.md)) and `local` (memory + disk, hostPath-backed, with clone identity regeneration — see [docs/snapshots/local-snapshots.md](docs/snapshots/local-snapshots.md), [docs/snapshots/identity-regeneration.md](docs/snapshots/identity-regeneration.md), [docs/snapshots/pause-window.md](docs/snapshots/pause-window.md)). `swiftctl snapshot` / `swiftctl restore` drive both backends.
+- **Offline migration** — Move SwiftGuests between Kubernetes nodes via `SwiftMigration` (Phase 1 of live migration). `swiftctl migrate <guest> --to <node>` stops the source guest, detaches its per-guest root-disk PVC, and recreates the guest on the target node. Downtime ~25–70s depending on storage class. Live migration (sub-second downtime) is Phase 3. See [docs/migration/overview.md](docs/migration/overview.md).
 - **Data disks** — Optional secondary data disk (`dataDiskRef`) on any boot path; appears as /dev/vdb in guest
 - **Networking** — tap + bridge + dnsmasq DHCP; guest IP propagated to status. Multi-NIC via Multus, macvlan, VLANs, OVN-Kubernetes overlay and localnet topologies
 - **swiftctl CLI** — Console access, lifecycle control, SSH, describe, logs, debug
@@ -179,6 +180,10 @@ make smoke-test
 | Clone identity regeneration | [docs/snapshots/identity-regeneration.md](docs/snapshots/identity-regeneration.md) |
 | Snapshot pause window | [docs/snapshots/pause-window.md](docs/snapshots/pause-window.md) |
 | Snapshot operator walkthrough (8 scenarios + findings) | [docs/snapshots/operator-walkthrough.md](docs/snapshots/operator-walkthrough.md) |
+| Migration — overview | [docs/migration/overview.md](docs/migration/overview.md) |
+| Migration — offline (Phase 1) | [docs/migration/offline-migration.md](docs/migration/offline-migration.md) |
+| Migration — networking + storage | [docs/migration/networking-requirements.md](docs/migration/networking-requirements.md) |
+| Migration — troubleshooting | [docs/migration/troubleshooting.md](docs/migration/troubleshooting.md) |
 | SwiftImage clone strategies | [docs/images/clone-strategies.md](docs/images/clone-strategies.md) |
 | Security audit | [docs/security-audit.md](docs/security-audit.md) |
 | Development | [docs/development.md](docs/development.md) |

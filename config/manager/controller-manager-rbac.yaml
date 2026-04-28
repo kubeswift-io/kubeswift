@@ -47,6 +47,15 @@ rules:
   - apiGroups: ["snapshot.kubeswift.io"]
     resources: ["swiftrestores", "swiftrestores/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftMigration (migration.kubeswift.io). Status patches go through
+  # the /status subresource. The controller patches SwiftGuest spec
+  # fields (runPolicy, nodeName) using the existing
+  # swift.kubeswift.io/swiftguests grant; no additional grant needed
+  # there. VolumeAttachment list (storage.k8s.io) is added below for
+  # the Preparing phase's dual-poll.
+  - apiGroups: ["migration.kubeswift.io"]
+    resources: ["swiftmigrations", "swiftmigrations/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # snapshot.storage.k8s.io VolumeSnapshots — owned by SwiftSnapshot/SwiftImage,
   # read by SwiftRestore. The CSI external-snapshotter owns VolumeSnapshotContent
   # and VolumeSnapshotClass; the controller-manager only needs read for class.
@@ -81,6 +90,14 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
+  # storage.k8s.io VolumeAttachment — read-only. The SwiftMigration
+  # controller's Preparing phase polls VolumeAttachments to verify the
+  # source-node CSI ControllerUnpublishVolume has completed before
+  # advancing to StopAndCopy (cross-node attach gate; without this
+  # the destination pod hits Multi-Attach errors on RWO storage).
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
   # Leader election (controller-runtime uses coordination.k8s.io/leases)
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

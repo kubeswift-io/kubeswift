@@ -81,4 +81,18 @@ webhooks:
         apiGroups: ["snapshot.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftrestores"]
+  - name: vswiftmigration.migration.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-migration-kubeswift-io-v1alpha1-swiftmigration
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["migration.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftmigrations"]
 {{- end }}
