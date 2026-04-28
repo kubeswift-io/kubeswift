@@ -96,19 +96,33 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Cancellation: the resource is being deleted while in flight.
-	// commit 10 implements the rollback behavior; for now, defer to
-	// the per-phase handler which sets Cancelled if appropriate.
+	// handleCancellation runs the rollback (pre-cutover) or just
+	// clears the annotation (post-cutover), then drops the
+	// finalizer to allow deletion to proceed.
 	if mig.DeletionTimestamp != nil {
 		return r.handleCancellation(ctx, &mig)
 	}
 
 	// Terminal phases: nothing more to do. Idempotency: re-reconcile
 	// of a Completed/Failed/Cancelled SwiftMigration is a no-op.
+	// Drop the finalizer in case it's still attached (cleanup runs
+	// on transition into the terminal phase, but a re-reconcile
+	// after a controller restart could observe the terminal state
+	// with the finalizer still present).
 	switch mig.Status.Phase {
 	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
 		migrationv1alpha1.SwiftMigrationPhaseFailed,
 		migrationv1alpha1.SwiftMigrationPhaseCancelled:
+		if err := r.removeFinalizer(ctx, &mig); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer on first reconcile so cancellation mid-flight
+	// gets a chance to clean up the SwiftGuest annotation.
+	if err := r.ensureFinalizer(ctx, &mig); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// First reconcile: stamp StartedAt and transition Pending →
@@ -182,6 +196,12 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 		status.FailureMessage = errMsg
 		now := metav1.Now()
 		status.CompletedAt = &now
+		// Cleanup must run BEFORE persist so a re-reconcile observing
+		// the Failed phase doesn't immediately drop the finalizer
+		// (terminal-phase shortcut) before cleanup completes.
+		if cleanupErr := r.onTerminalPhase(ctx, mig, status); cleanupErr != nil {
+			return ctrl.Result{}, fmt.Errorf("terminal-phase cleanup: %w", cleanupErr)
+		}
 		return ctrl.Result{}, r.persist(ctx, mig, status)
 	}
 	if advanced {
@@ -195,20 +215,7 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 	return ctrl.Result{RequeueAfter: requeue}, r.persist(ctx, mig, status)
 }
 
-// handleCancellation processes deletion of an in-flight SwiftMigration.
-// Phase 10 implements the rollback semantics; for now, allow the
-// deletion to proceed without finalizer interference.
-func (r *SwiftMigrationReconciler) handleCancellation(
-	ctx context.Context,
-	mig *migrationv1alpha1.SwiftMigration,
-) (ctrl.Result, error) {
-	// Placeholder until commit 10. Letting the resource delete
-	// without finalizer is safe during the controller-skeleton phase
-	// because no destructive actions have been taken yet.
-	_ = ctx
-	_ = mig
-	return ctrl.Result{}, nil
-}
+// handleCancellation is implemented in failure.go.
 
 // --- Phase handlers ---
 //
