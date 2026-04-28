@@ -108,7 +108,45 @@ func (v *Validator) validate(ctx context.Context, mig *migrationv1alpha1.SwiftMi
 	if v.Client == nil {
 		return nil, nil
 	}
+	// Skip cluster-state validation on UPDATE patches against migrations
+	// that are either being deleted or already in a terminal phase.
+	//
+	// Both cases produce metadata-only patches (finalizer removal) issued
+	// by the controller after the migration's outcome is decided. There's
+	// nothing left to gate, and re-running validateClusterState here can
+	// reject the patch on conditions that were valid at submission time
+	// but no longer hold (source SwiftGuest deleted, source==target after
+	// cutover succeeded). That rejection traps the resource: the
+	// finalizer can't be removed, which means the SwiftMigration can't
+	// be deleted via any normal kubectl operation, and stale completed
+	// migrations re-reconcile in a tight loop because each finalizer-
+	// removal patch fails admission.
+	//
+	// The shared pattern is "treat terminal states as terminal": once a
+	// resource is being deleted or has reached a terminal phase, spec
+	// validation against current cluster state has no value, only cost.
+	// Future SwiftMigration phases (live, drain integration) should
+	// preserve this discipline.
+	if mig.DeletionTimestamp != nil {
+		return nil, nil
+	}
+	if isTerminalPhase(mig.Status.Phase) {
+		return nil, nil
+	}
 	return v.validateClusterState(ctx, mig)
+}
+
+// isTerminalPhase returns true for SwiftMigration phases where the
+// outcome has been decided. Mirrors the controller's terminal-phase
+// short-circuit; the two must remain in sync.
+func isTerminalPhase(phase migrationv1alpha1.SwiftMigrationPhase) bool {
+	switch phase {
+	case migrationv1alpha1.SwiftMigrationPhaseCompleted,
+		migrationv1alpha1.SwiftMigrationPhaseFailed,
+		migrationv1alpha1.SwiftMigrationPhaseCancelled:
+		return true
+	}
+	return false
 }
 
 // validateShape covers rules that depend only on the SwiftMigration
