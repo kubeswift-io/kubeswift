@@ -636,25 +636,39 @@ func TestValidateUpdate_NoSpecChange(t *testing.T) {
 	}
 }
 
-// --- Terminal-state pass-through (Bug A + Bug B fix) ---
+// --- Per-operation validation discipline (Bug A + B + C fix) ---
 //
-// Background: in the deployed cluster, finalizer-removal patches issued
-// by the controller after a migration finished were rejected by this
-// webhook because the source SwiftGuest had moved to the destination
-// node (or had been deleted entirely). That trapped completed and
-// being-deleted migrations: the finalizer could not be removed, so
-// the SwiftMigration object could not be cleaned up via any normal
-// kubectl operation. The fix is to skip cluster-state validation
-// when the migration is terminal or being deleted — there's nothing
-// left to gate on metadata-only patches.
+// Background: this PR rationalizes admission validation to fire only
+// where it adds value. ValidateCreate runs full cluster-state checks
+// (the submission gate). ValidateUpdate runs spec immutability + spec
+// shape, never cluster-state. Cluster-state changes between CREATE
+// and UPDATE are the controller's domain — webhook re-validation
+// turns transient cluster conditions into stuck resources.
+//
+// The three bugs that motivated this design:
+//
+//   - Bug A (HIGH): operator deletes source SwiftGuest, then deletes
+//     SwiftMigration. removeFinalizer patch hits ValidateUpdate; old
+//     code ran cluster-state and rejected on missing guest. Result:
+//     SwiftMigration could not be deleted via any kubectl operation.
+//   - Bug B (MEDIUM): completed SwiftMigrations stuck reconciling.
+//     Watch fan-out enqueues every active migration; removeFinalizer
+//     patch hit ValidateUpdate; cluster-state rejected because
+//     source==target post-cutover. Retry storm forever.
+//   - Bug C (MEDIUM): in-flight (Pending/Validating/Preparing)
+//     migration whose source guest disappeared mid-flight had its
+//     ensureFinalizer patch rejected on every reconcile. Trapped
+//     in a non-terminal phase the controller couldn't fail-and-clean.
+//
+// All three share root cause: validation logic firing on every
+// operation without discriminating between submission (gate value)
+// and metadata churn (no value, real cost).
 
-// TestValidateUpdate_DeletionTimestamp_SkipsClusterState verifies that
-// an UPDATE patch on a SwiftMigration with deletionTimestamp set is
-// admitted even when the source SwiftGuest has been deleted. Mirrors
-// the headline bug: operator deletes the SwiftGuest, then deletes the
-// SwiftMigration; the controller's removeFinalizer Patch must not be
-// rejected. Source guest is intentionally absent from the fake client.
-func TestValidateUpdate_DeletionTimestamp_SkipsClusterState(t *testing.T) {
+// TestValidateUpdate_DeletionTimestamp_NoClusterState — Bug A
+// regression. SwiftMigration with deletionTimestamp set + source
+// guest absent. The controller's removeFinalizer patch shape must
+// pass admission.
+func TestValidateUpdate_DeletionTimestamp_NoClusterState(t *testing.T) {
 	scheme := migrationScheme(t)
 	// No source SwiftGuest in the cluster.
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
@@ -665,27 +679,20 @@ func TestValidateUpdate_DeletionTimestamp_SkipsClusterState(t *testing.T) {
 	now := metav1.Now()
 	old.DeletionTimestamp = &now
 	old.Finalizers = []string{"migration.kubeswift.io/cleanup"}
-
-	// Same-spec update with finalizer removed (the controller's
-	// removeFinalizer patch shape).
 	new := old.DeepCopy()
 	new.Finalizers = nil
 
 	if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
-		t.Errorf("ValidateUpdate on deleting SwiftMigration should skip cluster-state validation; got %v", err)
+		t.Errorf("ValidateUpdate on deleting SwiftMigration should not run cluster-state; got %v", err)
 	}
 }
 
-// TestValidateUpdate_TerminalPhase_SkipsClusterState verifies that an
-// UPDATE patch on a Completed SwiftMigration is admitted even when
-// the source SwiftGuest now sits on what used to be the target node.
-// Pre-fix this rejected with "spec.target.nodeName equals SwiftGuest's
-// current node" because the migration had finished and the guest had
-// moved to boba — the very condition the webhook was designed to
-// reject at submission.
-func TestValidateUpdate_TerminalPhase_SkipsClusterState(t *testing.T) {
+// TestValidateUpdate_TerminalPhase_NoClusterState — Bug B regression.
+// Parameterized over all three terminal phases. Source guest exists
+// on what was the migration's target — exact post-cutover scenario
+// the live cluster hit.
+func TestValidateUpdate_TerminalPhase_NoClusterState(t *testing.T) {
 	scheme := migrationScheme(t)
-	// Source guest exists but lives on the target node now (post-cutover).
 	guest := newSwiftGuest("guest", "default")
 	guest.Status.NodeName = "miles" // matches mig.Spec.Target.NodeName
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
@@ -703,19 +710,25 @@ func TestValidateUpdate_TerminalPhase_SkipsClusterState(t *testing.T) {
 			new := old.DeepCopy()
 			new.Finalizers = nil
 			if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
-				t.Errorf("ValidateUpdate on phase=%s SwiftMigration should skip cluster-state validation; got %v", phase, err)
+				t.Errorf("ValidateUpdate on phase=%s should not run cluster-state; got %v", phase, err)
 			}
 		})
 	}
 }
 
-// TestValidateUpdate_NonTerminalPhase_StillValidates verifies the skip
-// is scoped: a SwiftMigration in flight (Validating/Preparing/etc.)
-// still runs cluster-state validation. Otherwise the skip would
-// silently disable webhook gating mid-migration.
-func TestValidateUpdate_NonTerminalPhase_StillValidates(t *testing.T) {
+// TestValidateUpdate_InFlight_NoClusterState — Bug C regression.
+// Mid-flight (Pending/Validating/Preparing/StopAndCopy/Resuming)
+// migration whose source SwiftGuest was deleted mid-migration.
+// The controller's ensureFinalizer / annotation-flip metadata
+// patches must pass admission so the controller can drive the
+// migration to Failed and clean up.
+//
+// Pre-fix this was rejected with "source SwiftGuest 'guest' not
+// found" on every metadata patch, trapping the migration in a
+// non-terminal phase that no kubectl could untangle.
+func TestValidateUpdate_InFlight_NoClusterState(t *testing.T) {
 	scheme := migrationScheme(t)
-	// No source guest — would normally reject.
+	// Source guest deleted mid-migration — absent from the fake client.
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	v := &Validator{Client: c}
 
@@ -731,12 +744,51 @@ func TestValidateUpdate_NonTerminalPhase_StillValidates(t *testing.T) {
 			old := newSwiftMigration("m", "default")
 			old.Status.Phase = phase
 			new := old.DeepCopy()
-			new.ObjectMeta.Annotations = map[string]string{"x": "y"}
-			_, err := v.ValidateUpdate(context.Background(), old, new)
-			if err == nil || !strings.Contains(err.Error(), "not found") {
-				t.Errorf("ValidateUpdate on non-terminal phase=%s should still validate cluster-state; got %v", phase, err)
+			new.ObjectMeta.Annotations = map[string]string{"controller-touch": "1"}
+			if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+				t.Errorf("ValidateUpdate on phase=%s with metadata-only change should not run cluster-state; got %v", phase, err)
 			}
 		})
+	}
+}
+
+// TestValidateUpdate_StillEnforcesShape verifies the per-operation
+// discipline is "skip cluster-state on UPDATE", NOT "skip all
+// validation on UPDATE". Spec immutability is still enforced (a
+// dedicated test exists for that — TestValidateUpdate_SpecImmutable),
+// and spec shape is still validated as defense-in-depth in case a
+// future patch path bypasses immutability.
+func TestValidateUpdate_StillEnforcesShape(t *testing.T) {
+	scheme := migrationScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	v := &Validator{Client: c}
+
+	old := newSwiftMigration("m", "default")
+	// Construct an old with valid spec, then a new with invalid spec
+	// that ALSO mutates spec — the immutability check fires first.
+	// To test shape-on-update, we need both old and new to have the
+	// same invalid spec (so immutability passes) so shape is reached.
+	old.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	new := old.DeepCopy()
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err == nil || !strings.Contains(err.Error(), "live") {
+		t.Errorf("ValidateUpdate must still enforce shape on UPDATE; got %v", err)
+	}
+}
+
+// TestValidateCreate_RunsClusterState verifies CREATE retains full
+// validation. The submission point is when cluster-state gating adds
+// value (operator's intent first hits the API server). Anti-regression
+// against accidentally extending the per-operation skip to CREATE.
+func TestValidateCreate_RunsClusterState(t *testing.T) {
+	scheme := migrationScheme(t)
+	// No source guest — CREATE must reject.
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	_, err := v.ValidateCreate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("ValidateCreate must run cluster-state validation; got %v", err)
 	}
 }
 
