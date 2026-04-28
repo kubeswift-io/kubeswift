@@ -1094,7 +1094,7 @@ virtio-net driver, whose MAC is cached in the snapshot's RAM image.
 
 Operators using clones must either:
 - Reboot each clone after first resume (cloud-init bootcmd then fires
-  normally; the existing `swiftseedprofile-test.yaml` bootcmd works
+  normally; the existing `01-seed-profile.yaml` bootcmd works
   on fresh boots), or
 - Manually regenerate identity inside each clone (`systemd-machine-id-setup`,
   `rm /etc/ssh/ssh_host_*_key*; ssh-keygen -A`, `hostnamectl set-hostname …`)

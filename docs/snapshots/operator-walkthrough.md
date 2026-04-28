@@ -506,4 +506,718 @@ Job path does not.
 
 ---
 
-(Scenarios 3–8 follow.)
+## Scenario 3 — SwiftGuestPool scaling on a snapshot-backed image
+
+**Goal.** Take the snapshot-backed image pattern from Scenario 2 and
+put it under the load it was designed for: a SwiftGuestPool that
+scales up several replicas at once, each cloning the same
+clone-seed VolumeSnapshot in parallel.
+
+### Manifests
+
+[`config/samples/snapshots-walkthrough/scenario-3-pool-scaling/`](../../config/samples/snapshots-walkthrough/scenario-3-pool-scaling/)
+
+- `01-image.yaml` — snapshot-backed `ubuntu-noble-pool` SwiftImage +
+  shared seed profile.
+- `02-pool.yaml` — SwiftGuestPool `pool-fast` at `replicas: 5`,
+  template references the snapshot-backed image.
+
+### Step 1 — Create the pool at 5 replicas
+
+```bash
+kubectl apply -n snapshots-wt-s3 -f \
+  config/samples/snapshots-walkthrough/scenario-3-pool-scaling/01-image.yaml
+# wait for SwiftImage Ready (~100s on this cluster)
+kubectl apply -n snapshots-wt-s3 -f \
+  config/samples/snapshots-walkthrough/scenario-3-pool-scaling/02-pool.yaml
+```
+
+Watching `running_with_ip` as a count of pool members reporting
+`status.network.primaryIP`:
+
+```
+[0s]   running_with_ip=0/5
+[228s] running_with_ip=1/5
+[269s] running_with_ip=2/5
+[279s] running_with_ip=3/5
+[310s] running_with_ip=4/5
+[321s] running_with_ip=5/5
+```
+
+On this cluster the pool reached all 5 replicas Ready in ~321 s.
+Replicas come up in waves rather than strictly serially — Longhorn
+clones happen concurrently from the shared clone-seed, but
+replication-completion timing varies per replica.
+
+### Step 2 — Scale up to 10
+
+```bash
+kubectl scale swiftguestpool pool-fast -n snapshots-wt-s3 --replicas=10
+```
+
+Five new replicas come up incrementally. On this cluster the **10th
+replica got stuck Pending** because the cluster ran out of
+schedulable CPU:
+
+```
+0/3 nodes are available: 3 Insufficient cpu. no new claims to
+deallocate, preemption: 0/3 nodes are available: 3 No preemption
+victims found for incoming pod.
+```
+
+Each SwiftGuestClass `default` requests 2 vCPU; 9 running replicas
+× 2 = 18 vCPU committed, plus controller-manager + Longhorn
+instance-managers + system workloads, fills 24 vCPU across three
+8-CPU nodes. ([F8](walkthrough-findings.md#f8))
+
+> **Operator finding.** When sizing pools, account for system
+> overhead per node. On this cluster, three 8-CPU nodes can host
+> ≈9 default-class pool replicas before scheduler pressure kicks
+> in. Reserve headroom or scale node count, not just replica count.
+
+### Step 3 — Scale down to 3
+
+```bash
+kubectl scale swiftguestpool pool-fast -n snapshots-wt-s3 --replicas=3
+```
+
+The pool controller deletes highest-index replicas first. Within
+~1 s the API reports replicas=3; the surviving members are
+`pool-fast-0`, `pool-fast-1`, `pool-fast-2`. Their launcher pods
+continue serving traffic uninterrupted; only pool members 3–9
+terminate.
+
+### Step 4 — Verify per-replica state isolation
+
+Each surviving pool member has its own per-guest PVC, all cloned
+from the same `ubuntu-noble-pool-clone-seed` VolumeSnapshot:
+
+```
+pool-fast-0: dataSource=VolumeSnapshot/ubuntu-noble-pool-clone-seed, ip=10.244.125.12
+pool-fast-1: dataSource=VolumeSnapshot/ubuntu-noble-pool-clone-seed, ip=10.244.125.10
+pool-fast-2: dataSource=VolumeSnapshot/ubuntu-noble-pool-clone-seed, ip=10.244.125.20
+```
+
+Writing a unique sentinel into each replica's `/var/local/who.txt`
+confirms independent disks — each replica reads back its own
+content; no cross-talk.
+
+### What you just did
+
+You scaled a SwiftGuestPool from 0 → 5 → 10 → 3 replicas using the
+snapshot-strategy clone path. You saw the cluster's CPU ceiling
+when fleet size exceeded available scheduling capacity, and you
+confirmed each pool member has fully independent per-VM disk and
+network state despite sharing a clone seed.
+
+### Cleanup
+
+Pool deletion cascades to all SwiftGuests via owner references:
+
+```bash
+kubectl delete namespace snapshots-wt-s3
+```
+
+### What's next
+
+Scenario 4 stays on the same pool but updates its template — a
+**rolling update** that cycles each replica through the controller's
+maxUnavailable/maxSurge gates. The snapshot strategy keeps each
+replica's PVC clone fast.
+
+---
+
+## Scenario 4 — Pool rolling update
+
+**Goal.** Update a SwiftGuestPool's template (changing the seed
+profile) and watch the controller cycle each replica through the
+update without dropping below `maxUnavailable`.
+
+### Manifests
+
+[`config/samples/snapshots-walkthrough/scenario-4-pool-rolling-update/`](../../config/samples/snapshots-walkthrough/scenario-4-pool-rolling-update/)
+
+- `01-new-seed.yaml` — `walkthrough-seed-v2`, identical to the
+  Scenario 3 seed except for the hostname, which becomes the
+  visible signal that the rolling update completed.
+- `02-pool-updated.yaml` — same `pool-fast` resource, template's
+  `seedProfileRef` now points at `walkthrough-seed-v2`.
+
+### Step 1 — Apply the v2 seed and the updated pool template
+
+```bash
+kubectl apply -n snapshots-wt-s3 -f \
+  config/samples/snapshots-walkthrough/scenario-4-pool-rolling-update/01-new-seed.yaml
+kubectl apply -n snapshots-wt-s3 -f \
+  config/samples/snapshots-walkthrough/scenario-4-pool-rolling-update/02-pool-updated.yaml
+```
+
+```
+swiftseedprofile.seed.kubeswift.io/walkthrough-seed-v2 created
+swiftguestpool.swift.kubeswift.io/pool-fast configured
+```
+
+The `template.spec` hash changes when `seedProfileRef` does;
+`pool.status.templateHash` flips, the rolling update fires.
+
+### Step 2 — Watch the rolling update execute
+
+```
+[0s]   replicas=3 ready=1 updated=2
+[142s] replicas=3 ready=2 updated=2
+[173s] replicas=3 ready=2 updated=3
+[298s] replicas=3 ready=3 updated=3   <- complete
+```
+
+On this cluster the rolling update completed in ~298 s — each
+replica taking ~99 s on average to be cycled. The default
+`maxUnavailable: 1` keeps the pool with at least 2/3 ready
+throughout.
+
+### Step 3 — Verify v2 hostname applied to all replicas
+
+```bash
+for g in pool-fast-0 pool-fast-1 pool-fast-2; do
+  swiftctl ssh $g -n snapshots-wt-s3 -- hostname
+done
+```
+
+```
+pool-fast-0: scenario-4-pool-v2
+pool-fast-1: scenario-4-pool-v2
+pool-fast-2: scenario-4-pool-v2
+```
+
+All three pool members rebooted with the new seed profile;
+cloud-init applied the v2 hostname on each fresh boot. Pool members
+got fresh DHCP leases (different IPs from before the update) — VMs
+cycle cleanly through the update.
+
+### What you just did
+
+You updated a pool's template, watched the controller cycle each
+replica through a rolling update, and verified the new template's
+seed profile applied to every member. The snapshot-strategy clone
+path means each cycled replica's PVC gets a fast `dataSource`
+clone — no Copy Job overhead per cycle.
+
+### Cleanup
+
+Same as Scenario 3: `kubectl delete namespace snapshots-wt-s3`.
+
+### What's next
+
+Scenario 5 switches to the other backend — Tier B local-hostPath
+memory snapshots — and demonstrates the in-place restore flow that
+preserves in-RAM state across a launcher pod kill.
+
+---
+
+## Scenario 5 — Memory snapshot + in-place restore (Tier B disaster recovery)
+
+**Goal.** Capture a running VM's full state — RAM included —
+to a node hostPath, kill the launcher pod (simulating node failure
+or pod eviction), and bring the VM back **with its in-memory state
+intact**. The contract Tier B exists to support.
+
+### Manifests
+
+[`config/samples/snapshots-walkthrough/scenario-5-memory-snapshot-inplace/`](../../config/samples/snapshots-walkthrough/scenario-5-memory-snapshot-inplace/)
+
+- `01-source.yaml` — SwiftImage + SwiftSeedProfile + SwiftGuest
+  (same shape as Scenario 1).
+- `02-snapshot.yaml` — SwiftSnapshot with `backend.type: local`,
+  `includeMemory: true`, hostPath under
+  `/var/lib/kubeswift/snapshots/`.
+- `03-inplace-restore.yaml` — SwiftRestore with `targetGuest.name:
+  s5-source` (same as source) and `overwriteExisting: true`.
+
+### Step 1 — Source up; plant a sentinel on tmpfs
+
+The whole point of memory snapshots is preserving state that lives
+**only in RAM**. tmpfs is the cleanest test: anything on tmpfs is
+gone the moment the kernel restarts. If a sentinel on tmpfs
+survives the kill+restore cycle, the captured RAM image was loaded
+correctly.
+
+```bash
+swiftctl ssh s5-source -n snapshots-wt-s5 -- \
+  bash -c 'echo "hello-from-tmpfs" | sudo tee /run/sentinel.txt; \
+           stat -f -c %T /run'
+```
+
+```
+hello-from-tmpfs
+tmpfs    <- confirms /run is RAM-only
+```
+
+### Step 2 — Take the memory snapshot
+
+```bash
+kubectl apply -n snapshots-wt-s5 -f \
+  config/samples/snapshots-walkthrough/scenario-5-memory-snapshot-inplace/02-snapshot.yaml
+```
+
+The snapshot pauses the VM, serialises RAM to disk, and resumes:
+
+```
+[0s]  phase=Capturing
+[17s] phase=Ready  pauseWindow=10153ms
+```
+
+On this cluster a 4 GiB VM took ~10 seconds of pause time — the VM
+is unresponsive on the network during the pause. See
+[`pause-window.md`](pause-window.md) for the per-storage-class
+slope you'll see; Longhorn HDD measured here is ~2.5 s/GiB.
+
+### Step 3 — Kill the launcher pod (simulating a node failure)
+
+```bash
+kubectl delete pod -l swift.kubeswift.io/guest=s5-source \
+  -n snapshots-wt-s5 --grace-period=0 --force
+```
+
+The SwiftGuest controller will normally requeue and recreate the
+launcher pod from the source SwiftImage on its own. To force the
+restore-from-snapshot path instead, apply the SwiftRestore
+immediately:
+
+### Step 4 — Apply the in-place SwiftRestore
+
+```bash
+kubectl apply -n snapshots-wt-s5 -f \
+  config/samples/snapshots-walkthrough/scenario-5-memory-snapshot-inplace/03-inplace-restore.yaml
+```
+
+```
+[1s]  restore=Resuming guest_ip=10.244.125.11
+[11s] restore=Ready
+```
+
+On this cluster the in-place restore completed in ~11 s — far
+faster than a fresh boot because the **fast path** skips the
+snapshot-stager init container: when target name == source name
+and no identity regeneration is requested, the launcher pod mounts
+the snapshot directory read-only and reads it directly, no
+`cp -r` of the snapshot bytes.
+
+### Step 5 — Verify the tmpfs sentinel survived
+
+```bash
+swiftctl ssh s5-source -n snapshots-wt-s5 -- cat /run/sentinel.txt
+```
+
+```
+hello-from-tmpfs
+```
+
+The sentinel survived because the captured RAM image was loaded —
+not a fresh boot. tmpfs lives in RAM; if the kernel had rebooted,
+`/run` would be empty.
+
+`uptime` shows minutes since the resume rather than minutes since
+the original cold boot — that's an artifact of CH's
+restore-resumes-the-clock behavior, not a sign that the kernel
+rebooted.
+
+### What you just did
+
+You captured a running VM's full state (disk + memory), simulated
+a launcher pod crash, and brought the VM back with in-RAM state
+intact. This is the disaster-recovery contract Tier B exists for —
+fast restore of a known-good moment, no application restart, no
+re-init of in-memory caches.
+
+### Cleanup
+
+```bash
+kubectl delete namespace snapshots-wt-s5
+```
+
+The `kubeswift.io/snapshot-hostpath-cleanup` finalizer triggers an
+on-node cleanup pod that removes the snapshot directory before the
+SwiftSnapshot is GC'd.
+
+### What's next
+
+Scenario 6 keeps the same memory snapshot but restores it under a
+**different** target name — the clone path. That's where the
+documented identity-collision behaviour shows up.
+
+---
+
+## Scenario 6 — Memory snapshot clone restore (with identity collision evidence)
+
+**Goal.** Restore a memory snapshot into a target with a different
+name and observe what KubeSwift can and cannot rewrite at clone
+time. The identity-collision behaviour is documented in
+[`identity-regeneration.md`](identity-regeneration.md); this scenario
+captures it empirically so operators can verify on their own
+cluster.
+
+### Manifests
+
+[`config/samples/snapshots-walkthrough/scenario-6-memory-snapshot-clone/`](../../config/samples/snapshots-walkthrough/scenario-6-memory-snapshot-clone/)
+
+- `01-clone.yaml` — SwiftRestore against the snapshot from
+  Scenario 5 with `targetGuest.name: s6-clone-a` and the full
+  `identity.regenerate` set.
+
+### Step 1 — Apply the clone restore
+
+```bash
+kubectl apply -n snapshots-wt-s5 -f \
+  config/samples/snapshots-walkthrough/scenario-6-memory-snapshot-clone/01-clone.yaml
+```
+
+```
+[0s]   restore=Restoring  guest=Scheduling
+[110s] restore=Resuming   guest=Running
+[116s] restore=Ready
+```
+
+On this cluster the clone restore reached `Ready` in ~116 s. Most
+of that is the snapshot-stager init container: it copies the
+snapshot directory into the launcher pod's emptyDir, then patches
+`config.json` (rewrite source's runtime_dir prefix in disk paths
++ serial socket, swap MAC for a deterministic clone-specific value,
+null `host_mac` so CH auto-discovers the new tap MAC, append the
+`kubeswift.clone=true` cmdline marker).
+
+### Step 2 — Compare source and clone identity
+
+The clone shares the source's IP because the kernel network stack's
+DHCP lease was captured in RAM. From within either launcher pod,
+both VMs are reachable at `10.244.125.11`. SSH to each from inside
+its own launcher pod (each pod has its own bridge in its own
+network namespace, so the apparent IP is different than what the
+source would see).
+
+```bash
+# Identity from source
+swiftctl ssh s5-source -n snapshots-wt-s5 -- bash -c \
+  'echo MID=$(cat /etc/machine-id); hostname; \
+   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | awk "{print \$2}"; \
+   ip -br link show ens3'
+```
+
+```
+MID=e0b5cf1b07f7490a9ade0bb79763083f
+scenario-5-source
+SHA256:y8NWi/pIL0+d6K5GA3tOdVkxBG2geGDbd2Eqi5ZL5Ng
+ens3 UP 2e:87:2b:07:50:ae <BROADCAST,MULTICAST,UP,LOWER_UP>
+```
+
+```bash
+# Same query against the clone
+swiftctl ssh s6-clone-a -n snapshots-wt-s5 -- bash -c '...'
+```
+
+```
+MID=e0b5cf1b07f7490a9ade0bb79763083f       <- same as source
+scenario-5-source                          <- same as source
+SHA256:y8NWi/pIL0+d6K5GA3tOdVkxBG2geGDbd2Eqi5ZL5Ng    <- same as source
+ens3 UP 2e:87:2b:07:50:ae ...              <- same as source
+```
+
+All four guest-observable identity signals **match the source**.
+This is the documented behavior — see
+[`identity-regeneration.md`](identity-regeneration.md) for why.
+
+### Step 3 — Observe the hypervisor-side rewrite (which doesn't reach the guest)
+
+```bash
+kubectl exec -n snapshots-wt-s5 s6-clone-a -c launcher -- \
+  curl -s --unix-socket \
+  /var/lib/kubeswift/run/snapshots-wt-s5-s6-clone-a/ch.sock \
+  http://localhost/api/v1/vm.info \
+  | jq '.config.net[0]'
+```
+
+```json
+{
+  "tap": "tap0",
+  "mac": "52:54:00:4d:e2:76",          <- per-clone deterministic MAC
+  "host_mac": "1a:2a:53:7f:55:f5",     <- auto-discovered from clone tap
+  ...
+}
+
+cmdline: "kubeswift.clone=true"        <- patcher installed marker
+```
+
+The CH-side `config.net[0].mac` is **different** for the clone
+(`52:54:00:4d:e2:76`) than for the source. The bridge fdb on the
+clone's launcher pod sees this rewritten MAC. **But the guest-side
+view of the same NIC is unchanged** — the virtio-net driver's MAC
+is cached in the snapshot's RAM image and survives `--restore`
+verbatim.
+
+### Why does the rewrite not propagate?
+
+Because resume is not a boot. CH `--restore` resumes the captured
+guest state byte-for-byte: kernel does not re-init, systemd does
+not re-init, cloud-init does not re-run, and the virtio-net driver
+keeps its cached MAC. The cmdline marker is installed in the CH
+config, but the bootcmd that's supposed to grep `/proc/cmdline`
+for it never executes because there's no boot.
+
+L2 collisions between source and clone running on the same node
+are avoided **only because each launcher pod runs in its own
+Kubernetes pod network namespace** — different bridges, different
+ARP tables, no cross-pod L2 path to collide on. If you exposed
+clone traffic to a shared L2 segment outside the pod network,
+both VMs would advertise the source's MAC.
+
+### What operators can do today
+
+For genuinely independent identity, choose one:
+
+1. **Reboot the clone after first resume** — `swiftctl ssh
+   s6-clone-a -- sudo reboot`. The fresh boot runs cloud-init,
+   regenerates machine-id / SSH keys / hostname normally.
+2. **Run regen commands manually inside the clone** — see
+   [`identity-regeneration.md`](identity-regeneration.md) "What
+   operators have today" for the script.
+
+The vsock-agent path that closes this gap without a reboot is a
+future phase.
+
+### What you just did
+
+You confirmed the documented Phase 2 behaviour: hypervisor-side
+MAC and cmdline marker land in CH config correctly, but the
+guest-observable identity (machine-id, hostname, SSH host keys,
+guest-side MAC) collides with the source. Pod network namespace
+isolation is what makes the collision operationally tolerable.
+
+### Cleanup
+
+`kubectl delete namespace snapshots-wt-s5`.
+
+### What's next
+
+Scenario 7 explores combining SwiftGuestPool with memory snapshots
+— the cloning ergonomics that Phase 4 will close. Today, the
+combination has gaps; the scenario documents what works and what
+doesn't.
+
+---
+
+## Scenario 7 — SwiftGuestPool templated from a memory snapshot (Phase 4 gap)
+
+**Goal.** Document what's available today for "spin up N VMs all
+cloned from one memory snapshot" and where the gaps are. **No
+manifests for this scenario** — what's missing is the API surface,
+not a working flow.
+
+### What works today
+
+- **Single-clone restore** from a memory snapshot — exercised in
+  Scenario 6.
+- **Pool scaling on a snapshot-backed SwiftImage** — exercised in
+  Scenario 3. The clone seed is a `VolumeSnapshot` of the
+  SwiftImage's PVC, not a SwiftSnapshot of a running VM.
+
+### What's missing — Phase 4 design
+
+Per [`docs/design/snapshots.md`](../design/snapshots.md) §"Phase 4
+— Cloning ergonomics", these API surfaces are deferred:
+
+1. **`spec.cloneFromSnapshot` on SwiftGuest.** A SwiftGuest spec
+   would reference a SwiftSnapshot (memory snapshot) as the boot
+   source. Today this field doesn't exist on the CRD; SwiftGuest
+   has only `imageRef`, `kernelRef`, `gpuProfileRef`.
+2. **Pool template referencing `cloneFromSnapshot`.** With the
+   SwiftGuest field above, the pool template's
+   `spec.template.spec` could carry it and each pool member would
+   become a clone of the snapshot.
+
+Verifying the gap:
+
+```bash
+kubectl explain swiftguest.spec | grep -i clone
+```
+
+```
+   imageRef        <Object>
+   kernelRef       <Object>
+   gpuProfileRef   <Object>
+   guestClassRef   <Object>
+   ...                                          <- no cloneFromSnapshot
+```
+
+### Adjacent paths that don't substitute
+
+- **`SwiftImage.cloneStrategy: snapshot`** clones a SwiftImage's
+  template PVC. It does not clone a SwiftSnapshot (which captures
+  a running VM's full state).
+- **Manually replicating SwiftRestore objects.** You could write
+  N SwiftRestores against the same SwiftSnapshot with different
+  `targetGuest.name` values. Each restore would produce a
+  full-state clone of the snapshot. But:
+  1. The pool controller doesn't manage these — you maintain N CRs
+     by hand or via your own tooling.
+  2. Identity collision (Scenario 6) hits N times — every clone
+     shares the source's machine-id, hostname, etc. until rebooted
+     or manually regenerated.
+
+### What this scenario produces
+
+No commands, no output. The finding: **fast pool spin-up from a
+memory snapshot is not a Phase 0/1/2 capability**. Operators
+needing it today should build pools on a `cloneStrategy:
+snapshot` SwiftImage (Scenario 3); a memory-snapshot-templated pool
+is Phase 4.
+
+### What's next
+
+Scenario 8 audits the validation webhooks: which inputs the API
+rejects up front, with what error messages.
+
+---
+
+## Scenario 8 — Failure modes and operator diagnosability
+
+**Goal.** Verify the validation webhooks reject obviously broken
+inputs with operator-comprehensible error messages — the operator
+"can I tell what went wrong?" audit.
+
+### Manifests
+
+[`config/samples/snapshots-walkthrough/scenario-8-failure-modes/`](../../config/samples/snapshots-walkthrough/scenario-8-failure-modes/)
+
+Each test below applies a deliberately broken manifest with
+`--dry-run=server` so the apply is rejected by the admission
+webhook without persisting state.
+
+### Test A — Tier B hostPath outside the allowed prefix
+
+The hostPath whitelist exists so a malicious or mistaken manifest
+can't write into arbitrary node directories.
+
+```bash
+kubectl apply --dry-run=server -n snapshots-wt-s8 -f - <<EOF
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata: {name: bad-hostpath}
+spec:
+  guestRef: {name: irrelevant}
+  backend:
+    type: local
+    local: {hostPath: /tmp/badprefix/foo}
+  includeMemory: true
+EOF
+```
+
+```
+Error from server (Forbidden): admission webhook
+"vswiftsnapshot.snapshot.kubeswift.io" denied the request:
+spec.backend.local.hostPath must be under
+/var/lib/kubeswift/snapshots/ (got "/tmp/badprefix/foo")
+```
+
+Operator-respecting: names the constraint, names the offending
+value.
+
+### Test B — Restore target conflict (controller-level, not webhook)
+
+A SwiftRestore targeting an existing SwiftGuest without
+`overwriteExisting: true` **passes the webhook** but fails at the
+controller level once it tries to materialise the target:
+
+```
+kubectl get swiftrestore conflicting-restore -o yaml
+```
+```yaml
+status:
+  phase: Failed
+  conditions:
+  - type: Ready
+    reason: TargetConflict
+    message: 'SwiftGuest <name> already exists; set
+      targetGuest.overwriteExisting=true to replace'
+```
+
+The feedback loop is one reconcile pass slower than webhook
+rejection but the message is correct and actionable.
+([F9](walkthrough-findings.md#f9))
+
+### Test C — Memory clone without macAddresses regen
+
+A memory clone without MAC regen would put two VMs on the same L2
+segment with the same MAC; the webhook prevents it:
+
+```
+Error from server (Forbidden): admission webhook
+"vswiftrestore.snapshot.kubeswift.io" denied the request:
+cloning memory snapshot s5-mem-snap into a different target
+(<name> != source <source>) requires spec.identity.regenerate
+to include macAddresses; without MAC regeneration the clone
+shares network identity with the source and will conflict on
+the same L2 segment
+```
+
+This is exemplary error-message authoring: WHAT (regen list
+incomplete), WHY (L2 collision), and the fix (add macAddresses).
+
+### Test D — `cloneStrategy: snapshot` without volumeSnapshotClassName
+
+```
+Error from server (Forbidden): admission webhook
+"vswiftimage.image.kubeswift.io" denied the request:
+spec.volumeSnapshotClassName is required when
+spec.cloneStrategy is 'snapshot'
+```
+
+### Test E — VFIO/GPU SwiftGuest + includeMemory: true
+
+VFIO + memory snapshot is the Phase 0 spike Constraint #1 case —
+permanently rejected.
+
+```
+Error from server (Forbidden): admission webhook
+"vswiftsnapshot.snapshot.kubeswift.io" denied the request:
+includeMemory=true is not supported when source SwiftGuest
+<name> has gpuProfileRef (VFIO + memory snapshot fails on
+restore with 'bar 0 already used' — Phase 0 Constraint #1)
+```
+
+This message cites the design source for operators who want to
+understand the constraint. Operator-respecting at the highest tier.
+
+### Test F — SwiftGuest with both imageRef and kernelRef
+
+The webhook rejects it cleanly:
+
+```
+Error from server (Forbidden): admission webhook
+"vswiftguest.swift.kubeswift.io" denied the request:
+exactly one of spec.imageRef or spec.kernelRef must be set
+```
+
+### What you just did
+
+You verified the validation webhooks reject six classes of broken
+input with messages an operator can act on. Five of the six are
+webhook-level (immediate); one is controller-level (one reconcile
+pass slower) and is documented as an acceptable trade-off rather
+than a bug.
+
+### Cleanup
+
+These tests use `--dry-run=server` and persist nothing; no cleanup
+needed.
+
+---
+
+## After the walkthrough — where to read next
+
+- Per-scenario findings (bugs, doc gaps, UX issues, design gaps)
+  surfaced during this exercise: [walkthrough-findings.md](walkthrough-findings.md)
+- The CSI snapshot operator guide: [csi-snapshots.md](csi-snapshots.md)
+- The Tier B memory snapshot operator guide: [local-snapshots.md](local-snapshots.md)
+- The identity regeneration design and resume-vs-boot constraint:
+  [identity-regeneration.md](identity-regeneration.md)
+- The pause window cost model: [pause-window.md](pause-window.md)
+- SwiftImage clone strategies: [../images/clone-strategies.md](../images/clone-strategies.md)
+- SwiftGuestPool ops guide: [../swiftguestpool-guide.md](../swiftguestpool-guide.md)

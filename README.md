@@ -178,6 +178,7 @@ make smoke-test
 | VM snapshots — memory + disk (local) | [docs/snapshots/local-snapshots.md](docs/snapshots/local-snapshots.md) |
 | Clone identity regeneration | [docs/snapshots/identity-regeneration.md](docs/snapshots/identity-regeneration.md) |
 | Snapshot pause window | [docs/snapshots/pause-window.md](docs/snapshots/pause-window.md) |
+| Snapshot operator walkthrough (8 scenarios + findings) | [docs/snapshots/operator-walkthrough.md](docs/snapshots/operator-walkthrough.md) |
 | SwiftImage clone strategies | [docs/images/clone-strategies.md](docs/images/clone-strategies.md) |
 | Security audit | [docs/security-audit.md](docs/security-audit.md) |
 | Development | [docs/development.md](docs/development.md) |

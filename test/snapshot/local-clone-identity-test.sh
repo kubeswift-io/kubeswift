@@ -7,7 +7,7 @@
 # the SwiftRestore stager + in-guest cloud-init bootcmd implement.
 #
 # The combined seed profile (config/samples/local-snapshots/
-# swiftseedprofile-test.yaml) is applied to the source VM. When the
+# 01-seed-profile.yaml) is applied to the source VM. When the
 # controller patches the snapshot's config.json with kubeswift.clone=true
 # and per-clone MAC rewrites, the stager init container materializes the
 # patched copy in a pod-local emptyDir; the in-guest bootcmd regenerates
@@ -129,8 +129,8 @@ elapsed_since() { echo $(($(epoch_now) - $1)); }
 # 1. Source VM with the combined seed profile (kubeswift user for
 #    swiftctl ssh + clone-identity-regen bootcmd).
 echo "--- Step 1: Apply source manifests + seed profile ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftseedprofile-test.yaml" >/dev/null
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftguest-source.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/01-seed-profile.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/02-source-guest.yaml" >/dev/null
 
 if ! kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" >/dev/null 2>&1; then
   echo "  Importing Ubuntu Noble..."
@@ -166,7 +166,7 @@ echo "  Source identity: $SOURCE_IDENTITY"
 # 2. Take memory snapshot.
 echo ""
 echo "--- Step 2: Take Tier B memory snapshot ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftsnapshot-memory.yaml" >/dev/null
+kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/03-snapshot.yaml" >/dev/null
 kubectl wait --for=jsonpath='{.status.phase}'=Ready \
   swiftsnapshot/snapshot-local-mem -n "$NAMESPACE" --timeout=5m
 echo "  Snapshot Ready"
