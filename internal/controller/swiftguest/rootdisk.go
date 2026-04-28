@@ -140,19 +140,14 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 	}
 
 	if pvcExists {
-		if !metav1.IsControlledBy(&existingPVC, guest) {
-			if err := r.Delete(ctx, &existingPVC); err != nil && !errors.IsNotFound(err) {
-				return nil, err
-			}
-			if jobExists {
-				_ = r.Delete(ctx, &existingJob)
-			}
-			return nil, fmt.Errorf("deleted orphaned clone PVC %s, will recreate", cloneName)
-		}
 		// Restore-seeded PVCs are pre-populated from a VolumeSnapshot by
-		// SwiftRestore. Skip the Copy Job entirely — its cp from the source
-		// SwiftImage's PVC would overwrite the restore data. Wait for Bound,
-		// then hand the PVC straight to the launcher pod.
+		// SwiftRestore. They carry RestoreSeededLabel=true and are owned
+		// by the SwiftRestore (not by this SwiftGuest), which means the
+		// orphan check below would otherwise delete the snapshot data.
+		// Check the label FIRST and short-circuit before the orphan
+		// branch fires. Skip the Copy Job entirely — its cp from the
+		// source SwiftImage's PVC would overwrite the restore data.
+		// Wait for Bound, then hand the PVC straight to the launcher pod.
 		if existingPVC.Labels[RestoreSeededLabel] == "true" {
 			if existingPVC.Status.Phase != corev1.ClaimBound {
 				return nil, fmt.Errorf("restore-seeded PVC %s not yet Bound (phase=%s)", cloneName, existingPVC.Status.Phase)
@@ -163,6 +158,15 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 				_ = r.Delete(ctx, &existingJob)
 			}
 			return &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
+		}
+		if !metav1.IsControlledBy(&existingPVC, guest) {
+			if err := r.Delete(ctx, &existingPVC); err != nil && !errors.IsNotFound(err) {
+				return nil, err
+			}
+			if jobExists {
+				_ = r.Delete(ctx, &existingJob)
+			}
+			return nil, fmt.Errorf("deleted orphaned clone PVC %s, will recreate", cloneName)
 		}
 		if jobExists {
 			if isJobComplete(&existingJob) {
