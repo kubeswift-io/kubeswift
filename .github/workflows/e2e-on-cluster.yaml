@@ -1,0 +1,190 @@
+name: E2E (cluster)
+
+# Cluster-side end-to-end tests. Runs the existing test/ scripts against
+# a kind cluster with snapshot-capable CSI installed. These scripts boot
+# real Cloud-Hypervisor VMs and exercise the full SwiftSnapshot /
+# SwiftRestore lifecycle — they are what would have caught the Tier A
+# data-loss bug fixed in PR #21 had they been wired into CI.
+#
+# Initial scope (this commit):
+#   - workflow_dispatch (manual): maintainers can trigger ad hoc against
+#     a kind cluster on a hosted runner. The job is self-contained
+#     (kind setup, CSI driver install, KubeSwift deploy, e2e runs).
+#   - schedule (nightly): runs the same path overnight to surface
+#     regressions within 24 hours.
+#
+# NOT YET wired:
+#   - pull_request path-touch triggers. Hosted-runner KVM + cloud-image
+#     download per PR is heavy and the kind+CSI setup is new ground;
+#     stabilize the manual + nightly runs first, then add PR triggers
+#     in a follow-up. Path-touch on
+#     internal/controller/{swiftrestore,swiftguest,swiftsnapshot}/**
+#     and rust/** is the documented next step.
+#
+# See docs/testing/e2e-audit.md for the full e2e suite inventory.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Which e2e to run (default: all)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - smoke
+          - snapshot
+          - clonestrategy
+          - local-roundtrip
+          - local-clone-identity
+  schedule:
+    # Daily at 04:00 UTC. Surface regressions before working hours
+    # without flooding the runner pool.
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  cluster-e2e:
+    name: Cluster e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+
+      # KVM acceleration is required for Cloud Hypervisor to boot the
+      # real Ubuntu Noble cloud images the smoke-test and snapshot-test
+      # scripts use. GitHub-hosted ubuntu-latest runners have /dev/kvm
+      # available since 2024; verify it explicitly so the failure mode
+      # is "KVM unavailable" instead of an opaque CH crash.
+      - name: Verify KVM availability
+        run: |
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::/dev/kvm is not present on this runner. Cluster e2e cannot run without KVM."
+            exit 1
+          fi
+          ls -l /dev/kvm
+
+      - name: Install kind
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name kubeswift-e2e --config - <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+            - role: worker
+          EOF
+
+      # Snapshot CRDs (the snapshot-controller side; the host-path CSI
+      # driver below provides the storage-side implementation).
+      - name: Install snapshot CRDs
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.0.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.0.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshotcontents.yaml
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.0.1/client/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
+
+      - name: Install snapshot controller
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.0.1/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.0.1/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
+          kubectl -n kube-system rollout status deploy/snapshot-controller --timeout=2m
+
+      # csi-driver-host-path is the reference snapshot-capable CSI
+      # driver. It's lightweight (no real backing storage), correct
+      # enough for snapshot semantics, and has a default
+      # VolumeSnapshotClass annotation so snapshot-test.sh's
+      # auto-detection finds it.
+      - name: Install csi-driver-host-path
+        run: |
+          git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
+          /tmp/csi-host-path/deploy/kubernetes-1.30/deploy.sh
+          kubectl apply -f /tmp/csi-host-path/examples/csi-storageclass.yaml
+          kubectl apply -f /tmp/csi-host-path/examples/csi-snapshotclass.yaml
+          # Mark the snapshot class default so snapshot-test.sh auto-detects it.
+          kubectl annotate volumesnapshotclass csi-hostpath-snapclass \
+            snapshot.storage.kubernetes.io/is-default-class=true
+
+      - name: Build and load images
+        run: |
+          make build-images
+          kind load docker-image \
+            ghcr.io/projectbeskar/kubeswift/controller-manager:dev \
+            ghcr.io/projectbeskar/kubeswift/swiftletd:dev \
+            ghcr.io/projectbeskar/kubeswift/gpu-discovery:dev \
+            --name kubeswift-e2e
+
+      - name: Deploy KubeSwift
+        run: |
+          make deploy
+          kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=5m
+
+      - name: Run e2e ${{ github.event.inputs.scenario || 'all' }}
+        run: |
+          set -euo pipefail
+          SCENARIO="${{ github.event.inputs.scenario || 'all' }}"
+          run_one() {
+            echo "::group::e2e: $1"
+            make "$1"
+            echo "::endgroup::"
+          }
+          case "$SCENARIO" in
+            smoke)               run_one smoke-test ;;
+            snapshot)            run_one snapshot-test ;;
+            clonestrategy)       run_one clonestrategy-test ;;
+            local-roundtrip)     run_one local-roundtrip-test ;;
+            local-clone-identity) run_one local-clone-identity-test ;;
+            all)
+              run_one snapshot-test
+              run_one clonestrategy-test
+              # The Tier B local-* scripts need a node with KVM AND
+              # /var/lib/kubeswift/snapshots/ writable hostPath. Both
+              # are present on kind workers; if a future runner image
+              # changes that, these scripts will fail loudly rather
+              # than silently.
+              run_one local-roundtrip-test
+              run_one local-clone-identity-test
+              # Smoke-test runs last because it's the heaviest (boots
+              # five guests across scenarios) and a failure earlier in
+              # the chain is more informative for debugging.
+              run_one smoke-test
+              ;;
+            *)
+              echo "::error::unknown scenario: $SCENARIO"
+              exit 2
+              ;;
+          esac
+
+      - name: Diagnostic dump on failure
+        if: failure()
+        run: |
+          echo "::group::cluster state"
+          kubectl get all -A
+          echo "::endgroup::"
+          echo "::group::events"
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100
+          echo "::endgroup::"
+          echo "::group::controller-manager logs"
+          kubectl -n kubeswift-system logs deploy/controller-manager --tail=200 || true
+          echo "::endgroup::"
+          for guest in $(kubectl get pod -A -l 'swift.kubeswift.io/guest' -o name 2>/dev/null); do
+            echo "::group::launcher $guest"
+            kubectl logs $guest --tail=100 || true
+            echo "::endgroup::"
+          done
+
+      - name: Cleanup kind
+        if: always()
+        run: kind delete cluster --name kubeswift-e2e || true
