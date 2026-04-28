@@ -1,0 +1,15 @@
+# Scenario 5: in-place restore (target name == source name). Fast
+# path: no snapshot-stager init container, no staging emptyDir.
+# overwriteExisting=true is required because the source SwiftGuest
+# still exists on the cluster.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: s5-inplace-restore
+spec:
+  snapshotRef:
+    name: s5-mem-snap
+  targetGuest:
+    name: s5-source
+    overwriteExisting: true
+  resumeAfterRestore: true
