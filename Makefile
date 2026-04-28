@@ -19,6 +19,8 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image generate deploy undeploy load-images smoke-test smoke-test-cleanup \
+	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test e2e-tests \
+	verify-e2e-scripts \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
@@ -43,6 +45,12 @@ help:
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
 	@echo "  smoke-test            Run boot smoke test (requires KubeSwift cluster)"
 	@echo "  smoke-test-cleanup    Remove smoke-test resources (SwiftGuest, SwiftImage, etc.) for re-runs"
+	@echo "  clonestrategy-test    Run cloneStrategy: snapshot e2e (requires snapshot-capable CSI)"
+	@echo "  snapshot-test         Run Tier A (CSI VolumeSnapshot) snapshot+restore e2e"
+	@echo "  local-roundtrip-test  Run Tier B (local hostPath) memory snapshot+in-place restore e2e"
+	@echo "  local-clone-identity-test  Run Tier B clone-identity-collision e2e"
+	@echo "  e2e-tests             Run every cluster-side e2e in sequence"
+	@echo "  verify-e2e-scripts    Static check (bash -n) of every e2e script (fast, no cluster)"
 	@echo "  preflight             Run worker-node readiness preflight (host checks only)"
 
 build: build-go build-rust
@@ -169,6 +177,44 @@ smoke-test:
 # Uses NAMESPACE (default: default). Run: make smoke-test-cleanup NAMESPACE=myns
 smoke-test-cleanup:
 	@test/smoke/boot-test.sh --cleanup-only
+
+# Tier A (csi-volume-snapshot) end-to-end: source guest, snapshot, restore,
+# verify the per-guest PVC carries dataSource and the restore-seeded label.
+# Caught the Tier A data-loss bug fixed in PR #21 — would have caught it
+# from the day SwiftRestore was added had it run in CI.
+snapshot-test:
+	@test/snapshot/snapshot-test.sh
+
+# cloneStrategy: snapshot end-to-end: SwiftImage with status.cloneSeed,
+# fast per-guest PVC clone via dataSource: VolumeSnapshot.
+clonestrategy-test:
+	@test/clonestrategy/clonestrategy-test.sh
+
+# Tier B (local hostPath) memory snapshot + in-place restore: tmpfs
+# sentinel survives the kill+restore cycle.
+local-roundtrip-test:
+	@test/snapshot/local-roundtrip-test.sh
+
+# Tier B clone restore: machine-id, hostname, SSH host keys, guest-side
+# MAC are documented to collide between source and clones (resume-vs-boot
+# limitation). The test asserts that the documented behavior is what
+# operators observe.
+local-clone-identity-test:
+	@test/snapshot/local-clone-identity-test.sh
+
+# Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
+# this target opts out so the cluster is clean between scripts.
+e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test
+
+# Fast static check: every e2e script parses (bash -n). Catches
+# typos / unclosed quotes without needing a cluster. Designed to run
+# on every PR.
+verify-e2e-scripts:
+	@set -e; for script in $$(find test -name '*.sh' -type f); do \
+		echo "  bash -n $$script"; \
+		bash -n "$$script" || { echo "FAIL: $$script has syntax errors"; exit 1; }; \
+	done; \
+	echo "  all e2e scripts parse"
 
 preflight:
 	@./scripts/kubeswift-preflight.sh
