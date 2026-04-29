@@ -1,10 +1,26 @@
-# Role for swiftletd to patch SwiftGuest status (GuestRunning condition) and pod annotations (guest IP).
-# Apply in each namespace where SwiftGuests run. Use swiftletd-rolebinding.yaml
-# to bind this role to the launcher pod's service account (default).
+# ClusterRole for swiftletd (the launcher container) to read/patch its own
+# pod's annotations and patch the SwiftGuest's /status subresource.
+#
+# Cluster-scoped because the controller creates one RoleBinding per
+# workload namespace (see internal/controller/swiftguest/rbac.go) that
+# binds this ClusterRole to the namespace's `default` ServiceAccount —
+# the launcher pod's SA. Operators do NOT need to apply this manually
+# per namespace; the controller handles it on Reconcile.
+#
+# History: prior to 2026-04-29 this was a per-namespace `Role` and the
+# corresponding RoleBinding was applied manually (see Phase 2 walkthrough
+# finding W3 + snapshot walkthrough finding F2). The manual step caused
+# silent failures in any non-default namespace: the lease poller's
+# guest-IP annotation patch hit 403 forbidden, which combined with
+# `lease.rs`'s prior-buggy "return on first patch attempt regardless of
+# result" left the SwiftGuest's status.network.primaryIP empty forever.
+# Fixed by promoting to ClusterRole + controller-driven auto-bind.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  name: swiftletd-reporter
+  name: kubeswift-swiftletd-reporter
+  labels:
+    app.kubernetes.io/name: kubeswift
 rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests/status"]
