@@ -13,4 +13,4 @@ mod spawn;
 pub use api::{await_api_client, ApiClient, ApiError, ApiResponse};
 pub use config::{NICConfig, VFIODeviceConfig, VmConfig};
 pub use methods::{VmInfo, VmmVersion};
-pub use spawn::{connect_socket, spawn_ch, spawn_ch_restore, wait_for_socket};
+pub use spawn::{connect_socket, spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket};
