@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use swift_ch_client::{
-    spawn_ch, spawn_ch_restore, wait_for_socket, NICConfig, VFIODeviceConfig, VmConfig,
+    spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, NICConfig, VFIODeviceConfig,
+    VmConfig,
 };
 use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
@@ -24,10 +25,16 @@ fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
 /// Calls `on_socket_ready(pid, serial_socket_path)` once the hypervisor is ready
 /// (API/QMP socket appeared). Returns `(exit_status, pid, serial_socket_path)`.
 ///
-/// Restore-receive mode (Phase 2): when `intent.is_restore()` is true,
-/// dispatch goes to [`run_ch_restore`] instead of the normal CH/QEMU
-/// path. Cloud Hypervisor is the only hypervisor supported for restore;
-/// the validation webhook (commit 11) rejects restore intents with QEMU.
+/// Three CH-specific modes branch off before the normal CH/QEMU dispatch:
+///
+///   - `intent.is_migration_receiver()` → [`run_ch_receive`] (Phase 2 PR-C):
+///     CH spawned with `--api-socket` only; awaits action loop's
+///     vm.receive-migration dispatch. Skipped if `intent.is_restore()`
+///     would also match — receiver and restore are mutually exclusive
+///     and the operator-applied launcher pod sets exactly one role.
+///   - `intent.is_restore()` → [`run_ch_restore`] (snapshot Phase 2):
+///     CH spawned with `--api-socket` + `--restore source_url=...`.
+///   - Otherwise → fresh boot via [`run_ch`] or [`run_qemu`].
 pub fn run<F>(
     intent: &RuntimeIntent,
     runtime_dir: &RuntimeDir,
@@ -37,6 +44,9 @@ where
     F: FnOnce(u32, String, String),
 {
     remove_stale_sockets(runtime_dir);
+    if intent.is_migration_receiver() {
+        return run_ch_receive(intent, runtime_dir, on_socket_ready);
+    }
     if intent.is_restore() {
         return run_ch_restore(intent, runtime_dir, on_socket_ready);
     }
@@ -44,6 +54,73 @@ where
         "qemu" => run_qemu(intent, runtime_dir, on_socket_ready),
         _ => run_ch(intent, runtime_dir, on_socket_ready),
     }
+}
+
+// ─── Migration-receive path (Cloud Hypervisor, Phase 2 PR-C) ───────────────
+
+/// Migration-receive mode: bring up CH as an empty VMM awaiting
+/// `vm.receive-migration`. The action loop dispatches the
+/// receive-migration action over the API socket once the destination
+/// launcher pod's `migration-action: receive` annotation arrives.
+///
+/// Differences from [`run_ch`] and [`run_ch_restore`]:
+///
+///   - Spawns via [`spawn_ch_receive`] which emits `--api-socket=<path>`
+///     ONLY. CH starts without any VM created; the entire VM
+///     configuration arrives over the migration wire from the source
+///     CH (Q1c finding from
+///     `docs/design/live-migration-phase-2-spike.md`).
+///   - The migrated VM's disk paths must exist on this pod's
+///     filesystem at the SAME paths the source used (Constraint 4
+///     from `docs/design/live-migration.md`). Phase 2 manual demo
+///     handles this by mounting the same PVC at the same path in
+///     the hand-rolled launcher pod YAML.
+///   - on_socket_ready callback intentionally fires with the CH PID
+///     and serial-socket path even though no guest exists yet; the
+///     action loop's vm.receive-migration completion is the actual
+///     "guest running" signal (W1 gate from PR-B).
+fn run_ch_receive<F>(
+    intent: &RuntimeIntent,
+    runtime_dir: &RuntimeDir,
+    on_socket_ready: Option<F>,
+) -> Result<(std::process::ExitStatus, u32, String), String>
+where
+    F: FnOnce(u32, String, String),
+{
+    let _ = intent; // intent is currently only used as the discriminator
+    let api_socket = runtime_dir.api_socket();
+    log::info!(
+        "spawning cloud-hypervisor (receive) api_socket={}",
+        api_socket.display()
+    );
+    let mut child = spawn_ch_receive(&api_socket)
+        .map_err(|e| format!("failed to spawn cloud-hypervisor (receive): {}", e))?;
+    let pid = child.id();
+
+    wait_for_socket(&api_socket, Duration::from_secs(30))?;
+
+    let serial_socket_path = runtime_dir
+        .root()
+        .join("serial.sock")
+        .to_string_lossy()
+        .to_string();
+
+    // on_socket_ready is None for receiver mode (set in main.rs) —
+    // the migrated VM is not yet running so reporting "guest running"
+    // here would be a lie. The action loop's
+    // dispatch_migration_receive verifies vm_info.state=Running
+    // post-receive (PR-B's W1 gate). Operators verify destination
+    // success via that path.
+    if let Some(cb) = on_socket_ready {
+        cb(
+            pid,
+            serial_socket_path.clone(),
+            "cloud-hypervisor".to_string(),
+        );
+    }
+
+    let status = child.wait().map_err(|e| format!("wait failed: {}", e))?;
+    Ok((status, pid, serial_socket_path))
 }
 
 // ─── Restore-receive path (Cloud Hypervisor) ────────────────────────────────

@@ -536,13 +536,13 @@ Phase 2 spike completed 2026-04-29. Findings doc: `docs/design/live-migration-ph
 
 ### Phase 2 must-have-before-ship checklist
 
-These are non-negotiable before Phase 2 swiftletd extension lands in code:
+Status updated as PRs land; PR-A merged 2026-04-29 (swift-ch-client foundations + W2 cleanup + THREAT-MODEL.md), PR-B merged 2026-04-29 (action-loop refactor + migration ActionKinds + ack gate + W1 dispatch-side gate + sanitizer), PR-C in flight (receiver-mode launch branch + manual demo + cluster walkthrough).
 
-- [ ] **Threat-model gating** — `docs/design/THREAT-MODEL.md` + `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation gate (S2).
-- [ ] **swiftletd reads URL inputs from SwiftMigration CR**, not from pod annotations (S1; ties to OQ6).
-- [ ] **swiftletd launcher entrypoint `rm -f` API socket file before invoking CH** (W2 from walkthrough).
-- [ ] **Resuming-phase guard pattern** — controller's Resuming phase MUST gate `phase=Completed` on actual destination guest state (info=Running + primaryIP), NOT just on send-migration's exit code or stale annotation mirror (W1 from walkthrough).
-- [ ] **Controller-level CPU-feature pre-flight check** in SwiftMigration validating webhook (OQ1; mitigates F12/S3).
+- [x] **Threat-model gating** — `docs/design/THREAT-MODEL.md` shipped in PR-A + `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation gate enforced inside `decide()` in PR-B (S2).
+- [ ] **swiftletd reads URL inputs from SwiftMigration CR**, not from pod annotations (S1; ties to OQ6). Phase 2 manual path reads from operator-set annotations (acceptable per design §8.2.3 since operator IS the writer); Phase 3 deletes the annotation key entirely (§8.2.5 deprecation contract). PR-B tags every annotation-URL read with `// SECURITY-S1` for the Phase 3 grep check.
+- [x] **swiftletd CH spawn `rm -f` API socket file before invoking CH** — `rm_stale_api_socket` in `rust/swift-ch-client/src/spawn.rs` (PR-A; covers spawn_ch, spawn_ch_restore, spawn_ch_receive). W2 walkthrough finding.
+- [ ] **Resuming-phase guard pattern** — controller's Resuming phase MUST gate `phase=Completed` on actual destination guest state. **Controller-side work is Phase 3.** PR-B implements the dispatch-side W1 gate (vm_info probe post-call; w1_violation category) which is what swiftletd reports up to the controller.
+- [ ] **Controller-level CPU-feature pre-flight check** in SwiftMigration validating webhook (OQ1; mitigates F12/S3). **Phase 3 work** — PR-B's sanitizer collapses raw CH errors into category tokens (`cpu_incompat`, etc.) defensively, but the real pre-flight check is in the SwiftMigration webhook.
 
 ### Phase 2 design open questions surfaced by the spike
 
@@ -623,14 +623,12 @@ See dedicated section above. Three PRs: #24 initial implementation, #25 terminal
 
 ### Next Priorities (in order)
 
-**1. Live Migration Phase 2 — swiftletd live migration plumbing**
-- Extend swift-ch-client with send-migration / receive-migration API methods
-- Destination "awaiting migration" launcher pod mode
-- Annotation-driven control surface for migration actions
-- Progress reporting via pod annotations
-- Manual demonstration on real cluster (no controller integration yet — that's Phase 3)
-- Estimated 7-10 days
-- See "Phase 2 Decisions Pending" section above
+**1. Live Migration Phase 2 — swiftletd live migration plumbing — SHIPPED across 3 PRs**
+- PR-A (#27 — merged): swift-ch-client send_migration / receive_migration / spawn_ch_receive primitives; W2 stale-socket cleanup; THREAT-MODEL.md banner.
+- PR-B (#28 — merged): action-loop refactor (KeySet abstraction, per-namespace ActionState); migration ActionKind variants (Send/Receive/Cancel); plaintext-ack gate inside decide(); status-id-paired-write (write_migration_status); W1 dispatch-side gate; detail-string sanitizer; mutual rejection across namespaces. 32 snapshot tests preserved + 22 new migration tests.
+- PR-C (in flight): receiver-mode launch branch (RuntimeIntent.migration; KUBESWIFT_MIGRATION_ROLE env var; launch.rs run_ch_receive); namespace-translated terminal-success status (complete/running per design §3.1); manual demo scripts; cluster mini-walkthrough.
+
+Phase 2 deliverable surface complete: operators can manually demonstrate cross-node CH live migration via `make migration-phase2-manual SWIFTGUEST=<name> TARGET_NODE=<node>`. No controller integration (Phase 3); no mTLS (Phase 3); no drain integration (Phase 4).
 
 **2. Live Migration Phase 3 — live mode + mTLS**
 - SwiftMigration controller gains live mode
