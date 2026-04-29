@@ -75,12 +75,21 @@ use serde_json::json;
 
 use crate::kube_client;
 
-// Annotation keys — controller writes (read by swiftletd).
+// Annotation keys — snapshot namespace.
+//
+// The action loop runs against multiple action namespaces (snapshot,
+// migration). Each namespace has its own KeySet (see `SNAPSHOT_KEYS`,
+// `MIGRATION_KEYS`); these per-namespace constants are the identifier
+// strings the KeySet entries point at. Kept as `pub const` so external
+// code can reference the canonical key names directly without going
+// through the KeySet abstraction.
+
+// Snapshot namespace — controller writes (read by swiftletd).
 pub const ACTION_KEY: &str = "kubeswift.io/snapshot-action";
 pub const ACTION_ID_KEY: &str = "kubeswift.io/snapshot-action-id";
 pub const ACTION_ARGS_KEY: &str = "kubeswift.io/snapshot-action-args";
 
-// Annotation keys — swiftletd writes (read by controller).
+// Snapshot namespace — swiftletd writes (read by controller).
 pub const STATUS_KEY: &str = "kubeswift.io/snapshot-status";
 pub const STATUS_ID_KEY: &str = "kubeswift.io/snapshot-status-id";
 pub const STATUS_DETAIL_KEY: &str = "kubeswift.io/snapshot-status-detail";
@@ -88,6 +97,107 @@ pub const STATUS_DETAIL_KEY: &str = "kubeswift.io/snapshot-status-detail";
 /// controller surfaces this in SwiftSnapshot.status.observedPauseWindow.
 /// Set only on a successful capture.
 pub const STATUS_PAUSE_WINDOW_MS_KEY: &str = "kubeswift.io/snapshot-pause-window-ms";
+
+// Migration namespace — controller / operator writes (read by swiftletd).
+pub const MIGRATION_ACTION_KEY: &str = "kubeswift.io/migration-action";
+pub const MIGRATION_ACTION_ID_KEY: &str = "kubeswift.io/migration-action-id";
+pub const MIGRATION_ACTION_ARGS_KEY: &str = "kubeswift.io/migration-action-args";
+
+// Migration namespace — swiftletd writes (read by controller / operator).
+pub const MIGRATION_STATUS_KEY: &str = "kubeswift.io/migration-status";
+pub const MIGRATION_STATUS_ID_KEY: &str = "kubeswift.io/migration-status-id";
+pub const MIGRATION_STATUS_DETAIL_KEY: &str = "kubeswift.io/migration-status-detail";
+/// Observed vCPU-paused window in ms, set on a successful migration's
+/// terminal `complete` status. Mirrors snapshot's STATUS_PAUSE_WINDOW_MS_KEY
+/// shape but in the migration namespace.
+pub const MIGRATION_PAUSE_WINDOW_MS_KEY: &str = "kubeswift.io/migration-pause-window-ms";
+
+/// Phase 2 unsafe-plaintext acknowledgement annotation. Required on
+/// the launcher pod for swiftletd to accept any migration action — the
+/// S2 mitigation gate from `docs/design/live-migration-phase-2.md` §8.2.1.
+/// Set to the literal string `ack` by the operator to acknowledge that
+/// Phase 2 carries unauthenticated guest state in cleartext. Phase 3
+/// removes this annotation entirely once mTLS lands.
+pub const MIGRATION_PHASE2_ACK_KEY: &str = "kubeswift.io/migration-phase2-unsafe-plaintext";
+
+/// Annotation key set for one action namespace. Each namespace
+/// (snapshot, migration) has its own KeySet; the action loop runs
+/// `decide` against each per tick.
+///
+/// `KeySet` is `Copy` so it can be passed by value to async handlers
+/// without lifetime gymnastics. All entries are `'static` strings.
+#[derive(Debug, Clone, Copy)]
+pub struct KeySet {
+    pub action_key: &'static str,
+    pub action_id_key: &'static str,
+    pub action_args_key: &'static str,
+    pub status_key: &'static str,
+    pub status_id_key: &'static str,
+    pub status_detail_key: &'static str,
+    /// When `Some`, `decide` requires this annotation to be set to the
+    /// literal string `ack` for any action in this namespace to be
+    /// accepted. Phase 2 migration uses this for the
+    /// `migration-phase2-unsafe-plaintext` gate (§8.2.1). Snapshot's
+    /// KeySet has `None`.
+    pub ack_key: Option<&'static str>,
+    /// Maps the action verb string from the action_key annotation to
+    /// an [`ActionKind`]. Each namespace has its own verb dictionary.
+    pub parse_verb: fn(&str) -> ActionKind,
+    /// Identifier string used in log lines and rejection details. Stays
+    /// stable across releases; treated as part of the operator-visible
+    /// surface.
+    pub namespace: &'static str,
+}
+
+/// Snapshot namespace key set. Used by `dispatch_capture`, `dispatch_resume`,
+/// and (Phase 2 commit 7) `dispatch_restore_prepare`.
+pub static SNAPSHOT_KEYS: KeySet = KeySet {
+    action_key: ACTION_KEY,
+    action_id_key: ACTION_ID_KEY,
+    action_args_key: ACTION_ARGS_KEY,
+    status_key: STATUS_KEY,
+    status_id_key: STATUS_ID_KEY,
+    status_detail_key: STATUS_DETAIL_KEY,
+    ack_key: None,
+    parse_verb: parse_snapshot_verb,
+    namespace: "snapshot",
+};
+
+/// Migration namespace key set. Used by `dispatch_migration_send`,
+/// `dispatch_migration_receive`, `dispatch_migration_cancel`. The ack-key
+/// gate enforces the Phase 2 plaintext-transport acknowledgement
+/// (`docs/design/live-migration-phase-2.md` §8.2.1).
+pub static MIGRATION_KEYS: KeySet = KeySet {
+    action_key: MIGRATION_ACTION_KEY,
+    action_id_key: MIGRATION_ACTION_ID_KEY,
+    action_args_key: MIGRATION_ACTION_ARGS_KEY,
+    status_key: MIGRATION_STATUS_KEY,
+    status_id_key: MIGRATION_STATUS_ID_KEY,
+    status_detail_key: MIGRATION_STATUS_DETAIL_KEY,
+    ack_key: Some(MIGRATION_PHASE2_ACK_KEY),
+    parse_verb: parse_migration_verb,
+    namespace: "migration",
+};
+
+/// Maps a snapshot-namespace verb string to an [`ActionKind`].
+fn parse_snapshot_verb(verb: &str) -> ActionKind {
+    match verb {
+        "capture" => ActionKind::SnapshotCapture,
+        "resume" => ActionKind::SnapshotResume,
+        "prepare" => ActionKind::RestorePrepare,
+        other => ActionKind::Unknown(other.to_string()),
+    }
+}
+
+/// Maps a migration-namespace verb string to an [`ActionKind`].
+fn parse_migration_verb(verb: &str) -> ActionKind {
+    match verb {
+        "send" => ActionKind::MigrationSend,
+        "receive" => ActionKind::MigrationReceive,
+        "cancel" => ActionKind::MigrationCancel,
+        other => ActionKind::Unknown(other.to_string()),
+    }
+}
 
 /// Default per-call timeout for pause/resume/snapshot when the action
 /// args don't carry a `timeout_seconds` hint. 600s covers a 200 GiB VM
@@ -100,9 +210,12 @@ pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 600;
 /// snapshot+memory write is seconds).
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Action verbs the controller can ask for.
+/// Action verbs the controller (or operator, in Phase 2 manual demo)
+/// can ask for. Each variant belongs to one namespace (snapshot or
+/// migration); the parser is selected via `KeySet.parse_verb`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionKind {
+    // Snapshot namespace — `kubeswift.io/snapshot-action` verbs.
     /// pause -> snapshot(destination_url) -> resume. Ships in commit 6.
     SnapshotCapture,
     /// Stand-alone resume after a paused VM (used after restore-prepare
@@ -110,6 +223,22 @@ pub enum ActionKind {
     SnapshotResume,
     /// Bring up a fresh CH process via spawn_ch_restore. Ships in commit 7.
     RestorePrepare,
+
+    // Migration namespace — `kubeswift.io/migration-action` verbs.
+    // Ships in PR-B / PR-C of live-migration Phase 2.
+    /// Source-side: invoke `vm.send-migration` to stream guest state to
+    /// the destination CH. Long-lived (tens of seconds typical).
+    /// `docs/design/live-migration-phase-2.md` §2 row 3.
+    MigrationSend,
+    /// Destination-side: invoke `vm.receive-migration` to await the
+    /// source's connection and restore guest state. Long-lived.
+    /// `docs/design/live-migration-phase-2.md` §2 row 2.
+    MigrationReceive,
+    /// Destination-side cancel primitive: SIGKILL the local CH child.
+    /// The source CH automatically resumes on the dst-kill (Q1d-F2).
+    /// `docs/design/live-migration-phase-2.md` §2 row 7.
+    MigrationCancel,
+
     /// Anything else — surfaces as a malformed-rejection so the
     /// controller learns immediately rather than the launcher silently
     /// stalling on an unknown verb.
@@ -118,13 +247,12 @@ pub enum ActionKind {
 
 impl ActionKind {
     /// Map an `kubeswift.io/snapshot-action` value to a kind.
+    ///
+    /// Retained for backward compatibility with callers outside the
+    /// action loop (none today). Internally, prefer
+    /// `KeySet.parse_verb(verb)` which is namespace-aware.
     pub fn from_verb(verb: &str) -> Self {
-        match verb {
-            "capture" => ActionKind::SnapshotCapture,
-            "resume" => ActionKind::SnapshotResume,
-            "prepare" => ActionKind::RestorePrepare,
-            other => ActionKind::Unknown(other.to_string()),
-        }
+        parse_snapshot_verb(verb)
     }
 }
 
@@ -155,6 +283,16 @@ pub enum ActionDecision {
         incoming_id: String,
         current_id: String,
     },
+    /// The namespace requires an ack-gate annotation (Phase 2's
+    /// `migration-phase2-unsafe-plaintext: ack`) and it is missing,
+    /// empty, or set to a value other than `ack`. Surfaced as a
+    /// `Rejected` status with the action-id mirrored — different
+    /// from `RejectMalformed` because the action-id IS present and
+    /// the controller can correlate the rejection.
+    RejectAckMissing {
+        incoming_id: String,
+        ack_key: &'static str,
+    },
     /// Annotation set is incomplete or otherwise unparseable.
     RejectMalformed(String),
 }
@@ -179,57 +317,111 @@ impl StatusKind {
     }
 }
 
-/// Local state the action loop carries across iterations.
+/// Per-namespace local state. One slot in `ActionState` per
+/// namespace (snapshot, migration). Independent across namespaces:
+/// finishing a snapshot does not reset migration state and vice versa.
 #[derive(Default, Debug)]
-pub struct ActionState {
+pub struct NamespaceState {
     /// action-id of the last action we drove to a terminal status
     /// (Ready, Failed, or Rejected). Used for idempotency: if the
     /// controller's annotations still reference this id, we ignore
     /// rather than re-execute.
     pub last_completed_id: Option<String>,
-    /// Action currently being processed. `None` when idle. The loop
-    /// is single-threaded, so this slot has at most one occupant.
+    /// Action currently being processed in this namespace. `None`
+    /// when idle. The loop dispatches at most one action per
+    /// namespace at a time; namespaces can have at most one in-flight
+    /// each.
     pub in_flight: Option<PendingAction>,
+}
+
+/// Local state the action loop carries across iterations. Holds
+/// per-namespace state for snapshot and migration so the two
+/// namespaces' idempotency and in-flight tracking remain independent.
+///
+/// Mutual exclusion across namespaces (no concurrent snapshot +
+/// migration on the same guest) is enforced at dispatch time in
+/// `handle_pod_state`, not by sharing this state.
+#[derive(Default, Debug)]
+pub struct ActionState {
+    pub snapshot: NamespaceState,
+    pub migration: NamespaceState,
 }
 
 /// Pure-function action-decision logic. Tested in isolation — no
 /// kube-rs dependency, no I/O, no async. The action loop calls this
-/// each tick with the freshly-fetched annotations and its current
-/// in-memory state.
+/// each tick with the freshly-fetched annotations, the namespace's
+/// `KeySet`, and the namespace's current in-memory state.
+///
+/// The decision tree:
+///
+/// 1. **Idle** — no `action_key` set, or set empty.
+/// 2. **RejectMalformed** — `action_key` set without `action_id_key`.
+/// 3. **Idempotent** — `action_id_key` matches `last_completed_id` or
+///    matches the in-flight action's id.
+/// 4. **RejectInFlight** — different action-id arrives while one is in
+///    flight (cancel verbs are exempt — they bypass this gate so they
+///    can interrupt a running migration).
+/// 5. **RejectAckMissing** — namespace has `ack_key=Some(_)` but the
+///    annotation is absent or has a value other than `ack`. Phase 2
+///    plaintext-transport gate (§8.2.1).
+/// 6. **Accept** — all gates pass.
 pub fn decide(
     annotations: &BTreeMap<String, String>,
+    keys: &KeySet,
     last_completed_id: Option<&str>,
     in_flight_id: Option<&str>,
 ) -> ActionDecision {
-    let verb = match annotations.get(ACTION_KEY) {
+    let verb = match annotations.get(keys.action_key) {
         Some(v) if !v.is_empty() => v.as_str(),
         _ => return ActionDecision::Idle,
     };
-    let id = match annotations.get(ACTION_ID_KEY) {
+    let id = match annotations.get(keys.action_id_key) {
         Some(i) if !i.is_empty() => i.clone(),
         _ => {
             return ActionDecision::RejectMalformed(format!(
                 "{} set without {}",
-                ACTION_KEY, ACTION_ID_KEY
+                keys.action_key, keys.action_id_key
             ))
         }
     };
     if last_completed_id == Some(id.as_str()) {
         return ActionDecision::Idempotent { id };
     }
+    let kind = (keys.parse_verb)(verb);
+    // Cancel verbs bypass the in-flight gate so they can interrupt an
+    // in-flight migration (see `docs/design/live-migration-phase-2.md`
+    // §2 row 7 + Q1d-F2). All other verbs follow the normal
+    // RejectInFlight rule.
+    let is_cancel = matches!(kind, ActionKind::MigrationCancel);
     if let Some(current) = in_flight_id {
         if current == id {
             // Same action still being processed — quiet no-op.
             return ActionDecision::Idempotent { id };
         }
-        return ActionDecision::RejectInFlight {
-            incoming_id: id,
-            current_id: current.to_string(),
-        };
+        if !is_cancel {
+            return ActionDecision::RejectInFlight {
+                incoming_id: id,
+                current_id: current.to_string(),
+            };
+        }
+        // is_cancel: fall through to ack-gate + Accept.
     }
-    let kind = ActionKind::from_verb(verb);
+    // Phase 2 ack-gate: Phase 2 plaintext-transport ack annotation must
+    // be present on any namespace that requires it. Run AFTER action-id
+    // parsing so the rejection's status-id can be correlated by the
+    // controller — RejectAckMissing carries the incoming action-id.
+    // `docs/design/live-migration-phase-2.md` §8.2.1.
+    if let Some(ack_key) = keys.ack_key {
+        let acked = matches!(annotations.get(ack_key).map(|s| s.as_str()), Some("ack"));
+        if !acked {
+            return ActionDecision::RejectAckMissing {
+                incoming_id: id,
+                ack_key,
+            };
+        }
+    }
     let args = annotations
-        .get(ACTION_ARGS_KEY)
+        .get(keys.action_args_key)
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
     ActionDecision::Accept(PendingAction { kind, id, args })
@@ -258,6 +450,10 @@ impl ActionOutcome {
 /// Dispatch a pending action. Returns the outcome on success or a
 /// human-readable detail string on failure (mirrored into the
 /// status-detail annotation).
+///
+/// Migration variants dispatch through their own handlers; see
+/// `dispatch_migration_send`, `dispatch_migration_receive`,
+/// `dispatch_migration_cancel`.
 pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<ActionOutcome, String> {
     match &action.kind {
         ActionKind::SnapshotCapture => dispatch_capture(action, api_socket).await,
@@ -272,6 +468,9 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
                 "skeleton no-op: restore-prepare not yet wired",
             ))
         }
+        ActionKind::MigrationSend => dispatch_migration_send(action, api_socket).await,
+        ActionKind::MigrationReceive => dispatch_migration_receive(action, api_socket).await,
+        ActionKind::MigrationCancel => dispatch_migration_cancel(action, api_socket).await,
         ActionKind::Unknown(verb) => {
             log::warn!(
                 "dispatch_unknown_action_verb verb={} id={}",
@@ -280,6 +479,263 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
             );
             Err(format!("unknown action verb: {}", verb))
         }
+    }
+}
+
+/// Args parsed from `kubeswift.io/migration-action-args` for the
+/// `send` verb. The destination URL is the load-bearing field and
+/// is read straight from the args (Phase 2 manual path) — see the
+/// `SECURITY-S1` tag in the implementation for the Phase 3 hand-off.
+#[derive(Debug, serde::Deserialize)]
+struct MigrationSendArgs {
+    /// Destination URL in CH's syntax: `tcp:<host>:<port>` or
+    /// `unix:<path>`. Phase 2 reads this from operator-set pod
+    /// annotations; Phase 3 will read from the SwiftMigration CR
+    /// directly to mitigate S1 (annotation-trust-boundary).
+    target_url: String,
+    /// Override for the per-call HTTP timeout in seconds. Migration
+    /// can take tens of seconds for typical workloads (Phase 2 spike
+    /// Q2 — LOW dirty-rate ~19 s, HIGH dirty-rate ~37 s for 1 GiB
+    /// guest). The controller (Phase 3) will derive this from VM
+    /// memory size; Phase 2 defaults to DEFAULT_ACTION_TIMEOUT_SECS.
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// Args parsed from `kubeswift.io/migration-action-args` for the
+/// `receive` verb.
+#[derive(Debug, serde::Deserialize)]
+struct MigrationReceiveArgs {
+    /// Receive URL CH binds the listener on. Typically
+    /// `tcp:0.0.0.0:<port>`. Same Phase 2 / Phase 3 hand-off as
+    /// `MigrationSendArgs.target_url`.
+    listen_url: String,
+    /// Override for the per-call HTTP timeout in seconds.
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// Source-side migration handler. Invokes `vm.send-migration` against
+/// the local CH and returns the outcome.
+///
+/// `docs/design/live-migration-phase-2.md` §2 row 3 + §4.3.1.
+///
+/// Blocking semantics: the underlying `send_migration` call blocks for
+/// the entire pre-copy + stop-and-copy duration (tens of seconds for
+/// typical workloads). The action loop's tokio runtime is
+/// `current_thread`, so this dispatch effectively serializes the loop
+/// during the migration. Cancel cannot fire on the SOURCE side
+/// (cancel is destination-kill per F2). Future versions may run this
+/// on a worker thread for symmetry with receive; for Phase 2 the
+/// current-thread block is acceptable on the source.
+async fn dispatch_migration_send(
+    action: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    // SECURITY-S1: target_url is read from operator-set pod annotation
+    // args (Phase 2 manual path ONLY). In Phase 3, this read is replaced
+    // by reading from the SwiftMigration CR via kube-rs to mitigate the
+    // annotation-trust-boundary issue. See
+    // docs/design/live-migration-phase-2.md §8.2.3.
+    let args: MigrationSendArgs = serde_json::from_value(action.args.clone())
+        .map_err(|e| format!("parse migration_send args: {}", e))?;
+
+    log::info!(
+        "dispatch_migration_send id={} target={}",
+        action.id,
+        args.target_url
+    );
+
+    let timeout =
+        std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
+    let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
+
+    let started = std::time::Instant::now();
+    if let Err(e) = client.send_migration(&args.target_url) {
+        return Err(format!(
+            "send_migration: {}",
+            sanitize_ch_error(&format!("{:?}", e))
+        ));
+    }
+
+    // W1 completion-gate (load-bearing item C, walkthrough W1).
+    // `send_migration` exit=0 is necessary but not sufficient; the
+    // source CH must actually have exited cleanly (Q1c finding).
+    // We probe vm_info: if it returns ConnectionRefused / similar,
+    // CH is gone (the expected post-success state). If it returns
+    // Running, send-migration claimed success but the guest is
+    // still here — abnormal, treat as failure.
+    //
+    // `docs/design/live-migration-phase-2.md` §6.1.
+    match client.vm_info() {
+        Err(_) => {
+            // CH is gone — the expected outcome on success.
+            let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            log::info!(
+                "dispatch_migration_send_complete id={} elapsed_ms={}",
+                action.id,
+                elapsed_ms
+            );
+            Ok(ActionOutcome {
+                detail: Some(format!("sent to {} ({}ms)", args.target_url, elapsed_ms)),
+                pause_window_ms: Some(elapsed_ms),
+            })
+        }
+        Ok(info) => {
+            // CH is still alive after a "successful" send-migration.
+            // This contradicts Q1c; surface as failure with the W1
+            // category so operators learn the gate fired.
+            log::warn!(
+                "migration_send_w1_violation id={} state={}",
+                action.id,
+                info.state
+            );
+            Err(format!(
+                "w1_violation: send_migration returned 0 but CH state={}",
+                info.state
+            ))
+        }
+    }
+}
+
+/// Destination-side migration handler. Invokes `vm.receive-migration`
+/// against the local empty CH and returns the outcome.
+///
+/// `docs/design/live-migration-phase-2.md` §2 row 2 + §4.3.2.
+///
+/// Blocking semantics: blocks until source connects + transfers state,
+/// or until CH's TCP retransmit timeout (~3-5 s of network silence —
+/// F4 finding). The action loop's current-thread runtime cannot
+/// process the cancel verb while this handler is in flight; cancel's
+/// dst-kill primitive (PR-C) will need to bypass the action loop
+/// (e.g., a sibling thread that watches a separate cancel annotation
+/// and SIGKILLs CH directly). Phase 2 PR-B does NOT implement cancel.
+async fn dispatch_migration_receive(
+    action: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    // SECURITY-S1: listen_url is read from operator-set pod annotation
+    // args (Phase 2 manual path ONLY). Phase 3 replaces this read.
+    let args: MigrationReceiveArgs = serde_json::from_value(action.args.clone())
+        .map_err(|e| format!("parse migration_receive args: {}", e))?;
+
+    log::info!(
+        "dispatch_migration_receive id={} listen={}",
+        action.id,
+        args.listen_url
+    );
+
+    let timeout =
+        std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
+    let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
+
+    let started = std::time::Instant::now();
+    if let Err(e) = client.receive_migration(&args.listen_url) {
+        return Err(format!(
+            "receive_migration: {}",
+            sanitize_ch_error(&format!("{:?}", e))
+        ));
+    }
+
+    // W1 completion-gate (load-bearing item C, walkthrough W1).
+    // `receive_migration` exit=0 is necessary but not sufficient;
+    // the destination CH must actually be Running (Q1c — auto-resume
+    // on receive completion). Probe vm_info; require state=Running.
+    //
+    // `docs/design/live-migration-phase-2.md` §6.1.
+    match client.vm_info() {
+        Ok(info) if info.state == "Running" => {
+            let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            log::info!(
+                "dispatch_migration_receive_complete id={} state=Running elapsed_ms={}",
+                action.id,
+                elapsed_ms
+            );
+            Ok(ActionOutcome {
+                detail: Some(format!(
+                    "received on {} ({}ms)",
+                    args.listen_url, elapsed_ms
+                )),
+                pause_window_ms: Some(elapsed_ms),
+            })
+        }
+        Ok(info) => {
+            log::warn!(
+                "migration_receive_w1_violation id={} state={}",
+                action.id,
+                info.state
+            );
+            Err(format!(
+                "w1_violation: receive_migration returned 0 but CH state={}",
+                info.state
+            ))
+        }
+        Err(e) => {
+            log::warn!(
+                "migration_receive_vm_info_failed id={} err={:?}",
+                action.id,
+                e
+            );
+            Err(format!(
+                "w1_violation: receive_migration returned 0 but vm_info: {}",
+                sanitize_ch_error(&format!("{:?}", e))
+            ))
+        }
+    }
+}
+
+/// Destination-side cancel handler.
+///
+/// Phase 2 PR-B ships a placeholder that returns success without
+/// actually cancelling — the SIGKILL-CH-child wiring requires the
+/// receiver-mode launch branch (PR-C) to expose a CH process handle
+/// the action loop can signal. Until then, operators cancel by
+/// `kubectl delete pod` on the destination launcher pod, which is
+/// the equivalent operation at a coarser granularity.
+///
+/// `docs/design/live-migration-phase-2.md` §11 implementation
+/// checklist item 16 (cancel handler is in PR-C scope).
+async fn dispatch_migration_cancel(
+    action: &PendingAction,
+    _api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    log::info!(
+        "dispatch_migration_cancel id={} (placeholder — wired in PR-C)",
+        action.id
+    );
+    Ok(ActionOutcome::detail(
+        "cancel placeholder — operator should kubectl delete pod on dst (PR-C wires SIGKILL)",
+    ))
+}
+
+/// Sanitize a CH error string into a category. Defensive against
+/// future failure modes that could leak partial guest state through
+/// error strings — Phase 2 spike S3 finding. Conservative default:
+/// pattern-match on the leading error variant; collapse longer
+/// messages into a category token.
+///
+/// `docs/design/live-migration-phase-2.md` §3.1 + §6.2.
+fn sanitize_ch_error(raw: &str) -> &'static str {
+    // Match against the leading variant produced by ApiError's
+    // Debug impl. The variants are stable in swift-ch-client.
+    if raw.contains("Connect") {
+        "connection_refused"
+    } else if raw.contains("Configure") {
+        "socket_configure_failed"
+    } else if raw.contains("Status") {
+        if raw.contains("400") {
+            "bad_request"
+        } else if raw.contains("500") {
+            "internal_server_error"
+        } else {
+            "ch_status_error"
+        }
+    } else if raw.contains("Read") || raw.contains("Write") {
+        "transport_error"
+    } else if raw.contains("Malformed") {
+        "malformed_response"
+    } else {
+        "ch_error"
     }
 }
 
@@ -465,9 +921,15 @@ async fn dispatch_resume(
     Ok(ActionOutcome::detail("resumed"))
 }
 
-/// Patch the launcher pod's status annotations. Always merge-patches
-/// the four keys together so a status rewrite never leaves stale
-/// detail or stale pause-window from a prior status.
+/// Patch the launcher pod's status annotations for the snapshot
+/// namespace. Always merge-patches the four keys together so a status
+/// rewrite never leaves stale detail or stale pause-window from a
+/// prior status. The pause-window key is snapshot-specific.
+///
+/// The migration namespace has its own writer
+/// ([`write_migration_status`]) per `docs/design/live-migration-phase-2.md`
+/// §4.5 — keeping the writers separate avoids parameterizing across
+/// namespace-specific status fields.
 pub async fn write_status(
     client: &Client,
     namespace: &str,
@@ -490,6 +952,50 @@ pub async fn write_status(
     );
     annotations.insert(
         STATUS_PAUSE_WINDOW_MS_KEY.to_string(),
+        pause_window_ms.map(|n| n.to_string()).unwrap_or_default(),
+    );
+    let patch = json!({
+        "metadata": {
+            "annotations": annotations
+        }
+    });
+    let pp = PatchParams::default();
+    api.patch(pod_name, &pp, &Patch::Merge(&patch)).await?;
+    Ok(())
+}
+
+/// Patch the launcher pod's status annotations for the migration
+/// namespace. Mirrors [`write_status`] but writes the migration keys
+/// (action-id-mirror, status, status-detail, pause-window-ms in the
+/// migration namespace).
+///
+/// Status-id-paired-write discipline (`docs/design/live-migration-phase-2.md`
+/// §3.2): all four annotations land in a single Patch::Merge call, so
+/// the controller never observes a `migration-status` without its
+/// associated `migration-status-id`. This is the snapshot Phase 2
+/// Bug 14 precedent applied prophylactically.
+pub async fn write_migration_status(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    action_id: &str,
+    status: StatusKind,
+    detail: Option<&str>,
+    pause_window_ms: Option<u64>,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(
+        MIGRATION_STATUS_KEY.to_string(),
+        status.as_str().to_string(),
+    );
+    annotations.insert(MIGRATION_STATUS_ID_KEY.to_string(), action_id.to_string());
+    annotations.insert(
+        MIGRATION_STATUS_DETAIL_KEY.to_string(),
+        detail.unwrap_or("").to_string(),
+    );
+    annotations.insert(
+        MIGRATION_PAUSE_WINDOW_MS_KEY.to_string(),
         pause_window_ms.map(|n| n.to_string()).unwrap_or_default(),
     );
     let patch = json!({
@@ -557,6 +1063,28 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
     }
 }
 
+/// Detect whether a namespace has an active action annotation
+/// (non-empty `action_key`). Used to detect concurrent snapshot +
+/// migration actions for mutual rejection.
+fn is_namespace_active(annotations: &BTreeMap<String, String>, keys: &KeySet) -> bool {
+    matches!(annotations.get(keys.action_key), Some(v) if !v.is_empty())
+}
+
+/// Read the action-id for a namespace if both action and id are set.
+/// Returns None if either is missing (the malformed case decide()
+/// would surface separately).
+fn namespace_action_id<'a>(
+    annotations: &'a BTreeMap<String, String>,
+    keys: &KeySet,
+) -> Option<&'a str> {
+    let id = annotations.get(keys.action_id_key)?.as_str();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
+}
+
 async fn handle_pod_state(
     client: &Client,
     namespace: &str,
@@ -565,12 +1093,148 @@ async fn handle_pod_state(
     state: &mut ActionState,
     annotations: &BTreeMap<String, String>,
 ) {
+    let snap_active = is_namespace_active(annotations, &SNAPSHOT_KEYS);
+    let mig_active = is_namespace_active(annotations, &MIGRATION_KEYS);
+
+    // Mutual rejection across namespaces (`docs/design/live-migration-phase-2.md`
+    // §4.2.1): if both namespaces have non-empty action annotations
+    // AND neither has an in-flight action of its own (which would
+    // mean we already accepted one before the other arrived), reject
+    // BOTH. The controller learns immediately that one operation
+    // must complete before the other starts. Rejection is per-tick:
+    // when the conflicting annotation clears, the next tick's
+    // `decide` accepts normally — controllers MUST NOT clear
+    // annotations on observed `rejected` status.
+    if snap_active
+        && mig_active
+        && state.snapshot.in_flight.is_none()
+        && state.migration.in_flight.is_none()
+    {
+        if let Some(id) = namespace_action_id(annotations, &SNAPSHOT_KEYS) {
+            log::warn!("action_reject_concurrent namespace=snapshot id={}", id);
+            if let Err(e) = write_status(
+                client,
+                namespace,
+                pod_name,
+                id,
+                StatusKind::Rejected,
+                Some("concurrent action with migration rejected"),
+                None,
+            )
+            .await
+            {
+                log::error!("action_status_write_failed: {}", e);
+            }
+        }
+        if let Some(id) = namespace_action_id(annotations, &MIGRATION_KEYS) {
+            log::warn!("action_reject_concurrent namespace=migration id={}", id);
+            if let Err(e) = write_migration_status(
+                client,
+                namespace,
+                pod_name,
+                id,
+                StatusKind::Rejected,
+                Some("concurrent action with snapshot rejected"),
+                None,
+            )
+            .await
+            {
+                log::error!("action_status_write_failed: {}", e);
+            }
+        }
+        return;
+    }
+
+    // Per-namespace processing. Each namespace's writer/state is
+    // independent; calling them sequentially is safe because the
+    // action loop is single-threaded per pod.
+    handle_namespace(
+        client,
+        namespace,
+        pod_name,
+        api_socket,
+        &mut state.snapshot,
+        &SNAPSHOT_KEYS,
+        annotations,
+        write_status_fn,
+    )
+    .await;
+
+    handle_namespace(
+        client,
+        namespace,
+        pod_name,
+        api_socket,
+        &mut state.migration,
+        &MIGRATION_KEYS,
+        annotations,
+        write_migration_status_fn,
+    )
+    .await;
+}
+
+/// Type alias for the namespace-specific status writer used by
+/// `handle_namespace`. Callers pass either `write_status_fn` (snapshot)
+/// or `write_migration_status_fn` (migration).
+type StatusWriter = for<'a> fn(
+    &'a Client,
+    &'a str,
+    &'a str,
+    &'a str,
+    StatusKind,
+    Option<&'a str>,
+    Option<u64>,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>,
+>;
+
+fn write_status_fn<'a>(
+    client: &'a Client,
+    ns: &'a str,
+    pod: &'a str,
+    id: &'a str,
+    status: StatusKind,
+    detail: Option<&'a str>,
+    pause: Option<u64>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
+    Box::pin(write_status(client, ns, pod, id, status, detail, pause))
+}
+
+fn write_migration_status_fn<'a>(
+    client: &'a Client,
+    ns: &'a str,
+    pod: &'a str,
+    id: &'a str,
+    status: StatusKind,
+    detail: Option<&'a str>,
+    pause: Option<u64>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
+    Box::pin(write_migration_status(
+        client, ns, pod, id, status, detail, pause,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_namespace(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    api_socket: &Path,
+    state: &mut NamespaceState,
+    keys: &KeySet,
+    annotations: &BTreeMap<String, String>,
+    write: StatusWriter,
+) {
     let last = state.last_completed_id.as_deref();
     let in_flight = state.in_flight.as_ref().map(|p| p.id.as_str());
-    match decide(annotations, last, in_flight) {
+    match decide(annotations, keys, last, in_flight) {
         ActionDecision::Idle | ActionDecision::Idempotent { .. } => {}
         ActionDecision::RejectMalformed(reason) => {
-            log::warn!("action_reject_malformed: {}", reason);
+            log::warn!(
+                "action_reject_malformed namespace={}: {}",
+                keys.namespace,
+                reason
+            );
             // No action-id to mirror — we can't write a meaningful
             // status. Surface in logs only; the controller will learn
             // from the absent status and time out.
@@ -580,11 +1244,12 @@ async fn handle_pod_state(
             current_id,
         } => {
             log::warn!(
-                "action_reject_inflight incoming={} current={}",
+                "action_reject_inflight namespace={} incoming={} current={}",
+                keys.namespace,
                 incoming_id,
                 current_id
             );
-            if let Err(e) = write_status(
+            if let Err(e) = write(
                 client,
                 namespace,
                 pod_name,
@@ -601,10 +1266,44 @@ async fn handle_pod_state(
                 log::error!("action_status_write_failed: {}", e);
             }
         }
+        ActionDecision::RejectAckMissing {
+            incoming_id,
+            ack_key,
+        } => {
+            // Phase 2 plaintext-transport ack gate fired (S2 mitigation).
+            // The action-id IS present; emit a Rejected status so the
+            // controller can correlate the rejection to its specific
+            // attempt (mirror-write order from §8.2.1: status-id is
+            // written paired with the status in the same Patch::Merge).
+            log::warn!(
+                "action_reject_ack_missing namespace={} incoming={} ack_key={}",
+                keys.namespace,
+                incoming_id,
+                ack_key
+            );
+            if let Err(e) = write(
+                client,
+                namespace,
+                pod_name,
+                &incoming_id,
+                StatusKind::Rejected,
+                Some("phase2_plaintext_ack_missing"),
+                None,
+            )
+            .await
+            {
+                log::error!("action_status_write_failed: {}", e);
+            }
+        }
         ActionDecision::Accept(pending) => {
-            log::info!("action_accept kind={:?} id={}", pending.kind, pending.id);
+            log::info!(
+                "action_accept namespace={} kind={:?} id={}",
+                keys.namespace,
+                pending.kind,
+                pending.id
+            );
             state.in_flight = Some(pending.clone());
-            if let Err(e) = write_status(
+            if let Err(e) = write(
                 client,
                 namespace,
                 pod_name,
@@ -622,7 +1321,7 @@ async fn handle_pod_state(
                 Ok(outcome) => (StatusKind::Ready, outcome.detail, outcome.pause_window_ms),
                 Err(d) => (StatusKind::Failed, Some(d), None),
             };
-            if let Err(e) = write_status(
+            if let Err(e) = write(
                 client,
                 namespace,
                 pod_name,
@@ -654,19 +1353,19 @@ mod tests {
     #[test]
     fn no_action_annotation_is_idle() {
         let a = ann(&[]);
-        assert_eq!(decide(&a, None, None), ActionDecision::Idle);
+        assert_eq!(decide(&a, &SNAPSHOT_KEYS, None, None), ActionDecision::Idle);
     }
 
     #[test]
     fn empty_action_value_is_idle() {
         let a = ann(&[(ACTION_KEY, "")]);
-        assert_eq!(decide(&a, None, None), ActionDecision::Idle);
+        assert_eq!(decide(&a, &SNAPSHOT_KEYS, None, None), ActionDecision::Idle);
     }
 
     #[test]
     fn action_without_id_is_malformed() {
         let a = ann(&[(ACTION_KEY, "capture")]);
-        match decide(&a, None, None) {
+        match decide(&a, &SNAPSHOT_KEYS, None, None) {
             ActionDecision::RejectMalformed(_) => {}
             other => panic!("expected RejectMalformed, got {:?}", other),
         }
@@ -675,7 +1374,7 @@ mod tests {
     #[test]
     fn action_with_id_no_state_is_accepted() {
         let a = ann(&[(ACTION_KEY, "capture"), (ACTION_ID_KEY, "snap1-r42")]);
-        match decide(&a, None, None) {
+        match decide(&a, &SNAPSHOT_KEYS, None, None) {
             ActionDecision::Accept(p) => {
                 assert_eq!(p.kind, ActionKind::SnapshotCapture);
                 assert_eq!(p.id, "snap1-r42");
@@ -687,7 +1386,7 @@ mod tests {
     #[test]
     fn action_with_id_matching_last_completed_is_idempotent() {
         let a = ann(&[(ACTION_KEY, "capture"), (ACTION_ID_KEY, "snap1-r42")]);
-        match decide(&a, Some("snap1-r42"), None) {
+        match decide(&a, &SNAPSHOT_KEYS, Some("snap1-r42"), None) {
             ActionDecision::Idempotent { id } => assert_eq!(id, "snap1-r42"),
             other => panic!("expected Idempotent, got {:?}", other),
         }
@@ -696,7 +1395,7 @@ mod tests {
     #[test]
     fn action_with_id_matching_in_flight_is_idempotent() {
         let a = ann(&[(ACTION_KEY, "capture"), (ACTION_ID_KEY, "snap1-r42")]);
-        match decide(&a, None, Some("snap1-r42")) {
+        match decide(&a, &SNAPSHOT_KEYS, None, Some("snap1-r42")) {
             ActionDecision::Idempotent { id } => assert_eq!(id, "snap1-r42"),
             other => panic!("expected Idempotent, got {:?}", other),
         }
@@ -705,7 +1404,7 @@ mod tests {
     #[test]
     fn different_id_while_in_flight_is_rejected() {
         let a = ann(&[(ACTION_KEY, "capture"), (ACTION_ID_KEY, "snap2-r99")]);
-        match decide(&a, None, Some("snap1-r42")) {
+        match decide(&a, &SNAPSHOT_KEYS, None, Some("snap1-r42")) {
             ActionDecision::RejectInFlight {
                 incoming_id,
                 current_id,
@@ -720,7 +1419,7 @@ mod tests {
     #[test]
     fn unknown_action_verb_accepted_for_dispatch_to_reject() {
         let a = ann(&[(ACTION_KEY, "frobnicate"), (ACTION_ID_KEY, "x-1")]);
-        match decide(&a, None, None) {
+        match decide(&a, &SNAPSHOT_KEYS, None, None) {
             ActionDecision::Accept(p) => {
                 assert_eq!(p.kind, ActionKind::Unknown("frobnicate".to_string()));
             }
@@ -738,7 +1437,7 @@ mod tests {
                 r#"{"destination_url":"file:///snap1","include_memory":true}"#,
             ),
         ]);
-        match decide(&a, None, None) {
+        match decide(&a, &SNAPSHOT_KEYS, None, None) {
             ActionDecision::Accept(p) => {
                 assert_eq!(p.args["destination_url"], "file:///snap1");
                 assert_eq!(p.args["include_memory"], true);
@@ -754,7 +1453,7 @@ mod tests {
             (ACTION_ID_KEY, "snap1-r42"),
             (ACTION_ARGS_KEY, "this is not json"),
         ]);
-        match decide(&a, None, None) {
+        match decide(&a, &SNAPSHOT_KEYS, None, None) {
             ActionDecision::Accept(p) => {
                 assert_eq!(p.args, serde_json::Value::Null);
             }
@@ -1094,5 +1793,378 @@ mod tests {
         };
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("resume:"), "got {}", err);
+    }
+
+    // -------- Migration namespace decide() tests (PR-B) --------
+
+    #[test]
+    fn migration_no_action_annotation_is_idle() {
+        let a = ann(&[]);
+        assert_eq!(
+            decide(&a, &MIGRATION_KEYS, None, None),
+            ActionDecision::Idle
+        );
+    }
+
+    #[test]
+    fn migration_action_without_id_is_malformed() {
+        let a = ann(&[(MIGRATION_ACTION_KEY, "send")]);
+        match decide(&a, &MIGRATION_KEYS, None, None) {
+            ActionDecision::RejectMalformed(_) => {}
+            other => panic!("expected RejectMalformed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_send_without_ack_is_rejected() {
+        // The Phase 2 plaintext-transport ack gate (S2 mitigation): a
+        // migration action without `migration-phase2-unsafe-plaintext: ack`
+        // is rejected at decide() time. The action-id IS present so the
+        // controller can correlate the rejection.
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "send"),
+            (MIGRATION_ACTION_ID_KEY, "mig-001"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, None, None) {
+            ActionDecision::RejectAckMissing {
+                incoming_id,
+                ack_key,
+            } => {
+                assert_eq!(incoming_id, "mig-001");
+                assert_eq!(ack_key, MIGRATION_PHASE2_ACK_KEY);
+            }
+            other => panic!("expected RejectAckMissing, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_send_with_invalid_ack_value_is_rejected() {
+        // Anything other than the literal "ack" string is treated as
+        // not-acked — including "true", "yes", empty string, etc.
+        for invalid in ["", "true", "ACK", "yes", "1"] {
+            let a = ann(&[
+                (MIGRATION_ACTION_KEY, "send"),
+                (MIGRATION_ACTION_ID_KEY, "mig-001"),
+                (MIGRATION_PHASE2_ACK_KEY, invalid),
+            ]);
+            match decide(&a, &MIGRATION_KEYS, None, None) {
+                ActionDecision::RejectAckMissing { .. } => {}
+                other => panic!(
+                    "expected RejectAckMissing for ack={:?}, got {:?}",
+                    invalid, other
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn migration_send_with_ack_is_accepted() {
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "send"),
+            (MIGRATION_ACTION_ID_KEY, "mig-001"),
+            (MIGRATION_PHASE2_ACK_KEY, "ack"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, None, None) {
+            ActionDecision::Accept(p) => {
+                assert_eq!(p.kind, ActionKind::MigrationSend);
+                assert_eq!(p.id, "mig-001");
+            }
+            other => panic!("expected Accept, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_cancel_with_ack_is_accepted() {
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "cancel"),
+            (MIGRATION_ACTION_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_PHASE2_ACK_KEY, "ack"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, None, None) {
+            ActionDecision::Accept(p) => {
+                assert_eq!(p.kind, ActionKind::MigrationCancel);
+            }
+            other => panic!("expected Accept, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_cancel_bypasses_in_flight_gate() {
+        // Cancel verbs bypass the RejectInFlight gate so they can
+        // interrupt a running migration. Q1d-F2 documents that the
+        // dst-kill is the cancel primitive — cancel must reach
+        // dispatch even when receive is in flight.
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "cancel"),
+            (MIGRATION_ACTION_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_PHASE2_ACK_KEY, "ack"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, None, Some("mig-receive-999")) {
+            ActionDecision::Accept(p) => {
+                assert_eq!(p.kind, ActionKind::MigrationCancel);
+            }
+            other => panic!("cancel must bypass in-flight gate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_send_with_in_flight_other_id_is_rejected() {
+        // Non-cancel verbs follow the normal RejectInFlight rule
+        // even with ack present.
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "send"),
+            (MIGRATION_ACTION_ID_KEY, "mig-002"),
+            (MIGRATION_PHASE2_ACK_KEY, "ack"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, None, Some("mig-001")) {
+            ActionDecision::RejectInFlight {
+                incoming_id,
+                current_id,
+            } => {
+                assert_eq!(incoming_id, "mig-002");
+                assert_eq!(current_id, "mig-001");
+            }
+            other => panic!("expected RejectInFlight, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn migration_idempotent_when_id_matches_last_completed() {
+        let a = ann(&[
+            (MIGRATION_ACTION_KEY, "send"),
+            (MIGRATION_ACTION_ID_KEY, "mig-001"),
+            (MIGRATION_PHASE2_ACK_KEY, "ack"),
+        ]);
+        match decide(&a, &MIGRATION_KEYS, Some("mig-001"), None) {
+            ActionDecision::Idempotent { id } => assert_eq!(id, "mig-001"),
+            other => panic!("expected Idempotent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_migration_verb_maps_known_and_unknown() {
+        assert_eq!(parse_migration_verb("send"), ActionKind::MigrationSend);
+        assert_eq!(
+            parse_migration_verb("receive"),
+            ActionKind::MigrationReceive
+        );
+        assert_eq!(parse_migration_verb("cancel"), ActionKind::MigrationCancel);
+        assert_eq!(
+            parse_migration_verb("xyz"),
+            ActionKind::Unknown("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn migration_keyset_carries_ack_gate() {
+        // Snapshot's KeySet has no ack gate; migration's does.
+        // This is the structural signal that ack-gate enforcement is
+        // namespace-specific and Phase 3 will turn it off when mTLS
+        // lands.
+        assert!(SNAPSHOT_KEYS.ack_key.is_none());
+        assert_eq!(MIGRATION_KEYS.ack_key, Some(MIGRATION_PHASE2_ACK_KEY));
+    }
+
+    #[test]
+    fn migration_keyset_namespace_field() {
+        assert_eq!(SNAPSHOT_KEYS.namespace, "snapshot");
+        assert_eq!(MIGRATION_KEYS.namespace, "migration");
+    }
+
+    // -------- Sanitize_ch_error (S3 detail-string sanitization) --------
+
+    #[test]
+    fn sanitize_ch_error_categorizes_status_codes() {
+        // The sanitizer must NOT pass through raw error bodies — only
+        // category tokens. This protects against future failure modes
+        // that could leak partial guest state through error strings
+        // (S3 finding from the spike).
+        assert_eq!(
+            sanitize_ch_error("Status(ApiResponse { status: 400, body: ... })"),
+            "bad_request"
+        );
+        assert_eq!(
+            sanitize_ch_error("Status(ApiResponse { status: 500, body: ... })"),
+            "internal_server_error"
+        );
+        assert_eq!(
+            sanitize_ch_error("Connect { path: ..., source: ... }"),
+            "connection_refused"
+        );
+        assert_eq!(
+            sanitize_ch_error("Configure(...)"),
+            "socket_configure_failed"
+        );
+        assert_eq!(sanitize_ch_error("Read(...)"), "transport_error");
+        assert_eq!(sanitize_ch_error("Write(...)"), "transport_error");
+        assert_eq!(sanitize_ch_error("Malformed(...)"), "malformed_response");
+        assert_eq!(sanitize_ch_error("totally novel error"), "ch_error");
+    }
+
+    #[test]
+    fn sanitize_ch_error_does_not_pass_through_payload() {
+        // Defensive: even if a future ApiError variant carries an
+        // unexpected structure, the sanitizer must return one of the
+        // hardcoded categories. The output is a `&'static str` so by
+        // construction no payload bytes can leak.
+        let raw = "Status(ApiResponse { status: 503, body: [secret guest memory bytes] })";
+        let category = sanitize_ch_error(raw);
+        assert_eq!(category, "ch_status_error");
+        assert!(!category.contains("secret"));
+        assert!(!category.contains("body"));
+    }
+
+    // -------- Migration dispatch tests --------
+
+    fn migration_send_action(args: serde_json::Value) -> PendingAction {
+        PendingAction {
+            kind: ActionKind::MigrationSend,
+            id: "mig-001".to_string(),
+            args,
+        }
+    }
+
+    fn migration_receive_action(args: serde_json::Value) -> PendingAction {
+        PendingAction {
+            kind: ActionKind::MigrationReceive,
+            id: "mig-recv-001".to_string(),
+            args,
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_send_returns_complete_when_ch_exits() {
+        // Phase 2 spike Q1c: source CH auto-exits cleanly on successful
+        // send-migration. The dispatch handler probes vm_info post-send;
+        // ConnectionRefused is the expected outcome (CH gone).
+        //
+        // We model this with a mock that responds to the send-migration
+        // call with 204 No Content, then the second accept (vm_info)
+        // never connects because the mock has run out of responses.
+        // The vm_info call returns a Connect error → sanitizer maps to
+        // `connection_refused` → W1 gate accepts as "CH gone clean".
+        let server = MultiMockServer::spawn(vec![no_content()]);
+        let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
+        let outcome = dispatch(&action, &server.path).await.unwrap();
+        let detail = outcome.detail.unwrap();
+        assert!(
+            detail.contains("sent to tcp:1.2.3.4:6789"),
+            "got {}",
+            detail
+        );
+        assert!(outcome.pause_window_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn migration_send_w1_violates_when_ch_still_running() {
+        // W1 gate (load-bearing item C): if send_migration returns 0
+        // but vm_info still reports state=Running, that's abnormal —
+        // CH should have exited. Surface as failure with the
+        // w1_violation category.
+        let body = br#"{"config":{},"state":"Running"}"#;
+        let info_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let mut info_full = info_response.into_bytes();
+        info_full.extend_from_slice(body);
+        let server = MultiMockServer::spawn(vec![no_content(), info_full]);
+        let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
+        let err = dispatch(&action, &server.path).await.unwrap_err();
+        assert!(err.contains("w1_violation"), "got {}", err);
+        assert!(err.contains("state=Running"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_send_propagates_send_failure_with_sanitized_detail() {
+        // F2/F3 in spike: send-migration fails when destination is
+        // gone or network drops. The sanitizer converts the raw error
+        // into a category token; raw bytes never reach the
+        // status-detail annotation.
+        let server = MultiMockServer::spawn(vec![
+            b"HTTP/1.1 500 Internal\r\nContent-Length: 25\r\n\r\nguest secret memory bytes"
+                .to_vec(),
+        ]);
+        let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
+        let err = dispatch(&action, &server.path).await.unwrap_err();
+        assert!(err.contains("internal_server_error"), "got {}", err);
+        // Critical: raw body bytes must not be in the error detail
+        // (S3 sanitization invariant).
+        assert!(
+            !err.contains("guest secret memory bytes"),
+            "raw body leaked into error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_receive_returns_running_when_state_running() {
+        // Phase 2 spike Q1c: destination CH auto-resumes after
+        // receive-migration completes. The dispatch handler probes
+        // vm_info post-receive and requires state=Running.
+        let body = br#"{"config":{},"state":"Running"}"#;
+        let info_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let mut info_full = info_response.into_bytes();
+        info_full.extend_from_slice(body);
+        let server = MultiMockServer::spawn(vec![no_content(), info_full]);
+        let action =
+            migration_receive_action(serde_json::json!({ "listen_url": "tcp:0.0.0.0:6789" }));
+        let outcome = dispatch(&action, &server.path).await.unwrap();
+        let detail = outcome.detail.unwrap();
+        assert!(
+            detail.contains("received on tcp:0.0.0.0:6789"),
+            "got {}",
+            detail
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_receive_w1_violates_when_state_not_running() {
+        // If receive_migration returns 0 but vm_info reports Paused
+        // (or any non-Running state), the W1 gate fires.
+        let body = br#"{"config":{},"state":"Paused"}"#;
+        let info_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let mut info_full = info_response.into_bytes();
+        info_full.extend_from_slice(body);
+        let server = MultiMockServer::spawn(vec![no_content(), info_full]);
+        let action =
+            migration_receive_action(serde_json::json!({ "listen_url": "tcp:0.0.0.0:6789" }));
+        let err = dispatch(&action, &server.path).await.unwrap_err();
+        assert!(err.contains("w1_violation"), "got {}", err);
+        assert!(err.contains("state=Paused"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_cancel_is_placeholder() {
+        // PR-B ships cancel as a no-op placeholder; PR-C wires the
+        // SIGKILL-CH primitive when the receiver-mode launch branch
+        // exposes the CH process handle. This test pins the
+        // contract so a future regression doesn't silently change
+        // cancel's behaviour.
+        let api_socket = std::path::PathBuf::from("/does/not/matter");
+        let action = PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "mig-cancel-001".to_string(),
+            args: serde_json::Value::Null,
+        };
+        let outcome = dispatch(&action, &api_socket).await.unwrap();
+        let detail = outcome.detail.unwrap();
+        assert!(detail.contains("placeholder"), "got {}", detail);
+        assert!(detail.contains("PR-C"), "got {}", detail);
+    }
+
+    #[tokio::test]
+    async fn migration_send_args_missing_target_url_is_error() {
+        let action = migration_send_action(serde_json::json!({}));
+        let err = dispatch(&action, Path::new("/does/not/matter"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("parse migration_send args"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_receive_args_missing_listen_url_is_error() {
+        let action = migration_receive_action(serde_json::json!({}));
+        let err = dispatch(&action, Path::new("/does/not/matter"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("parse migration_receive args"), "got {}", err);
     }
 }
