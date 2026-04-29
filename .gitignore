@@ -16,5 +16,6 @@ vendor/
 
 # Built binaries (top-level only — never the cmd/swiftctl/ source)
 /swiftctl
+/bin/swiftctl
 /controller-manager
 /gpu-discovery
