@@ -53,13 +53,12 @@ SOURCE_NODE="${WORKERS[0]}"
 TARGET_NODE="${WORKERS[1]}"
 echo "Source node: $SOURCE_NODE  Target node: $TARGET_NODE"
 
-# Set up namespace + RBAC. Patch the rolebinding subject namespace
-# (snapshot walkthrough F2 — the default rolebinding hardcodes
-# "default" as the SA namespace).
+# Set up namespace. As of 2026-04-29 the controller auto-creates
+# the per-namespace `swiftletd-reporter` RoleBinding on first
+# SwiftGuest reconcile (Phase 2 walkthrough finding W3 + snapshot
+# walkthrough F2). The cluster-scoped ClusterRole is shipped via
+# `make deploy` / Helm; this script no longer needs to apply it.
 kubectl create namespace "$NAMESPACE" 2>/dev/null || true
-kubectl apply -k config/rbac -n "$NAMESPACE"
-kubectl patch rolebinding swiftletd-reporter -n "$NAMESPACE" --type=json \
-  -p '[{"op":"replace","path":"/subjects/0/namespace","value":"'"$NAMESPACE"'"}]' || true
 
 # Cordon target so the source guest lands on SOURCE_NODE.
 kubectl cordon "$TARGET_NODE"

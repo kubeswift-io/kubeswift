@@ -30,9 +30,24 @@ fn parse_first_lease(contents: &str) -> Option<String> {
 }
 
 /// Spawns a background thread that polls the lease file and patches the pod annotation when IP found.
-/// Stops after patching or after max_attempts (default 120 = 4 min at 2s interval).
+/// Stops after a SUCCESSFUL patch or after max_attempts (default 120 = 4 min at 2s interval).
 /// First boot of cloud images can take 60–90s for cloud-init + DHCP.
 /// `nics` is passed to build the multi-NIC interfaces annotation.
+///
+/// Retry-on-failure invariant (added 2026-04-29 — Phase 2 walkthrough
+/// finding W4): the prior implementation `return`-ed unconditionally
+/// after the first patch attempt regardless of result. When the
+/// per-namespace RBAC was missing (Phase 2 walkthrough finding W3 —
+/// fixed by `internal/controller/swiftguest/rbac.go`), the patch
+/// returned 403 Forbidden and the poller exited; even after the
+/// RBAC was applied later in the pod's lifetime, the annotation was
+/// never written, leaving `status.network.primaryIP` empty forever.
+///
+/// The fix: only `return` (terminate the poller) on a SUCCESSFUL
+/// patch. On any error from the kube client (transient apiserver
+/// unavailability, RBAC gap, etc.), continue polling — eventually
+/// the operator-fix will land and the next attempt will succeed.
+/// Bounded by MAX_ATTEMPTS (~4 min total).
 pub fn spawn_lease_poller(
     lease_path: impl AsRef<Path> + Send + 'static,
     namespace: String,
@@ -66,23 +81,34 @@ pub fn spawn_lease_poller(
                 return;
             };
             let nics_ref = nics.as_deref();
-            rt.block_on(async {
+            // patched is true iff patch_pod_annotation returned Ok.
+            // We continue polling on transient errors (kube-client
+            // unavailable, 403 RBAC gap during initial namespace
+            // setup, etc.) — see W4 finding above. Only a successful
+            // patch terminates the poller.
+            let patched = rt.block_on(async {
                 let client = match crate::kube_client::create_client().await {
                     Ok(c) => c,
                     Err(e) => {
-                        log::warn!("kube client unavailable ({}), skipping pod annotation", e);
-                        return;
+                        log::warn!("kube client unavailable ({}), will retry", e);
+                        return false;
                     }
                 };
-                if let Err(e) =
-                    patch_pod_annotation(&client, &namespace, &pod_name, &ip, nics_ref).await
-                {
-                    log::error!("patch_pod_annotation_failed: {}", e);
-                } else {
-                    log::info!("pod_annotation_patched {}={}", ANNOTATION_GUEST_IP, ip);
+                match patch_pod_annotation(&client, &namespace, &pod_name, &ip, nics_ref).await {
+                    Err(e) => {
+                        log::warn!("patch_pod_annotation_failed (will retry): {}", e);
+                        false
+                    }
+                    Ok(()) => {
+                        log::info!("pod_annotation_patched {}={}", ANNOTATION_GUEST_IP, ip);
+                        true
+                    }
                 }
             });
-            return;
+            if patched {
+                return;
+            }
+            // else: continue polling; transient error or RBAC gap.
         }
         log::warn!("lease_poll_timeout");
     });
@@ -137,4 +163,59 @@ async fn patch_pod_annotation(
     let pp = PatchParams::default();
     api.patch(name, &pp, &Patch::Merge(&patch)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_first_lease_skips_blank_and_comment_lines() {
+        // dnsmasq lease file format:
+        //   <expiry> <mac> <ip> <hostname> <client_id>
+        // We accept blank/comment lines and pick the first valid IP.
+        let contents = "\
+# header comment
+\n
+1777501581 2e:dc:8f:5b:97:21 10.244.125.15 mig-walkthrough-guest ff:b5:5e:67:ff:00
+";
+        assert_eq!(
+            parse_first_lease(contents),
+            Some("10.244.125.15".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_first_lease_returns_none_on_no_lease() {
+        assert_eq!(parse_first_lease(""), None);
+        assert_eq!(parse_first_lease("# only comments\n"), None);
+    }
+
+    #[test]
+    fn parse_first_lease_skips_non_ip_third_column() {
+        // If the third column isn't a valid IP literal, skip the
+        // line. dnsmasq sometimes writes intermediate "DUID" lines
+        // alongside lease lines; those should not be misread as IPs.
+        let contents = "1777501581 mac garbage hostname client_id\n";
+        assert_eq!(parse_first_lease(contents), None);
+    }
+
+    #[test]
+    fn build_interfaces_json_legacy_single_nic() {
+        // No NIC list → emit the legacy single-NIC entry shape.
+        let s = build_interfaces_json("10.0.0.5", None);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v[0]["name"], "eth0");
+        assert_eq!(v[0]["ip"], "10.0.0.5");
+    }
+
+    // The retry-on-failure invariant inside `spawn_lease_poller` (W4
+    // finding from the Phase 2 walkthrough) is verified end-to-end on
+    // the cluster: re-running the walkthrough after the RBAC bootstrap
+    // fix applies should observe the lease annotation appearing on
+    // the pod within ~30s of guest boot, not "never". A unit test
+    // would require a mock kube client + tokio runtime + thread
+    // synchronisation harness — disproportionate scaffolding for the
+    // bug surface area. The structural fix (`if patched { return; }`
+    // gate) is small enough for a code-review-bound contract.
 }
