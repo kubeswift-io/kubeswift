@@ -57,26 +57,26 @@ Before any scenario, the cluster needs:
 
 ## Setup that bites operators (do this once)
 
-Every scenario applies into a fresh namespace. RBAC must be applied
-to that namespace **and** the RoleBinding's subject must be patched
-to point at that namespace's default ServiceAccount. Without the
-patch, the launcher pod's swiftletd hits `pods is forbidden` errors
-and the SwiftGuest never gets a `status.network.primaryIP`:
+Every scenario applies into a fresh namespace. As of 2026-04-29 the
+SwiftGuest controller auto-creates the per-namespace
+`swiftletd-reporter` RoleBinding on first Reconcile — operators no
+longer apply per-namespace RBAC manually. The cluster-scoped
+ClusterRole (`kubeswift-swiftletd-reporter`) ships with `make
+deploy` / Helm:
 
 ```bash
 NS=snapshots-wt-s1
 kubectl create namespace $NS
-kubectl apply -k config/rbac -n $NS
-# REQUIRED: the rolebinding's subject defaults to namespace=default;
-# patch it to your namespace.
-kubectl patch rolebinding swiftletd-reporter -n $NS --type=json \
-  -p '[{"op":"replace","path":"/subjects/0/namespace","value":"'"$NS"'"}]'
+# That's it — the controller wires the RoleBinding when the first
+# SwiftGuest in this namespace is reconciled.
 ```
 
-This is what `test/smoke/boot-test.sh` does — see
-[`apply_rbac()`](../../test/smoke/boot-test.sh) for the same
-incantation. ([Why this isn't already in the
-docs](walkthrough-findings.md#f2))
+History: prior to 2026-04-29 this required a `kubectl apply -k
+config/rbac -n $NS` plus a manual `subjects[0].namespace` patch (see
+[walkthrough-findings.md F2](walkthrough-findings.md#f2-doc-gap-important--rbac-rolebinding-subject-namespace-must-be-patched--fixed-2026-04-29)).
+The Phase 2 live-migration walkthrough re-surfaced the same gap as
+finding W3 — second post-hoc validation in 6 days — which finally
+prompted the architectural fix.
 
 ---
 

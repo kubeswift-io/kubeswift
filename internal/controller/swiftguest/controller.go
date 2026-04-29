@@ -68,6 +68,20 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Per-namespace RBAC bootstrap: idempotently ensure the
+	// `swiftletd-reporter` RoleBinding exists in this SwiftGuest's
+	// namespace, so the launcher pod's `default` ServiceAccount has
+	// pods/get,patch + swiftguests/status:patch. Replaces the prior
+	// operator-applied RoleBinding pattern (snapshot walkthrough
+	// finding F2 + Phase 2 walkthrough finding W3). Runs early so we
+	// don't waste work on subsequent steps if the RBAC bootstrap
+	// fails — without the binding, the launcher pod would boot but
+	// silently fail every annotation write.
+	if err := EnsureSwiftletdRBAC(ctx, r.Client, guest.Namespace); err != nil {
+		logger.Error(err, "failed to ensure swiftletd RBAC", "namespace", guest.Namespace)
+		return ctrl.Result{}, err
+	}
+
 	res := resolved.NewResolver(r.Client)
 	rg, err := res.Resolve(ctx, &guest)
 	if err != nil {

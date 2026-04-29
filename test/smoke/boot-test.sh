@@ -112,11 +112,12 @@ echo ""
 # --- Helpers ---
 
 apply_rbac() {
-  kubectl apply -k "$RBAC_DIR" -n "$NAMESPACE" >/dev/null 2>&1
-  if [[ "$NAMESPACE" != "default" ]]; then
-    kubectl patch rolebinding swiftletd-reporter -n "$NAMESPACE" --type=json \
-      -p="[{\"op\":\"replace\",\"path\":\"/subjects/0/namespace\",\"value\":\"$NAMESPACE\"}]" 2>/dev/null || true
-  fi
+  # As of 2026-04-29 the controller auto-creates the per-namespace
+  # `swiftletd-reporter` RoleBinding on first SwiftGuest reconcile in
+  # a namespace; no manual apply is needed. Apply the cluster-scoped
+  # ClusterRole as a no-op (idempotent) so older clusters that don't
+  # have the ClusterRole yet still get it.
+  kubectl apply -k "$RBAC_DIR" >/dev/null 2>&1 || true
 }
 
 apply_shared() {

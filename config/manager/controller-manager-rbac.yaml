@@ -102,6 +102,20 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["create", "get", "update", "patch", "list", "watch"]
+  # rbac.authorization.k8s.io RoleBindings — the SwiftGuest controller
+  # creates a per-namespace RoleBinding that binds the
+  # `kubeswift-swiftletd-reporter` ClusterRole to the workload
+  # namespace's `default` ServiceAccount. This replaces the prior
+  # operator-applied RoleBinding pattern (snapshot walkthrough finding
+  # F2 + Phase 2 walkthrough finding W3). Per-call permissions:
+  #   - get   — to detect whether the binding already exists (idempotent)
+  #   - create — to create it on first SwiftGuest reconcile in a namespace
+  # No update/delete — the RoleBinding is owned by the namespace
+  # lifecycle, not by individual SwiftGuests; deleting all SwiftGuests
+  # in a namespace doesn't remove the binding.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -117,3 +131,23 @@ subjects:
   - kind: ServiceAccount
     name: controller-manager
     namespace: kubeswift-system
+---
+# ClusterRole for swiftletd (the launcher container) — read/patch its
+# own pod's annotations and patch the SwiftGuest's /status subresource.
+# Bound per workload namespace via a RoleBinding the SwiftGuest
+# controller creates on Reconcile (see internal/controller/swiftguest/rbac.go).
+# See config/rbac/swiftletd-role.yaml for the operator-facing comment
+# and history.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-swiftletd-reporter
+  labels:
+    app.kubernetes.io/name: kubeswift
+rules:
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch", "update"]
