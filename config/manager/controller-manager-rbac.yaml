@@ -108,14 +108,21 @@ rules:
   # namespace's `default` ServiceAccount. This replaces the prior
   # operator-applied RoleBinding pattern (snapshot walkthrough finding
   # F2 + Phase 2 walkthrough finding W3). Per-call permissions:
-  #   - get   — to detect whether the binding already exists (idempotent)
-  #   - create — to create it on first SwiftGuest reconcile in a namespace
+  #   - get      — to detect whether the binding already exists (idempotent)
+  #   - create   — to create it on first SwiftGuest reconcile in a namespace
+  #   - list,watch — controller-runtime's default cached client requires
+  #                  these to populate the informer cache for RoleBinding;
+  #                  without them, Get returns "Failed to watch" errors
+  #                  and the cache never syncs (Phase 2 walkthrough
+  #                  W3 follow-up — the original PR #30 grant of just
+  #                  get,create blocked Reconcile because the cache
+  #                  layer couldn't initialise).
   # No update/delete — the RoleBinding is owned by the namespace
   # lifecycle, not by individual SwiftGuests; deleting all SwiftGuests
   # in a namespace doesn't remove the binding.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "create"]
+    verbs: ["get", "list", "watch", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

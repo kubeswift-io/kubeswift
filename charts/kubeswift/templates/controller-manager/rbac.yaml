@@ -110,10 +110,11 @@ rules:
   # `kubeswift-swiftletd-reporter` ClusterRole to the workload
   # namespace's `default` ServiceAccount. Replaces the prior
   # operator-applied RoleBinding pattern (snapshot walkthrough finding
-  # F2 + Phase 2 walkthrough finding W3).
+  # F2 + Phase 2 walkthrough finding W3). list+watch are required by
+  # controller-runtime's cached client (Phase 2 W3 follow-up).
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "create"]
+    verbs: ["get", "list", "watch", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
