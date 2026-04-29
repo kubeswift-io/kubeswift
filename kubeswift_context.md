@@ -571,7 +571,30 @@ After PR-C (#29) merged + redeployed, attempting the manual demo in a fresh `mig
 
 - **W5 — Two post-hoc walkthroughs hit the same bug.** Snapshot walkthrough F2 documented W3's symptom but the disposition was "fix-in-walkthrough-PR" (the operator-walkthrough doc and the smoke test got the manual-apply incantation), NOT the architectural fix. Phase 2 walkthrough re-surfaced the same bug. **Pattern observation:** when an operator-experience finding is closed by "document the workaround" rather than "fix the root cause", the same finding will re-surface in the NEXT post-hoc validation. Worth applying to the Tracked Follow-up #2 ("operator-flow validation pattern in test infrastructure") — the walkthrough pattern should resolve findings architecturally on first occurrence, not on second.
 
-W3 and W4 are fixed in PR #30 (`fix/swiftletd-rbac-auto-bind`). The original Phase 2 walkthrough was paused after surfacing these findings; it resumes after PR #30 merges + redeploys.
+W3 and W4 are fixed in PR #30 (`fix/swiftletd-rbac-auto-bind`). The original Phase 2 walkthrough was paused after surfacing these findings; it resumed after PR #30 merged + redeployed.
+
+### Phase 2 walkthrough resumption (post-PR-#30 redeploy)
+
+After PR #30 merged + redeployed, the walkthrough resumed in a fresh `mig-walkthrough` namespace. Two more findings surfaced (W6, W7); one (W7) was a follow-up to PR #30 fixed inline; one (W6) is a design contradiction in PR-C requiring disposition before further Phase 2 work.
+
+- **W6 — Phase 2 manual demo cannot complete on RWO-only storage; design doc §5.1.2 contradicts live-migration.md Constraint 4.** PR-C's `live-migration-phase-2.md` §5.1.2 said "RWO is required" and "RWX is rejected" for the destination-receive pod template. In practice the destination pod hits `FailedAttachVolume: Multi-Attach error` because the source pod still has the same RWO PVC mounted on `miles`. The §5.1.2 text conflates the F2-split-brain risk (which RWO does mitigate) with the live-migration disk-handoff requirement (which RWO does NOT solve without Phase 3's RWO-handoff choreography per `live-migration.md` Constraint 4). The Phase 2 spike's Q1 evidence was kernel-boot/initramfs-only — it never exercised the disk-handoff scenario. **Disposition:** Phase 2 manual demo on disk-boot guests requires either (a) a kernel-boot variant of the demo template that omits the PVC mount, (b) RWX storage, or (c) Phase 3 controller integration with the RWO-handoff choreography. Recommend (a) for any further Phase 2 wire-protocol demonstrations on the current cluster (Longhorn-RWO); defer (c) to Phase 3 design work. Detail in [`docs/design/live-migration-phase-2-walkthrough.md`](docs/design/live-migration-phase-2-walkthrough.md).
+
+- **W7 — controller-runtime cached client requires `list,watch` on RoleBindings.** PR #30's grant of just `get,create` was insufficient — every Reconcile in a workload namespace logged `Failed to watch *v1.RoleBinding: rolebindings.rbac.authorization.k8s.io is forbidden: User "system:serviceaccount:kubeswift-system:controller-manager" cannot list resource "rolebindings"`. The cache layer never synced, so `EnsureSwiftletdRBAC`'s `Get` blocked indefinitely; SwiftGuest pods never got created. Same controller-runtime architectural property affects every namespace-scoped resource the controller reads via the cached client. **Fixed in commit `e794471` (direct push to main):** verbs extended to `get, list, watch, create` in both `config/manager/controller-manager-rbac.yaml` and the Helm chart. Cluster ClusterRole patched live + controller restarted; SwiftGuest reconciled successfully thereafter. **Pattern observation:** this regression escaped the unit tests in PR #30's `rbac_test.go` because they use the fake client (no informer cache); a real-cluster smoke test would have caught it. Adds weight to Tracked Follow-up #2 (operator-flow validation pattern in test infrastructure) — fake-client tests verify control-flow but not RBAC sufficiency.
+
+W6 is the **third** post-hoc walkthrough to surface a finding the spike did not catch (after F2 in snapshot walkthrough, W3 in Phase 2 walkthrough). The W5 pattern restated: spike findings under-constrain the design when they validate a simplified scenario; the broader operator scenario reveals contradictions. The Phase 2 spike's kernel-boot guest sidestepped disk handoff; the operator walkthrough's Ubuntu Noble disk-boot guest exercised it.
+
+What the post-resumption walkthrough DID validate end-to-end:
+- W3 + W4 fixes shipped cleanly (auto-bind + lease retry-on-failure both observable in fresh namespace).
+- swiftletd image `sha-6fa2394` carries PR-A + PR-B + PR-C + the env-var-race fix.
+- `make migration-phase2-manual` orchestration scripts (source.sh + destination.sh up to apply) correctly extract metadata + render dst pod template.
+
+What it did NOT validate (blocked on W6):
+- Receiver-mode launch branch (`run_ch_receive`) actually running in production.
+- Cross-node `send-migration` wire protocol on a real disk-boot guest.
+- Sentinel md5 survival post-migration.
+- Timing measurements (vCPU pause window, BEACON gap, total downtime).
+
+Pre-migration sentinel md5 captured anyway for any future re-run on this same source pod: `88d94a051ea2db180606535a4125784d` (sentinel `SPIKE-PHASE2-WT-1777503996`, written via serial console).
 
 ---
 
