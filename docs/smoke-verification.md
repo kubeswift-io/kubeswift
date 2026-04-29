@@ -39,24 +39,22 @@ docker images | grep swiftletd
 
 ### 4. RBAC for swiftletd
 
-swiftletd needs RBAC to patch SwiftGuest status. Apply in each namespace where SwiftGuests run.
+swiftletd needs RBAC to patch SwiftGuest status + pod annotations. As
+of 2026-04-29 the SwiftGuest controller auto-creates the per-namespace
+`swiftletd-reporter` RoleBinding on first Reconcile (see
+`internal/controller/swiftguest/rbac.go`); operators do NOT apply
+per-namespace RBAC manually. The cluster-scoped ClusterRole
+(`kubeswift-swiftletd-reporter`) ships with `make deploy` / Helm.
 
-**Apply:**
+**Verify** (after creating a SwiftGuest in the namespace):
 ```bash
-kubectl apply -k config/rbac/ -n <namespace>
-```
-
-For non-default namespaces, patch the RoleBinding subject:
-```bash
-kubectl patch rolebinding swiftletd-reporter -n <namespace> --type=json \
-  -p='[{"op":"replace","path":"/subjects/0/namespace","value":"<namespace>"}]'
-```
-
-**Verify:**
-```bash
-kubectl get role swiftletd-reporter -n <namespace>
+kubectl get clusterrole kubeswift-swiftletd-reporter
 kubectl get rolebinding swiftletd-reporter -n <namespace>
 ```
+
+If the RoleBinding does not appear within ~10s of the first SwiftGuest
+reconcile, check controller-manager logs for `failed to ensure
+swiftletd RBAC` errors.
 
 ### 4a. SSH validation (optional follow-up)
 
@@ -223,7 +221,7 @@ kubectl logs <pod-name> -n <namespace> -c launcher | grep -E "lease|guest IP|tim
 | Cause | Symptom | Remediation |
 |------|---------|-------------|
 | Image URL unreachable | SwiftImage Importing/Failed | Verify URL; check network from cluster |
-| RBAC missing | GuestRunning never True; swiftletd logs permission denied | `kubectl apply -k config/rbac/ -n <namespace>` |
+| RBAC missing (pre-2026-04-29 cluster) | GuestRunning never True; swiftletd logs permission denied | Re-run `make deploy` to install the cluster-scoped ClusterRole + grant the controller-manager `rolebindings:get,create`. The controller will auto-create the per-namespace RoleBinding on next reconcile. |
 | Node without Cloud Hypervisor | Pod Pending; events mention image or runtime | Use swiftletd image with CH; or install CH on node |
 | Insufficient storage | SwiftImage Failed; PVC pending | Increase cluster storage; check PVC size |
 | Controller not running | No reconciliation; resources stuck | Deploy/restart KubeSwift controllers |

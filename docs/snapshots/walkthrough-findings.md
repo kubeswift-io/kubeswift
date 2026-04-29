@@ -70,9 +70,9 @@ in PR #21. Verified to FAIL without the fix and PASS with it.
 
 ---
 
-## F2 (Doc gap, Important) — RBAC RoleBinding subject namespace must be patched
+## F2 (Doc gap, Important) — RBAC RoleBinding subject namespace must be patched — FIXED 2026-04-29
 
-**Surfaced in:** Scenario 1 setup.
+**Surfaced in:** Scenario 1 setup. **Re-surfaced:** Phase 2 live-migration walkthrough (W3) — same root cause, second post-hoc validation in 6 days.
 
 **What happened.** Following the docs literally
 ("apply RBAC to the namespace") leaves the launcher pod's swiftletd
@@ -85,19 +85,24 @@ pod annotation.
 -n <other-ns>`, the binding is created in `<other-ns>` but its
 subject still points at `default`'s ServiceAccount.
 
-**Workaround:** patch after apply:
+**Original workaround (no longer needed):** patch after apply:
 ```bash
 kubectl patch rolebinding swiftletd-reporter -n <other-ns> --type=json \
   -p '[{"op":"replace","path":"/subjects/0/namespace","value":"<other-ns>"}]'
 ```
 
-`test/smoke/boot-test.sh` does this; the operator docs don't
-mention it.
+**Final fix (2026-04-29):** the SwiftGuest controller auto-creates the
+per-namespace RoleBinding on every Reconcile via
+`internal/controller/swiftguest/rbac.go::EnsureSwiftletdRBAC`. The
+`Role` was promoted to a cluster-scoped `ClusterRole`
+(`kubeswift-swiftletd-reporter`) shipped via `make deploy` / Helm.
+Operators no longer apply per-namespace RBAC manually. See PR for
+details + the matching lease-poller retry-on-failure fix (W4) that
+was masking the symptom even after RBAC was applied.
 
-**Disposition:** Fix-in-walkthrough-PR (added to the walkthrough's
-Setup section + a brief mention in `csi-snapshots.md` Prerequisites).
-A cleaner fix — making the rolebinding namespace-template aware via
-kustomize — is a follow-up.
+**Disposition:** Resolved-architecturally. Manual workaround (above) is
+no longer documented as the recommended path; smoke-test +
+migration-test scripts no longer perform the manual apply.
 
 ---
 

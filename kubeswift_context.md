@@ -561,6 +561,18 @@ Status updated as PRs land; PR-A merged 2026-04-29 (swift-ch-client foundations 
 - **W1 — Walkthrough script self-narrated success on actual failure.** First run failed; script printed "no contradiction" because conclusion wasn't gated on observed state. Phase 2 controller's Resuming phase must avoid this same pattern.
 - **W2 — Stale-state cleanup is the persistent operational hazard.** CH leaves API socket file on SIGKILL; next CH instance fails with "Address in use". swiftletd launcher entrypoint must `rm -f` the socket file before starting CH.
 
+### Phase 2 walkthrough findings (post-PR-C cluster validation)
+
+After PR-C (#29) merged + redeployed, attempting the manual demo in a fresh `mig-walkthrough` namespace surfaced TWO bugs that combined to silently break SwiftGuest IP discovery in any non-`default` namespace. Documented here because both bugs are pre-Phase-2 latent (snapshot Phases 0-2 + Phase 1 migration also affected on multi-namespace clusters), but Phase 2 walkthrough is what finally forced the architectural fix.
+
+- **W3 — Per-namespace `swiftletd-reporter` RoleBinding required manual application.** Latent re-surface of snapshot walkthrough finding F2 (Scenario 1 setup, 6 days prior). `config/rbac/swiftletd-rolebinding.yaml` hardcoded `subjects[0].namespace: default`; operators were expected to `kubectl apply -k config/rbac -n <ns>` followed by a `kubectl patch` on every new namespace. Without the patch, swiftletd's pod-annotation writes hit 403 Forbidden, no `kubeswift.io/guest-ip` annotation got written, and the SwiftGuest's `status.network.primaryIP` stayed empty forever. **Fix: controller-driven auto-bind.** Promoted Role → ClusterRole (`kubeswift-swiftletd-reporter`) shipped via `make deploy` / Helm; SwiftGuest controller calls `EnsureSwiftletdRBAC` at the top of every Reconcile to idempotently create the per-namespace RoleBinding bound to the namespace's `default` ServiceAccount. Operators no longer apply per-namespace RBAC manually. Two post-hoc walkthroughs in 6 days hitting the same bug was the dispositive signal — the architectural fix shipped on the second occurrence.
+
+- **W4 — Lease poller exited permanently after first patch failure.** Compounded W3: even when the RBAC arrived later in the pod's lifetime (operator manually applied the binding mid-flight), the lease poller had already terminated. `rust/swiftletd/src/lease.rs::spawn_lease_poller` had an unconditional `return` after the first `patch_pod_annotation` attempt regardless of result. **Fix: only `return` on patch SUCCESS.** Transient errors (kube client unavailable, RBAC gap, apiserver flap) now leave the poller alive for retry on the next 2s tick, bounded by the existing 4-minute MAX_ATTEMPTS cap. Same-shape bug as the snapshot poller's earlier handling; the lease poller was simply the only one left with the broken pattern.
+
+- **W5 — Two post-hoc walkthroughs hit the same bug.** Snapshot walkthrough F2 documented W3's symptom but the disposition was "fix-in-walkthrough-PR" (the operator-walkthrough doc and the smoke test got the manual-apply incantation), NOT the architectural fix. Phase 2 walkthrough re-surfaced the same bug. **Pattern observation:** when an operator-experience finding is closed by "document the workaround" rather than "fix the root cause", the same finding will re-surface in the NEXT post-hoc validation. Worth applying to the Tracked Follow-up #2 ("operator-flow validation pattern in test infrastructure") — the walkthrough pattern should resolve findings architecturally on first occurrence, not on second.
+
+W3 and W4 are fixed in PR #30 (`fix/swiftletd-rbac-auto-bind`). The original Phase 2 walkthrough was paused after surfacing these findings; it resumes after PR #30 merges + redeploys.
+
 ---
 
 ## Bugs Fixed (Recent — Snapshot and Migration Phases)
@@ -575,6 +587,8 @@ Status updated as PRs land; PR-A merged 2026-04-29 (swift-ch-client foundations 
 | 56 | swiftmigration/webhook | Stuck finalizer when source SwiftGuest deleted before SwiftMigration | PR #25 |
 | 57 | swiftmigration/controller | Reconcile loop on terminal-phase SwiftMigrations | PR #25 |
 | 58 | swiftmigration/webhook | Per-operation discipline refactor (subsumes A/B/C as architectural rule) | PR #26 |
+| 59 | swiftguest/rbac.go (new) | swiftletd RBAC was per-namespace Role + manually-applied RoleBinding; silently broke IP discovery in non-default namespaces. Promoted to ClusterRole + controller-driven auto-bind. (Re-surface of snapshot walkthrough F2; W3 in Phase 2 walkthrough.) | PR #30 |
+| 60 | rust/swiftletd/src/lease.rs | Lease poller `return`-ed unconditionally after first patch attempt; transient 403 (W3 RBAC gap) killed the poller permanently. Only `return` on patch success now; retry on transient errors. (W4 in Phase 2 walkthrough.) | PR #30 |
 
 ---
 
