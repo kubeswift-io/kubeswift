@@ -64,8 +64,23 @@ fn main() {
     let intent_path =
         env::var("KUBESWIFT_INTENT_PATH").unwrap_or_else(|_| intent::INTENT_PATH.to_string());
 
+    // Live-migration role (Phase 2). KUBESWIFT_MIGRATION_ROLE=receiver
+    // signals destination-receive mode; absent / any other value means
+    // normal startup (source-side or unrelated to migration). See
+    // `docs/design/live-migration-phase-2.md` §4.3.2 for why this is an
+    // env var rather than a field in the intent JSON: keeps the intent
+    // JSON shape unchanged and isolates the receiver branch from the
+    // Phase 1 pod-builder logic.
+    let migration_role = env::var("KUBESWIFT_MIGRATION_ROLE")
+        .ok()
+        .filter(|v| !v.is_empty());
+
     match intent::load_intent(&intent_path) {
-        Ok(intent) => {
+        Ok(mut intent) => {
+            if let Some(ref role) = migration_role {
+                intent.migration = Some(intent::MigrationIntent { role: role.clone() });
+                log::info!("migration_role role={}", role);
+            }
             if intent.has_kernel() {
                 let kb = intent.kernel_boot.as_ref().unwrap();
                 log::info!(
@@ -124,6 +139,19 @@ fn main() {
                     intent.restore_snapshot_path()
                 );
             }
+            if intent.is_migration_receiver() {
+                // Phase 2 receiver mode: launch.rs will spawn CH with
+                // --api-socket only; the action loop dispatches
+                // vm.receive-migration over the API socket. Disk paths
+                // listed in the source's migrated config.json must
+                // exist on this dst pod at the same paths — the
+                // hand-rolled launcher pod YAML mounts the same PVCs
+                // and the seed.iso below is rebuilt for path-equality
+                // (CH re-opens every disk listed in config.json on
+                // receive completion). See
+                // `docs/design/live-migration-phase-2.md` §4.3.2.
+                log::info!("migration_receiver_mode");
+            }
             if intent.has_seed() && !intent.has_kernel() {
                 let configmap_path = Path::new(intent.seed_path());
                 let nocloud_output = runtime_dir.seed_dir();
@@ -176,7 +204,18 @@ fn main() {
                 return;
             }
 
-            if intent.has_network() {
+            // Lease poller: skipped in receiver mode. The migrated
+            // guest's DHCP state arrives over the migration wire as
+            // part of the virtio-net device state; the local
+            // dnsmasq on the dst node will not re-issue a lease
+            // mid-migration (and even if it does, mutating the
+            // launcher pod's status annotation while migration is
+            // in flight would race the action handler's status
+            // writes). A future PR-D may add an
+            // on-receive-completion lease report driven by the
+            // action loop. See `docs/design/live-migration-phase-2.md`
+            // §4.3.2 + §3.4 (poll-info-API).
+            if intent.has_network() && !intent.is_migration_receiver() {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let lease_path = runtime_dir.root().join("dnsmasq.leases");
                     let nics_for_poller = intent.nics.clone();
@@ -195,49 +234,64 @@ fn main() {
                 action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
             }
 
-            let on_socket_ready = namespace.as_ref().zip(name.as_ref()).map(|_| {
-                let ns = namespace.clone().unwrap();
-                let name = name.clone().unwrap();
-                let rt_clone = Arc::clone(&rt);
-                move |pid: u32, serial_socket_path: String, hypervisor: String| {
-                    log::info!(
-                        "socket_ready pid={} serial={} hypervisor={}",
-                        pid,
-                        serial_socket_path,
-                        hypervisor
-                    );
-                    rt_clone.block_on(async {
-                        let client = match kube_client::create_client().await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                log::warn!("kube client unavailable ({}), skipping report", e);
-                                return;
-                            }
-                        };
-                        if let Err(e) =
-                            report::report_guest_running(&client, &ns, &name, true, None).await
-                        {
-                            log::error!("report_running_failed: {}", e);
-                        } else {
-                            log::info!("guest_running_reported");
-                        }
-                        if let Err(e) = report::report_guest_runtime(
-                            &client,
-                            &ns,
-                            &name,
+            // on_socket_ready: skipped in receiver mode. CH on a
+            // receiver pod has no VM at socket-ready time (it's an
+            // empty VMM awaiting receive-migration); reporting
+            // "guest running" here would be a lie. The action loop's
+            // dispatch_migration_receive path verifies vm_info
+            // state=Running post-receive (W1 gate from PR-B); a
+            // future follow-up may add an
+            // on-migration-receive-success runtime report. For PR-C
+            // operators verify destination success via the
+            // migration-status: ready annotation OR via vm_info
+            // directly.
+            let on_socket_ready = if intent.is_migration_receiver() {
+                None
+            } else {
+                namespace.as_ref().zip(name.as_ref()).map(|_| {
+                    let ns = namespace.clone().unwrap();
+                    let name = name.clone().unwrap();
+                    let rt_clone = Arc::clone(&rt);
+                    move |pid: u32, serial_socket_path: String, hypervisor: String| {
+                        log::info!(
+                            "socket_ready pid={} serial={} hypervisor={}",
                             pid,
-                            serial_socket_path.as_str(),
-                            hypervisor.as_str(),
-                        )
-                        .await
-                        {
-                            log::error!("report_runtime_failed: {}", e);
-                        } else {
-                            log::info!("guest_runtime_reported");
-                        }
-                    });
-                }
-            });
+                            serial_socket_path,
+                            hypervisor
+                        );
+                        rt_clone.block_on(async {
+                            let client = match kube_client::create_client().await {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    log::warn!("kube client unavailable ({}), skipping report", e);
+                                    return;
+                                }
+                            };
+                            if let Err(e) =
+                                report::report_guest_running(&client, &ns, &name, true, None).await
+                            {
+                                log::error!("report_running_failed: {}", e);
+                            } else {
+                                log::info!("guest_running_reported");
+                            }
+                            if let Err(e) = report::report_guest_runtime(
+                                &client,
+                                &ns,
+                                &name,
+                                pid,
+                                serial_socket_path.as_str(),
+                                hypervisor.as_str(),
+                            )
+                            .await
+                            {
+                                log::error!("report_runtime_failed: {}", e);
+                            } else {
+                                log::info!("guest_runtime_reported");
+                            }
+                        });
+                    }
+                })
+            };
 
             match launch::run(&intent, &runtime_dir, on_socket_ready) {
                 Ok((exit_status, _pid, _serial_socket_path)) => {

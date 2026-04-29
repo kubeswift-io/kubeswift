@@ -173,6 +173,23 @@ load-images:
 smoke-test:
 	@test/smoke/boot-test.sh --no-cleanup
 
+# Phase 2 live-migration manual demo (test surface — NOT a usable
+# migration workflow). Drives the swiftletd send/receive primitives
+# end-to-end via kubectl annotate; does NOT go through the
+# SwiftMigration controller. See test/migration/manual/README.md for
+# the security banner and prerequisites.
+#
+# Required env: SWIFTGUEST=<name> TARGET_NODE=<hostname>
+# Optional env: NAMESPACE=<ns> (default: default)
+migration-phase2-manual:
+	@if [ -z "$$SWIFTGUEST" ]; then echo "SWIFTGUEST=<name> is required"; exit 1; fi
+	@if [ -z "$$TARGET_NODE" ]; then echo "TARGET_NODE=<hostname> is required"; exit 1; fi
+	@cd test/migration/manual && \
+		SWIFTGUEST=$$SWIFTGUEST NAMESPACE=$${NAMESPACE:-default} ./source.sh && \
+		TARGET_NODE=$$TARGET_NODE ./destination.sh && \
+		./run.sh && \
+		./verify.sh
+
 # smoke-test-cleanup removes resources created by all smoke test scenarios.
 # Uses NAMESPACE (default: default). Run: make smoke-test-cleanup NAMESPACE=myns
 smoke-test-cleanup:
