@@ -50,6 +50,15 @@ pub struct RuntimeIntent {
     /// same path used for every other hypervisor action.
     #[serde(default)]
     pub restore: Option<RestoreIntent>,
+    /// Live-migration role (Phase 2). Constructed at startup in
+    /// `main.rs` from the `KUBESWIFT_MIGRATION_ROLE` env var, NOT
+    /// deserialized from the intent JSON file — env-var-driven keeps
+    /// the existing intent JSON shape unchanged and isolates the
+    /// receiver branch from the Phase 1 pod-builder logic. See
+    /// `docs/design/live-migration-phase-2.md` §4.3.2 for the
+    /// rationale.
+    #[serde(skip)]
+    pub migration: Option<MigrationIntent>,
 }
 
 /// Restore-receive configuration for swiftletd.
@@ -61,6 +70,36 @@ pub struct RestoreIntent {
     /// here as readOnly. CH reads `config.json`, `state.json`, and
     /// `memory-ranges` from this directory.
     pub snapshot_path: String,
+}
+
+/// Live-migration role (Phase 2). When `role == "receiver"`, swiftletd
+/// spawns CH with `--api-socket` only (via
+/// `swift_ch_client::spawn_ch_receive`) and waits for the action loop
+/// to dispatch `vm.receive-migration`. Source-side (`role == "source"`
+/// or `migration` absent) uses the normal CH spawn path; the action
+/// loop dispatches `vm.send-migration` against the already-running CH.
+///
+/// Phase 2's manual demo path uses operator-applied launcher-pod YAML
+/// to set `KUBESWIFT_MIGRATION_ROLE=receiver` on the destination pod's
+/// swiftletd container. Phase 3's controller will set the same env var
+/// programmatically when building the destination launcher pod.
+#[derive(Debug, Clone)]
+pub struct MigrationIntent {
+    /// `"receiver"` for the destination pod; any other value (or
+    /// absence) means source / not in migration mode. Phase 2 only
+    /// has the receiver role as a distinct startup mode — source
+    /// pods boot normally, and the migration is initiated via
+    /// annotation after the VM is already running.
+    pub role: String,
+}
+
+impl MigrationIntent {
+    /// Returns true if this launcher pod is meant to start in
+    /// receiver mode (CH spawned with `--api-socket` only, awaiting
+    /// `vm.receive-migration`).
+    pub fn is_receiver(&self) -> bool {
+        self.role == "receiver"
+    }
 }
 
 /// GPU passthrough configuration from the controller.
@@ -210,6 +249,21 @@ impl RuntimeIntent {
     /// from a local snapshot rather than perform a fresh boot.
     pub fn is_restore(&self) -> bool {
         self.restore.is_some()
+    }
+
+    /// Returns true when this launcher pod is meant to start in
+    /// migration-receiver mode (Phase 2 — `docs/design/live-migration-phase-2.md`
+    /// §4.3.2). swiftletd spawns CH with `--api-socket` only via
+    /// `spawn_ch_receive`; the action loop dispatches
+    /// `vm.receive-migration` over the API socket once the
+    /// destination launcher pod's `migration-action: receive`
+    /// annotation arrives.
+    ///
+    /// Source-side migration is NOT a distinct startup mode — source
+    /// pods boot normally and the migration is initiated via
+    /// annotation after the VM is already running.
+    pub fn is_migration_receiver(&self) -> bool {
+        self.migration.as_ref().is_some_and(|m| m.is_receiver())
     }
 
     /// Returns the snapshot path for restore-receive mode, or empty
