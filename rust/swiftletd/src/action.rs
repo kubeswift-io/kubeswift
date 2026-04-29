@@ -304,6 +304,12 @@ pub enum StatusKind {
     Ready,
     Failed,
     Rejected,
+    /// Namespace-specific status verb override. Used by migration to
+    /// emit `"complete"` (source success) and `"running"` (destination
+    /// success) per `docs/design/live-migration-phase-2.md` §3.1; the
+    /// shared `Ready` variant ("ready") stays the snapshot success
+    /// verb to avoid breaking SwiftSnapshot/SwiftRestore controllers.
+    Custom(&'static str),
 }
 
 impl StatusKind {
@@ -313,6 +319,7 @@ impl StatusKind {
             StatusKind::Ready => "ready",
             StatusKind::Failed => "failed",
             StatusKind::Rejected => "rejected",
+            StatusKind::Custom(s) => s,
         }
     }
 }
@@ -436,6 +443,17 @@ pub fn decide(
 pub struct ActionOutcome {
     pub detail: Option<String>,
     pub pause_window_ms: Option<u64>,
+    /// Override the terminal-success status string. Defaults to
+    /// `StatusKind::Ready` ("ready") when None — that's the snapshot
+    /// success verb.
+    ///
+    /// Migration source uses `Some("complete")`; migration destination
+    /// uses `Some("running")`. The string is written verbatim to the
+    /// status annotation; the controller (or operator, in Phase 2
+    /// manual demo) reads the matching value to detect terminal
+    /// success. See `docs/design/live-migration-phase-2.md` §3.1
+    /// for the per-direction status enum.
+    pub success_status: Option<&'static str>,
 }
 
 impl ActionOutcome {
@@ -443,6 +461,7 @@ impl ActionOutcome {
         Self {
             detail: Some(s.into()),
             pause_window_ms: None,
+            success_status: None,
         }
     }
 }
@@ -579,6 +598,9 @@ async fn dispatch_migration_send(
             Ok(ActionOutcome {
                 detail: Some(format!("sent to {} ({}ms)", args.target_url, elapsed_ms)),
                 pause_window_ms: Some(elapsed_ms),
+                // Source-side migration success verb per design §3.1:
+                // "complete" (CH gone, guest now running on destination).
+                success_status: Some("complete"),
             })
         }
         Ok(info) => {
@@ -657,6 +679,9 @@ async fn dispatch_migration_receive(
                     args.listen_url, elapsed_ms
                 )),
                 pause_window_ms: Some(elapsed_ms),
+                // Destination-side migration success verb per design §3.1:
+                // "running" (CH state=Running with the migrated guest).
+                success_status: Some("running"),
             })
         }
         Ok(info) => {
@@ -888,6 +913,7 @@ async fn dispatch_capture(
     Ok(ActionOutcome {
         detail: Some(detail),
         pause_window_ms: Some(pause_window_ms),
+        success_status: None, // Snapshot uses the default StatusKind::Ready ("ready").
     })
 }
 
@@ -1318,7 +1344,16 @@ async fn handle_namespace(
             }
             let result = dispatch(&pending, api_socket).await;
             let (status, detail, pause_window_ms) = match result {
-                Ok(outcome) => (StatusKind::Ready, outcome.detail, outcome.pause_window_ms),
+                Ok(outcome) => {
+                    // `success_status` is None for snapshot (defaults to
+                    // StatusKind::Ready → "ready"); migration source
+                    // sets Some("complete"); migration destination sets
+                    // Some("running"). See ActionOutcome.success_status.
+                    let status = outcome
+                        .success_status
+                        .map_or(StatusKind::Ready, StatusKind::Custom);
+                    (status, outcome.detail, outcome.pause_window_ms)
+                }
                 Err(d) => (StatusKind::Failed, Some(d), None),
             };
             if let Err(e) = write(
@@ -1481,6 +1516,18 @@ mod tests {
         assert_eq!(StatusKind::Ready.as_str(), "ready");
         assert_eq!(StatusKind::Failed.as_str(), "failed");
         assert_eq!(StatusKind::Rejected.as_str(), "rejected");
+    }
+
+    #[test]
+    fn status_kind_custom_emits_verbatim() {
+        // Migration source uses StatusKind::Custom("complete"); migration
+        // destination uses StatusKind::Custom("running"). The string
+        // is written verbatim to the migration-status annotation per
+        // design §3.1.
+        assert_eq!(StatusKind::Custom("complete").as_str(), "complete");
+        assert_eq!(StatusKind::Custom("running").as_str(), "running");
+        assert_eq!(StatusKind::Custom("listening").as_str(), "listening");
+        assert_eq!(StatusKind::Custom("precopy").as_str(), "precopy");
     }
 
     #[tokio::test]
@@ -2053,6 +2100,8 @@ mod tests {
             detail
         );
         assert!(outcome.pause_window_ms.is_some());
+        // Source-side migration success verb per design §3.1.
+        assert_eq!(outcome.success_status, Some("complete"));
     }
 
     #[tokio::test]
@@ -2113,6 +2162,8 @@ mod tests {
             "got {}",
             detail
         );
+        // Destination-side migration success verb per design §3.1.
+        assert_eq!(outcome.success_status, Some("running"));
     }
 
     #[tokio::test]
