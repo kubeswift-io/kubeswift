@@ -152,6 +152,30 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Serializes the three `*_honors_binary_env_var` tests + the
+    /// `spawn_ch_receive_cleans_up_stale_socket` test.
+    ///
+    /// `KUBESWIFT_CH_BINARY` is process-wide; cargo test runs tests in
+    /// parallel by default. Without this lock, two tests that both
+    /// `set_var` race: test A sets path-A, test B sets path-B
+    /// (clobbering A), test A's `spawn_ch_*` reads the env var and
+    /// gets path-B, test A's argv ends up in test B's `argv.log`,
+    /// test A's `read_to_string(&argv_log)` returns ENOENT.
+    ///
+    /// This race went undetected when `spawn_ch_restore_honors_binary_env_var`
+    /// was the only test of its kind (PR-A doubled the surface by
+    /// adding two more `spawn_ch_receive_*` tests). CI's GitHub
+    /// Actions runner triggered it on the second post-PR-A run.
+    ///
+    /// Use `.lock().unwrap()` even though we don't carry shared
+    /// data across the lock — the side effect we're guarding is the
+    /// process-wide env var, not a Rust value.
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn restore_args_includes_api_socket_and_source_url() {
@@ -204,6 +228,7 @@ mod tests {
         // it records its argv to a sentinel file then exits 0. We
         // can then assert the spawn invoked the right binary with
         // the right args.
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let argv_log = tmp.path().join("argv.log");
         let script_path = tmp.path().join("fake-ch.sh");
@@ -325,6 +350,7 @@ mod tests {
         // Mirrors spawn_ch_restore_honors_binary_env_var but for the
         // new receive variant — asserts the spawned binary gets
         // exactly --api-socket=<path> and nothing else.
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let argv_log = tmp.path().join("argv.log");
         let script_path = tmp.path().join("fake-ch.sh");
@@ -367,6 +393,7 @@ mod tests {
         // target path must be removed before CH spawn fires, even if
         // the file content is non-empty (a real CH socket left by a
         // prior SIGKILL'd process).
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let argv_log = tmp.path().join("argv.log");
         let socket_path = tmp.path().join("ch.sock");
