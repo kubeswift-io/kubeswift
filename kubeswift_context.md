@@ -522,17 +522,44 @@ What happens when SwiftImage's source PVC is deleted while a snapshot of it has 
 
 ---
 
-## Phase 2 Decisions Pending (live migration)
+## Phase 2 Decisions Resolved (live migration)
 
-When PR #26 is deployed, Phase 2 of live migration design conversation begins. Pending decisions:
+Phase 2 spike completed 2026-04-29. Findings doc: `docs/design/live-migration-phase-2-spike.md`. All four pending decisions resolved with empirical evidence on the deployed cluster (miles + boba, CH v51.1).
 
-1. **swiftletd control surface for migration actions** — annotation-driven (matches existing patterns including snapshot Phase 2's pattern) vs HTTP. Default recommendation: annotation-driven, but heaviest swiftletd extension yet so worth confirming.
+1. **swiftletd control surface — RESOLVED: annotation-driven**, mirroring snapshot Phase 2's `kubeswift.io/<resource>-action-id-mirror` pattern. 8-action set: prepare-destination (pod-level), start-receive, start-send, report-progress, report-complete, report-failed, cancel (= dst-kill, NOT a CH API call), wait-keepalive. Annotation churn ~8 patches per ~30 s migration — trivially within surface throughput. No action requires synchronous request/response. Spike doc Resolved Decision 1 + Q3.
 
-2. **mTLS posture for Phase 2** — Phase 2 is plumbing in isolation, no controller integration, no production migration traffic yet. Manual demonstration uses plaintext TCP. mTLS is Phase 3 territory.
+2. **mTLS posture — RESOLVED: plaintext TCP for Phase 2 with security-gating**. Phase 2 manual demonstration only; mTLS lands in Phase 3. **Required gates before Phase 2 ships**: `docs/design/THREAT-MODEL.md` callout + `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation gate on swiftletd action acceptance. Phase 3 mTLS handoff must compose with the S1 annotation-trust-boundary mitigation (URLs from SwiftMigration CR, NOT pod annotations) — neither subsumes the other. Spike doc Resolved Decision 2 + S2.
 
-3. **Same-CH-version constraint** — operationally consequential for upgrade workflow. Phase 2 spike must verify against deployed CH version and document upgrade-discipline implications.
+3. **Same-CH-version constraint — RESOLVED: bidirectional v50/v51 minor compatibility**, but Phase 2 spec defaults to **exact-image-tag match** with `spec.allowVersionSkew=true` opt-in escape hatch (analogous to Phase 1's `spec.allowIPChange`). Detection at the Kubernetes layer (controller-level image-tag comparison), NOT at the CH wire level (no CH-level capability handshake exists). The realistic production failure mode is **CPU-feature mismatch** (heterogeneous microarchs), not version mismatch — F12 in spike doc. Q4b (full sweep across major versions, patch-only skew) descoped per architect time-cap. Spike doc Resolved Decision 3 + Q4 + F12.
 
-4. **Pre-copy convergence test surface** — pre-copy migration's whole shape needs memory-dirtying workload, not static VM. Spike should validate convergence on typical workload before Phase 2 commits to specific timing assumptions.
+4. **Pre-copy convergence — RESOLVED: 5-iter cap is the convergence gate**. CH v51.1 hardcodes pre-copy to 5 iterations; high-dirty-rate workloads do NOT converge in the spec sense — they emerge with stop-and-copy ≈ one iteration window of dirty pages. Phase 2 spec encodes `spec.maxPauseWindow` (operator chooses acceptable vCPU-paused window — workloads exceeding it rejected at admission via dirty-rate estimation) and `spec.timeout` (controller-level total-migration cap). **Realistic Phase 2 numbers**: vCPU-paused window 0.5–5 s for typical workloads; operator-visible BEACON gap 20–40 s (pre-copy iterations contribute). Spike doc Resolved Decision 4 + Q2 + F6 + F7.
+
+### Phase 2 must-have-before-ship checklist
+
+These are non-negotiable before Phase 2 swiftletd extension lands in code:
+
+- [ ] **Threat-model gating** — `docs/design/THREAT-MODEL.md` + `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation gate (S2).
+- [ ] **swiftletd reads URL inputs from SwiftMigration CR**, not from pod annotations (S1; ties to OQ6).
+- [ ] **swiftletd launcher entrypoint `rm -f` API socket file before invoking CH** (W2 from walkthrough).
+- [ ] **Resuming-phase guard pattern** — controller's Resuming phase MUST gate `phase=Completed` on actual destination guest state (info=Running + primaryIP), NOT just on send-migration's exit code or stale annotation mirror (W1 from walkthrough).
+- [ ] **Controller-level CPU-feature pre-flight check** in SwiftMigration validating webhook (OQ1; mitigates F12/S3).
+
+### Phase 2 design open questions surfaced by the spike
+
+(NOT in original four; require explicit treatment before swiftletd extension begins.)
+
+1. Heterogeneous CPU microarch policy (controller pre-flight CPU-feature check, mirroring Phase 1's target node Ready check).
+2. Destination listener timeout strategy (~30 s default, exposed as `spec.destinationTimeout`).
+3. observedDowntime → split into `observedPauseWindow` + `observedTotalMigrationTime` in Phase 3 status reporting.
+4. Progress-reporting mechanism: poll-`info`-API (recommended) vs tail-`--log-file` (Phase 3+ improvement).
+5. Source-crash recovery model (no retry-same-destination after source crash; provision fresh dest).
+6. Migration channel auth for Phase 3: sidecar mTLS vs first-party CH support; trust-anchor model. **Compose with S1.**
+7. Audit logging policy (Kubernetes Events on each migration phase transition; operator-identity binding for opt-in flags).
+
+### Spike-walkthrough operational findings
+
+- **W1 — Walkthrough script self-narrated success on actual failure.** First run failed; script printed "no contradiction" because conclusion wasn't gated on observed state. Phase 2 controller's Resuming phase must avoid this same pattern.
+- **W2 — Stale-state cleanup is the persistent operational hazard.** CH leaves API socket file on SIGKILL; next CH instance fails with "Address in use". swiftletd launcher entrypoint must `rm -f` the socket file before starting CH.
 
 ---
 
