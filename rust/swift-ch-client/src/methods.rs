@@ -118,6 +118,113 @@ impl ApiClient {
             .map(drop)
     }
 
+    /// Send the running VM's state to a destination CH instance over the
+    /// migration channel.
+    ///
+    /// This is the source-side primitive for live migration (Phase 2).
+    /// `destination_url` is the URL the destination CH is listening on,
+    /// in CH's own URL syntax:
+    ///
+    ///   - `tcp:<host>:<port>` for cross-host TCP transport. Plaintext;
+    ///     Phase 2 carries this only on a trusted cluster network with
+    ///     the operator-acknowledged `unsafe-plaintext: ack` gate. Phase
+    ///     3 wraps this in mTLS via a sidecar.
+    ///   - `unix:<path>` for same-host. Used in development only.
+    ///
+    /// # Blocking semantics
+    ///
+    /// `send-migration` blocks the API socket for the **entire pre-copy +
+    /// stop-and-copy duration**. Realistic cross-node windows on the
+    /// spike's 256 MiB beacon guest were ~2.9 s; a 4 GiB application VM
+    /// at typical dirty rates is on the order of tens of seconds (Q2
+    /// findings in `live-migration-phase-2-spike.md`). Callers MUST set
+    /// a generously-sized [`ApiClient::with_timeout`] before issuing
+    /// this call, OR dispatch it on a worker that does not gate the
+    /// action loop's poll cadence.
+    ///
+    /// # Lifecycle
+    ///
+    /// On success the source CH process exits cleanly (Q1c finding) — the
+    /// guest is now running on the destination CH. The action handler
+    /// observes the source exit through the existing CH-supervision path
+    /// and writes the terminal `migration-status: complete` annotation.
+    ///
+    /// On failure CH stays alive and the guest continues running on this
+    /// side. Failure modes covered by the spike:
+    ///   - F1: source killed mid-migration (process gone — caller never
+    ///     observes the result here, since this method's process is dead).
+    ///   - F2: destination killed mid-migration — the in-flight call
+    ///     returns `ApiError::Status(500)` or similar with detail
+    ///     `connection refused`; the source guest auto-resumes.
+    ///   - F3: network drop — same shape as F2 once the destination
+    ///     listener gives up (a few seconds).
+    ///
+    /// See `docs/design/live-migration-phase-2.md` §4.1 for the full
+    /// blocking-semantics rationale.
+    pub fn send_migration(&self, destination_url: &str) -> Result<(), ApiError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "destination_url": destination_url,
+        }))
+        .map_err(|e| ApiError::Malformed(format!("send_migration body serialize: {}", e)))?;
+        self.request_ok("PUT", "/api/v1/vm.send-migration", Some(&body))
+            .map(drop)
+    }
+
+    /// Open a migration receive listener on this (empty) CH and wait for
+    /// the source CH to connect and stream the VM's state.
+    ///
+    /// This is the destination-side primitive for live migration. The
+    /// CH process MUST have been started with `--api-socket` only and
+    /// MUST NOT have a VM created (no `vm.create` / `vm.boot` prior to
+    /// this call). See [`crate::spawn_ch_receive`] for the matching
+    /// spawn primitive.
+    ///
+    /// `receiver_url` is the URL CH binds the listener on:
+    ///
+    ///   - `tcp:0.0.0.0:<port>` accepts the source's connection.
+    ///   - `unix:<path>` for same-host development tests.
+    ///
+    /// # Blocking semantics
+    ///
+    /// Like [`send_migration`], this call blocks the API socket for the
+    /// entire migration. CH:
+    ///
+    ///   1. Opens the TCP listener at `receiver_url`.
+    ///   2. Accepts the source's connection.
+    ///   3. Receives pre-copy iterations + stop-and-copy delta.
+    ///   4. Restores VM state and **automatically transitions the VM to
+    ///      `Running`** (Q1c finding — no separate `boot` or `resume`
+    ///      call is needed).
+    ///   5. Returns 204 No Content over this API call.
+    ///
+    /// The TCP listener self-terminates after a few seconds of network
+    /// silence (F4 finding). The action handler MUST NOT impose an
+    /// application-level timeout shorter than the realistic migration
+    /// window; CH's TCP layer is the timeout source.
+    ///
+    /// # Failure modes
+    ///
+    /// - Source crashes mid-migration: CH self-terminates with an error
+    ///   (F1 finding). This method returns `ApiError::Status` with the
+    ///   underlying error; the destination is unrecoverable, controller
+    ///   must provision a fresh destination for retry.
+    /// - Source never connects: the listener gives up after the TCP
+    ///   retransmit window (F4 finding); this method returns an error.
+    /// - CPU-feature mismatch: CH receives the snapshot, performs the
+    ///   compatibility check post-receive, and aborts pre-resume (F12
+    ///   finding). This method returns `ApiError::Status` with detail
+    ///   `cpu_incompat` or similar.
+    ///
+    /// See `docs/design/live-migration-phase-2.md` §4.1.
+    pub fn receive_migration(&self, receiver_url: &str) -> Result<(), ApiError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "receiver_url": receiver_url,
+        }))
+        .map_err(|e| ApiError::Malformed(format!("receive_migration body serialize: {}", e)))?;
+        self.request_ok("PUT", "/api/v1/vm.receive-migration", Some(&body))
+            .map(drop)
+    }
+
     /// Query the VM's lifecycle state.
     pub fn vm_info(&self) -> Result<VmInfo, ApiError> {
         let resp = self.request_ok("GET", "/api/v1/vm.info", None)?;
@@ -282,6 +389,83 @@ mod tests {
             ApiError::Status(resp) => {
                 assert_eq!(resp.status, 400);
                 assert_eq!(resp.body, b"VM is not in Paused state");
+            }
+            other => panic!("expected Status error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn send_migration_sends_destination_url_in_body() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client.send_migration("tcp:10.0.0.5:6789").unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        assert!(req.starts_with("PUT /api/v1/vm.send-migration HTTP/1.1\r\n"));
+        assert!(req.contains("Content-Type: application/json\r\n"));
+        let (_, body) = req.split_once("\r\n\r\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed["destination_url"], "tcp:10.0.0.5:6789");
+    }
+
+    #[test]
+    fn send_migration_propagates_5xx_with_body() {
+        // F2/F3 in the spike: when the destination is killed mid-flight or
+        // the network drops, send-migration returns an error with the
+        // underlying TCP failure reason. Callers (the action handler) must
+        // see the body so they can sanitize it into a category for the
+        // status-detail annotation.
+        let server = MockServer::spawn(
+            b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 19\r\n\r\nconnection refused\n"
+                .to_vec(),
+        );
+        let client = ApiClient::new(server.path.clone());
+        let err = client.send_migration("tcp:10.0.0.5:6789").unwrap_err();
+        match err {
+            ApiError::Status(resp) => {
+                assert_eq!(resp.status, 500);
+                assert!(
+                    String::from_utf8_lossy(&resp.body).contains("connection refused"),
+                    "body did not carry the underlying reason: {:?}",
+                    resp.body
+                );
+            }
+            other => panic!("expected Status error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn receive_migration_sends_receiver_url_in_body() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client.receive_migration("tcp:0.0.0.0:6789").unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        assert!(req.starts_with("PUT /api/v1/vm.receive-migration HTTP/1.1\r\n"));
+        assert!(req.contains("Content-Type: application/json\r\n"));
+        let (_, body) = req.split_once("\r\n\r\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed["receiver_url"], "tcp:0.0.0.0:6789");
+    }
+
+    #[test]
+    fn receive_migration_propagates_4xx_with_body() {
+        // Q1c finding: receive-migration on a CH that already has a VM
+        // created (rather than empty) errors out. Phase 2 swiftletd
+        // surfaces this as `migration-status: failed, detail: ...`; the
+        // body of the 4xx is what gets sanitized into the detail.
+        let server = MockServer::spawn(
+            b"HTTP/1.1 400 Bad Request\r\nContent-Length: 33\r\n\r\nvm already created on destination\n"
+                .to_vec(),
+        );
+        let client = ApiClient::new(server.path.clone());
+        let err = client.receive_migration("tcp:0.0.0.0:6789").unwrap_err();
+        match err {
+            ApiError::Status(resp) => {
+                assert_eq!(resp.status, 400);
+                assert!(
+                    String::from_utf8_lossy(&resp.body).contains("vm already created"),
+                    "body lost: {:?}",
+                    resp.body
+                );
             }
             other => panic!("expected Status error, got {:?}", other),
         }

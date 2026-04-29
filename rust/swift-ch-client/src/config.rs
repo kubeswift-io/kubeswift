@@ -58,6 +58,13 @@ pub struct VmConfig {
 }
 
 impl VmConfig {
+    /// Returns the API socket path. Used by spawn paths to clean up
+    /// stale sockets before invoking CH (W2 walkthrough finding —
+    /// `docs/design/live-migration-phase-2.md` §4.3.3).
+    pub fn api_socket(&self) -> &str {
+        &self.api_socket
+    }
+
     /// Build CH process arguments. Unix socket only; no TCP.
     /// Each option and its value must be separate argv elements (e.g. ["--api-socket", "path=/foo"]).
     /// For --disk, multiple disks are passed as multiple values to a single --disk (not repeated --disk).
