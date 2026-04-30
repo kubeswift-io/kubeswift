@@ -5,6 +5,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
+
+	"github.com/projectbeskar/kubeswift/internal/resolved"
 )
 
 // CloneGrowInitImage is the image used by clone-grow-init.
@@ -32,17 +34,54 @@ func networkInitContainer() corev1.Container {
 }
 
 // cloneGrowInitContainer returns the clone-grow-init init container that
-// expands a snapshot-based clone PVC's image.raw to the target size.
+// finalises a snapshot-based clone PVC before the launcher pod boots.
 //
 // Used only on the snapshot clone strategy. The Copy Job path performs the
-// equivalent qemu-img resize + sgdisk -e itself before the launcher pod is
-// created (see createCloneJob in rootdisk.go).
+// equivalent operations itself before the launcher pod is created (see
+// createCloneJob in rootdisk.go).
 //
-// The PVC's underlying block device must already be expanded to targetBytes
-// before this init container runs; the SwiftGuest controller's
+// The PVC's underlying block device (or filesystem) must already be at
+// targetBytes before this init container runs; the SwiftGuest controller's
 // expand-and-wait gate (ensureRootDiskCloneFromSnapshot) enforces that.
-func cloneGrowInitContainer(targetBytes int64) corev1.Container {
-	script := fmt.Sprintf(`set -e
+//
+// W9 — branches on rg.Storage.VolumeMode (PR #32 surface):
+//
+//   - Filesystem (default): byte-identical to pre-W9.
+//     `qemu-img resize -f raw .../image.raw <bytes> && sgdisk -e .../image.raw`.
+//   - Block: VolumeDevices for the root-disk volume; runs
+//     `sgdisk -e /dev/kubeswift-root` only. No qemu-img resize —
+//     block devices are pre-sized at the PVC's requested capacity by
+//     the storage layer; resize would be a no-op and including it
+//     would mask future regressions in the expand-and-wait gate.
+func cloneGrowInitContainer(rg *resolved.ResolvedGuest, targetBytes int64) corev1.Container {
+	isBlock := rg != nil && rg.Storage.VolumeMode == "Block"
+
+	var script string
+	var volumeMounts []corev1.VolumeMount
+	var volumeDevices []corev1.VolumeDevice
+
+	if isBlock {
+		// Block path. sgdisk -e operates byte-level through the block
+		// device's standard read/write interface; works natively on
+		// raw devices. No qemu-img resize (no-op on Block) and no cp
+		// (the PVC was populated by the Copy Job which already wrote
+		// the raw image to the block device).
+		script = fmt.Sprintf(`set -e
+echo "clone-grow-init: Block mode, target=%d bytes, device=%s"
+apt-get update -qq
+apt-get install -y -qq gdisk >/dev/null 2>&1
+sgdisk -e %s
+sync
+echo "clone-grow-init: complete (Block)"`,
+			targetBytes, DiskRootDevicePath, DiskRootDevicePath)
+		volumeDevices = []corev1.VolumeDevice{
+			{Name: "root-disk", DevicePath: DiskRootDevicePath},
+		}
+	} else {
+		// Filesystem path — byte-identical to pre-W9 behaviour. Reviewers:
+		// any change that alters this branch is a regression risk for
+		// every existing SwiftGuest (the default volumeMode).
+		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: target=%d bytes"
 apt-get update -qq
 apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
@@ -50,7 +89,11 @@ qemu-img resize -f raw %s/image.raw %d
 sgdisk -e %s/image.raw
 sync
 echo "clone-grow-init: complete ($(stat -c %%s %s/image.raw) bytes)"`,
-		targetBytes, DisksRootPath, targetBytes, DisksRootPath, DisksRootPath)
+			targetBytes, DisksRootPath, targetBytes, DisksRootPath, DisksRootPath)
+		volumeMounts = []corev1.VolumeMount{
+			{Name: "root-disk", MountPath: DisksRootPath},
+		}
+	}
 
 	return corev1.Container{
 		Name:            "clone-grow-init",
@@ -58,9 +101,8 @@ echo "clone-grow-init: complete ($(stat -c %%s %s/image.raw) bytes)"`,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{"/bin/sh", "-c", script},
 		SecurityContext: privilegedContext(),
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "root-disk", MountPath: DisksRootPath},
-		},
+		VolumeMounts:    volumeMounts,
+		VolumeDevices:   volumeDevices,
 	}
 }
 

@@ -199,6 +199,15 @@ func (r *ResolvedGuest) GetRootDiskFormat() string {
 	return "raw"
 }
 
+// GetRootDiskVolumeMode returns the resolved storage volumeMode
+// ("Filesystem" or "Block") for the root disk. Empty string is
+// treated as "Filesystem" by callers (the pre-W9 default). Used by
+// runtimeintent.Build to decide whether RootDisk.Path resolves to a
+// filesystem path or a Block device path.
+func (r *ResolvedGuest) GetRootDiskVolumeMode() string {
+	return r.Storage.VolumeMode
+}
+
 // GetCPU returns CPU cores for runtime intent.
 func (r *ResolvedGuest) GetCPU() int {
 	return r.Resources.CPU
