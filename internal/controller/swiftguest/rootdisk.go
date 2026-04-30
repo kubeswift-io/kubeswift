@@ -187,7 +187,7 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 			}
 			return nil, fmt.Errorf("clone Job %s in progress", jobName)
 		}
-		if err := r.createCloneJob(ctx, guest, jobName, sourcePVC, cloneName, targetSize); err != nil {
+		if err := r.createCloneJob(ctx, guest, rg, jobName, sourcePVC, cloneName, targetSize); err != nil {
 			return nil, err
 		}
 		return nil, fmt.Errorf("clone Job %s created, waiting for completion", jobName)
@@ -380,22 +380,89 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromSnapshot(
 	}, nil
 }
 
+// CloneJobBlockDevicePath is the in-Job device path for a Block-mode
+// destination PVC. Only meaningful inside the Copy Job's pod namespace —
+// the launcher pod uses its own constant (DiskRootDevicePath in pod.go).
+// The two are deliberately distinct: Copy Job device naming is internal
+// to a one-shot Job and need not align with the launcher's branding.
+const CloneJobBlockDevicePath = "/dev/dst-block"
+
+// createCloneJob creates the per-guest root-disk Copy Job. Branches on
+// the resolved storage volumeMode (PR #32 surface):
+//
+//   - Filesystem (default): byte-identical to pre-W9 behaviour. Mounts
+//     the destination PVC as a filesystem path and runs
+//     `cp + qemu-img resize + sgdisk -e + sync`.
+//   - Block: mounts the destination PVC via VolumeDevices as a raw block
+//     device and runs `qemu-img convert + sgdisk -e + sync`. No
+//     `qemu-img resize` (no-op on block devices: size is fixed at PVC
+//     provision time by the storage layer; including it as a no-op
+//     invites future confusion). No `cp` (cp can't write to a raw
+//     device; qemu-img convert handles the bulk transfer atomically and
+//     supports sparse-aware writes).
+//
+// The source PVC mount is unchanged (read-only filesystem mount) for
+// both branches — SwiftImage import PVCs stay on Filesystem per W9
+// scoping question (a)'s default. SwiftImage.spec.storage for direct
+// Block imports is deferred.
 func (r *SwiftGuestReconciler) createCloneJob(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
+	rg *resolved.ResolvedGuest,
 	jobName, sourcePVC, clonePVC string,
 	targetSize resource.Quantity,
 ) error {
 	targetBytes := targetSize.Value()
+	isBlock := rg.Storage.VolumeMode == "Block"
 
-	script := fmt.Sprintf(`set -e
+	var script string
+	var volumeMounts []corev1.VolumeMount
+	var volumeDevices []corev1.VolumeDevice
+
+	if isBlock {
+		// Block destination. qemu-img convert writes the raw image to
+		// the block device atomically. sgdisk -e operates byte-level
+		// through the block device's standard read/write interface,
+		// which works natively on block devices (W9 scoping question
+		// (c) — verified on cluster). No qemu-img resize: block devices
+		// are pre-sized at the PVC's requested capacity by the storage
+		// layer, so resize would be a no-op and including it would
+		// invite future confusion about whether the resize step was
+		// load-bearing.
+		script = fmt.Sprintf(`set -e
+echo "Cloning root disk from %s to %s (%d bytes, Block mode -> %s)"
+apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
+qemu-img convert -f raw -O raw /src/image.raw %s
+sgdisk -e %s
+sync
+echo "Clone complete (Block mode)"`,
+			sourcePVC, clonePVC, targetBytes, CloneJobBlockDevicePath,
+			CloneJobBlockDevicePath, CloneJobBlockDevicePath)
+		volumeMounts = []corev1.VolumeMount{
+			{Name: "src", MountPath: "/src", ReadOnly: true},
+		}
+		volumeDevices = []corev1.VolumeDevice{
+			{Name: "dst", DevicePath: CloneJobBlockDevicePath},
+		}
+	} else {
+		// Filesystem destination — byte-identical to pre-W9 behaviour.
+		// Reviewers: this branch is the regression contract; any change
+		// that alters the rendered Job for Filesystem-mode guests is a
+		// regression and the smoke test will catch it.
+		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes)"
 cp /src/image.raw /dst/image.raw
 apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img resize -f raw /dst/image.raw %d
 sgdisk -e /dst/image.raw
 sync
-echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`, sourcePVC, clonePVC, targetBytes, targetBytes)
+echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
+			sourcePVC, clonePVC, targetBytes, targetBytes)
+		volumeMounts = []corev1.VolumeMount{
+			{Name: "src", MountPath: "/src", ReadOnly: true},
+			{Name: "dst", MountPath: "/dst"},
+		}
+	}
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -415,13 +482,11 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`, sourcePVC, clonePVC
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{{
-						Name:    "clone",
-						Image:   CloneJobImage,
-						Command: []string{"/bin/sh", "-c", script},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "src", MountPath: "/src", ReadOnly: true},
-							{Name: "dst", MountPath: "/dst"},
-						},
+						Name:          "clone",
+						Image:         CloneJobImage,
+						Command:       []string{"/bin/sh", "-c", script},
+						VolumeMounts:  volumeMounts,
+						VolumeDevices: volumeDevices,
 					}},
 					Volumes: []corev1.Volume{
 						{
