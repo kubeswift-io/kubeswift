@@ -293,6 +293,60 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              storage:
+                description: |-
+                  Storage overrides the SwiftGuestClass storage defaults for PVCs
+                  the controller creates for this guest (today: the root-disk clone).
+                  Per-field merge: each non-empty field overrides the same field on
+                  SwiftGuestClass.spec.storage; empty fields fall through to the
+                  class default, then to system defaults (ReadWriteOnce + Filesystem
+
+                  Set this when a single guest needs different storage characteristics
+                  than its class — for example, opting one guest into RWX+Block for
+                  live-migration capability while the rest of the class stays on RWO.
+                properties:
+                  accessMode:
+                    description: |-
+                      AccessMode is the PVC accessMode. Defaults to ReadWriteOnce.
+                      ReadWriteOnce is security-conservative and matches Phase 1 offline
+                      migration behaviour. ReadWriteMany unlocks Phase 3 live migration of
+                      disk-boot guests but only in combination with VolumeMode=Block (see
+                      the XValidation rule on this struct).
+                    enum:
+                    - ReadWriteOnce
+                    - ReadWriteMany
+                    type: string
+                  storageClassName:
+                    description: |-
+                      StorageClassName names the StorageClass for controller-created
+                      PVCs. Nil/unset falls through to SwiftGuestClass.spec.storage
+                      .storageClassName, then to the source SwiftImage's PVC's class
+                      (existing pre-PR-32 behaviour), then to the cluster default. Set
+                      it explicitly when a specific class is required — e.g. a Longhorn
+                      class with parameters.migratable="true" for RWX+Block guests.
+
+                      *string distinguishes "not set" (fall through) from the empty
+                      string (explicit cluster-default selection). The explicit-empty
+                      case is rare in practice; the distinction is preserved for
+                      forward compatibility with operators who want to override the
+                      class to the cluster default explicitly.
+                    type: string
+                  volumeMode:
+                    description: |-
+                      VolumeMode is the PVC volumeMode. Defaults to Filesystem. Block is
+                      required for live-migration-capable RWX (KubeVirt model) and for
+                      some CSI drivers' raw-device passthrough; the value flows to PVC
+                      spec verbatim.
+                    enum:
+                    - Filesystem
+                    - Block
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: accessMode=ReadWriteMany requires volumeMode=Block; Filesystem
+                    RWX is not live-migration-capable (see docs/design/storage-access-mode.md)
+                  rule: '!(self.accessMode == ''ReadWriteMany'' && (!has(self.volumeMode)
+                    || self.volumeMode == ''Filesystem''))'
               topologySpreadConstraints:
                 description: |-
                   TopologySpreadConstraints applied to the launcher pod.
@@ -659,6 +713,33 @@ spec:
                   pid:
                     format: int64
                     type: integer
+                type: object
+              storage:
+                description: |-
+                  Storage echoes the resolved storage spec actually used for
+                  controller-created PVCs (today: the root-disk clone). Informational
+                  only — useful for kubectl describe and operator debugging to confirm
+                  the per-field merge resolved the way the operator expected.
+
+                  liveMigrationCapable is intentionally NOT a field here; see
+                  ResolvedStorageStatus's doc comment for the write-back-race
+                  rationale. Use IsLiveMigrationCapable on the resolved spec.
+                properties:
+                  accessMode:
+                    description: |-
+                      AccessMode is the resolved PVC accessMode actually used for
+                      controller-created PVCs.
+                    type: string
+                  storageClassName:
+                    description: |-
+                      StorageClassName is the resolved StorageClass actually used. Empty
+                      when resolution fell through to the source-image-class default.
+                    type: string
+                  volumeMode:
+                    description: |-
+                      VolumeMode is the resolved PVC volumeMode actually used for
+                      controller-created PVCs.
+                    type: string
                 type: object
             type: object
         type: object

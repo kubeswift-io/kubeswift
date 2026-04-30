@@ -612,6 +612,7 @@ Pre-migration sentinel md5 captured anyway for any future re-run on this same so
 | 58 | swiftmigration/webhook | Per-operation discipline refactor (subsumes A/B/C as architectural rule) | PR #26 |
 | 59 | swiftguest/rbac.go (new) | swiftletd RBAC was per-namespace Role + manually-applied RoleBinding; silently broke IP discovery in non-default namespaces. Promoted to ClusterRole + controller-driven auto-bind. (Re-surface of snapshot walkthrough F2; W3 in Phase 2 walkthrough.) | PR #30 |
 | 60 | rust/swiftletd/src/lease.rs | Lease poller `return`-ed unconditionally after first patch attempt; transient 403 (W3 RBAC gap) killed the poller permanently. Only `return` on patch success now; retry on transient errors. (W4 in Phase 2 walkthrough.) | PR #30 |
+| 61 | api/swift/v1alpha1 + controller + webhook | Storage access mode CRD: SwiftGuestClass.spec.storage and SwiftGuest.spec.storage select accessMode/volumeMode/storageClassName for controller-created PVCs. CRD admission rejects RWX+Filesystem (Filesystem RWX is not live-migration-capable). SwiftMigration webhook gains forward-compat live-mode storage gate (recompute from spec, NOT read status — write-back-race avoidance). Defaults preserve current behaviour (RWO+Filesystem). Resolves W6 design contradiction at the API surface; storage architecture review owns the deeper questions (CSI driver matrix, F2 split-brain on RWX). | PR #32 |
 
 ---
 
@@ -763,3 +764,8 @@ When helping develop KubeSwift:
 - **Live Migration Phase 1 — operator-opt-in for IP change via spec.allowIPChange (default networking does not preserve IP cross-node)**
 - **Live Migration Phase 1 — webhook uses per-operation discipline (ValidateCreate full / ValidateUpdate shape-only / ValidateDelete pass-through) — see PR #26**
 - **Pattern: validation logic that fires on every operation needs to enumerate which operations it fires on. Default-to-everything is the bug pattern; default-to-explicit is the discipline (PR #26 lesson)**
+- **Storage access mode (PR #32) — SwiftGuestClass.spec.storage + SwiftGuest.spec.storage select accessMode/volumeMode/storageClassName per-field. Default RWO+Filesystem. RWX+Block is the live-migration-capable combination (KubeVirt model)**
+- **Storage access mode — CRD admission HARD rejects RWX+Filesystem via OpenAPI CEL XValidation. Filesystem RWX (Longhorn Generic, NFS-based) is not live-migration-capable; the rejection is at submit time so operators don't discover the gap at drain time**
+- **Storage access mode — `liveMigrationCapable` is recomputed from the resolved spec at admission time (SwiftMigration webhook + swiftctl describe), NOT stored in status. Derived facts in status race controller-write-back during cluster restore; recompute eliminates the false-rejection hazard**
+- **Storage access mode — Longhorn migratable-parameter check is a STATUS condition (StorageReady), NOT an admission gate. StorageClasses are cluster-admin resources; the controller surfaces the gap and reconciles to ready when fixed**
+- **Storage access mode — per-field merge: SwiftGuest.spec.storage overrides SwiftGuestClass.spec.storage one field at a time. Empty/zero fields fall through. *string for storageClassName distinguishes nil ("fall through") from "" ("explicit cluster default") — both currently resolve to empty but the distinction is preserved for forward compat**

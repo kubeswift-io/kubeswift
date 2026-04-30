@@ -1,0 +1,30 @@
+# SwiftGuest that overrides its class storage spec for a single guest.
+#
+# Pattern: most of the class is RWO+Filesystem (security-conservative);
+# this one guest opts into RWX+Block for live-migration capability. The
+# per-field merge (PR #32 architect call Q2) means only the fields named
+# below override; everything else falls through to the class default.
+#
+# The CRD admission webhook still rejects RWX+Filesystem here — the
+# combination is invalid wherever it appears, whether at class or guest
+# level.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: live-migratable-app
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: small-rwo  # the RWO sample class
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+  # Per-guest storage override. AccessMode and VolumeMode swap to
+  # RWX+Block; storageClassName names a migratable Longhorn class. The
+  # SwiftGuestClass small-rwo's storage block (RWO+Filesystem) is fully
+  # overridden here.
+  storage:
+    accessMode: ReadWriteMany
+    volumeMode: Block
+    storageClassName: longhorn-migratable

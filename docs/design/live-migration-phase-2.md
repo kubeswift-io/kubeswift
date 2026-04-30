@@ -286,11 +286,56 @@ This isolation prevents accidental Phase 1 regressions. Reviewers MUST refuse an
 
 **Drift risk — seed-iso reconstruction (tracked-follow-up):** the destination-receive pod's swiftletd needs the same `seed.iso` reconstruction the existing `main.rs:121-141` performs for restore-receive (via `swift_seed::build_nocloud_dir` and `create_seed_iso` at `main.rs:18-49`). Phase 2's hand-rolled YAML must replicate the seed-iso volume mounts and the `KUBESWIFT_INTENT_PATH` env var, or swiftletd's startup fails before reaching the migration branch. Phase 3's controller-built path will replicate Phase 1's pod-builder logic via shared helper. Phase 2 documents the required volume mounts in `test/migration/manual/dst-launcher-pod.yaml.template` (per §11 implementation checklist item 14). Drift between hand-rolled YAML and Phase 1's pod-builder logic is a known follow-up risk — flagged here so Phase 3 explicitly closes it by reusing the helper.
 
-#### 5.1.2 RWX volumes rejected by destination-receive pod template
+#### 5.1.2 RWX volumes — Phase 2 manual demo uses RWO; live migration of disk-boot guests requires RWX+Block (W6 follow-up)
 
-The Phase 2 destination-receive pod template assumes RWO PVC access mode (matching Phase 1's offline-migration model and the spike's evidence base). RWX volumes are NOT supported in Phase 2 because of the **F2 source-auto-resume** behaviour: when destination is killed mid-migration, source CH automatically resumes its guest. With RWO storage, PVC attachment serializes between source and destination — the source cannot be both attached and resumed while the destination is also attaching. With RWX, this serialization disappears, opening a split-brain window where source and destination CH could both be `Running` against the same disk file simultaneously.
+> Updated 2026-04-30 by PR #32 (storage access mode CRD). Original framing
+> (RWO required, RWX rejected) was a constraint of the Phase 2 manual demo
+> only and conflicted with the broader live-migration semantic gap.
 
-Phase 2 manual demo template documents `accessModes: [ReadWriteOnce]` as required. Operators using a CSI driver that only offers RWX must either configure RWO mode for migration tests OR wait for Phase 3+ where the split-brain hazard is explicitly handled in the controller's StopAndCopy phase. The hand-rolled YAML template includes a comment block explaining this.
+**Phase 2 manual demo (this document's scope):** uses
+`accessModes: [ReadWriteOnce]` because the manual demo's reference
+workload is a kernel-boot guest with no PVC. The disk-handoff problem
+that drives the RWO/RWX choice does not appear in the manual demo path.
+The `dst-launcher-pod.yaml.template` continues to declare RWO; this is
+correct **for that template**.
+
+**Live migration of disk-boot guests (Phase 3 work):** requires RWX+Block,
+following the KubeVirt model. With RWO and disk-boot, the destination
+pod cannot attach the volume while the source pod still has it
+(Multi-Attach error on RWO). With RWX, both pods can attach
+concurrently — the F2 split-brain hazard noted previously is real, but
+it is the storage layer's job to coordinate exclusive write access during
+migration (KubeVirt addresses this through libvirt/QEMU coordination;
+Cloud Hypervisor's behaviour is part of the storage architecture review
+that follows PR #32).
+
+PR #32 ships the API surface for the choice:
+
+- `SwiftGuestClass.spec.storage` and `SwiftGuest.spec.storage` declare
+  `accessMode` (RWO|RWX), `volumeMode` (Filesystem|Block), and
+  `storageClassName`. Per-field merge — guest > class > defaults.
+- CRD admission rejects RWX+Filesystem (Filesystem RWX is not
+  live-migration-capable; Longhorn Generic RWX is NFS-based).
+- `SwiftMigration.ValidateCreate` rejects mode=live for guests whose
+  resolved storage is not RWX+Block (forward-compat for Phase 3 — the
+  Phase 1 mode=live shape rejection runs first).
+- Defaults preserve current behaviour (RWO+Filesystem); no migration
+  required for existing manifests.
+
+See `docs/design/storage-access-mode.md` for the full surface.
+
+**What still needs to land in Phase 3:**
+
+- Controller-side StopAndCopy for live mode that explicitly handles RWO
+  handoff (delete-source-pod-then-attach-target-pod sequencing) OR
+  declares RWX+Block as a pre-condition and refuses RWO live migration
+  at the controller layer
+- F2 split-brain mitigation on RWX: CH's coordination behaviour is the
+  open question. The storage architecture review owns this.
+
+The Phase 2 manual demo is unchanged by PR #32 — operators continue to
+use RWO templates for the manual demo path. Phase 3's controller-built
+path is what consumes the new CRD surface.
 
 ### 5.2 Prerequisite ordering: tap and PVC must exist before swiftletd starts (F5)
 

@@ -41,6 +41,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/resolved"
 )
 
 // Phase 1 input bounds. These cap inputs the spec accepts for forward
@@ -387,6 +388,27 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 			guest.Name)
 	}
 
+	// Live-mode storage gate (W6 follow-up).
+	//
+	// Phase 1 rejects mode=live at validateShape, so this branch is
+	// unreachable through the public API surface today. It is in place
+	// for forward-compatibility with Phase 3 — when validateShape starts
+	// accepting mode=live, this gate is what stops live migration of
+	// guests whose resolved storage spec cannot deliver live-migration
+	// semantics (RWX+Block per KubeVirt's model and Longhorn's
+	// Migratable RWX).
+	//
+	// We RECOMPUTE the resolved storage spec here rather than reading
+	// SwiftGuest.status.storage. Status reads are stale during cluster
+	// restore (controller hasn't reconciled yet) and would create false
+	// rejections. Recompute eliminates the write-back race; the cost is
+	// one additional Get for the SwiftGuestClass.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		if err := v.gateLiveModeStorage(ctx, &guest); err != nil {
+			return nil, err
+		}
+	}
+
 	// Networking opt-in: default node-local-bridge networking does not
 	// preserve guest IPs cross-node (spike Q1a). Operator must opt into
 	// spec.allowIPChange to acknowledge.
@@ -404,6 +426,44 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	}
 
 	return nil, nil
+}
+
+// gateLiveModeStorage rejects live-mode migrations for guests whose
+// resolved storage spec is not live-migration-capable (RWX+Block).
+// W6 follow-up — see validateClusterState's invocation site for the
+// rationale.
+//
+// Implementation: read the SwiftGuestClass referenced by the guest,
+// recompute the merged storage spec via resolved.MergeStorage, and
+// reject when the result is not RWX+Block. Recomputation (rather than
+// reading SwiftGuest.status.storage) avoids the controller-write-back
+// race during cluster restore.
+//
+// Phase 1 mode=live is rejected at validateShape, so this gate is
+// unreachable in production today; it is a Phase 3 forward-compat
+// landing site exercised by the unit tests.
+func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
+	var class swiftv1alpha1.SwiftGuestClass
+	err := v.Client.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class)
+	if apierrors.IsNotFound(err) {
+		// Class missing is not a storage-gate concern — the controller
+		// will fail resolution and surface ResolutionFailed. Don't
+		// double-reject here on an unrelated condition.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("look up SwiftGuestClass %q for live-mode storage check: %w",
+			guest.Spec.GuestClassRef.Name, err)
+	}
+	storage := resolved.MergeStorage(guest, &class)
+	if storage.IsLiveMigrationCapable() {
+		return nil
+	}
+	return fmt.Errorf(
+		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (KubeVirt-style live migration; Filesystem RWX is not live-migration-capable). "+
+			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline. See docs/design/storage-access-mode.md.",
+		guest.Name, storage.AccessMode, storage.VolumeMode,
+	)
 }
 
 // isDefaultNodeLocalNetworking returns true when the guest uses

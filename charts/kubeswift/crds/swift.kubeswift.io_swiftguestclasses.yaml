@@ -16,7 +16,20 @@ spec:
     singular: swiftguestclass
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.cpu
+      name: CPU
+      type: string
+    - jsonPath: .spec.memory
+      name: Memory
+      type: string
+    - jsonPath: .spec.storage.accessMode
+      name: AccessMode
+      type: string
+    - jsonPath: .spec.storage.volumeMode
+      name: VolumeMode
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: SwiftGuestClass is the Schema for the swiftguestclasses API.
@@ -72,6 +85,56 @@ spec:
                 - format
                 - size
                 type: object
+              storage:
+                description: |-
+                  Storage is the cluster default for PVCs the SwiftGuest controller
+                  creates (today: the root-disk clone PVC). Per-guest overrides on
+                  SwiftGuest.spec.storage compose per-field on top of this. Nil/unset
+                  keeps the legacy behaviour: ReadWriteOnce + Filesystem, with
+                  StorageClassName inherited from the source SwiftImage's PVC.
+                properties:
+                  accessMode:
+                    description: |-
+                      AccessMode is the PVC accessMode. Defaults to ReadWriteOnce.
+                      ReadWriteOnce is security-conservative and matches Phase 1 offline
+                      migration behaviour. ReadWriteMany unlocks Phase 3 live migration of
+                      disk-boot guests but only in combination with VolumeMode=Block (see
+                      the XValidation rule on this struct).
+                    enum:
+                    - ReadWriteOnce
+                    - ReadWriteMany
+                    type: string
+                  storageClassName:
+                    description: |-
+                      StorageClassName names the StorageClass for controller-created
+                      PVCs. Nil/unset falls through to SwiftGuestClass.spec.storage
+                      .storageClassName, then to the source SwiftImage's PVC's class
+                      (existing pre-PR-32 behaviour), then to the cluster default. Set
+                      it explicitly when a specific class is required — e.g. a Longhorn
+                      class with parameters.migratable="true" for RWX+Block guests.
+
+                      *string distinguishes "not set" (fall through) from the empty
+                      string (explicit cluster-default selection). The explicit-empty
+                      case is rare in practice; the distinction is preserved for
+                      forward compatibility with operators who want to override the
+                      class to the cluster default explicitly.
+                    type: string
+                  volumeMode:
+                    description: |-
+                      VolumeMode is the PVC volumeMode. Defaults to Filesystem. Block is
+                      required for live-migration-capable RWX (KubeVirt model) and for
+                      some CSI drivers' raw-device passthrough; the value flows to PVC
+                      spec verbatim.
+                    enum:
+                    - Filesystem
+                    - Block
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: accessMode=ReadWriteMany requires volumeMode=Block; Filesystem
+                    RWX is not live-migration-capable (see docs/design/storage-access-mode.md)
+                  rule: '!(self.accessMode == ''ReadWriteMany'' && (!has(self.volumeMode)
+                    || self.volumeMode == ''Filesystem''))'
             required:
             - cpu
             - memory
@@ -80,3 +143,4 @@ spec:
         type: object
     served: true
     storage: true
+    subresources: {}

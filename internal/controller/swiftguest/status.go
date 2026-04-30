@@ -131,6 +131,48 @@ func findUnschedulableCondition(pod *corev1.Pod) *corev1.PodCondition {
 	return nil
 }
 
+// ConditionStorageReady captures whether the controller's per-driver
+// pre-flight check for the resolved storage spec has succeeded. Today
+// the only check is the Longhorn migratable-parameter check for
+// RWX+Block guests on a Longhorn StorageClass; other CSI drivers
+// pass through. The condition is informational — it does NOT gate pod
+// creation, since the check is best-effort and storage classes can be
+// fixed by the cluster admin without restarting the SwiftGuest.
+const ConditionStorageReady = "StorageReady"
+
+// EchoResolvedStorage writes the resolved storage spec onto the guest
+// status as an informational mirror. liveMigrationCapable is intentionally
+// not stored — it is recomputed from this echo at the SwiftMigration
+// validation webhook (write-back-race avoidance; see
+// api/swift/v1alpha1.ResolvedStorageStatus's doc comment).
+func EchoResolvedStorage(status *swiftv1alpha1.SwiftGuestStatus, accessMode, volumeMode, storageClassName string) {
+	status.Storage = &swiftv1alpha1.ResolvedStorageStatus{
+		AccessMode:       corev1.PersistentVolumeAccessMode(accessMode),
+		VolumeMode:       corev1.PersistentVolumeMode(volumeMode),
+		StorageClassName: storageClassName,
+	}
+}
+
+// SetStorageReadyCondition sets the StorageReady condition. When ok is
+// false, reason+message names the per-driver pre-flight failure (today:
+// Longhorn migratable parameter missing on a RWX+Block StorageClass).
+func SetStorageReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason, message string) {
+	cond := metav1.Condition{Type: ConditionStorageReady}
+	if ok {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "StorageReady"
+		cond.Message = message
+		if cond.Message == "" {
+			cond.Message = "Storage spec is ready for controller-created PVCs"
+		}
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = reason
+		cond.Message = message
+	}
+	setCondition(status, cond)
+}
+
 // SetResolvedCondition sets the Resolved condition.
 func SetResolvedCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason string) {
 	cond := metav1.Condition{

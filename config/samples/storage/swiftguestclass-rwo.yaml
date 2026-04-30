@@ -1,0 +1,23 @@
+# SwiftGuestClass with explicit RWO+Filesystem storage.
+#
+# This is the default behaviour when `spec.storage` is omitted; the
+# explicit form is provided here for documentation clarity. RWO storage
+# is suitable for offline migration (Phase 1) but NOT for live migration
+# of disk-boot guests (Phase 3 work pending RWO-handoff choreography or
+# RWX adoption — see docs/design/storage-access-mode.md).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: small-rwo
+spec:
+  cpu: "2"
+  memory: "4Gi"
+  rootDisk:
+    size: "40Gi"
+    format: raw
+  storage:
+    accessMode: ReadWriteOnce
+    volumeMode: Filesystem
+    # storageClassName omitted: per-guest clone PVCs inherit the source
+    # SwiftImage's PVC storage class (legacy behaviour, preserves
+    # Longhorn's same-class-clone constraint).

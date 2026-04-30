@@ -25,11 +25,22 @@ type SwiftGuestClassSpec struct {
 	CPU      resource.Quantity `json:"cpu"`
 	Memory   resource.Quantity `json:"memory"`
 	RootDisk RootDiskSpec      `json:"rootDisk"`
+	// Storage is the cluster default for PVCs the SwiftGuest controller
+	// creates (today: the root-disk clone PVC). Per-guest overrides on
+	// SwiftGuest.spec.storage compose per-field on top of this. Nil/unset
+	// keeps the legacy behaviour: ReadWriteOnce + Filesystem, with
+	// StorageClassName inherited from the source SwiftImage's PVC.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
 }
 
 // SwiftGuestClass is the Schema for the swiftguestclasses API.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=swiftguestclasses,scope=Cluster,shortName=sgc
+// +kubebuilder:printcolumn:name="CPU",type=string,JSONPath=`.spec.cpu`
+// +kubebuilder:printcolumn:name="Memory",type=string,JSONPath=`.spec.memory`
+// +kubebuilder:printcolumn:name="AccessMode",type=string,JSONPath=`.spec.storage.accessMode`
+// +kubebuilder:printcolumn:name="VolumeMode",type=string,JSONPath=`.spec.storage.volumeMode`
 type SwiftGuestClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

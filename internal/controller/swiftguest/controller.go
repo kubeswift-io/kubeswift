@@ -105,6 +105,24 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	status := guest.Status.DeepCopy()
 	SetResolvedCondition(status, true, "")
 
+	// Echo the resolved storage spec to status for operator visibility.
+	// Pure informational mirror; the SwiftMigration webhook recomputes
+	// liveMigrationCapable from the resolved spec rather than reading
+	// status (avoids write-back race during cluster restore).
+	EchoResolvedStorage(status, rg.Storage.AccessMode, rg.Storage.VolumeMode, rg.Storage.StorageClassName)
+
+	// Per-driver storage pre-flight: surface a StorageReady=False
+	// condition when the resolved spec is RWX+Block but the chosen
+	// StorageClass is a Longhorn class missing parameters.migratable.
+	// Best-effort and informational — the check is a status condition,
+	// NOT an admission gate, because StorageClasses are cluster-admin
+	// resources and can be fixed without restarting the guest.
+	if reason, msg, ok := r.checkStorageReady(ctx, rg); ok {
+		SetStorageReadyCondition(status, true, "", "")
+	} else {
+		SetStorageReadyCondition(status, false, reason, msg)
+	}
+
 	// Seed rendering: when ResolvedGuest has Seed, render and create ConfigMap
 	seedConfigMapName := ""
 	if rg.HasSeed() {
