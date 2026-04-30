@@ -40,6 +40,24 @@ const (
 	IntentFile    = "runtime-intent.json"
 	RunDirPath    = "/var/lib/kubeswift/run"
 
+	// DiskRootDevicePath is the in-pod device path for a Block-mode
+	// root disk (W9 — runtime path for spec.storage.volumeMode: Block).
+	// Cloud Hypervisor's --disk path=<value> opens this path opaquely;
+	// for Block-mode PVCs, the path resolves to a raw block device
+	// surfaced via VolumeDevices, not a filesystem-mounted file.
+	//
+	// Distinct from DisksRootPath (the Filesystem mount): the two are
+	// mutually exclusive on the same volume by Kubernetes contract
+	// (VolumeMounts and VolumeDevices cannot share a volume name —
+	// kubelet rejects with "volume X has volumeMode Block, but is
+	// specified in volumeMounts", which was the W9 surface point).
+	//
+	// Brand prefix is deliberate: /dev/kubeswift-root is unambiguous
+	// in pod logs, swiftletd diagnostics, and CH --disk arg dumps. We
+	// avoid /dev/vda* / /dev/sd* (kernel-managed virtio/SCSI) and
+	// /dev/disk/by-* (udev-reserved-feeling) per architect Q3 review.
+	DiskRootDevicePath = "/dev/kubeswift-root"
+
 	// SnapshotsHostPath is the on-node directory Cloud Hypervisor writes
 	// Tier B snapshot directories into (config.json, state.json, memory-
 	// ranges) when the SwiftSnapshot controller drives a vm.snapshot

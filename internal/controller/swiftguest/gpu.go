@@ -423,7 +423,8 @@ func BuildGPUDiskBootPod(
 
 	// Standard launcher mounts.
 	var mounts []corev1.VolumeMount
-	AddVolumeMounts(&mounts, rg.HasSeed())
+	var volumeDevices []corev1.VolumeDevice
+	AddVolumeMounts(&mounts, &volumeDevices, rg, rg.HasSeed())
 	mounts = append(mounts, corev1.VolumeMount{Name: "dev-vfio", MountPath: "/dev/vfio"})
 	if hugepages != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "hugepages", MountPath: "/dev/hugepages"})
@@ -465,7 +466,7 @@ func BuildGPUDiskBootPod(
 
 	var initContainers []corev1.Container
 	if rootDiskClone != nil && rootDiskClone.NeedsGrowInit {
-		initContainers = append(initContainers, cloneGrowInitContainer(rootDiskClone.TargetSizeBytes))
+		initContainers = append(initContainers, cloneGrowInitContainer(rg, rootDiskClone.TargetSizeBytes))
 	}
 	initContainers = append(initContainers, gpuInitContainer)
 	if rg.HasNetwork() {
@@ -526,8 +527,9 @@ func BuildGPUDiskBootPod(
 							},
 						},
 					},
-					Resources:    resources,
-					VolumeMounts: mounts,
+					Resources:     resources,
+					VolumeMounts:  mounts,
+					VolumeDevices: volumeDevices,
 				},
 			},
 			Volumes: volumes,

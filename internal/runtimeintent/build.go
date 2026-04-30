@@ -8,6 +8,13 @@ type ResolvedGuest interface {
 	HasNetwork() bool
 	HasDataDisk() bool
 	GetRootDiskFormat() string
+	// GetRootDiskVolumeMode returns "Filesystem" or "Block". Empty is
+	// treated as "Filesystem" (pre-W9 default). Block resolves the
+	// RootDisk.Path to DiskRootDevicePath instead of the filesystem
+	// image.raw path; swiftletd hands the device path opaquely to
+	// Cloud Hypervisor's --disk path=... which works for both file
+	// and device targets.
+	GetRootDiskVolumeMode() string
 	GetCPU() int
 	GetMemoryMiB() int
 	GetLifecycle() string
@@ -63,9 +70,18 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	if lifecycle == "" {
 		lifecycle = "start"
 	}
+	rootDiskPath := DisksRootPath + "/" + RootDiskImageFile
+	if rg.GetRootDiskVolumeMode() == "Block" {
+		// Block-mode root disk: swiftletd's CH spawn will pass this
+		// path to --disk path=<value>. CH treats it opaquely (file or
+		// device); the kubelet surfaces the PVC at this path via
+		// VolumeDevices in the launcher pod (see pod.go::rootDiskMount).
+		rootDiskPath = DiskRootDevicePath
+	}
+
 	return &RuntimeIntent{
 		RootDisk: RootDiskSpec{
-			Path:   DisksRootPath + "/" + RootDiskImageFile,
+			Path:   rootDiskPath,
 			Format: rg.GetRootDiskFormat(),
 		},
 		SeedPath:   seedPath,
