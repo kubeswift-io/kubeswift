@@ -1,0 +1,47 @@
+# SwiftGuestClass for live-migration-capable guests (Phase 3 forward
+# compat). Pairs with the longhorn-migratable StorageClass below.
+#
+# RWX+Block is the KubeVirt-style live-migration capability rule. The
+# CRD admission webhook rejects RWX+Filesystem (Filesystem RWX, e.g.
+# Longhorn Generic RWX, is NFS-based and NOT live-migratable). Cluster
+# admins must apply a Longhorn StorageClass with
+# `parameters.migratable: "true"` BEFORE applying SwiftGuests on this
+# class — otherwise the SwiftGuest controller surfaces a
+# StorageReady=False condition naming the missing parameter.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: live-migratable
+spec:
+  cpu: "2"
+  memory: "4Gi"
+  rootDisk:
+    size: "40Gi"
+    format: raw
+  storage:
+    accessMode: ReadWriteMany
+    volumeMode: Block
+    storageClassName: longhorn-migratable
+---
+# Sample StorageClass — the cluster admin applies one of these once
+# (kubectl apply -f), separate from the SwiftGuestClass lifecycle. The
+# `migratable: "true"` parameter is what unlocks Longhorn's KubeVirt-
+# style live-migration support; without it the volume mode is Block but
+# the volume cannot live-migrate.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-migratable
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "3"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  fsType: ""
+  # Required for KubeSwift live migration of disk-boot guests
+  # (Phase 3+). Without this, the SwiftGuest controller will set
+  # StorageReady=False with reason=LonghornNotMigratable.
+  migratable: "true"

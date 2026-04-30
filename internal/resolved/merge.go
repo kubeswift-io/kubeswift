@@ -57,7 +57,62 @@ func Merge(
 	// Copy interfaces from SwiftGuest spec for multi-NIC support.
 	rg.Interfaces = guest.Spec.Interfaces
 
+	// Storage: per-field merge — guest > class > system defaults.
+	rg.Storage = MergeStorage(guest, guestClass)
+
 	return rg
+}
+
+// MergeStorage resolves the per-field merge of the storage block. Guest
+// override beats class default; missing fields fall through. System
+// defaults: ReadWriteOnce + Filesystem + "" (inherit from source
+// SwiftImage's PVC storage class — preserves pre-PR-32 behaviour).
+//
+// The caller (Merge) guarantees a non-nil ResolvedGuest, so this returns
+// a value-typed Storage with all three fields populated. The controller
+// writes AccessMode/VolumeMode/StorageClassName onto status as an echo;
+// the SwiftMigration webhook recomputes IsLiveMigrationCapable on
+// admission rather than reading status (avoids the controller-write-back
+// race during cluster restore).
+func MergeStorage(guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) Storage {
+	out := Storage{
+		AccessMode:       string(swiftv1alpha1.DefaultStorageAccessMode),
+		VolumeMode:       string(swiftv1alpha1.DefaultStorageVolumeMode),
+		StorageClassName: "",
+	}
+	// Class fills in first (least specific), so guest can subsequently
+	// overwrite per field.
+	if guestClass != nil && guestClass.Spec.Storage != nil {
+		s := guestClass.Spec.Storage
+		if s.AccessMode != "" {
+			out.AccessMode = string(s.AccessMode)
+		}
+		if s.VolumeMode != "" {
+			out.VolumeMode = string(s.VolumeMode)
+		}
+		if s.StorageClassName != nil {
+			out.StorageClassName = *s.StorageClassName
+		}
+	}
+	if guest != nil && guest.Spec.Storage != nil {
+		s := guest.Spec.Storage
+		if s.AccessMode != "" {
+			out.AccessMode = string(s.AccessMode)
+		}
+		if s.VolumeMode != "" {
+			out.VolumeMode = string(s.VolumeMode)
+		}
+		if s.StorageClassName != nil {
+			// nil = "fall through"; explicit "" = "use cluster default".
+			// Both resolve to empty string in the resolved spec, but
+			// keeping the *string distinction at the spec layer means a
+			// future change to differentiate them (e.g. surfacing "the
+			// class set a name; the guest is explicitly clearing it") is
+			// possible without a CRD migration.
+			out.StorageClassName = *s.StorageClassName
+		}
+	}
+	return out
 }
 
 func mergeLifecycle(guest *swiftv1alpha1.SwiftGuest) Lifecycle {

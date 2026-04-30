@@ -27,7 +27,8 @@ func migrationScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("clientgoscheme: %v", err)
 	}
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
-	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{})
 	metav1.AddToGroupVersion(s, gvSwift)
 	gvMig := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvMig, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
@@ -816,5 +817,128 @@ func TestIsTerminalPhase(t *testing.T) {
 				t.Errorf("isTerminalPhase(%q) = %v, want %v", tc.phase, got, tc.want)
 			}
 		})
+	}
+}
+
+// --- Live-mode storage gate (W6 follow-up) ---
+//
+// The gate fires from validateClusterState when spec.mode=live. Phase 1
+// validateShape rejects mode=live before validateClusterState runs, so
+// the gate is unreachable through the public API today. These tests
+// drive gateLiveModeStorage directly so the rule is locked in for
+// Phase 3, when validateShape starts accepting mode=live.
+
+func TestGateLiveModeStorage_RWOFilesystemRejected(t *testing.T) {
+	// Default storage (RWO+Filesystem). Live migration of a disk-boot
+	// guest with RWO storage requires the not-yet-implemented Phase 3
+	// RWO-handoff choreography; the gate rejects with a clear remedy
+	// message naming RWX+Block.
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	err := v.gateLiveModeStorage(context.Background(), guest)
+	if err == nil {
+		t.Fatal("gate should reject default RWO+Filesystem for live mode")
+	}
+	if !strings.Contains(err.Error(), "ReadWriteMany") || !strings.Contains(err.Error(), "Block") {
+		t.Errorf("error must name the required RWM+Block combo so operators know how to fix it; got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "spec.mode=offline") {
+		t.Errorf("error should hint at mode=offline as the alternative; got %q", err.Error())
+	}
+}
+
+func TestGateLiveModeStorage_ClassRWXBlockAccepted(t *testing.T) {
+	// Class declares RWX+Block. The guest inherits via per-field merge
+	// (no override). Live mode passes the gate.
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "class"},
+		Spec: swiftv1alpha1.SwiftGuestClassSpec{
+			Storage: &swiftv1alpha1.StorageSpec{
+				AccessMode: corev1.ReadWriteMany,
+				VolumeMode: corev1.PersistentVolumeBlock,
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	if err := v.gateLiveModeStorage(context.Background(), guest); err != nil {
+		t.Errorf("gate should accept class RWX+Block; got %v", err)
+	}
+}
+
+func TestGateLiveModeStorage_GuestOverridesClassRejected(t *testing.T) {
+	// Class is RWX+Block (live-capable) but the guest explicitly downgrades
+	// AccessMode to RWO. Per-field merge resolves the guest override; the
+	// gate rejects.
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.Storage = &swiftv1alpha1.StorageSpec{
+		AccessMode: corev1.ReadWriteOnce,
+	}
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "class"},
+		Spec: swiftv1alpha1.SwiftGuestClassSpec{
+			Storage: &swiftv1alpha1.StorageSpec{
+				AccessMode: corev1.ReadWriteMany,
+				VolumeMode: corev1.PersistentVolumeBlock,
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	err := v.gateLiveModeStorage(context.Background(), guest)
+	if err == nil {
+		t.Fatal("gate should reject when guest downgrades AccessMode to RWO")
+	}
+	if !strings.Contains(err.Error(), "accessMode=ReadWriteOnce") {
+		t.Errorf("error should report the resolved (downgraded) AccessMode; got %q", err.Error())
+	}
+}
+
+func TestGateLiveModeStorage_MissingClassDoesNotDoubleReject(t *testing.T) {
+	// SwiftGuestClass missing: the controller will fail resolution and
+	// surface ResolutionFailed. The webhook MUST NOT double-reject on an
+	// unrelated condition — return nil so the more-specific failure
+	// path is the one operators see.
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest).Build()
+	v := &Validator{Client: c}
+
+	if err := v.gateLiveModeStorage(context.Background(), guest); err != nil {
+		t.Errorf("gate should defer when class is missing; got %v", err)
+	}
+}
+
+// TestValidate_ModeLivePhase1RejectedAtShape locks in the contract that
+// validateShape rejects mode=live before the cluster-state storage gate
+// would fire. Confirms gateLiveModeStorage is unreachable in production
+// in Phase 1 — operators see the "live not yet shipped" error, not the
+// storage capability error. When Phase 3 lands, the assertion in this
+// test changes to require the storage gate's error, NOT the shape
+// rejection.
+func TestValidate_ModeLivePhase1RejectedAtShape(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	_, err := v.validate(context.Background(), mig)
+	if err == nil {
+		t.Fatal("validate with mode=live should reject in Phase 1")
+	}
+	if !strings.Contains(err.Error(), "not yet shipped") {
+		t.Errorf("Phase 1 should reject at validateShape (not the storage gate); got %q", err.Error())
 	}
 }

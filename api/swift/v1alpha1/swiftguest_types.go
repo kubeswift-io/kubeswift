@@ -95,6 +95,18 @@ type SwiftGuestSpec struct {
 	// validation webhook rejects migrations of pinned guests.
 	// +optional
 	Migration *MigrationSpec `json:"migration,omitempty"`
+	// Storage overrides the SwiftGuestClass storage defaults for PVCs
+	// the controller creates for this guest (today: the root-disk clone).
+	// Per-field merge: each non-empty field overrides the same field on
+	// SwiftGuestClass.spec.storage; empty fields fall through to the
+	// class default, then to system defaults (ReadWriteOnce + Filesystem
+	// + class-of-source-image storage class).
+	//
+	// Set this when a single guest needs different storage characteristics
+	// than its class — for example, opting one guest into RWX+Block for
+	// live-migration capability while the rest of the class stays on RWO.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
 }
 
 // MigrationSpec is the per-SwiftGuest migration policy. Defaults are
@@ -229,6 +241,16 @@ type SwiftGuestStatus struct {
 	// Populated when spec.gpuProfileRef is set.
 	// +optional
 	GPU *GPUStatus `json:"gpu,omitempty"`
+	// Storage echoes the resolved storage spec actually used for
+	// controller-created PVCs (today: the root-disk clone). Informational
+	// only — useful for kubectl describe and operator debugging to confirm
+	// the per-field merge resolved the way the operator expected.
+	//
+	// liveMigrationCapable is intentionally NOT a field here; see
+	// ResolvedStorageStatus's doc comment for the write-back-race
+	// rationale. Use IsLiveMigrationCapable on the resolved spec.
+	// +optional
+	Storage *ResolvedStorageStatus `json:"storage,omitempty"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.

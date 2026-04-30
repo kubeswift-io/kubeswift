@@ -108,18 +108,25 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 
 	// Branch: snapshot path requires status.cloneSeed.Kind = VolumeSnapshot.
 	if seed := rg.PreparedImage.CloneSeed; seed != nil && seed.Kind == "VolumeSnapshot" && seed.Name != "" {
-		return r.ensureRootDiskCloneFromSnapshot(ctx, guest, sourcePVC, cloneName, targetSize, seed)
+		return r.ensureRootDiskCloneFromSnapshot(ctx, guest, rg, sourcePVC, cloneName, targetSize, seed)
 	}
 
-	// Legacy Copy Job path. Behavior preserved byte-for-byte.
-	return r.ensureRootDiskCloneFromCopy(ctx, guest, sourcePVC, cloneName, targetSize)
+	// Legacy Copy Job path. Behavior preserved byte-for-byte EXCEPT for the
+	// new resolved-storage-spec inputs (accessMode, volumeMode,
+	// storageClassName) flowing into PVC creation. Defaults preserve the
+	// pre-PR-32 behaviour: RWO + Filesystem + class-of-source-image.
+	return r.ensureRootDiskCloneFromCopy(ctx, guest, rg, sourcePVC, cloneName, targetSize)
 }
 
-// ensureRootDiskCloneFromCopy is the legacy copy path (unchanged from
-// pre-Phase-1 behavior).
+// ensureRootDiskCloneFromCopy is the legacy copy path. Behaviour is
+// byte-identical to the pre-Phase-1 implementation EXCEPT that PVC
+// creation now sources accessMode/volumeMode/storageClassName from the
+// resolved storage spec (rg.Storage). Default-resolved values preserve
+// the pre-PR-32 behaviour: RWO + Filesystem + class-of-source-image.
 func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
+	rg *resolved.ResolvedGuest,
 	sourcePVC, cloneName string,
 	targetSize resource.Quantity,
 ) (*RootDiskCloneResult, error) {
@@ -201,8 +208,9 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			StorageClassName: srcPVC.Spec.StorageClassName,
+			AccessModes:      resolvedAccessModes(rg),
+			VolumeMode:       resolvedVolumeMode(rg),
+			StorageClassName: resolvedStorageClassName(rg, &srcPVC),
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: targetSize,
@@ -241,6 +249,7 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 func (r *SwiftGuestReconciler) ensureRootDiskCloneFromSnapshot(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
+	rg *resolved.ResolvedGuest,
 	sourcePVC, cloneName string,
 	targetSize resource.Quantity,
 	seed *resolved.PreparedCloneSeed,
@@ -286,8 +295,9 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromSnapshot(
 				},
 			},
 			Spec: corev1.PersistentVolumeClaimSpec{
-				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-				StorageClassName: srcPVC.Spec.StorageClassName,
+				AccessModes:      resolvedAccessModes(rg),
+				VolumeMode:       resolvedVolumeMode(rg),
+				StorageClassName: resolvedStorageClassName(rg, &srcPVC),
 				DataSource: &corev1.TypedLocalObjectReference{
 					APIGroup: &apiGroup,
 					Kind:     "VolumeSnapshot",

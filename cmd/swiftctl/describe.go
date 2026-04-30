@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/cli"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 )
@@ -111,6 +112,26 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 		for _, iface := range guest.Status.Network.Interfaces {
 			fmt.Fprintf(out, "    - %s: %s\n", iface.Name, iface.IP)
 		}
+	}
+
+	// Storage
+	fmt.Fprintf(out, "\nStorage:\n")
+	if guest.Status.Storage != nil {
+		access := string(guest.Status.Storage.AccessMode)
+		volume := string(guest.Status.Storage.VolumeMode)
+		sc := guest.Status.Storage.StorageClassName
+		if sc == "" {
+			sc = "(inherited from source SwiftImage's PVC)"
+		}
+		fmt.Fprintf(out, "  AccessMode:           %s\n", access)
+		fmt.Fprintf(out, "  VolumeMode:           %s\n", volume)
+		fmt.Fprintf(out, "  StorageClass:         %s\n", sc)
+		// liveMigrationCapable is recomputed (not stored in status) to
+		// avoid the controller-write-back race during cluster restore.
+		// The webhook recomputes the same way at admission time.
+		fmt.Fprintf(out, "  LiveMigrationCapable: %t\n", swiftv1alpha1.IsLiveMigrationCapable(guest.Status.Storage))
+	} else {
+		fmt.Fprintf(out, "  (not yet resolved)\n")
 	}
 
 	// Conditions
