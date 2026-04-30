@@ -24,7 +24,19 @@ pub struct VFIODeviceConfig {
 /// VM configuration derived from runtime intent.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
-    /// Path to root disk image.
+    /// Path to root disk. Opaque string — Cloud Hypervisor's
+    /// `--disk path=<value>` opens both filesystem files and raw block
+    /// devices identically, so this can be either a regular file path
+    /// (e.g. `/var/lib/kubeswift/disks/root/image.raw` for Filesystem-
+    /// mode PVCs) or a device path (e.g. `/dev/kubeswift-root` for
+    /// Block-mode PVCs surfaced via Kubernetes `volumeDevices`).
+    ///
+    /// W9 — the controller resolves which form to use based on the
+    /// SwiftGuest's resolved `spec.storage.volumeMode`; swiftletd
+    /// hands whichever string it received through to CH unchanged.
+    /// No suffix detection or path-shape branching exists in this
+    /// crate (verified by grep audit at W9 Component 3 start —
+    /// see PR description).
     pub disk_path: String,
     /// Memory size in MiB.
     pub memory_mib: u32,
@@ -405,6 +417,76 @@ mod tests {
         assert!(
             joined.contains("path=/sys/bus/pci/devices/0000:03:00.0/"),
             "missing device path: {}",
+            joined
+        );
+    }
+
+    // W9 Component 3 — Block-mode root disk path passes through the
+    // CH args generator unchanged. The architect's Q2 read held: this
+    // crate has zero suffix-detection logic; the disk_path field is
+    // opaque. These tests lock that opacity in so a future commit
+    // that introduces, e.g., `if disk_path.ends_with(".raw") { ... }`
+    // produces a visible test failure.
+
+    /// W9 — disk-boot path with a `/dev/...` device path produces
+    /// `--disk path=/dev/kubeswift-root` exactly once, alongside
+    /// firmware + seed disk path. CH treats device paths and file
+    /// paths identically through the `--disk path=` argument; this
+    /// test pins that contract.
+    #[test]
+    fn test_disk_boot_block_device_path() {
+        let mut cfg = make_disk_boot_config();
+        cfg.disk_path = "/dev/kubeswift-root".to_string();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("path=/dev/kubeswift-root"),
+            "Block-mode disk path missing from CH args: {}",
+            joined
+        );
+        // The legacy filesystem path must NOT appear when disk_path is a
+        // device path — the substitution is total, not additive.
+        assert!(
+            !joined.contains("path=/data/image.raw"),
+            "filesystem disk path leaked into Block-mode args: {}",
+            joined
+        );
+        // --disk for the firmware-driven disk-boot path takes multiple
+        // values (root + optional seed); both should be present and the
+        // root value should be the device path.
+        let disk_idx = args
+            .iter()
+            .position(|a| a == "--disk")
+            .expect("--disk flag missing");
+        assert!(
+            args.get(disk_idx + 1)
+                .map(|v| v == "path=/dev/kubeswift-root")
+                .unwrap_or(false),
+            "first --disk value should be the root device path; args: {:?}",
+            args
+        );
+    }
+
+    /// W9 — Block-mode root with a Filesystem-mode data disk produces
+    /// CH args carrying both surfaces independently. The mixed case
+    /// from architect Q4 mirrored at the swift-ch-client layer:
+    /// disk_path (device) and data_disk_path (file) coexist on the
+    /// same `--disk` arg list with no suffix-driven re-routing.
+    #[test]
+    fn test_disk_boot_block_root_with_filesystem_data() {
+        let mut cfg = make_disk_boot_config();
+        cfg.disk_path = "/dev/kubeswift-root".to_string();
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("path=/dev/kubeswift-root"),
+            "Block root path missing: {}",
+            joined
+        );
+        assert!(
+            joined.contains("path=/data/extra.raw"),
+            "Filesystem data path missing: {}",
             joined
         );
     }

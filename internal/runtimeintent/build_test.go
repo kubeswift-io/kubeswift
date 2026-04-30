@@ -6,35 +6,96 @@ import (
 )
 
 type mockResolvedGuest struct {
-	hasSeed       bool
-	hasKernel     bool
-	hasNetwork    bool
-	hasDataDisk   bool
-	format        string
-	cpu           int
-	memory        int
-	lifecycle     string
-	guestID       string
-	kernelPath    string
-	initramfsPath string
-	kernelCmdline string
-	hypervisor    string
+	hasSeed        bool
+	hasKernel      bool
+	hasNetwork     bool
+	hasDataDisk    bool
+	format         string
+	rootVolumeMode string // W9: "Filesystem" (default) or "Block"
+	cpu            int
+	memory         int
+	lifecycle      string
+	guestID        string
+	kernelPath     string
+	initramfsPath  string
+	kernelCmdline  string
+	hypervisor     string
 }
 
-func (m *mockResolvedGuest) HasSeed() bool             { return m.hasSeed }
-func (m *mockResolvedGuest) HasKernel() bool           { return m.hasKernel }
-func (m *mockResolvedGuest) HasNetwork() bool          { return m.hasNetwork }
-func (m *mockResolvedGuest) HasDataDisk() bool         { return m.hasDataDisk }
-func (m *mockResolvedGuest) GetRootDiskFormat() string { return m.format }
-func (m *mockResolvedGuest) GetCPU() int               { return m.cpu }
-func (m *mockResolvedGuest) GetMemoryMiB() int         { return m.memory }
-func (m *mockResolvedGuest) GetLifecycle() string      { return m.lifecycle }
-func (m *mockResolvedGuest) GetGuestID() string        { return m.guestID }
-func (m *mockResolvedGuest) GetKernelPath() string     { return m.kernelPath }
-func (m *mockResolvedGuest) GetInitramfsPath() string  { return m.initramfsPath }
-func (m *mockResolvedGuest) GetKernelCmdline() string  { return m.kernelCmdline }
-func (m *mockResolvedGuest) GetHypervisor() string     { return m.hypervisor }
-func (m *mockResolvedGuest) GetNICs() []NICIntent      { return nil }
+func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
+func (m *mockResolvedGuest) HasKernel() bool               { return m.hasKernel }
+func (m *mockResolvedGuest) HasNetwork() bool              { return m.hasNetwork }
+func (m *mockResolvedGuest) HasDataDisk() bool             { return m.hasDataDisk }
+func (m *mockResolvedGuest) GetRootDiskFormat() string     { return m.format }
+func (m *mockResolvedGuest) GetRootDiskVolumeMode() string { return m.rootVolumeMode }
+func (m *mockResolvedGuest) GetCPU() int                   { return m.cpu }
+func (m *mockResolvedGuest) GetMemoryMiB() int             { return m.memory }
+func (m *mockResolvedGuest) GetLifecycle() string          { return m.lifecycle }
+func (m *mockResolvedGuest) GetGuestID() string            { return m.guestID }
+func (m *mockResolvedGuest) GetKernelPath() string         { return m.kernelPath }
+func (m *mockResolvedGuest) GetInitramfsPath() string      { return m.initramfsPath }
+func (m *mockResolvedGuest) GetKernelCmdline() string      { return m.kernelCmdline }
+func (m *mockResolvedGuest) GetHypervisor() string         { return m.hypervisor }
+func (m *mockResolvedGuest) GetNICs() []NICIntent          { return nil }
+
+// TestBuild_DiskBootBlockMode is the W9 contract test for the
+// runtimeintent producer side: a guest with Block-mode root storage
+// produces a RuntimeIntent.RootDisk.Path equal to the Block device
+// path constant, NOT the filesystem image.raw path. swiftletd hands
+// this string to Cloud Hypervisor's --disk path=<value> opaquely; the
+// kubelet attaches the Block PVC at this device path via VolumeDevices
+// in the launcher pod (controller-side, see pod.go::rootDiskMount).
+func TestBuild_DiskBootBlockMode(t *testing.T) {
+	rg := &mockResolvedGuest{
+		hasSeed:        true,
+		hasNetwork:     true,
+		format:         "raw",
+		rootVolumeMode: "Block",
+		cpu:            2,
+		memory:         2048,
+		lifecycle:      "start",
+		guestID:        "block-guest",
+	}
+	intent := Build(rg)
+	if intent.RootDisk.Path != DiskRootDevicePath {
+		t.Errorf("Block-mode RootDisk.Path = %q, want %q", intent.RootDisk.Path, DiskRootDevicePath)
+	}
+	if intent.RootDisk.Path == DisksRootPath+"/"+RootDiskImageFile {
+		t.Errorf("Block-mode RootDisk.Path must NOT be the filesystem path")
+	}
+}
+
+// TestBuild_DiskBootFilesystemModeUnchanged is the regression gate. The
+// Filesystem path is byte-identical to pre-W9: RootDisk.Path resolves
+// to <DisksRootPath>/<RootDiskImageFile>. Empty rootVolumeMode (the
+// default before any caller sets it) MUST resolve to Filesystem too.
+func TestBuild_DiskBootFilesystemModeUnchanged(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+	}{
+		{"explicit_Filesystem", "Filesystem"},
+		{"empty_defaults_Filesystem", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rg := &mockResolvedGuest{
+				hasSeed:        true,
+				format:         "raw",
+				rootVolumeMode: tc.mode,
+				cpu:            2,
+				memory:         2048,
+				lifecycle:      "start",
+				guestID:        "fs-guest",
+			}
+			intent := Build(rg)
+			want := DisksRootPath + "/" + RootDiskImageFile
+			if intent.RootDisk.Path != want {
+				t.Errorf("Filesystem-mode RootDisk.Path = %q, want %q", intent.RootDisk.Path, want)
+			}
+		})
+	}
+}
 
 func TestBuild(t *testing.T) {
 	rg := &mockResolvedGuest{
