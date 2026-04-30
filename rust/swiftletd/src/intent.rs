@@ -194,7 +194,22 @@ impl NICIntent {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RootDisk {
+    /// Disk path. Opaque to swiftletd — the value is forwarded
+    /// unchanged to Cloud Hypervisor's `--disk path=<value>` argument
+    /// (via `swift_ch_client::config::VmConfig::disk_path`). CH opens
+    /// regular files and raw block devices identically through this
+    /// arg, so the controller-side resolver decides which form to
+    /// emit based on the SwiftGuest's resolved
+    /// `spec.storage.volumeMode` (W9 — see
+    /// `internal/runtimeintent/build.go::Build` for the producer side).
+    ///
+    /// No path-suffix or extension-based branching exists in this
+    /// crate. The W9 PR description records the verbatim grep audit.
     pub path: String,
+    /// Disk format. Today always "raw" in practice (the SwiftImage
+    /// import pipeline converts qcow2→raw before guest boot). The
+    /// field is informational only — swiftletd does not branch on it,
+    /// and CH treats every `--disk path=` target as a raw stream.
     pub format: String,
 }
 
@@ -518,5 +533,56 @@ mod tests {
         assert!(intent.is_restore());
         // ...but the URL is empty, which run_ch_restore checks.
         assert!(intent.restore_source_url().is_empty());
+    }
+
+    // W9 Component 3 — a Block-mode SwiftGuest produces a RuntimeIntent
+    // whose RootDisk.path is the in-pod block device path
+    // (`/dev/kubeswift-root`). The controller emits the path that way
+    // (see internal/runtimeintent/build.go::Build); swiftletd
+    // deserializes it transparently and forwards it unchanged to CH.
+    // This test pins the deserialization contract and the disk_path()
+    // accessor's pass-through behaviour.
+
+    /// W9 — Block-mode root disk path deserializes correctly and
+    /// `disk_path()` returns the device path verbatim. No suffix
+    /// detection, no path-shape interpretation; the string is
+    /// opaque all the way to CH's --disk path= argument.
+    #[test]
+    fn test_intent_block_mode_root_disk_path() {
+        let json = r#"{
+            "rootDisk": {"path": "/dev/kubeswift-root", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/block-guest",
+            "network": true
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            intent.disk_path(),
+            "/dev/kubeswift-root",
+            "Block-mode disk_path should pass through verbatim"
+        );
+        assert_eq!(intent.root_disk.format, "raw");
+    }
+
+    /// W9 — Filesystem-mode disk path is unchanged (regression gate).
+    /// The default and overwhelming-majority case must continue to
+    /// produce the legacy filesystem path.
+    #[test]
+    fn test_intent_filesystem_mode_root_disk_path_unchanged() {
+        let json = r#"{
+            "rootDisk": {"path": "/var/lib/kubeswift/disks/root/image.raw", "format": "raw"},
+            "seedPath": "/data/seed",
+            "cpu": 2, "memory": 2048,
+            "lifecycle": "start",
+            "guestId": "default/fs-guest",
+            "network": true
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            intent.disk_path(),
+            "/var/lib/kubeswift/disks/root/image.raw"
+        );
     }
 }
