@@ -98,6 +98,18 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
     verbs: ["get", "list", "watch"]
+  # storage.k8s.io StorageClass — read-only. The SwiftGuest controller's
+  # checkStorageReady (PR #32) inspects the resolved StorageClass to
+  # verify the Longhorn migratable parameter for RWX+Block guests.
+  # list+watch are required because controller-runtime's cached client
+  # opens an informer on every GETable resource — same pattern as W7
+  # for rolebindings; without list+watch the informer cache fails to
+  # sync ("Failed to watch *v1.StorageClass" loop) and every reconcile
+  # that touches the cached client blocks indefinitely. PR #32 W8
+  # follow-up.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
   # Leader election (controller-runtime uses coordination.k8s.io/leases)
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
