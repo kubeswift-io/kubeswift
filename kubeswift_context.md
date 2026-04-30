@@ -520,6 +520,48 @@ Pattern decision validated: do mini-walkthroughs between phases for live migrati
 
 What happens when SwiftImage's source PVC is deleted while a snapshot of it has bound clones. Deferred from Phase 0 spike for cluster safety. Phase 2 e2e covered some of this but not all. Should validate before Phase 3.
 
+### 6. Storage RWX+Block runtime path (W9 — follow-up to PR #32)
+
+PR #32 shipped the API-surface unblock for storage access mode selection.
+The post-merge cluster walkthrough confirmed every API-surface path is
+working (resolution, status echo, StorageReady condition, CRD admission)
+and surfaced W9: the runtime path doesn't yet support `volumeMode: Block`
+destinations.
+
+Three components need updates, plus three open scoping questions the
+walkthrough did not exercise. Detail in
+[`docs/design/storage-rwx-block-runtime.md`](docs/design/storage-rwx-block-runtime.md).
+
+Components:
+- Copy Job (`internal/controller/swiftguest/rootdisk.go::createCloneJob`):
+  use `volumeDevices` + raw-device write (`dd`/`qemu-img convert` to
+  `/dev/dst-block`) for Block destinations
+- Launcher pod builder
+  (`internal/controller/swiftguest/pod.go`): switch root-disk volume to
+  `volumeDevices` for Block destinations; pass the device path via
+  RuntimeIntent
+- swiftletd (Rust): accept block device path in
+  `runtimeintent::DiskIntent` and pass as `--disk path=/dev/...` to
+  Cloud Hypervisor
+
+Open scoping questions (must be answered as part of W9, not blockers):
+(a) does the qcow2→raw SwiftImage import pipeline work against
+Block-mode destination PVCs (`qemu-img convert -O raw` to `/dev/...`
+inside the import Job)?
+(b) does cloud-init `growpart` work on a Block-mode root disk inside the
+guest, or does the Block path produce a partition that cloud-init's
+filesystem-resize step can't extend?
+(c) does the existing `qemu-img resize` + `sgdisk -e` GPT-fix step work
+against Block targets, or does Block change the resize/sgdisk semantics
+(qemu-img resize on a block device is typically a no-op since size is
+fixed at provision time; sgdisk -e operates byte-level so should still
+work)?
+
+This is not a PR #32 regression. Same shape as Phase 1 → Phase 2 → PR
+#32: each shipped layer reveals what the next needs. The W5 pattern
+(spike scenarios under-constrain the design) restated yet again — this
+time at the API/runtime boundary.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
@@ -596,6 +638,70 @@ What it did NOT validate (blocked on W6):
 
 Pre-migration sentinel md5 captured anyway for any future re-run on this same source pod: `88d94a051ea2db180606535a4125784d` (sentinel `SPIKE-PHASE2-WT-1777503996`, written via serial console).
 
+### PR #32 walkthrough findings (post-merge cluster validation)
+
+After PR #32 (storage access mode CRD) merged + redeployed, the cluster
+validation exercise in `default` namespace surfaced two findings (W8, W9).
+The framing applies the now-recurring pattern: **each shipped layer reveals
+what the next layer needs**. Phase 1 (offline migration) revealed Phase 2's
+need (live migration plumbing). Phase 2 walkthrough revealed PR #32's need
+(API surface for storage access mode). PR #32 walkthrough now reveals W9
+(runtime-path support for Block volumeMode). W9 is **not a PR #32
+regression** — PR #32's stated scope was the API-surface unblock, and
+every piece of that surface is validated. W9 is the next phase the
+unblock makes addressable.
+
+- **W8 — controller-runtime cached client requires `list,watch` on
+  StorageClass.** PR #32's `checkStorageReady()` calls `r.Get` on
+  StorageClass to verify the Longhorn migratable parameter. Same shape as
+  W7 (rolebindings) and Phase 2 walkthrough W3 (RBAC gap): adding a
+  cached-client `r.Get` on a new resource type without granting
+  `list,watch` starves the reconcile queue ("Failed to watch
+  *v1.StorageClass" loop, no SwiftGuest reconciles fire). Unit tests
+  passed because fake-client doesn't use informers. **Fixed in commit
+  `8f5265e` on the PR #32 branch:** verbs extended to `get, list, watch`
+  in both `config/manager/controller-manager-rbac.yaml` and the Helm
+  chart. **Recurring lesson** (W7 + W8 are the same lesson): when adding
+  a `r.Get` on a new resource type from inside the controller-runtime
+  cached client, grant `list,watch` alongside `get`. Adds further weight
+  to Tracked Follow-up #2 (operator-flow validation pattern in test
+  infrastructure) — fake-client tests verify control-flow but not RBAC
+  sufficiency.
+
+- **W9 — runtime-path gap: Copy Job + launcher pod + swiftletd do not
+  yet support `volumeMode: Block` destinations.** With PR #32 shipped,
+  applying a SwiftGuest with `spec.storage.{accessMode: ReadWriteMany,
+  volumeMode: Block, storageClassName: longhorn-migratable}` resolves
+  correctly, populates `status.storage`, surfaces `StorageReady=True`,
+  and creates the per-guest clone PVC bound at 40Gi RWX on the migratable
+  Longhorn class. The gap surfaces **at the rootdisk Copy Job step**:
+  kubelet refuses with `volume dst has volumeMode Block, but is specified
+  in volumeMounts`. The Copy Job in
+  `internal/controller/swiftguest/rootdisk.go::createCloneJob` mounts the
+  destination as a filesystem path (`volumeMounts: /dst`) and runs
+  `cp /src/image.raw /dst/image.raw` — which only works on Filesystem-mode
+  PVCs. Block-mode PVCs need `volumeDevices` + raw-device write
+  (`dd`/`qemu-img convert` to `/dev/dst-block`). The launcher pod and
+  swiftletd have the analogous gap further along the path: both currently
+  mount the root PVC as a filesystem path and pass `--disk
+  path=/var/lib/.../image.raw` to Cloud Hypervisor; for Block they would
+  need `volumeDevices` and `--disk path=/dev/...`. **Disposition: defer
+  to a follow-up PR** scoped as "Storage RWX+Block runtime path."
+  Detail and scoping questions in
+  [`docs/design/storage-rwx-block-runtime.md`](docs/design/storage-rwx-block-runtime.md).
+  PR #32 ships and is complete on its API-surface scope; the runtime-path
+  follow-up uses the same surface.
+
+W8 + W9 are the **fourth and fifth** post-hoc walkthroughs in 9 days to
+surface a finding the spike-and-tests cycle did not catch (after snapshot
+F2, Phase 2 W3, Phase 2 W6). The W5 pattern continues to restate itself:
+unit tests with fake clients verify control-flow shape but not RBAC
+sufficiency or kubelet-mount-side semantics; spike scenarios validate
+simplified inputs and miss the operator's full-feature target shape. This
+is now durable signal for Tracked Follow-up #2 — the operator-flow
+validation pattern needs to land as part of the test infrastructure, not
+as the next phase's after-the-fact discovery.
+
 ---
 
 ## Bugs Fixed (Recent — Snapshot and Migration Phases)
@@ -613,6 +719,7 @@ Pre-migration sentinel md5 captured anyway for any future re-run on this same so
 | 59 | swiftguest/rbac.go (new) | swiftletd RBAC was per-namespace Role + manually-applied RoleBinding; silently broke IP discovery in non-default namespaces. Promoted to ClusterRole + controller-driven auto-bind. (Re-surface of snapshot walkthrough F2; W3 in Phase 2 walkthrough.) | PR #30 |
 | 60 | rust/swiftletd/src/lease.rs | Lease poller `return`-ed unconditionally after first patch attempt; transient 403 (W3 RBAC gap) killed the poller permanently. Only `return` on patch success now; retry on transient errors. (W4 in Phase 2 walkthrough.) | PR #30 |
 | 61 | api/swift/v1alpha1 + controller + webhook | Storage access mode CRD: SwiftGuestClass.spec.storage and SwiftGuest.spec.storage select accessMode/volumeMode/storageClassName for controller-created PVCs. CRD admission rejects RWX+Filesystem (Filesystem RWX is not live-migration-capable). SwiftMigration webhook gains forward-compat live-mode storage gate (recompute from spec, NOT read status — write-back-race avoidance). Defaults preserve current behaviour (RWO+Filesystem). Resolves W6 design contradiction at the API surface; storage architecture review owns the deeper questions (CSI driver matrix, F2 split-brain on RWX). | PR #32 |
+| 62 | rbac (controller-manager ClusterRole) | StorageClass `list,watch` verbs missing — controller-runtime's cached client opens an informer on every GETable resource; PR #32's `checkStorageReady`'s `r.Get` on StorageClass triggered "Failed to watch" loop, starving SwiftGuest reconcile queue. Fake-client unit tests passed (no informer). Same shape as W7 (rolebindings). (W8 in PR #32 walkthrough.) | PR #32 |
 
 ---
 
@@ -668,17 +775,29 @@ See dedicated section above. Three PRs: #24 initial implementation, #25 terminal
 
 Phase 2 deliverable surface complete: operators can manually demonstrate cross-node CH live migration via `make migration-phase2-manual SWIFTGUEST=<name> TARGET_NODE=<node>`. No controller integration (Phase 3); no mTLS (Phase 3); no drain integration (Phase 4).
 
-**2. Live Migration Phase 3 — live mode + mTLS**
+**2. Storage RWX+Block runtime path (W9 follow-up to PR #32)**
+- Copy Job in `rootdisk.go` uses `volumeDevices` + `dd`/`qemu-img convert` for Block destinations
+- Launcher pod builder mounts root PVC as block device when resolved
+  storage is `volumeMode: Block`; RuntimeIntent carries device path
+- swiftletd accepts block device path and passes `--disk path=/dev/...` to CH
+- Verify (a) import pipeline against Block PVCs, (b) cloud-init growpart on
+  Block root disks, (c) qemu-img resize + sgdisk -e against Block targets
+- Detail: `docs/design/storage-rwx-block-runtime.md`
+- Unblocks Phase 3 live migration on RWX+Block guests (KubeVirt-model storage)
+- Same-shape pattern as the API-surface unblock that revealed it: each
+  shipped layer surfaces the next layer's gap. NOT a PR #32 regression.
+
+**3. Live Migration Phase 3 — live mode + mTLS**
 - SwiftMigration controller gains live mode
 - mTLS sidecar for migration channel
 - Pre-copy convergence handling
 
-**3. Live Migration Phase 4 — drain integration via eviction webhook**
+**4. Live Migration Phase 4 — drain integration via eviction webhook**
 - `kubectl drain` triggers migration automatically
 - Independent value: drain integration with offline migration alone dramatically improves operator UX
 - Could jump sequence if operator demand for safe drain dominates
 
-**4. Live Migration Phase 5 — operational polish**
+**5. Live Migration Phase 5 — operational polish**
 - Prometheus metrics, dashboards, retention
 
 ### Snapshot Roadmap Continuation (deferred behind live migration)
