@@ -303,7 +303,8 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	}
 
 	var mounts []corev1.VolumeMount
-	AddVolumeMounts(&mounts, rg.HasSeed())
+	var volumeDevices []corev1.VolumeDevice
+	AddVolumeMounts(&mounts, &volumeDevices, rg, rg.HasSeed())
 	if rg.HasDataDisk() {
 		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
 	}
@@ -327,7 +328,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 
 	var initContainers []corev1.Container
 	if rootDiskClone != nil && rootDiskClone.NeedsGrowInit {
-		initContainers = append(initContainers, cloneGrowInitContainer(rootDiskClone.TargetSizeBytes))
+		initContainers = append(initContainers, cloneGrowInitContainer(rg, rootDiskClone.TargetSizeBytes))
 	}
 	if rg.HasNetwork() {
 		initContainers = append(initContainers, networkInitContainer())
@@ -377,8 +378,9 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 							},
 						},
 					},
-					Resources:    resources,
-					VolumeMounts: mounts,
+					Resources:     resources,
+					VolumeMounts:  mounts,
+					VolumeDevices: volumeDevices,
 				},
 			},
 			Volumes: volumes,
@@ -394,13 +396,51 @@ func VolumeMountPaths() (imagePath, seedPath, intentDir string) {
 	return DisksRootPath, SeedPath, IntentPath
 }
 
-// AddVolumeMounts adds the standard volume mounts to a container.
-// Caller must ensure volumes exist for image, seed (if present), intent, and dev-kvm.
-func AddVolumeMounts(mounts *[]corev1.VolumeMount, hasSeed bool) {
-	imagePath, seedPath, intentDir := VolumeMountPaths()
+// rootDiskMount returns the launcher-pod root-disk mount surface for
+// the resolved storage spec (W9 — runtime path for volumeMode: Block).
+// Filesystem mode returns a non-nil VolumeMount; Block mode returns a
+// non-nil VolumeDevice. Exactly one is non-nil. Callers append to the
+// appropriate list.
+//
+// The two are mutually exclusive on the same volume name by Kubernetes
+// contract — kubelet rejects with "volume X has volumeMode Block, but
+// is specified in volumeMounts" (the W9 surface point that triggered
+// this whole follow-up). Centralising the branch here means the four
+// call sites (launcher container in pod.go and gpu.go;
+// cloneGrowInitContainer; restore-receive launcher in restore.go)
+// share one source of truth.
+//
+// The same helper serves the launcher container, clone-grow-init, and
+// restore-receive launcher because all three use the same volume name
+// ("root-disk") and the same path constants — the architect (W9 Q1
+// review) confirmed a single helper covers the four call sites without
+// per-site differentiation.
+func rootDiskMount(rg *resolved.ResolvedGuest) (*corev1.VolumeMount, *corev1.VolumeDevice) {
+	if rg.Storage.VolumeMode == "Block" {
+		return nil, &corev1.VolumeDevice{Name: "root-disk", DevicePath: DiskRootDevicePath}
+	}
+	return &corev1.VolumeMount{Name: "root-disk", MountPath: DisksRootPath}, nil
+}
+
+// AddVolumeMounts adds the standard volume mounts (and, for Block-mode
+// guests, the root-disk volume device) to a container.
+//
+// Caller must ensure volumes exist for image, seed (if present),
+// intent, and dev-kvm. The W9 signature change adds the devices slice
+// and rg parameter so the helper can place the root-disk surface on
+// the correct list. Pre-W9 callers passed (mounts, hasSeed); W9
+// callers pass (mounts, devices, rg, hasSeed).
+func AddVolumeMounts(mounts *[]corev1.VolumeMount, devices *[]corev1.VolumeDevice, rg *resolved.ResolvedGuest, hasSeed bool) {
+	_, seedPath, intentDir := VolumeMountPaths()
 	*mounts = append(*mounts,
 		corev1.VolumeMount{Name: "run", MountPath: RunDirPath},
-		corev1.VolumeMount{Name: "root-disk", MountPath: imagePath},
+	)
+	if mount, device := rootDiskMount(rg); mount != nil {
+		*mounts = append(*mounts, *mount)
+	} else if device != nil && devices != nil {
+		*devices = append(*devices, *device)
+	}
+	*mounts = append(*mounts,
 		corev1.VolumeMount{Name: "runtime-intent", MountPath: intentDir},
 		corev1.VolumeMount{Name: "dev-kvm", MountPath: "/dev/kvm"},
 	)

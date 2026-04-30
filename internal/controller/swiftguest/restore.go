@@ -282,12 +282,24 @@ func BuildRestorePod(
 		AddSeedVolume(&volumes, seedConfigMapName)
 	}
 
+	// W9 — root-disk surface depends on resolved storage volumeMode. The
+	// restore-receive launcher pod has the same kubelet contract as the
+	// regular launcher: VolumeMounts and VolumeDevices cannot share a
+	// volume name. Channel through rootDiskMount so the same source-of-
+	// truth covers all five call sites.
 	mounts := []corev1.VolumeMount{
 		{Name: "run", MountPath: RunDirPath},
-		{Name: "root-disk", MountPath: DisksRootPath},
-		{Name: "runtime-intent", MountPath: IntentPath},
-		{Name: "dev-kvm", MountPath: "/dev/kvm"},
 	}
+	var volumeDevices []corev1.VolumeDevice
+	if mount, device := rootDiskMount(rg); mount != nil {
+		mounts = append(mounts, *mount)
+	} else if device != nil {
+		volumeDevices = append(volumeDevices, *device)
+	}
+	mounts = append(mounts,
+		corev1.VolumeMount{Name: "runtime-intent", MountPath: IntentPath},
+		corev1.VolumeMount{Name: "dev-kvm", MountPath: "/dev/kvm"},
+	)
 	if rg.HasSeed() && seedConfigMapName != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "seed", MountPath: SeedPath})
 	}
@@ -368,8 +380,9 @@ func BuildRestorePod(
 							},
 						},
 					},
-					Resources:    resources,
-					VolumeMounts: mounts,
+					Resources:     resources,
+					VolumeMounts:  mounts,
+					VolumeDevices: volumeDevices,
 				},
 			},
 			Volumes: volumes,
