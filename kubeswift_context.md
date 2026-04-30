@@ -520,13 +520,31 @@ Pattern decision validated: do mini-walkthroughs between phases for live migrati
 
 What happens when SwiftImage's source PVC is deleted while a snapshot of it has bound clones. Deferred from Phase 0 spike for cluster safety. Phase 2 e2e covered some of this but not all. Should validate before Phase 3.
 
-### 6. Storage RWX+Block runtime path (W9 — follow-up to PR #32)
+### 6. Storage RWX+Block runtime path (W9 — SHIPPED via PR #35)
 
-PR #32 shipped the API-surface unblock for storage access mode selection.
-The post-merge cluster walkthrough confirmed every API-surface path is
-working (resolution, status echo, StorageReady condition, CRD admission)
-and surfaced W9: the runtime path doesn't yet support `volumeMode: Block`
-destinations.
+W9 shipped via PR #35 (2026-04-30). Cluster mini-walkthrough validated
+the end-to-end Block runtime path on Longhorn Migratable storage
+(`parameters.migratable: "true"`). RWX+Block SwiftGuest boots, cloud-init
+growpart + resize2fs succeed (`df` reports ~37G of 40G), Block PVC
+persists across pod recreation, RWO+Filesystem regression unaffected.
+See "PR #35 walkthrough findings" subsection above.
+
+Two follow-ups from the walkthrough:
+
+- **W10 — CH `Request check failed: ... ReadOnly` WARN at sector 0 during
+  early boot.** Two warnings during boot, then never again; growpart
+  succeeds. Non-blocking; investigate as a CH v51.1 quirk in the early-
+  boot virtio-blk request validation path. Document for operators.
+- **W11 / W9.x — `cloneStrategy=snapshot` + `volumeMode: Block` fails at
+  PVC provisioning.** CSI external-snapshotter requires the
+  `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"`
+  annotation on the source VolumeSnapshotContent when destination
+  volumeMode differs from source. The SwiftImage controller's
+  cloneSeed-creation path needs to set this annotation. Small fix;
+  separate follow-up issue per W9 prompt's binding language.
+
+For historical reference (the original W9 scoping doc still describes
+the gap as it existed before PR #35):
 
 Three components need updates, plus three open scoping questions the
 walkthrough did not exercise. Detail in
@@ -702,6 +720,79 @@ is now durable signal for Tracked Follow-up #2 — the operator-flow
 validation pattern needs to land as part of the test infrastructure, not
 as the next phase's after-the-fact discovery.
 
+### PR #35 (W9 runtime path) walkthrough findings — 2026-04-30
+
+PR #35 shipped W9 in three components: Copy Job + launcher pod
+builder + restore-receive launcher + clone-grow-init Block path
+(controller-side) + Rust opacity contract (swiftletd / swift-ch-client
+docs + tests verifying disk_path passes opaquely to `--disk path=`).
+Cluster mini-walkthrough on `default` namespace with `longhorn-migratable`
+StorageClass (Longhorn `parameters.migratable: "true"`). Two findings:
+
+- **W10 — CH `Request check failed: ... ReadOnly` WARN at sector 0
+  during early boot of Block-mode guests; non-blocking.** The launcher
+  log shows 2x WARNs at ~18s and ~23s into boot, both writes to sector 0
+  (likely a bootloader / GPT scan write). CH's `vm.info` reports
+  `readonly: false` for the disk, the device is `O_RDWR | O_NONBLOCK |
+  O_CLOEXEC` per `/proc/$pid/fdinfo`, the launcher container can write
+  to `/dev/kubeswift-root` directly with `dd`, and the `growpart` +
+  `resize2fs` chain in cloud-init ultimately succeeds (verified by
+  `df -h /` reporting 37G of 40G after first-boot, dmesg showing
+  `EXT4-fs (vda1): resized filesystem from 655099 to 10223355 blocks`).
+  After the two boot-time WARNs, no further ReadOnly warnings for
+  the lifetime of the guest. **Disposition: noisy boot-time diagnostic,
+  no functional impact.** Worth investigating in CH source to understand
+  why `Request::check()` returns `Error::ReadOnly` on a disk whose
+  config says `readonly:false` — likely a CH v51.1 quirk in the early-
+  boot virtio-blk request validation path. Document for operators so
+  they don't mistake the WARN for a real failure; revisit if a future
+  CH version surfaces it as a hard error.
+
+- **W11 (= W9.x) — `cloneStrategy=snapshot` + `volumeMode: Block` fails
+  at PVC provisioning.** The CSI external-snapshotter refuses to clone
+  a Filesystem-mode source VolumeSnapshot (the SwiftImage's clone-seed,
+  taken from a `longhorn` Filesystem PVC) into a Block-mode destination
+  PVC (the SwiftGuest's clone PVC on `longhorn-migratable`):
+  > `error getting handle for DataSource Type VolumeSnapshot ... requested volume modifies the mode of the source volume but does not have permission to do so. snapshot.storage.kubernetes.io/allow-volume-mode-change annotation is not present on snapshotcontent ...`
+
+  Per W9 prompt's binding language ("Only if it does NOT work does it
+  become W9.x with a separate follow-up issue. The 'OR' in the W9
+  prompt was deliberate"), this becomes **W9.x — separate follow-up**.
+  Fix surface is small: the SwiftImage controller's snapshot-creation
+  path (where it generates the cloneSeed VolumeSnapshot for
+  `cloneStrategy: snapshot`) needs to set the
+  `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"`
+  annotation on the resulting VolumeSnapshotContent. **Operator
+  workaround until W9.x ships:** for RWX+Block guests, use
+  `cloneStrategy: copy` (the default — exercised end-to-end in this
+  walkthrough). Snapshot-strategy clones remain available for
+  Filesystem-mode guests (the existing path).
+
+What the walkthrough VALIDATED end-to-end on cluster (W9 acceptance):
+
+| | Result |
+|---|---|
+| RWX+Block SwiftGuest reaches Phase=Running | ✓ ~2m18s clone Job + ~30s boot |
+| `status.network.primaryIP` populated | ✓ via DHCP+annotation pipeline |
+| Pod manifest: VolumeDevices=[{root-disk, /dev/kubeswift-root}] | ✓ |
+| Pod manifest: no root-disk VolumeMount on Block | ✓ |
+| Console login (kubeswift/kubeswift) | ✓ |
+| `swiftctl ssh -i <key> rwx-test` | ✓ (operator-confirmed) |
+| `df -h /` reports ~37G of 40G | ✓ — growpart + resize2fs on Block work |
+| Block PVC persistence across pod recreate | ✓ same PVC UID, guest reboots cleanly |
+| RWO+Filesystem regression (`rwo-test` + smoke-test `sample`) | ✓ both Phase=Running with default RWO+Filesystem |
+| Pre-W9 manifest with no `spec.storage` block | ✓ resolves to legacy RWO+Filesystem |
+| Scoping (a): SwiftImage import PVC stays Filesystem | ✓ `RWO Filesystem longhorn` |
+| Scoping (c): sgdisk-on-Block via clone-grow-init | Deferred — exercised only on snapshot path which is W9.x-blocked |
+| `cloneStrategy=snapshot` + Block | ❌ → W9.x (CSI annotation gap) |
+
+**Pattern for the project (W5 restated yet again):** the cluster
+walkthrough caught W10 + W11 that the unit-test cycle could not — a
+CH-runtime-noise WARN that fake-client tests can't see, and a CSI
+inter-driver behaviour that doesn't reach Go test surface. Adds yet
+more weight to Tracked Follow-up #2 (operator-flow validation pattern
+in test infrastructure).
+
 ---
 
 ## Bugs Fixed (Recent — Snapshot and Migration Phases)
@@ -720,6 +811,7 @@ as the next phase's after-the-fact discovery.
 | 60 | rust/swiftletd/src/lease.rs | Lease poller `return`-ed unconditionally after first patch attempt; transient 403 (W3 RBAC gap) killed the poller permanently. Only `return` on patch success now; retry on transient errors. (W4 in Phase 2 walkthrough.) | PR #30 |
 | 61 | api/swift/v1alpha1 + controller + webhook | Storage access mode CRD: SwiftGuestClass.spec.storage and SwiftGuest.spec.storage select accessMode/volumeMode/storageClassName for controller-created PVCs. CRD admission rejects RWX+Filesystem (Filesystem RWX is not live-migration-capable). SwiftMigration webhook gains forward-compat live-mode storage gate (recompute from spec, NOT read status — write-back-race avoidance). Defaults preserve current behaviour (RWO+Filesystem). Resolves W6 design contradiction at the API surface; storage architecture review owns the deeper questions (CSI driver matrix, F2 split-brain on RWX). | PR #32 |
 | 62 | rbac (controller-manager ClusterRole) | StorageClass `list,watch` verbs missing — controller-runtime's cached client opens an informer on every GETable resource; PR #32's `checkStorageReady`'s `r.Get` on StorageClass triggered "Failed to watch" loop, starving SwiftGuest reconcile queue. Fake-client unit tests passed (no informer). Same shape as W7 (rolebindings). (W8 in PR #32 walkthrough.) | PR #32 |
+| 63 | rootdisk Copy Job + launcher pod builder + clone-grow-init + restore-receive launcher + RuntimeIntent producer + rust opacity contract | Block volumeMode runtime path: Copy Job branches to `volumeDevices` + `qemu-img convert + sgdisk -e` (no cp, no resize) for Block destinations; launcher pod uses VolumeDevices at `/dev/kubeswift-root`; clone-grow-init runs sgdisk -e against device path on Block (skips qemu-img resize as no-op); RuntimeIntent.RootDisk.Path resolves to device path for Block guests; rust crates verified suffix-free via Q2 grep audit. End-to-end cluster validation: RWX+Block guest boots, growpart succeeds, df reports ~37G of 40G, PVC persistence across pod recreate verified. Two findings (W10 noisy boot WARN non-blocking; W11=W9.x cloneStrategy=snapshot+Block fails at CSI provisioning, deferred). | PR #35 |
 
 ---
 
@@ -775,19 +867,33 @@ See dedicated section above. Three PRs: #24 initial implementation, #25 terminal
 
 Phase 2 deliverable surface complete: operators can manually demonstrate cross-node CH live migration via `make migration-phase2-manual SWIFTGUEST=<name> TARGET_NODE=<node>`. No controller integration (Phase 3); no mTLS (Phase 3); no drain integration (Phase 4).
 
-**2. Storage RWX+Block runtime path (W9 follow-up to PR #32)**
-- Copy Job in `rootdisk.go` uses `volumeDevices` + `dd`/`qemu-img convert` for Block destinations
-- Launcher pod builder mounts root PVC as block device when resolved
-  storage is `volumeMode: Block`; RuntimeIntent carries device path
-- swiftletd accepts block device path and passes `--disk path=/dev/...` to CH
-- Verify (a) import pipeline against Block PVCs, (b) cloud-init growpart on
-  Block root disks, (c) qemu-img resize + sgdisk -e against Block targets
-- Detail: `docs/design/storage-rwx-block-runtime.md`
-- Unblocks Phase 3 live migration on RWX+Block guests (KubeVirt-model storage)
-- Same-shape pattern as the API-surface unblock that revealed it: each
-  shipped layer surfaces the next layer's gap. NOT a PR #32 regression.
+**2. Storage RWX+Block runtime path (W9 — SHIPPED via PR #35)**
+- Copy Job in `rootdisk.go` branches on `rg.Storage.VolumeMode` for
+  Block destinations: `volumeDevices` + `qemu-img convert + sgdisk -e`
+- Launcher pod builder + clone-grow-init + restore-receive launcher use
+  shared `rootDiskMount(rg)` helper; Block guests get VolumeDevices
+  at `/dev/kubeswift-root`
+- RuntimeIntent.RootDisk.Path resolves to the device path for Block
+- Rust opacity contract verified: zero suffix-detection logic in
+  `swift-ch-client` or `swiftletd` (Q2 sidebar grep result documented
+  in PR #35); doc comments codify the opacity contract
+- Cluster validation: RWX+Block guest boots, cloud-init growpart works
+  (`df -h /` reports ~37G of 40G), PVC persistence across pod recreate
+- Two follow-ups: W10 (CH boot-time ReadOnly WARN, non-blocking) and
+  W11=W9.x (cloneStrategy=snapshot + Block, separate follow-up — see
+  Tracked Follow-up #6 for details and Tracked Follow-up #7 below)
 
-**3. Live Migration Phase 3 — live mode + mTLS**
+**3. W9.x — `cloneStrategy=snapshot` + `volumeMode: Block` (small follow-up to PR #35)**
+- The SwiftImage controller's cloneSeed VolumeSnapshot needs the
+  `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"`
+  annotation when the SwiftImage may be cloned to Block-mode PVCs
+  (or unconditionally — the annotation is no-op when destination
+  volumeMode matches source)
+- ~30 lines of Go change in the SwiftImage controller's snapshot
+  creation path; one cluster integration test verifying RWX+Block guest
+  boots from a cloneStrategy=snapshot SwiftImage
+
+**4. Live Migration Phase 3 — live mode + mTLS**
 - SwiftMigration controller gains live mode
 - mTLS sidecar for migration channel
 - Pre-copy convergence handling
