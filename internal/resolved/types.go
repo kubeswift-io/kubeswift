@@ -30,6 +30,15 @@ type ResolvedGuest struct {
 	KernelBoot    *KernelBoot    `json:"kernelBoot,omitempty"`
 	DataDisk      *PreparedImage `json:"dataDisk,omitempty"`
 	Network       bool           `json:"network"`
+	// Storage is the post-merge effective storage spec for controller-
+	// created PVCs (today: the root-disk clone). Always non-nil after a
+	// successful resolution: defaults are filled in (RWO + Filesystem +
+	// empty StorageClassName). The controller writes AccessMode +
+	// VolumeMode + StorageClassName onto SwiftGuest.status.storage as an
+	// informational echo. liveMigrationCapable is recomputed from this
+	// spec at the SwiftMigration validation webhook (not stored in
+	// status — see api/swift/v1alpha1.ResolvedStorageStatus's doc comment).
+	Storage Storage `json:"storage"`
 	// Hypervisor overrides the default hypervisor selection.
 	// "qemu" forces the QEMU path; empty or "cloud-hypervisor" uses Cloud Hypervisor.
 	// Set by the controller from the kubeswift.io/hypervisor-override annotation.
@@ -59,6 +68,32 @@ type Resources struct {
 type RootDisk struct {
 	Size   resource.Quantity `json:"size"`
 	Format string            `json:"format"` // raw or qcow2
+}
+
+// Storage is the post-merge effective storage spec for controller-created
+// PVCs. Defaults are pre-filled by Merge: AccessMode=ReadWriteOnce,
+// VolumeMode=Filesystem, StorageClassName="" (legacy fall-through to the
+// source SwiftImage's PVC storage class).
+//
+// IsLiveMigrationCapable returns true iff AccessMode=ReadWriteMany AND
+// VolumeMode=Block — the canonical KubeVirt-style rule. The SwiftMigration
+// webhook's ValidateCreate calls it directly to gate live mode; the
+// controller writes the AccessMode/VolumeMode/StorageClassName onto
+// SwiftGuest.status.storage as an informational echo only.
+type Storage struct {
+	AccessMode       string `json:"accessMode"`       // ReadWriteOnce or ReadWriteMany
+	VolumeMode       string `json:"volumeMode"`       // Filesystem or Block
+	StorageClassName string `json:"storageClassName"` // empty = inherit from source SwiftImage's PVC
+}
+
+// IsLiveMigrationCapable mirrors swiftv1alpha1.IsLiveMigrationCapable
+// against the resolved storage shape; we keep the rule in two places
+// because the API package and the resolved package can't share string
+// constants without a circular import (the API package can't depend on
+// resolved). The two implementations are textually identical and a unit
+// test in this package locks them in step.
+func (s Storage) IsLiveMigrationCapable() bool {
+	return s.AccessMode == "ReadWriteMany" && s.VolumeMode == "Block"
 }
 
 // Networks holds network config. MVP: one network.
