@@ -633,6 +633,114 @@ After PR-C (#29) merged + redeployed, attempting the manual demo in a fresh `mig
 
 W3 and W4 are fixed in PR #30 (`fix/swiftletd-rbac-auto-bind`). The original Phase 2 walkthrough was paused after surfacing these findings; it resumed after PR #30 merged + redeployed.
 
+### Phase 3a Decisions Resolved (live migration)
+
+Phase 3a spike completed 2026-05-01. Findings doc:
+[`docs/design/live-migration-phase-3a-spike.md`](docs/design/live-migration-phase-3a-spike.md).
+All four spike questions resolved with empirical evidence on the
+deployed cluster (miles + boba, kernel-boot 4Gi guest, CH v51.1).
+
+1. **Q1 — Controller orchestration**: state machine drives the four
+   transitions (Validating → Preparing → StopAndCopy → Resuming →
+   Completed) entirely via the Phase 2 annotation surface. Send-id
+   derivation `<SwiftMigration>:send:<attempt-counter>` for idempotent
+   retry across leader-handover (F1.8). Dst pod ownerRef:
+   **conditional decision** — option 2 (SwiftGuest owns dst, with
+   `migration-role` label) recommended IF Phase 3a makes SwiftGuest
+   controller migration-aware. If rejected, options 1 (SwiftMigration
+   owns dst) / 3 (no ownerRef + explicit cleanup) reopen. Spike
+   doc F1.5.
+
+2. **Q2 — Controller observation**: informer push latency ≤25ms on
+   spike cluster (avg 20ms, max 24ms over 10 trials). Annotation
+   schema sufficient for full state machine; no new annotations
+   required. **Controller-manager observes both pods via informer
+   alone — no cross-pod TCP connectivity needed.** This closes
+   off the controller→swiftletd command channel as a Phase 3b
+   design surface (F2.4); only swiftletd↔swiftletd needs Phase 3b
+   mTLS hardening.
+
+3. **Q3 — W1 gate-on-observed-state**: enforcement is in
+   swiftletd-on-src's `vm.send-migration` dispatch (Phase 2 PR-B's
+   W1 dispatch-side gate). Controller observation reduces to
+   "informer event for src `migration-status=complete`" (F1.2).
+   F1.9-vs-F4 contradiction RESOLVED: F1.9 (≥60s) captured silent-
+   network failure mode; F4 (~3-5s) captured peer-abort failure
+   mode; q3v3 surfaced a third (blackhole, ≥127s kernel TCP
+   retransmit). All three handled by `spec.timeout` default 5min
+   (F3.5).
+
+4. **Q4 — K8s-initiated termination + node failure**: dst termination
+   (any cause) → src writes `failed` cleanly (F4.1); src termination
+   → no terminal status, controller detects via src pod UID change
+   (F4.2). FailureReason enum: Cancelled / PodTerminated /
+   SourcePodReplaced / Timeout / Other (F4.3). NO PDB on dst pod;
+   Phase 4 webhook handles drain-mid-migration (F4.4). True node
+   failure ≈ Q3-v3 blackhole; same coping path via `spec.timeout`
+   (F4.5).
+
+### Phase 3a must-have-before-ship checklist
+
+- [ ] **B0 — br0/Calico CIDR collision fix** ([PR #39](https://github.com/projectbeskar/kubeswift/pull/39),
+  in-flight ahead of Phase 3a implementation). Launcher pod's
+  hardcoded `10.244.125.0/24` br0 subnet collides with Calico per-
+  node pod CIDRs on some clusters; cross-node TCP from miles-pod to
+  boba-pod silently fails because dst pod's br0 (linkdown stub)
+  shadows Calico's eth0 route for replies. Fix moves br0 to
+  `192.168.99.0/24` (RFC1918 reservation). Affects all future
+  kubeswift cross-pod-TCP workflows, not just Phase 3a. Spike doc
+  B0 section.
+
+- [ ] **swiftletd auto-write `failed` on abnormal listener exit**
+  (F3.2). Without this, controller relies entirely on `spec.timeout`
+  to escape stuck-at-running scenarios where dst CH listener died
+  without writing terminal status. Phase 3a controller can ship
+  without this if `spec.timeout` is the floor; cleaner with it.
+
+- [ ] **swiftletd cancel handler implementation** (F3.4 / Phase 2
+  PR-B's placeholder). Phase 3a's Cancel mechanism issues
+  `migration-action: cancel` via annotation FIRST, falls back to
+  pod-deletion only if cancel-handler times out. Phase 2 PR-B
+  shipped a placeholder; Phase 3a needs the real implementation.
+
+- [ ] **Controller-side `status.failureReason` enum** (F4.3) with
+  values: Cancelled / PodTerminated / SourcePodReplaced / Timeout /
+  Other. Distinguishes the failure modes operators see in `kubectl
+  describe swiftmigration`.
+
+- [ ] **`spec.timeout` default 5m** (F3.5) — empirically grounded
+  in Q3-v3 blackhole behavior (kernel TCP retransmit ~127s default).
+
+### Phase 3a design open questions surfaced by the spike
+
+These are NOT spike questions; they're decision points Phase 3a
+design must address.
+
+1. **SwiftGuest controller migration-awareness** (F1.5 conditional).
+   Phase 3a's first design decision. If yes → dst pod ownerRef =
+   SwiftGuest with `migration-role` label. If no → reopen
+   ownerRef options 1 (SwiftMigration owns) or 3 (no ownerRef +
+   explicit cleanup) with additional empirical validation outside
+   the spike.
+
+2. **dst-side `migration-status=running` ambiguity** (F1.1). The
+   same value fires at receive-accept-time AND at terminal-success
+   on dst. F1.2's recommendation (gate Completed on src-side
+   `complete`) routes around it. **Phase 3a may also request
+   swiftletd-side rename of the dst-side terminal value** (e.g.,
+   `complete` instead of `running`) — cleaner state-machine
+   semantics, but not blocking for Phase 3a.
+
+3. **Multi-migration concurrency**. Default recommendation:
+   serialize per-source-node (refuse new SwiftMigration whose
+   source is a node with an in-flight SwiftMigration). Spike doc's
+   "Open questions for Phase 3a design".
+
+4. **Progress visibility (F2.5)** — already filed as Phase 5
+   backlog item above. Operators watching a 38s SwiftMigration with
+   no progress visibility will surface it as a usability gap during
+   first production rollouts.
+
 ### Phase 2 walkthrough resumption (post-PR-#30 redeploy)
 
 After PR #30 merged + redeployed, the walkthrough resumed in a fresh `mig-walkthrough` namespace. Two more findings surfaced (W6, W7); one (W7) was a follow-up to PR #30 fixed inline; one (W6) is a design contradiction in PR-C requiring disposition before further Phase 2 work.
@@ -905,6 +1013,20 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
 
 **5. Live Migration Phase 5 — operational polish**
 - Prometheus metrics, dashboards, retention
+- **swiftletd progress annotations (Phase 3a spike F2.5).** Phase 2
+  design §3 mentioned intermediate `migration-progress` annotation
+  values (`precopy` / `stopcopy` / `listening` / `transferring`)
+  but Phase 2 PR-B does NOT emit them — operators only see
+  `running` (accept) → terminal `complete` / `running` (post-resume).
+  Phase 3a spike confirmed this is a correctness-no-op for the
+  state machine, but operators watching a 38s SwiftMigration with
+  zero progress visibility will surface it as a usability gap
+  during Phase 3a's first production rollouts. Implementation:
+  swiftletd emits `kubeswift.io/migration-progress` annotation
+  during pre-copy iterations + stop-copy + listening states;
+  controller surfaces in SwiftMigration `status.phaseDetail`.
+  Tracked here so Phase 3a's spike doc is not the canonical
+  source.
 
 ### Snapshot Roadmap Continuation (deferred behind live migration)
 
