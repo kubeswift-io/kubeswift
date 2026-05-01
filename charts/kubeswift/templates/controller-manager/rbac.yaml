@@ -90,6 +90,15 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotclasses"]
     verbs: ["get", "list", "watch"]
+  # snapshot.storage.k8s.io VolumeSnapshotContents — get,patch only.
+  # The CSI external-snapshotter owns VSC creation/deletion. The
+  # SwiftImage controller patches the
+  # snapshot.storage.kubernetes.io/allow-volume-mode-change annotation
+  # on the cloneSeed VSC after binding (W9.x / issue #37). list,watch
+  # required by controller-runtime's cached client.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "patch"]
   # SwiftMigration (migration.kubeswift.io). Phase 1 controller patches
   # SwiftGuest spec fields (runPolicy + nodeName) using the existing
   # swift.kubeswift.io/swiftguests grant; no additional grant needed

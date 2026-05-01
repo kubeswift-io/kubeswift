@@ -30,6 +30,28 @@ const (
 	ReasonSnapshotting   = "Snapshotting"
 	ReasonSnapshotReady  = "SnapshotReady"
 	ReasonSnapshotFailed = "SnapshotFailed"
+
+	// AllowVolumeModeChangeAnnotation is the CSI external-snapshotter
+	// annotation that permits a clone PVC to use a volumeMode different
+	// from the source VolumeSnapshot's volumeMode. Without it, the
+	// snapshotter rejects clones that change Filesystem→Block (or vice
+	// versa) at PVC provisioning time.
+	//
+	// W9.x — issue #37. The SwiftImage import PVC is RWO+Filesystem on
+	// Longhorn (the default); a SwiftGuest with spec.storage.volumeMode:
+	// Block clones from this seed via dataSource: VolumeSnapshot. Without
+	// this annotation on the VolumeSnapshotContent, Longhorn's CSI
+	// provisioner refuses with "modifies the mode of the source volume
+	// but does not have permission to do so."
+	//
+	// The annotation must be on the VolumeSnapshotContent, NOT on the
+	// VolumeSnapshot — the snapshotter's clone-mode check reads the
+	// VSC, and there is no automatic propagation from VS to VSC. We
+	// patch the VSC after the snapshotter binds it (status
+	// .boundVolumeSnapshotContentName is populated). The annotation is
+	// no-op when destination volumeMode matches source, so it's safe
+	// (and idempotent) to set unconditionally on every cloneSeed VSC.
+	AllowVolumeModeChangeAnnotation = "snapshot.storage.kubernetes.io/allow-volume-mode-change"
 )
 
 // CloneSeedSnapshotName returns the deterministic VolumeSnapshot name for
@@ -97,11 +119,74 @@ func (r *SwiftImageReconciler) EnsureCloneSeed(ctx context.Context, img *imagev1
 		return false, sourceSizeBytes, fmt.Errorf("get clone-seed snapshot: %w", err)
 	}
 
+	// Snapshot exists. Ensure the allow-volume-mode-change annotation
+	// is set on the bound VolumeSnapshotContent before the snapshot is
+	// used as a dataSource for any clone PVC (W9.x / issue #37).
+	//
+	// Sequence: snapshotter binds VSC first (status.boundVolumeSnapshotContentName
+	// populated), then drives ReadyToUse=true. We patch in between so
+	// the annotation is in place by the time any SwiftGuest's clone PVC
+	// references the snapshot. If the binding hasn't happened yet,
+	// this is a no-op and we requeue with the readyToUse check below.
+	if err := r.ensureAllowVolumeModeChange(ctx, &snap); err != nil {
+		return false, sourceSizeBytes, fmt.Errorf("ensure allow-volume-mode-change annotation: %w", err)
+	}
+
 	// Snapshot exists. Check readiness.
 	if snap.Status == nil || snap.Status.ReadyToUse == nil || !*snap.Status.ReadyToUse {
 		return false, sourceSizeBytes, nil
 	}
 	return true, sourceSizeBytes, nil
+}
+
+// ensureAllowVolumeModeChange patches the VolumeSnapshotContent bound to
+// the given VolumeSnapshot with
+// snapshot.storage.kubernetes.io/allow-volume-mode-change: "true" so that
+// clone PVCs may differ in volumeMode from the source. No-op when the
+// VSC has not been bound yet (snapshotter hasn't created it) or when the
+// annotation already carries the expected value.
+//
+// Idempotent: returns nil whenever the annotation is in the desired
+// state, including the not-yet-bound case (caller's outer loop requeues
+// via the ReadyToUse check).
+//
+// Permissions required (controller-manager ClusterRole):
+//   - snapshot.storage.k8s.io/volumesnapshotcontents: get, patch
+//
+// Without these the patch fails with 403 Forbidden; the controller
+// surfaces the error and the next reconcile retries. See PR #35
+// walkthrough W11 finding for the failure mode this prevents.
+func (r *SwiftImageReconciler) ensureAllowVolumeModeChange(ctx context.Context, snap *volumesnapshotv1.VolumeSnapshot) error {
+	if snap.Status == nil || snap.Status.BoundVolumeSnapshotContentName == nil {
+		// Snapshotter has not created the VSC yet; the next reconcile
+		// loop will re-check.
+		return nil
+	}
+	vscName := *snap.Status.BoundVolumeSnapshotContentName
+	if vscName == "" {
+		return nil
+	}
+	var vsc volumesnapshotv1.VolumeSnapshotContent
+	if err := r.Get(ctx, client.ObjectKey{Name: vscName}, &vsc); err != nil {
+		if errors.IsNotFound(err) {
+			// VSC referenced by status but not yet visible to the cache;
+			// retry on next reconcile.
+			return nil
+		}
+		return fmt.Errorf("get VolumeSnapshotContent %q: %w", vscName, err)
+	}
+	if vsc.Annotations[AllowVolumeModeChangeAnnotation] == "true" {
+		return nil
+	}
+	patch := client.MergeFrom(vsc.DeepCopy())
+	if vsc.Annotations == nil {
+		vsc.Annotations = map[string]string{}
+	}
+	vsc.Annotations[AllowVolumeModeChangeAnnotation] = "true"
+	if err := r.Patch(ctx, &vsc, patch); err != nil {
+		return fmt.Errorf("patch VolumeSnapshotContent %q with %s=true: %w", vscName, AllowVolumeModeChangeAnnotation, err)
+	}
+	return nil
 }
 
 // createCloneSeedSnapshot creates a VolumeSnapshot of the SwiftImage's

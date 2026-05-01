@@ -65,6 +65,22 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotclasses"]
     verbs: ["get", "list", "watch"]
+  # snapshot.storage.k8s.io VolumeSnapshotContents — get,patch only.
+  # The CSI external-snapshotter owns VSC creation/deletion (the
+  # controller never creates or deletes VSCs). The SwiftImage
+  # controller patches the
+  # snapshot.storage.kubernetes.io/allow-volume-mode-change annotation
+  # on the cloneSeed VSC after the snapshotter binds it (W9.x / issue
+  # #37) so RWX+Block guests can clone from a Filesystem-mode source
+  # snapshot. Without these verbs the patch fails 403 and snapshot+
+  # Block guests never reach Running.
+  #
+  # list,watch are required by controller-runtime's cached client (the
+  # informer cache opens a watch on every GETable resource — same
+  # pattern as W7 rolebindings, W8 storageclasses).
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "patch"]
   # Core resources
   - apiGroups: [""]
     resources: ["nodes"]
