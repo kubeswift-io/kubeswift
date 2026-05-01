@@ -17,8 +17,28 @@ INTENT_PATH="${KUBESWIFT_INTENT_PATH:-/var/lib/kubeswift/intent/runtime-intent.j
 setup_primary_nic() {
     local bridge="$1" tap="$2"
 
-    # VM subnet (internal only; must not conflict with pod network)
-    local bridge_ip="${BRIDGE_IP:-10.244.125.1/24}"
+    # VM-internal subnet (per launcher-pod network namespace; must NOT
+    # collide with the cluster pod-CIDR pool or any per-node Calico
+    # allocation, otherwise SYN-ACK replies to cross-node traffic
+    # routed via this br0 (linkdown) instead of eth0 — see
+    # docs/design/live-migration-phase-3a-spike.md B0 finding.
+    local bridge_ip="${BRIDGE_IP:-192.168.99.1/24}"
+
+    # Derive the network address from bridge_ip for iptables MASQUERADE.
+    # bridge_ip is host/prefix (e.g. 192.168.99.1/24). We need the
+    # network/prefix form (e.g. 192.168.99.0/24) for the source-match
+    # and exclude-match rules.
+    local bridge_addr="${bridge_ip%/*}"
+    local bridge_prefix="${bridge_ip#*/}"
+    # Compute network address by zeroing the last octet of bridge_addr
+    # for /24 subnets. For now we only support /24; if bridge_prefix is
+    # different, fail loudly so an operator override doesn't silently
+    # mis-program iptables.
+    if [ "$bridge_prefix" != "24" ]; then
+        echo "ERROR: BRIDGE_IP prefix must be /24 (got $bridge_prefix)"
+        exit 1
+    fi
+    local bridge_net="${bridge_addr%.*}.0/24"
 
     # Create bridge (internal only -- do NOT add eth0)
     ip link add "$bridge" type bridge stp_state 0
@@ -35,10 +55,12 @@ setup_primary_nic() {
     # Enable IP forwarding
     echo 1 > /proc/sys/net/ipv4/ip_forward
 
-    # Masquerade VM traffic out through the pod's real interface
-    iptables -t nat -A POSTROUTING -s 10.244.125.0/24 ! -d 10.244.125.0/24 -j MASQUERADE
+    # Masquerade VM traffic out through the pod's real interface.
+    # Source/exclude derive from bridge_ip so any operator override
+    # via BRIDGE_IP env stays internally consistent.
+    iptables -t nat -A POSTROUTING -s "$bridge_net" ! -d "$bridge_net" -j MASQUERADE
 
-    echo "Primary NIC: $bridge ($bridge_ip) with $tap"
+    echo "Primary NIC: $bridge ($bridge_ip, net $bridge_net) with $tap"
 }
 
 setup_secondary_nic() {

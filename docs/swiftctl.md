@@ -201,9 +201,9 @@ Console:
   SerialSocket: /var/lib/kubeswift/run/default-sample/serial.sock
 
 Network:
-  PrimaryIP:   10.244.125.11
+  PrimaryIP:   192.168.99.11
   Interfaces:
-    - eth0: 10.244.125.11
+    - eth0: 192.168.99.11
 
 Conditions:
   Resolved: True — ...

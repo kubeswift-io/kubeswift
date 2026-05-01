@@ -177,11 +177,11 @@ mod tests {
         let contents = "\
 # header comment
 \n
-1777501581 2e:dc:8f:5b:97:21 10.244.125.15 mig-walkthrough-guest ff:b5:5e:67:ff:00
+1777501581 2e:dc:8f:5b:97:21 192.168.99.15 mig-walkthrough-guest ff:b5:5e:67:ff:00
 ";
         assert_eq!(
             parse_first_lease(contents),
-            Some("10.244.125.15".to_string())
+            Some("192.168.99.15".to_string())
         );
     }
 
