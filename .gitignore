@@ -19,3 +19,9 @@ vendor/
 /bin/swiftctl
 /controller-manager
 /gpu-discovery
+
+# Spike scratch directories (per-spike scripts + JSONL run logs).
+# Spike scripts are scratch; their findings are committed under
+# docs/design/<phase>-spike.md instead. Convention since
+# Phase 3a (2026-05).
+/spike/
