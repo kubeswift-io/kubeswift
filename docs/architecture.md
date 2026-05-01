@@ -253,17 +253,17 @@ Guest VM
   |
 tap0  (created by network-init init container)
   |
-br0   (10.244.125.1/24)
+br0   (192.168.99.1/24)
   |
 pod network eth0  (NOT bridged — this was Bug 1)
 
-dnsmasq: DHCP 10.244.125.10-20, gateway 10.244.125.1
+dnsmasq: DHCP 192.168.99.10-20, gateway 192.168.99.1
 iptables MASQUERADE on eth0 for guest outbound traffic
 ```
 
 Key facts:
 - `eth0` is never enslaved to `br0`. Bridging eth0 breaks pod networking.
-- `br0` has its own IP (10.244.125.1) as the default gateway for guests.
+- `br0` has its own IP (192.168.99.1) as the default gateway for guests.
 - The network-init init container runs before swiftletd for both disk boot and kernel boot guests.
 - dnsmasq is started by `launcher-entrypoint.sh` when `"network": true` in the RuntimeIntent.
 - swiftletd polls `/var/lib/kubeswift/run/<guestId>/dnsmasq.leases` to discover the guest IP.

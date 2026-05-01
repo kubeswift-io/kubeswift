@@ -80,13 +80,13 @@ SwiftGuest Running
 Checking status conditions...
 Conditions OK
 Waiting for status.network.primaryIP (timeout 2m)...
-status.network.primaryIP=10.244.125.10
+status.network.primaryIP=192.168.99.10
 
 === Smoke test PASSED ===
 ```
 
 - **GuestRunning:** True
-- **status.network.primaryIP:** Populated (e.g. `10.244.125.10`)
+- **status.network.primaryIP:** Populated (e.g. `192.168.99.10`)
 - **Lease poll:** No timeout; swiftletd discovers IP and patches pod
 - **Tap warning:** `Tap tap0 already exists` is expected and harmless (init container creates tap0 before cloud-hypervisor)
 

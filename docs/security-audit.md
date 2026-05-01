@@ -428,7 +428,7 @@ This ensures `driver_override` is always cleared even on interruption, allowing 
 
 **Current state:** `network-init.sh` creates an iptables MASQUERADE rule:
 ```bash
-iptables -t nat -A POSTROUTING -s 10.244.125.0/24 ! -d 10.244.125.0/24 -j MASQUERADE
+iptables -t nat -A POSTROUTING -s 192.168.99.0/24 ! -d 192.168.99.0/24 -j MASQUERADE
 ```
 
 This NATs guest traffic to the pod's `eth0` IP, giving the guest access to the entire pod network (all services, all pods in the cluster).
