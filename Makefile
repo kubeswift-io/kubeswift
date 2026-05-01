@@ -19,7 +19,8 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image generate deploy undeploy load-images smoke-test smoke-test-cleanup \
-	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test e2e-tests \
+	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
+	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -49,6 +50,7 @@ help:
 	@echo "  snapshot-test         Run Tier A (CSI VolumeSnapshot) snapshot+restore e2e"
 	@echo "  local-roundtrip-test  Run Tier B (local hostPath) memory snapshot+in-place restore e2e"
 	@echo "  local-clone-identity-test  Run Tier B clone-identity-collision e2e"
+	@echo "  b0-cross-node-tcp-test     Run B0 cross-node TCP regression test (requires 2+ kernel-nodes)"
 	@echo "  e2e-tests             Run every cluster-side e2e in sequence"
 	@echo "  verify-e2e-scripts    Static check (bash -n) of every e2e script (fast, no cluster)"
 	@echo "  preflight             Run worker-node readiness preflight (host checks only)"
@@ -219,9 +221,16 @@ local-roundtrip-test:
 local-clone-identity-test:
 	@test/snapshot/local-clone-identity-test.sh
 
+# B0 regression: cross-node pod-to-pod TCP from launcher pods. Catches
+# any revert of the launcher br0 default subnet to a value that would
+# collide with the cluster's per-node Calico pod CIDR allocations.
+# See docs/design/live-migration-phase-3a-spike.md (B0 finding).
+b0-cross-node-tcp-test:
+	@test/networking/b0-cross-node-tcp.sh validate
+
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
-e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test
+e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test
 
 # Fast static check: every e2e script parses (bash -n). Catches
 # typos / unclosed quotes without needing a cluster. Designed to run

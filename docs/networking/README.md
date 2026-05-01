@@ -27,7 +27,7 @@ Guest VM
    |  virtio-net (enp0s5) --- secondary NIC (bridge, Multus: another network)
    |  hardware NIC (enp0s6) --- SR-IOV VF (VFIO passthrough)
    |
-  tap0 --- br0 (10.244.125.1/24) --- dnsmasq DHCP
+  tap0 --- br0 (192.168.99.1/24) --- dnsmasq DHCP
   tap1 --- br1 --- net1 (Multus: macvlan on eno2, or bridge CNI, or OVN-K overlay)
   tap2 --- br2 --- net2 (Multus: macvlan on bond0.100, or OVN-K localnet VLAN)
   /dev/vfio/<group> --- direct VFIO passthrough (no tap, no bridge)
