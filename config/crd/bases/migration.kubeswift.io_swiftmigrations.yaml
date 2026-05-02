@@ -368,6 +368,20 @@ spec:
                   (the same RECV_ID survives across reconcile invocations).
                 format: int32
                 type: integer
+              resumingStartedAt:
+                description: |-
+                  ResumingStartedAt is when the SwiftMigration first transitioned
+                  to the Resuming phase (cutover step 3 — the controller's
+                  observable boundary between StopAndCopy completion and Resuming
+                  entry). Live-mode Resuming-live uses this as the anchor for
+                  status.observedDowntime: ObservedDowntime = GuestRunning=True
+                  observation time - ResumingStartedAt. Persisted in status (not
+                  in-memory) so leader-handover preserves the anchor and the new
+                  leader's downtime computation reflects the original cutover
+                  boundary, not the leader-handover boundary. Phase 1 offline does
+                  not populate this field.
+                format: date-time
+                type: string
               sendAttempts:
                 description: |-
                   SendAttempts counts vm.send-migration dispatches issued on the
