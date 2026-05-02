@@ -206,6 +206,20 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Phase 3a §5.3 cancel handling. Fires BEFORE phase dispatch
+	// so that a spec.cancelRequested flag gets honored before the
+	// per-phase handler runs its checks. Two paths:
+	//   - Pre-cutover live cancel: drives to Cancelled (handler
+	//     writes cancel annotation on dst pod, waits for D1 ack
+	//     within 30s budget, deletes dst pod, finalizes).
+	//   - Post-cutover live cancel: sets CancelIgnored condition
+	//     with reason=PastCutover; returns false-handled so phase
+	//     dispatch continues to Completed normally.
+	// Offline mode is silently ignored (out of Phase 3a scope).
+	if handled, res, err := r.honorCancel(ctx, &mig); handled || err != nil {
+		return res, err
+	}
+
 	// First reconcile: stamp StartedAt and transition Pending →
 	// Validating. The controller advances phase exactly once per
 	// transition; subsequent reconciles in the same phase poll for
