@@ -47,13 +47,13 @@ func (r *SwiftMigrationReconciler) handleResuming(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
-) (advanced bool, requeue time.Duration, errMsg string, err error) {
+) *phaseResult {
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("source SwiftGuest %q deleted during Resuming", mig.Spec.GuestRef.Name), nil
+			return phaseFailure(fmt.Sprintf("source SwiftGuest %q deleted during Resuming", mig.Spec.GuestRef.Name), "")
 		}
-		return false, 0, "", fmt.Errorf("get source guest: %w", getErr)
+		return phaseTransient(fmt.Errorf("get source guest: %w", getErr))
 	}
 
 	// Poll for GuestRunning=True. Observe + primaryIP also populated
@@ -71,7 +71,7 @@ func (r *SwiftMigrationReconciler) handleResuming(
 	if !running {
 		setPhaseDetail(status, "awaiting GuestRunning=True on destination")
 		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming, "awaiting GuestRunning on destination (boot ~17s on warm cache)")
-		return false, resumingPollInterval, "", nil
+		return phaseRequeue(resumingPollInterval)
 	}
 	if !hasIP {
 		// GuestRunning is True but the primaryIP hasn't been reported
@@ -82,7 +82,7 @@ func (r *SwiftMigrationReconciler) handleResuming(
 		// (already-stale) "awaiting boot".
 		setPhaseDetail(status, "awaiting primaryIP discovery on destination")
 		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming, "awaiting primaryIP discovery")
-		return false, resumingPollInterval, "", nil
+		return phaseRequeue(resumingPollInterval)
 	}
 
 	// Cutover complete. Clear the in-progress annotation on the
@@ -125,5 +125,5 @@ func (r *SwiftMigrationReconciler) handleResuming(
 			fmt.Sprintf("migration completed: SwiftGuest %q running on %q with IP %s",
 				guest.Name, status.DestinationNode, guest.Status.Network.PrimaryIP))
 	}
-	return true, 0, "", nil
+	return phaseAdvance()
 }

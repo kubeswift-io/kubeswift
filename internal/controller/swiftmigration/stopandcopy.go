@@ -50,13 +50,13 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
-) (advanced bool, requeue time.Duration, errMsg string, err error) {
+) *phaseResult {
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("source SwiftGuest %q deleted during StopAndCopy", mig.Spec.GuestRef.Name), nil
+			return phaseFailure(fmt.Sprintf("source SwiftGuest %q deleted during StopAndCopy", mig.Spec.GuestRef.Name), "")
 		}
-		return false, 0, "", fmt.Errorf("get source guest: %w", getErr)
+		return phaseTransient(fmt.Errorf("get source guest: %w", getErr))
 	}
 
 	// Defensive: the in-progress annotation should have been written
@@ -64,7 +64,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 	// ordering or the guest was reset; fail-fast rather than
 	// continue.
 	if guest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress] != mig.Name {
-		return false, 0, fmt.Sprintf("SwiftGuest %q is missing the in-progress annotation for this migration; the phase ordering invariant was violated", guest.Name), nil
+		return phaseFailure(fmt.Sprintf("SwiftGuest %q is missing the in-progress annotation for this migration; the phase ordering invariant was violated", guest.Name), "")
 	}
 
 	target := mig.Spec.Target.NodeName
@@ -78,7 +78,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 		guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
 		guest.Spec.NodeName = target
 		if patchErr := r.Patch(ctx, &guest, patch); patchErr != nil {
-			return false, 0, "", fmt.Errorf("combined patch runPolicy+nodeName: %w", patchErr)
+			return phaseTransient(fmt.Errorf("combined patch runPolicy+nodeName: %w", patchErr))
 		}
 		setPhaseDetail(status, fmt.Sprintf("patched SwiftGuest to run on %q; awaiting destination pod", target))
 		if r.Recorder != nil {
@@ -98,18 +98,18 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 	if apierrors.IsNotFound(getErr) {
 		setPhaseDetail(status, "awaiting destination pod creation")
 		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy, "awaiting destination pod creation")
-		return false, stopAndCopyPollInterval, "", nil
+		return phaseRequeue(stopAndCopyPollInterval)
 	}
 	if getErr != nil {
-		return false, 0, "", fmt.Errorf("get destination pod: %w", getErr)
+		return phaseTransient(fmt.Errorf("get destination pod: %w", getErr))
 	}
 
 	// Pod exists. Verify it's pinned to the destination node — if it
 	// somehow landed elsewhere (race window we believe is closed but
 	// belt-and-suspenders), surface as Failed.
 	if pod.Spec.NodeName != target {
-		return false, 0, fmt.Sprintf("destination pod %q scheduled on %q, expected %q (atomicity invariant violated)",
-			pod.Name, pod.Spec.NodeName, target), nil
+		return phaseFailure(fmt.Sprintf("destination pod %q scheduled on %q, expected %q (atomicity invariant violated)",
+			pod.Name, pod.Spec.NodeName, target), "")
 	}
 
 	// Stamp the destination pod ref. Phase 1 source and destination
@@ -127,5 +127,5 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 		r.Recorder.Event(mig, corev1.EventTypeNormal, "PodScheduled",
 			fmt.Sprintf("destination launcher pod %q scheduled on %q; awaiting boot", pod.Name, pod.Spec.NodeName))
 	}
-	return true, 0, "", nil
+	return phaseAdvance()
 }

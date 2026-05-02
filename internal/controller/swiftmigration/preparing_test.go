@@ -85,7 +85,8 @@ func TestPreparing_FirstEntry_ClaimsGuestAndDeletesPod(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, requeue, errMsg, err := result.Advanced, result.Requeue, result.FailureMsg, result.Err
 	if err != nil {
 		t.Fatalf("handlePreparing returned err = %v", err)
 	}
@@ -149,7 +150,8 @@ func TestPreparing_AnnotationConflict_RejectedClearly(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "another SwiftMigration") || !strings.Contains(errMsg, "other-migration") {
 		t.Errorf("conflict error should name the other migration; got %q", errMsg)
 	}
@@ -188,7 +190,8 @@ func TestPreparing_NilAnnotationsMap(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	errMsg, err := result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("nil annotations map should be handled gracefully; err=%v errMsg=%q", err, errMsg)
 	}
@@ -230,7 +233,8 @@ func TestPreparing_PodHasDeletionTimestamp_DoesNotReDelete(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, requeue, errMsg, err := result.Advanced, result.Requeue, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("Terminating pod should not error; err=%v errMsg=%q", err, errMsg)
 	}
@@ -274,7 +278,8 @@ func TestPreparing_ReentryWithMatchingAnnotation_NoOpClaim(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("re-entry should succeed; err=%v errMsg=%q", err, errMsg)
 	}
@@ -314,7 +319,8 @@ func TestPreparing_PodGone_VAStillPresent_DoesNotAdvance(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, requeue, errMsg, err := result.Advanced, result.Requeue, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("pod-gone+VA-present should not error; err=%v errMsg=%q", err, errMsg)
 	}
@@ -355,7 +361,8 @@ func TestPreparing_PodGoneAndVAGone_Advances(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("pod-gone+VA-gone should advance; err=%v errMsg=%q", err, errMsg)
 	}
@@ -383,7 +390,8 @@ func TestPreparing_GuestDeletedMidFlight(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "deleted during Preparing") {
 		t.Errorf("errMsg = %q, want mention of deleted during Preparing", errMsg)
 	}
@@ -419,7 +427,8 @@ func TestPreparing_PVCNotYetBound_AdvancesGracefully(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("unbound PVC should not error; err=%v errMsg=%q", err, errMsg)
 	}
@@ -455,7 +464,8 @@ func TestPreparing_VAForOtherPVNotMatched(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, _, _ := r.handlePreparing(context.Background(), mig, status)
+	result := r.handlePreparing(context.Background(), mig, status)
+	advanced := result.Advanced
 	if !advanced {
 		t.Error("unrelated VolumeAttachment must not block this migration")
 	}
