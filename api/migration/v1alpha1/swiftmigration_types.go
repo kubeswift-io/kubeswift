@@ -268,6 +268,18 @@ type SwiftMigrationStatus struct {
 	// window. Phase 1 offline mode does not populate this field.
 	// +optional
 	PreparingStartedAt *metav1.Time `json:"preparingStartedAt,omitempty"`
+	// ResumingStartedAt is when the SwiftMigration first transitioned
+	// to the Resuming phase (cutover step 3 — the controller's
+	// observable boundary between StopAndCopy completion and Resuming
+	// entry). Live-mode Resuming-live uses this as the anchor for
+	// status.observedDowntime: ObservedDowntime = GuestRunning=True
+	// observation time - ResumingStartedAt. Persisted in status (not
+	// in-memory) so leader-handover preserves the anchor and the new
+	// leader's downtime computation reflects the original cutover
+	// boundary, not the leader-handover boundary. Phase 1 offline does
+	// not populate this field.
+	// +optional
+	ResumingStartedAt *metav1.Time `json:"resumingStartedAt,omitempty"`
 	// CompletedAt is when the migration reached a terminal state.
 	// +optional
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
