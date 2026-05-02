@@ -1802,6 +1802,7 @@ dependencies = [
  "env_logger",
  "k8s-openapi",
  "kube",
+ "libc",
  "log",
  "serde",
  "serde_json",
