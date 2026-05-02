@@ -231,7 +231,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Guest is intentionally stopped. If a pod exists and is completed or doesn't exist,
 		// update status to Stopped and return without recreating the pod.
 		var existingPod corev1.Pod
-		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod)
+		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod)
 		if podErr != nil && client.IgnoreNotFound(podErr) != nil {
 			return ctrl.Result{}, podErr
 		}
@@ -255,7 +255,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyAlways {
 
 		var existingPod corev1.Pod
-		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod)
+		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod)
 		if podErr != nil && !apierrors.IsNotFound(podErr) {
 			return ctrl.Result{}, podErr
 		}
@@ -353,7 +353,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var existingPod corev1.Pod
 	var podForMetrics *corev1.Pod
-	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Name}, &existingPod); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
