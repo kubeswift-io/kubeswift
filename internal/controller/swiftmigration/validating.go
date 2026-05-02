@@ -40,11 +40,23 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
-	// Phase 3a per-mode dispatch. isLiveMode handles initial-entry
-	// (status.Mode unset, spec.Mode=live) so handleValidatingLive is
-	// responsible for stamping status.Mode=live during its B2 body.
-	// mode=auto stays in the offline path until B2 lands the auto-
-	// resolution logic; B1 dispatch is scoped to explicit live only.
+	// Phase 3a auto-mode pre-resolution. When spec.Mode=auto and
+	// status.Mode is empty (initial entry), resolve to a concrete
+	// mode and stamp status.Mode BEFORE the per-mode dispatch fires.
+	// This shifts auto-resolution into a pre-dispatch step rather
+	// than letting handleValidatingLive handle "auto-but-actually-
+	// offline" mid-execution. After resolveAutoMode returns nil,
+	// status.Mode is one of "live" or "offline" and isLiveMode is
+	// unambiguous.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeAuto && status.Mode == "" {
+		if res := r.resolveAutoMode(ctx, mig, status); res != nil {
+			return res
+		}
+	}
+
+	// Per-mode dispatch. isLiveMode handles both post-resolution
+	// (status.Mode=live) and explicit-live initial entry
+	// (status.Mode="" + spec.Mode=live).
 	if isLiveMode(mig) {
 		return r.handleValidatingLive(ctx, mig, status)
 	}

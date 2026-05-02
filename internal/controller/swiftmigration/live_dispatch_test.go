@@ -15,12 +15,12 @@ import (
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
 
-// Live-mode dispatch tests. B1 stubs return phaseFailure; the assertion
-// is that the failure carries the live-mode FailureReason and message,
-// proving dispatch routed correctly. B2 will replace these stubs with
-// real bodies; the dispatch tests stay as regression guards.
+// Live-mode dispatch tests. B2 replaced the Validating-live stub with
+// a real body; the test now verifies dispatch routes to the live body
+// (which fails fast on a missing source pod, since live-migrating a
+// non-running guest is invalid).
 
-func TestDispatch_Validating_LiveMode_RoutesToLiveStub(t *testing.T) {
+func TestDispatch_Validating_LiveMode_RoutesToLiveBody(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -39,7 +39,7 @@ func TestDispatch_Validating_LiveMode_RoutesToLiveStub(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Name: "m", Namespace: "default"}}); err != nil {
 		t.Fatalf("reconcile 1: %v", err)
 	}
-	// Second reconcile: Validating handler runs → dispatch fires.
+	// Second reconcile: Validating-live runs → fails on missing src pod.
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Name: "m", Namespace: "default"}}); err != nil {
 		t.Fatalf("reconcile 2: %v", err)
 	}
@@ -50,13 +50,16 @@ func TestDispatch_Validating_LiveMode_RoutesToLiveStub(t *testing.T) {
 	}
 
 	if got.Status.Phase != migrationv1alpha1.SwiftMigrationPhaseFailed {
-		t.Errorf("phase: want Failed (live stub), got %q", got.Status.Phase)
+		t.Errorf("phase: want Failed (live body, no src pod), got %q", got.Status.Phase)
 	}
-	if !strings.Contains(got.Status.FailureMessage, "live-mode Validating not yet implemented") {
-		t.Errorf("FailureMessage: want stub message, got %q", got.Status.FailureMessage)
+	if !strings.Contains(got.Status.FailureMessage, "has no pod") {
+		t.Errorf("FailureMessage: want missing-pod message, got %q", got.Status.FailureMessage)
 	}
 	if got.Status.FailureReason != migrationv1alpha1.FailureReasonOther {
 		t.Errorf("FailureReason: want Other, got %q", got.Status.FailureReason)
+	}
+	if got.Status.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		t.Errorf("status.Mode: want live (set before failure), got %q", got.Status.Mode)
 	}
 }
 
@@ -130,13 +133,6 @@ func TestHandleResumingLive_GuardFires_WhenNotLiveMode(t *testing.T) {
 	}
 }
 
-func TestHandleValidatingLive_StubReturns_NotImplemented_WhenLiveMode(t *testing.T) {
-	r := &SwiftMigrationReconciler{}
-	mig := &migrationv1alpha1.SwiftMigration{
-		Spec: migrationv1alpha1.SwiftMigrationSpec{Mode: migrationv1alpha1.SwiftMigrationModeLive},
-	}
-	res := r.handleValidatingLive(context.Background(), mig, &mig.Status)
-	if !strings.Contains(res.FailureMsg, "not yet implemented") {
-		t.Errorf("stub message: got %q", res.FailureMsg)
-	}
-}
+// (Validating-live stub-not-implemented test removed in B2; body is
+// real now. See TestDispatch_Validating_LiveMode_RoutesToLiveBody and
+// the validating_live_test.go suite for the behavior tests.)
