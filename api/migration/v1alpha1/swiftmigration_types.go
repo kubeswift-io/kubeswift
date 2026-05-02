@@ -258,6 +258,16 @@ type SwiftMigrationStatus struct {
 	// StartedAt is when the controller first observed the SwiftMigration.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// PreparingStartedAt is when the SwiftMigration first transitioned
+	// to the Preparing phase. Live-mode Preparing-live uses this as the
+	// anchor for the 60-second destination-pod-Ready budget; if the
+	// dst pod hasn't reached Ready by PreparingStartedAt + 60s, the
+	// migration transitions to Failed with FailureReason=PodTerminated.
+	// Persisted in status (not in-memory) so leader-handover preserves
+	// the budget anchor and the new leader doesn't restart the 60s
+	// window. Phase 1 offline mode does not populate this field.
+	// +optional
+	PreparingStartedAt *metav1.Time `json:"preparingStartedAt,omitempty"`
 	// CompletedAt is when the migration reached a terminal state.
 	// +optional
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
