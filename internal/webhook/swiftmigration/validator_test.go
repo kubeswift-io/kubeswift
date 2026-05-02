@@ -222,6 +222,59 @@ func TestValidateShape_AcceptTimeoutAtMax(t *testing.T) {
 	}
 }
 
+func TestValidateShape_RejectLiveTimeoutBelowMin(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 30 * time.Second}
+	err := validateShape(mig)
+	if err == nil || !strings.Contains(err.Error(), "below minimum") {
+		t.Errorf("validateShape live mode + timeout=30s should reject; got %v", err)
+	}
+}
+
+func TestValidateShape_AcceptLiveTimeoutAtMin(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: MinLiveTimeout}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape live mode + timeout=60s should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_AcceptLiveTimeoutUnset(t *testing.T) {
+	// Unset timeout means controller default (5min per design F3.5)
+	// applies. Webhook must NOT reject the unset case.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = nil
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape live mode + timeout unset should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_OfflineModeAcceptsShortTimeout(t *testing.T) {
+	// MinLiveTimeout applies ONLY to live mode. Offline mode finishes
+	// in tens of seconds; a 10s timeout is unusual but valid.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	mig.Spec.Timeout = &metav1.Duration{Duration: 10 * time.Second}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape offline mode + timeout=10s should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_AutoModeAcceptsShortTimeout(t *testing.T) {
+	// Auto mode does not enforce live's minimum (the resolution may
+	// pick offline at controller time). A 10s timeout for an auto-mode
+	// migration is unusual but the webhook does not reject it.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeAuto
+	mig.Spec.Timeout = &metav1.Duration{Duration: 10 * time.Second}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape auto mode + timeout=10s should accept; got %v", err)
+	}
+}
+
 func TestValidateShape_RejectParallelConnectionsOverMax(t *testing.T) {
 	mig := newSwiftMigration("m", "default")
 	mig.Spec.ParallelConnections = MaxParallelConnections + 1

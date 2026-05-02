@@ -55,6 +55,17 @@ const (
 	// (cold-cache CoW); 24h is an absurdly generous ceiling that still
 	// rejects "999h" footguns.
 	MaxTimeout = 24 * time.Hour
+	// MinLiveTimeout is the lower bound on spec.timeout for mode=live.
+	// Phase 3a's cutover ordering invariant (3-step forward-only-retry-
+	// in-place sequence) requires headroom for transient-failure
+	// retries: controller-runtime's exponential backoff on cutover
+	// step retries plus the kernel TCP retransmit window (~127s on
+	// network blackhole per Q3-v3 spike) means timeouts under ~60s
+	// risk producing FailureReasonTimeout on transient issues that
+	// would otherwise self-resolve. Architect-discipline review Q3.2
+	// mitigation. Offline mode is unaffected (Phase 1 offline finishes
+	// in tens of seconds and has no comparable retry semantics).
+	MinLiveTimeout = 60 * time.Second
 	// MaxParallelConnections caps the (Phase 1-ignored) live-mode
 	// connection count. CH upstream supports up to 128; 16 covers
 	// realistic live-migration uses without leaving room for resource
@@ -265,6 +276,15 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 	// connections, and reason length/charset.
 	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > MaxTimeout {
 		return fmt.Errorf("spec.timeout=%s exceeds maximum %s", mig.Spec.Timeout.Duration, MaxTimeout)
+	}
+	// Live-mode minimum: see MinLiveTimeout doc. Only enforced for
+	// mode=live; mode=auto and mode=offline are unaffected. Phase 3a
+	// architect-discipline Q3.2 mitigation.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive &&
+		mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 &&
+		mig.Spec.Timeout.Duration < MinLiveTimeout {
+		return fmt.Errorf("spec.timeout=%s is below minimum %s for mode=live (cutover retries need headroom)",
+			mig.Spec.Timeout.Duration, MinLiveTimeout)
 	}
 	if mig.Spec.ParallelConnections > MaxParallelConnections {
 		return fmt.Errorf("spec.parallelConnections=%d exceeds maximum %d", mig.Spec.ParallelConnections, MaxParallelConnections)
