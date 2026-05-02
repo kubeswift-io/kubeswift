@@ -82,6 +82,30 @@ spec:
                   OVN-K layer-2 networking. When the flag is set and triggers, the
                   controller writes IPWillChange=True for visibility.
                 type: boolean
+              cancelRequested:
+                description: |-
+                  CancelRequested triggers controller-side cancellation of an in-flight
+                  migration without deleting the SwiftMigration CR. Honored only in
+                  pre-cutover phases (Pending, Validating, Preparing, StopAndCopy
+                  before cutover step 1 succeeds). When set during or after cutover,
+                  the controller surfaces a CancelIgnored condition with reason
+                  PastCutover and the migration completes normally — the cutover
+                  cannot be reversed once status.podRef.name has swapped to the dst
+                  pod and the src pod is deleted. See
+                  docs/design/live-migration-phase-3a.md §5.3 for the rationale.
+
+                  Operators using mode=live should prefer spec.cancelRequested over
+                  `kubectl delete pod <dst>` for cancellation: force-delete of the
+                  dst pod produces a slow failure path bounded by spec.timeout
+                  (W12 finding from PR #41 — swift-ch-client's synchronous send
+                  hangs on TCP retransmit when the dst is killed without
+                  swiftletd's mediation).
+
+                  Operationally distinct from DeletionTimestamp != nil: deleting the
+                  SwiftMigration CR runs handleCancellation (Phase 1 finalizer
+                  path) which removes the CR after cleanup; cancelRequested keeps
+                  the CR for audit and surfaces the result via phase=Cancelled.
+                type: boolean
               downtimeTarget:
                 description: |-
                   DowntimeTarget is the Cloud Hypervisor downtime_ms target. Ignored in
@@ -242,7 +266,36 @@ spec:
               failureMessage:
                 description: |-
                   FailureMessage is a structured human-readable failure description.
-                  Set on Failed phase only.
+                  Set on Failed (and Cancelled) phase. Free-form companion to
+                  FailureReason.
+                type: string
+              failureReason:
+                description: |-
+                  FailureReason classifies terminal Failed transitions for live mode.
+                  One of:
+                    - Cancelled: operator cancel via spec.cancelRequested or
+                      SwiftMigration deletion (also populated on Cancelled phase
+                      for symmetry).
+                    - PodTerminated: dst pod terminated mid-migration (drain,
+                      graceful delete, OOM, etc).
+                    - SourcePodReplaced: src pod was K8s-terminated and recreated
+                      mid-migration (UID change detected per F4.2).
+                    - Timeout: spec.timeout exceeded.
+                    - Other: catch-all for migration-internal errors (CH error,
+                      CPU incompatibility, W1 violation, etc) with detail in
+                      FailureMessage.
+                  Phase 1 offline mode does not populate this field — its failure
+                  modes are simpler and FailureMessage alone is sufficient. Phase 3a
+                  live mode uses this enum to give the operator a stable taxonomy
+                  for `kubectl get swiftmigration` output and dashboard alerting.
+                  See docs/design/live-migration-phase-3a.md §4.7 for the
+                  failure-mode-to-reason mapping.
+                enum:
+                - Cancelled
+                - PodTerminated
+                - SourcePodReplaced
+                - Timeout
+                - Other
                 type: string
               mode:
                 description: |-
@@ -258,6 +311,18 @@ spec:
                   ObservedDowntime is the wall-clock duration the guest was unresponsive,
                   measured from Preparing entry to GuestRunning=True on the destination.
                   In offline mode this includes the entire stop+attach+boot sequence.
+                type: string
+              observedPauseWindow:
+                description: |-
+                  ObservedPauseWindow is the swiftletd-on-src-reported vCPU-paused
+                  duration during stop-and-copy, parsed from the src pod's
+                  migration-status-detail annotation when send completes. Distinct
+                  from ObservedDowntime (which spans cutover + apiserver latency,
+                  dominated by storage and pod lifecycle costs in offline mode and
+                  by network + cutover costs in live mode). The pause window is
+                  the operator-relevant metric for "how long was the guest
+                  frozen" — typically 0.5-5s for live mode per F6/F7 of the Phase
+                  2 spike.
                 type: string
               phase:
                 description: Phase is the current lifecycle phase.
@@ -278,6 +343,26 @@ spec:
                   every reconcile. Examples: "waiting for PVC detach (Longhorn:
                   detaching)", "waiting for GuestRunning condition".
                 type: string
+              recvAttempts:
+                description: |-
+                  RecvAttempts counts vm.receive-migration dispatches issued on the
+                  destination launcher pod. Used to derive $RECV_ID per F1.8 as
+                  `<swiftmigration.Name>:recv:<RecvAttempts>`. Phase 3a never
+                  retries within a single SwiftMigration — failures cascade to the
+                  Failed terminal state, the operator creates a new SwiftMigration
+                  to retry — so this counter is 1 on success and never increments
+                  in PR 1. The field exists as forward-compat for future retry
+                  policies (Phase 5+) and for leader-handover state reconstruction
+                  (the same RECV_ID survives across reconcile invocations).
+                format: int32
+                type: integer
+              sendAttempts:
+                description: |-
+                  SendAttempts counts vm.send-migration dispatches issued on the
+                  source launcher pod. Used to derive $SEND_ID per F1.8. Same
+                  semantics as RecvAttempts.
+                format: int32
+                type: integer
               sourceNode:
                 description: SourceNode is the node the SwiftGuest was running on
                   at migration start.
@@ -289,9 +374,31 @@ spec:
                   name:
                     type: string
                 type: object
+              sourcePodUID:
+                description: |-
+                  SourcePodUID is the source launcher pod's UID at Validating-phase
+                  entry. Used by F4.2's UID-change failure detection: at every
+                  reconcile in pre-cutover phases, the controller compares the
+                  observed src pod UID against this stored value; mismatch indicates
+                  the src pod was K8s-terminated and recreated mid-migration, which
+                  transitions the SwiftMigration to Failed with
+                  FailureReason=SourcePodReplaced. Suppressed post-cutover because
+                  the cutover step 2 intentionally deletes the src pod.
+                type: string
               startedAt:
                 description: StartedAt is when the controller first observed the SwiftMigration.
                 format: date-time
+                type: string
+              targetIP:
+                description: |-
+                  TargetIP is the destination guest's primary IP, propagated from
+                  the source pod's pre-migration kubeswift.io/guest-ip annotation
+                  via swiftletd at receive-complete time (PR #41 D3 propagation).
+                  The controller reads the dst pod's annotation in the Resuming
+                  phase and reflects the value here for operator visibility in
+                  `kubectl get swiftmigration -o wide`. Live mode only; offline
+                  mode populates SwiftGuest.status.network.primaryIP via the
+                  existing first-boot lease poller path.
                 type: string
             type: object
         type: object
