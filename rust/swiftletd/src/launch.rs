@@ -97,6 +97,27 @@ where
         .map_err(|e| format!("failed to spawn cloud-hypervisor (receive): {}", e))?;
     let pid = child.id();
 
+    // Phase 3a D1: persist the receiver CH PID alongside the api socket so
+    // the action loop's cancel handler (`dispatch_migration_cancel`) can
+    // SIGKILL this process when the controller writes
+    // `migration-action: cancel`. CH v51.1 has no `vm.cancel-migration`
+    // API (Phase 2 spike F4); SIGKILL on the dst CH is the cancel
+    // primitive (`docs/design/live-migration-phase-3a.md` §7.2 D1).
+    //
+    // Write best-effort: a missing PID file just means the cancel
+    // handler returns "cancel kill failed: pid file not found" and the
+    // operator falls back to `kubectl delete pod` (the pre-D1
+    // behavior). The file is colocated with `ch.sock` so cleanup
+    // happens via the same lifecycle (runtime dir removal).
+    let pid_path = runtime_dir.root().join("ch.pid");
+    if let Err(e) = std::fs::write(&pid_path, pid.to_string()) {
+        log::warn!(
+            "ch_pid_write_failed path={} err={} (cancel handler will not be able to SIGKILL CH)",
+            pid_path.display(),
+            e
+        );
+    }
+
     wait_for_socket(&api_socket, Duration::from_secs(30))?;
 
     let serial_socket_path = runtime_dir
