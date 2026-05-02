@@ -1135,6 +1135,151 @@ pub async fn write_migration_status(
     Ok(())
 }
 
+// ─── Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────────
+//
+// Auto-write `migration-status: failed` on abnormal CH listener exit.
+//
+// Without this, if the dst CH listener process exits abnormally during
+// migration (panic, SIGKILL by something inside the pod, kernel OOM),
+// the controller waits indefinitely on a terminal annotation that
+// never arrives. D2 closes the gap: when `launch::run` returns
+// abnormally and we were a migration receiver, swiftletd patches the
+// dst pod's migration-status to `failed` paired with the last-observed
+// migration-action-id and a detail string describing the exit.
+//
+// D2 is the canonical write-once guard for the D1+D2 race
+// (`docs/design/live-migration-phase-3a.md` §7.2 D1 commentary): D1's
+// SIGKILL-then-Err path also produces a `migration-status: failed`
+// write, and the two writes race on the apiserver. D2's `decide_watchdog`
+// inspects the freshly-fetched annotations and skips when a terminal
+// failure is already recorded for the same action-id (the LWW
+// scenario the architect-discipline review accepted as good-enough
+// for Phase 3a).
+
+/// Output of [`decide_watchdog`] — what `write_migration_failed_on_abnormal_exit`
+/// should do given the current pod annotations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WatchdogDecision {
+    /// Skip the watchdog write. Carries a human-readable reason for
+    /// logging.
+    Skip(&'static str),
+    /// Write `migration-status: failed` paired with this action-id and
+    /// detail string.
+    WriteFailed { action_id: String, detail: String },
+}
+
+/// Pure-function watchdog decision logic. Tested in isolation — no
+/// kube-rs dependency, no I/O. The kube wrapper
+/// [`write_migration_failed_on_abnormal_exit`] calls this with
+/// freshly-fetched pod annotations.
+///
+/// `exit_detail` is appended to the human-readable detail string
+/// (typically the `exit_status.code()` or launch::run error message).
+///
+/// Skip rules (`docs/design/live-migration-phase-3a.md` §7.2 D2):
+///
+/// 1. No `migration-action-id` annotation, or empty — there's no
+///    active migration action to fail. Skip.
+/// 2. `migration-status` is already `failed` for the SAME action-id —
+///    a terminal failure was already recorded (D1 won the race, or a
+///    prior dispatch's Err path wrote it). Skip to preserve write-once
+///    semantics.
+///
+/// Otherwise: emit a write paired with the last-observed action-id.
+/// This handles the post-success-then-CH-death case (`status: running`
+/// with matching id, then CH died) — D2 surfaces a NEW failure event
+/// because the dst guest is now dead and the migration's effect has
+/// been undone. Operationally correct.
+pub fn decide_watchdog(
+    annotations: &BTreeMap<String, String>,
+    exit_detail: &str,
+) -> WatchdogDecision {
+    let action_id = match annotations.get(MIGRATION_ACTION_ID_KEY) {
+        Some(id) if !id.is_empty() => id.clone(),
+        _ => return WatchdogDecision::Skip("no active migration-action-id"),
+    };
+
+    let status = annotations
+        .get(MIGRATION_STATUS_KEY)
+        .map(String::as_str)
+        .unwrap_or("");
+    let status_id = annotations
+        .get(MIGRATION_STATUS_ID_KEY)
+        .map(String::as_str)
+        .unwrap_or("");
+
+    if status == "failed" && status_id == action_id {
+        return WatchdogDecision::Skip("terminal failed status already present for action-id");
+    }
+
+    WatchdogDecision::WriteFailed {
+        action_id,
+        detail: format!("destination listener exited abnormally: {}", exit_detail),
+    }
+}
+
+/// kube wrapper: read pod annotations, run [`decide_watchdog`], and
+/// write `migration-status: failed` when the decision says to.
+///
+/// Called from `main.rs` after `launch::run` returns abnormally on a
+/// migration-receiver pod. Best-effort: a kube client failure here is
+/// logged and ignored — the controller's `spec.timeout` is the floor
+/// and will eventually transition the SwiftMigration to Failed even
+/// if D2's write doesn't land.
+pub async fn write_migration_failed_on_abnormal_exit(
+    namespace: &str,
+    pod_name: &str,
+    exit_detail: &str,
+) {
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "watchdog_kube_client_unavailable: {} (controller's spec.timeout is the floor)",
+                e
+            );
+            return;
+        }
+    };
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let pod = match api.get(pod_name).await {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("watchdog_pod_get_failed: {}", e);
+            return;
+        }
+    };
+    let annotations: BTreeMap<String, String> = pod
+        .metadata
+        .annotations
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    match decide_watchdog(&annotations, exit_detail) {
+        WatchdogDecision::Skip(reason) => {
+            log::info!("watchdog_skip reason={}", reason);
+        }
+        WatchdogDecision::WriteFailed { action_id, detail } => {
+            log::warn!("watchdog_write_failed id={} detail={}", action_id, detail);
+            if let Err(e) = write_migration_status(
+                &client,
+                namespace,
+                pod_name,
+                &action_id,
+                StatusKind::Failed,
+                Some(&detail),
+                None,
+            )
+            .await
+            {
+                log::error!("watchdog_status_write_failed: {}", e);
+            }
+        }
+    }
+}
+
 /// Spawn the action loop on a dedicated thread with its own tokio
 /// runtime. Mirrors the lease-poller pattern in [`crate::lease`].
 pub fn spawn_action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
@@ -2390,6 +2535,138 @@ mod tests {
         // err — caller treats as cancel failure.
         let err = verify_pid_is_cloud_hypervisor(99_999_999).unwrap_err();
         assert!(err.contains("readlink"), "got {}", err);
+    }
+
+    // ─── Phase 3a D2 watchdog (`docs/design/live-migration-phase-3a.md` §7.2) ─
+
+    #[test]
+    fn watchdog_skips_when_no_action_id() {
+        // No active migration; CH may have died for unrelated reasons
+        // (eg pod-shutdown after a graceful stop). Nothing to fail.
+        let a = ann(&[]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::Skip(reason) => {
+                assert!(
+                    reason.contains("no active migration-action-id"),
+                    "got {}",
+                    reason
+                );
+            }
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_skips_when_action_id_is_empty_string() {
+        // Annotation present but empty — same as absent for our purposes.
+        let a = ann(&[(MIGRATION_ACTION_ID_KEY, "")]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::Skip(_) => {}
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_skips_when_terminal_failed_already_present_for_same_id() {
+        // D1 race winner: D1's cancel handler returned Err, the action
+        // loop wrote `migration-status: failed` paired with CANCEL_ID
+        // before CH's child.wait() unblocked in main.rs. D2's watchdog
+        // observes the existing terminal failure and skips, preserving
+        // write-once semantics so the controller sees D1's "cancelled"
+        // detail rather than D2's "destination listener exited
+        // abnormally".
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_STATUS_KEY, "failed"),
+            (MIGRATION_STATUS_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_STATUS_DETAIL_KEY, "cancelled"),
+        ]);
+        match decide_watchdog(&a, "code=signal:9") {
+            WatchdogDecision::Skip(reason) => {
+                assert!(reason.contains("terminal failed"), "got {}", reason);
+            }
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_no_status_yet() {
+        // CH died abnormally before any status was written for the
+        // current action (eg listener crash before recv-accept).
+        // Watchdog writes failed paired with the action-id.
+        let a = ann(&[(MIGRATION_ACTION_ID_KEY, "mig-recv-042")]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::WriteFailed { action_id, detail } => {
+                assert_eq!(action_id, "mig-recv-042");
+                assert!(detail.contains("destination listener exited abnormally"));
+                assert!(detail.contains("code=1"));
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_intermediate_running_for_same_id() {
+        // recv accepted by action loop ("running" intermediate written),
+        // CH died mid-receive. No terminal status yet → watchdog writes
+        // failed. Note: dispatch_migration_receive's success path also
+        // writes `running` as success_status; D2 cannot disambiguate
+        // intermediate from terminal-success "running", so D2 will
+        // also fire post-success-then-CH-death — operationally correct
+        // because the dst guest is now dead.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-042"),
+            (MIGRATION_STATUS_KEY, "running"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-042"),
+        ]);
+        match decide_watchdog(&a, "signal:9") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-042");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_terminal_failed_was_for_different_id() {
+        // Status carries a stale terminal from a prior migration
+        // attempt (different action-id). The current action has no
+        // matching terminal status; watchdog writes failed for the
+        // current action-id.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-002"),
+            (MIGRATION_STATUS_KEY, "failed"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-001"),
+            (MIGRATION_STATUS_DETAIL_KEY, "stale"),
+        ]);
+        match decide_watchdog(&a, "code=137") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-002");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_terminal_complete_was_for_same_id() {
+        // Source-side success status ("complete") for the same id.
+        // For dst-side D2 this case is implausible (dst writes
+        // "running" not "complete"), but defensively the watchdog
+        // would fire because the skip rule only matches "failed",
+        // not "complete". A successful-then-CH-death event surfaces
+        // as a NEW failure; the controller's interpretation is that
+        // the migration succeeded then the dst guest died.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-007"),
+            (MIGRATION_STATUS_KEY, "complete"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-007"),
+        ]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-007");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
     }
 
     #[tokio::test]
