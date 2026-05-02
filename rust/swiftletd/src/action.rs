@@ -709,28 +709,129 @@ async fn dispatch_migration_receive(
     }
 }
 
-/// Destination-side cancel handler.
+/// Destination-side cancel handler — Phase 3a D1
+/// (`docs/design/live-migration-phase-3a.md` §7.2).
 ///
-/// Phase 2 PR-B ships a placeholder that returns success without
-/// actually cancelling — the SIGKILL-CH-child wiring requires the
-/// receiver-mode launch branch (PR-C) to expose a CH process handle
-/// the action loop can signal. Until then, operators cancel by
-/// `kubectl delete pod` on the destination launcher pod, which is
-/// the equivalent operation at a coarser granularity.
+/// Cancel primitive on the destination is **SIGKILL the receiver CH**.
+/// Cloud Hypervisor v51.1 has no `vm.cancel-migration` API (Phase 2
+/// spike F4 + direct audit of `swift-ch-client::methods`). Closing the
+/// dst CH process is what unwinds the in-flight `vm.send-migration`
+/// HTTP call on the source side: the TCP stream closes, src CH errors
+/// out, src swiftletd writes terminal `migration-status: failed`.
 ///
-/// `docs/design/live-migration-phase-2.md` §11 implementation
-/// checklist item 16 (cancel handler is in PR-C scope).
+/// Mechanism:
+///
+/// 1. Read CH PID from `<runtime_dir>/ch.pid` (written by
+///    `launch::run_ch_receive` immediately after spawn).
+/// 2. Defense-in-depth: confirm `/proc/<pid>/exe` resolves to a
+///    `cloud-hypervisor` binary. Guards against PID reuse if the
+///    receiver CH already exited and the kernel reassigned the PID
+///    to an unrelated process.
+/// 3. `kill(pid, SIGKILL)`. Synchronous; `EAGAIN`/`ESRCH`/`EPERM`
+///    surface as a cancel failure.
+/// 4. Return `Err("cancelled")` so the action loop's natural Err
+///    branch writes `migration-status: failed` with the cancel
+///    action-id and detail `"cancelled"` (the controller's match
+///    string per design §2.3 and §4.1).
+///
+/// The write-once race between this handler's failed-write and D2's
+/// watchdog-on-CH-exit failed-write is resolved by D2's
+/// already-terminal guard (D2's responsibility, not D1's). D1 just
+/// kills + returns Err.
+///
+/// Cancel is **one-shot per migration**: re-firing the same cancel
+/// action-id is idempotent (action loop's `last_completed_id` gate);
+/// re-firing with a new cancel action-id while the receiver CH is
+/// already gone returns `Err("cancel kill failed: ESRCH")` which the
+/// controller treats the same as a successful cancel (the migration
+/// is already in a terminal state).
 async fn dispatch_migration_cancel(
     action: &PendingAction,
-    _api_socket: &Path,
+    api_socket: &Path,
 ) -> Result<ActionOutcome, String> {
+    log::info!("dispatch_migration_cancel id={}", action.id);
+
+    // ch.pid lives next to ch.sock in <runtime_dir>.
+    let pid_path = api_socket
+        .parent()
+        .map(|p| p.join("ch.pid"))
+        .ok_or_else(|| "cancel kill failed: api_socket has no parent dir".to_string())?;
+
+    let pid = read_ch_pid(&pid_path).map_err(|e| format!("cancel kill failed: {}", e))?;
+
+    if let Err(e) = verify_pid_is_cloud_hypervisor(pid) {
+        // PID reuse, /proc unreadable, or CH already gone. Treat as
+        // cancel failure; operator can fall back to kubectl delete pod.
+        return Err(format!("cancel kill failed: {}", e));
+    }
+
+    sigkill(pid).map_err(|e| format!("cancel kill failed: {}", e))?;
+
     log::info!(
-        "dispatch_migration_cancel id={} (placeholder — wired in PR-C)",
-        action.id
+        "dispatch_migration_cancel_killed id={} pid={}",
+        action.id,
+        pid
     );
-    Ok(ActionOutcome::detail(
-        "cancel placeholder — operator should kubectl delete pod on dst (PR-C wires SIGKILL)",
-    ))
+    // Err triggers write_migration_status(Failed, detail="cancelled")
+    // via handle_namespace's existing Err path.
+    Err("cancelled".to_string())
+}
+
+/// Read CH's PID from `<runtime_dir>/ch.pid`. Used by the cancel
+/// handler. Returned errors are user-facing strings (no source-error
+/// chain leaked).
+fn read_ch_pid(path: &Path) -> Result<i32, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|e| format!("parse pid from {}: {}", path.display(), e))
+}
+
+/// Defense-in-depth: confirm the PID at `pid_path` is actually a
+/// `cloud-hypervisor` process via `readlink /proc/<pid>/exe` +
+/// basename match. Linux kernel may reuse PIDs; catching reuse here
+/// prevents an errant SIGKILL of an unrelated process if the
+/// receiver CH already exited.
+///
+/// `comm` (15-char truncation) is NOT used: "cloud-hypervisor" is 16
+/// chars and currently fits; a future rename or wrapper script would
+/// silently bypass a comm-based check. `/proc/<pid>/exe` symlink
+/// derefs to the real binary path inside the launcher pod's mount
+/// namespace, which is reliable here.
+fn verify_pid_is_cloud_hypervisor(pid: i32) -> Result<(), String> {
+    let exe_link = format!("/proc/{}/exe", pid);
+    let target =
+        std::fs::read_link(&exe_link).map_err(|e| format!("readlink {}: {}", exe_link, e))?;
+    let basename = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("exe target has no basename: {}", target.display()))?;
+    if basename != "cloud-hypervisor" {
+        return Err(format!(
+            "pid {} exe={} (expected cloud-hypervisor); refusing to SIGKILL",
+            pid, basename
+        ));
+    }
+    Ok(())
+}
+
+/// Send SIGKILL to `pid`. Wraps `libc::kill` with a Rust-friendly
+/// error string. Synchronous; the kernel does not block on signal
+/// delivery (the target may take additional time to actually exit
+/// and be reaped, but that is the receiver-mode supervisor's
+/// concern, not the cancel handler's).
+fn sigkill(pid: i32) -> Result<(), String> {
+    // SAFETY: libc::kill is FFI; pid_t == i32 on Linux. SIGKILL
+    // (signal 9) is well-defined. Return value 0 = success;
+    // -1 = error with errno.
+    let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        let err = std::io::Error::last_os_error();
+        Err(format!("kill({}, SIGKILL): {}", pid, err))
+    }
 }
 
 /// Sanitize a CH error string into a category. Defensive against
@@ -2182,23 +2283,113 @@ mod tests {
         assert!(err.contains("state=Paused"), "got {}", err);
     }
 
+    // ─── Phase 3a D1 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    //
+    // Cancel handler tests: the placeholder shipped in Phase 2 PR-B is
+    // now the real SIGKILL-via-PID-file implementation. Tests cover the
+    // failure paths that don't require a live CH child (no-pid-file,
+    // unparseable pid, exe-symlink-mismatch). The actual SIGKILL path
+    // is exercised by the D1 cluster integration test (manual demo
+    // re-run in PR description) — unit-testing libc::kill against a
+    // real process requires a fork+exec harness disproportionate to
+    // the bug-surface of three lines of code.
+
     #[tokio::test]
-    async fn migration_cancel_is_placeholder() {
-        // PR-B ships cancel as a no-op placeholder; PR-C wires the
-        // SIGKILL-CH primitive when the receiver-mode launch branch
-        // exposes the CH process handle. This test pins the
-        // contract so a future regression doesn't silently change
-        // cancel's behaviour.
-        let api_socket = std::path::PathBuf::from("/does/not/matter");
+    async fn migration_cancel_no_pid_file_is_error() {
+        // No `<runtime_dir>/ch.pid` (CH never started, or the
+        // launcher failed to write the pid file). Cancel returns
+        // an error; controller falls back to kubectl delete pod.
+        let tmp = tempfile::tempdir().unwrap();
+        let api_socket = tmp.path().join("ch.sock");
         let action = PendingAction {
             kind: ActionKind::MigrationCancel,
-            id: "mig-cancel-001".to_string(),
+            id: "mig-cancel-no-pid".to_string(),
             args: serde_json::Value::Null,
         };
-        let outcome = dispatch(&action, &api_socket).await.unwrap();
-        let detail = outcome.detail.unwrap();
-        assert!(detail.contains("placeholder"), "got {}", detail);
-        assert!(detail.contains("PR-C"), "got {}", detail);
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(
+            err.starts_with("cancel kill failed:"),
+            "expected cancel-kill-failed prefix, got {}",
+            err
+        );
+        assert!(err.contains("ch.pid"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_cancel_unparseable_pid_is_error() {
+        // Garbage in ch.pid (corrupted file, race with launcher
+        // truncating it). Cancel returns an error.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("ch.pid"), "not-a-pid").unwrap();
+        let api_socket = tmp.path().join("ch.sock");
+        let action = PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "mig-cancel-bad-pid".to_string(),
+            args: serde_json::Value::Null,
+        };
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(err.contains("parse pid"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_cancel_pid_reuse_check_rejects_unrelated_process() {
+        // ch.pid points at a real PID but it's not cloud-hypervisor
+        // (PID reuse: the receiver CH already exited and the kernel
+        // reassigned the PID). The /proc/<pid>/exe check catches it
+        // before the SIGKILL fires. Use the test process's own PID,
+        // whose /proc/<pid>/exe basename is the test binary, NOT
+        // cloud-hypervisor.
+        let tmp = tempfile::tempdir().unwrap();
+        let our_pid = std::process::id();
+        std::fs::write(tmp.path().join("ch.pid"), our_pid.to_string()).unwrap();
+        let api_socket = tmp.path().join("ch.sock");
+        let action = PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "mig-cancel-reuse".to_string(),
+            args: serde_json::Value::Null,
+        };
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(err.starts_with("cancel kill failed:"), "got {}", err);
+        assert!(
+            err.contains("expected cloud-hypervisor"),
+            "expected exe-mismatch reason, got {}",
+            err
+        );
+        // Critically: the test process is still alive (we did NOT
+        // SIGKILL ourselves). If the verify step were skipped, this
+        // test would terminate with SIGKILL instead of asserting.
+    }
+
+    #[test]
+    fn read_ch_pid_strips_trailing_newline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("ch.pid");
+        // launch.rs writes pid via write(&p, pid.to_string()) — no
+        // trailing newline. Operators or tooling editing the file
+        // may add one; trim() handles both.
+        std::fs::write(&p, "12345\n").unwrap();
+        assert_eq!(read_ch_pid(&p).unwrap(), 12345);
+        std::fs::write(&p, "67890").unwrap();
+        assert_eq!(read_ch_pid(&p).unwrap(), 67890);
+    }
+
+    #[test]
+    fn verify_pid_is_cloud_hypervisor_rejects_self() {
+        // /proc/self/exe basename is the test binary, NOT
+        // cloud-hypervisor. Defense-in-depth check rejects.
+        let our_pid = std::process::id() as i32;
+        let err = verify_pid_is_cloud_hypervisor(our_pid).unwrap_err();
+        assert!(err.contains("expected cloud-hypervisor"), "got {}", err);
+    }
+
+    #[test]
+    fn verify_pid_is_cloud_hypervisor_rejects_dead_pid() {
+        // PID 1 in a non-init namespace would be /sbin/init or
+        // similar; we use a pid that almost certainly doesn't exist
+        // (max u16 + 1). readlink fails; the verify step returns
+        // err — caller treats as cancel failure.
+        let err = verify_pid_is_cloud_hypervisor(99_999_999).unwrap_err();
+        assert!(err.contains("readlink"), "got {}", err);
     }
 
     #[tokio::test]
