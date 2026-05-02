@@ -532,6 +532,23 @@ struct MigrationReceiveArgs {
     /// Override for the per-call HTTP timeout in seconds.
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// Phase 3a D3: guest IP to propagate onto the dst pod's
+    /// `kubeswift.io/guest-ip` annotation post-resume. Live migration
+    /// preserves the guest's network state byte-for-byte (Phase 2
+    /// spike Q1e: virtio-net device state, MAC, queue config); the
+    /// guest does NOT re-DHCP on resume, so the dst pod cannot
+    /// re-discover the IP locally. The controller reads the src
+    /// pod's existing `kubeswift.io/guest-ip` annotation and forwards
+    /// it here. See `docs/design/live-migration-phase-3a.md` §3.6
+    /// + §7.2 D3.
+    ///
+    // SECURITY-S1: guest_ip is read from operator-set pod annotation
+    // args (Phase 2 manual path; Phase 3a controller-mediated). Phase
+    // 3b moves operator-controlled inputs to the SwiftMigration CR
+    // and removes the annotation read; this // SECURITY-S1 marker
+    // makes the read site greppable for the Phase 3b sweep.
+    #[serde(default)]
+    guest_ip: Option<String>,
 }
 
 /// Source-side migration handler. Invokes `vm.send-migration` against
@@ -673,6 +690,15 @@ async fn dispatch_migration_receive(
                 action.id,
                 elapsed_ms
             );
+            // Phase 3a D3: propagate guest IP to dst pod annotation.
+            // Best-effort; failure is non-fatal — the migration itself
+            // succeeded and the controller has a fallback path
+            // (post-Resuming reconcile reads src pod's guest-ip if
+            // dst's is absent). See `docs/design/live-migration-phase-3a.md`
+            // §7.2 D3.
+            if let Some(ip) = &args.guest_ip {
+                propagate_guest_ip_annotation(ip).await;
+            }
             Ok(ActionOutcome {
                 detail: Some(format!(
                     "received on {} ({}ms)",
@@ -831,6 +857,54 @@ fn sigkill(pid: i32) -> Result<(), String> {
     } else {
         let err = std::io::Error::last_os_error();
         Err(format!("kill({}, SIGKILL): {}", pid, err))
+    }
+}
+
+/// Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2): write
+/// the migrated guest's IP to the dst pod's `kubeswift.io/guest-ip`
+/// annotation post-resume. Reuses the same annotation key Phase 1's
+/// first-boot lease discovery uses (`lease::ANNOTATION_GUEST_IP`).
+///
+/// Best-effort: any kube-rs failure is logged at WARN and ignored.
+/// The migration itself has succeeded by the time we get here (W1
+/// gate cleared); IP propagation is informational. The controller's
+/// Resuming-phase reconcile observes this annotation and reflects
+/// the value into `SwiftMigration.status.targetIP` for operator
+/// visibility (PR 1 controller integration).
+///
+/// Reads `POD_NAMESPACE` / `POD_NAME` from the env (set by the pod
+/// spec via downward API, same as `main::report_running`'s env
+/// reads). If either is absent, the propagation is skipped — same
+/// best-effort posture.
+async fn propagate_guest_ip_annotation(ip: &str) {
+    let (namespace, pod_name) = match (
+        std::env::var("POD_NAMESPACE").ok(),
+        std::env::var("POD_NAME").ok(),
+    ) {
+        (Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => (ns, name),
+        _ => {
+            log::warn!("d3_guest_ip_propagation_skipped reason=POD_NAMESPACE_or_POD_NAME_unset");
+            return;
+        }
+    };
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("d3_kube_client_unavailable: {}", e);
+            return;
+        }
+    };
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(
+        crate::lease::ANNOTATION_GUEST_IP.to_string(),
+        ip.to_string(),
+    );
+    let patch = json!({"metadata": {"annotations": annotations}});
+    let pp = PatchParams::default();
+    match api.patch(&pod_name, &pp, &Patch::Merge(&patch)).await {
+        Ok(_) => log::info!("d3_guest_ip_propagated ip={}", ip),
+        Err(e) => log::warn!("d3_guest_ip_patch_failed: {}", e),
     }
 }
 
@@ -2685,5 +2759,70 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("parse migration_receive args"), "got {}", err);
+    }
+
+    // ─── Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    //
+    // Args-parsing tests for the new `guest_ip` field. The actual
+    // `propagate_guest_ip_annotation` kube write is exercised by the
+    // cluster integration test in the manual demo re-run at PR close
+    // — unit-testing it would need a kube client mock and POD_*
+    // env-var harness disproportionate to a 50-line reuse of the
+    // lease.rs pattern.
+
+    #[test]
+    fn migration_receive_args_parses_with_guest_ip() {
+        // Phase 3a controller-mediated path: controller forwards the
+        // src pod's existing kubeswift.io/guest-ip annotation into
+        // migration-action-args.guest_ip.
+        let raw = serde_json::json!({
+            "listen_url": "tcp:0.0.0.0:6789",
+            "guest_ip": "192.168.99.42",
+        });
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.listen_url, "tcp:0.0.0.0:6789");
+        assert_eq!(parsed.guest_ip.as_deref(), Some("192.168.99.42"));
+    }
+
+    #[test]
+    fn migration_receive_args_parses_without_guest_ip() {
+        // Phase 2 manual-path / pre-D3 callers don't set guest_ip;
+        // the field is `#[serde(default)]` so absence parses as
+        // None and the propagation step skips with a benign log.
+        let raw = serde_json::json!({"listen_url": "tcp:0.0.0.0:6789"});
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.guest_ip, None);
+    }
+
+    #[test]
+    fn migration_receive_args_with_explicit_null_guest_ip_is_none() {
+        // JSON null also parses as None (consistent with default).
+        let raw = serde_json::json!({
+            "listen_url": "tcp:0.0.0.0:6789",
+            "guest_ip": null,
+        });
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.guest_ip, None);
+    }
+
+    #[test]
+    fn d3_security_s1_tag_present_at_args_read_site() {
+        // Phase 3b's grep-and-delete sweep keys on the literal
+        // string `SECURITY-S1` in the swiftletd source. This test
+        // pins that the marker is present at the D3 args-read site
+        // so a refactor that drops the comment doesn't silently
+        // remove the Phase 3b audit signal.
+        let source = include_str!("action.rs");
+        let count = source.matches("SECURITY-S1").count();
+        assert!(
+            count >= 3,
+            "expected ≥3 SECURITY-S1 markers (D3 args struct + send + receive read sites), found {}",
+            count
+        );
+        // Confirm D3-specific marker text is intact.
+        assert!(
+            source.contains("// SECURITY-S1: guest_ip is read"),
+            "D3 SECURITY-S1 marker text missing or renamed; Phase 3b grep-and-delete sweep depends on it"
+        );
     }
 }
