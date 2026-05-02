@@ -90,7 +90,8 @@ func TestValidating_HappyPath(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil {
 		t.Fatalf("handleValidating returned err = %v", err)
 	}
@@ -131,7 +132,8 @@ func TestValidating_GuestDisappeared(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, err := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg, err := result.FailureMsg, result.Err
 	if err != nil {
 		t.Fatalf("handleValidating returned err = %v", err)
 	}
@@ -151,7 +153,8 @@ func TestValidating_TargetNodeMissing(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "no longer exists") || !strings.Contains(errMsg, "miles") {
 		t.Errorf("errMsg = %q, want mention of missing target node", errMsg)
 	}
@@ -169,7 +172,8 @@ func TestValidating_InsufficientCPU(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "insufficient CPU") {
 		t.Errorf("errMsg = %q, want mention of insufficient CPU", errMsg)
 	}
@@ -192,7 +196,8 @@ func TestValidating_InsufficientMemory(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "insufficient memory") {
 		t.Errorf("errMsg = %q, want mention of insufficient memory", errMsg)
 	}
@@ -227,7 +232,8 @@ func TestValidating_ExistingPodsCountedInCapacity(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "insufficient CPU") {
 		t.Errorf("errMsg should reflect existing pod consumption; got %q", errMsg)
 	}
@@ -261,7 +267,8 @@ func TestValidating_FailedPodsExcludedFromCapacity(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	advanced, errMsg := result.Advanced, result.FailureMsg
 	if errMsg != "" {
 		t.Errorf("Failed pod should not consume capacity; got errMsg=%q", errMsg)
 	}
@@ -311,7 +318,8 @@ func TestValidating_MigrationDisabledMidFlight(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "migration.enabled=false") {
 		t.Errorf("errMsg = %q, want mention of migration.enabled=false", errMsg)
 	}
@@ -337,7 +345,8 @@ func TestValidating_NodeMissingAllocatable(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "no Allocatable CPU reported") {
 		t.Errorf("errMsg = %q, want mention of missing Allocatable", errMsg)
 	}
@@ -355,7 +364,8 @@ func TestValidating_GuestClassNotFound(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "SwiftGuestClass") || !strings.Contains(errMsg, "not found") {
 		t.Errorf("errMsg = %q, want mention of missing SwiftGuestClass", errMsg)
 	}
@@ -373,7 +383,8 @@ func TestValidating_InsufficientMemory_NeedHaveSubstrings(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "need") || !strings.Contains(errMsg, "have") {
 		t.Errorf("memory rejection should report need/have substrings; got %q", errMsg)
 	}
@@ -411,7 +422,8 @@ func TestValidating_InitContainerRequestsCounted(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "insufficient CPU") {
 		t.Errorf("init container request should count toward used CPU; got errMsg=%q", errMsg)
 	}
@@ -468,7 +480,8 @@ func TestValidating_NodeCordonedMidFlight(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "cordoned") {
 		t.Errorf("errMsg = %q, want mention of cordoned", errMsg)
 	}
@@ -497,7 +510,8 @@ func TestValidating_NodeNotReadyMidFlight(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleValidating(context.Background(), mig, status)
+	result := r.handleValidating(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "not Ready") {
 		t.Errorf("errMsg = %q, want mention of not Ready", errMsg)
 	}

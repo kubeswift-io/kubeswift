@@ -52,7 +52,8 @@ func TestResuming_GuestRunningPlusIP_TransitionsToCompleted(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handleResuming(context.Background(), mig, status)
+	result := r.handleResuming(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("Resuming happy path should not error; err=%v errMsg=%q", err, errMsg)
 	}
@@ -108,7 +109,8 @@ func TestResuming_GuestRunningButNoIP_StaysInResuming(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, _, _ := r.handleResuming(context.Background(), mig, status)
+	result := r.handleResuming(context.Background(), mig, status)
+	advanced, requeue := result.Advanced, result.Requeue
 	if advanced {
 		t.Error("must NOT advance when primaryIP is empty")
 	}
@@ -146,7 +148,8 @@ func TestResuming_GuestNotRunning_StaysInResuming(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, _, _ := r.handleResuming(context.Background(), mig, status)
+	result := r.handleResuming(context.Background(), mig, status)
+	advanced, requeue := result.Advanced, result.Requeue
 	if advanced {
 		t.Error("must NOT advance while GuestRunning=False")
 	}
@@ -172,7 +175,8 @@ func TestResuming_GuestDeletedMidFlight(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleResuming(context.Background(), mig, status)
+	result := r.handleResuming(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "deleted during Resuming") {
 		t.Errorf("guest deleted should fail clearly; got %q", errMsg)
 	}

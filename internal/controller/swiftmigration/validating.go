@@ -3,7 +3,6 @@ package swiftmigration
 import (
 	"context"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,21 +39,21 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
-) (advanced bool, requeue time.Duration, errMsg string, err error) {
+) *phaseResult {
 	// Resolve source SwiftGuest in same namespace.
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("source SwiftGuest %q no longer exists in namespace %q", mig.Spec.GuestRef.Name, mig.Namespace), nil
+			return phaseFailure(fmt.Sprintf("source SwiftGuest %q no longer exists in namespace %q", mig.Spec.GuestRef.Name, mig.Namespace), "")
 		}
-		return false, 0, "", fmt.Errorf("get source SwiftGuest: %w", getErr)
+		return phaseTransient(fmt.Errorf("get source SwiftGuest: %w", getErr))
 	}
 
 	// Defense in depth: re-check migration.enabled. The webhook caught
 	// this at submission time, but a SwiftGuest mutation between
 	// admission and our Reconcile could flip enabled to false.
 	if guest.Spec.Migration != nil && guest.Spec.Migration.Enabled != nil && !*guest.Spec.Migration.Enabled {
-		return false, 0, fmt.Sprintf("SwiftGuest %q has spec.migration.enabled=false", guest.Name), nil
+		return phaseFailure(fmt.Sprintf("SwiftGuest %q has spec.migration.enabled=false", guest.Name), "")
 	}
 
 	// Stamp source/destination node and resolved mode. Phase 1 always
@@ -79,24 +78,24 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	var node corev1.Node
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.Target.NodeName}, &node); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("target node %q no longer exists in cluster", mig.Spec.Target.NodeName), nil
+			return phaseFailure(fmt.Sprintf("target node %q no longer exists in cluster", mig.Spec.Target.NodeName), "")
 		}
-		return false, 0, "", fmt.Errorf("get target node: %w", getErr)
+		return phaseTransient(fmt.Errorf("get target node: %w", getErr))
 	}
 	if node.Spec.Unschedulable {
-		return false, 0, fmt.Sprintf("target node %q is cordoned (spec.unschedulable=true)", mig.Spec.Target.NodeName), nil
+		return phaseFailure(fmt.Sprintf("target node %q is cordoned (spec.unschedulable=true)", mig.Spec.Target.NodeName), "")
 	}
 	if !nodeReady(&node) {
-		return false, 0, fmt.Sprintf("target node %q is not Ready", mig.Spec.Target.NodeName), nil
+		return phaseFailure(fmt.Sprintf("target node %q is not Ready", mig.Spec.Target.NodeName), "")
 	}
 
 	// Resolve SwiftGuestClass for resource requirements.
 	var class swiftv1alpha1.SwiftGuestClass
 	if getErr := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("SwiftGuestClass %q referenced by guest %q not found", guest.Spec.GuestClassRef.Name, guest.Name), nil
+			return phaseFailure(fmt.Sprintf("SwiftGuestClass %q referenced by guest %q not found", guest.Spec.GuestClassRef.Name, guest.Name), "")
 		}
-		return false, 0, "", fmt.Errorf("get SwiftGuestClass: %w", getErr)
+		return phaseTransient(fmt.Errorf("get SwiftGuestClass: %w", getErr))
 	}
 
 	// Manual capacity check: read node Allocatable, list pods on the
@@ -106,7 +105,7 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	// (server dry-run skips the scheduler; real-pod-probe leaves
 	// debris).
 	if err := r.checkNodeCapacity(ctx, &node, &class); err != nil {
-		return false, 0, err.Error(), nil
+		return phaseFailure(err.Error(), "")
 	}
 
 	// All checks passed. Mark Compatible=True, transition to Preparing.
@@ -119,7 +118,7 @@ func (r *SwiftMigrationReconciler) handleValidating(
 		r.Recorder.Event(mig, corev1.EventTypeNormal, "Validated",
 			fmt.Sprintf("validation passed; migrating %q from %q to %q", guest.Name, status.SourceNode, status.DestinationNode))
 	}
-	return true, 0, "", nil
+	return phaseAdvance()
 }
 
 // checkNodeCapacity verifies the target node has headroom for the
