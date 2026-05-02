@@ -51,6 +51,11 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
+	// Phase 3a per-mode dispatch.
+	if isLiveMode(mig) {
+		return r.handleStopAndCopyLive(ctx, mig, status)
+	}
+
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {
 		if apierrors.IsNotFound(getErr) {

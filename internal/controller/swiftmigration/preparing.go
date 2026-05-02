@@ -70,6 +70,12 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
+	// Phase 3a per-mode dispatch. By Preparing, status.Mode has been
+	// stamped by Validating; isLiveMode reads from status.
+	if isLiveMode(mig) {
+		return r.handlePreparingLive(ctx, mig, status)
+	}
+
 	// Re-resolve source guest. The Validating phase already touched
 	// it; we re-read because runPolicy/annotation may have been
 	// modified between phase transitions.
