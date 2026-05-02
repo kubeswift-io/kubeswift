@@ -293,7 +293,31 @@ fn main() {
                 })
             };
 
-            match launch::run(&intent, &runtime_dir, on_socket_ready) {
+            // Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2):
+            // on abnormal exit while we were a migration receiver, write
+            // `migration-status: failed` paired with the last-observed
+            // action-id so the controller doesn't stall on a never-
+            // arriving terminal status. The watchdog's `decide_watchdog`
+            // is the canonical write-once guard for the D1+D2 race.
+            let watchdog_dst = intent.is_migration_receiver();
+            let result = launch::run(&intent, &runtime_dir, on_socket_ready);
+            let abnormal_exit_detail: Option<String> = match &result {
+                Ok((exit_status, _, _)) if !exit_status.success() => {
+                    Some(format!("vm_exited_nonzero code={:?}", exit_status.code()))
+                }
+                Ok(_) => None,
+                Err(e) => Some(format!("launch_error: {}", e)),
+            };
+            if watchdog_dst {
+                if let (Some(detail), Some(ref ns), Some(ref n)) =
+                    (&abnormal_exit_detail, &namespace, &name)
+                {
+                    rt.block_on(action::write_migration_failed_on_abnormal_exit(
+                        ns, n, detail,
+                    ));
+                }
+            }
+            match result {
                 Ok((exit_status, _pid, _serial_socket_path)) => {
                     if exit_status.success() {
                         log::info!("vm_stopped_gracefully");

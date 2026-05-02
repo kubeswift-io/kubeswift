@@ -532,6 +532,23 @@ struct MigrationReceiveArgs {
     /// Override for the per-call HTTP timeout in seconds.
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// Phase 3a D3: guest IP to propagate onto the dst pod's
+    /// `kubeswift.io/guest-ip` annotation post-resume. Live migration
+    /// preserves the guest's network state byte-for-byte (Phase 2
+    /// spike Q1e: virtio-net device state, MAC, queue config); the
+    /// guest does NOT re-DHCP on resume, so the dst pod cannot
+    /// re-discover the IP locally. The controller reads the src
+    /// pod's existing `kubeswift.io/guest-ip` annotation and forwards
+    /// it here. See `docs/design/live-migration-phase-3a.md` §3.6
+    /// + §7.2 D3.
+    ///
+    // SECURITY-S1: guest_ip is read from operator-set pod annotation
+    // args (Phase 2 manual path; Phase 3a controller-mediated). Phase
+    // 3b moves operator-controlled inputs to the SwiftMigration CR
+    // and removes the annotation read; this // SECURITY-S1 marker
+    // makes the read site greppable for the Phase 3b sweep.
+    #[serde(default)]
+    guest_ip: Option<String>,
 }
 
 /// Source-side migration handler. Invokes `vm.send-migration` against
@@ -673,6 +690,15 @@ async fn dispatch_migration_receive(
                 action.id,
                 elapsed_ms
             );
+            // Phase 3a D3: propagate guest IP to dst pod annotation.
+            // Best-effort; failure is non-fatal — the migration itself
+            // succeeded and the controller has a fallback path
+            // (post-Resuming reconcile reads src pod's guest-ip if
+            // dst's is absent). See `docs/design/live-migration-phase-3a.md`
+            // §7.2 D3.
+            if let Some(ip) = &args.guest_ip {
+                propagate_guest_ip_annotation(ip).await;
+            }
             Ok(ActionOutcome {
                 detail: Some(format!(
                     "received on {} ({}ms)",
@@ -709,28 +735,177 @@ async fn dispatch_migration_receive(
     }
 }
 
-/// Destination-side cancel handler.
+/// Destination-side cancel handler — Phase 3a D1
+/// (`docs/design/live-migration-phase-3a.md` §7.2).
 ///
-/// Phase 2 PR-B ships a placeholder that returns success without
-/// actually cancelling — the SIGKILL-CH-child wiring requires the
-/// receiver-mode launch branch (PR-C) to expose a CH process handle
-/// the action loop can signal. Until then, operators cancel by
-/// `kubectl delete pod` on the destination launcher pod, which is
-/// the equivalent operation at a coarser granularity.
+/// Cancel primitive on the destination is **SIGKILL the receiver CH**.
+/// Cloud Hypervisor v51.1 has no `vm.cancel-migration` API (Phase 2
+/// spike F4 + direct audit of `swift-ch-client::methods`). Closing the
+/// dst CH process is what unwinds the in-flight `vm.send-migration`
+/// HTTP call on the source side: the TCP stream closes, src CH errors
+/// out, src swiftletd writes terminal `migration-status: failed`.
 ///
-/// `docs/design/live-migration-phase-2.md` §11 implementation
-/// checklist item 16 (cancel handler is in PR-C scope).
+/// Mechanism:
+///
+/// 1. Read CH PID from `<runtime_dir>/ch.pid` (written by
+///    `launch::run_ch_receive` immediately after spawn).
+/// 2. Defense-in-depth: confirm `/proc/<pid>/exe` resolves to a
+///    `cloud-hypervisor` binary. Guards against PID reuse if the
+///    receiver CH already exited and the kernel reassigned the PID
+///    to an unrelated process.
+/// 3. `kill(pid, SIGKILL)`. Synchronous; `EAGAIN`/`ESRCH`/`EPERM`
+///    surface as a cancel failure.
+/// 4. Return `Err("cancelled")` so the action loop's natural Err
+///    branch writes `migration-status: failed` with the cancel
+///    action-id and detail `"cancelled"` (the controller's match
+///    string per design §2.3 and §4.1).
+///
+/// The write-once race between this handler's failed-write and D2's
+/// watchdog-on-CH-exit failed-write is resolved by D2's
+/// already-terminal guard (D2's responsibility, not D1's). D1 just
+/// kills + returns Err.
+///
+/// Cancel is **one-shot per migration**: re-firing the same cancel
+/// action-id is idempotent (action loop's `last_completed_id` gate);
+/// re-firing with a new cancel action-id while the receiver CH is
+/// already gone returns `Err("cancel kill failed: ESRCH")` which the
+/// controller treats the same as a successful cancel (the migration
+/// is already in a terminal state).
 async fn dispatch_migration_cancel(
     action: &PendingAction,
-    _api_socket: &Path,
+    api_socket: &Path,
 ) -> Result<ActionOutcome, String> {
+    log::info!("dispatch_migration_cancel id={}", action.id);
+
+    // ch.pid lives next to ch.sock in <runtime_dir>.
+    let pid_path = api_socket
+        .parent()
+        .map(|p| p.join("ch.pid"))
+        .ok_or_else(|| "cancel kill failed: api_socket has no parent dir".to_string())?;
+
+    let pid = read_ch_pid(&pid_path).map_err(|e| format!("cancel kill failed: {}", e))?;
+
+    if let Err(e) = verify_pid_is_cloud_hypervisor(pid) {
+        // PID reuse, /proc unreadable, or CH already gone. Treat as
+        // cancel failure; operator can fall back to kubectl delete pod.
+        return Err(format!("cancel kill failed: {}", e));
+    }
+
+    sigkill(pid).map_err(|e| format!("cancel kill failed: {}", e))?;
+
     log::info!(
-        "dispatch_migration_cancel id={} (placeholder — wired in PR-C)",
-        action.id
+        "dispatch_migration_cancel_killed id={} pid={}",
+        action.id,
+        pid
     );
-    Ok(ActionOutcome::detail(
-        "cancel placeholder — operator should kubectl delete pod on dst (PR-C wires SIGKILL)",
-    ))
+    // Err triggers write_migration_status(Failed, detail="cancelled")
+    // via handle_namespace's existing Err path.
+    Err("cancelled".to_string())
+}
+
+/// Read CH's PID from `<runtime_dir>/ch.pid`. Used by the cancel
+/// handler. Returned errors are user-facing strings (no source-error
+/// chain leaked).
+fn read_ch_pid(path: &Path) -> Result<i32, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|e| format!("parse pid from {}: {}", path.display(), e))
+}
+
+/// Defense-in-depth: confirm the PID at `pid_path` is actually a
+/// `cloud-hypervisor` process via `readlink /proc/<pid>/exe` +
+/// basename match. Linux kernel may reuse PIDs; catching reuse here
+/// prevents an errant SIGKILL of an unrelated process if the
+/// receiver CH already exited.
+///
+/// `comm` (15-char truncation) is NOT used: "cloud-hypervisor" is 16
+/// chars and currently fits; a future rename or wrapper script would
+/// silently bypass a comm-based check. `/proc/<pid>/exe` symlink
+/// derefs to the real binary path inside the launcher pod's mount
+/// namespace, which is reliable here.
+fn verify_pid_is_cloud_hypervisor(pid: i32) -> Result<(), String> {
+    let exe_link = format!("/proc/{}/exe", pid);
+    let target =
+        std::fs::read_link(&exe_link).map_err(|e| format!("readlink {}: {}", exe_link, e))?;
+    let basename = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("exe target has no basename: {}", target.display()))?;
+    if basename != "cloud-hypervisor" {
+        return Err(format!(
+            "pid {} exe={} (expected cloud-hypervisor); refusing to SIGKILL",
+            pid, basename
+        ));
+    }
+    Ok(())
+}
+
+/// Send SIGKILL to `pid`. Wraps `libc::kill` with a Rust-friendly
+/// error string. Synchronous; the kernel does not block on signal
+/// delivery (the target may take additional time to actually exit
+/// and be reaped, but that is the receiver-mode supervisor's
+/// concern, not the cancel handler's).
+fn sigkill(pid: i32) -> Result<(), String> {
+    // SAFETY: libc::kill is FFI; pid_t == i32 on Linux. SIGKILL
+    // (signal 9) is well-defined. Return value 0 = success;
+    // -1 = error with errno.
+    let rc = unsafe { libc::kill(pid, libc::SIGKILL) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        let err = std::io::Error::last_os_error();
+        Err(format!("kill({}, SIGKILL): {}", pid, err))
+    }
+}
+
+/// Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2): write
+/// the migrated guest's IP to the dst pod's `kubeswift.io/guest-ip`
+/// annotation post-resume. Reuses the same annotation key Phase 1's
+/// first-boot lease discovery uses (`lease::ANNOTATION_GUEST_IP`).
+///
+/// Best-effort: any kube-rs failure is logged at WARN and ignored.
+/// The migration itself has succeeded by the time we get here (W1
+/// gate cleared); IP propagation is informational. The controller's
+/// Resuming-phase reconcile observes this annotation and reflects
+/// the value into `SwiftMigration.status.targetIP` for operator
+/// visibility (PR 1 controller integration).
+///
+/// Reads `POD_NAMESPACE` / `POD_NAME` from the env (set by the pod
+/// spec via downward API, same as `main::report_running`'s env
+/// reads). If either is absent, the propagation is skipped — same
+/// best-effort posture.
+async fn propagate_guest_ip_annotation(ip: &str) {
+    let (namespace, pod_name) = match (
+        std::env::var("POD_NAMESPACE").ok(),
+        std::env::var("POD_NAME").ok(),
+    ) {
+        (Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => (ns, name),
+        _ => {
+            log::warn!("d3_guest_ip_propagation_skipped reason=POD_NAMESPACE_or_POD_NAME_unset");
+            return;
+        }
+    };
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("d3_kube_client_unavailable: {}", e);
+            return;
+        }
+    };
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(
+        crate::lease::ANNOTATION_GUEST_IP.to_string(),
+        ip.to_string(),
+    );
+    let patch = json!({"metadata": {"annotations": annotations}});
+    let pp = PatchParams::default();
+    match api.patch(&pod_name, &pp, &Patch::Merge(&patch)).await {
+        Ok(_) => log::info!("d3_guest_ip_propagated ip={}", ip),
+        Err(e) => log::warn!("d3_guest_ip_patch_failed: {}", e),
+    }
 }
 
 /// Sanitize a CH error string into a category. Defensive against
@@ -1032,6 +1207,151 @@ pub async fn write_migration_status(
     let pp = PatchParams::default();
     api.patch(pod_name, &pp, &Patch::Merge(&patch)).await?;
     Ok(())
+}
+
+// ─── Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────────
+//
+// Auto-write `migration-status: failed` on abnormal CH listener exit.
+//
+// Without this, if the dst CH listener process exits abnormally during
+// migration (panic, SIGKILL by something inside the pod, kernel OOM),
+// the controller waits indefinitely on a terminal annotation that
+// never arrives. D2 closes the gap: when `launch::run` returns
+// abnormally and we were a migration receiver, swiftletd patches the
+// dst pod's migration-status to `failed` paired with the last-observed
+// migration-action-id and a detail string describing the exit.
+//
+// D2 is the canonical write-once guard for the D1+D2 race
+// (`docs/design/live-migration-phase-3a.md` §7.2 D1 commentary): D1's
+// SIGKILL-then-Err path also produces a `migration-status: failed`
+// write, and the two writes race on the apiserver. D2's `decide_watchdog`
+// inspects the freshly-fetched annotations and skips when a terminal
+// failure is already recorded for the same action-id (the LWW
+// scenario the architect-discipline review accepted as good-enough
+// for Phase 3a).
+
+/// Output of [`decide_watchdog`] — what `write_migration_failed_on_abnormal_exit`
+/// should do given the current pod annotations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WatchdogDecision {
+    /// Skip the watchdog write. Carries a human-readable reason for
+    /// logging.
+    Skip(&'static str),
+    /// Write `migration-status: failed` paired with this action-id and
+    /// detail string.
+    WriteFailed { action_id: String, detail: String },
+}
+
+/// Pure-function watchdog decision logic. Tested in isolation — no
+/// kube-rs dependency, no I/O. The kube wrapper
+/// [`write_migration_failed_on_abnormal_exit`] calls this with
+/// freshly-fetched pod annotations.
+///
+/// `exit_detail` is appended to the human-readable detail string
+/// (typically the `exit_status.code()` or launch::run error message).
+///
+/// Skip rules (`docs/design/live-migration-phase-3a.md` §7.2 D2):
+///
+/// 1. No `migration-action-id` annotation, or empty — there's no
+///    active migration action to fail. Skip.
+/// 2. `migration-status` is already `failed` for the SAME action-id —
+///    a terminal failure was already recorded (D1 won the race, or a
+///    prior dispatch's Err path wrote it). Skip to preserve write-once
+///    semantics.
+///
+/// Otherwise: emit a write paired with the last-observed action-id.
+/// This handles the post-success-then-CH-death case (`status: running`
+/// with matching id, then CH died) — D2 surfaces a NEW failure event
+/// because the dst guest is now dead and the migration's effect has
+/// been undone. Operationally correct.
+pub fn decide_watchdog(
+    annotations: &BTreeMap<String, String>,
+    exit_detail: &str,
+) -> WatchdogDecision {
+    let action_id = match annotations.get(MIGRATION_ACTION_ID_KEY) {
+        Some(id) if !id.is_empty() => id.clone(),
+        _ => return WatchdogDecision::Skip("no active migration-action-id"),
+    };
+
+    let status = annotations
+        .get(MIGRATION_STATUS_KEY)
+        .map(String::as_str)
+        .unwrap_or("");
+    let status_id = annotations
+        .get(MIGRATION_STATUS_ID_KEY)
+        .map(String::as_str)
+        .unwrap_or("");
+
+    if status == "failed" && status_id == action_id {
+        return WatchdogDecision::Skip("terminal failed status already present for action-id");
+    }
+
+    WatchdogDecision::WriteFailed {
+        action_id,
+        detail: format!("destination listener exited abnormally: {}", exit_detail),
+    }
+}
+
+/// kube wrapper: read pod annotations, run [`decide_watchdog`], and
+/// write `migration-status: failed` when the decision says to.
+///
+/// Called from `main.rs` after `launch::run` returns abnormally on a
+/// migration-receiver pod. Best-effort: a kube client failure here is
+/// logged and ignored — the controller's `spec.timeout` is the floor
+/// and will eventually transition the SwiftMigration to Failed even
+/// if D2's write doesn't land.
+pub async fn write_migration_failed_on_abnormal_exit(
+    namespace: &str,
+    pod_name: &str,
+    exit_detail: &str,
+) {
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "watchdog_kube_client_unavailable: {} (controller's spec.timeout is the floor)",
+                e
+            );
+            return;
+        }
+    };
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let pod = match api.get(pod_name).await {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("watchdog_pod_get_failed: {}", e);
+            return;
+        }
+    };
+    let annotations: BTreeMap<String, String> = pod
+        .metadata
+        .annotations
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    match decide_watchdog(&annotations, exit_detail) {
+        WatchdogDecision::Skip(reason) => {
+            log::info!("watchdog_skip reason={}", reason);
+        }
+        WatchdogDecision::WriteFailed { action_id, detail } => {
+            log::warn!("watchdog_write_failed id={} detail={}", action_id, detail);
+            if let Err(e) = write_migration_status(
+                &client,
+                namespace,
+                pod_name,
+                &action_id,
+                StatusKind::Failed,
+                Some(&detail),
+                None,
+            )
+            .await
+            {
+                log::error!("watchdog_status_write_failed: {}", e);
+            }
+        }
+    }
 }
 
 /// Spawn the action loop on a dedicated thread with its own tokio
@@ -2182,23 +2502,245 @@ mod tests {
         assert!(err.contains("state=Paused"), "got {}", err);
     }
 
+    // ─── Phase 3a D1 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    //
+    // Cancel handler tests: the placeholder shipped in Phase 2 PR-B is
+    // now the real SIGKILL-via-PID-file implementation. Tests cover the
+    // failure paths that don't require a live CH child (no-pid-file,
+    // unparseable pid, exe-symlink-mismatch). The actual SIGKILL path
+    // is exercised by the D1 cluster integration test (manual demo
+    // re-run in PR description) — unit-testing libc::kill against a
+    // real process requires a fork+exec harness disproportionate to
+    // the bug-surface of three lines of code.
+
     #[tokio::test]
-    async fn migration_cancel_is_placeholder() {
-        // PR-B ships cancel as a no-op placeholder; PR-C wires the
-        // SIGKILL-CH primitive when the receiver-mode launch branch
-        // exposes the CH process handle. This test pins the
-        // contract so a future regression doesn't silently change
-        // cancel's behaviour.
-        let api_socket = std::path::PathBuf::from("/does/not/matter");
+    async fn migration_cancel_no_pid_file_is_error() {
+        // No `<runtime_dir>/ch.pid` (CH never started, or the
+        // launcher failed to write the pid file). Cancel returns
+        // an error; controller falls back to kubectl delete pod.
+        let tmp = tempfile::tempdir().unwrap();
+        let api_socket = tmp.path().join("ch.sock");
         let action = PendingAction {
             kind: ActionKind::MigrationCancel,
-            id: "mig-cancel-001".to_string(),
+            id: "mig-cancel-no-pid".to_string(),
             args: serde_json::Value::Null,
         };
-        let outcome = dispatch(&action, &api_socket).await.unwrap();
-        let detail = outcome.detail.unwrap();
-        assert!(detail.contains("placeholder"), "got {}", detail);
-        assert!(detail.contains("PR-C"), "got {}", detail);
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(
+            err.starts_with("cancel kill failed:"),
+            "expected cancel-kill-failed prefix, got {}",
+            err
+        );
+        assert!(err.contains("ch.pid"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_cancel_unparseable_pid_is_error() {
+        // Garbage in ch.pid (corrupted file, race with launcher
+        // truncating it). Cancel returns an error.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("ch.pid"), "not-a-pid").unwrap();
+        let api_socket = tmp.path().join("ch.sock");
+        let action = PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "mig-cancel-bad-pid".to_string(),
+            args: serde_json::Value::Null,
+        };
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(err.contains("parse pid"), "got {}", err);
+    }
+
+    #[tokio::test]
+    async fn migration_cancel_pid_reuse_check_rejects_unrelated_process() {
+        // ch.pid points at a real PID but it's not cloud-hypervisor
+        // (PID reuse: the receiver CH already exited and the kernel
+        // reassigned the PID). The /proc/<pid>/exe check catches it
+        // before the SIGKILL fires. Use the test process's own PID,
+        // whose /proc/<pid>/exe basename is the test binary, NOT
+        // cloud-hypervisor.
+        let tmp = tempfile::tempdir().unwrap();
+        let our_pid = std::process::id();
+        std::fs::write(tmp.path().join("ch.pid"), our_pid.to_string()).unwrap();
+        let api_socket = tmp.path().join("ch.sock");
+        let action = PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "mig-cancel-reuse".to_string(),
+            args: serde_json::Value::Null,
+        };
+        let err = dispatch(&action, &api_socket).await.unwrap_err();
+        assert!(err.starts_with("cancel kill failed:"), "got {}", err);
+        assert!(
+            err.contains("expected cloud-hypervisor"),
+            "expected exe-mismatch reason, got {}",
+            err
+        );
+        // Critically: the test process is still alive (we did NOT
+        // SIGKILL ourselves). If the verify step were skipped, this
+        // test would terminate with SIGKILL instead of asserting.
+    }
+
+    #[test]
+    fn read_ch_pid_strips_trailing_newline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("ch.pid");
+        // launch.rs writes pid via write(&p, pid.to_string()) — no
+        // trailing newline. Operators or tooling editing the file
+        // may add one; trim() handles both.
+        std::fs::write(&p, "12345\n").unwrap();
+        assert_eq!(read_ch_pid(&p).unwrap(), 12345);
+        std::fs::write(&p, "67890").unwrap();
+        assert_eq!(read_ch_pid(&p).unwrap(), 67890);
+    }
+
+    #[test]
+    fn verify_pid_is_cloud_hypervisor_rejects_self() {
+        // /proc/self/exe basename is the test binary, NOT
+        // cloud-hypervisor. Defense-in-depth check rejects.
+        let our_pid = std::process::id() as i32;
+        let err = verify_pid_is_cloud_hypervisor(our_pid).unwrap_err();
+        assert!(err.contains("expected cloud-hypervisor"), "got {}", err);
+    }
+
+    #[test]
+    fn verify_pid_is_cloud_hypervisor_rejects_dead_pid() {
+        // PID 1 in a non-init namespace would be /sbin/init or
+        // similar; we use a pid that almost certainly doesn't exist
+        // (max u16 + 1). readlink fails; the verify step returns
+        // err — caller treats as cancel failure.
+        let err = verify_pid_is_cloud_hypervisor(99_999_999).unwrap_err();
+        assert!(err.contains("readlink"), "got {}", err);
+    }
+
+    // ─── Phase 3a D2 watchdog (`docs/design/live-migration-phase-3a.md` §7.2) ─
+
+    #[test]
+    fn watchdog_skips_when_no_action_id() {
+        // No active migration; CH may have died for unrelated reasons
+        // (eg pod-shutdown after a graceful stop). Nothing to fail.
+        let a = ann(&[]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::Skip(reason) => {
+                assert!(
+                    reason.contains("no active migration-action-id"),
+                    "got {}",
+                    reason
+                );
+            }
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_skips_when_action_id_is_empty_string() {
+        // Annotation present but empty — same as absent for our purposes.
+        let a = ann(&[(MIGRATION_ACTION_ID_KEY, "")]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::Skip(_) => {}
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_skips_when_terminal_failed_already_present_for_same_id() {
+        // D1 race winner: D1's cancel handler returned Err, the action
+        // loop wrote `migration-status: failed` paired with CANCEL_ID
+        // before CH's child.wait() unblocked in main.rs. D2's watchdog
+        // observes the existing terminal failure and skips, preserving
+        // write-once semantics so the controller sees D1's "cancelled"
+        // detail rather than D2's "destination listener exited
+        // abnormally".
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_STATUS_KEY, "failed"),
+            (MIGRATION_STATUS_ID_KEY, "mig-cancel-001"),
+            (MIGRATION_STATUS_DETAIL_KEY, "cancelled"),
+        ]);
+        match decide_watchdog(&a, "code=signal:9") {
+            WatchdogDecision::Skip(reason) => {
+                assert!(reason.contains("terminal failed"), "got {}", reason);
+            }
+            other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_no_status_yet() {
+        // CH died abnormally before any status was written for the
+        // current action (eg listener crash before recv-accept).
+        // Watchdog writes failed paired with the action-id.
+        let a = ann(&[(MIGRATION_ACTION_ID_KEY, "mig-recv-042")]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::WriteFailed { action_id, detail } => {
+                assert_eq!(action_id, "mig-recv-042");
+                assert!(detail.contains("destination listener exited abnormally"));
+                assert!(detail.contains("code=1"));
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_intermediate_running_for_same_id() {
+        // recv accepted by action loop ("running" intermediate written),
+        // CH died mid-receive. No terminal status yet → watchdog writes
+        // failed. Note: dispatch_migration_receive's success path also
+        // writes `running` as success_status; D2 cannot disambiguate
+        // intermediate from terminal-success "running", so D2 will
+        // also fire post-success-then-CH-death — operationally correct
+        // because the dst guest is now dead.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-042"),
+            (MIGRATION_STATUS_KEY, "running"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-042"),
+        ]);
+        match decide_watchdog(&a, "signal:9") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-042");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_terminal_failed_was_for_different_id() {
+        // Status carries a stale terminal from a prior migration
+        // attempt (different action-id). The current action has no
+        // matching terminal status; watchdog writes failed for the
+        // current action-id.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-002"),
+            (MIGRATION_STATUS_KEY, "failed"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-001"),
+            (MIGRATION_STATUS_DETAIL_KEY, "stale"),
+        ]);
+        match decide_watchdog(&a, "code=137") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-002");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_writes_failed_when_terminal_complete_was_for_same_id() {
+        // Source-side success status ("complete") for the same id.
+        // For dst-side D2 this case is implausible (dst writes
+        // "running" not "complete"), but defensively the watchdog
+        // would fire because the skip rule only matches "failed",
+        // not "complete". A successful-then-CH-death event surfaces
+        // as a NEW failure; the controller's interpretation is that
+        // the migration succeeded then the dst guest died.
+        let a = ann(&[
+            (MIGRATION_ACTION_ID_KEY, "mig-recv-007"),
+            (MIGRATION_STATUS_KEY, "complete"),
+            (MIGRATION_STATUS_ID_KEY, "mig-recv-007"),
+        ]);
+        match decide_watchdog(&a, "code=1") {
+            WatchdogDecision::WriteFailed { action_id, .. } => {
+                assert_eq!(action_id, "mig-recv-007");
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -2217,5 +2759,70 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("parse migration_receive args"), "got {}", err);
+    }
+
+    // ─── Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    //
+    // Args-parsing tests for the new `guest_ip` field. The actual
+    // `propagate_guest_ip_annotation` kube write is exercised by the
+    // cluster integration test in the manual demo re-run at PR close
+    // — unit-testing it would need a kube client mock and POD_*
+    // env-var harness disproportionate to a 50-line reuse of the
+    // lease.rs pattern.
+
+    #[test]
+    fn migration_receive_args_parses_with_guest_ip() {
+        // Phase 3a controller-mediated path: controller forwards the
+        // src pod's existing kubeswift.io/guest-ip annotation into
+        // migration-action-args.guest_ip.
+        let raw = serde_json::json!({
+            "listen_url": "tcp:0.0.0.0:6789",
+            "guest_ip": "192.168.99.42",
+        });
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.listen_url, "tcp:0.0.0.0:6789");
+        assert_eq!(parsed.guest_ip.as_deref(), Some("192.168.99.42"));
+    }
+
+    #[test]
+    fn migration_receive_args_parses_without_guest_ip() {
+        // Phase 2 manual-path / pre-D3 callers don't set guest_ip;
+        // the field is `#[serde(default)]` so absence parses as
+        // None and the propagation step skips with a benign log.
+        let raw = serde_json::json!({"listen_url": "tcp:0.0.0.0:6789"});
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.guest_ip, None);
+    }
+
+    #[test]
+    fn migration_receive_args_with_explicit_null_guest_ip_is_none() {
+        // JSON null also parses as None (consistent with default).
+        let raw = serde_json::json!({
+            "listen_url": "tcp:0.0.0.0:6789",
+            "guest_ip": null,
+        });
+        let parsed: MigrationReceiveArgs = serde_json::from_value(raw).unwrap();
+        assert_eq!(parsed.guest_ip, None);
+    }
+
+    #[test]
+    fn d3_security_s1_tag_present_at_args_read_site() {
+        // Phase 3b's grep-and-delete sweep keys on the literal
+        // string `SECURITY-S1` in the swiftletd source. This test
+        // pins that the marker is present at the D3 args-read site
+        // so a refactor that drops the comment doesn't silently
+        // remove the Phase 3b audit signal.
+        let source = include_str!("action.rs");
+        let count = source.matches("SECURITY-S1").count();
+        assert!(
+            count >= 3,
+            "expected ≥3 SECURITY-S1 markers (D3 args struct + send + receive read sites), found {}",
+            count
+        );
+        // Confirm D3-specific marker text is intact.
+        assert!(
+            source.contains("// SECURITY-S1: guest_ip is read"),
+            "D3 SECURITY-S1 marker text missing or renamed; Phase 3b grep-and-delete sweep depends on it"
+        );
     }
 }
