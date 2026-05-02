@@ -40,6 +40,15 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
+	// Phase 3a per-mode dispatch. isLiveMode handles initial-entry
+	// (status.Mode unset, spec.Mode=live) so handleValidatingLive is
+	// responsible for stamping status.Mode=live during its B2 body.
+	// mode=auto stays in the offline path until B2 lands the auto-
+	// resolution logic; B1 dispatch is scoped to explicit live only.
+	if isLiveMode(mig) {
+		return r.handleValidatingLive(ctx, mig, status)
+	}
+
 	// Resolve source SwiftGuest in same namespace.
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {

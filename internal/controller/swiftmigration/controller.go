@@ -93,8 +93,8 @@ type SwiftMigrationReconciler struct {
 //   - phaseAdvance()        — phase advanced, immediate requeue
 //   - phaseRequeue(d)       — still in current phase, requeue after d
 //   - phaseFailure(msg, r)  — user-actionable failure → Failed phase
-//                             with status.failureReason = r (live mode);
-//                             leave r empty for offline-mode failures.
+//     with status.failureReason = r (live mode);
+//     leave r empty for offline-mode failures.
 //   - phaseTransient(err)   — transient/retry-worthy error
 //
 // Phase 1 offline-mode handlers leave FailureReason empty when calling
