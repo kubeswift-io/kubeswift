@@ -161,15 +161,31 @@ func (r *SwiftMigrationReconciler) cleanupSourceGuest(
 
 // onTerminalPhase performs cleanup when the SwiftMigration transitions
 // to Failed (the dispatchResult path) so the source guest doesn't get
-// left annotated and stopped. Called from Reconcile after persist().
+// left annotated and stopped, AND so a pre-cutover-created dst pod
+// (live mode) doesn't leak (W17).
 //
 // Mirrors handleCancellation's pre/post-cutover split. The Completed
-// phase already clears the annotation in Resuming (commit 9); this
-// helper covers the Failed case across all phases.
+// phase already clears the annotation in Resuming; this helper covers
+// the Failed case across all phases.
 //
-// Idempotent: skips when the SwiftMigration's annotation isn't on
-// the source guest (cleanup ran on a previous reconcile, or the
-// failure was Validating-phase before any patches).
+// Pre/post-cutover detection is mode-aware:
+//   - offline: SwiftGuest.spec.nodeName patched at cutover, so check
+//     guest.Spec.NodeName == status.DestinationNode (existing
+//     heuristic, unchanged).
+//   - live (Phase 3a): cutover patches guest.STATUS.podRef.name and
+//     writes the PodRefSwapped condition (W21). Use isPostCutover()
+//     which reads the condition — same gate as honorCancel and
+//     shouldCheckSourcePodUID for consistency.
+//
+// W17 (PR #46 Scenario 3): on pre-cutover Failed in LIVE mode, also
+// delete the destination pod the controller created in Preparing-live.
+// Without this, the dst pod leaks (resource consumption + UX confusion).
+// Best-effort retry-in-place: a transient Delete failure surfaces as
+// the function's error return, which triggers controller-runtime
+// reconcile retry (controller.go:299 propagates the error).
+//
+// Idempotent: cleanupSourceGuest skips when the annotation isn't ours;
+// dst pod Delete returns NotFound on second attempt (success).
 func (r *SwiftMigrationReconciler) onTerminalPhase(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
@@ -178,22 +194,72 @@ func (r *SwiftMigrationReconciler) onTerminalPhase(
 	if status.Phase != migrationv1alpha1.SwiftMigrationPhaseFailed {
 		return nil
 	}
+
 	postCutover := false
-	// Use the same heuristic as handleCancellation, but consult the
-	// PRE-failure phase: status.Phase has already been set to Failed
-	// by dispatchResult, so we can't distinguish Validating-failure
-	// from StopAndCopy-failure by status.Phase alone. The destination
-	// node patch is only issued in StopAndCopy; check the SwiftGuest
-	// directly to decide whether the cutover happened.
-	var guest swiftv1alpha1.SwiftGuest
-	if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
+	if status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		// Live mode: PodRefSwapped condition is the authoritative
+		// post-cutover signal (post-W21 it's always written at
+		// cutoverStep1).
+		postCutover = isPostCutover(mig)
+	} else {
+		// Offline mode: check guest.Spec.NodeName patch.
+		var guest swiftv1alpha1.SwiftGuest
+		if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if guest.Spec.NodeName == status.DestinationNode && status.DestinationNode != "" {
+			postCutover = true
+		}
+	}
+
+	if err := r.cleanupSourceGuest(ctx, mig, !postCutover); err != nil {
+		return err
+	}
+
+	// W17: pre-cutover Failed in live mode → delete the dst pod that
+	// Preparing-live created. Post-cutover Failed leaves the dst pod
+	// in place because it IS the canonical guest at that point
+	// (the migration crossed the cutover commit point).
+	if !postCutover && status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		if err := r.cleanupDstPod(ctx, mig, status); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// cleanupDstPod deletes the destination pod created during Preparing-
+// live. Best-effort: NotFound is success (idempotent re-fire); other
+// errors surface and trigger reconcile retry.
+//
+// status.destinationPodRef.name is the load-bearing input — it's set
+// in Preparing-live B2.2 when the controller successfully Creates the
+// dst pod. If the field is empty (Validating-phase failure, or
+// Preparing failed before Create), there's nothing to clean up.
+func (r *SwiftMigrationReconciler) cleanupDstPod(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+	status *migrationv1alpha1.SwiftMigrationStatus,
+) error {
+	if status.DestinationPodRef == nil || status.DestinationPodRef.Name == "" {
+		return nil
+	}
+	pod := &corev1.Pod{}
+	pod.Name = status.DestinationPodRef.Name
+	pod.Namespace = mig.Namespace
+	if err := r.Delete(ctx, pod); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("delete destination pod %q: %w", pod.Name, err)
 	}
-	if guest.Spec.NodeName == status.DestinationNode && status.DestinationNode != "" {
-		postCutover = true
+	if r.Recorder != nil {
+		r.Recorder.Eventf(mig, corev1.EventTypeNormal, "DestinationPodCleanedUp",
+			"deleted destination pod %q after pre-cutover Failed", pod.Name)
 	}
-	return r.cleanupSourceGuest(ctx, mig, !postCutover)
+	return nil
 }
