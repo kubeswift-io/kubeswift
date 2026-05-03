@@ -236,21 +236,36 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 
 	switch sub {
 	case substatePreRecv:
-		// Patch src pod with migration-name label per architect F-3:
-		// makes src observable via the same labeled-pod watch the
-		// manager registers for dst. Idempotent — skips patch if the
-		// label is already present (leader-handover safe). Without
-		// this, controller observability of src migration-status
-		// transitions falls back to the 30s SyncPeriod (defense-in-
-		// depth), adding up to 30s latency to state advances.
-		if srcPodPresent && srcPod.Labels[LabelMigrationName] != mig.Name {
-			labelPatch := client.MergeFrom(srcPod.DeepCopy())
+		// Patch src pod with the migration-name label (architect F-3,
+		// informer observability) AND the Phase 2 plaintext-ack
+		// annotation (W13: swiftletd's decide() rejects send actions
+		// on pods missing the ack with status=rejected; without this
+		// patch the migration would stall at substateSendPending until
+		// spec.timeout). Both writes are idempotent at the apiserver
+		// layer (same-value MergeFrom is a no-op patch); skip-when-
+		// present is a small optimisation that also makes leader-
+		// handover behaviour observable in tests. dst pod gets the
+		// ack at construction time in B2.2's mergeAnnotationsForDst;
+		// src pod is the existing SwiftGuest launcher pod which
+		// predates the migration, so the controller must add it.
+		needLabelPatch := srcPodPresent && srcPod.Labels[LabelMigrationName] != mig.Name
+		needAckPatch := srcPodPresent && srcPod.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue
+		if needLabelPatch || needAckPatch {
+			patch := client.MergeFrom(srcPod.DeepCopy())
 			if srcPod.Labels == nil {
 				srcPod.Labels = map[string]string{}
 			}
-			srcPod.Labels[LabelMigrationName] = mig.Name
-			if err := r.Patch(ctx, &srcPod, labelPatch); err != nil {
-				return phaseTransient(fmt.Errorf("label src pod for informer observability: %w", err))
+			if srcPod.Annotations == nil {
+				srcPod.Annotations = map[string]string{}
+			}
+			if needLabelPatch {
+				srcPod.Labels[LabelMigrationName] = mig.Name
+			}
+			if needAckPatch {
+				srcPod.Annotations[AnnotationMigrationPhase2Ack] = AnnotationMigrationPhase2AckValue
+			}
+			if err := r.Patch(ctx, &srcPod, patch); err != nil {
+				return phaseTransient(fmt.Errorf("patch src pod (label + phase2 ack) at StopAndCopy entry: %w", err))
 			}
 		}
 
