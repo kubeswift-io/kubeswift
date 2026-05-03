@@ -243,6 +243,147 @@ func TestStopAndCopyLive_PreRecv_WritesReceiveAction(t *testing.T) {
 	}
 }
 
+// W13 regression: substatePreRecv must patch src pod with BOTH the
+// migration-name label (informer observability per architect F-3) AND
+// the Phase 2 plaintext-ack annotation. Without the ack, swiftletd's
+// decide() rejects the send-action with status=rejected and the
+// migration stalls at substateSendPending until spec.timeout.
+//
+// Cluster walkthrough surfaced this against PR 1's merged image
+// (sha-4cde589): src pod's migration-status annotation went to
+// "rejected" with detail "phase2_plaintext_ack_missing"; controller
+// stayed at substateSendPending; spec.timeout fired ~5min later.
+func TestStopAndCopyLive_PreRecv_PatchesSrcPodWithLabelAndAck_W13(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	// Confirm src pod starts WITHOUT the ack — fixture realism.
+	if src.Annotations[AnnotationMigrationPhase2Ack] != "" {
+		t.Fatalf("fixture invalid: src pod should not pre-set ack")
+	}
+	if src.Labels[LabelMigrationName] != "" {
+		t.Fatalf("fixture invalid: src pod should not pre-set migration label")
+	}
+
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("unexpected failure: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+
+	var got corev1.Pod
+	if err := r.Get(context.Background(), key(src), &got); err != nil {
+		t.Fatalf("re-get src: %v", err)
+	}
+	if got.Labels[LabelMigrationName] != mig.Name {
+		t.Errorf("src migration-name label: want %q, got %q",
+			mig.Name, got.Labels[LabelMigrationName])
+	}
+	if got.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue {
+		t.Errorf("src phase2-ack annotation: want %q, got %q",
+			AnnotationMigrationPhase2AckValue,
+			got.Annotations[AnnotationMigrationPhase2Ack])
+	}
+}
+
+// W14: deriveSubstate must recognise migration-status=rejected on src
+// and dst as terminal sub-states. Without this, swiftletd's decide()
+// rejection (e.g., missing phase2 ack, action-id mismatch) leaves the
+// migration parked at substateSendPending/substateRecvPending until
+// spec.timeout — operators see Timeout when the real cause is the
+// rejection detail.
+func TestDeriveSubstate_SrcRejected_W14(t *testing.T) {
+	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
+	stamp(src, migrationActionVerbSend, sendActionID(mig),
+		MigrationStatusRejected, sendActionID(mig),
+		"phase2_plaintext_ack_missing")
+	if got := deriveSubstate(mig, src, dst); got != substateSrcRejected {
+		t.Errorf("substate: want src-rejected, got %v", got)
+	}
+}
+
+func TestDeriveSubstate_DstRejected_W14(t *testing.T) {
+	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig),
+		MigrationStatusRejected, recvActionID(mig),
+		"phase2_plaintext_ack_missing")
+	if got := deriveSubstate(mig, src, dst); got != substateDstRejected {
+		t.Errorf("substate: want dst-rejected, got %v", got)
+	}
+}
+
+func TestStopAndCopyLive_SrcRejected_FailsWithOther_W14(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	stamp(src, migrationActionVerbSend, sendActionID(mig),
+		MigrationStatusRejected, sendActionID(mig),
+		"phase2_plaintext_ack_missing")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
+		t.Errorf("FailureReason: want Other, got %q", res.FailureReason)
+	}
+	if !strings.Contains(res.FailureMsg, "source rejected migration action") {
+		t.Errorf("FailureMsg: want src-rejected message, got %q", res.FailureMsg)
+	}
+	if !strings.Contains(res.FailureMsg, "phase2_plaintext_ack_missing") {
+		t.Errorf("FailureMsg should preserve rejection detail; got %q", res.FailureMsg)
+	}
+}
+
+func TestStopAndCopyLive_DstRejected_FailsWithOther_W14(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig),
+		MigrationStatusRejected, recvActionID(mig),
+		"phase2_plaintext_ack_missing")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
+		t.Errorf("FailureReason: want Other, got %q", res.FailureReason)
+	}
+	if !strings.Contains(res.FailureMsg, "destination rejected migration action") {
+		t.Errorf("FailureMsg: want dst-rejected message, got %q", res.FailureMsg)
+	}
+	if !strings.Contains(res.FailureMsg, "phase2_plaintext_ack_missing") {
+		t.Errorf("FailureMsg should preserve rejection detail; got %q", res.FailureMsg)
+	}
+}
+
+// W13 idempotency: re-running the handler when src pod already has
+// the label + ack must not re-patch (verified via ResourceVersion
+// stability across reconciles).
+func TestStopAndCopyLive_PreRecv_W13Idempotent(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	if src.Labels == nil {
+		src.Labels = map[string]string{}
+	}
+	if src.Annotations == nil {
+		src.Annotations = map[string]string{}
+	}
+	src.Labels[LabelMigrationName] = mig.Name
+	src.Annotations[AnnotationMigrationPhase2Ack] = AnnotationMigrationPhase2AckValue
+
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	var pre corev1.Pod
+	_ = r.Get(context.Background(), key(src), &pre)
+	preRV := pre.ResourceVersion
+
+	status := mig.Status.DeepCopy()
+	_ = r.handleStopAndCopyLive(context.Background(), mig, status)
+
+	var post corev1.Pod
+	_ = r.Get(context.Background(), key(src), &post)
+	if post.ResourceVersion != preRV {
+		t.Errorf("src pod ResourceVersion changed; W13 patch should be a no-op when label+ack already present (pre=%q post=%q)",
+			preRV, post.ResourceVersion)
+	}
+}
+
 func TestStopAndCopyLive_RecvPending_RequeuesWithDetail(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
