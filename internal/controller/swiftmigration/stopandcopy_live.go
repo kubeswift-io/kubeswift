@@ -216,6 +216,22 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		srcArg = &srcPod
 	}
 
+	// Cutover-in-progress short-circuit: if SwiftGuest.status.podRef.name
+	// already equals the dst pod name, cutover step 1 has succeeded.
+	// Subsequent reconciles dispatch directly to the cutover handler
+	// (which derives the within-cutover step from cluster state).
+	// Without this short-circuit, deriveSubstate falls through to
+	// substatePreRecv when src pod is gone (post-step-2), which would
+	// mis-route to writing a fresh receive-action.
+	//
+	// Equivalent: we're in cutover whenever PodRefSwapped is True per
+	// B1's isPostCutover() helper; here we read directly from
+	// guest.status.podRef so the check works whether or not the
+	// caller has already loaded the SwiftMigration's Conditions.
+	if guest.Status.PodRef != nil && guest.Status.PodRef.Name == dstName {
+		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName)
+	}
+
 	sub := deriveSubstate(mig, srcArg, dstArg)
 
 	switch sub {
@@ -307,16 +323,14 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// vm.send-migration internally probed the dst CH for
 		// vm_info=Running before writing complete, so observing
 		// src=complete implies dst CH is in Running state with the
-		// migrated guest. The cutover 3-step sequence (B3.2) takes
-		// over from here.
+		// migrated guest.
 		//
-		// **B3.1 PARK POINT**: set phaseDetail to "src migration
-		// complete; preparing cutover" and requeue. B3.2 will
-		// replace this branch with the cutover sequence.
-		setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveSrcCompleted)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
-			"source migration complete; preparing cutover (B3.2)")
-		return phaseRequeue(stopAndCopyLivePollInterval)
+		// **B3.2 CUTOVER**: dispatch to the 3-step cutover sequence
+		// per §2.3 + §3.5 cutover ordering invariant. Each reconcile
+		// in the cutover handler executes ONLY the pending step;
+		// next reconcile reads cluster state and proceeds. Forward-
+		// only retry-in-place; no rollback.
+		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName)
 
 	case substateDstFailed:
 		// dst reported migration-status=failed with matching

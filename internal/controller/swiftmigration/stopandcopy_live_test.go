@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
@@ -188,7 +189,7 @@ func newStopAndCopyReconciler(t *testing.T, objs ...interface{}) *SwiftMigration
 		case *migrationv1alpha1.SwiftMigration:
 			builder = builder.WithObjects(v).WithStatusSubresource(v)
 		case *swiftv1alpha1.SwiftGuest:
-			builder = builder.WithObjects(v)
+			builder = builder.WithObjects(v).WithStatusSubresource(v)
 		case *corev1.Pod:
 			builder = builder.WithObjects(v)
 		default:
@@ -316,10 +317,13 @@ func TestStopAndCopyLive_SendPending_RequeuesWithDetail(t *testing.T) {
 	}
 }
 
-func TestStopAndCopyLive_SrcCompleted_ParksAtCutoverEntry(t *testing.T) {
-	// B3.1 PARK POINT: when src reports complete with matching $SEND_ID
-	// (W1 gate satisfied), handler sets phaseDetail to SrcCompleted
-	// and requeues. B3.2 will replace this with cutover sequence.
+func TestStopAndCopyLive_SrcCompleted_DispatchesCutoverStep1(t *testing.T) {
+	// B3.2: when src reports complete with matching $SEND_ID (W1 gate
+	// satisfied), handler dispatches into the 3-step cutover sequence.
+	// First reconcile executes step 1 (SwiftGuest podRef.name patch +
+	// cutoverStep1At timestamp). Phase remains StopAndCopy; phaseDetail
+	// transitions through PodRef → DeleteSrc as the in-memory
+	// status updates.
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
@@ -332,13 +336,22 @@ func TestStopAndCopyLive_SrcCompleted_ParksAtCutoverEntry(t *testing.T) {
 		t.Fatalf("unexpected failure: err=%v msg=%q", res.Err, res.FailureMsg)
 	}
 	if res.Advanced {
-		t.Errorf("B3.1 must NOT advance phase at src-completed; cutover is B3.2")
-	}
-	if status.PhaseDetail != migrationv1alpha1.PhaseDetailLiveSrcCompleted {
-		t.Errorf("phaseDetail: want SrcCompleted, got %q", status.PhaseDetail)
+		t.Errorf("must NOT advance phase mid-cutover; step 1 just landed")
 	}
 	if status.Phase != migrationv1alpha1.SwiftMigrationPhaseStopAndCopy {
-		t.Errorf("phase must remain StopAndCopy; got %q", status.Phase)
+		t.Errorf("phase must remain StopAndCopy until step 3; got %q", status.Phase)
+	}
+	if status.CutoverStep1At == nil {
+		t.Errorf("CutoverStep1At not stamped after step 1")
+	}
+
+	// Verify SwiftGuest podRef.name was patched.
+	var got swiftv1alpha1.SwiftGuest
+	if err := r.Get(context.Background(), client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &got); err != nil {
+		t.Fatalf("re-get guest: %v", err)
+	}
+	if got.Status.PodRef == nil || got.Status.PodRef.Name != "guest-mig-abcdef" {
+		t.Errorf("SwiftGuest.status.podRef.name: want guest-mig-abcdef, got %+v", got.Status.PodRef)
 	}
 }
 
