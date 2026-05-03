@@ -29,6 +29,20 @@ const (
 	MigrationActionCancel         = "cancel"
 	MigrationStatusFailed         = "failed"
 	MigrationStatusFailedCancelDt = "cancelled" // expected substring in status-detail
+
+	// MigrationStatusRejected is swiftletd's status for an action it
+	// refused to execute (Phase 2 PR-B's decide() rejection path —
+	// e.g., missing phase2-ack annotation, namespace mismatch, action-id
+	// mismatch). Distinct from "failed" (action ran and errored) per
+	// rust/swiftletd/src/action.rs's StatusKind::Rejected vs
+	// StatusKind::Failed.
+	//
+	// Phase 3a's controller treats rejected with matching action-id as
+	// terminal: surface as a fast Failed transition with the rejection
+	// detail preserved in failureMessage. Without this recognition the
+	// migration stalls at substateSendPending/substateRecvPending until
+	// spec.timeout (W14, surfaced during PR 1 cluster walkthrough).
+	MigrationStatusRejected = "rejected"
 )
 
 // cancelAckTimeout is the upper bound for waiting on D1's cancel-ack
