@@ -679,6 +679,45 @@ deployed cluster (miles + boba, kernel-boot 4Gi guest, CH v51.1).
    failure ≈ Q3-v3 blackhole; same coping path via `spec.timeout`
    (F4.5).
 
+### Phase 3a PR 1 cluster validation (2026-05-03)
+
+PR 1 merged + cluster-validated functional. Walkthrough surfaced
+**nine findings (W13-W21)** across four image iterations.
+
+**Four BLOCKING bugs fixed mid-walkthrough via hotfix PRs:**
+- W13 ([PR #43](https://github.com/projectbeskar/kubeswift/pull/43)):
+  controller didn't patch src pod with phase2-ack annotation
+- W14 ([PR #43](https://github.com/projectbeskar/kubeswift/pull/43)):
+  `deriveSubstate` didn't recognize `migration-status=rejected` as
+  terminal
+- W15 ([PR #44](https://github.com/projectbeskar/kubeswift/pull/44)):
+  UID-check used `canonicalPodName` which resolves to dst post-step-1
+- W16 ([PR #45](https://github.com/projectbeskar/kubeswift/pull/45)):
+  swiftletd receiver-mode never flipped GuestRunning=True
+  post-receive
+
+**Five non-blocking findings** for follow-up PR:
+- W17 (MEDIUM): pre-cutover Failed migration leaves dst pod running
+- W18 (HIGH): failureReason classification can't distinguish dst-K8s-
+  termination from generic src failures (maps to Other not
+  PodTerminated)
+- W19 (LOW): docs/migration/phase-3a.md W12 narrative out of date
+- W20 (MEDIUM): cancel D1 fast-path doesn't fire while
+  receive_migration blocks the action loop (Phase 3b candidate)
+- W21 (HIGH): `SwiftMigrationConditionPodRefSwapped` never written
+  → CancelIgnored gate broken; potential data-loss in narrow Resuming
+  window. Same root cause as W15.
+
+Pattern: four consecutive finding-behind-a-finding events. Each
+BLOCKING bug at a different code path hid the next. The W5 lesson
+restated for the fifth time in the project's history.
+
+Walkthrough log:
+[`docs/migration/phase-3a-cluster-validation.md`](docs/migration/phase-3a-cluster-validation.md).
+
+**Cluster validation status: Phase 3a PR 1 mode=live live migration
+functional** for kernel-boot guests on default node-local networking.
+
 ### Phase 3a PR 1 implementation status (Group B + Group C complete)
 
 PR 1 (`feat/phase-3a-controller-core`) ships the SwiftMigration
