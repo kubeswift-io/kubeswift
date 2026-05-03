@@ -172,6 +172,96 @@ func TestCutover_Step1PartialCompletion_TimestampOnlyRetry(t *testing.T) {
 	}
 }
 
+// W21 (PR #46 walkthrough): cutoverStep1Timestamp must write BOTH
+// status.CutoverStep1At AND the PodRefSwapped=True condition. The
+// condition is the safety gate for cancel-post-cutover; without it,
+// cancel during the narrow Resuming window would route through the
+// pre-cutover code path and destroy the just-migrated guest.
+func TestCutover_Step1WritesPodRefSwappedCondition_W21(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	scheme := testScheme(t)
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, src, dst).
+		WithStatusSubresource(mig, guest).
+		Build()
+	r := &SwiftMigrationReconciler{Client: base, Scheme: scheme, Recorder: record.NewFakeRecorder(20)}
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("unexpected failure: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+
+	// Both signals must be set on the in-memory status (persisted by
+	// dispatchResult at the end of the reconcile).
+	if status.CutoverStep1At == nil {
+		t.Errorf("CutoverStep1At should be stamped after cutoverStep1")
+	}
+	var podRefSwapped *metav1.Condition
+	for i := range status.Conditions {
+		c := &status.Conditions[i]
+		if c.Type == migrationv1alpha1.SwiftMigrationConditionPodRefSwapped {
+			podRefSwapped = c
+			break
+		}
+	}
+	if podRefSwapped == nil {
+		t.Fatalf("PodRefSwapped condition not written; W21 regression")
+	}
+	if podRefSwapped.Status != metav1.ConditionTrue {
+		t.Errorf("PodRefSwapped status: want True, got %q", podRefSwapped.Status)
+	}
+	if podRefSwapped.Reason != migrationv1alpha1.ReasonCutoverStep1Complete {
+		t.Errorf("PodRefSwapped reason: want %q, got %q",
+			migrationv1alpha1.ReasonCutoverStep1Complete, podRefSwapped.Reason)
+	}
+
+	// isPostCutover() reads the Conditions list — verify the gate
+	// flips True so downstream call-sites (honorCancel,
+	// shouldCheckSourcePodUID) see the post-cutover signal.
+	migWithStatus := mig.DeepCopy()
+	migWithStatus.Status = *status
+	if !isPostCutover(migWithStatus) {
+		t.Errorf("isPostCutover should return true after W21 condition write")
+	}
+}
+
+// W21 idempotency: cutoverStep1TimestampOnly recovery branch (when
+// SwiftGuest patch landed but timestamp persist failed) must also
+// write the condition, AND must be idempotent when re-fired.
+func TestCutover_Step1TimestampOnly_WritesPodRefSwappedCondition_W21(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	guest.Status.PodRef = &corev1.ObjectReference{Name: "guest-mig-abcdef", Namespace: "default"}
+	// CutoverStep1At nil → cutoverStep1TimestampOnly path
+
+	scheme := testScheme(t)
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, src, dst).
+		WithStatusSubresource(mig, guest).
+		Build()
+	r := &SwiftMigrationReconciler{Client: base, Scheme: scheme, Recorder: record.NewFakeRecorder(20)}
+
+	status := mig.Status.DeepCopy()
+	_ = r.handleStopAndCopyLive(context.Background(), mig, status)
+
+	if status.CutoverStep1At == nil {
+		t.Errorf("CutoverStep1At should be stamped on timestamp-only retry")
+	}
+	var found bool
+	for _, c := range status.Conditions {
+		if c.Type == migrationv1alpha1.SwiftMigrationConditionPodRefSwapped &&
+			c.Status == metav1.ConditionTrue {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("PodRefSwapped=True must be written on timestamp-only path too; W21 regression")
+	}
+}
+
 // TestCutover_Step2RetryInPlace: src pod Delete fails → next reconcile
 // observes step 1 done + src exists → retries Delete.
 func TestCutover_Step2RetryInPlace_DeleteFails(t *testing.T) {
