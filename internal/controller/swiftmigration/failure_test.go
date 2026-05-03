@@ -4,7 +4,10 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -260,5 +263,170 @@ func TestOnTerminalPhase_FailedPreCutover_RestoresRunPolicy(t *testing.T) {
 	}
 	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
 		t.Errorf("pre-cutover Failed: runPolicy = %q, want Running (restored)", got.Spec.RunPolicy)
+	}
+}
+
+// W17 (PR #46 Scenario 3): pre-cutover Failed in live mode must
+// delete the destination pod the controller created during
+// Preparing-live. Without the cleanup, dst pod leaks.
+func TestOnTerminalPhase_FailedPreCutoverLive_DeletesDstPod_W17(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Status.NodeName = "miles"
+	guest.Annotations = map[string]string{
+		migrationv1alpha1.AnnotationMigrationInProgress: "m",
+	}
+	mig := newMigration("m", "default")
+	dstPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "guest-mig-abcdef",
+			Namespace: "default",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, dstPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := &migrationv1alpha1.SwiftMigrationStatus{
+		Phase:           migrationv1alpha1.SwiftMigrationPhaseFailed,
+		Mode:            migrationv1alpha1.SwiftMigrationModeLive,
+		SourceNode:      "miles",
+		DestinationNode: "boba",
+		DestinationPodRef: &migrationv1alpha1.SwiftMigrationPodRef{
+			Name: "guest-mig-abcdef",
+		},
+		// No PodRefSwapped condition → pre-cutover.
+	}
+
+	if err := r.onTerminalPhase(context.Background(), mig, status); err != nil {
+		t.Fatalf("onTerminalPhase returned err = %v", err)
+	}
+
+	var got corev1.Pod
+	err := c.Get(context.Background(),
+		client.ObjectKey{Name: "guest-mig-abcdef", Namespace: "default"}, &got)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("dst pod should be deleted post-W17 cleanup; got err=%v", err)
+	}
+}
+
+// W17 negative case: post-cutover Failed in live mode must NOT
+// delete the dst pod (it IS the canonical guest at that point).
+func TestOnTerminalPhase_FailedPostCutoverLive_PreservesDstPod_W17(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Annotations = map[string]string{
+		migrationv1alpha1.AnnotationMigrationInProgress: "m",
+	}
+	mig := newMigration("m", "default")
+	// Post-cutover: PodRefSwapped=True
+	mig.Status.Conditions = []metav1.Condition{{
+		Type:               migrationv1alpha1.SwiftMigrationConditionPodRefSwapped,
+		Status:             metav1.ConditionTrue,
+		Reason:             migrationv1alpha1.ReasonCutoverStep1Complete,
+		LastTransitionTime: metav1.Now(),
+		Message:            "cutover step 1 complete",
+	}}
+	dstPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "guest-mig-abcdef",
+			Namespace: "default",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, dstPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := &migrationv1alpha1.SwiftMigrationStatus{
+		Phase:      migrationv1alpha1.SwiftMigrationPhaseFailed,
+		Mode:       migrationv1alpha1.SwiftMigrationModeLive,
+		SourceNode: "miles",
+		Conditions: mig.Status.Conditions,
+		DestinationPodRef: &migrationv1alpha1.SwiftMigrationPodRef{
+			Name: "guest-mig-abcdef",
+		},
+	}
+
+	if err := r.onTerminalPhase(context.Background(), mig, status); err != nil {
+		t.Fatalf("onTerminalPhase returned err = %v", err)
+	}
+
+	var got corev1.Pod
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "guest-mig-abcdef", Namespace: "default"}, &got); err != nil {
+		t.Errorf("dst pod must NOT be deleted post-cutover; W17 must respect post-cutover gate. err=%v", err)
+	}
+}
+
+// W17 retry-in-place: if dst pod Delete fails (transient apiserver
+// error), onTerminalPhase returns the error and controller-runtime
+// retries on the next reconcile.
+func TestOnTerminalPhase_DstPodDeleteFails_ReturnsErrorForRetry_W17(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Annotations = map[string]string{
+		migrationv1alpha1.AnnotationMigrationInProgress: "m",
+	}
+	mig := newMigration("m", "default")
+	dstPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "guest-mig-abcdef",
+			Namespace: "default",
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, dstPod).
+		WithStatusSubresource(mig).
+		Build()
+	c := newSelectiveFailingClient(base)
+	c.FailNext(typeKeyOf(&corev1.Pod{}), VerbDelete, 1,
+		apierrors.NewServerTimeout(schema.GroupResource{Resource: "pods"}, "delete", 1))
+
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+	status := &migrationv1alpha1.SwiftMigrationStatus{
+		Phase: migrationv1alpha1.SwiftMigrationPhaseFailed,
+		Mode:  migrationv1alpha1.SwiftMigrationModeLive,
+		DestinationPodRef: &migrationv1alpha1.SwiftMigrationPodRef{
+			Name: "guest-mig-abcdef",
+		},
+	}
+
+	err := r.onTerminalPhase(context.Background(), mig, status)
+	if err == nil {
+		t.Errorf("expected transient err for retry-in-place; got nil")
+	}
+}
+
+// W17: dst pod cleanup is a no-op when status.DestinationPodRef is
+// empty (Validating-phase failure before any pod was created).
+func TestOnTerminalPhase_NoDstPodRef_NoOpCleanup_W17(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Annotations = map[string]string{
+		migrationv1alpha1.AnnotationMigrationInProgress: "m",
+	}
+	mig := newMigration("m", "default")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := &migrationv1alpha1.SwiftMigrationStatus{
+		Phase: migrationv1alpha1.SwiftMigrationPhaseFailed,
+		Mode:  migrationv1alpha1.SwiftMigrationModeLive,
+		// DestinationPodRef nil — Validating-phase failure
+	}
+
+	if err := r.onTerminalPhase(context.Background(), mig, status); err != nil {
+		t.Errorf("onTerminalPhase should succeed when no dst pod was created; got err=%v", err)
 	}
 }
