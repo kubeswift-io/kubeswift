@@ -69,6 +69,17 @@ const (
 	// CH-internal errors, network failures during send. Per F4 the
 	// controller maps the FailureReason based on detail string.
 	substateSrcFailed
+	// substateDstRejected is "dst pod reported migration-status=
+	// rejected with matching $RECV_ID." swiftletd's decide() refused
+	// the receive-action (e.g., missing phase2-ack — addressed by W13
+	// for happy-path; namespace mismatch; action-id mismatch). Without
+	// W14's recognition the migration would stall at substateRecvPending
+	// until spec.timeout.
+	substateDstRejected
+	// substateSrcRejected is the src-side equivalent — swiftletd
+	// refused the send-action with status=rejected. Same default
+	// rationale as substateDstRejected.
+	substateSrcRejected
 )
 
 // String returns the design-doc sub-state name for diagnostic logging
@@ -90,6 +101,10 @@ func (s stopAndCopySubstate) String() string {
 		return "dst-failed"
 	case substateSrcFailed:
 		return "src-failed"
+	case substateDstRejected:
+		return "dst-rejected"
+	case substateSrcRejected:
+		return "src-rejected"
 	default:
 		return fmt.Sprintf("unknown(%d)", int(s))
 	}
@@ -188,6 +203,11 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 	if podStatusMatches(src, MigrationStatusFailed, sid) {
 		return substateSrcFailed
 	}
+	// Src-side rejected (W14): swiftletd's decide() refused the send-
+	// action. Terminal — fast-fail rather than wait for spec.timeout.
+	if podStatusMatches(src, MigrationStatusRejected, sid) {
+		return substateSrcRejected
+	}
 
 	// Dst-side terminal: failed (D2 watchdog or CH receive error).
 	// We do NOT check dst-side "running" here as a terminal state —
@@ -195,6 +215,11 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 	// is src=complete; dst=running is intermediate.
 	if podStatusMatches(dst, MigrationStatusFailed, rid) {
 		return substateDstFailed
+	}
+	// Dst-side rejected (W14): swiftletd-on-dst refused the receive-
+	// action. Terminal — same rationale as src-side.
+	if podStatusMatches(dst, MigrationStatusRejected, rid) {
+		return substateDstRejected
 	}
 
 	// Send-action acknowledged on src (action-id matches $SEND_ID):

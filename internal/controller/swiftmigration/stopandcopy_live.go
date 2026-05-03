@@ -385,6 +385,29 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			fmt.Sprintf("source reported migration failure: %s", normalizeStatusDetail(detail)),
 			classifyFailureFromDetail(detail))
 
+	case substateDstRejected:
+		// W14: dst's swiftletd refused the receive-action via decide().
+		// Detail carries the rejection reason (e.g.,
+		// phase2_plaintext_ack_missing, action-id mismatch). Surface as
+		// FailureReasonOther with the detail preserved — operator-
+		// readable failureMessage is the load-bearing artifact for
+		// diagnosis since rejection reasons are open-ended.
+		detail := dstPod.Annotations[AnnotationMigrationStatusDtl]
+		return phaseFailure(
+			fmt.Sprintf("destination rejected migration action: %s", normalizeStatusDetail(detail)),
+			migrationv1alpha1.FailureReasonOther)
+
+	case substateSrcRejected:
+		// W14: src's swiftletd refused the send-action via decide().
+		// See substateDstRejected for rationale.
+		detail := ""
+		if srcArg != nil {
+			detail = srcArg.Annotations[AnnotationMigrationStatusDtl]
+		}
+		return phaseFailure(
+			fmt.Sprintf("source rejected migration action: %s", normalizeStatusDetail(detail)),
+			migrationv1alpha1.FailureReasonOther)
+
 	default:
 		// deriveSubstate is exhaustive; this branch is unreachable
 		// unless a future sub-state is added without updating the
