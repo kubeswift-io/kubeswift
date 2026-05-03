@@ -972,8 +972,7 @@ async fn report_guest_running_post_receive() {
         }
     };
     // Fetch the dst pod to read the swift.kubeswift.io/guest label.
-    let pod_api: Api<k8s_openapi::api::core::v1::Pod> =
-        Api::namespaced(client.clone(), &namespace);
+    let pod_api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), &namespace);
     let pod = match pod_api.get(&pod_name).await {
         Ok(p) => p,
         Err(e) => {
@@ -2906,7 +2905,10 @@ mod tests {
     fn extract_guest_name_from_labels_returns_value_when_present() {
         use std::collections::BTreeMap;
         let mut labels = BTreeMap::new();
-        labels.insert("swift.kubeswift.io/guest".to_string(), "faas-s2".to_string());
+        labels.insert(
+            "swift.kubeswift.io/guest".to_string(),
+            "faas-s2".to_string(),
+        );
         labels.insert("kubeswift.io/migration".to_string(), "s2-mig".to_string());
         assert_eq!(
             extract_guest_name_from_labels(Some(&labels)),
