@@ -150,13 +150,38 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		return phaseTransient(fmt.Errorf("get source guest: %w", err))
 	}
 
-	// Resolve src pod (the canonical pod pre-cutover; B2.3's helper
-	// returns guest.Name when status.podRef is nil/empty, which is
-	// the correct value here since B2.4's cutover hasn't run yet).
-	srcPodName := canonicalPodNameForGuest(&guest)
+	// Resolve src pod by guest.Name — NOT via canonicalPodName.
+	//
+	// W15 (cluster walkthrough finding): canonicalPodNameForGuest
+	// resolves to the dst pod name post-cutoverStep1 (which patches
+	// SwiftGuest.status.podRef.name = dst). cutoverStep1 issues two
+	// separate apiserver writes (SwiftGuest podRef + SwiftMigration
+	// status); the SwiftGuest patch fires the SwiftGuest informer
+	// watch and triggers a SwiftMigration reconcile. If that race-
+	// reconcile lands before the SwiftMigration status patch persists
+	// (or before the controller's persist completes from the original
+	// cutover-step-1 reconcile), the new reconcile reads:
+	//   - mig.Status.PhaseDetail = LiveSrcCompleted (stale; pre-cutover)
+	//   - guest.Status.PodRef.Name = dst (already swapped)
+	// shouldCheckSourcePodUID returns true (LiveSrcCompleted is in the
+	// pre-cutover vocabulary), and canonicalPodName resolves to dst.
+	// The Get fetches the dst pod, whose UID never matches
+	// status.SourcePodUID, so the UID check fires SourcePodReplaced on
+	// a perfectly healthy migration.
+	//
+	// The src pod is ALWAYS named guest.Name throughout its lifetime.
+	// Using guest.Name directly here makes the UID check race-free.
+	// canonicalPodName is the right abstraction for "the active
+	// canonical launcher pod" but wrong for "the original src pod
+	// whose UID we recorded at Validating".
+	//
+	// Same shape as the B3.2 fix in cutover.go::executeCutover, which
+	// also explicitly fetches src by guest.Name to bypass the same
+	// canonicalPodName-post-step-1 ambiguity. The fix didn't propagate
+	// to this outer site until W15 surfaced on cluster.
 	var srcPod corev1.Pod
 	srcPodPresent := true
-	if err := r.Get(ctx, client.ObjectKey{Name: srcPodName, Namespace: guest.Namespace}, &srcPod); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &srcPod); err != nil {
 		if apierrors.IsNotFound(err) {
 			srcPodPresent = false
 		} else {
@@ -314,7 +339,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 
 		if !srcPodPresent {
 			return phaseFailure(
-				fmt.Sprintf("source pod %q disappeared between pre-recv and pre-send", srcPodName),
+				fmt.Sprintf("source pod %q disappeared between pre-recv and pre-send", guest.Name),
 				migrationv1alpha1.FailureReasonSourcePodReplaced)
 		}
 		if dstPod.Status.PodIP == "" {
@@ -340,7 +365,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			"issuing send action on source pod")
 		if r.Recorder != nil {
 			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "SendIssued",
-				"wrote send-action on src pod %q (id=%s)", srcPodName, sendActionID(mig))
+				"wrote send-action on src pod %q (id=%s)", guest.Name, sendActionID(mig))
 		}
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
