@@ -406,9 +406,24 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		if srcArg != nil {
 			detail = srcArg.Annotations[AnnotationMigrationStatusDtl]
 		}
+		// W18 (PR #46 Scenario 4): when dst pod is being K8s-
+		// terminated mid-StopAndCopy, src CH's vm.send-migration
+		// errors out with a generic CH error (e.g.,
+		// "send_migration: internal_server_error") because the TCP
+		// peer disappeared. The src-side detail string by itself
+		// can't distinguish "dst terminated" from "any other src
+		// failure", so classifyFailureFromDetail defaults to Other.
+		// §4.7 design intent: dst-K8s-termination should map to
+		// PodTerminated. Use dst pod state to disambiguate: if
+		// dst has DeletionTimestamp set (graceful termination in
+		// progress), override the classification.
+		reason := classifyFailureFromDetail(detail)
+		if dstPod.DeletionTimestamp != nil {
+			reason = migrationv1alpha1.FailureReasonPodTerminated
+		}
 		return phaseFailure(
 			fmt.Sprintf("source reported migration failure: %s", normalizeStatusDetail(detail)),
-			classifyFailureFromDetail(detail))
+			reason)
 
 	case substateDstRejected:
 		// W14: dst's swiftletd refused the receive-action via decide().
