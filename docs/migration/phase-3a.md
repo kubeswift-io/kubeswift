@@ -1,0 +1,315 @@
+# Phase 3a Live Migration — Operator Reference
+
+> Audience: KubeSwift operators initiating, monitoring, cancelling,
+> or debugging live migrations.
+>
+> Phase 3a ships **mode=live** on the SwiftMigration controller:
+> memory and CPU state transfer between nodes without cold-boot.
+> Downtime is measured in seconds (vCPU pause window plus brief
+> network reachability gap), not the tens of seconds Phase 1
+> offline migration requires.
+>
+> Phase 3a does NOT include mTLS for the migration channel —
+> that's Phase 3b. Phase 3a IS production-usable on trusted
+> cluster networks where pod-to-pod traffic is not exposed to
+> untrusted parties; deployments with stricter requirements
+> should wait for Phase 3b.
+
+---
+
+## Overview
+
+`mode=live` on a SwiftMigration:
+
+- Creates a destination launcher pod on the target node with the
+  SwiftGuest's disk content already accessible (RWX+Block storage
+  for disk-boot guests; kernel-boot guests have no on-disk state
+  to transfer).
+- Drives Cloud Hypervisor's pre-copy then stop-and-copy memory
+  transfer from source CH to destination CH over plaintext TCP
+  (mTLS in Phase 3b).
+- Atomically swaps the SwiftGuest's canonical pod reference from
+  source to destination at the cutover instant.
+- Deletes the source pod and resumes the guest on the destination.
+
+When to use it:
+
+- Kernel-boot SwiftGuests (no disk handoff complexity).
+- Disk-boot SwiftGuests on RWX+Block storage (PR #35 / W9 path).
+  Use `cloneStrategy: copy` until W9.x ships
+  (`cloneStrategy: snapshot` + `volumeMode: Block` is gapped at
+  the CSI provisioner — see `docs/snapshots/walkthrough-findings.md`).
+- Workloads where multi-second downtime is unacceptable but
+  sub-second is not strictly required.
+
+When NOT to use it:
+
+- VFIO/SR-IOV workloads (GPU passthrough, SR-IOV NIC). Upstream
+  Cloud Hypervisor constraint #2251 prohibits live migration of
+  VFIO state. The webhook rejects `mode=live` on VFIO guests at
+  admission. Use `mode=offline` for these workloads.
+- Disk-boot guests on RWO storage. The destination pod cannot
+  attach the disk while the source pod still holds it; live
+  migration's source-running-during-pre-copy semantic is
+  incompatible. Use RWX+Block per the storage access mode CRD
+  (`docs/design/storage-access-mode.md`) or fall back to
+  `mode=offline`.
+- Filesystem RWX storage (Longhorn Generic, NFS-based). The
+  CRD admission rejects RWX+Filesystem; the SwiftGuest cannot
+  exist with this combination. The `liveMigrationCapable`
+  recompute fires on every SwiftMigration admission — there's
+  nothing to override.
+
+---
+
+## Initiating a migration
+
+Apply a SwiftMigration manifest:
+
+```yaml
+apiVersion: migration.kubeswift.io/v1alpha1
+kind: SwiftMigration
+metadata:
+  name: my-guest-to-boba
+  namespace: workloads
+spec:
+  guestRef:
+    name: my-guest
+  target:
+    nodeName: boba
+  mode: live
+  timeout: 5m   # default; raise for very large guests
+```
+
+Or via swiftctl (after PR 2 ships):
+
+```sh
+swiftctl migrate my-guest --to boba --mode live
+```
+
+`mode: auto` (the default) resolves to `live` for non-VFIO
+guests on RWX+Block storage and `offline` otherwise. The
+resolved mode is recorded in `status.mode`.
+
+---
+
+## Cancelling a migration — W12 guidance
+
+> **USE `spec.cancelRequested: true` to cancel a live migration.**
+>
+> **DO NOT use `kubectl delete pod --grace-period=0 --force` on
+> the destination pod.**
+
+Force-deleting the destination pod produces a slow-failure
+path: the source CH's `vm.send-migration` call is synchronous
+in `swift-ch-client`, so when the destination disappears
+abruptly, the source side can take up to ~127 seconds (kernel
+TCP retransmit timeout) to unwind. The migration eventually
+transitions to Failed via `spec.timeout` (5 minute default),
+but operators may perceive it as stuck during the unwind
+window. The source pod's swiftletd logs show
+`send_migration: connection reset` only after the kernel
+gives up retransmitting.
+
+`spec.cancelRequested: true` triggers a clean cancel through
+the controller's cancel handler:
+
+1. Controller writes the cancel action annotation on the
+   destination pod with the cancel ID.
+2. swiftletd-on-dst's D1 cancel handler verifies the
+   destination CH PID, SIGKILLs the destination CH process.
+3. Source CH's TCP send unwinds within sub-seconds (TCP RST
+   from the dst kernel).
+4. Source swiftletd writes `migration-status=failed` with
+   detail `cancelled` and the cancel action ID.
+5. Controller observes the terminal status and transitions
+   the SwiftMigration to Cancelled.
+
+End-to-end: cancellation completes within a few seconds in
+the typical case, vs ~127 seconds for the force-delete path.
+
+This W12 limitation will be resolved in Phase 3b when
+`swift-ch-client` is refactored to async I/O (cancellable
+network calls). Until then, `spec.cancelRequested` is the
+supported cancellation mechanism.
+
+To cancel:
+
+```sh
+kubectl patch smig my-guest-to-boba \
+  --type merge -p '{"spec":{"cancelRequested":true}}'
+```
+
+The patch can be issued at any pre-cutover sub-state. Once
+cutover step 1 has crossed (SwiftGuest's `status.podRef.name`
+points at the dst pod), cancel-after-the-point sets a
+`CancelIgnored` condition on the SwiftMigration but does not
+roll back — the migration drives forward to Completed because
+the cluster-of-truth pod reference is already destination.
+Operators will see `phase: Completed` with
+`conditions[type=CancelIgnored, status=True]`.
+
+---
+
+## Operator-visible behavior
+
+### Post-migration pod name change
+
+After a successful live migration, the SwiftGuest's canonical
+launcher pod is the **destination pod**, named
+`<guest-name>-mig-<short-uid>` (NOT `<guest-name>`). This is
+the cluster-of-truth signal at cutover step 1: when
+`SwiftGuest.status.podRef.name` flips to the dst pod name, the
+migration has crossed the cutover point.
+
+Operators using `swiftctl logs`, `swiftctl console`, or
+`swiftctl ssh` are unaffected — the CLI resolves the canonical
+pod via `status.podRef` (PR 2 work).
+
+Operators using kubectl directly should query by label rather
+than by pod name:
+
+```sh
+# AFTER migration this returns the dst pod, not the src pod:
+kubectl get pod -l swift.kubeswift.io/guest=my-guest -n workloads
+
+# This will return NotFound after migration:
+kubectl logs my-guest -n workloads   # ← old src pod name
+```
+
+### Migration-in-progress signal
+
+A non-terminal SwiftMigration carries the
+`kubeswift.io/migration-in-progress` annotation on its
+SwiftGuest. The annotation's value is the SwiftMigration's
+name. Use this to detect "this guest has an active migration":
+
+```sh
+kubectl get swiftguest my-guest -n workloads \
+  -o jsonpath='{.metadata.annotations.kubeswift\.io/migration-in-progress}'
+```
+
+The annotation is removed when the SwiftMigration reaches a
+terminal phase (Completed / Failed / Cancelled).
+
+### Phase + phaseDetail vocabulary
+
+`status.phase` values:
+
+- `Pending` — SwiftMigration created, controller hasn't picked
+  it up yet.
+- `Validating` — webhook + controller pre-flight checks
+  (target node Ready, src pod UID stamped, mode resolution).
+- `Preparing` — destination pod created and waited until
+  Ready.
+- `StopAndCopy` — memory transfer in progress. `phaseDetail`
+  refines further:
+    - `issuing receive on destination`
+    - `destination receiving`
+    - `issuing send on source`
+    - `transferring guest state`
+    - `src migration complete; preparing cutover`
+    - `cutover: updating canonical pod`
+    - `cutover: deleting source pod`
+    - `cutover: completing`
+- `Resuming` — destination guest health check after cutover.
+- `Completed` / `Failed` / `Cancelled` — terminal.
+
+These phaseDetail strings are stable per the §6.4 vocabulary
+discipline; operators may script against them.
+
+---
+
+## Failure modes
+
+When `phase: Failed`, `status.failureReason` distinguishes
+why:
+
+| failureReason | Cause | Operator action |
+|---|---|---|
+| `PodTerminated` | Destination pod K8s-terminated mid-flight (drain, node failure, OOM kill, manual delete). The src CH's send call eventually unwound; D2 watchdog on dst confirmed CH abnormal exit. | Investigate destination node health. Re-issue the SwiftMigration once the cause is resolved. |
+| `SourcePodReplaced` | Source pod's UID changed mid-flight — typically from `kubectl delete pod` on the source. SwiftGuest's `runPolicy: Running` recreated the pod with a new UID; the migration's source observation was lost. | The new source pod is a fresh boot. Either accept it and re-issue migration, or investigate why the source was deleted. |
+| `Timeout` | `spec.timeout` exceeded since `status.startedAt`. Default 5min. Common causes: very large guest with tight default; network blackhole between nodes; CH stuck in pre-copy convergence. | Inspect src/dst pod logs for swiftletd's last reported status. If the migration was making progress, raise `spec.timeout`. If stuck, debug the underlying network/CH issue. |
+| `Cancelled` | Destination side wrote `migration-status=failed` with detail `cancelled` (D1 cancel handler), OR an upstream cancel slipped through to the failure path. Phase routes through Failed because the cancel handler's primary cancel path uses the Cancelled phase; this is the defensive classification. | Usually informational — the operator initiated the cancel. |
+| `Other` | Anything else: W1 violation (CH state-vs-wire-protocol contradiction), CH internal error (`send_migration: <err>`), unrecognised swiftletd detail. `failureMessage` carries the raw detail. | Read `failureMessage`; consult swiftletd logs on src + dst. May indicate a bug worth a Phase 3a issue. |
+
+Common debug commands:
+
+```sh
+# Inspect the migration:
+kubectl describe smig my-guest-to-boba -n workloads
+
+# Inspect the pods:
+kubectl get pod -l swift.kubeswift.io/guest=my-guest -n workloads
+kubectl get pod -l kubeswift.io/migration=my-guest-to-boba -n workloads
+
+# Source/destination launcher logs:
+kubectl logs <src-pod> -c launcher -n workloads --tail=200
+kubectl logs <dst-pod> -c launcher -n workloads --tail=200
+
+# swiftletd action surface (annotations carry the live state):
+kubectl get pod <src-pod> -n workloads \
+  -o jsonpath='{.metadata.annotations}' | jq .
+```
+
+---
+
+## F2.4 architectural simplification
+
+> Phase 3a's controller observes both source and destination
+> pods exclusively via the apiserver/informer surface. There is
+> **no controller→swiftletd command channel.**
+
+The controller writes annotations on pods; swiftletd's action
+handlers respond to annotation changes; the controller observes
+the resulting status annotations via informer events.
+
+This architecture means:
+
+- Network connectivity issues between the controller-manager
+  pod and source/destination pods do not affect migration
+  orchestration. The controller doesn't talk to swiftletd
+  directly.
+- Migration coordination scales with apiserver capacity, not
+  with controller-to-pod network paths.
+- Phase 3b's mTLS work for the migration channel applies only
+  to the swiftletd↔swiftletd connection (the actual memory
+  transfer between source and destination CH), not to
+  controller observability.
+
+This is a deliberate design choice that simplifies Phase 3b's
+mTLS scope (one channel, not two) and improves resilience to
+network partitions between the control plane and the data
+plane. See design doc §5 (controller-runtime integration).
+
+---
+
+## Limitations and future work
+
+| Limitation | Future resolution |
+|---|---|
+| Plaintext migration channel (no mTLS) | Phase 3b — sidecar or first-party CH mTLS support |
+| W12 cancellation slow-failure path on `kubectl delete --force` | Phase 3b — `swift-ch-client` async refactor |
+| No CPU-feature pre-flight check; mismatched microarchs fail at receive | Phase 3b — admission-time CPU compatibility check (§4 spike F12) |
+| VFIO/SR-IOV cannot live-migrate | Upstream CH constraint; use `mode=offline` |
+| F2 split-brain hazard on RWX storage during pre-copy | Phase 3c — controller-side write-fence orchestration |
+| No progress visibility during pre-copy iterations | Phase 5 — swiftletd progress annotations + controller `status.phaseDetail` enrichment |
+| 5-iteration CH pre-copy hardcap; high-dirty-rate workloads exit at stop-and-copy boundary | Upstream CH (Phase 5+ issue tracking) |
+
+---
+
+## See also
+
+- `docs/design/live-migration.md` — overall live migration design
+- `docs/design/live-migration-phase-3a.md` — Phase 3a controller
+  design (state machine, cutover ordering, failure modes)
+- `docs/design/live-migration-phase-3a-spike.md` — Phase 3a spike
+  findings (cluster-validated empirical evidence)
+- `docs/design/live-migration-phase-2.md` — Phase 2 swiftletd
+  plumbing reference
+- `docs/design/storage-access-mode.md` — RWX+Block storage
+  selection
+- `docs/migration/troubleshooting.md` — general migration
+  debugging
+- `docs/migration/phase-2.md` — manual demo path (Phase 2;
+  superseded by Phase 3a's controller-driven path)

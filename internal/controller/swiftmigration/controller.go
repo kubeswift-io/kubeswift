@@ -448,15 +448,45 @@ func (r *SwiftMigrationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // podToMigrations maps a Pod event to SwiftMigrations referencing the
-// pod's SwiftGuest. Launcher pods are 1:1 with SwiftGuests (same name).
-// Returns at most one Request: the active SwiftMigration in the same
-// namespace whose guestRef.name matches the pod name AND whose phase
-// is non-terminal (Completed/Failed/Cancelled SwiftMigrations don't
-// need to react to pod events).
+// pod's SwiftGuest. Two cases per design §5.1:
+//
+//   - Launcher pod whose name == SwiftGuest name: Phase 1's src-pod
+//     observation path. Returns the active SwiftMigration whose
+//     guestRef.name matches the pod name.
+//   - Pod carrying the kubeswift.io/migration label: dst pod (set at
+//     creation in B2.2) AND src pod after the StopAndCopy entry label
+//     patch (architect F-3). Returns the SwiftMigration whose name
+//     matches the label value, regardless of pod name.
+//
+// The label-based path is what enables Phase 3a's informer-driven
+// observation of dst pod migration-status transitions without
+// SyncPeriod latency. Both paths short-circuit terminal-phase
+// SwiftMigrations.
 func (r *SwiftMigrationReconciler) podToMigrations(ctx context.Context, obj client.Object) []ctrlreconcile.Request {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
+	}
+	// Label-based path: covers dst pods (named <guest>-mig-<uid>,
+	// not matched by name-based lookup) and src pods after the
+	// StopAndCopy entry label patch. See LabelMigrationName.
+	if migName := pod.Labels[LabelMigrationName]; migName != "" {
+		var mig migrationv1alpha1.SwiftMigration
+		if err := r.Get(ctx, client.ObjectKey{Name: migName, Namespace: pod.Namespace}, &mig); err == nil {
+			switch mig.Status.Phase {
+			case migrationv1alpha1.SwiftMigrationPhaseCompleted,
+				migrationv1alpha1.SwiftMigrationPhaseFailed,
+				migrationv1alpha1.SwiftMigrationPhaseCancelled:
+				// Terminal — no enqueue.
+			default:
+				return []ctrlreconcile.Request{{
+					NamespacedName: client.ObjectKey{Name: mig.Name, Namespace: mig.Namespace},
+				}}
+			}
+		}
+		// Get failure or terminal phase: fall through to name-based
+		// lookup below in case the same event matches a different
+		// SwiftMigration via guestRef.
 	}
 	return r.findActiveMigrationsForGuest(ctx, pod.Namespace, pod.Name)
 }

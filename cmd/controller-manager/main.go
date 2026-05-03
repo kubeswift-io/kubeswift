@@ -4,11 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	cacheopts "sigs.k8s.io/controller-runtime/pkg/cache"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -83,6 +86,22 @@ func main() {
 		LeaderElection:          *leaderElect,
 		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: leaderElectionNS,
+		// Cache.SyncPeriod=30s: defense-in-depth for missed informer
+		// events on labeled launcher pods, NOT the primary observation
+		// mechanism (Phase 3a live migration design §5.5; architect F-3).
+		// Phase 3a's controller observes src/dst pod migration-status
+		// transitions exclusively via informer events; the labeled-pod
+		// watch (kubeswift.io/migration label, set on dst at creation
+		// and on src at StopAndCopy entry) drives all state advances
+		// in the typical case. The 30s resync catches the rare missed
+		// event (apiserver bookmark gap, controller restart mid-flight,
+		// etc.) within an acceptable bound while keeping apiserver list-
+		// load bounded. Default controller-runtime SyncPeriod is 10h —
+		// far too coarse for live migration's seconds-scale cadence.
+		// Phase 1 controllers tolerate 30s without behavior change
+		// (their Reconcile is idempotent and their primary trigger is
+		// also informer-driven).
+		Cache: cacheopts.Options{SyncPeriod: ptr.To(30 * time.Second)},
 	}
 	if *webhookEnabled {
 		mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{
