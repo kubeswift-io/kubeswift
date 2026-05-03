@@ -591,6 +591,59 @@ func TestStopAndCopyLive_SrcPodGone_FailsWithSourcePodReplaced(t *testing.T) {
 	}
 }
 
+// W15 regression: when SwiftGuest.status.podRef.name has been patched
+// to the dst pod (post-cutoverStep1), the controller must NOT use
+// canonicalPodName to resolve src — that would fetch the dst pod and
+// false-positive the UID check.
+//
+// Cluster walkthrough surfaced this against PR 1 + W13/W14 hotfix
+// image (sha-ce68fa9): cutoverStep1 issues two separate apiserver
+// writes (SwiftGuest podRef + SwiftMigration status); the SwiftGuest
+// patch fires the SwiftGuest informer watch, triggering a race-
+// reconcile that reads stale phaseDetail (LiveSrcCompleted = pre-
+// cutover) and a fresh guest with podRef = dst. canonicalPodName
+// resolves to dst, the Get fetches the dst pod, and the UID check
+// false-fires SourcePodReplaced.
+//
+// Fix: src-pod fetch uses guest.Name (the original src pod name)
+// regardless of canonicalPodName state. The UID check is specifically
+// about the original src pod, not the canonical launcher pod.
+func TestStopAndCopyLive_PostCutoverStep1_RaceReconcile_DoesNotFalseFireUIDCheck_W15(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-A")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	// Race state: cutoverStep1 has patched SwiftGuest podRef but the
+	// SwiftMigration status patch hasn't persisted yet. Phase still
+	// StopAndCopy, phaseDetail still LiveSrcCompleted (pre-cutover
+	// vocabulary; shouldCheckSourcePodUID returns true).
+	mig.Status.PhaseDetail = migrationv1alpha1.PhaseDetailLiveSrcCompleted
+	guest.Status.PodRef = &corev1.ObjectReference{
+		Name:      "guest-mig-abcdef", // matches dst pod name
+		Namespace: guest.Namespace,
+	}
+	// src pod still exists with original UID (cutoverStep2 hasn't run);
+	// dst pod has different UID. canonicalPodName would resolve to
+	// dst-name and fetch dst (UID mismatch → false-fire). guest.Name
+	// resolves to src-name and fetches src (UID match → no fire).
+	src.UID = "uid-A"
+	dst.UID = "uid-DST" // distinct from src
+	stamp(src, migrationActionVerbSend, sendActionID(mig),
+		migrationStatusComplete, sendActionID(mig), "ok")
+
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason == migrationv1alpha1.FailureReasonSourcePodReplaced {
+		t.Errorf("UID check false-fired SourcePodReplaced; W15 regression. msg=%q",
+			res.FailureMsg)
+	}
+	// Healthy outcome: cutover-in-progress short-circuit fires;
+	// executeCutover dispatches step 2 (delete src) since podRef-done
+	// + cutoverStep1At unset means cutoverStep1Timestamp recovery path,
+	// or step 2 if CutoverStep1At was set via fixture. Either way,
+	// no SourcePodReplaced.
+}
+
 func TestStopAndCopyLive_DefensiveGuard_NotLiveMode(t *testing.T) {
 	r := &SwiftMigrationReconciler{}
 	mig := &migrationv1alpha1.SwiftMigration{
