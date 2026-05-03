@@ -100,38 +100,79 @@ resolved mode is recorded in `status.mode`.
 > **DO NOT use `kubectl delete pod --grace-period=0 --force` on
 > the destination pod.**
 
-Force-deleting the destination pod produces a slow-failure
-path: the source CH's `vm.send-migration` call is synchronous
-in `swift-ch-client`, so when the destination disappears
-abruptly, the source side can take up to ~127 seconds (kernel
-TCP retransmit timeout) to unwind. The migration eventually
-transitions to Failed via `spec.timeout` (5 minute default),
-but operators may perceive it as stuck during the unwind
-window. The source pod's swiftletd logs show
-`send_migration: connection reset` only after the kernel
-gives up retransmitting.
+Force-deleting the destination pod produces a fast-failure
+path on the controller side, but the source-side TCP unwind
+remains slow internally. **Empirical timing from PR #46
+walkthrough Scenario 5** (force-delete dst on
+`kubectl delete pod <dst> --grace-period=0 --force`):
 
-`spec.cancelRequested: true` triggers a clean cancel through
-the controller's cancel handler:
+- **T+0s**: SwiftMigration transitions to Failed with
+  `failureReason=PodTerminated` and message `"destination pod
+  <name> disappeared during StopAndCopy"`. The controller's
+  outer dst-pod-NotFound check fires immediately on the
+  apiserver's pod-deletion event.
+
+- **Up to ~127s** (background, no operator-visible signal):
+  source CH's `vm.send-migration` call is synchronous in
+  `swift-ch-client` and TCP-retransmits to a peer that no
+  longer exists. The src pod's `migration-status: running`
+  annotation lingers throughout this window (cosmetic; the
+  SwiftMigration is already terminally Failed). Once the
+  kernel gives up retransmitting (~127s default), the src
+  swiftletd writes `migration-status: failed` with detail
+  `send_migration: connection reset`. The SwiftMigration is
+  unaffected by this late status write.
+
+The behavior is **better than this doc previously described**
+(the prior narrative claimed ~127s slow-failure of the
+SwiftMigration phase itself; cluster reality is fast
+PodTerminated at T+0s). The src-side TCP unwind is internal
+state that doesn't surface as user-visible delay.
+
+`spec.cancelRequested: true` triggers a controller-side cancel
+flow:
 
 1. Controller writes the cancel action annotation on the
    destination pod with the cancel ID.
 2. swiftletd-on-dst's D1 cancel handler verifies the
    destination CH PID, SIGKILLs the destination CH process.
-3. Source CH's TCP send unwinds within sub-seconds (TCP RST
-   from the dst kernel).
+3. Source CH's TCP send unwinds (TCP RST from the dst kernel).
 4. Source swiftletd writes `migration-status=failed` with
    detail `cancelled` and the cancel action ID.
 5. Controller observes the terminal status and transitions
    the SwiftMigration to Cancelled.
 
-End-to-end: cancellation completes within a few seconds in
-the typical case, vs ~127 seconds for the force-delete path.
+**Empirical timing from PR #46 walkthrough Scenario 7**
+(`spec.cancelRequested=true` mid-StopAndCopy/transferring):
+**~27 seconds end-to-end**. This is faster than the force-
+delete path (T+0 controller-side, ~127s src-internal unwind)
+because the controller's 30s cancel-ack budget triggers a
+fallback (force-delete dst pod) when swiftletd's D1 ack
+doesn't arrive in time. D1 itself is blocked while
+`dispatch_migration_receive` holds the action loop's current-
+thread runtime — Phase 2 spike F2.4 finding. The fallback
+delivers a clean Cancelled phase with `failureReason=Cancelled`
+and message `"destination pod force-deleted; swiftletd cancel
+ack timed out (30s budget)"`.
 
-This W12 limitation will be resolved in Phase 3b when
-`swift-ch-client` is refactored to async I/O (cancellable
-network calls). Until then, `spec.cancelRequested` is the
-supported cancellation mechanism.
+**Why prefer `spec.cancelRequested` despite the 30s fallback?**
+
+- It surfaces a clean `Cancelled` phase (not Failed), with
+  `failureReason=Cancelled` for operator-readable audit trail.
+- It's the supported, documented mechanism — operators
+  shouldn't reach for `kubectl delete --force` as a debugging
+  tool.
+- The post-cutover behavior is correct: cancel-after-cutover
+  sets a `CancelIgnored` condition and lets the migration
+  complete normally (operators don't risk destroying an
+  already-migrated guest).
+
+The W12 (action-loop blocking) and W20 (fallback fires
+because D1 doesn't dispatch in time) limitations both resolve
+in Phase 3b when `swift-ch-client` is refactored to async I/O
+(cancellable network calls). At that point, D1 will fire
+within sub-seconds and `spec.cancelRequested` cancellation
+will land in "few seconds" range.
 
 To cancel:
 
