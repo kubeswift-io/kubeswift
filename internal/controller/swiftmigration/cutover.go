@@ -241,17 +241,38 @@ func (r *SwiftMigrationReconciler) cutoverStep1(
 	return r.cutoverStep1Timestamp(ctx, status)
 }
 
-// cutoverStep1Timestamp stamps status.CutoverStep1At = now(). Called
-// from cutoverStep1 (after SwiftGuest patch succeeded) and from the
-// dispatcher when deriveCutoverStep returns cutoverStep1TimestampOnly
-// (recovery from leader-handover-between-the-two-patches).
+// cutoverStep1Timestamp stamps status.CutoverStep1At = now() AND
+// writes the PodRefSwapped=True condition. Called from cutoverStep1
+// (after SwiftGuest patch succeeded) and from the dispatcher when
+// deriveCutoverStep returns cutoverStep1TimestampOnly (recovery from
+// leader-handover-between-the-two-patches).
 //
 // The status update happens via the in-memory `status` pointer the
 // dispatchResult will persist. We don't issue a separate Patch here
 // because dispatchResult's persist() handles the SwiftMigration
 // status diff at the end of every reconcile invocation. This means
-// a transient-fail-on-persist will leave the timestamp unset and
-// the next reconcile re-runs cutoverStep1TimestampOnly cleanly.
+// a transient-fail-on-persist will leave the timestamp + condition
+// unset and the next reconcile re-runs cutoverStep1TimestampOnly
+// cleanly (idempotent: `if CutoverStep1At == nil` short-circuits the
+// timestamp write; setCondition's same-value short-circuit handles
+// the condition).
+//
+// W21 (PR #46 cluster walkthrough): the PodRefSwapped condition is
+// the safety gate against data-loss in cancel-post-cutover (cancel
+// during the narrow Resuming window where the dst pod IS the live
+// migrated guest; without the gate, transitionCancelLive would
+// destroy the just-migrated guest). The architect's Q3.3(c)
+// decision was that PodRefSwapped is DERIVED from cluster state
+// (guest.Status.PodRef.Name == dstName) on every cutover-substate
+// reconcile — derivation remains primary for state-machine logic
+// (the cutover-in-progress short-circuit in stopandcopy_live reads
+// directly from guest.status.podRef). The explicit write here is
+// ADDITIONAL DEFENSE so that downstream call-sites that read the
+// SwiftMigration's Conditions list (isPostCutover, honorCancel,
+// shouldCheckSourcePodUID) get a consistent signal even when the
+// SwiftGuest informer cache lags by a reconcile. **Do not remove
+// the derivation; do not remove this explicit write — both are
+// load-bearing.**
 func (r *SwiftMigrationReconciler) cutoverStep1Timestamp(
 	ctx context.Context,
 	status *migrationv1alpha1.SwiftMigrationStatus,
@@ -260,6 +281,11 @@ func (r *SwiftMigrationReconciler) cutoverStep1Timestamp(
 		now := metav1.Now()
 		status.CutoverStep1At = &now
 	}
+	setCondition(status,
+		migrationv1alpha1.SwiftMigrationConditionPodRefSwapped,
+		metav1.ConditionTrue,
+		migrationv1alpha1.ReasonCutoverStep1Complete,
+		"cutover step 1 complete: SwiftGuest.status.podRef.name patched to destination pod")
 	setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverDeleteSrc)
 	// Requeue so the next reconcile observes step 1 done and
 	// proceeds to step 2. Short interval — no external state to
