@@ -236,6 +236,24 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 
 	switch sub {
 	case substatePreRecv:
+		// Patch src pod with migration-name label per architect F-3:
+		// makes src observable via the same labeled-pod watch the
+		// manager registers for dst. Idempotent — skips patch if the
+		// label is already present (leader-handover safe). Without
+		// this, controller observability of src migration-status
+		// transitions falls back to the 30s SyncPeriod (defense-in-
+		// depth), adding up to 30s latency to state advances.
+		if srcPodPresent && srcPod.Labels[LabelMigrationName] != mig.Name {
+			labelPatch := client.MergeFrom(srcPod.DeepCopy())
+			if srcPod.Labels == nil {
+				srcPod.Labels = map[string]string{}
+			}
+			srcPod.Labels[LabelMigrationName] = mig.Name
+			if err := r.Patch(ctx, &srcPod, labelPatch); err != nil {
+				return phaseTransient(fmt.Errorf("label src pod for informer observability: %w", err))
+			}
+		}
+
 		// Write the receive-action on the dst pod. Increment
 		// RecvAttempts to 1 (in-memory; persisted by dispatchResult).
 		// Per F1.8 the counter starts at 0 and is incremented to 1
