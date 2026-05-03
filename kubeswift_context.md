@@ -679,6 +679,45 @@ deployed cluster (miles + boba, kernel-boot 4Gi guest, CH v51.1).
    failure ≈ Q3-v3 blackhole; same coping path via `spec.timeout`
    (F4.5).
 
+### Phase 3a PR 1 implementation status (Group B + Group C complete)
+
+PR 1 (`feat/phase-3a-controller-core`) ships the SwiftMigration
+controller core for `mode=live`. Implemented across 11 commits in
+two groups:
+
+**Group B — controller core (10 commits, B0 → B3.3):**
+B0 (`a0e1526`) selectiveFailingClient + reconcile-recovery test
+infra; B0.5 (`2d6f2dd`) shouldCheckSourcePodUID + isPostCutover
+helpers; B1 (`0790711`) webhook MinLiveTimeout 60s; B2.1
+(`9090b60`) Validating-live + auto-mode resolution; B2.2
+(`337d900`) Preparing-live + dst pod construction; B2.3
+(`7fb7cb7`) Resuming-live + ResumingStartedAt; B2.4 (`b110b29`)
+cancel handler for spec.cancelRequested=true; B3.1 (`350a79e`)
+StopAndCopy-live 6-substate state machine; B3.2 (`420b075`)
+3-step cutover with retry-in-place; B3.3 (`16bf529`) failure-
+detail classifier + reconcile-recovery tests covering §4.7.
+
+**Group C — controller-runtime integration + operator docs:**
+src-pod label patch at StopAndCopy entry (architect F-3) makes
+src observable via the same labeled-pod watch as dst;
+podToMigrations enhanced with label-based path
+(`kubeswift.io/migration` label) covering both src and dst pods;
+30s SyncPeriod registered as defense-in-depth (NOT primary
+observation per §5.5); operator-facing reference at
+`docs/migration/phase-3a.md` with W12 cancellation guidance,
+post-migration pod name change behavior, and F2.4 architectural
+simplification.
+
+RBAC: B0.5 audit closure verified; no drift between
+config/manager and charts/kubeswift Helm chart at semantic
+verb-set level.
+
+**Pending before PR 1 opens:** cluster integration testing
+across the 10 scenarios from the original PR 1 prompt
+(end-to-end on miles + boba; W12 cancellation path validation;
+forced-failure mode coverage). Cluster integration is a separate
+session.
+
 ### Phase 3a must-have-before-ship checklist
 
 - [ ] **B0 — br0/Calico CIDR collision fix** ([PR #39](https://github.com/projectbeskar/kubeswift/pull/39),

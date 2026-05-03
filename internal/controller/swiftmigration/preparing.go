@@ -69,16 +69,22 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
-) (advanced bool, requeue time.Duration, errMsg string, err error) {
+) *phaseResult {
+	// Phase 3a per-mode dispatch. By Preparing, status.Mode has been
+	// stamped by Validating; isLiveMode reads from status.
+	if isLiveMode(mig) {
+		return r.handlePreparingLive(ctx, mig, status)
+	}
+
 	// Re-resolve source guest. The Validating phase already touched
 	// it; we re-read because runPolicy/annotation may have been
 	// modified between phase transitions.
 	var guest swiftv1alpha1.SwiftGuest
 	if getErr := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return false, 0, fmt.Sprintf("source SwiftGuest %q deleted during Preparing", mig.Spec.GuestRef.Name), nil
+			return phaseFailure(fmt.Sprintf("source SwiftGuest %q deleted during Preparing", mig.Spec.GuestRef.Name), "")
 		}
-		return false, 0, "", fmt.Errorf("get source guest: %w", getErr)
+		return phaseTransient(fmt.Errorf("get source guest: %w", getErr))
 	}
 
 	// Idempotency check: AnnotationMigrationInProgress is the source
@@ -88,7 +94,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	//   - present + matches different name → conflict, fail
 	current := guest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress]
 	if current != "" && current != mig.Name {
-		return false, 0, fmt.Sprintf("another SwiftMigration %q is already in progress for SwiftGuest %q", current, guest.Name), nil
+		return phaseFailure(fmt.Sprintf("another SwiftMigration %q is already in progress for SwiftGuest %q", current, guest.Name), "")
 	}
 
 	if current == "" {
@@ -103,7 +109,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		guest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress] = mig.Name
 		guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
 		if patchErr := r.Patch(ctx, &guest, patch); patchErr != nil {
-			return false, 0, "", fmt.Errorf("claim SwiftGuest with annotation + runPolicy=Stopped: %w", patchErr)
+			return phaseTransient(fmt.Errorf("claim SwiftGuest with annotation + runPolicy=Stopped: %w", patchErr))
 		}
 		setPhaseDetail(status, "claimed SwiftGuest; deleting source launcher pod")
 		if r.Recorder != nil {
@@ -127,7 +133,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	getErr := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &pod)
 	podGone := apierrors.IsNotFound(getErr)
 	if getErr != nil && !podGone {
-		return false, 0, "", fmt.Errorf("get source pod: %w", getErr)
+		return phaseTransient(fmt.Errorf("get source pod: %w", getErr))
 	}
 	if !podGone {
 		// Pod still exists — issue Delete (idempotent on re-entry).
@@ -137,7 +143,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		if pod.DeletionTimestamp == nil {
 			grace := int64(PodTerminationGracePeriod)
 			if delErr := r.Delete(ctx, &pod, &client.DeleteOptions{GracePeriodSeconds: &grace}); delErr != nil && !apierrors.IsNotFound(delErr) {
-				return false, 0, "", fmt.Errorf("delete source pod: %w", delErr)
+				return phaseTransient(fmt.Errorf("delete source pod: %w", delErr))
 			}
 			if r.Recorder != nil {
 				r.Recorder.Event(mig, corev1.EventTypeNormal, "PodTerminating",
@@ -146,7 +152,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		}
 		setPhaseDetail(status, "waiting for source pod termination")
 		setReadyCondition(status, metav1.ConditionFalse, ReasonPreparing, "waiting for source pod termination")
-		return false, preparingPollInterval, "", nil
+		return phaseRequeue(preparingPollInterval)
 	}
 
 	// Pod is gone. Now wait for the per-guest root PVC's
@@ -155,7 +161,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	pvcName := swiftguest.RootDiskCloneName(guest.Name)
 	attached, err := r.isPVCStillAttached(ctx, guest.Namespace, pvcName)
 	if err != nil {
-		return false, 0, "", err
+		return phaseTransient(err)
 	}
 	if attached {
 		setPhaseDetail(status, fmt.Sprintf("waiting for volume detach (PVC %q)", pvcName))
@@ -169,7 +175,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 			r.Recorder.Event(mig, corev1.EventTypeNormal, "PVCDetaching",
 				fmt.Sprintf("waiting for VolumeAttachment GC of PVC %q", pvcName))
 		}
-		return false, preparingPollInterval, "", nil
+		return phaseRequeue(preparingPollInterval)
 	}
 
 	// Pod gone + no VolumeAttachment → safe to advance. The Cluster
@@ -182,7 +188,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		r.Recorder.Event(mig, corev1.EventTypeNormal, "VolumeDetached",
 			fmt.Sprintf("PVC %q detached; advancing to StopAndCopy", pvcName))
 	}
-	return true, 0, "", nil
+	return phaseAdvance()
 }
 
 // isPVCStillAttached returns true when a VolumeAttachment exists that

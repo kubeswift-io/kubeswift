@@ -83,6 +83,79 @@ type SwiftMigrationReconciler struct {
 	Recorder record.EventRecorder
 }
 
+// phaseResult is the return type of every per-phase handler. It
+// replaces the earlier (advanced, requeue, errMsg, err) quadruple to
+// give a named place for the Phase 3a `failureReason` enum. The
+// failureMsg/failureReason pair maps to a Failed terminal phase via
+// dispatchResult; advanced/requeue/err preserve Phase 1's semantics.
+//
+// Construction conventions (see helpers below):
+//   - phaseAdvance()        — phase advanced, immediate requeue
+//   - phaseRequeue(d)       — still in current phase, requeue after d
+//   - phaseFailure(msg, r)  — user-actionable failure → Failed phase
+//     with status.failureReason = r (live mode);
+//     leave r empty for offline-mode failures.
+//   - phaseTransient(err)   — transient/retry-worthy error
+//
+// Phase 1 offline-mode handlers leave FailureReason empty when calling
+// phaseFailure — the Phase 1 status schema doesn't carry the enum, and
+// the FailureMsg alone is sufficient for offline's simpler failure
+// taxonomy. Phase 3a live-mode handlers always pair msg + reason.
+type phaseResult struct {
+	// Advanced indicates the phase transition completed; dispatchResult
+	// requeues immediately so the next handler runs without poll
+	// latency.
+	Advanced bool
+	// Requeue is the interval to requeue after when still in the
+	// current phase (Advanced=false). Zero means no requeue (caller
+	// will fall through to controller-runtime's default cadence).
+	Requeue time.Duration
+	// Err is a transient/retry-worthy error returned from the handler.
+	// dispatchResult propagates it to controller-runtime so the resource
+	// is requeued with backoff. Distinct from FailureMsg, which
+	// represents a user-actionable migration failure.
+	Err error
+	// FailureMsg is set when the handler observed a user-actionable
+	// failure (e.g., source guest missing, target node not Ready).
+	// dispatchResult maps this to the Failed terminal phase with
+	// status.failureMessage = FailureMsg.
+	FailureMsg string
+	// FailureReason is the §6 enum value paired with FailureMsg in
+	// live mode (one of: Cancelled, PodTerminated, SourcePodReplaced,
+	// Timeout, Other). Empty for offline-mode failures and for
+	// non-failure paths. See api/migration/v1alpha1's
+	// FailureReason* constants.
+	FailureReason string
+}
+
+// phaseAdvance returns a phaseResult that signals "phase advanced;
+// requeue immediately to start the next handler."
+func phaseAdvance() *phaseResult {
+	return &phaseResult{Advanced: true}
+}
+
+// phaseRequeue returns a phaseResult that signals "still in current
+// phase; requeue after d." Most poll loops use this with a fixed
+// per-phase cadence (validating: 0, preparing: 5s, etc).
+func phaseRequeue(d time.Duration) *phaseResult {
+	return &phaseResult{Requeue: d}
+}
+
+// phaseFailure returns a phaseResult that maps to the Failed terminal
+// phase. The msg is human-readable; reason is the §6 enum (use one of
+// the FailureReason* constants in api/migration/v1alpha1; pass "" for
+// offline-mode where the enum is not populated).
+func phaseFailure(msg, reason string) *phaseResult {
+	return &phaseResult{FailureMsg: msg, FailureReason: reason}
+}
+
+// phaseTransient returns a phaseResult carrying a transient error.
+// dispatchResult propagates the error to controller-runtime which
+// requeues with exponential backoff.
+func phaseTransient(err error) *phaseResult {
+	return &phaseResult{Err: err}
+}
+
 // Reconcile drives the SwiftMigration state machine. The shape mirrors
 // the swiftsnapshot/swiftrestore controllers: load the resource,
 // short-circuit on terminal phases, dispatch to per-phase handler,
@@ -133,6 +206,20 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Phase 3a §5.3 cancel handling. Fires BEFORE phase dispatch
+	// so that a spec.cancelRequested flag gets honored before the
+	// per-phase handler runs its checks. Two paths:
+	//   - Pre-cutover live cancel: drives to Cancelled (handler
+	//     writes cancel annotation on dst pod, waits for D1 ack
+	//     within 30s budget, deletes dst pod, finalizes).
+	//   - Post-cutover live cancel: sets CancelIgnored condition
+	//     with reason=PastCutover; returns false-handled so phase
+	//     dispatch continues to Completed normally.
+	// Offline mode is silently ignored (out of Phase 3a scope).
+	if handled, res, err := r.honorCancel(ctx, &mig); handled || err != nil {
+		return res, err
+	}
+
 	// First reconcile: stamp StartedAt and transition Pending →
 	// Validating. The controller advances phase exactly once per
 	// transition; subsequent reconciles in the same phase poll for
@@ -156,20 +243,16 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{Requeue: true}, r.persist(ctx, &mig, status)
 
 	case migrationv1alpha1.SwiftMigrationPhaseValidating:
-		advanced, requeue, errMsg, err := r.handleValidating(ctx, &mig, status)
-		return r.dispatchResult(ctx, &mig, status, advanced, requeue, errMsg, err)
+		return r.dispatchResult(ctx, &mig, status, r.handleValidating(ctx, &mig, status))
 
 	case migrationv1alpha1.SwiftMigrationPhasePreparing:
-		advanced, requeue, errMsg, err := r.handlePreparing(ctx, &mig, status)
-		return r.dispatchResult(ctx, &mig, status, advanced, requeue, errMsg, err)
+		return r.dispatchResult(ctx, &mig, status, r.handlePreparing(ctx, &mig, status))
 
 	case migrationv1alpha1.SwiftMigrationPhaseStopAndCopy:
-		advanced, requeue, errMsg, err := r.handleStopAndCopy(ctx, &mig, status)
-		return r.dispatchResult(ctx, &mig, status, advanced, requeue, errMsg, err)
+		return r.dispatchResult(ctx, &mig, status, r.handleStopAndCopy(ctx, &mig, status))
 
 	case migrationv1alpha1.SwiftMigrationPhaseResuming:
-		advanced, requeue, errMsg, err := r.handleResuming(ctx, &mig, status)
-		return r.dispatchResult(ctx, &mig, status, advanced, requeue, errMsg, err)
+		return r.dispatchResult(ctx, &mig, status, r.handleResuming(ctx, &mig, status))
 
 	default:
 		// Unknown phase (e.g., a resource written by a Phase 3+
@@ -181,27 +264,33 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 // dispatchResult is the post-handler decision tree shared by all
-// non-terminal phases. errMsg != "" → terminal Failed (the rule from
-// the swiftrestore precedent: handlers report user-actionable failures
-// via errMsg, while err is reserved for transient/retry-worthy
-// problems). advanced=true means status now reflects the next phase
-// and we should requeue immediately.
+// non-terminal phases. The phaseResult struct's fields are interpreted
+// in priority order: Err (transient retry) → FailureMsg (terminal
+// Failed with FailureReason) → Advanced (immediate requeue) → Requeue
+// (still in current phase, requeue after).
+//
+// FailureMsg vs Err discipline (from the swiftrestore precedent):
+// handlers report user-actionable failures via FailureMsg, paired with
+// the §6 enum FailureReason for live mode; transient/retry-worthy
+// problems use Err so controller-runtime applies exponential backoff.
 func (r *SwiftMigrationReconciler) dispatchResult(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
-	advanced bool,
-	requeue time.Duration,
-	errMsg string,
-	err error,
+	result *phaseResult,
 ) (ctrl.Result, error) {
-	if err != nil {
-		return ctrl.Result{}, err
+	if result.Err != nil {
+		return ctrl.Result{}, result.Err
 	}
-	if errMsg != "" {
+	if result.FailureMsg != "" {
 		setPhase(status, migrationv1alpha1.SwiftMigrationPhaseFailed)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonMigrationFailed, errMsg)
-		status.FailureMessage = errMsg
+		setReadyCondition(status, metav1.ConditionFalse, ReasonMigrationFailed, result.FailureMsg)
+		status.FailureMessage = result.FailureMsg
+		// Live-mode failure-reason taxonomy (§6); empty for offline-mode
+		// failures, which keep the simpler Phase 1 behavior.
+		if result.FailureReason != "" {
+			status.FailureReason = result.FailureReason
+		}
 		now := metav1.Now()
 		status.CompletedAt = &now
 		// Cleanup must run BEFORE persist so a re-reconcile observing
@@ -212,7 +301,7 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 		}
 		return ctrl.Result{}, r.persist(ctx, mig, status)
 	}
-	if advanced {
+	if result.Advanced {
 		// Phase advanced; persist and requeue immediately to start the
 		// next handler.
 		return ctrl.Result{Requeue: true}, r.persist(ctx, mig, status)
@@ -220,7 +309,7 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 	// Still in current phase; persist any progress (phaseDetail,
 	// observed conditions) and requeue after the handler-specified
 	// interval.
-	return ctrl.Result{RequeueAfter: requeue}, r.persist(ctx, mig, status)
+	return ctrl.Result{RequeueAfter: result.Requeue}, r.persist(ctx, mig, status)
 }
 
 // handleCancellation is implemented in failure.go.
@@ -359,15 +448,45 @@ func (r *SwiftMigrationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // podToMigrations maps a Pod event to SwiftMigrations referencing the
-// pod's SwiftGuest. Launcher pods are 1:1 with SwiftGuests (same name).
-// Returns at most one Request: the active SwiftMigration in the same
-// namespace whose guestRef.name matches the pod name AND whose phase
-// is non-terminal (Completed/Failed/Cancelled SwiftMigrations don't
-// need to react to pod events).
+// pod's SwiftGuest. Two cases per design §5.1:
+//
+//   - Launcher pod whose name == SwiftGuest name: Phase 1's src-pod
+//     observation path. Returns the active SwiftMigration whose
+//     guestRef.name matches the pod name.
+//   - Pod carrying the kubeswift.io/migration label: dst pod (set at
+//     creation in B2.2) AND src pod after the StopAndCopy entry label
+//     patch (architect F-3). Returns the SwiftMigration whose name
+//     matches the label value, regardless of pod name.
+//
+// The label-based path is what enables Phase 3a's informer-driven
+// observation of dst pod migration-status transitions without
+// SyncPeriod latency. Both paths short-circuit terminal-phase
+// SwiftMigrations.
 func (r *SwiftMigrationReconciler) podToMigrations(ctx context.Context, obj client.Object) []ctrlreconcile.Request {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
+	}
+	// Label-based path: covers dst pods (named <guest>-mig-<uid>,
+	// not matched by name-based lookup) and src pods after the
+	// StopAndCopy entry label patch. See LabelMigrationName.
+	if migName := pod.Labels[LabelMigrationName]; migName != "" {
+		var mig migrationv1alpha1.SwiftMigration
+		if err := r.Get(ctx, client.ObjectKey{Name: migName, Namespace: pod.Namespace}, &mig); err == nil {
+			switch mig.Status.Phase {
+			case migrationv1alpha1.SwiftMigrationPhaseCompleted,
+				migrationv1alpha1.SwiftMigrationPhaseFailed,
+				migrationv1alpha1.SwiftMigrationPhaseCancelled:
+				// Terminal — no enqueue.
+			default:
+				return []ctrlreconcile.Request{{
+					NamespacedName: client.ObjectKey{Name: mig.Name, Namespace: mig.Namespace},
+				}}
+			}
+		}
+		// Get failure or terminal phase: fall through to name-based
+		// lookup below in case the same event matches a different
+		// SwiftMigration via guestRef.
 	}
 	return r.findActiveMigrationsForGuest(ctx, pod.Namespace, pod.Name)
 }

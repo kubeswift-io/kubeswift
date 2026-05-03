@@ -55,6 +55,17 @@ const (
 	// (cold-cache CoW); 24h is an absurdly generous ceiling that still
 	// rejects "999h" footguns.
 	MaxTimeout = 24 * time.Hour
+	// MinLiveTimeout is the lower bound on spec.timeout for mode=live.
+	// Phase 3a's cutover ordering invariant (3-step forward-only-retry-
+	// in-place sequence) requires headroom for transient-failure
+	// retries: controller-runtime's exponential backoff on cutover
+	// step retries plus the kernel TCP retransmit window (~127s on
+	// network blackhole per Q3-v3 spike) means timeouts under ~60s
+	// risk producing FailureReasonTimeout on transient issues that
+	// would otherwise self-resolve. Architect-discipline review Q3.2
+	// mitigation. Offline mode is unaffected (Phase 1 offline finishes
+	// in tens of seconds and has no comparable retry semantics).
+	MinLiveTimeout = 60 * time.Second
 	// MaxParallelConnections caps the (Phase 1-ignored) live-mode
 	// connection count. CH upstream supports up to 128; 16 covers
 	// realistic live-migration uses without leaving room for resource
@@ -201,18 +212,37 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 		return fmt.Errorf("spec.guestRef.name is required")
 	}
 
-	// Mode: live is rejected — Phase 1 ships offline only. The constant
-	// PhaseLiveMigrationNotShipped (api/migration/v1alpha1) names the
-	// gate so Phase 3 reviewers can find it via grep.
+	// Mode: Phase 3a accepts live (PR #41 shipped swiftletd D1/D2/D3 +
+	// this PR's controller). The PhaseLiveMigrationNotShipped constant
+	// stays in api/migration/v1alpha1 for historical grep but no longer
+	// gates admission — auto/live/offline are all valid Phase 3a modes.
 	switch mig.Spec.Mode {
-	case "", migrationv1alpha1.SwiftMigrationModeAuto, migrationv1alpha1.SwiftMigrationModeOffline:
-		// OK. auto resolves to offline in Phase 1; the controller records
-		// the resolved mode in status.mode for operator visibility.
-	case migrationv1alpha1.SwiftMigrationModeLive:
-		return fmt.Errorf("spec.mode=live is not yet shipped (%s); live migration is reserved for Phase 3 — use mode: offline or mode: auto",
-			migrationv1alpha1.PhaseLiveMigrationNotShipped)
+	case "", migrationv1alpha1.SwiftMigrationModeAuto, migrationv1alpha1.SwiftMigrationModeOffline,
+		migrationv1alpha1.SwiftMigrationModeLive:
+		// OK. The controller's Validating phase resolves auto to live
+		// when capabilities permit (live-migration-capable storage AND
+		// non-default networking OR allowIPChange AND no GPU/SR-IOV);
+		// else auto resolves to offline. Live-mode-specific cluster-
+		// state checks (per-source-node concurrency, name length cap,
+		// kernel-boot-vs-PVC storage gate) live in validateClusterState.
 	default:
 		return fmt.Errorf("spec.mode=%q is not a recognised value (auto|live|offline)", mig.Spec.Mode)
+	}
+
+	// Phase 3a live-mode shape rule: guest name length cap.
+	// Per docs/design/live-migration-phase-3a.md §3.2, the destination
+	// pod is named `<guest>-mig-<short-uid>` (5 + 6 = 11 chars suffix);
+	// Kubernetes pod names are bounded at 253 chars (DNS-1123 subdomain
+	// rule). Cap guest name at 242 to leave headroom. Phase 1 offline
+	// mode reuses guest.Name as the post-migration pod name and is
+	// unaffected.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		const liveModeGuestNameMaxLen = 242
+		if len(mig.Spec.GuestRef.Name) > liveModeGuestNameMaxLen {
+			return fmt.Errorf(
+				"spec.guestRef.name length %d exceeds %d for mode=live; the destination pod name `<guest>-mig-<short-uid>` would exceed the 253-char Kubernetes pod name limit. Use a shorter SwiftGuest name or mode=offline (which reuses the guest name unchanged).",
+				len(mig.Spec.GuestRef.Name), liveModeGuestNameMaxLen)
+		}
 	}
 
 	// Target: exactly one of nodeName / nodeSelector.
@@ -246,6 +276,15 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 	// connections, and reason length/charset.
 	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > MaxTimeout {
 		return fmt.Errorf("spec.timeout=%s exceeds maximum %s", mig.Spec.Timeout.Duration, MaxTimeout)
+	}
+	// Live-mode minimum: see MinLiveTimeout doc. Only enforced for
+	// mode=live; mode=auto and mode=offline are unaffected. Phase 3a
+	// architect-discipline Q3.2 mitigation.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive &&
+		mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 &&
+		mig.Spec.Timeout.Duration < MinLiveTimeout {
+		return fmt.Errorf("spec.timeout=%s is below minimum %s for mode=live (cutover retries need headroom)",
+			mig.Spec.Timeout.Duration, MinLiveTimeout)
 	}
 	if mig.Spec.ParallelConnections > MaxParallelConnections {
 		return fmt.Errorf("spec.parallelConnections=%d exceeds maximum %d", mig.Spec.ParallelConnections, MaxParallelConnections)
@@ -388,23 +427,47 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 			guest.Name)
 	}
 
-	// Live-mode storage gate (W6 follow-up).
+	// Live-mode storage gate (W6 follow-up; Phase 3a kernel-boot
+	// adjustment).
 	//
-	// Phase 1 rejects mode=live at validateShape, so this branch is
-	// unreachable through the public API surface today. It is in place
-	// for forward-compatibility with Phase 3 — when validateShape starts
-	// accepting mode=live, this gate is what stops live migration of
-	// guests whose resolved storage spec cannot deliver live-migration
-	// semantics (RWX+Block per KubeVirt's model and Longhorn's
-	// Migratable RWX).
+	// Live migration of disk-boot guests requires RWX+Block storage
+	// (KubeVirt's model and Longhorn's Migratable RWX). Filesystem RWX
+	// is NOT live-migration-capable. Kernel-boot guests (kernelRef set,
+	// no root-disk PVC) have no shared storage to coordinate at all,
+	// so the storage gate doesn't apply — they're live-capable by
+	// virtue of having no PVC. Design doc §1 lists kernel-boot as a
+	// Phase 3a target workload class; the storage gate must NOT
+	// reject them.
 	//
 	// We RECOMPUTE the resolved storage spec here rather than reading
 	// SwiftGuest.status.storage. Status reads are stale during cluster
 	// restore (controller hasn't reconciled yet) and would create false
-	// rejections. Recompute eliminates the write-back race; the cost is
-	// one additional Get for the SwiftGuestClass.
+	// rejections.
 	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
 		if err := v.gateLiveModeStorage(ctx, &guest); err != nil {
+			return nil, err
+		}
+	}
+
+	// Phase 3a per-source-node concurrency rule (live mode).
+	// Per docs/design/live-migration-phase-3a.md §5.4: at most one
+	// in-flight live migration per source node. The controller observes
+	// both source and destination pods via the labeled-watch (§5.1);
+	// concurrent migrations from the same source node would race on
+	// the source pod's annotations and produce non-deterministic
+	// dispatch outcomes.
+	//
+	// We list SwiftMigrations cluster-wide and reject if any other
+	// non-terminal SwiftMigration has the same status.sourceNode AND
+	// mode=live. Reading status of OTHER resources is allowed under
+	// per-operation discipline (PR #26): the rule prohibits reading
+	// status of THIS resource being admitted; reading peers is fine.
+	//
+	// Phase 1 offline migrations are exempt — they don't conflict with
+	// live mode (different state surfaces) and the per-source-guest
+	// annotation conflict check in Preparing is the floor for offline.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive && sourceNode != "" {
+		if err := v.checkPerSourceNodeConcurrency(ctx, mig, sourceNode); err != nil {
 			return nil, err
 		}
 	}
@@ -429,20 +492,39 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 }
 
 // gateLiveModeStorage rejects live-mode migrations for guests whose
-// resolved storage spec is not live-migration-capable (RWX+Block).
-// W6 follow-up — see validateClusterState's invocation site for the
-// rationale.
+// resolved storage spec is not live-migration-capable.
+//
+// Two cases pass the gate:
+//
+//  1. Kernel-boot guests (kernelRef set, no root-disk PVC). With no
+//     shared storage to coordinate, there is no F2 split-brain
+//     concern and no cross-node storage handoff to perform — the
+//     guest's root filesystem is the initramfs which lives in CH's
+//     migrated memory. Phase 3a design doc §1 lists kernel-boot as
+//     a Phase 3a target workload class; the storage gate exists to
+//     reject INCAPABLE storage, not to require storage where none
+//     exists.
+//
+//  2. Disk-boot guests with RWX+Block storage (KubeVirt's model;
+//     Longhorn's Migratable RWX). Filesystem RWX is NOT
+//     live-migration-capable.
 //
 // Implementation: read the SwiftGuestClass referenced by the guest,
 // recompute the merged storage spec via resolved.MergeStorage, and
-// reject when the result is not RWX+Block. Recomputation (rather than
-// reading SwiftGuest.status.storage) avoids the controller-write-back
-// race during cluster restore.
-//
-// Phase 1 mode=live is rejected at validateShape, so this gate is
-// unreachable in production today; it is a Phase 3 forward-compat
-// landing site exercised by the unit tests.
+// reject only when the resolved storage is non-empty AND not
+// RWX+Block. Recomputation (rather than reading SwiftGuest.status.
+// storage) avoids the controller-write-back race during cluster
+// restore.
 func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
+	// Kernel-boot guests are live-capable by virtue of having no
+	// shared storage. The kernelRef field is the discriminator —
+	// SwiftGuest CRD admission rejects guests with both kernelRef
+	// AND imageRef, so the presence of kernelRef implies absence
+	// of disk-boot storage.
+	if guest.Spec.KernelRef != nil {
+		return nil
+	}
+
 	var class swiftv1alpha1.SwiftGuestClass
 	err := v.Client.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class)
 	if apierrors.IsNotFound(err) {
@@ -464,6 +546,51 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline. See docs/design/storage-access-mode.md.",
 		guest.Name, storage.AccessMode, storage.VolumeMode,
 	)
+}
+
+// checkPerSourceNodeConcurrency rejects a live-mode SwiftMigration
+// when another non-terminal live SwiftMigration is already in flight
+// from the same source node. Per docs/design/live-migration-phase-3a.md
+// §5.4.
+//
+// Reading peer SwiftMigrations' status is allowed under the
+// per-operation discipline (PR #26): the rule prohibits reading
+// status of the resource being admitted, not status of OTHER
+// resources observed at admission time.
+func (v *Validator) checkPerSourceNodeConcurrency(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+	sourceNode string,
+) error {
+	var migs migrationv1alpha1.SwiftMigrationList
+	if err := v.Client.List(ctx, &migs); err != nil {
+		return fmt.Errorf("list SwiftMigrations for per-source-node concurrency check: %w", err)
+	}
+	for i := range migs.Items {
+		other := &migs.Items[i]
+		// Skip the resource being admitted (CREATE has no UID match
+		// yet; compare by namespaced name).
+		if other.Namespace == mig.Namespace && other.Name == mig.Name {
+			continue
+		}
+		// Only live mode conflicts with live mode. Phase 1 offline
+		// migrations don't share state with live mode.
+		if other.Spec.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+			continue
+		}
+		// Skip terminal-phase peers.
+		if isTerminalPhase(other.Status.Phase) {
+			continue
+		}
+		// Per-source-node match: reject.
+		if other.Status.SourceNode == sourceNode {
+			return fmt.Errorf(
+				"another live SwiftMigration %q is in flight from source node %q (phase=%s); per-source-node concurrency limits to one in-flight live migration. Wait for the existing migration to complete or fail.",
+				client.ObjectKeyFromObject(other), sourceNode, other.Status.Phase,
+			)
+		}
+	}
+	return nil
 }
 
 // isDefaultNodeLocalNetworking returns true when the guest uses

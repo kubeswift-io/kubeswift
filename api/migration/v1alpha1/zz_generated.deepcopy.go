@@ -149,12 +149,29 @@ func (in *SwiftMigrationStatus) DeepCopyInto(out *SwiftMigrationStatus) {
 		in, out := &in.StartedAt, &out.StartedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.PreparingStartedAt != nil {
+		in, out := &in.PreparingStartedAt, &out.PreparingStartedAt
+		*out = (*in).DeepCopy()
+	}
+	if in.CutoverStep1At != nil {
+		in, out := &in.CutoverStep1At, &out.CutoverStep1At
+		*out = (*in).DeepCopy()
+	}
+	if in.ResumingStartedAt != nil {
+		in, out := &in.ResumingStartedAt, &out.ResumingStartedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.CompletedAt != nil {
 		in, out := &in.CompletedAt, &out.CompletedAt
 		*out = (*in).DeepCopy()
 	}
 	if in.ObservedDowntime != nil {
 		in, out := &in.ObservedDowntime, &out.ObservedDowntime
+		*out = new(v1.Duration)
+		**out = **in
+	}
+	if in.ObservedPauseWindow != nil {
+		in, out := &in.ObservedPauseWindow, &out.ObservedPauseWindow
 		*out = new(v1.Duration)
 		**out = **in
 	}
