@@ -249,6 +249,26 @@ spec:
                   - type
                   type: object
                 type: array
+              cutoverStep1At:
+                description: |-
+                  CutoverStep1At is when cutover step 1 (SwiftGuest.status.podRef.name
+                  patch) succeeded. Stamped by StopAndCopy-live's cutover handler
+                  alongside the SwiftGuest patch. Operator-visible audit data:
+                  `kubectl get swiftmigration -o wide` may surface this for
+                  drilling into "when did the canonical pod actually swap?"
+                  during incident triage.
+
+                  Phase 3a's PodRefSwapped condition is DERIVED from cluster
+                  state on every reconcile (per architect Q3.3(c)) — this
+                  timestamp is independent of that derivation and serves only
+                  audit purposes. Resuming-live (B2.3) may reference this for
+                  observedDowntime computation refinement; B2.3 currently uses
+                  status.ResumingStartedAt as the anchor (which is at-most one
+                  apiserver round-trip after CutoverStep1At).
+
+                  Phase 1 offline mode does not populate this field.
+                format: date-time
+                type: string
               destinationNode:
                 description: DestinationNode is the resolved target node (after webhook
                   validation).

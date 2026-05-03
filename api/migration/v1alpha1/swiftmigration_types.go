@@ -117,15 +117,16 @@ const (
 // scripts; dashboards may match against them; reconcile-loop recovery
 // reads them.
 const (
-	PhaseDetailLiveIssuingRecv      = "issuing receive on destination"
-	PhaseDetailLiveDestReceiving    = "destination receiving"
-	PhaseDetailLiveIssuingSend      = "issuing send on source"
-	PhaseDetailLiveTransferring     = "transferring guest state"
-	PhaseDetailLiveSrcCompleted     = "src migration complete; preparing cutover"
-	PhaseDetailLiveCutoverPodRef    = "cutover: updating canonical pod"
-	PhaseDetailLiveCutoverDeleteSrc = "cutover: deleting source pod"
-	PhaseDetailLiveAwaitingHealth   = "waiting for guest health on destination"
-	PhaseDetailLiveDestHealthy      = "destination guest healthy"
+	PhaseDetailLiveIssuingRecv       = "issuing receive on destination"
+	PhaseDetailLiveDestReceiving     = "destination receiving"
+	PhaseDetailLiveIssuingSend       = "issuing send on source"
+	PhaseDetailLiveTransferring      = "transferring guest state"
+	PhaseDetailLiveSrcCompleted      = "src migration complete; preparing cutover"
+	PhaseDetailLiveCutoverPodRef     = "cutover: updating canonical pod"
+	PhaseDetailLiveCutoverDeleteSrc  = "cutover: deleting source pod"
+	PhaseDetailLiveCutoverCompleting = "cutover: completing"
+	PhaseDetailLiveAwaitingHealth    = "waiting for guest health on destination"
+	PhaseDetailLiveDestHealthy       = "destination guest healthy"
 )
 
 // SwiftMigrationGuestRef references the SwiftGuest to migrate.
@@ -268,6 +269,24 @@ type SwiftMigrationStatus struct {
 	// window. Phase 1 offline mode does not populate this field.
 	// +optional
 	PreparingStartedAt *metav1.Time `json:"preparingStartedAt,omitempty"`
+	// CutoverStep1At is when cutover step 1 (SwiftGuest.status.podRef.name
+	// patch) succeeded. Stamped by StopAndCopy-live's cutover handler
+	// alongside the SwiftGuest patch. Operator-visible audit data:
+	// `kubectl get swiftmigration -o wide` may surface this for
+	// drilling into "when did the canonical pod actually swap?"
+	// during incident triage.
+	//
+	// Phase 3a's PodRefSwapped condition is DERIVED from cluster
+	// state on every reconcile (per architect Q3.3(c)) — this
+	// timestamp is independent of that derivation and serves only
+	// audit purposes. Resuming-live (B2.3) may reference this for
+	// observedDowntime computation refinement; B2.3 currently uses
+	// status.ResumingStartedAt as the anchor (which is at-most one
+	// apiserver round-trip after CutoverStep1At).
+	//
+	// Phase 1 offline mode does not populate this field.
+	// +optional
+	CutoverStep1At *metav1.Time `json:"cutoverStep1At,omitempty"`
 	// ResumingStartedAt is when the SwiftMigration first transitioned
 	// to the Resuming phase (cutover step 3 — the controller's
 	// observable boundary between StopAndCopy completion and Resuming
