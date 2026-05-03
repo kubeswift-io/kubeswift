@@ -333,13 +333,15 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName)
 
 	case substateDstFailed:
-		// dst reported migration-status=failed with matching
-		// $RECV_ID. Detail string parsing for FailureReason
-		// refinement is B3.3 work; for B3.1 we map to Other.
+		// dst reported migration-status=failed with matching $RECV_ID.
+		// B3.3: classify via classifyFailureFromDetail (D2 watchdog
+		// detail "destination listener exited abnormally: ..." maps to
+		// PodTerminated; W1 violation maps to Other; "cancelled" maps
+		// to Cancelled; default Other).
 		detail := dstPod.Annotations[AnnotationMigrationStatusDtl]
 		return phaseFailure(
 			fmt.Sprintf("destination reported migration failure: %s", normalizeStatusDetail(detail)),
-			migrationv1alpha1.FailureReasonOther)
+			classifyFailureFromDetail(detail))
 
 	case substateSrcFailed:
 		detail := ""
@@ -348,7 +350,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		}
 		return phaseFailure(
 			fmt.Sprintf("source reported migration failure: %s", normalizeStatusDetail(detail)),
-			migrationv1alpha1.FailureReasonOther)
+			classifyFailureFromDetail(detail))
 
 	default:
 		// deriveSubstate is exhaustive; this branch is unreachable

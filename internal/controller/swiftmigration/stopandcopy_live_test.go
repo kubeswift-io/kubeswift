@@ -355,22 +355,24 @@ func TestStopAndCopyLive_SrcCompleted_DispatchesCutoverStep1(t *testing.T) {
 	}
 }
 
-func TestStopAndCopyLive_DstFailed_FailsWithOther(t *testing.T) {
+func TestStopAndCopyLive_DstFailed_GenericDetail_FailsWithOther(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), MigrationStatusFailed, recvActionID(mig), "watchdog: CH exited abnormally")
+	// Generic CH-internal error string (no D2 / W1 / cancel match).
+	// B3.3 classifier returns Other for unrecognised details.
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), MigrationStatusFailed, recvActionID(mig), "receive_migration: ch_internal_error")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
 	status := mig.Status.DeepCopy()
 	res := r.handleStopAndCopyLive(context.Background(), mig, status)
 	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
-		t.Errorf("FailureReason: want Other (B3.1; B3.3 refines), got %q", res.FailureReason)
+		t.Errorf("FailureReason: want Other for unrecognised detail, got %q", res.FailureReason)
 	}
 	if !strings.Contains(res.FailureMsg, "destination reported migration failure") {
 		t.Errorf("FailureMsg: want dst-failed message, got %q", res.FailureMsg)
 	}
-	if !strings.Contains(res.FailureMsg, "watchdog") {
-		t.Errorf("FailureMsg should include detail; got %q", res.FailureMsg)
+	if !strings.Contains(res.FailureMsg, "ch_internal_error") {
+		t.Errorf("FailureMsg should preserve raw detail; got %q", res.FailureMsg)
 	}
 }
 
