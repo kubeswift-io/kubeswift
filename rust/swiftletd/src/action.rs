@@ -699,6 +699,24 @@ async fn dispatch_migration_receive(
             if let Some(ip) = &args.guest_ip {
                 propagate_guest_ip_annotation(ip).await;
             }
+            // W16: flip SwiftGuest's GuestRunning condition to True on
+            // the destination side. Without this, the controller's
+            // Resuming-live handler waits indefinitely for a signal
+            // that never arrives (the src-side swiftletd wrote
+            // GuestRunning=False/VmStopped at cutover step 1 when its
+            // CH exited; receiver-mode swiftletd never overwrites it
+            // because main.rs's on_socket_ready callback is skipped in
+            // receiver mode and the launcher's post-launch report path
+            // only fires when CH exits). Best-effort with the same
+            // posture as D3 — if the patch fails, the controller's
+            // spec.timeout is the floor.
+            //
+            // Reads the SwiftGuest name from the dst pod's
+            // swift.kubeswift.io/guest label (LabelGuestName from
+            // dst_pod.go); the SwiftGuest is named guest.Name throughout
+            // its lifetime (canonical pod is dst post-cutover, but the
+            // SwiftGuest CR's name is invariant).
+            report_guest_running_post_receive().await;
             Ok(ActionOutcome {
                 detail: Some(format!(
                     "received on {} ({}ms)",
@@ -906,6 +924,103 @@ async fn propagate_guest_ip_annotation(ip: &str) {
         Ok(_) => log::info!("d3_guest_ip_propagated ip={}", ip),
         Err(e) => log::warn!("d3_guest_ip_patch_failed: {}", e),
     }
+}
+
+/// W16: post-receive SwiftGuest GuestRunning condition flip on dst.
+///
+/// In receiver mode, main.rs skips the on_socket_ready callback (CH
+/// has no VM at socket-ready time; reporting "guest running" before
+/// receive_migration completes would be a lie). The post-launch
+/// report path in main.rs only fires when CH exits — which on a
+/// successful migration only happens when the guest itself shuts
+/// down, not at receive-completion time.
+///
+/// This helper closes the gap. Called from
+/// `dispatch_migration_receive`'s success branch, after the W1 gate
+/// confirmed CH state=Running with the migrated guest. It:
+///
+///   1. Reads `POD_NAMESPACE` / `POD_NAME` from env (downward API).
+///   2. Fetches the dst pod and reads `swift.kubeswift.io/guest`
+///      label to get the SwiftGuest's name (the canonical-pod name
+///      changed at cutover step 1, but the SwiftGuest CR name is
+///      invariant; dst pod construction in B2.2 preserves the
+///      guest label).
+///   3. Patches `SwiftGuest.status.conditions[GuestRunning] = True`
+///      via the same `report::report_guest_running` helper used by
+///      main.rs's on_socket_ready callback in non-receiver mode.
+///
+/// Best-effort like D3: any failure (kube client unavailable,
+/// missing env, missing label, API error) is logged but doesn't
+/// affect the migration outcome — the controller's spec.timeout is
+/// the floor for stall detection.
+async fn report_guest_running_post_receive() {
+    let (namespace, pod_name) = match (
+        std::env::var("POD_NAMESPACE").ok(),
+        std::env::var("POD_NAME").ok(),
+    ) {
+        (Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => (ns, name),
+        _ => {
+            log::warn!("w16_guest_running_skipped reason=POD_NAMESPACE_or_POD_NAME_unset");
+            return;
+        }
+    };
+    let client = match crate::kube_client::create_client().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("w16_kube_client_unavailable: {}", e);
+            return;
+        }
+    };
+    // Fetch the dst pod to read the swift.kubeswift.io/guest label.
+    let pod_api: Api<k8s_openapi::api::core::v1::Pod> =
+        Api::namespaced(client.clone(), &namespace);
+    let pod = match pod_api.get(&pod_name).await {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("w16_pod_get_failed: {}", e);
+            return;
+        }
+    };
+    let guest_name = match extract_guest_name_from_labels(pod.metadata.labels.as_ref()) {
+        Some(g) => g,
+        None => {
+            log::warn!("w16_guest_label_missing pod={}/{}", namespace, pod_name);
+            return;
+        }
+    };
+    match crate::report::report_guest_running(&client, &namespace, &guest_name, true, None).await {
+        Ok(()) => log::info!(
+            "w16_guest_running_reported guest={}/{}",
+            namespace,
+            guest_name
+        ),
+        Err(e) => log::warn!(
+            "w16_guest_running_patch_failed guest={}/{} err={}",
+            namespace,
+            guest_name,
+            e
+        ),
+    }
+}
+
+/// W16 helper: extract the SwiftGuest's name from a launcher pod's
+/// labels. Pure function (no I/O); unit-testable in isolation.
+///
+/// The label key (`swift.kubeswift.io/guest`) is set on the dst pod
+/// at construction time in B2.2's `mergeLabelsForDst`. The
+/// SwiftGuest CR's name is invariant through cutover (canonical pod
+/// changes; SwiftGuest CR doesn't), so this is the source of truth
+/// for "which SwiftGuest does this dst launcher pod represent."
+///
+/// Returns `None` if labels are absent, the key is missing, or the
+/// value is empty — caller logs and returns without patching.
+fn extract_guest_name_from_labels(
+    labels: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<String> {
+    labels
+        .and_then(|l| l.get("swift.kubeswift.io/guest"))
+        .filter(|v| !v.is_empty())
+        .cloned()
 }
 
 /// Sanitize a CH error string into a category. Defensive against
@@ -2769,6 +2884,55 @@ mod tests {
     // — unit-testing it would need a kube client mock and POD_*
     // env-var harness disproportionate to a 50-line reuse of the
     // lease.rs pattern.
+
+    // ─── W16 (Phase 3a PR 1 cluster walkthrough finding) ─────────────
+    //
+    // Cluster walkthrough surfaced that swiftletd-on-dst's receiver-mode
+    // never flips the SwiftGuest's GuestRunning condition to True after
+    // receive_migration completes successfully. The
+    // `report_guest_running_post_receive` helper added in
+    // `dispatch_migration_receive`'s success branch closes the gap.
+    //
+    // The kube-write path follows the same pattern as
+    // propagate_guest_ip_annotation (D3): real kube client +
+    // POD_NAMESPACE/POD_NAME env reads + best-effort patch. Cluster
+    // integration validates the side effect; unit-testing the kube
+    // write would need a kube-client mock harness disproportionate to
+    // the 30-line helper.
+    //
+    // The pure-function piece (label extraction) IS unit-testable:
+
+    #[test]
+    fn extract_guest_name_from_labels_returns_value_when_present() {
+        use std::collections::BTreeMap;
+        let mut labels = BTreeMap::new();
+        labels.insert("swift.kubeswift.io/guest".to_string(), "faas-s2".to_string());
+        labels.insert("kubeswift.io/migration".to_string(), "s2-mig".to_string());
+        assert_eq!(
+            extract_guest_name_from_labels(Some(&labels)),
+            Some("faas-s2".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_guest_name_from_labels_returns_none_when_missing() {
+        use std::collections::BTreeMap;
+        let labels = BTreeMap::new();
+        assert_eq!(extract_guest_name_from_labels(Some(&labels)), None);
+    }
+
+    #[test]
+    fn extract_guest_name_from_labels_returns_none_when_labels_absent() {
+        assert_eq!(extract_guest_name_from_labels(None), None);
+    }
+
+    #[test]
+    fn extract_guest_name_from_labels_returns_none_when_value_empty() {
+        use std::collections::BTreeMap;
+        let mut labels = BTreeMap::new();
+        labels.insert("swift.kubeswift.io/guest".to_string(), "".to_string());
+        assert_eq!(extract_guest_name_from_labels(Some(&labels)), None);
+    }
 
     #[test]
     fn migration_receive_args_parses_with_guest_ip() {
