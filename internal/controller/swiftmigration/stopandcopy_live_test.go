@@ -285,6 +285,59 @@ func TestStopAndCopyLive_PreRecv_PatchesSrcPodWithLabelAndAck_W13(t *testing.T) 
 	}
 }
 
+// W18 (PR #46 Scenario 4): when dst pod is being K8s-terminated mid-
+// StopAndCopy, src CH errors with generic detail. Without a dst-state
+// check, classifyFailureFromDetail defaults to Other; §4.7 says
+// PodTerminated. The fix overrides classification when
+// dst.DeletionTimestamp is set.
+func TestStopAndCopyLive_SrcFailed_DstTerminating_MapsToPodTerminated_W18(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	stamp(src, migrationActionVerbSend, sendActionID(mig),
+		MigrationStatusFailed, sendActionID(mig),
+		"send_migration: internal_server_error")
+	// dst pod is K8s-terminating: DeletionTimestamp set.
+	now := metav1.Now()
+	dst.DeletionTimestamp = &now
+	dst.Finalizers = []string{"kubernetes.io/grace-period"} // required for fake client to honor DeletionTimestamp
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonPodTerminated {
+		t.Errorf("FailureReason: want PodTerminated (W18 override), got %q",
+			res.FailureReason)
+	}
+	if !strings.Contains(res.FailureMsg, "source reported migration failure") {
+		t.Errorf("FailureMsg should still describe src-failed; got %q", res.FailureMsg)
+	}
+	if !strings.Contains(res.FailureMsg, "send_migration: internal_server_error") {
+		t.Errorf("FailureMsg should preserve src detail; got %q", res.FailureMsg)
+	}
+}
+
+// W18 negative case: when dst is healthy (no DeletionTimestamp), the
+// existing classifier behavior is preserved (generic src failure →
+// Other, not PodTerminated).
+func TestStopAndCopyLive_SrcFailed_DstHealthy_PreservesOther_W18(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	stamp(src, migrationActionVerbSend, sendActionID(mig),
+		MigrationStatusFailed, sendActionID(mig),
+		"send_migration: internal_server_error")
+	// dst pod healthy — no DeletionTimestamp.
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
+		t.Errorf("FailureReason: want Other (W18 preserves classifier when dst healthy), got %q",
+			res.FailureReason)
+	}
+}
+
 // W14: deriveSubstate must recognise migration-status=rejected on src
 // and dst as terminal sub-states. Without this, swiftletd's decide()
 // rejection (e.g., missing phase2 ack, action-id mismatch) leaves the
