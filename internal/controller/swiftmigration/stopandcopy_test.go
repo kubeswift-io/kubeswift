@@ -38,7 +38,8 @@ func TestStopAndCopy_FirstEntry_PatchesAtomically(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, requeue, errMsg, err := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	advanced, requeue, errMsg, err := result.Advanced, result.Requeue, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("StopAndCopy first-entry should not error; err=%v errMsg=%q", err, errMsg)
 	}
@@ -82,7 +83,8 @@ func TestStopAndCopy_MissingAnnotation_Fails(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "missing the in-progress annotation") {
 		t.Errorf("missing annotation should fail with phase-ordering error; got %q", errMsg)
 	}
@@ -122,7 +124,8 @@ func TestStopAndCopy_PodOnDestination_Advances(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	advanced, _, errMsg, err := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	advanced, errMsg, err := result.Advanced, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("StopAndCopy with destination pod should advance; err=%v errMsg=%q", err, errMsg)
 	}
@@ -171,7 +174,8 @@ func TestStopAndCopy_PodOnWrongNode_Fails(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "atomicity invariant violated") {
 		t.Errorf("wrong-node pod should fail with atomicity error; got %q", errMsg)
 	}
@@ -192,7 +196,8 @@ func TestStopAndCopy_GuestDeleted_Fails(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, _, errMsg, _ := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "deleted during StopAndCopy") {
 		t.Errorf("guest deleted mid-flight should fail clearly; got %q", errMsg)
 	}
@@ -224,7 +229,8 @@ func TestStopAndCopy_Idempotent_PatchAlreadyApplied(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
 
 	status := mig.Status.DeepCopy()
-	_, requeue, errMsg, err := r.handleStopAndCopy(context.Background(), mig, status)
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	requeue, errMsg, err := result.Requeue, result.FailureMsg, result.Err
 	if err != nil || errMsg != "" {
 		t.Fatalf("idempotent re-entry should not error; err=%v errMsg=%q", err, errMsg)
 	}

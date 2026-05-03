@@ -71,19 +71,71 @@ func newReadyNode(name string) *corev1.Node {
 	}
 }
 
+// newReadyKernelNode returns a Ready node with the
+// kubeswift.io/kernel-node=true label so kernel-boot guests pass the
+// boot-type-specific node-label requirement in validateClusterState.
+func newReadyKernelNode(name string) *corev1.Node {
+	n := newReadyNode(name)
+	n.Labels = map[string]string{"kubeswift.io/kernel-node": "true"}
+	return n
+}
+
 // --- Shape rules (no Client) ---
 
-func TestValidateShape_RejectLiveMode(t *testing.T) {
+// TestValidateShape_AcceptLiveMode locks in Phase 3a's acceptance of
+// mode=live. Phase 1 rejected mode=live at shape; PR #41 shipped the
+// swiftletd D1/D2/D3 dependencies and this PR ships the controller,
+// so live mode is now valid at admission. Live-mode-specific cluster-
+// state checks (per-source-node concurrency, kernel-boot vs PVC
+// storage gate) live in validateClusterState; live-mode-specific
+// shape rules (242-char guest-name cap) live in validateShape and
+// have their own tests.
+func TestValidateShape_AcceptLiveMode(t *testing.T) {
 	mig := newSwiftMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	if err := validateShape(mig); err == nil || !strings.Contains(err.Error(), "live") {
-		t.Errorf("validateShape mode=live should reject with mention of 'live'; got err=%v", err)
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape mode=live should be accepted in Phase 3a; got err=%v", err)
 	}
-	// The phase-gate constant must appear in the message so Phase 3
-	// reviewers can find the rejection by grepping for it.
-	if err := validateShape(mig); err == nil || !strings.Contains(err.Error(), migrationv1alpha1.PhaseLiveMigrationNotShipped) {
-		t.Errorf("validateShape mode=live should mention the gate constant %q; got %v",
-			migrationv1alpha1.PhaseLiveMigrationNotShipped, err)
+}
+
+// TestValidateShape_LiveModeRejectsLongGuestName covers the Phase 3a
+// guest-name length cap. The destination launcher pod is named
+// `<guest>-mig-<short-uid>` (11-char suffix); Kubernetes pod names
+// are bounded at 253 chars (DNS-1123). Cap GUEST name (not
+// SwiftMigration name) at 242 with headroom. Phase 1 offline mode
+// reuses the guest name unchanged post-migration and is unaffected.
+func TestValidateShape_LiveModeRejectsLongGuestName(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	// 243 chars — one over the cap.
+	mig.Spec.GuestRef.Name = strings.Repeat("a", 243)
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	if err := validateShape(mig); err == nil || !strings.Contains(err.Error(), "242") {
+		t.Errorf("validateShape mode=live with 243-char guest name should reject mentioning 242; got %v", err)
+	}
+}
+
+// TestValidateShape_LiveModeAcceptsBoundaryGuestName confirms the
+// 242-char cap is inclusive of 242 (the literal limit). A 242-char
+// guest name is accepted; 243 is rejected (separate test).
+func TestValidateShape_LiveModeAcceptsBoundaryGuestName(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.GuestRef.Name = strings.Repeat("a", 242)
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape mode=live with 242-char guest name (at cap) should accept; got err=%v", err)
+	}
+}
+
+// TestValidateShape_OfflineModeAcceptsLongGuestName confirms the
+// 242-char cap fires only for live mode. Offline-mode guest names
+// are unaffected (offline mode reuses guest.Name as the post-migration
+// pod name with no suffix).
+func TestValidateShape_OfflineModeAcceptsLongGuestName(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.GuestRef.Name = strings.Repeat("a", 250)
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape mode=offline with 250-char guest name should accept; got err=%v", err)
 	}
 }
 
@@ -167,6 +219,59 @@ func TestValidateShape_AcceptTimeoutAtMax(t *testing.T) {
 	mig.Spec.Timeout = &metav1.Duration{Duration: MaxTimeout}
 	if err := validateShape(mig); err != nil {
 		t.Errorf("validateShape timeout=24h should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_RejectLiveTimeoutBelowMin(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 30 * time.Second}
+	err := validateShape(mig)
+	if err == nil || !strings.Contains(err.Error(), "below minimum") {
+		t.Errorf("validateShape live mode + timeout=30s should reject; got %v", err)
+	}
+}
+
+func TestValidateShape_AcceptLiveTimeoutAtMin(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: MinLiveTimeout}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape live mode + timeout=60s should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_AcceptLiveTimeoutUnset(t *testing.T) {
+	// Unset timeout means controller default (5min per design F3.5)
+	// applies. Webhook must NOT reject the unset case.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = nil
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape live mode + timeout unset should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_OfflineModeAcceptsShortTimeout(t *testing.T) {
+	// MinLiveTimeout applies ONLY to live mode. Offline mode finishes
+	// in tens of seconds; a 10s timeout is unusual but valid.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	mig.Spec.Timeout = &metav1.Duration{Duration: 10 * time.Second}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape offline mode + timeout=10s should accept; got %v", err)
+	}
+}
+
+func TestValidateShape_AutoModeAcceptsShortTimeout(t *testing.T) {
+	// Auto mode does not enforce live's minimum (the resolution may
+	// pick offline at controller time). A 10s timeout for an auto-mode
+	// migration is unusual but the webhook does not reject it.
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeAuto
+	mig.Spec.Timeout = &metav1.Duration{Duration: 10 * time.Second}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape auto mode + timeout=10s should accept; got %v", err)
 	}
 }
 
@@ -764,14 +869,15 @@ func TestValidateUpdate_StillEnforcesShape(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	v := &Validator{Client: c}
 
+	// Phase 3a accepts mode=live, so the shape-canary uses a still-
+	// invalid value. parallelConnections > MaxParallelConnections is
+	// a stable shape rule (input bounds, no cluster-state dependency)
+	// that fires the same way on UPDATE as on CREATE — the canary
+	// proves shape validation runs.
 	old := newSwiftMigration("m", "default")
-	// Construct an old with valid spec, then a new with invalid spec
-	// that ALSO mutates spec — the immutability check fires first.
-	// To test shape-on-update, we need both old and new to have the
-	// same invalid spec (so immutability passes) so shape is reached.
-	old.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	old.Spec.ParallelConnections = MaxParallelConnections + 1
 	new := old.DeepCopy()
-	if _, err := v.ValidateUpdate(context.Background(), old, new); err == nil || !strings.Contains(err.Error(), "live") {
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err == nil || !strings.Contains(err.Error(), "parallelConnections") {
 		t.Errorf("ValidateUpdate must still enforce shape on UPDATE; got %v", err)
 	}
 }
@@ -918,14 +1024,20 @@ func TestGateLiveModeStorage_MissingClassDoesNotDoubleReject(t *testing.T) {
 	}
 }
 
-// TestValidate_ModeLivePhase1RejectedAtShape locks in the contract that
-// validateShape rejects mode=live before the cluster-state storage gate
-// would fire. Confirms gateLiveModeStorage is unreachable in production
-// in Phase 1 — operators see the "live not yet shipped" error, not the
-// storage capability error. When Phase 3 lands, the assertion in this
-// test changes to require the storage gate's error, NOT the shape
-// rejection.
-func TestValidate_ModeLivePhase1RejectedAtShape(t *testing.T) {
+// TestValidate_ModeLiveDiskBootRejectedByStorageGate locks in the
+// Phase 3a contract that mode=live admits at validateShape and is then
+// rejected by the cluster-state storage gate when the guest's storage
+// is not live-migration-capable. Disk-boot guests with default
+// RWO+Filesystem storage hit gateLiveModeStorage's RWX+Block
+// requirement; operators see the storage capability error with a
+// pointer to docs/design/storage-access-mode.md.
+//
+// The Phase 1 ancestor of this test asserted shape-level rejection
+// ("not yet shipped"); Phase 3a removed that gate — the docstring
+// from that ancestor said "When Phase 3 lands, the assertion in this
+// test changes to require the storage gate's error" — Phase 3a is
+// that landing.
+func TestValidate_ModeLiveDiskBootRejectedByStorageGate(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
@@ -934,11 +1046,146 @@ func TestValidate_ModeLivePhase1RejectedAtShape(t *testing.T) {
 
 	mig := newSwiftMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true // bypass the IP-change gate so we reach the storage gate
 	_, err := v.validate(context.Background(), mig)
 	if err == nil {
-		t.Fatal("validate with mode=live should reject in Phase 1")
+		t.Fatal("validate with mode=live + RWO+Filesystem disk-boot guest should reject")
 	}
-	if !strings.Contains(err.Error(), "not yet shipped") {
-		t.Errorf("Phase 1 should reject at validateShape (not the storage gate); got %q", err.Error())
+	if !strings.Contains(err.Error(), "live migration requires") {
+		t.Errorf("Phase 3a should reject at the storage gate; got %q", err.Error())
+	}
+}
+
+// TestValidate_ModeLiveKernelBootAcceptsAtStorageGate locks in the
+// Phase 3a kernel-boot adjustment to gateLiveModeStorage. Kernel-boot
+// guests have no shared storage to coordinate (no F2 split-brain
+// concern, no cross-node storage handoff); the storage gate must
+// accept them rather than rejecting on the absence of RWX+Block.
+//
+// Design doc clarification captured in PR description: kernel-boot
+// guests are live-capable by virtue of having no shared storage.
+func TestValidate_ModeLiveKernelBootAcceptsAtStorageGate(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.ImageRef = nil
+	guest.Spec.KernelRef = &corev1.LocalObjectReference{Name: "faas-minimal"}
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyKernelNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+	if _, err := v.validate(context.Background(), mig); err != nil {
+		t.Errorf("validate with mode=live + kernel-boot guest should accept (no PVC = live-capable); got %v", err)
+	}
+}
+
+// TestValidate_ModeLivePerSourceNodeConcurrencyRejected locks in the
+// Phase 3a per-source-node concurrency rule. A second live SwiftMigration
+// from the same source node is rejected at admission. Phase 1 offline
+// migrations don't conflict with live (different state surfaces).
+func TestValidate_ModeLivePerSourceNodeConcurrencyRejected(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest1 := newSwiftGuest("guest1", "default")
+	guest1.Spec.ImageRef = nil
+	guest1.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	guest2 := newSwiftGuest("guest2", "default")
+	guest2.Spec.ImageRef = nil
+	guest2.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	// Existing live migration from sourceNode=boba.
+	existing := newSwiftMigration("existing", "default")
+	existing.Spec.GuestRef.Name = "guest1"
+	existing.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	existing.Status.SourceNode = "boba"
+	existing.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		guest1, guest2, class, newReadyKernelNode("miles"), existing,
+	).Build()
+	v := &Validator{Client: c}
+
+	// New migration also from sourceNode=boba (guest2 lives on boba).
+	mig := newSwiftMigration("new", "default")
+	mig.Spec.GuestRef.Name = "guest2"
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+
+	_, err := v.validate(context.Background(), mig)
+	if err == nil {
+		t.Fatal("second live SwiftMigration from same source node should be rejected")
+	}
+	if !strings.Contains(err.Error(), "per-source-node concurrency") {
+		t.Errorf("rejection should mention per-source-node concurrency; got %q", err.Error())
+	}
+}
+
+// TestValidate_ModeLivePerSourceNodeConcurrency_TerminalPeerOk verifies
+// that a terminal-phase peer SwiftMigration does NOT block a new
+// SwiftMigration from the same source node. Operators creating a
+// migration after a previous one Failed/Completed must not be blocked
+// by stale state.
+func TestValidate_ModeLivePerSourceNodeConcurrency_TerminalPeerOk(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest1 := newSwiftGuest("guest1", "default")
+	guest1.Spec.ImageRef = nil
+	guest1.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	guest2 := newSwiftGuest("guest2", "default")
+	guest2.Spec.ImageRef = nil
+	guest2.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	completed := newSwiftMigration("completed", "default")
+	completed.Spec.GuestRef.Name = "guest1"
+	completed.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	completed.Status.SourceNode = "boba"
+	completed.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseCompleted
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		guest1, guest2, class, newReadyKernelNode("miles"), completed,
+	).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("new", "default")
+	mig.Spec.GuestRef.Name = "guest2"
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+
+	if _, err := v.validate(context.Background(), mig); err != nil {
+		t.Errorf("new live SwiftMigration must not be blocked by Completed peer; got %v", err)
+	}
+}
+
+// TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk verifies
+// that an in-flight Phase 1 offline SwiftMigration from the same
+// source node does NOT block a live SwiftMigration. The two modes
+// don't share state surfaces.
+func TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest1 := newSwiftGuest("guest1", "default")
+	guest1.Spec.ImageRef = nil
+	guest1.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	guest2 := newSwiftGuest("guest2", "default")
+	guest2.Spec.ImageRef = nil
+	guest2.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+	offline := newSwiftMigration("offline", "default")
+	offline.Spec.GuestRef.Name = "guest1"
+	offline.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	offline.Status.SourceNode = "boba"
+	offline.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		guest1, guest2, class, newReadyKernelNode("miles"), offline,
+	).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("new", "default")
+	mig.Spec.GuestRef.Name = "guest2"
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+
+	if _, err := v.validate(context.Background(), mig); err != nil {
+		t.Errorf("offline peer must not block live; got %v", err)
 	}
 }
