@@ -338,6 +338,42 @@ fn main() {
                             log::info!(
                                 "vm_exited_post_send_migration; skipping VmStopped report (W22)"
                             );
+                            // W23 (PR #46 follow-up cluster re-walkthrough,
+                            // post-W22): wait for the action loop's terminal
+                            // `migration-status: complete` write to land
+                            // before exiting. W22's flag-set-and-skip path
+                            // removed the implicit ~tens-of-ms apiserver
+                            // round-trip from the previous report_running
+                            // call, exposing a race where main exited
+                            // before the action loop's separate-thread
+                            // tokio runtime could complete its kube
+                            // client patch — leaving src pod's
+                            // migration-status at "running" forever and
+                            // stalling the controller until spec.timeout.
+                            //
+                            // 10s bounded timeout — typical apiserver
+                            // Patch is sub-100ms p50, sub-1s p99; 10s
+                            // gives 100x headroom over normal latency.
+                            // Timeout-expiry path logs warn and exits
+                            // anyway — controller's spec.timeout (5min
+                            // default) is the ultimate floor for stuck-
+                            // migration detection.
+                            let signal = action::migration_send_terminal_signal();
+                            let waited = rt.block_on(async {
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    signal.notified(),
+                                )
+                                .await
+                                .is_ok()
+                            });
+                            if waited {
+                                log::info!("w23_terminal_write_signal_received; safe to exit");
+                            } else {
+                                log::warn!(
+                                    "w23_terminal_write_signal_timeout after 10s; exiting anyway (controller spec.timeout will detect any stuck migration)"
+                                );
+                            }
                         } else {
                             log::info!("vm_stopped_gracefully");
                             report_running(false, Some("VmStopped"));
