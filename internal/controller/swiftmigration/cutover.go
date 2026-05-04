@@ -155,16 +155,24 @@ func (r *SwiftMigrationReconciler) executeCutover(
 	srcPod *corev1.Pod, // nil if NotFound
 	dstName string,
 ) *phaseResult {
-	// Cutover step 2 looks up src pod BY guest.Name (the original
-	// pre-cutover pod name), NOT via canonicalPodName — which post-
-	// step-1 resolves to dst pod name and would mis-detect "src
-	// exists." Re-fetch src pod by guest.Name here; ignore the
-	// caller's srcPod argument (which may be the dst pod due to
-	// canonicalPodName's post-step-1 indirection).
+	// Cutover step 2 looks up src pod by status.SourcePodRef.Name
+	// (locked in at Validating-live, W26 fix). Pre-W26 this used
+	// literal guest.Name which was correct ONLY for first-migrations
+	// (where guest.Name = src pod name) and broke chain migrations
+	// (where the original src pod is the prior migration's dst-suffix
+	// pod, not guest.Name) — chain step 2 would silently skip src pod
+	// deletion (NotFound) leaking the prior dst pod on the source
+	// node. The locked-in name is also race-immune to the
+	// cutoverStep1 informer-fires-before-persist window, which is
+	// why stopandcopy_live's UID-check site uses the same helper.
+	// Caller's srcPod argument is preserved for API symmetry but
+	// ignored (may be the wrong pod under canonicalPodName-style
+	// resolution at the call site).
 	var srcByName corev1.Pod
 	_ = srcPod // suppress unused-param hint; caller passes for API symmetry
 	srcExistsByName := true
-	if err := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &srcByName); err != nil {
+	srcName := srcPodLookupName(mig, guest)
+	if err := r.Get(ctx, client.ObjectKey{Name: srcName, Namespace: guest.Namespace}, &srcByName); err != nil {
 		if apierrors.IsNotFound(err) {
 			srcExistsByName = false
 		} else {

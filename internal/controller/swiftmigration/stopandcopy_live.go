@@ -150,38 +150,35 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		return phaseTransient(fmt.Errorf("get source guest: %w", err))
 	}
 
-	// Resolve src pod by guest.Name — NOT via canonicalPodName.
+	// Resolve src pod by status.SourcePodRef.Name (locked in at
+	// Validating-live).
 	//
-	// W15 (cluster walkthrough finding): canonicalPodNameForGuest
-	// resolves to the dst pod name post-cutoverStep1 (which patches
-	// SwiftGuest.status.podRef.name = dst). cutoverStep1 issues two
-	// separate apiserver writes (SwiftGuest podRef + SwiftMigration
-	// status); the SwiftGuest patch fires the SwiftGuest informer
-	// watch and triggers a SwiftMigration reconcile. If that race-
-	// reconcile lands before the SwiftMigration status patch persists
-	// (or before the controller's persist completes from the original
-	// cutover-step-1 reconcile), the new reconcile reads:
-	//   - mig.Status.PhaseDetail = LiveSrcCompleted (stale; pre-cutover)
-	//   - guest.Status.PodRef.Name = dst (already swapped)
-	// shouldCheckSourcePodUID returns true (LiveSrcCompleted is in the
-	// pre-cutover vocabulary), and canonicalPodName resolves to dst.
-	// The Get fetches the dst pod, whose UID never matches
-	// status.SourcePodUID, so the UID check fires SourcePodReplaced on
-	// a perfectly healthy migration.
+	// W15 + W26 background. Two prior single-mode fixes were tried and
+	// both broke the other case:
 	//
-	// The src pod is ALWAYS named guest.Name throughout its lifetime.
-	// Using guest.Name directly here makes the UID check race-free.
-	// canonicalPodName is the right abstraction for "the active
-	// canonical launcher pod" but wrong for "the original src pod
-	// whose UID we recorded at Validating".
+	//   - W15 fix (literal guest.Name): closes the cutoverStep1 race
+	//     window where canonicalPodName resolves to dst-name before
+	//     the SwiftMigration status persists. But fails on chain
+	//     migrations: after a prior migration's cutover, the original
+	//     src pod is named with the prior migration's dst-suffix, NOT
+	//     guest.Name; literal guest.Name lookup hits NotFound and
+	//     false-fires SourcePodReplaced.
+	//   - canonicalPodName: works for chains (resolves to the prior
+	//     dst-suffix = current src). But re-opens the W15 race AND
+	//     in cutover.go::executeCutover post-step1 would resolve to
+	//     THIS migration's dst pod and cutoverStep2 would delete the
+	//     migrated guest.
 	//
-	// Same shape as the B3.2 fix in cutover.go::executeCutover, which
-	// also explicitly fetches src by guest.Name to bypass the same
-	// canonicalPodName-post-step-1 ambiguity. The fix didn't propagate
-	// to this outer site until W15 surfaced on cluster.
+	// W26 fix: lock in the src pod name at Validating time
+	// (status.SourcePodRef.Name), use it consistently here and in
+	// cutover.go::executeCutover. Race-immune (locked at validation,
+	// not derived from cluster state) AND chain-safe (the recorded
+	// name is the actual src pod, regardless of how many prior
+	// migrations the guest has been through).
 	var srcPod corev1.Pod
 	srcPodPresent := true
-	if err := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &srcPod); err != nil {
+	srcName := srcPodLookupName(mig, &guest)
+	if err := r.Get(ctx, client.ObjectKey{Name: srcName, Namespace: guest.Namespace}, &srcPod); err != nil {
 		if apierrors.IsNotFound(err) {
 			srcPodPresent = false
 		} else {
