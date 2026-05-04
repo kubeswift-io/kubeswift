@@ -287,6 +287,27 @@ type SwiftMigrationStatus struct {
 	// Phase 1 offline mode does not populate this field.
 	// +optional
 	CutoverStep1At *metav1.Time `json:"cutoverStep1At,omitempty"`
+	// CutoverStep2DispatchedAt is when cutover step 2 (src pod Delete
+	// dispatch) was issued by the controller. This is the cutover
+	// commit point on the source side — vCPU pause begins inside CH
+	// at this moment, propagating to the dst migration receiver.
+	//
+	// W27a (PR #54 follow-up, Tracked Follow-up #7): this is the
+	// authoritative anchor for observedDowntime. The prior anchor
+	// (status.ResumingStartedAt) was stamped one apiserver round-trip
+	// later AND consumed in the same reconcile invocation, producing
+	// sub-millisecond observedDowntime values across all 17 PR #46 +
+	// E12 walkthrough runs. Anchoring on CutoverStep2DispatchedAt
+	// instead measures the actual operator-visible cutover-to-resume
+	// window: cutover-step-2-dispatch → GuestRunning=True observation.
+	//
+	// Stamped idempotently by cutoverStep2: only set if currently nil,
+	// preserving the original timestamp across leader-handover and
+	// cutover-mid-flight reconcile-recovery (§2.4) reentry.
+	//
+	// Phase 1 offline mode does not populate this field.
+	// +optional
+	CutoverStep2DispatchedAt *metav1.Time `json:"cutoverStep2DispatchedAt,omitempty"`
 	// ResumingStartedAt is when the SwiftMigration first transitioned
 	// to the Resuming phase (cutover step 3 — the controller's
 	// observable boundary between StopAndCopy completion and Resuming

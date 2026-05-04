@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -183,24 +184,35 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 		status.TargetIP = ip
 	}
 
-	// Compute ObservedDowntime: now - ResumingStartedAt. The §6 doc
-	// definition uses cutover step 2 as the anchor; ResumingStartedAt
-	// stamps at cutover step 3 entry, which is one apiserver round-
-	// trip after step 2. The difference is sub-second and the
-	// ResumingStartedAt anchor is what we can reliably observe from
-	// B2.3's vantage point. B3 may refine to a step-2 anchor if it
-	// stamps a separate timestamp; until then this is the best
-	// approximation.
+	// W27a fix (PR #54 follow-up, Tracked Follow-up #7):
+	// observedDowntime is the wall-clock window between cutover step 2
+	// dispatch (src pod Delete; vCPU pause begins inside CH on src)
+	// and dst guest reaching GuestRunning=True (vCPU pause ends on
+	// dst). The prior implementation anchored on
+	// status.ResumingStartedAt — stamped one apiserver round-trip
+	// after step 2 AND consumed in the same reconcile invocation,
+	// producing sub-millisecond observedDowntime values across all 17
+	// PR #46 + E12 walkthrough runs. CutoverStep2DispatchedAt is the
+	// correct anchor.
+	//
+	// Defensive nil-check: CutoverStep2DispatchedAt is stamped by
+	// cutoverStep2 unconditionally (even on NotFound recovery), so
+	// reaching Resuming with it nil indicates a state-machine
+	// invariant violation. Log + leave ObservedDowntime nil so
+	// operators see a missing field, never a wrong one.
 	now := metav1.Now()
-	if status.ResumingStartedAt != nil {
-		downtime := metav1.Duration{Duration: now.Sub(status.ResumingStartedAt.Time)}
+	if status.CutoverStep2DispatchedAt != nil {
+		downtime := metav1.Duration{Duration: now.Sub(status.CutoverStep2DispatchedAt.Time)}
 		status.ObservedDowntime = &downtime
+	} else {
+		log.FromContext(ctx).Info(
+			"observedDowntime not computed: status.CutoverStep2DispatchedAt is nil at Resuming completion (state-machine invariant violation; W27a)",
+			"migration", mig.Name)
 	}
-	// status.ObservedPauseWindow is populated by B3 from src pod's
-	// migration-status-detail annotation during StopAndCopy. B2.3
-	// leaves it as-is — preserves whatever B3 wrote, leaves nil if
-	// B3 hasn't run yet (forward-compat hedge per the prompt's rule
-	// 5).
+	// status.ObservedPauseWindow is stamped by stopandcopy_live's
+	// substateSendComplete handler (W27b fix) reading the src pod's
+	// kubeswift.io/migration-pause-window-ms annotation. B2.3 leaves
+	// it as-is — preserves whatever StopAndCopy wrote.
 
 	status.CompletedAt = &now
 	setPhase(status, migrationv1alpha1.SwiftMigrationPhaseCompleted)
