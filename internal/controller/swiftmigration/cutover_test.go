@@ -305,6 +305,60 @@ func TestCutover_Step2RetryInPlace_DeleteFails(t *testing.T) {
 	}
 }
 
+// W26 chain regression: post-step1, executeCutover must delete the
+// PRIOR migration's dst pod (= THIS migration's src), NOT THIS
+// migration's dst pod. Pre-W26 this site used literal guest.Name,
+// which silently skipped src deletion (Get NotFound) and leaked the
+// prior dst pod on the source node. canonicalPodName-style resolution
+// at the same site would have been worse: it would resolve to THIS
+// migration's dst pod (just patched into status.PodRef) and delete
+// the migrated guest. The W26 fix locks the src pod name at
+// Validating-live (status.SourcePodRef.Name) so step 2 always finds
+// the actual pre-cutover src pod, regardless of how many prior
+// migrations the guest has been through.
+func TestCutover_Step2_ChainMigration_DeletesPriorSrcPodNotDstPod_W26(t *testing.T) {
+	mig, guest, _, _ := cutoverFixture(t)
+	priorDstName := "guest-mig-firstrun" // THIS migration's src
+	thisDstName := "guest-mig-abcdef"    // matches dstPodName(mig, "guest") for the fixture
+	mig.Status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: priorDstName}
+	guest.Status.PodRef = &corev1.ObjectReference{Name: thisDstName, Namespace: "default"}
+	now := metav1.Now()
+	mig.Status.CutoverStep1At = &now
+
+	chainSrc := templateSrcPod(priorDstName, "default")
+	chainSrc.UID = "uid-PRIOR-DST"
+	stamp(chainSrc, migrationActionVerbSend, sendActionID(mig),
+		migrationStatusComplete, sendActionID(mig), "ok")
+	thisDst := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: thisDstName, Namespace: "default", UID: "uid-THIS-DST"},
+		Spec:       corev1.PodSpec{NodeName: "miles"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.244.1.43"},
+	}
+
+	r := newStopAndCopyReconciler(t, mig, guest, chainSrc, thisDst)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("reconcile failed: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+
+	// Prior src pod (named priorDstName) must be deleted (or have a
+	// pending DeletionTimestamp).
+	var srcAfter corev1.Pod
+	srcErr := r.Get(context.Background(), client.ObjectKey{Name: priorDstName, Namespace: "default"}, &srcAfter)
+	if srcErr == nil && srcAfter.DeletionTimestamp == nil {
+		t.Errorf("prior src pod %q should be deleted by cutoverStep2; still exists with no DeletionTimestamp", priorDstName)
+	}
+
+	// THIS migration's dst pod must NOT be deleted.
+	var dstAfter corev1.Pod
+	if err := r.Get(context.Background(), client.ObjectKey{Name: thisDstName, Namespace: "default"}, &dstAfter); err != nil {
+		t.Errorf("dst pod %q must NOT be deleted by cutoverStep2 (would destroy migrated guest): err=%v", thisDstName, err)
+	} else if dstAfter.DeletionTimestamp != nil {
+		t.Errorf("dst pod %q must NOT be marked for deletion (would destroy migrated guest)", thisDstName)
+	}
+}
+
 // TestCutover_Step2NotFoundTreatedAsSuccess: src pod was deleted by a
 // previous reconcile but the controller crashed before observing.
 // Next reconcile observes step 1 done + src NotFound → step 3 derived,

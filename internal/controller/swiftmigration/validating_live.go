@@ -99,6 +99,18 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 		return phaseTransient(fmt.Errorf("get source pod: %w", err))
 	}
 	status.SourcePodUID = srcPod.UID
+	// W26: lock in the src pod NAME at Validating time, mirroring the
+	// existing SourcePodUID lock-in. Pre-W26, downstream sites resolved
+	// the src pod by either guest.Name (W15 fix in cutover.go +
+	// stopandcopy_live.go) or canonicalPodName (preparing_live.go). Both
+	// derive from current cluster state and are wrong for back-to-back
+	// migrations: after a prior migration's cutover, guest.Status.PodRef
+	// .Name points at the prior dst pod (= this migration's src), which
+	// is NOT guest.Name. Locking the name in here makes src-pod
+	// resolution race-immune AND chain-safe; downstream sites use
+	// status.SourcePodRef.Name consistently regardless of cluster state
+	// drift mid-migration.
+	status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: srcPod.Name}
 
 	// IPWillChange surfacing (same logic as offline path; live mode
 	// on default networking still loses the IP because Cloud Hypervisor
@@ -176,4 +188,37 @@ func canonicalPodNameForGuest(guest *swiftv1alpha1.SwiftGuest) string {
 		return guest.Status.PodRef.Name
 	}
 	return guest.Name
+}
+
+// srcPodLookupName returns the launcher pod name to use for src pod
+// lookups in live-mode Preparing / StopAndCopy / cutover phases. Uses
+// the SwiftMigration's status.SourcePodRef.Name when set (locked in at
+// Validating-live), falling back to canonicalPodNameForGuest for
+// pre-Validating reconciles or recovery cases where the field is
+// somehow unset.
+//
+// Why locked-in beats current-cluster-state derivation: between the
+// time Validating captures the src pod identity and the time cutover
+// patches guest.Status.PodRef.Name to the dst pod, the cluster-state
+// derivation diverges from the original src pod. Two separate
+// failure modes both blocked by locking in:
+//
+//   - W15 race: cutoverStep1 patches SwiftGuest podRef before the
+//     SwiftMigration status persists; informer-driven race-reconcile
+//     reads (phaseDetail=LiveSrcCompleted, podRef=dstName,
+//     PodRefSwapped=False). Without locking, canonicalPodName resolves
+//     to dst pod and false-fires the F4.2 UID check.
+//   - W26 chain: after a prior migration's cutover, status.PodRef.Name
+//     points at the prior dst pod (= this migration's src). Without
+//     locking, literal guest.Name lookup misses (NotFound) and
+//     false-fires SourcePodReplaced; canonicalPodName resolves to the
+//     prior dst pod which IS the src for this migration but in
+//     cutover.go's executeCutover would post-step1 resolve to THIS
+//     migration's dst pod and cutoverStep2 would delete the migrated
+//     guest. Locking eliminates both modes uniformly.
+func srcPodLookupName(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alpha1.SwiftGuest) string {
+	if mig.Status.SourcePodRef != nil && mig.Status.SourcePodRef.Name != "" {
+		return mig.Status.SourcePodRef.Name
+	}
+	return canonicalPodNameForGuest(guest)
 }
