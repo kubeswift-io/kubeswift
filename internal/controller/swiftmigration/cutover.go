@@ -323,6 +323,7 @@ func (r *SwiftMigrationReconciler) cutoverStep2(
 	if srcPod == nil {
 		// deriveCutoverStep wouldn't return cutoverStep2Pending if
 		// srcPod is nil, but defensive: treat as already-done.
+		stampCutoverStep2DispatchedAt(status)
 		setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverCompleting)
 		return phaseRequeue(stopAndCopyLivePollInterval)
 	}
@@ -332,14 +333,35 @@ func (r *SwiftMigrationReconciler) cutoverStep2(
 			// Already gone — previous reconcile's Delete succeeded
 			// but controller crashed before observing. Treat as
 			// success.
+			stampCutoverStep2DispatchedAt(status)
 			setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverCompleting)
 			return phaseRequeue(stopAndCopyLivePollInterval)
 		}
 		return phaseTransient(fmt.Errorf("cutover step 2 (Delete src pod): %w", err))
 	}
 
+	stampCutoverStep2DispatchedAt(status)
 	setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverCompleting)
 	return phaseRequeue(stopAndCopyLivePollInterval)
+}
+
+// stampCutoverStep2DispatchedAt records the moment the controller
+// dispatched the src pod Delete (i.e., cutover step 2). This is the
+// authoritative anchor for status.ObservedDowntime per W27a (Tracked
+// Follow-up #7): cutover commit point on the source side, where vCPU
+// pause begins inside CH.
+//
+// Idempotent: only sets the timestamp if currently nil. Preserves the
+// original timestamp across leader-handover and cutover-mid-flight
+// reconcile-recovery (§2.4) reentry — re-dispatching Delete on an
+// already-deleted (NotFound) src pod must NOT shift the anchor; the
+// vCPU pause began at the original dispatch, not at the recovery
+// reentry.
+func stampCutoverStep2DispatchedAt(status *migrationv1alpha1.SwiftMigrationStatus) {
+	if status.CutoverStep2DispatchedAt == nil {
+		now := metav1.Now()
+		status.CutoverStep2DispatchedAt = &now
+	}
 }
 
 // cutoverStep3 transitions the SwiftMigration phase from StopAndCopy

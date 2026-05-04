@@ -790,6 +790,58 @@ func TestStopAndCopyLive_LeaderHandoverMidRecvIssued_ReentrantNoDuplicateWrite(t
 	}
 }
 
+// W27b: stampObservedPauseWindow reads the swiftletd-on-src reported
+// pause window from the src pod's
+// kubeswift.io/migration-pause-window-ms annotation and stamps it
+// into status.ObservedPauseWindow. Verifies the happy-path read.
+func TestStampObservedPauseWindow_HappyPath_W27b(t *testing.T) {
+	mig := &migrationv1alpha1.SwiftMigration{}
+	status := &migrationv1alpha1.SwiftMigrationStatus{}
+	src := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{AnnotationMigrationPauseWindowMs: "312"},
+		},
+	}
+	stampObservedPauseWindow(context.Background(), mig, status, src)
+	if status.ObservedPauseWindow == nil {
+		t.Fatalf("ObservedPauseWindow not stamped")
+	}
+	if got := status.ObservedPauseWindow.Duration; got != 312*time.Millisecond {
+		t.Errorf("ObservedPauseWindow: want 312ms, got %v", got)
+	}
+}
+
+// W27b defensive: malformed annotation leaves ObservedPauseWindow nil
+// (operators see a missing field, never a wrong one). Same posture as
+// W27a's defensive nil-check on missing CutoverStep2DispatchedAt.
+func TestStampObservedPauseWindow_ParseFailure_LeavesFieldNil_W27b(t *testing.T) {
+	mig := &migrationv1alpha1.SwiftMigration{}
+	status := &migrationv1alpha1.SwiftMigrationStatus{}
+	src := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{AnnotationMigrationPauseWindowMs: "garbage"},
+		},
+	}
+	stampObservedPauseWindow(context.Background(), mig, status, src)
+	if status.ObservedPauseWindow != nil {
+		t.Errorf("ObservedPauseWindow should be nil on parse failure; got %v",
+			status.ObservedPauseWindow)
+	}
+}
+
+// W27b: missing annotation (older swiftletd version, unexpected pod
+// state) is silent — no log spam, field stays nil.
+func TestStampObservedPauseWindow_MissingAnnotation_LeavesFieldNil_W27b(t *testing.T) {
+	mig := &migrationv1alpha1.SwiftMigration{}
+	status := &migrationv1alpha1.SwiftMigrationStatus{}
+	src := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: nil}}
+	stampObservedPauseWindow(context.Background(), mig, status, src)
+	if status.ObservedPauseWindow != nil {
+		t.Errorf("ObservedPauseWindow should be nil when annotation absent; got %v",
+			status.ObservedPauseWindow)
+	}
+}
+
 // key extracts the namespacedKey for a fixture pod (mirrors what
 // existing tests use ad-hoc; small local helper for readability).
 func key(p *corev1.Pod) namespacedKey {

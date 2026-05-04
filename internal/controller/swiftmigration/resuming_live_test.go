@@ -67,6 +67,11 @@ func TestResumingLive_HappyPath_AdvancesToCompleted(t *testing.T) {
 	dst.Annotations = map[string]string{AnnotationGuestIP: "10.0.0.42"}
 	resumingStartedAt := metav1.NewTime(time.Now().Add(-2 * time.Second))
 	mig.Status.ResumingStartedAt = &resumingStartedAt
+	// W27a: ObservedDowntime now anchors on CutoverStep2DispatchedAt
+	// (stamped by cutoverStep2). Stamp slightly before
+	// ResumingStartedAt to mirror the production ordering.
+	cutoverStep2At := metav1.NewTime(time.Now().Add(-3 * time.Second))
+	mig.Status.CutoverStep2DispatchedAt = &cutoverStep2At
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -360,5 +365,75 @@ func TestResumingLive_PreservesObservedPauseWindow(t *testing.T) {
 	}
 	if status.ObservedPauseWindow == nil || status.ObservedPauseWindow.Duration != preset.Duration {
 		t.Errorf("ObservedPauseWindow modified; want %v, got %+v", preset, status.ObservedPauseWindow)
+	}
+}
+
+// W27a integration: observedDowntime is computed against
+// CutoverStep2DispatchedAt, NOT ResumingStartedAt. This test simulates
+// the production reality where step 2 dispatched ~45s ago and the dst
+// is now reaching GuestRunning=True. Pre-W27a the value was a
+// sub-millisecond nonsense reading from two adjacent metav1.Now()
+// calls in the same reconcile.
+func TestResumingLive_ObservedDowntime_AnchoredOnCutoverStep2_W27a(t *testing.T) {
+	scheme := testScheme(t)
+	mig, guest, dst := resumingLiveFixture(t)
+	setGuestRunningTrue(guest)
+	dst.Annotations = map[string]string{AnnotationGuestIP: "10.0.0.42"}
+	// Production timing: step 2 dispatched ~45s ago.
+	cutoverStep2At := metav1.NewTime(time.Now().Add(-45 * time.Second))
+	mig.Status.CutoverStep2DispatchedAt = &cutoverStep2At
+	// Resuming was entered shortly after step 2.
+	resumingStartedAt := metav1.NewTime(time.Now().Add(-44 * time.Second))
+	mig.Status.ResumingStartedAt = &resumingStartedAt
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, dst).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	if res := r.handleResumingLive(context.Background(), mig, status); !res.Advanced {
+		t.Fatalf("expected Advanced; got %+v", res)
+	}
+	if status.ObservedDowntime == nil {
+		t.Fatalf("ObservedDowntime not computed")
+	}
+	// Must reflect ~45s; allow generous tolerance for test wall-clock
+	// drift. Pre-W27a value was ~50µs.
+	got := status.ObservedDowntime.Duration
+	if got < 40*time.Second || got > 50*time.Second {
+		t.Errorf("ObservedDowntime should reflect ~45s cutover-to-resume window; got %v", got)
+	}
+}
+
+// W27a defensive: missing CutoverStep2DispatchedAt (state-machine
+// invariant violation) leaves ObservedDowntime nil rather than
+// reporting a wrong value. Operators see a missing field, never the
+// pre-W27a sub-millisecond nonsense.
+func TestResumingLive_ObservedDowntime_NilCutoverStamp_LeavesFieldNil_W27a(t *testing.T) {
+	scheme := testScheme(t)
+	mig, guest, dst := resumingLiveFixture(t)
+	setGuestRunningTrue(guest)
+	dst.Annotations = map[string]string{AnnotationGuestIP: "10.0.0.42"}
+	resumingStartedAt := metav1.NewTime(time.Now().Add(-2 * time.Second))
+	mig.Status.ResumingStartedAt = &resumingStartedAt
+	// CutoverStep2DispatchedAt deliberately nil.
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, dst).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	if res := r.handleResumingLive(context.Background(), mig, status); !res.Advanced {
+		t.Fatalf("expected Advanced; got %+v", res)
+	}
+	if status.ObservedDowntime != nil {
+		t.Errorf("ObservedDowntime should be nil when CutoverStep2DispatchedAt is missing; got %v",
+			status.ObservedDowntime)
 	}
 }
