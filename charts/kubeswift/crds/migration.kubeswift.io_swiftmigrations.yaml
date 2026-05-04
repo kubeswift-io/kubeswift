@@ -269,6 +269,29 @@ spec:
                   Phase 1 offline mode does not populate this field.
                 format: date-time
                 type: string
+              cutoverStep2DispatchedAt:
+                description: |-
+                  CutoverStep2DispatchedAt is when cutover step 2 (src pod Delete
+                  dispatch) was issued by the controller. This is the cutover
+                  commit point on the source side — vCPU pause begins inside CH
+                  at this moment, propagating to the dst migration receiver.
+
+                  W27a (PR #54 follow-up, Tracked Follow-up #7): this is the
+                  authoritative anchor for observedDowntime. The prior anchor
+                  (status.ResumingStartedAt) was stamped one apiserver round-trip
+                  later AND consumed in the same reconcile invocation, producing
+                  sub-millisecond observedDowntime values across all 17 PR #46 +
+                  E12 walkthrough runs. Anchoring on CutoverStep2DispatchedAt
+                  instead measures the actual operator-visible cutover-to-resume
+                  window: cutover-step-2-dispatch → GuestRunning=True observation.
+
+                  Stamped idempotently by cutoverStep2: only set if currently nil,
+                  preserving the original timestamp across leader-handover and
+                  cutover-mid-flight reconcile-recovery (§2.4) reentry.
+
+                  Phase 1 offline mode does not populate this field.
+                format: date-time
+                type: string
               destinationNode:
                 description: DestinationNode is the resolved target node (after webhook
                   validation).

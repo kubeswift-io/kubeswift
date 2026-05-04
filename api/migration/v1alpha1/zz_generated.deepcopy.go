@@ -157,6 +157,10 @@ func (in *SwiftMigrationStatus) DeepCopyInto(out *SwiftMigrationStatus) {
 		in, out := &in.CutoverStep1At, &out.CutoverStep1At
 		*out = (*in).DeepCopy()
 	}
+	if in.CutoverStep2DispatchedAt != nil {
+		in, out := &in.CutoverStep2DispatchedAt, &out.CutoverStep2DispatchedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.ResumingStartedAt != nil {
 		in, out := &in.ResumingStartedAt, &out.ResumingStartedAt
 		*out = (*in).DeepCopy()
