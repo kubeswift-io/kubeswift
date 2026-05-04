@@ -336,3 +336,160 @@ The walkthrough discipline ("fix and continue on clean baseline" rather than "ma
 **Phase 3a PR 1 mode=live live migration: cluster-validated functional** for kernel-boot guests on default node-local networking. Five non-blocking findings (W17–W21) tracked for follow-up PR. Phase 3b candidates (W20, W12) tracked for the swift-ch-client async refactor.
 
 The four BLOCKING hotfixes shipped via PRs #43, #44, #45 are the actual functional unlock — without them, no Phase 3a live migration could succeed. PR 1's merge represented the controller-and-swiftletd architecture; the hotfixes complete the data plane.
+
+---
+
+# Phase 3a PR 1 — E12 Disk-Boot Validation (2026-05-04)
+
+> Cluster validation of disk-boot RWX+Block live migration (E12 in [`docs/design/live-migration-phase-3a.md`](../design/live-migration-phase-3a.md) §8.2 test plan). Same cluster as the kernel-boot walkthrough above; image baseline `sha-8c86ffa` (post-W22/W23/chart-version fix), then `sha-f6cf771` (post-W26 hotfix).
+
+Phase 3a docs claimed support for **two** workload classes (`kernelRef` + `imageRef` with RWX+Block); PR #46 walkthrough only validated the first. E12 closes that gap and surfaces W26 — a workload-class-independent bug that PR #46's three-run determinism gate did not catch because that gate validated **timing-race elimination** (W22 lesson), not **chain-migration correctness**.
+
+## Findings summary
+
+| # | Severity | Disposition | One-line |
+|---|---|---|---|
+| W26 | BLOCKING | Fixed via [PR #53](https://github.com/projectbeskar/kubeswift/pull/53) | Back-to-back live migrations on the same SwiftGuest false-fired SourcePodReplaced; latent guest-destruction vector at `cutover.go::cutoverStep2`. Workload-class-independent — disk-boot validation surfaced it because the `or sequential miles→boba→miles→boba` S1 path naturally exercised chains |
+
+No W27 / fourth-finding-behind-a-finding surfaced. Chain closed at one BLOCKING.
+
+## Prerequisite + fixture inventory
+
+| Asset | Source |
+|---|---|
+| Longhorn v1.11.1 (engine v1) | Existing on cluster |
+| StorageClass `longhorn-migratable` (migratable:"true", fsType:"", 3 replicas) | Existing — pre-validated in PR #35 W9 |
+| Ubuntu Noble SwiftImage (`cloneStrategy: copy`) | **Created** as `mig-wt-disk/ubuntu-noble-copy` (default-namespace SwiftImages use `cloneStrategy: snapshot` — W9.x blocked for Block destinations) |
+| SwiftSeedProfile (kubeswift user, ed25519 key) | **Created** as `mig-wt-disk/default` |
+| SwiftGuestClass (4Gi/2cpu, 20Gi raw, RWX+Block, longhorn-migratable) | **Created** as `mig-wt-disk/live-migratable` (modeled on `config/samples/storage/swiftguestclass-rwx-migratable.yaml`) |
+| `mig-wt-disk` namespace (fresh, non-`default`) | **Created** — fresh-namespace gate per design §8.2 |
+| RBAC | Auto-bound by SwiftGuest controller (PR #30) — no manual apply |
+
+SwiftImage import + measure: 8m35s. disk-s1 boot to Running+IP: ~3min.
+
+## Scenarios
+
+### S1 baseline (3-run determinism + chain) — PASS
+
+| Run | Direction | Result | sourcePodRef (locked at Validating) | Wall-clock | Sentinel md5 |
+|---|---|---|---|---|---|
+| 1 | miles → boba | Completed | `<none>` (pre-W26 image) | 59s | `115d66eb…d4c` (locked) |
+| 2 | boba → miles | **Failed (W26)** | n/a | 21s | n/a |
+| 2-retry (post-W26) | boba → miles | Completed | `disk-s1-mig-4a3376` (run 1's dst) | 59s | `115d66eb…d4c` (preserved) |
+| 3 (post-W26) | miles → boba | Completed | `disk-s1-mig-c7683f` (run 2's dst) | 54s | (preserved) |
+
+3-run wall-clock: 59s / 59s / 54s — bounded variance, well within the W22-style determinism gate.
+
+`uptime` inside the guest after run 3 reported "1 hour, 22 minutes" — confirms three live resumes, no boot. Live migration's value proposition (state preservation across nodes) holds for disk-boot.
+
+### S2 reconcile-loop interruption — PASS
+
+disk-s2 miles → boba. Controller-manager pod killed at t+16s (mid `transferring guest state`). New leader took over; phase=Completed at t+57s.
+
+| Field | Value |
+|---|---|
+| Wall-clock total | 57s |
+| recvAttempts / sendAttempts | 1 / 1 (no duplicate dispatches across leader handover) |
+| Sentinel md5 | preserved |
+| Old controller pod | `controller-manager-66c64fc469-plv8h` |
+| New controller pod | `controller-manager-66c64fc469-9rwgg` |
+
+§2.4 state-machine reconstruction works on disk-boot's longer pre-copy window.
+
+### S5 force-delete dst mid-flight — PASS
+
+disk-s5 miles → boba. dst pod force-deleted (`--grace-period=0 --force`) at t+16s.
+
+| Field | Value |
+|---|---|
+| Phase transition to Failed | t+19s (3s after force-delete; fast-path detection) |
+| failureReason | **PodTerminated** (correct architect F4.3 classification — not Other, not Timeout) |
+| failureMessage | `destination pod "disk-s5-mig-8c831c" disappeared during StopAndCopy` |
+| src guest survives | Running on miles, podRef unchanged, sentinel preserved |
+
+W18 classification gap (kernel-boot S5: maps to Other not PodTerminated) does **not** surface on disk-boot — fast-path fired correctly.
+
+### S7 cancel pre-cutover — PASS
+
+disk-s7 boba → miles. `kubectl patch smig --type=merge -p '{"spec":{"cancelRequested":true}}'` at t+16s.
+
+| Field | Value |
+|---|---|
+| Phase transition to Cancelled | t+32s (16s from cancel patch) |
+| failureReason | Cancelled |
+| failureMessage | `destination pod was never created; cancel completes without swiftletd ack` |
+| src guest survives | Running on boba, podRef unchanged, sentinel preserved |
+
+Cancel discipline holds on disk-boot.
+
+## W26 root cause + fix
+
+**Repro** (S1 run 2 first attempt, 2026-05-04, image `sha-8c86ffa`):
+
+- Run 1 succeeded; `SwiftGuest.status.podRef.Name` patched to `disk-s1-mig-4a3376` (run 1's dst, now run 2's canonical src).
+- Run 2 began. `Validating-live` captured `status.SourcePodUID` correctly via `canonicalPodNameForGuest` (which post-run-1 returns the run-1-dst-suffix name).
+- Run 2 reached StopAndCopy → `transferring guest state`. At t+21s, phase=Failed, failureReason=`SourcePodReplaced`, failureMessage `source pod for SwiftGuest "disk-s1" no longer exists during StopAndCopy`.
+- **Verification**: source pod `disk-s1-mig-4a3376` (UID `0b596b96-…`) still Running on boba. False-positive.
+
+**Root cause** at [`stopandcopy_live.go:184`](../../internal/controller/swiftmigration/stopandcopy_live.go) (and same shape at [`cutover.go:167`](../../internal/controller/swiftmigration/cutover.go)):
+
+```go
+r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &srcPod)
+```
+
+The W15 fix replaced `canonicalPodNameForGuest` with literal `guest.Name` to dodge a cutoverStep1 informer race. The fix's docstring assumed "src pod is named guest.Name throughout its lifetime" — true for first migrations only. After a prior migration's cutover, `status.podRef.Name` points at the prior dst pod (= the new migration's src), which is NOT `guest.Name`. Literal lookup hit NotFound → false-fire.
+
+`cutover.go:167`'s same literal-`guest.Name` lookup carried a worse latent bug: chain run 2's cutoverStep2 would silently skip src-pod deletion (NotFound) leaking the prior dst pod on the source node. The naive canonicalPodName-everywhere alternative would post-cutoverStep1 resolve to **THIS** migration's dst pod and `cutoverStep2` would delete the migrated guest — silent data destruction.
+
+**Fix** (PR #53): stamp `status.SourcePodRef.Name = srcPod.Name` at `Validating-live` (mirrors existing `SourcePodUID` lock-in); three live-mode src lookups use a `srcPodLookupName(mig, guest)` helper that returns `SourcePodRef.Name` when set, falls back to `canonicalPodNameForGuest` for defense. Race-immune (locked at validation) AND chain-safe.
+
+**Phase 1 offline** is unaffected — Approach A reuses `guest.Name` as the post-migration pod name; literal-`guest.Name` lookups remain correct there. W26 fix is live-mode-only.
+
+## Workload-class blast radius confirmation (kernel-boot chain)
+
+After the W26 hotfix landed (image `sha-f6cf771`), a kernel-boot chain validation ran in `mig-wt`:
+
+| Run | Direction | Result | sourcePodRef | Wall-clock |
+|---|---|---|---|---|
+| A | miles → boba | Completed | `kernel-s1` | 51s |
+| B (chain) | boba → miles | Completed | `kernel-s1-mig-3cebf9` (run A's dst) | 48s |
+
+Run B is the exact W26 chain scenario on kernel-boot — before the fix it would have false-fired. After: clean. Same code path runs for both workload classes; W26 was a controller-level bug surfaced by disk-boot only because PR #46's three-run gate ran on different SwiftGuests, not chained on one.
+
+## Validation methodology gap (recurring W5 pattern, sixth occurrence)
+
+PR #46's three-run kernel-boot determinism gate validated **timing-race elimination** (W22 lesson). It did not validate **chain-migration correctness** — different question. Disk-boot E12's documented "or sequential miles→boba→miles→boba" path naturally landed in chain territory and surfaced W26.
+
+This is the **W5 lesson restated for the sixth time** in the project's history:
+
+| # | Surfaced in | Pattern |
+|---|---|---|
+| 1 | Snapshot F2 | Per-namespace RBAC manual-apply (papered over in walkthrough doc, re-surfaced in Phase 2) |
+| 2 | Phase 2 W3 + W6 | Storage handoff scenario absent from spike |
+| 3 | PR #32 W8 | Cached-client RBAC sufficiency invisible to fake-client tests |
+| 4 | PR #35 W9.x + W10 | CSI annotation gap + CH boot-time WARN absent from unit tests |
+| 5 | PR #42 W13–W21 | Four BLOCKING hotfix iterations — unit tests passed at each layer |
+| **6** | **E12 W26** | **Chain-migration correctness absent from PR #46's determinism gate** |
+
+Future Phase 3a/3b validation should include explicit chain-migration scenarios (≥2 sequential migrations on the same SwiftGuest) alongside three-run determinism. Adds further weight to Tracked Follow-up #2 (operator-flow validation pattern in test infrastructure).
+
+## Performance comparison
+
+| Scenario | Kernel-boot (PR #46) | Disk-boot (E12) | Δ |
+|---|---|---|---|
+| S1 happy path | ~51s | 59s | +16% |
+| Chain run B | n/a | 59s | — |
+| Reconcile-recovery | n/a | 57s | — |
+| Force-delete fail-fast | ~5s | 19s (16s cancel-write delay) | comparable |
+| Cancel pre-cutover | <30s | 32s | comparable |
+
+Disk-boot's Ubuntu Noble pre-copy window is ~16% longer than kernel-boot's faas-minimal — well within bounds; no anomaly.
+
+## Cluster validation status — both workload classes
+
+**Phase 3a PR 1 mode=live live migration: cluster-validated functional for both in-scope workload classes.**
+
+- Kernel-boot guests (`spec.kernelRef`): validated PR #46 (10 scenarios) + chain validated post-W26 hotfix (2 runs, sourcePodRef confirmed)
+- RWX+Block disk-boot guests (`spec.imageRef` + RWX+Block storage): validated E12 (S1 3-run + chain + S2 + S5 + S7)
+
+W26 fix is the data-plane unlock for chain migrations on either workload class. Without it, every operator workflow involving repeated drain/rebalance on the same SwiftGuest would have hit the bug after the first migration.
