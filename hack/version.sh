@@ -25,7 +25,15 @@ if [[ -n "$GIT_TAG" ]]; then
   fi
 else
   # Dev (no tag): 0.0.0-dev.<shortsha>
-  VERSION="0.0.0-dev.${GIT_COMMIT_SHORT}"
+  # SemVer §9 leading-zero guard: only ~0.4% of commits hit this
+  # (all-digit hash starting with 0). Mirror the same conditional
+  # the release-dev workflow applies; otherwise local computation
+  # would diverge from published chart versions.
+  if [[ "$GIT_COMMIT_SHORT" =~ ^0[0-9]{6}$ ]]; then
+    VERSION="0.0.0-dev.g${GIT_COMMIT_SHORT}"
+  else
+    VERSION="0.0.0-dev.${GIT_COMMIT_SHORT}"
+  fi
   VERSION_TAG="v${VERSION}"
   IMAGE_TAG="sha-${GIT_COMMIT_SHORT}"
   CHART_VERSION="$VERSION"
