@@ -10,7 +10,15 @@ TYPE="${1:-dev}"
 case "$TYPE" in
   dev)
     GIT_COMMIT_SHORT="${GIT_COMMIT_SHORT:-$(git rev-parse HEAD | cut -c1-7)}"
-    echo "0.0.0-dev.${GIT_COMMIT_SHORT}"
+    # SemVer §9 leading-zero guard: only ~0.4% of commits hit this
+    # (all-digit hash starting with 0). Mirror the same conditional
+    # the release-dev workflow applies; otherwise local computation
+    # would diverge from published chart versions.
+    if [[ "$GIT_COMMIT_SHORT" =~ ^0[0-9]{6}$ ]]; then
+      echo "0.0.0-dev.g${GIT_COMMIT_SHORT}"
+    else
+      echo "0.0.0-dev.${GIT_COMMIT_SHORT}"
+    fi
     ;;
   rc|stable)
     GIT_TAG="${GIT_TAG:-$(git describe --tags --exact-match 2>/dev/null)}"
