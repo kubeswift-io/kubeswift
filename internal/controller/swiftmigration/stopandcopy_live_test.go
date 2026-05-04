@@ -30,6 +30,10 @@ func stopAndCopyFixture(t *testing.T, srcUID types.UID) (*migrationv1alpha1.Swif
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
 	mig.Status.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Status.SourcePodUID = srcUID
+	// W26: src pod name locked at Validating; mirror that in the
+	// fixture so srcPodLookupName resolves to the original src pod
+	// regardless of guest.Status.PodRef drift across cutover/race.
+	mig.Status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: "guest"}
 	startedAt := metav1.NewTime(time.Now().Add(-30 * time.Second))
 	mig.Status.StartedAt = &startedAt
 
@@ -695,6 +699,60 @@ func TestStopAndCopyLive_PostCutoverStep1_RaceReconcile_DoesNotFalseFireUIDCheck
 	// + cutoverStep1At unset means cutoverStep1Timestamp recovery path,
 	// or step 2 if CutoverStep1At was set via fixture. Either way,
 	// no SourcePodReplaced.
+}
+
+// W26 regression: chain migration. After a prior migration's cutover,
+// SwiftGuest.status.podRef.Name points at the prior dst pod (= the new
+// migration's src). Pre-W26 the StopAndCopy UID-check resolved src by
+// literal guest.Name → NotFound → false-fired SourcePodReplaced on a
+// perfectly healthy chain migration. The W26 fix locks the src pod
+// name at Validating-live (status.SourcePodRef.Name) so resolution is
+// chain-safe.
+//
+// Discovered on cluster during Phase 3a PR 1 disk-boot E12 validation
+// (S1 run 2, miles→boba→miles). Same code path runs for kernel-boot
+// and disk-boot — workload-class-independent bug; disk-boot validation
+// happened to exercise back-to-back migrations and surface it.
+func TestStopAndCopyLive_ChainMigration_SrcResolvesToPriorDstPod_NoFalseFire_W26(t *testing.T) {
+	mig, guest, _, dst := stopAndCopyFixture(t, "uid-PRIOR-DST")
+	// Chain state: SwiftGuest's canonical pod is now the prior
+	// migration's dst-suffix pod. status.SourcePodRef.Name was locked
+	// in at Validating-live to that same name (the "src" for THIS
+	// migration).
+	priorDstPodName := "guest-mig-firstrun"
+	mig.Status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: priorDstPodName}
+	guest.Status.PodRef = &corev1.ObjectReference{Name: priorDstPodName, Namespace: guest.Namespace}
+	// The actual src pod for THIS migration has the prior-dst-suffix
+	// name. Literal guest.Name lookup ("guest") would NotFound; fix
+	// resolves via locked-in name.
+	chainSrc := templateSrcPod(priorDstPodName, "default")
+	chainSrc.UID = "uid-PRIOR-DST"
+	chainSrc.Annotations = map[string]string{AnnotationGuestIP: "10.0.0.5"}
+	r := newStopAndCopyReconciler(t, mig, guest, chainSrc, dst)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason == migrationv1alpha1.FailureReasonSourcePodReplaced {
+		t.Errorf("UID check false-fired SourcePodReplaced; W26 chain regression. msg=%q",
+			res.FailureMsg)
+	}
+}
+
+// W26 first-migration smoke: nothing fancy here, but the W26 fix
+// hinges on srcPodLookupName falling back to canonicalPodNameForGuest
+// when status.SourcePodRef is unset. Regress against accidental
+// removal of the fallback.
+func TestStopAndCopyLive_FirstMigration_SrcResolvesToGuestName_W26Fallback(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	// Simulate a Validating-live that didn't run yet (e.g., recovery
+	// reconcile or test scenario): SourcePodRef unset. Fallback should
+	// land on canonicalPodNameForGuest = guest.Name (no prior podRef).
+	mig.Status.SourcePodRef = nil
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason == migrationv1alpha1.FailureReasonSourcePodReplaced {
+		t.Errorf("fallback path false-fired SourcePodReplaced; msg=%q", res.FailureMsg)
+	}
 }
 
 func TestStopAndCopyLive_DefensiveGuard_NotLiveMode(t *testing.T) {
