@@ -95,7 +95,7 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 	// eviction, etc), which fails the migration.
 	if shouldCheckSourcePodUID(mig) && status.SourcePodUID != "" {
 		var srcPod corev1.Pod
-		err := r.Get(ctx, client.ObjectKey{Name: canonicalPodNameForGuest(&guest), Namespace: guest.Namespace}, &srcPod)
+		err := r.Get(ctx, client.ObjectKey{Name: srcPodLookupName(mig, &guest), Namespace: guest.Namespace}, &srcPod)
 		if apierrors.IsNotFound(err) {
 			return phaseFailure(
 				fmt.Sprintf("source pod for SwiftGuest %q no longer exists during Preparing", guest.Name),
@@ -121,7 +121,7 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 	// fetched it for the UID check, but re-fetching is cheaper than
 	// threading it through; this code path runs once per reconcile.)
 	var srcPod corev1.Pod
-	if err := r.Get(ctx, client.ObjectKey{Name: canonicalPodNameForGuest(&guest), Namespace: guest.Namespace}, &srcPod); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: srcPodLookupName(mig, &guest), Namespace: guest.Namespace}, &srcPod); err != nil {
 		if apierrors.IsNotFound(err) {
 			return phaseFailure(
 				fmt.Sprintf("source pod for SwiftGuest %q no longer exists; cannot template dst pod", guest.Name),
