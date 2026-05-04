@@ -580,6 +580,92 @@ This is not a PR #32 regression. Same shape as Phase 1 → Phase 2 → PR
 (spike scenarios under-constrain the design) restated yet again — this
 time at the API/runtime boundary.
 
+### 7. Phase 3a downtime-metrics observability broken / not wired (W27 — surfaced by E12 disk-boot validation 2026-05-04)
+
+E12 cluster validation surfaced **two metrics-observability bugs** in
+Phase 3a's `status.observedDowntime` and `status.observedPauseWindow`
+fields. Correctness of migrations is unaffected — these are
+operator-visible metrics surfaces only — but both are paper-shipped
+and undeliverable as documented. Disposition: **W27 follow-up PR**
+after PR 2 (swiftctl resolveLauncherPodName) and PR #54 walkthrough
+log update merge. **Not a Phase 3b prerequisite** — Phase 3b design
+conversation can begin in parallel; W27 lands as a small hotfix.
+
+**W27a — observedDowntime measurement broken (sub-millisecond values
+across all walkthroughs).**
+
+Code site:
+[`internal/controller/swiftmigration/resuming_live.go:130-198`](internal/controller/swiftmigration/resuming_live.go).
+`ResumingStartedAt` is stamped at line 131 on the first reconcile that
+enters Resuming phase; `now := metav1.Now()` at line 194 fires later
+in the SAME reconcile invocation when the completion path fires
+(GuestRunning=True observed without an intervening apiserver event
+because the dst-side condition write may have already landed before
+this reconcile started). The two `metav1.Now()` calls are
+microseconds apart on real clusters, producing 34–114µs durations
+across all 9 PR #46 + 8 E12 walkthrough runs. The existing comment at
+lines 186–193 explicitly says "B3 may refine to a step-2 anchor if it
+stamps a separate timestamp; until then this is the best
+approximation" — design knew this was wrong, deferred without
+tracking.
+
+Fix shape: stamp `status.CutoverStep2DispatchedAt` in
+[`cutover.go::cutoverStep2`](internal/controller/swiftmigration/cutover.go)
+when the src pod Delete dispatches; compute
+`observedDowntime = guestRunningObservedAt - cutoverStep2DispatchedAt`
+at Completed. Wire-anchor: cutoverStep2 is the actual cutover commit
+point (vCPU pause begins on src CH at this moment); GuestRunning=True
+on the SwiftGuest is the actual resume signal (vCPU pause ends on dst
+CH). The window between these is the operator-visible downtime — the
+~38–48s pre-copy + cutover total observed in cluster logs.
+
+W27a does not affect migration correctness. Affects: operators
+reading `kubectl get smig -o wide` for downtime, dashboards consuming
+the field, capacity-planning analyses. The CRD field exists with
+correct documentation; the implementation under-delivers.
+
+**W27b — observedPauseWindow plumbing half-implemented.**
+
+Code surface inventory:
+
+| Side | Status |
+|---|---|
+| swiftletd writes `kubeswift.io/migration-pause-window-ms` annotation on src pod via `write_migration_status` ([`rust/swiftletd/src/action.rs:1383-1407`](rust/swiftletd/src/action.rs)) | ✓ implemented |
+| swiftletd computes `pause_window_ms = elapsed_ms` at `dispatch_migration_send_complete` (line 701) and `dispatch_migration_send_complete` clean-exit (line 809) | ✓ implemented |
+| Go controller: ANY read of `kubeswift.io/migration-pause-window-ms` from src pod annotations | **✗ ZERO consumers** |
+| Go controller: ANY assignment to `status.ObservedPauseWindow` field | **✗ ZERO assignments** |
+
+Comment at
+[`resuming_live.go:75–79`](internal/controller/swiftmigration/resuming_live.go)
++ `:199–203` says "ObservedPauseWindow is populated by B3 from src
+pod's migration-status-detail annotation during StopAndCopy. B2.3
+leaves it as-is — preserves whatever B3 wrote, leaves nil if B3
+hasn't run yet (forward-compat hedge per the prompt's rule 5)." B3
+landed but never implemented the read-and-stamp path. Field is
+permanently nil in cluster.
+
+By contrast: `internal/controller/swiftsnapshot/local.go:249-251`
+DOES read the snapshot-pause-window-ms annotation and stamp
+`status.ObservedPauseWindowMs`. That's the parallel pattern Phase 3a
+needs; it just wasn't ported.
+
+Fix shape: in stopandcopy_live.go (or the cutover entry point), read
+the src pod's `kubeswift.io/migration-pause-window-ms` annotation
+when present and stamp `status.ObservedPauseWindow` (parsing
+milliseconds → metav1.Duration). Mirror the snapshot pattern at
+[`local.go:249-252`](internal/controller/swiftsnapshot/local.go). ~10
+LOC + a unit test.
+
+W27a + W27b together: a single follow-up PR cleanly addresses both.
+W27a fixes the dispatch-to-resume wall-clock window; W27b fixes the
+swiftletd-reported vCPU-pause-only window. Both fields then carry
+their documented semantics.
+
+**Note on shipping qualification** (operator's framing): "Phase 3a
+shipped: correctness validated; downtime metrics observability
+deferred to W27 follow-up" is the honest version of the shipping
+claim. PR #54 description updated to state this explicitly.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
