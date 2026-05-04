@@ -29,12 +29,12 @@ jobs:
           SHORT=$(echo ${{ github.sha }} | cut -c1-7)
           # SemVer 2.0.0 §9 forbids leading zeroes in numeric pre-release
           # identifiers, and Helm enforces this strictly. A 7-char short
-          # hash that happens to be all digits (e.g., "0781498") is
-          # treated as numeric → fails with "Version segment starts with
-          # 0". Prepend "g" (git describe convention) to make the segment
-          # alphanumeric, which bypasses the leading-zero rule.
-          # Docker image tag is unaffected — Docker tags don't use
-          # SemVer validation.
+          # hash that happens to be all digits (e.g., "0781498" — the
+          # merge SHA of PR #49) is treated as numeric and rejected with
+          # "Version segment starts with 0". Prepend "g" (git describe
+          # convention) to make the segment alphanumeric, which bypasses
+          # the leading-zero rule. Docker image tag is unaffected
+          # because Docker tags don't use SemVer validation.
           echo "version=0.0.0-dev.g${SHORT}" >> $GITHUB_OUTPUT
           echo "image_tag=sha-${SHORT}" >> $GITHUB_OUTPUT
           echo "git_commit=${{ github.sha }}" >> $GITHUB_OUTPUT
