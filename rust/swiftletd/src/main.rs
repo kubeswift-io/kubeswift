@@ -320,8 +320,28 @@ fn main() {
             match result {
                 Ok((exit_status, _pid, _serial_socket_path)) => {
                     if exit_status.success() {
-                        log::info!("vm_stopped_gracefully");
-                        report_running(false, Some("VmStopped"));
+                        // W22 (PR #46 follow-up cluster re-walkthrough):
+                        // when CH exits cleanly because vm.send-migration
+                        // succeeded (src side of a live migration), the
+                        // guest is NOT stopped — it's running on the dst
+                        // pod. Writing GuestRunning=False/VmStopped here
+                        // races with swiftletd-on-dst's W16
+                        // GuestRunning=True write on the same SwiftGuest
+                        // condition; non-deterministic outcome leaves the
+                        // SwiftGuest stuck at GuestRunning=False.
+                        // action::migration_send_completed_clean() returns
+                        // true iff dispatch_migration_send hit its W1-gate
+                        // success path; suppress the VmStopped write so
+                        // dst's GuestRunning=True is the authoritative
+                        // post-migration state.
+                        if action::migration_send_completed_clean() {
+                            log::info!(
+                                "vm_exited_post_send_migration; skipping VmStopped report (W22)"
+                            );
+                        } else {
+                            log::info!("vm_stopped_gracefully");
+                            report_running(false, Some("VmStopped"));
+                        }
                     } else {
                         log::warn!("vm_exited_nonzero code={:?}", exit_status.code());
                         report_running(false, Some("VmFailed"));
