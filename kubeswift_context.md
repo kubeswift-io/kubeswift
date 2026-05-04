@@ -716,7 +716,51 @@ Walkthrough log:
 [`docs/migration/phase-3a-cluster-validation.md`](docs/migration/phase-3a-cluster-validation.md).
 
 **Cluster validation status: Phase 3a PR 1 mode=live live migration
-functional** for kernel-boot guests on default node-local networking.
+functional** for **both in-scope workload classes** on default
+node-local networking:
+- **Kernel-boot** (`spec.kernelRef`): PR #46 walkthrough (10 scenarios)
+  + post-W26 chain validation (2 runs, sourcePodRef confirmed).
+- **RWX+Block disk-boot** (`spec.imageRef` + RWX+Block storage): E12
+  walkthrough 2026-05-04 (S1 3-run + chain run 2 boba→miles + S2
+  reconcile-recovery + S5 force-delete + S7 cancel-pre-cutover; all
+  PASS post-W26).
+
+### W26 — chain-migration BLOCKING bug surfaced by E12, fixed via PR #53
+
+E12 surfaced **W26**: Phase 3a's three live-mode src-pod lookup sites
+([`stopandcopy_live.go:184`](internal/controller/swiftmigration/stopandcopy_live.go),
+[`cutover.go:167`](internal/controller/swiftmigration/cutover.go),
+[`preparing_live.go:98,124`](internal/controller/swiftmigration/preparing_live.go))
+derived src pod identity from cluster state — literal `guest.Name`
+(W15 fix in two of them) or `canonicalPodName` (the third). Both
+derivations break for back-to-back migrations: after a prior
+migration's cutover, `SwiftGuest.status.podRef.Name` points at the
+prior dst pod (= the new migration's src), not `guest.Name`. Literal
+lookup hit NotFound → false-fired SourcePodReplaced; the naive
+canonicalPodName-everywhere alternative would post-cutoverStep1
+resolve to **THIS** migration's dst pod, and `cutoverStep2` would
+delete the migrated guest (silent data destruction).
+
+**Fix** (PR #53): stamp `status.SourcePodRef.Name = srcPod.Name` at
+Validating-live (mirroring existing `SourcePodUID` lock-in); three
+live-mode src lookups use `srcPodLookupName(mig, guest)` helper that
+returns `SourcePodRef.Name` when set, falls back to
+`canonicalPodNameForGuest`. Race-immune AND chain-safe.
+
+**Workload-class-independent.** Same controller code runs for both
+kernel-boot and disk-boot. Disk-boot E12 surfaced it because the
+"or sequential miles→boba→miles→boba" S1 path naturally exercised
+chain migrations; PR #46's three-run determinism gate ran on
+non-chained runs (different validation question — timing-race
+elimination per W22 lesson, not chain correctness).
+
+**Phase 1 offline unaffected** — Approach A reuses `guest.Name` as
+post-migration pod name, so literal-`guest.Name` lookups remain
+correct there. W26 fix is live-mode-only.
+
+W5 pattern restated for the **sixth** time. Future Phase 3a/3b
+validation should include explicit chain-migration scenarios alongside
+three-run determinism gates.
 
 ### Phase 3a PR 1 implementation status (Group B + Group C complete)
 
@@ -998,6 +1042,7 @@ in test infrastructure).
 | 61 | api/swift/v1alpha1 + controller + webhook | Storage access mode CRD: SwiftGuestClass.spec.storage and SwiftGuest.spec.storage select accessMode/volumeMode/storageClassName for controller-created PVCs. CRD admission rejects RWX+Filesystem (Filesystem RWX is not live-migration-capable). SwiftMigration webhook gains forward-compat live-mode storage gate (recompute from spec, NOT read status — write-back-race avoidance). Defaults preserve current behaviour (RWO+Filesystem). Resolves W6 design contradiction at the API surface; storage architecture review owns the deeper questions (CSI driver matrix, F2 split-brain on RWX). | PR #32 |
 | 62 | rbac (controller-manager ClusterRole) | StorageClass `list,watch` verbs missing — controller-runtime's cached client opens an informer on every GETable resource; PR #32's `checkStorageReady`'s `r.Get` on StorageClass triggered "Failed to watch" loop, starving SwiftGuest reconcile queue. Fake-client unit tests passed (no informer). Same shape as W7 (rolebindings). (W8 in PR #32 walkthrough.) | PR #32 |
 | 63 | rootdisk Copy Job + launcher pod builder + clone-grow-init + restore-receive launcher + RuntimeIntent producer + rust opacity contract | Block volumeMode runtime path: Copy Job branches to `volumeDevices` + `qemu-img convert + sgdisk -e` (no cp, no resize) for Block destinations; launcher pod uses VolumeDevices at `/dev/kubeswift-root`; clone-grow-init runs sgdisk -e against device path on Block (skips qemu-img resize as no-op); RuntimeIntent.RootDisk.Path resolves to device path for Block guests; rust crates verified suffix-free via Q2 grep audit. End-to-end cluster validation: RWX+Block guest boots, growpart succeeds, df reports ~37G of 40G, PVC persistence across pod recreate verified. Two findings (W10 noisy boot WARN non-blocking; W11=W9.x cloneStrategy=snapshot+Block fails at CSI provisioning, deferred). | PR #35 |
+| 64 | swiftmigration controller (validating_live + stopandcopy_live + cutover + preparing_live) | Phase 3a back-to-back live migrations false-fired SourcePodReplaced (and carried a latent guest-destruction vector at cutoverStep2). Three live-mode src-pod lookup sites derived src pod from cluster state; both literal-guest.Name (W15 fix) and canonicalPodName broke for chain migrations. Fix: stamp status.SourcePodRef.Name at Validating-live (mirrors existing SourcePodUID lock-in); use srcPodLookupName helper at all sites. Race-immune AND chain-safe. Workload-class-independent — same code runs for kernel-boot and disk-boot. (W26 in E12 disk-boot validation 2026-05-04.) | PR #53 |
 
 ---
 
