@@ -68,7 +68,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 /// W22 (PR #46 follow-up cluster re-walkthrough): tracks whether a
 /// migration-send has completed cleanly. Set inside
@@ -96,6 +99,52 @@ pub static MIGRATION_SEND_COMPLETED: AtomicBool = AtomicBool::new(false);
 /// suppress the post-launch VmStopped report (W22).
 pub fn migration_send_completed_clean() -> bool {
     MIGRATION_SEND_COMPLETED.load(Ordering::SeqCst)
+}
+
+/// W23 (PR #46 follow-up cluster re-walkthrough, post-W22): graceful-
+/// shutdown signal between the action loop and main.rs on the
+/// migration-send terminal write.
+///
+/// **Distinct from W22 — do not conflate.** W22's
+/// MIGRATION_SEND_COMPLETED flag prevents `main.rs` from writing
+/// GuestRunning=False/VmStopped after a successful migration-send
+/// (avoiding the race against dst-side W16 GuestRunning=True). W23
+/// addresses a different race that the W22 fix INTRODUCED:
+///
+///   - Pre-W22: main's post-launch path called report_running(false,
+///     VmStopped), whose apiserver Patch round-trip incidentally
+///     gave the action loop ~tens of ms to finish writing the
+///     terminal `migration-status: complete` annotation.
+///   - Post-W22: main's W22-flag-set branch skips the patch and
+///     returns immediately, killing the action loop thread before
+///     its terminal-status write call lands. The src pod retains
+///     `migration-status: running` forever; the controller never
+///     observes the W1 gate and stalls until spec.timeout.
+///
+/// Fix: action loop fires `notify_one()` on this Notify AFTER the
+/// terminal write for a MigrationSend action returns (success or
+/// failure). main.rs's W22 success branch awaits `.notified()` with
+/// a 10s bounded timeout before exiting. On timeout, log warn and
+/// exit anyway — controller's spec.timeout is the ultimate floor.
+///
+/// Notify semantics: notify_one before notified wakes the next
+/// notified call; notify_one is idempotent (at most one stored
+/// permit). Matches the "fire once at terminal-write completion,
+/// wait once in main" contract.
+///
+/// F2.4 preserved: no controller→swiftletd channel; this is purely
+/// swiftletd-internal main↔action-loop coordination via standard
+/// Rust primitives.
+static MIGRATION_SEND_TERMINAL_WRITTEN: OnceLock<Arc<Notify>> = OnceLock::new();
+
+/// Returns the singleton Notify used by the action loop to signal
+/// "terminal-status write for MigrationSend has completed". main.rs
+/// awaits `.notified()` on this with a bounded timeout. Initialised
+/// lazily on first call.
+pub fn migration_send_terminal_signal() -> Arc<Notify> {
+    MIGRATION_SEND_TERMINAL_WRITTEN
+        .get_or_init(|| Arc::new(Notify::new()))
+        .clone()
 }
 
 use kube::api::{Api, Patch, PatchParams};
@@ -1838,6 +1887,30 @@ async fn handle_namespace(
             {
                 log::error!("action_status_write_failed: {}", e);
             }
+            // W23: signal main.rs that the terminal write for a
+            // MigrationSend action has completed (success or failure).
+            // main.rs's W22 success branch awaits this before exiting,
+            // ensuring the apiserver actually received the
+            // `migration-status: complete` annotation patch before the
+            // process exits and kills this thread mid-flight.
+            //
+            // Fired AFTER the write call returns — the whole point is
+            // ensuring the write lands. Send-failure on the channel is
+            // benign (notify_one stores at most one permit; idempotent
+            // if no awaiter is parked yet).
+            //
+            // Scoped to MigrationSend only because that's the action
+            // whose completion triggers main's exit. Other actions
+            // (snapshot, restore, MigrationReceive, MigrationCancel)
+            // don't have main.rs exiting on their completion so they
+            // don't need the signal. Defensive completeness: fire on
+            // both success ("complete") and failure paths since a
+            // future code change might add an exit-on-send-failure
+            // path; cheap to fire either way.
+            if pending.kind == ActionKind::MigrationSend {
+                migration_send_terminal_signal().notify_one();
+                log::info!("w23_terminal_write_signal_fired id={}", pending.id);
+            }
             state.in_flight = None;
             state.last_completed_id = Some(pending.id);
         }
@@ -2984,6 +3057,67 @@ mod tests {
         assert!(migration_send_completed_clean());
         // Reset so other tests see the default.
         MIGRATION_SEND_COMPLETED.store(false, Ordering::SeqCst);
+    }
+
+    // ─── W23 (PR #46 follow-up cluster re-walkthrough, post-W22) ────
+    //
+    // Cluster re-walkthrough Scenarios 1+8 against the W22 image
+    // (sha-8dd1a51) showed src pod's migration-status stuck at
+    // "running" because main exited before the action loop's
+    // terminal-status write landed. W23 adds graceful shutdown
+    // signaling: action loop fires Notify after the terminal
+    // write returns; main awaits with 10s bounded timeout before
+    // exiting on the W22 success path.
+    //
+    // Unit-testable surface: the Notify primitive's signal-receive
+    // and timeout-expiry contracts. The full kube-write-then-signal
+    // shutdown flow is exercised by the cluster re-walkthrough.
+
+    #[tokio::test]
+    async fn w23_signal_received_within_timeout() {
+        // Two threads (or in this case, two tokio tasks) sharing the
+        // singleton Notify: one fires notify_one shortly; the other
+        // awaits .notified() with a 10s bound. The await must
+        // complete via signal, NOT timeout.
+        let signal = migration_send_terminal_signal();
+        let firer_signal = signal.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            firer_signal.notify_one();
+        });
+        let result = tokio::time::timeout(Duration::from_secs(10), signal.notified()).await;
+        assert!(result.is_ok(), "signal must be received within 10s timeout");
+    }
+
+    #[tokio::test]
+    async fn w23_signal_timeout_path_returns_err() {
+        // No firer; ensure timeout fires after a short bound.
+        // Use a *fresh* Notify (not the singleton) since the
+        // singleton may have a stored permit from prior tests.
+        let fresh = Arc::new(Notify::new());
+        let result = tokio::time::timeout(Duration::from_millis(100), fresh.notified()).await;
+        assert!(
+            result.is_err(),
+            "timeout-expiry path must return Err (Elapsed)"
+        );
+    }
+
+    #[tokio::test]
+    async fn w23_signal_idempotent_notify_one_before_notified() {
+        // Notify semantics: notify_one before notified stores at
+        // most one permit; the next notified() wakes immediately.
+        // This is the load-bearing property for the W23 contract:
+        // if the action loop fires before main awaits, main still
+        // wakes promptly.
+        let fresh = Arc::new(Notify::new());
+        fresh.notify_one();
+        // Second notify_one is benign (still at most one permit).
+        fresh.notify_one();
+        let result = tokio::time::timeout(Duration::from_millis(100), fresh.notified()).await;
+        assert!(
+            result.is_ok(),
+            "notify_one before notified must wake the next notified() call"
+        );
     }
 
     #[test]
