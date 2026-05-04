@@ -580,7 +580,18 @@ This is not a PR #32 regression. Same shape as Phase 1 → Phase 2 → PR
 (spike scenarios under-constrain the design) restated yet again — this
 time at the API/runtime boundary.
 
-### 7. Phase 3a downtime-metrics observability broken / not wired (W27 — surfaced by E12 disk-boot validation 2026-05-04)
+### 7. Phase 3a downtime-metrics observability — SHIPPED via W27 follow-up PR
+
+**Status: SHIPPED.** W27a + W27b both fixed in a single follow-up PR.
+`status.observedDowntime` now anchors on a new
+`status.cutoverStep2DispatchedAt` timestamp (stamped at src pod
+Delete dispatch); `status.observedPauseWindow` is read from the
+swiftletd-written `kubeswift.io/migration-pause-window-ms` annotation
+at `substateSrcCompleted`. Both fields carry their documented
+semantics. Cluster validation pending after merge + redeploy.
+
+Original W27 audit notes preserved below for context (the diagnosis
+that drove the fix).
 
 E12 cluster validation surfaced **two metrics-observability bugs** in
 Phase 3a's `status.observedDowntime` and `status.observedPauseWindow`
@@ -1129,6 +1140,7 @@ in test infrastructure).
 | 62 | rbac (controller-manager ClusterRole) | StorageClass `list,watch` verbs missing — controller-runtime's cached client opens an informer on every GETable resource; PR #32's `checkStorageReady`'s `r.Get` on StorageClass triggered "Failed to watch" loop, starving SwiftGuest reconcile queue. Fake-client unit tests passed (no informer). Same shape as W7 (rolebindings). (W8 in PR #32 walkthrough.) | PR #32 |
 | 63 | rootdisk Copy Job + launcher pod builder + clone-grow-init + restore-receive launcher + RuntimeIntent producer + rust opacity contract | Block volumeMode runtime path: Copy Job branches to `volumeDevices` + `qemu-img convert + sgdisk -e` (no cp, no resize) for Block destinations; launcher pod uses VolumeDevices at `/dev/kubeswift-root`; clone-grow-init runs sgdisk -e against device path on Block (skips qemu-img resize as no-op); RuntimeIntent.RootDisk.Path resolves to device path for Block guests; rust crates verified suffix-free via Q2 grep audit. End-to-end cluster validation: RWX+Block guest boots, growpart succeeds, df reports ~37G of 40G, PVC persistence across pod recreate verified. Two findings (W10 noisy boot WARN non-blocking; W11=W9.x cloneStrategy=snapshot+Block fails at CSI provisioning, deferred). | PR #35 |
 | 64 | swiftmigration controller (validating_live + stopandcopy_live + cutover + preparing_live) | Phase 3a back-to-back live migrations false-fired SourcePodReplaced (and carried a latent guest-destruction vector at cutoverStep2). Three live-mode src-pod lookup sites derived src pod from cluster state; both literal-guest.Name (W15 fix) and canonicalPodName broke for chain migrations. Fix: stamp status.SourcePodRef.Name at Validating-live (mirrors existing SourcePodUID lock-in); use srcPodLookupName helper at all sites. Race-immune AND chain-safe. Workload-class-independent — same code runs for kernel-boot and disk-boot. (W26 in E12 disk-boot validation 2026-05-04.) | PR #53 |
+| 65 | swiftmigration controller (resuming_live + cutover + stopandcopy_live) | Phase 3a downtime metrics broken/half-wired. (W27a) status.observedDowntime measured two adjacent metav1.Now() calls in the same reconcile invocation, producing 34-114µs across all 17 walkthrough runs vs a real cutover window of ~38-48s. Fix: new status.cutoverStep2DispatchedAt timestamp stamped at cutoverStep2 Delete dispatch; observedDowntime computed against it at Resuming completion. (W27b) status.observedPauseWindow plumbing half-implemented — swiftletd wrote kubeswift.io/migration-pause-window-ms annotation correctly but controller had zero readers. Fix: stampObservedPauseWindow helper reads annotation at substateSrcCompleted (W1 gate observation), mirrors snapshot controller's pattern. Both fields now carry their documented semantics. Defensive nil/parse handling on both. (W27 follow-up to E12 walkthrough.) | (this PR) |
 
 ---
 

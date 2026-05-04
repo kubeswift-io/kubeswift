@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -302,6 +303,51 @@ func TestCutover_Step2RetryInPlace_DeleteFails(t *testing.T) {
 	// Verify src pod gone.
 	if err := c.Get(context.Background(), client.ObjectKey{Name: src.Name, Namespace: "default"}, &pod); !apierrors.IsNotFound(err) {
 		t.Errorf("src pod should be deleted; got err=%v", err)
+	}
+}
+
+// W27a: cutoverStep2 stamps status.CutoverStep2DispatchedAt on
+// successful Delete dispatch. The timestamp anchors observedDowntime
+// computation in resuming_live; without it, observedDowntime stays
+// nil at Completed (defensive nil-check). Test covers both the
+// happy-path Delete and the NotFound-recovery path; both must stamp.
+func TestCutover_Step2_StampsCutoverStep2DispatchedAt_W27a(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	guest.Status.PodRef = &corev1.ObjectReference{Name: "guest-mig-abcdef", Namespace: "default"}
+	now := metav1.Now()
+	mig.Status.CutoverStep1At = &now
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("reconcile failed: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+	if status.CutoverStep2DispatchedAt == nil {
+		t.Fatalf("CutoverStep2DispatchedAt not stamped after successful Delete")
+	}
+}
+
+// W27a idempotency: repeated cutoverStep2 invocations (leader handover,
+// reconcile-recovery on NotFound retry) must NOT shift the timestamp;
+// the original dispatch is the cutover commit point.
+func TestCutover_Step2_StampIdempotent_PreservesOriginal_W27a(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	guest.Status.PodRef = &corev1.ObjectReference{Name: "guest-mig-abcdef", Namespace: "default"}
+	now := metav1.Now()
+	mig.Status.CutoverStep1At = &now
+	originalStamp := metav1.NewTime(time.Now().Add(-90 * time.Second))
+	mig.Status.CutoverStep2DispatchedAt = &originalStamp
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	_ = r.handleStopAndCopyLive(context.Background(), mig, status)
+	if status.CutoverStep2DispatchedAt == nil {
+		t.Fatalf("CutoverStep2DispatchedAt was cleared")
+	}
+	if !status.CutoverStep2DispatchedAt.Time.Equal(originalStamp.Time) {
+		t.Errorf("CutoverStep2DispatchedAt shifted from original stamp: original=%v now=%v",
+			originalStamp.Time, status.CutoverStep2DispatchedAt.Time)
 	}
 }
 

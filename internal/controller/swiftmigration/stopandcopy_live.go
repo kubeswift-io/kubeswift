@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -380,6 +382,15 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// src=complete implies dst CH is in Running state with the
 		// migrated guest.
 		//
+		// W27b: read swiftletd-reported pause window from launcher pod
+		// annotation. swiftletd-on-src writes
+		// kubeswift.io/migration-pause-window-ms alongside
+		// migration-status=complete (rust/swiftletd/src/action.rs::
+		// write_migration_status). Mirrors the snapshot pattern at
+		// internal/controller/swiftsnapshot/local.go:249-251. Idempotent
+		// (same observed value on every reconcile until cutover advances).
+		stampObservedPauseWindow(ctx, mig, status, srcArg)
+		//
 		// **B3.2 CUTOVER**: dispatch to the 3-step cutover sequence
 		// per §2.3 + §3.5 cutover ordering invariant. Each reconcile
 		// in the cutover handler executes ONLY the pending step;
@@ -483,6 +494,53 @@ func (r *SwiftMigrationReconciler) writeMigrationAction(
 // arguments (listen_url + guest_ip for receive; target_url for send).
 // Mirrors rust/swiftletd/src/action.rs::MIGRATION_ACTION_ARGS_KEY.
 const AnnotationMigrationActionArgs = "kubeswift.io/migration-action-args"
+
+// stampObservedPauseWindow reads the swiftletd-on-src reported vCPU
+// pause window from the src pod's
+// kubeswift.io/migration-pause-window-ms annotation and stamps it
+// into status.ObservedPauseWindow. swiftletd writes the annotation
+// alongside migration-status=complete via write_migration_status
+// (rust/swiftletd/src/action.rs:1383-1407). The value reflects the
+// CH-internal pause-and-send window, NOT the controller-orchestration
+// downtime (that's status.ObservedDowntime, anchored on
+// CutoverStep2DispatchedAt per W27a).
+//
+// Idempotent: every reconcile in substateSrcCompleted re-reads and
+// re-stamps the same value until cutover advances state. Mirrors the
+// snapshot controller's pattern at
+// internal/controller/swiftsnapshot/local.go:249-251.
+//
+// Defensive parse failure handling: malformed annotation (manual
+// operator tampering, apiserver quirk, swiftletd version skew without
+// the field) is logged and ObservedPauseWindow stays at its prior
+// value (typically nil). Operators see a missing field, not a wrong
+// one. W27b acceptance criterion.
+func stampObservedPauseWindow(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+	status *migrationv1alpha1.SwiftMigrationStatus,
+	srcPod *corev1.Pod,
+) {
+	if srcPod == nil {
+		return
+	}
+	v := srcPod.Annotations[AnnotationMigrationPauseWindowMs]
+	if v == "" {
+		return
+	}
+	ms, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || ms < 0 {
+		log.FromContext(ctx).Info(
+			"observedPauseWindow not stamped: src pod annotation unparseable (W27b defensive)",
+			"migration", mig.Name,
+			"annotation", AnnotationMigrationPauseWindowMs,
+			"value", v,
+			"parseError", err)
+		return
+	}
+	pause := metav1.Duration{Duration: time.Duration(ms) * time.Millisecond}
+	status.ObservedPauseWindow = &pause
+}
 
 // normalizeStatusDetail returns a single-line, length-bounded variant
 // of the swiftletd-written status-detail annotation for inclusion in

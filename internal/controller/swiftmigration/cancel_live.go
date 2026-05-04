@@ -21,14 +21,21 @@ import (
 // (rust/swiftletd/src/action.rs::MIGRATION_*_KEY). These are the
 // controller's side of the Phase 2 annotation surface.
 const (
-	AnnotationMigrationAction     = "kubeswift.io/migration-action"
-	AnnotationMigrationActionID   = "kubeswift.io/migration-action-id"
-	AnnotationMigrationStatus     = "kubeswift.io/migration-status"
-	AnnotationMigrationStatusID   = "kubeswift.io/migration-status-id"
-	AnnotationMigrationStatusDtl  = "kubeswift.io/migration-status-detail"
-	MigrationActionCancel         = "cancel"
-	MigrationStatusFailed         = "failed"
-	MigrationStatusFailedCancelDt = "cancelled" // expected substring in status-detail
+	AnnotationMigrationAction    = "kubeswift.io/migration-action"
+	AnnotationMigrationActionID  = "kubeswift.io/migration-action-id"
+	AnnotationMigrationStatus    = "kubeswift.io/migration-status"
+	AnnotationMigrationStatusID  = "kubeswift.io/migration-status-id"
+	AnnotationMigrationStatusDtl = "kubeswift.io/migration-status-detail"
+	// AnnotationMigrationPauseWindowMs is the swiftletd-on-src-reported
+	// vCPU-paused window (CH's actual pause-and-send measurement),
+	// written alongside `migration-status=complete` at send-complete
+	// (rust/swiftletd/src/action.rs::write_migration_status). Read by
+	// stopandcopy_live's substateSendComplete handler and stamped into
+	// status.ObservedPauseWindow per W27b.
+	AnnotationMigrationPauseWindowMs = "kubeswift.io/migration-pause-window-ms"
+	MigrationActionCancel            = "cancel"
+	MigrationStatusFailed            = "failed"
+	MigrationStatusFailedCancelDt    = "cancelled" // expected substring in status-detail
 
 	// MigrationStatusRejected is swiftletd's status for an action it
 	// refused to execute (Phase 2 PR-B's decide() rejection path —

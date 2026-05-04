@@ -6,6 +6,12 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased] - 2026-04-05
 
+### Fixed (Phase 3a downtime metrics — W27 follow-up)
+- W27a: `status.observedDowntime` previously measured two adjacent `metav1.Now()` calls in the same reconcile invocation, producing sub-millisecond nonsense (34-114µs across all 17 PR #46 + E12 walkthrough runs). Now anchored on new `status.cutoverStep2DispatchedAt` (stamped by `cutoverStep2` on Delete dispatch); reflects the operator-visible cutover-to-resume window. Defensive nil-check leaves the field unset rather than reporting a wrong value if the timestamp is missing.
+- W27b: `status.observedPauseWindow` plumbing was half-implemented — swiftletd-on-src wrote the `kubeswift.io/migration-pause-window-ms` annotation correctly but the controller had zero readers, leaving the field permanently nil. Now stamped at `substateSrcCompleted` (W1 gate observation), mirroring the snapshot controller's parallel pattern. Defensive parse-failure handling.
+- New status field `cutoverStep2DispatchedAt *metav1.Time` on SwiftMigration: operator-visible audit data (`kubectl get smig -o wide`) and authoritative anchor for `observedDowntime`. Phase 1 offline mode does not populate this field.
+- Closes Tracked Follow-up #7 in kubeswift_context.md.
+
 ### Added
 - Comprehensive networking operations guide for physical networks, VLANs, bonds, and isolated networks
 - VMware ESXi and Proxmox VE concept mapping for platform migration
