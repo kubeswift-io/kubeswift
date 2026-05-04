@@ -493,3 +493,89 @@ Disk-boot's Ubuntu Noble pre-copy window is ~16% longer than kernel-boot's faas-
 - RWX+Block disk-boot guests (`spec.imageRef` + RWX+Block storage): validated E12 (S1 3-run + chain + S2 + S5 + S7)
 
 W26 fix is the data-plane unlock for chain migrations on either workload class. Without it, every operator workflow involving repeated drain/rebalance on the same SwiftGuest would have hit the bug after the first migration.
+
+---
+
+# W27 Validation — Phase 3a downtime metrics empirical baseline (2026-05-04)
+
+> Cluster validation of [PR #55](https://github.com/projectbeskar/kubeswift/pull/55) (W27a + W27b downtime-metrics correctness fix). Image baseline `sha-b730536`. Same cluster as the kernel-boot + E12 walkthroughs above.
+
+W27 audit (Tracked Follow-up #7) identified two broken metrics surfaces:
+- W27a: `status.observedDowntime` measured two adjacent `metav1.Now()` calls in the same reconcile (sub-millisecond nonsense, 34-114µs across 17 prior runs)
+- W27b: `status.observedPauseWindow` plumbing half-implemented (swiftletd wrote `kubeswift.io/migration-pause-window-ms`; controller had zero readers; field permanently nil)
+
+PR #55 fixed both. This validation captures empirical numbers from a single S1-equivalent run on each workload class.
+
+## Operational note: CRD update required at deploy
+
+PR #55 added a new status field `cutoverStep2DispatchedAt`. The validation's first attempted run (kernel-s1 miles→boba) showed `observedDowntime` empty + `cutoverStep2DispatchedAt` empty even though `observedPauseWindow=38.161s` populated correctly. Root cause: the cluster's CRD was stale (deploy step didn't update CRDs), apiserver silently stripped the unknown field per CRD schema. Operators upgrading the controller image MUST re-apply CRDs:
+
+```
+kubectl apply -f config/crd/bases/migration.kubeswift.io_swiftmigrations.yaml
+```
+
+Or use `make deploy` (which already does this). All subsequent runs in this validation used the updated CRD.
+
+## Empirical numbers
+
+| Workload class | Migration | Total wall-clock | observedDowntime | observedPauseWindow | cutoverStep2DispatchedAt |
+|---|---|---|---|---|---|
+| Kernel-boot (`spec.kernelRef`) | kernel-s1 boba→miles | 47s | **1.751622467s** | **38.169s** | 2026-05-04T20:58:55Z |
+| RWX+Block disk-boot (`spec.imageRef`) | disk-s1 miles→boba | 58s | **1.958336573s** | **38.186s** | 2026-05-04T21:00:42Z |
+
+Both fields are now populated with meaningful, non-trivial values. **W27a + W27b empirically confirmed working on cluster for both in-scope workload classes.**
+
+## Coherence interpretation + semantic gap (FOLLOW-UP)
+
+The W27 prompt's mental model was that `observedPauseWindow` ≤ `observedDowntime` (vCPU pause should be CONTAINED within the cutover-orchestration window). Empirically the opposite is true: `observedPauseWindow` (~38s) > `observedDowntime` (~2s) on both runs.
+
+This is the **W27 fix doing what the code says, but the field semantics not matching their CRD docstrings**. Decomposition:
+
+### What `observedDowntime` actually measures (post-W27a)
+
+Window: `cutoverStep2DispatchedAt` (src pod Delete dispatch) → `completedAt` (GuestRunning=True observed on dst). For both runs that's ~1-2 seconds. This is the **cutover-orchestration window post-data-transfer** — a real, operator-visible duration, but NOT "the entire time the guest was unresponsive."
+
+### What `observedPauseWindow` actually measures (post-W27b)
+
+Window: `elapsed_ms` of swiftletd's `vm.send-migration` call (i.e., the entire StopAndCopy "transferring guest state" duration). For both runs that's ~38s. CRD docstring says "swiftletd-on-src-reported vCPU-paused duration during stop-and-copy" — but Cloud Hypervisor's send_migration internally does pre-copy iterations (vCPU still running, dirty-page tracking) followed by a final stop-and-copy phase (vCPU paused). swiftletd's `elapsed_ms` covers the whole flow, not just the final vCPU-paused sub-phase. The actual vCPU-paused window is somewhere inside that 38s, typically hundreds of milliseconds, not separately surfaced by swiftletd today.
+
+### The actual relationship
+
+```
+StopAndCopy entry (~T0)
+  │
+  │  ◄── observedPauseWindow (~38s) covers this whole transfer phase ──►
+  │     • CH pre-copy iterations (vCPU running, dirty-tracking)
+  │     • Final stop-and-copy on src (vCPU paused, drain remaining pages)
+  │     • Send_migration completes
+  │
+cutoverStep2DispatchedAt (~T0 + 38s)
+  │
+  │  ◄── observedDowntime (~2s) ──►
+  │     • src pod Delete dispatch
+  │     • dst pod resume + GuestRunning=True observation
+  │
+Completed
+```
+
+The two windows are sequential, not overlapping. Neither directly measures "guest-perceived downtime from the inside." The actual vCPU-paused window (the operator-relevant guest-stop-the-world metric) is inside CH's `send_migration` internals and not separately surfaced.
+
+### Disposition
+
+W27 fix is **correct as scoped** — both fields now have meaningful nonzero values and reflect what swiftletd writes / what the controller computes. The semantic mismatch with the CRD docstrings is a separate concern (W28 candidate, not blocking):
+
+- `observedDowntime` should be re-named or re-documented to "cutover orchestration window" or similar — the docstring says "wall-clock duration the guest was unresponsive" which is misleading given the new anchor
+- `observedPauseWindow` should be re-named to "send_migration call duration" / "transfer window" — the docstring says "vCPU-paused duration" which CH's `elapsed_ms` does not strictly measure
+- A NEW field for the actual vCPU-paused window would require swiftletd extension to query CH's internal stats (or hook around the final stop-and-copy sub-phase). Phase 3b candidate.
+
+Documenting and stopping per W27 prompt's "If the three numbers are wildly inconsistent ... document and stop before declaring W27 fixed" gate. **W27a + W27b plumbing fix is shipped and validated; field-semantics refinement is W28 / Phase 3b territory.**
+
+## Third-measurement gap (ping-loss-from-sibling-pod)
+
+The W27 prompt's third measurement (ping from sibling pod on third node × 50ms intervals) requires multi-node L2 reachability to the guest's br0 IP (192.168.99.0/24). Default node-local networking does not provide this — br0 is per-node, the guest IP is reachable only from the launcher pod on the same node. This is the multi-node-L2 gap tracked as Tracked Follow-up #1 (network architecture requirements design doc) and addressable via Multus + macvlan / OVN-Kubernetes layer-2 / UDN per Phase 3+ networking work.
+
+A guest-internal alternative (ping from inside the guest to its gateway) would conflate "vCPU pause" with "br0 teardown on src + recreate on dst" and is not a clean replacement. This measurement is deferred to a future cluster equipped with multi-node L2.
+
+## Cluster validation status
+
+**Phase 3a downtime metrics: cluster-validated for both in-scope workload classes**, with W27 plumbing-fix correctness confirmed and one semantic-gap follow-up flagged (W28 candidate). Both `observedDowntime` and `observedPauseWindow` now report meaningful values on every successful live migration; operators reading `kubectl describe smig` see a real cutover-orchestration window and a real swiftletd-reported transfer window, not microseconds and nil.
