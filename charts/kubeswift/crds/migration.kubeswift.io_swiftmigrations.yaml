@@ -351,21 +351,65 @@ spec:
                 type: string
               observedDowntime:
                 description: |-
-                  ObservedDowntime is the wall-clock duration the guest was unresponsive,
-                  measured from Preparing entry to GuestRunning=True on the destination.
-                  In offline mode this includes the entire stop+attach+boot sequence.
+                  ObservedDowntime is the wall-clock duration the guest was
+                  unresponsive on cluster, measured against different anchors per
+                  mode:
+
+                    - Offline mode (Phase 1): from Preparing entry to GuestRunning
+                      =True observation on destination. Includes the entire
+                      stop+detach+attach+cold-boot sequence — typically tens of
+                      seconds dominated by storage detach and VM boot.
+
+                    - Live mode (Phase 3a, post-W27a fix): from
+                      CutoverStep2DispatchedAt (src pod Delete dispatch — vCPU
+                      pause begins inside CH on src) to GuestRunning=True
+                      observation on destination (vCPU pause ends on dst).
+                      Typically low single-digit seconds for default node-local
+                      networking. Pre-W27a this measured two adjacent
+                      metav1.Now() calls in the same reconcile, producing
+                      sub-millisecond nonsense; see Tracked Follow-up #7 close-out
+                      in kubeswift_context.md.
+
+                  **Live-mode caveat**: this is the cutover-orchestration window,
+                  NOT the "guest stopped-the-world" window from inside the guest.
+                  The actual vCPU-paused sub-phase inside Cloud Hypervisor's
+                  vm.send-migration RPC is internal to CH and not separately
+                  surfaced today (W28 candidate per Tracked Follow-up #7
+                  close-out — capture per-phase timing from CH internals).
                 type: string
               observedPauseWindow:
                 description: |-
-                  ObservedPauseWindow is the swiftletd-on-src-reported vCPU-paused
-                  duration during stop-and-copy, parsed from the src pod's
-                  migration-status-detail annotation when send completes. Distinct
-                  from ObservedDowntime (which spans cutover + apiserver latency,
-                  dominated by storage and pod lifecycle costs in offline mode and
-                  by network + cutover costs in live mode). The pause window is
-                  the operator-relevant metric for "how long was the guest
-                  frozen" — typically 0.5-5s for live mode per F6/F7 of the Phase
-                  2 spike.
+                  ObservedPauseWindow is the swiftletd-reported elapsed time of
+                  the vm.send-migration RPC on the source pod, read from the
+                  kubeswift.io/migration-pause-window-ms annotation that
+                  swiftletd writes alongside migration-status=complete
+                  (rust/swiftletd/src/action.rs::write_migration_status). Stamped
+                  by stopandcopy_live's substateSrcCompleted handler per W27b.
+
+                  **Important: this is NOT the vCPU stop-the-world window.** Cloud
+                  Hypervisor's send-migration implementation does iterative
+                  pre-copy by default — multiple memory-transfer iterations with
+                  dirty-page tracking while the vCPU is STILL RUNNING — followed
+                  by a final stop-and-copy phase where the vCPU is paused to
+                  drain the remaining dirty pages. swiftletd measures the
+                  wall-clock elapsed of the entire RPC (pre-copy iterations +
+                  final stop-and-copy + finalize). On a typical 4Gi guest with
+                  default node-local networking this is ~38s; the actual vCPU
+                  stop-the-world is typically hundreds of milliseconds, buried
+                  inside CH's internal phase boundaries and not separately
+                  surfaced today.
+
+                  Capturing the actual vCPU stop-the-world from CH internals is
+                  W28 candidate per Tracked Follow-up #7 close-out: future CH
+                  versions may grow per-phase timing on the send-migration
+                  response, OR swift-ch-client could probe vm.info around the
+                  stop-and-copy boundary inside the RPC, OR an external observer
+                  (Tracked Follow-up #1's multi-node L2 enablement + ping
+                  measurement) could capture guest-perceived downtime from the
+                  outside.
+
+                  Phase 1 offline mode does not populate this field — there is no
+                  memory-transfer phase in offline migration.
                 type: string
               phase:
                 description: Phase is the current lifecycle phase.

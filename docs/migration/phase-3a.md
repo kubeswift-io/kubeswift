@@ -325,6 +325,37 @@ plane. See design doc §5 (controller-runtime integration).
 
 ---
 
+## Operational note: stale CRD silently strips new status fields
+
+When upgrading the controller image across releases that add new
+SwiftMigration status fields (e.g., the `cutoverStep2DispatchedAt`
+field added by W27a in the W27 follow-up), operators must also
+refresh the CRD on cluster:
+
+```
+kubectl apply -f config/crd/bases/migration.kubeswift.io_swiftmigrations.yaml
+```
+
+Or use `make deploy` / `helm upgrade` (both refresh CRDs as part of
+the deployment). This pattern applies to **every release that adds
+new status fields** across any KubeSwift CRD, not just SwiftMigration.
+
+**Failure mode** if the CRD is stale: apiserver silently strips
+unknown status fields without returning an error. Controller logs
+show patches succeeding; the field is documented in the CRD types
+package; operators see the field permanently empty in
+`kubectl get smig -o yaml` output. The W27 cluster validation hit
+this on its first run — `cutoverStep2DispatchedAt` was empty despite
+the W27a code shipped because the cluster CRD didn't have the field
+in its schema.
+
+**Detection**: run `kubectl explain swiftmigration.status` after a
+controller upgrade. If the new field is absent from the explain
+output, the CRD is stale. The redeploy sequence is the same fix
+across all such upgrades.
+
+---
+
 ## Limitations and future work
 
 | Limitation | Future resolution |
