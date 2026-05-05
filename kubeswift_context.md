@@ -582,13 +582,67 @@ time at the API/runtime boundary.
 
 ### 7. Phase 3a downtime-metrics observability — SHIPPED via W27 follow-up PR
 
-**Status: SHIPPED.** W27a + W27b both fixed in a single follow-up PR.
+**Status: SHIPPED + cluster-validated.** W27a + W27b both fixed in
+PR #55 (merged). PR #56 documents empirical cluster validation; PR
+#56 commit D additionally clarifies field semantics in CRD docstrings.
+
 `status.observedDowntime` now anchors on a new
 `status.cutoverStep2DispatchedAt` timestamp (stamped at src pod
-Delete dispatch); `status.observedPauseWindow` is read from the
-swiftletd-written `kubeswift.io/migration-pause-window-ms` annotation
-at `substateSrcCompleted`. Both fields carry their documented
-semantics. Cluster validation pending after merge + redeploy.
+Delete dispatch); for live mode this measures the operator-visible
+cluster downtime window (cutover dispatch → GuestRunning=True), not
+sub-millisecond reconcile-clock noise. `status.observedPauseWindow`
+is read from the swiftletd-written
+`kubeswift.io/migration-pause-window-ms` annotation at
+`substateSrcCompleted` — measures the wall-clock elapsed of the
+entire `vm.send-migration` RPC (pre-copy iterations + final
+stop-and-copy + finalize), NOT the vCPU stop-the-world sub-phase
+(buried inside CH internals).
+
+Empirical cluster baseline (image `sha-b730536`, default node-local
+networking, 4Gi guests):
+- Kernel-boot: observedDowntime=1.75s, observedPauseWindow=38.17s
+- Disk-boot RWX+Block: observedDowntime=1.96s, observedPauseWindow=38.19s
+
+### W28 candidate (split from W27): capture actual vCPU stop-the-world
+
+Currently `observedPauseWindow` measures the entire send-migration
+RPC, dominated by pre-copy iterations where the vCPU is still
+running. The actual vCPU stop-the-world (CH's final stop-and-copy
+sub-phase, typically hundreds of milliseconds for the empirical
+4Gi-guest cases above) is the operator-relevant "guest frozen"
+metric and is not separately surfaced today.
+
+Three plausible paths to capture it:
+
+1. **Future CH versions may grow per-phase timing** on the
+   `vm.send-migration` HTTP response body (CH per-phase telemetry
+   is on the upstream roadmap; tracked there, not here).
+2. **`swift-ch-client` could probe `vm.info` around the stop-and-copy
+   boundary** inside the send-migration RPC — requires interleaving
+   reads with the synchronous send call, which itself is constrained
+   by the W12 swift-ch-client async refactor (Phase 3b prerequisite).
+3. **External observer via Tracked Follow-up #1** (multi-node L2
+   enablement: Multus + macvlan / OVN-K layer-2 / UDN) — ping the
+   guest from a third-node sibling pod with 50ms intervals and count
+   consecutive lost pings × 50ms. This is the cleanest empirical
+   measurement but blocked on the cross-node L2 prerequisite.
+
+W28 is non-blocking for Phase 3a or Phase 3b shipping. Phase 3b
+design conversation can begin without W28 resolved; W28 lands
+opportunistically when one of the three paths becomes feasible.
+
+### W27 cluster validation operational finding
+
+First validation run hit a **stale-CRD-silent-strip failure mode**:
+cluster CRD didn't have the new `cutoverStep2DispatchedAt` field;
+apiserver silently stripped it from controller status patches; field
+appeared empty in cluster despite the controller image having the
+W27a stamp code. Documented in `docs/migration/phase-3a.md` operational
+note. Pattern applies to any new status field across releases —
+operators upgrading via custom pipelines must `kubectl apply -f
+config/crd/bases/...` (or use `make deploy` / `helm upgrade` which
+already do this); detection is `kubectl explain swiftmigration.status`
+after upgrade.
 
 Original W27 audit notes preserved below for context (the diagnosis
 that drove the fix).
