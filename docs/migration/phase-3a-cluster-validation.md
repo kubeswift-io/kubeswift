@@ -591,3 +591,96 @@ The W27 prompt's third measurement (ping from sibling pod on third node × 50ms 
 **Phase 3a downtime metrics: cluster-validated for both in-scope workload classes.** W27a + W27b plumbing fix correctness empirically confirmed on cluster. Both `observedDowntime` and `observedPauseWindow` now report meaningful values on every successful live migration; pre-W27 they reported sub-millisecond nonsense (downtime) and nil (pauseWindow).
 
 The "actual vCPU stop-the-world window" is W28 candidate — currently buried inside Cloud Hypervisor's `send-migration` internals and not separately surfaced. PR #56 commit D updates the field docstrings to match what each value actually measures.
+
+---
+
+# PR 2 Walkthrough — swiftctl pod resolution under migration scenarios (2026-05-05)
+
+> Cluster validation of [PR #57](https://github.com/projectbeskar/kubeswift/pull/57) — `internal/cli/guest.go::GuestResolver.ResolvePod` hardened against migration-cutover and chain-migration races. Image deployed post-PR-#57 merge. Same cluster as prior walkthroughs.
+
+PR 2 fixes two foot-guns in swiftctl's shared pod-resolution entry point:
+- **Foot-gun 1**: PodRef-NotFound now falls through to the label-selector path (was: errored out)
+- **Foot-gun 2**: multi-pod label-selector results stable-sorted (was: non-deterministic `list.Items[0]`)
+
+This walkthrough exercised normal flows + migration-aware paths to surface any regressions and to document the foot-gun fix evidence honestly.
+
+## Scenario summary
+
+| # | Scenario | Result |
+|---|---|---|
+| S1 | Kernel-boot baseline (`faas-minimal` in `pr2-wt-kernel`, never migrated) | PASS |
+| S2 | Disk-boot RWX+Block baseline (`disk-rwx-block` in `pr2-wt-disk`, never migrated) | PASS |
+| S3 | Post-M1 swiftctl resolution (live miles→boba) — PodRef-suffixed path on real cluster | PASS |
+| S4 | Chain M2 (boba→miles) — dual-labeled-Running state captured at t+16s | PASS |
+| S5 | Race loop probe during M3 (~290 calls × 5/sec for ~58s) | PASS — zero `pod not found` errors |
+| S6 | Cleanup gap audit (orphan-labeled-pod scan) | PASS — clean state |
+
+## Three live migrations — additional empirical baseline points
+
+| | M1 (miles→boba) | M2 (chain boba→miles) | M3 (race-probed miles→boba) |
+|---|---|---|---|
+| Wall-clock | 57s | 58s | 57s |
+| `observedDowntime` | 2.18s | 1.42s | 1.83s |
+| `observedPauseWindow` | 38.36s | 38.28s | 38.28s |
+| podRef post-migration | `disk-rwx-block-mig-3cfc9a` (suffixed) | `disk-rwx-block-mig-83256b` (suffixed) | `disk-rwx-block-mig-0bced6` (suffixed) |
+| Single labeled pod after Completed | ✓ | ✓ | ✓ |
+
+W27 metrics correctness is now **four-run empirically confirmed** (PR #56's E12 kernel-boot + E12 disk-boot + W2 walkthrough's M1 + M2 + M3), not single-run. Downtime sits at 1.4–2.2s; pauseWindow at 38.2–38.4s. Consistent across multiple runs and direction reversals.
+
+## Foot-gun fix evidence — what was actually exercised
+
+### Foot-gun 2 (multi-pod selector disambiguation)
+
+**Captured: dual-labeled-Running state at t+16s of M2.** The `kubectl get pods -l swift.kubeswift.io/guest=disk-rwx-block` probe during M2's StopAndCopy/transferring phase returned:
+
+```
+disk-rwx-block-mig-3cfc9a   1/1   Running   0   2m4s   (M1's dst on boba — now M2's src)
+disk-rwx-block-mig-83256b   1/1   Running   0   16s    (M2's pre-cutover dst on miles)
+```
+
+Both pods Running, both labeled. This IS the chain-migration multi-pod scenario foot-gun 2's stable-sort defense exists for. **However**, swiftctl resolved via the PodRef path (status.podRef.Name was still pointing at `disk-rwx-block-mig-3cfc9a` at this moment, pre-cutoverStep1) and reached the correct pod without ever entering the label-selector path. The `swiftctl logs --tail 1` returned the M2 send-dispatch log line confirming the right pod.
+
+**Honest reading**: the dual-labeled-Running cluster state is real and was captured. swiftctl's behavior was correct. But the SPECIFIC code path the foot-gun 2 fix added (`sort.SliceStable` over `list.Items`) was NOT exercised on cluster — PodRef won the resolution before label-selector fallback fired. Foot-gun 2's defense remains preventive insurance; unit tests T5–T8 are the load-bearing validation for the sort logic.
+
+### Foot-gun 1 (PodRef-NotFound fallback)
+
+**Race loop ran ~290 swiftctl calls at 5/sec across the full ~58s of M3's cutover window.** Loop exit grep for `not found|error` in any `swiftctl logs` output: **zero matches**.
+
+**Honest reading**: zero NotFound errors observed; ResolvePod returned valid pod data on every probe. Either the PodRef path always succeeded (likely, given cluster timing) OR the fallback kicked in cleanly when transient. The SPECIFIC code path foot-gun 1 added (NotFound→fallthrough instead of error) is hard to trigger empirically because the cutover-step-1 → dst-pod-Ready window is sub-second on this cluster. Foot-gun 1's defense remains preventive insurance; unit test T3 is the load-bearing validation.
+
+### What WAS validated end-to-end on cluster
+
+- **Zero regressions** across 3 sequential live migrations on the same SwiftGuest
+- **Correct behavior at every observed migration phase boundary** — pre-migration podRef-unsuffixed (S1, S2), post-migration podRef-suffixed (S3), chain post-migration (S4), race-probed (S5)
+- **Dual-labeled-Running state confirmed** in chain transient (foot-gun 2 scenario)
+- **Race probe clean** across ~290 calls (foot-gun 1 scenario)
+- **Cleanup audit clean** — controller deletes src pods on cutoverStep2 successfully; no orphan labeled pods cluster-wide
+
+## Findings
+
+### W2-1 — `swiftctl debug` `/proc` scan misses CH process (LOW)
+
+`swiftctl debug` output includes `--- Cloud Hypervisor command line (from /proc) --- No cloud-hypervisor process found`, while `swiftctl describe` simultaneously reports `Runtime: Hypervisor: cloud-hypervisor PID: <pid>`. Diagnostic contradiction; pre-existing in `internal/cli/debug.go` (out of PR 2 scope).
+
+Disposition: **LOW** — separate triage. Tracked Follow-up #8.
+
+### W2-2 — offline→delete→live migration sequence settling window (LOW)
+
+Chaining `swiftctl migrate <guest> --to <node>` (offline default mode) → `kubectl delete swiftmigration` → apply a live-mode SwiftMigration in <5s fast-fails the second migration with `SourcePodReplaced`. Steady-state retry ~30s later succeeds cleanly. User-induced edge case; not a controller bug — SourcePodUID lock is W26's by-design behavior functioning correctly.
+
+Disposition: **LOW; user-induced.** Tracked Follow-up #9.
+
+## Pass criteria
+
+- [x] Never-migrated kernel-boot: T1 + T4 cases real-cluster validated
+- [x] Never-migrated disk-boot: full surface (logs, describe, debug, ssh) works
+- [x] Post-migration: PodRef-suffixed path resolves correctly (T1 case at the migration boundary)
+- [x] Chain migration: dual-labeled-Running state captured; correct pod returned (via PodRef path; sort defense unexercised but verified by unit tests)
+- [x] Race probe: zero NotFound errors across ~290 probes during cutover window
+- [x] Cleanup audit: zero orphan labeled pods cluster-wide
+
+## Cluster validation status
+
+**PR 2 ships cluster-validated.** Both foot-gun fixes are preventive insurance; the chain-migration and cutover-window cluster transients did NOT escalate to label-selector-fallback paths because PodRef resolution succeeded first. The foot-gun fixes' specific code paths are exercised by unit tests T3 + T5–T8; cluster validation confirmed zero regressions and correct end-to-end behavior across normal flows + 3 migrations + race probe + cleanup audit.
+
+**Phase 3a is closed.** PR 2 walkthrough findings recorded honestly above. W2-1 and W2-2 filed as Tracked Follow-ups #8 and #9 (both LOW, neither blocking). Phase 3b design conversation begins next.

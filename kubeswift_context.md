@@ -731,6 +731,55 @@ shipped: correctness validated; downtime metrics observability
 deferred to W27 follow-up" is the honest version of the shipping
 claim. PR #54 description updated to state this explicitly.
 
+### 8. swiftctl debug /proc scan misses CH process (W2-1 — surfaced by PR 2 walkthrough 2026-05-05)
+
+**Symptom**: `swiftctl debug <guest>` output includes
+`--- Cloud Hypervisor command line (from /proc) --- No
+cloud-hypervisor process found (check launcher logs for spawn
+args)`, while `swiftctl describe` simultaneously reports
+`Runtime: Hypervisor: cloud-hypervisor PID: <pid>`. The two
+diagnostics contradict each other on the same guest in the same
+moment.
+
+**Hypothesis**: swiftletd's `/proc` scan inside the launcher
+container appears to miss the CH process despite swiftletd
+successfully reporting the PID via pod annotations. Likely a /proc
+visibility issue from inside the launcher container — PID
+namespace, /proc mount, or shell loop boundary in
+`internal/cli/debug.go`. Pre-existing in swiftctl debug, not a PR 2
+regression.
+
+**Severity: LOW** (diagnostic contradiction, not operational
+failure). Disposition: triage when an operator hits it OR alongside
+other swiftctl polish work. ~10-30 min investigation; fix surface
+likely small (one shell command in debug.go).
+
+### 9. offline→delete→live migration sequence has a settling window (W2-2 — surfaced by PR 2 walkthrough 2026-05-05)
+
+**Symptom**: chaining `swiftctl migrate <guest> --to <node>` (mode
+defaults to offline) → `kubectl delete swiftmigration <name>` → apply
+a live-mode SwiftMigration in <5s sequence, the live migration's
+Validating-time `status.SourcePodUID` capture races against the
+offline migration's `cleanupSourceGuest` pod-recreate cycle (the
+offline cancellation path restored runPolicy=Running, the SwiftGuest
+controller created a new pod, the live mig captured podRef.UID
+mid-recreate, and Preparing-live's UID-check observed mismatch
+against the steady-state pod). Live mig fast-fails t+3s with
+`failureReason=SourcePodReplaced`.
+
+Steady-state retry ~30s later (once the new pod settles back to
+Running) succeeds cleanly. Pre-existing race; not a controller bug
+— SourcePodUID lock is W26's by-design behavior, functioning
+correctly. The race is between the offline mig's cleanup path and
+the live mig's validation, not between two live migs.
+
+**Severity: LOW** (user-induced; rare in practice — operators don't
+typically chain offline→delete→live in the same second).
+Disposition: document a "rapid mode-switch caveat" in
+`docs/migration/phase-3a.md` operator runbook IF operators raise it
+empirically; otherwise leave at tracked-follow-up status. No code
+change needed.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
@@ -1194,7 +1243,8 @@ in test infrastructure).
 | 62 | rbac (controller-manager ClusterRole) | StorageClass `list,watch` verbs missing — controller-runtime's cached client opens an informer on every GETable resource; PR #32's `checkStorageReady`'s `r.Get` on StorageClass triggered "Failed to watch" loop, starving SwiftGuest reconcile queue. Fake-client unit tests passed (no informer). Same shape as W7 (rolebindings). (W8 in PR #32 walkthrough.) | PR #32 |
 | 63 | rootdisk Copy Job + launcher pod builder + clone-grow-init + restore-receive launcher + RuntimeIntent producer + rust opacity contract | Block volumeMode runtime path: Copy Job branches to `volumeDevices` + `qemu-img convert + sgdisk -e` (no cp, no resize) for Block destinations; launcher pod uses VolumeDevices at `/dev/kubeswift-root`; clone-grow-init runs sgdisk -e against device path on Block (skips qemu-img resize as no-op); RuntimeIntent.RootDisk.Path resolves to device path for Block guests; rust crates verified suffix-free via Q2 grep audit. End-to-end cluster validation: RWX+Block guest boots, growpart succeeds, df reports ~37G of 40G, PVC persistence across pod recreate verified. Two findings (W10 noisy boot WARN non-blocking; W11=W9.x cloneStrategy=snapshot+Block fails at CSI provisioning, deferred). | PR #35 |
 | 64 | swiftmigration controller (validating_live + stopandcopy_live + cutover + preparing_live) | Phase 3a back-to-back live migrations false-fired SourcePodReplaced (and carried a latent guest-destruction vector at cutoverStep2). Three live-mode src-pod lookup sites derived src pod from cluster state; both literal-guest.Name (W15 fix) and canonicalPodName broke for chain migrations. Fix: stamp status.SourcePodRef.Name at Validating-live (mirrors existing SourcePodUID lock-in); use srcPodLookupName helper at all sites. Race-immune AND chain-safe. Workload-class-independent — same code runs for kernel-boot and disk-boot. (W26 in E12 disk-boot validation 2026-05-04.) | PR #53 |
-| 65 | swiftmigration controller (resuming_live + cutover + stopandcopy_live) | Phase 3a downtime metrics broken/half-wired. (W27a) status.observedDowntime measured two adjacent metav1.Now() calls in the same reconcile invocation, producing 34-114µs across all 17 walkthrough runs vs a real cutover window of ~38-48s. Fix: new status.cutoverStep2DispatchedAt timestamp stamped at cutoverStep2 Delete dispatch; observedDowntime computed against it at Resuming completion. (W27b) status.observedPauseWindow plumbing half-implemented — swiftletd wrote kubeswift.io/migration-pause-window-ms annotation correctly but controller had zero readers. Fix: stampObservedPauseWindow helper reads annotation at substateSrcCompleted (W1 gate observation), mirrors snapshot controller's pattern. Both fields now carry their documented semantics. Defensive nil/parse handling on both. (W27 follow-up to E12 walkthrough.) | (this PR) |
+| 65 | swiftmigration controller (resuming_live + cutover + stopandcopy_live) | Phase 3a downtime metrics broken/half-wired. (W27a) status.observedDowntime measured two adjacent metav1.Now() calls in the same reconcile invocation, producing 34-114µs across all 17 walkthrough runs vs a real cutover window of ~38-48s. Fix: new status.cutoverStep2DispatchedAt timestamp stamped at cutoverStep2 Delete dispatch; observedDowntime computed against it at Resuming completion. (W27b) status.observedPauseWindow plumbing half-implemented — swiftletd wrote kubeswift.io/migration-pause-window-ms annotation correctly but controller had zero readers. Fix: stampObservedPauseWindow helper reads annotation at substateSrcCompleted (W1 gate observation), mirrors snapshot controller's pattern. Both fields now carry their documented semantics. Defensive nil/parse handling on both. (W27 follow-up to E12 walkthrough.) | PR #55 |
+| 66 | swiftctl (internal/cli/guest.go GuestResolver.ResolvePod) | swiftctl pod resolution had two foot-guns surfacing during Phase 3a live migration cutover and chain migration. **Foot-gun 1**: when status.podRef was set but the named pod returned NotFound (cutover transient: podRef just patched to dst-suffix but dst pod not yet created, OR src deleted before podRef patched), ResolvePod errored out instead of falling through to the label-selector path. **Foot-gun 2**: when the label selector returned multiple labeled pods (chain-migration transient: M1 src still Terminating + M2 dst Running, both labeled `swift.kubeswift.io/guest=<name>`), `list.Items[0]` was non-deterministic — apiserver might return Terminating-first. Fix: NotFound on PodRef.Get falls through to the label-selector path; multi-pod selector results stable-sorted by (non-Terminating > Running > newest CreationTimestamp); all-Terminating fallback returns newest with stderr warning. Function signatures unchanged. Cluster-validated: chain-migration dual-labeled-Running state captured at t+16s of M2; race probe ~290 calls during M3 hit zero "not found" errors; W2 walkthrough recorded clean state. (W2 walkthrough findings W2-1 + W2-2 are non-PR-2 issues filed as Tracked Follow-ups #8 + #9.) | PR #57 |
 
 ---
 
