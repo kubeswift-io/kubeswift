@@ -857,6 +857,157 @@ commit archaeology.
 Phase 3b design doc; cross-reference from `newDstPod` docstring if
 language is added there too.
 
+### 13. Bake stress-ng into demo SeedProfile (Phase 3b PR 1 walkthrough LOW-1)
+
+Phase 3b PR 1 walkthrough deferred T2/T3 (stress-ng MED workload
+migration + progress-estimate samples under workload) because of
+setup overhead: installing `stress-ng` inside the guest required a
+~10min SSH-into-guest dance (`kubectl exec` into launcher → serial
+console socat → in-guest `apt-get`). Mechanical correctness of the
+progress-estimate emitter was established by T1's clean monotonic
+13→26→39→52→65→79→92 progression on a no-stress baseline; workload-
+sensitivity calibration is a follow-up walkthrough's question (Phase
+3b design doc open question §11.1).
+
+**Implementable in any PR that touches the manual-demo scaffolding**:
+add `stress-ng` to the SeedProfile's cloud-init `packages:` list in
+[`tools/manual-demo/phase-3b-pr1/launch-pods.sh`](tools/manual-demo/phase-3b-pr1/launch-pods.sh).
+Future walkthroughs then start stress-ng via a one-line `kubectl
+exec` + `socat` + serial-console snippet without an apt-get install
+delay. T2/T3 sampling re-runs in <2min of marginal setup.
+
+**Disposition:** infrastructure/scaffolding cleanup; no production
+code change. Tracked here so the next walkthrough writer sees the
+gap before re-running the dance.
+
+### 14. Source-side cancel-during-send is a no-op until send returns (Phase 3b PR 1 walkthrough LOW-2 / T5 finding)
+
+Phase 3b PR 1 walkthrough's T5 confirmed empirically what the Phase
+2 PR-B comment at
+[`rust/swiftletd/src/action.rs:640-644`](rust/swiftletd/src/action.rs#L640)
+already documents: **the action loop runs on a `current_thread`
+tokio runtime; `client.send_migration()` is a sync blocking HTTP
+call that holds the thread for tens of seconds. While the source
+swiftletd is in `dispatch_migration_send`, the action loop CANNOT
+pick up any subsequently-applied annotation actions (cancel
+included). Cancel queues silently and runs only after
+`vm.send-migration` returns** (success or timeout).
+
+T5 timeline (4Gi no-stress guest, miles→boba):
+- t=0: cancel patches applied to BOTH src and dst pods.
+- t=1..16s: src remains in `sending` state — cancel queued, not
+  dispatched.
+- t=17s: src reaches `complete` (transfer 38214ms — full happy path).
+- t=17..18s: dst processes its queued cancel post-receive-success
+  (LOW-3 / TFU-15 separately).
+- t=18..30+s: src progress estimate holds at 92% — Commit D's drop
+  guard works correctly (no zombie emissions).
+
+**Phase 3b PR 1 didn't change this surface.** PR 1's cancel path
+inherits Phase 2 PR-B unchanged.
+
+**Operational implication for PR 2 controller cancel handler:** the
+controller's cancel-mid-send path MUST expect cancel to take effect
+only after the in-flight `vm.send-migration` returns (success,
+error, or timeout). Cancel-via-pod-delete is the fallback if the
+operator wants to abort sooner. Document explicitly in PR 2's
+controller cancel handler that source-side cancel is best-effort
+during in-flight send.
+
+**Future fix candidate (Phase 3c or operational-polish):** refactor
+src dispatch_migration_send to run the blocking `send_migration`
+call on a `tokio::task::spawn_blocking` (so the current_thread
+runtime can tick), OR move the entire send dispatch onto a worker
+`std::thread` (mirrors the existing receive-side pattern via
+`spawn_action_loop` at action.rs:1555-1571 and the Phase 3b PR 1
+progress emitter at action.rs:`spawn_progress_emitter`). Either
+approach unblocks source-side cancel responsiveness.
+
+**Disposition:** documentation in PR 2; architectural fix deferred
+to Phase 3c+ when a worker-thread refactor on src is in scope.
+
+### 15. Destination cancel-post-receive-complete race (Phase 3b PR 1 walkthrough LOW-3 / T5 finding)
+
+Phase 3b PR 1 walkthrough's T5 surfaced that the destination swiftletd
+has no `receive-complete` cancel-ignore gate. Once `vm.receive-
+migration` returns successfully (dst CH state=Running, guest live),
+the dst writes `migration-status: running` — but if a cancel action
+was queued during the receive (because the action loop was blocked
+by the receive call, same root cause as TFU-14), the next loop tick
+picks up the queued cancel and SIGKILLs the just-resumed CH.
+
+Phase 3b design doc §4.6 specifies that cancel post-receive-complete
+should be **ignored**. The implementation today (Phase 2 PR-B +
+Phase 3a + Phase 3b PR 1) doesn't enforce this; the action loop
+dispatches cancel unconditionally.
+
+**Where the gate actually lives in design:** Phase 3a's
+**controller-side** CancelIgnored gate at
+[`internal/controller/swiftmigration/stopandcopy_live.go`](internal/controller/swiftmigration/stopandcopy_live.go)
+W21 (`SwiftMigrationConditionPodRefSwapped` condition) is the
+dispatch-time guard for live mode. The controller doesn't send the
+cancel annotation to swiftletd-dst once cutover step 1 (PodRefSwap)
+has fired; this prevents the queued-cancel-on-dst race in the live-
+controller-driven path.
+
+**PR 2 must explicitly preserve the CancelIgnored gate** — a future
+refactor that removes the gate (perhaps as "cleaner control flow")
+silently re-introduces the data-destruction surface where a queued
+cancel kills a successfully-resumed dst guest. Same architectural
+pattern as W26 and LBA-1 in the Phase 3b design doc (Section 9): a
+"cleanup" refactor that removes a load-bearing property without
+naming it explicitly is the bug pattern.
+
+**Disposition:** PR 2 implementation must preserve the existing
+W21 gate; cross-reference from PR 2's controller cancel handler to
+this follow-up. No swiftletd-side change required.
+
+### 16. `make deploy` vs Helm chart webhook-enabled default mismatch (Phase 3b PR 1 walkthrough deploy-time observation)
+
+Phase 3b PR 1 walkthrough's deploy step exposed a pre-existing
+tension between two deployment paths:
+
+- [`config/manager/deployment.yaml:27`](config/manager/deployment.yaml#L27)
+  sets `--webhook-enabled=false` (used by `make deploy` via
+  `config/default`).
+- [`charts/kubeswift/templates/controller-manager/deployment.yaml:35`](charts/kubeswift/templates/controller-manager/deployment.yaml#L35)
+  sets `--webhook-enabled=true` (Helm chart default).
+
+The cluster's `ValidatingWebhookConfiguration` resources persist
+across redeploys. When `make deploy` overwrites the deployment with
+webhook-disabled, the webhook service endpoint exists but its pod
+serves nothing — every CRD create attempt fails with
+`connection refused` on port 9443.
+
+**Walkthrough workaround:** patched the deployment args live to
+`--webhook-enabled=true` and triggered a re-rollout.
+
+**Phase 3b PR 1 not affected** — PR 1 doesn't add new webhook
+admission rules; existing Phase 3a validating webhooks (image,
+guest, migration) and the offline-mode webhook are what stalled.
+
+**Operationally relevant for PR 2:** PR 2 adds the SwiftMigration
+webhook eligibility check (live-mode-when-ineligible rejection
+per design doc §3.3). If `make deploy` continues to default to
+webhook-disabled, operators running PR 2 against the dev cluster
+will see explicit-live SwiftMigrations admit when they should
+reject (because the webhook is dead), and the controller's
+defense-in-depth Validating-phase eligibility check catches it —
+but the failure surface is more confusing (dst pod creation
+attempt + fail + cleanup vs admission rejection).
+
+**Disposition:** worth a small cleanup PR before PR 2 lands. Two
+options:
+1. Update `config/default` to include the webhook overlay by
+   default (matches Helm chart behavior).
+2. Update `make deploy` to either run the webhook overlay
+   explicitly OR document that operators must `make
+   deploy-with-webhooks` (separate target) for full functionality.
+
+Recommend option 1 — eliminate the surprise without adding a
+second target operators must remember. Filed for cleanup before
+PR 2's webhook eligibility check lands.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
