@@ -18,7 +18,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image generate deploy undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image generate deploy deploy-with-webhook undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
@@ -41,7 +41,8 @@ help:
 	@echo "  print-version         Print version info from hack/version.sh"
 	@echo "  generate              Generate CRDs and deepcopy (also syncs charts/ + runs verify-crd-sync)"
 	@echo "  verify-crd-sync       Fail if config/crd/kustomization.yaml drifts from config/crd/bases/"
-	@echo "  deploy                Apply CRDs and KubeSwift to cluster"
+	@echo "  deploy                Deploy controller-manager (minimal install, no webhooks). Use deploy-with-webhook for webhook-enabled deploys (requires cert-manager)."
+	@echo "  deploy-with-webhook   Deploy controller-manager with admission webhooks enabled (requires cert-manager cluster-side; applies config/overlays/webhook on top of the minimal install)"
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
 	@echo "  smoke-test            Run boot smoke test (requires KubeSwift cluster)"
@@ -156,6 +157,34 @@ deploy: generate verify-crd-sync
 	@# GPU discovery: set image tag and deploy RBAC + DaemonSet.
 	kubectl apply -f config/rbac/gpu-discovery-rbac.yaml
 	sed 's|gpu-discovery:latest|gpu-discovery:$(IMAGE_TAG)|' config/daemonset/gpu-discovery.yaml | kubectl apply -f -
+
+# deploy-with-webhook layers config/overlays/webhook on top of the minimal
+# install. The overlay composes config/default + config/webhook and patches
+# the controller-manager Deployment to --webhook-enabled=true with the
+# cert-manager TLS Secret volumeMount. Requires cert-manager installed
+# cluster-side (the overlay's Certificate + Issuer reference cert-manager
+# CRDs).
+#
+# Operators reaching for an apply path that doesn't strand the cluster's
+# ValidatingWebhookConfiguration / MutatingWebhookConfiguration resources
+# pointing at a webhook-disabled controller (TFU-16 walkthrough finding):
+# use this target instead of `make deploy` when the cluster has the
+# webhook resources installed.
+deploy-with-webhook: deploy
+	@echo "Layering webhook overlay (patches deployment to --webhook-enabled=true + cert volume; applies config/webhook resources)"
+	@# Same IMAGE_TAG sed-patch trick as `deploy` — the overlay composes
+	@# config/manager, so kustomize re-renders manager with the patch on top.
+	cd config/manager && sed -i 's/newTag: .*/newTag: $(IMAGE_TAG)/' kustomization.yaml
+	kubectl apply -k config/overlays/webhook
+	cd config/manager && sed -i 's/newTag: .*/newTag: latest/' kustomization.yaml
+	@# Re-set the launcher image env var — the overlay's deployment patch
+	@# replaces the spec.template.spec.containers[].args list, which
+	@# triggers a rollout. The env var set by `deploy` survives across
+	@# kustomize-apply because env is not declared in deployment.yaml,
+	@# but re-set defensively to handle the case where it was cleared.
+	kubectl set env deployment/controller-manager -n kubeswift-system \
+		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
+	kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=120s
 
 undeploy:
 	kubectl delete -k config/default --ignore-not-found --timeout=60s
