@@ -428,8 +428,11 @@ type SwiftMigrationStatus struct {
 	// measured in spike Q4.)
 	//
 	// Replaces ObservedPauseWindow (deprecated alias, will be removed
-	// in Phase 3b+1). Phase 1 offline mode does not populate this
-	// field — there is no memory-transfer phase in offline migration.
+	// in Phase 3b+1).
+	//
+	// Not populated for status.mode=offline migrations; offline
+	// migration shuts down the source guest and restarts it on the
+	// destination, with no memory transfer RPC involved.
 	// +optional
 	ObservedTransferDuration *metav1.Duration `json:"observedTransferDuration,omitempty"`
 	// ObservedPauseWindow is a deprecated alias for
@@ -439,6 +442,10 @@ type SwiftMigrationStatus struct {
 	// duration, most of which is NOT vCPU-paused). Phase 3b PR 1
 	// dual-writes both fields from a single source value to give
 	// operator tooling one full release cycle to migrate.
+	//
+	// Not populated for status.mode=offline migrations; offline
+	// migration shuts down the source guest and restarts it on the
+	// destination, with no memory transfer RPC involved.
 	//
 	// Will be removed in Phase 3b+1. Operator tooling should migrate
 	// to ObservedTransferDuration.
