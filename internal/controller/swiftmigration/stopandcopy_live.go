@@ -389,7 +389,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// write_migration_status). Mirrors the snapshot pattern at
 		// internal/controller/swiftsnapshot/local.go:249-251. Idempotent
 		// (same observed value on every reconcile until cutover advances).
-		stampObservedPauseWindow(ctx, mig, status, srcArg)
+		stampTransferDuration(ctx, mig, status, srcArg)
 		//
 		// **B3.2 CUTOVER**: dispatch to the 3-step cutover sequence
 		// per §2.3 + §3.5 cutover ordering invariant. Each reconcile
@@ -495,15 +495,23 @@ func (r *SwiftMigrationReconciler) writeMigrationAction(
 // Mirrors rust/swiftletd/src/action.rs::MIGRATION_ACTION_ARGS_KEY.
 const AnnotationMigrationActionArgs = "kubeswift.io/migration-action-args"
 
-// stampObservedPauseWindow reads the swiftletd-on-src reported vCPU
-// pause window from the src pod's
-// kubeswift.io/migration-pause-window-ms annotation and stamps it
-// into status.ObservedPauseWindow. swiftletd writes the annotation
-// alongside migration-status=complete via write_migration_status
+// stampTransferDuration reads the swiftletd-on-src reported
+// vm.send-migration RPC duration from the src pod's
+// kubeswift.io/migration-pause-window-ms annotation and dual-writes
+// it into BOTH status.ObservedTransferDuration (Phase 3b canonical)
+// AND status.ObservedPauseWindow (deprecated alias, removed in
+// Phase 3b+1). swiftletd writes the annotation alongside
+// migration-status=complete via write_migration_status
 // (rust/swiftletd/src/action.rs:1383-1407). The value reflects the
 // CH-internal pause-and-send window, NOT the controller-orchestration
 // downtime (that's status.ObservedDowntime, anchored on
 // CutoverStep2DispatchedAt per W27a).
+//
+// Wire annotation NOT renamed in Phase 3b PR 1: the
+// kubeswift.io/migration-pause-window-ms key stays as-is on the
+// swiftletd↔controller wire to avoid breaking the existing
+// annotation contract. The CRD-field rename is independent; PR 2
+// or later cleanup may align the wire annotation key.
 //
 // Idempotent: every reconcile in substateSrcCompleted re-reads and
 // re-stamps the same value until cutover advances state. Mirrors the
@@ -512,10 +520,10 @@ const AnnotationMigrationActionArgs = "kubeswift.io/migration-action-args"
 //
 // Defensive parse failure handling: malformed annotation (manual
 // operator tampering, apiserver quirk, swiftletd version skew without
-// the field) is logged and ObservedPauseWindow stays at its prior
-// value (typically nil). Operators see a missing field, not a wrong
-// one. W27b acceptance criterion.
-func stampObservedPauseWindow(
+// the field) is logged and BOTH fields stay at their prior values
+// (typically nil). Operators see a missing field, not a wrong one.
+// W27b acceptance criterion preserved.
+func stampTransferDuration(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
@@ -531,15 +539,20 @@ func stampObservedPauseWindow(
 	ms, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || ms < 0 {
 		log.FromContext(ctx).Info(
-			"observedPauseWindow not stamped: src pod annotation unparseable (W27b defensive)",
+			"observedTransferDuration not stamped: src pod annotation unparseable (W27b defensive)",
 			"migration", mig.Name,
 			"annotation", AnnotationMigrationPauseWindowMs,
 			"value", v,
 			"parseError", err)
 		return
 	}
-	pause := metav1.Duration{Duration: time.Duration(ms) * time.Millisecond}
-	status.ObservedPauseWindow = &pause
+	d := metav1.Duration{Duration: time.Duration(ms) * time.Millisecond}
+	// Phase 3b PR 1 Commit E: dual-write. Both fields land on the
+	// same status patch (caller already runs status patching after
+	// returning from this helper); operators reading either field
+	// see the same value.
+	status.ObservedTransferDuration = &d
+	status.ObservedPauseWindow = &d
 }
 
 // normalizeStatusDetail returns a single-line, length-bounded variant
