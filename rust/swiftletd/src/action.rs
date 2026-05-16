@@ -1758,6 +1758,38 @@ fn write_migration_status_fn<'a>(
     ))
 }
 
+/// Pre-dispatch status verb for a freshly-accepted action.
+///
+/// `handle_namespace` writes a status annotation between
+/// `ActionDecision::Accept` and the dispatcher returning. For most
+/// actions (snapshot, restore, migration-send, migration-cancel) the
+/// generic `StatusKind::Running` ("running") is the right pre-dispatch
+/// verb — operationally meaning "swiftletd has accepted the action and
+/// is now executing it."
+///
+/// For `MigrationReceive` we override to `Custom("receive-ready")`
+/// per Phase 3b design doc §5.1: the controller's PreparingLive
+/// phase gate-observes this annotation to know it can safely patch
+/// `migration-action: send` on the source pod. The annotation fires
+/// here (a few microseconds before `client.receive_migration()` is
+/// issued to CH) rather than from inside the dispatcher because
+/// threading the kube client into `dispatch()` would have grown the
+/// signature churn past the operator-set sanity-check budget
+/// (see Phase 3b PR 1 prompt; ~20 test-site callers of
+/// `dispatch()`). Operationally the few-microsecond gap between
+/// the annotation write and the actual TCP listener open is dwarfed
+/// by the controller's ~540ms reconcile→patch-send round-trip
+/// (Phase 3b spike Q1), so no race surfaces on cluster timing.
+///
+/// Commit D extends the match with
+/// `MigrationSend => Custom("sending")` per design doc §5.2.
+fn pre_dispatch_status(kind: &ActionKind) -> StatusKind {
+    match kind {
+        ActionKind::MigrationReceive => StatusKind::Custom("receive-ready"),
+        _ => StatusKind::Running,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_namespace(
     client: &Client,
@@ -1852,7 +1884,7 @@ async fn handle_namespace(
                 namespace,
                 pod_name,
                 &pending.id,
-                StatusKind::Running,
+                pre_dispatch_status(&pending.kind),
                 None,
                 None,
             )
@@ -2058,6 +2090,54 @@ mod tests {
         assert_eq!(StatusKind::Ready.as_str(), "ready");
         assert_eq!(StatusKind::Failed.as_str(), "failed");
         assert_eq!(StatusKind::Rejected.as_str(), "rejected");
+    }
+
+    // Phase 3b PR 1 Commit C — pre-dispatch annotation verb-
+    // specialization. Per design doc §5.1, the controller's
+    // PreparingLive phase gate-observes `migration-status:
+    // receive-ready` before patching `migration-action: send` on the
+    // source pod. This helper is the emission site.
+    #[test]
+    fn pre_dispatch_status_receive_emits_receive_ready() {
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationReceive).as_str(),
+            "receive-ready"
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_status_send_keeps_running_until_commit_d() {
+        // Phase 3b PR 1 Commit D extends the match with a `sending`
+        // arm per design doc §5.2; until then send retains the
+        // generic `running` pre-dispatch verb. This assertion will
+        // be updated in Commit D.
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationSend).as_str(),
+            "running"
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_status_other_actions_unchanged() {
+        // Snapshot + restore + cancel actions retain the
+        // pre-Phase-3b semantics; only the receive verb gets a
+        // specialized pre-dispatch annotation.
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::SnapshotCapture).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::SnapshotResume).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::RestorePrepare).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationCancel).as_str(),
+            "running"
+        );
     }
 
     #[test]
