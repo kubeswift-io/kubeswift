@@ -174,6 +174,11 @@ func (in *SwiftMigrationStatus) DeepCopyInto(out *SwiftMigrationStatus) {
 		*out = new(v1.Duration)
 		**out = **in
 	}
+	if in.ObservedTransferDuration != nil {
+		in, out := &in.ObservedTransferDuration, &out.ObservedTransferDuration
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.ObservedPauseWindow != nil {
 		in, out := &in.ObservedPauseWindow, &out.ObservedPauseWindow
 		*out = new(v1.Duration)

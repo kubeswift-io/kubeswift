@@ -402,37 +402,46 @@ type SwiftMigrationStatus struct {
 	// semantics as RecvAttempts.
 	// +optional
 	SendAttempts int32 `json:"sendAttempts,omitempty"`
-	// ObservedPauseWindow is the swiftletd-reported elapsed time of
-	// the vm.send-migration RPC on the source pod, read from the
-	// kubeswift.io/migration-pause-window-ms annotation that
-	// swiftletd writes alongside migration-status=complete
+	// ObservedTransferDuration is the swiftletd-reported elapsed time
+	// of the vm.send-migration RPC on the source pod: pre-copy
+	// iterations + final stop-and-copy + finalize. Most of this window
+	// is NOT vCPU-paused; the guest stays responsive throughout
+	// pre-copy. For the operator-visible cluster downtime window
+	// (cutoverStep2DispatchedAt → GuestRunning observation on the
+	// destination), see ObservedDowntime.
+	//
+	// Read from the kubeswift.io/migration-pause-window-ms annotation
+	// that swiftletd writes alongside migration-status=complete
 	// (rust/swiftletd/src/action.rs::write_migration_status). Stamped
-	// by stopandcopy_live's substateSrcCompleted handler per W27b.
+	// by stopandcopy_live's substateSrcCompleted handler per W27b;
+	// in Phase 3b PR 1 the same stamping path dual-writes both
+	// ObservedTransferDuration and the deprecated ObservedPauseWindow
+	// alias from a single source value.
 	//
-	// **Important: this is NOT the vCPU stop-the-world window.** Cloud
-	// Hypervisor's send-migration implementation does iterative
-	// pre-copy by default — multiple memory-transfer iterations with
-	// dirty-page tracking while the vCPU is STILL RUNNING — followed
-	// by a final stop-and-copy phase where the vCPU is paused to
-	// drain the remaining dirty pages. swiftletd measures the
-	// wall-clock elapsed of the entire RPC (pre-copy iterations +
-	// final stop-and-copy + finalize). On a typical 4Gi guest with
-	// default node-local networking this is ~38s; the actual vCPU
-	// stop-the-world is typically hundreds of milliseconds, buried
-	// inside CH's internal phase boundaries and not separately
-	// surfaced today.
+	// Empirical baseline from Phase 3b spike Q2 on Calico VXLAN pod
+	// networking: ~38s for a 4Gi RAM guest with no memory-dirtying
+	// workload; scales monotonically with dirty rate (~45s LOW, ~68s
+	// MED, ~87s HIGH for stress-ng rand-set workloads). Operator
+	// sizing formula for live-migratable guests:
+	//   (guest_RAM × 1.05) / pod_network_bandwidth
+	// (the 1.05 factor accounts for the ~5% CH orchestration overhead
+	// measured in spike Q4.)
 	//
-	// Capturing the actual vCPU stop-the-world from CH internals is
-	// W28 candidate per Tracked Follow-up #7 close-out: future CH
-	// versions may grow per-phase timing on the send-migration
-	// response, OR swift-ch-client could probe vm.info around the
-	// stop-and-copy boundary inside the RPC, OR an external observer
-	// (Tracked Follow-up #1's multi-node L2 enablement + ping
-	// measurement) could capture guest-perceived downtime from the
-	// outside.
+	// Replaces ObservedPauseWindow (deprecated alias, will be removed
+	// in Phase 3b+1). Phase 1 offline mode does not populate this
+	// field — there is no memory-transfer phase in offline migration.
+	// +optional
+	ObservedTransferDuration *metav1.Duration `json:"observedTransferDuration,omitempty"`
+	// ObservedPauseWindow is a deprecated alias for
+	// ObservedTransferDuration. The original name misleadingly
+	// suggested "vCPU pause window" — see ObservedTransferDuration's
+	// docstring for the actual semantics (full vm.send-migration RPC
+	// duration, most of which is NOT vCPU-paused). Phase 3b PR 1
+	// dual-writes both fields from a single source value to give
+	// operator tooling one full release cycle to migrate.
 	//
-	// Phase 1 offline mode does not populate this field — there is no
-	// memory-transfer phase in offline migration.
+	// Will be removed in Phase 3b+1. Operator tooling should migrate
+	// to ObservedTransferDuration.
 	// +optional
 	ObservedPauseWindow *metav1.Duration `json:"observedPauseWindow,omitempty"`
 	// TargetIP is the destination guest's primary IP, propagated from
