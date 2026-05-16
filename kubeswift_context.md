@@ -962,51 +962,86 @@ naming it explicitly is the bug pattern.
 W21 gate; cross-reference from PR 2's controller cancel handler to
 this follow-up. No swiftletd-side change required.
 
-### 16. `make deploy` vs Helm chart webhook-enabled default mismatch (Phase 3b PR 1 walkthrough deploy-time observation)
+### 16. `make deploy` cluster-state-drift with persistent VWC/MWC resources (Phase 3b PR 1 walkthrough deploy-time observation; resolved via `make deploy-with-webhook` target)
 
-Phase 3b PR 1 walkthrough's deploy step exposed a pre-existing
-tension between two deployment paths:
+**Original framing was wrong; corrected here.** The PR 1 walkthrough
+finding described this as a "chronic mismatch between `make deploy`
+and Helm chart webhook-enabled defaults." TFU-16's Phase 0
+reconnaissance (before the cleanup PR) confirmed both defaults
+agree (webhook-disabled):
 
-- [`config/manager/deployment.yaml:27`](config/manager/deployment.yaml#L27)
-  sets `--webhook-enabled=false` (used by `make deploy` via
-  `config/default`).
-- [`charts/kubeswift/templates/controller-manager/deployment.yaml:35`](charts/kubeswift/templates/controller-manager/deployment.yaml#L35)
-  sets `--webhook-enabled=true` (Helm chart default).
+- [`config/manager/deployment.yaml:27`](config/manager/deployment.yaml#L27):
+  `--webhook-enabled=false`.
+- [`charts/kubeswift/values.yaml`](charts/kubeswift/values.yaml):
+  `webhook.enabled: false` (chart template branches on this).
 
-The cluster's `ValidatingWebhookConfiguration` resources persist
-across redeploys. When `make deploy` overwrites the deployment with
-webhook-disabled, the webhook service endpoint exists but its pod
-serves nothing — every CRD create attempt fails with
+Both deployment paths default to webhook-disabled deliberately —
+the comment at the top of
+[`config/default/kustomization.yaml`](config/default/kustomization.yaml)
+explicitly states "minimal: no webhook" for clusters without
+cert-manager. The webhook-enabled path is opt-in via
+[`config/overlays/webhook/`](config/overlays/webhook/) (kustomize) or
+`--set webhook.enabled=true` (Helm).
+
+**The actual problem is cluster-state drift, not a defaults
+mismatch.** `ValidatingWebhookConfiguration` and
+`MutatingWebhookConfiguration` are cluster-scoped resources owned
+by neither `config/default` nor `config/manager` alone. Once an
+operator opts in once (via the webhook overlay or Helm value),
+these resources persist across redeploys. A subsequent `make
+deploy` blindly applies `config/default`, reverting the
+controller-manager Deployment to webhook-disabled mode — but
+leaving the VWC/MWC resources pointing at the now-non-serving
+webhook endpoint. Every CRD create attempt then fails
 `connection refused` on port 9443.
 
-**Walkthrough workaround:** patched the deployment args live to
-`--webhook-enabled=true` and triggered a re-rollout.
+**Resolved in PR #63** (cleanup branch
+`cleanup/tfu-16-deploy-with-webhook` off main): added a
+`make deploy-with-webhook` target that wraps
+`kubectl apply -k config/overlays/webhook` (composes
+`config/default` + `config/webhook` + the deployment-patch flipping
+args to `--webhook-enabled=true` + cert volumeMount). Updated
+`make deploy` help text to make its minimal-install nature
+explicit. No code changes; no config changes.
 
-**Phase 3b PR 1 not affected** — PR 1 doesn't add new webhook
-admission rules; existing Phase 3a validating webhooks (image,
-guest, migration) and the offline-mode webhook are what stalled.
+**Operational guidance for operators going forward:**
 
-**Operationally relevant for PR 2:** PR 2 adds the SwiftMigration
-webhook eligibility check (live-mode-when-ineligible rejection
-per design doc §3.3). If `make deploy` continues to default to
-webhook-disabled, operators running PR 2 against the dev cluster
-will see explicit-live SwiftMigrations admit when they should
-reject (because the webhook is dead), and the controller's
-defense-in-depth Validating-phase eligibility check catches it —
-but the failure surface is more confusing (dst pod creation
-attempt + fail + cleanup vs admission rejection).
+- Cluster without webhook resources installed: `make deploy`
+  (minimal, no cert-manager dependency).
+- Cluster with webhook resources installed OR cluster where you
+  want webhook admission to fire: `make deploy-with-webhook`
+  (requires cert-manager installed cluster-side; the overlay's
+  Certificate + Issuer resources need the cert-manager CRDs).
+- Switching between the two: applying the opposite target
+  doesn't auto-clean the VWC/MWC resources from the prior
+  install. To switch from webhook-enabled back to minimal,
+  manually `kubectl delete -k config/webhook` first.
 
-**Disposition:** worth a small cleanup PR before PR 2 lands. Two
-options:
-1. Update `config/default` to include the webhook overlay by
-   default (matches Helm chart behavior).
-2. Update `make deploy` to either run the webhook overlay
-   explicitly OR document that operators must `make
-   deploy-with-webhooks` (separate target) for full functionality.
+**Operationally relevant for Phase 3b PR 2:** PR 2 adds the
+SwiftMigration webhook eligibility check (live-mode-when-
+ineligible rejection per design doc §3.3). Operators running PR 2
+against the dev cluster should use `make deploy-with-webhook` to
+get accurate admission-time rejection. The controller's
+defense-in-depth Validating-phase eligibility check still catches
+the case via a `Failed` transition, but admission-time rejection
+gives operators a clearer failure surface (single error message
+at SwiftMigration creation rather than dst pod creation attempt +
+fail + cleanup).
 
-Recommend option 1 — eliminate the surprise without adding a
-second target operators must remember. Filed for cleanup before
-PR 2's webhook eligibility check lands.
+**Cross-reference for PR 3 operator runbook work** (`docs/migration/phase-3b.md`):
+include a "Deploying KubeSwift" subsection that distinguishes
+the two targets and the cert-manager prerequisite for
+deploy-with-webhook.
+
+**Pattern note** (similar to LBA-1 / W26): "default to minimal,
+opt-in for the heavier surface" works when the opt-in target is
+discoverable. The TFU-16 walkthrough finding shows that opt-in
+discoverability via README/comment alone isn't enough — an
+explicit `make deploy-with-webhook` target makes the choice
+visible to operators who run `make help`. Future config splits
+(e.g., GPU node opt-in, multi-NIC opt-in) should expose Make
+targets analogously rather than relying on operators to know
+which overlay path to invoke.
 
 ---
 
