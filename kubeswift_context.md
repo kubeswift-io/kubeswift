@@ -780,6 +780,83 @@ Disposition: document a "rapid mode-switch caveat" in
 empirically; otherwise leave at tracked-follow-up status. No code
 change needed.
 
+### 10. CPU-feature mismatch (Phase 3b spike Q3 reframe)
+
+Phase 2 spike's F12 noted that CPU-feature mismatch (heterogeneous
+microarchs across nodes) is the realistic production failure mode
+for live migration, not version skew. Phase 3b spike Q3 confirmed
+this is **NOT addressed in Phase 3b** — spike cluster is hardware-
+uniform; testing requires deliberate CPU-flag masking and the
+mitigation is procedural anyway.
+
+**Mitigation today (Phase 3b ships without code changes for this):**
+operator runbook discipline. Verify `lscpu` flag uniformity across
+nodes that participate in live migration. CH v51.1 uses `host` CPU
+model by default (passes through host flags as-is); migration
+succeeds when source and destination expose identical flag sets and
+fails at guest-feature-load time when they don't.
+
+**Tracked for Phase 3c or operational-polish phase**: add a
+`swiftctl migrate --check <guest> --to <node>` pre-flight that
+compares source and destination node CPU flags before issuing the
+SwiftMigration. Surface mismatches as a warning, not a hard
+rejection (operator may have a reason to proceed). Mirrors Phase
+1's target-node-Ready-check ergonomic pattern.
+
+### 11. observedPauseWindow CRD field-name decision (Phase 3b spike Q2 leftover)
+
+The current name `observedPauseWindow` suggests "vCPU pause
+window" — the duration the guest is frozen. W27 (commit D, PR #56)
+clarified the field semantics in CRD docstrings: it actually
+measures the *full* `vm.send-migration` RPC duration (pre-copy
+iterations + final stop-and-copy + finalize), most of which is
+NOT vCPU-paused.
+
+The Phase 3b spike Q2 results made the naming gap concrete: a
+baseline migration shows `pauseWindow=38.20s` while the guest
+stayed responsive throughout — no operator looking at
+"pauseWindow=38s" intuits "guest was responsive for most of those
+38s; only the last sub-second was actual vCPU-pause."
+
+**Phase 3b design conversation should consider renaming** to
+`transferDuration` or `migrationRpcDuration` — and reserve
+`observedPauseWindow` for the actual vCPU-stop-the-world metric
+when W28 lands. **Decision deferred to Phase 3b design
+conversation**. CRD field renames are breaking changes; the
+cost/benefit needs explicit weighing against the operator-clarity
+benefit. Doing it before Phase 3b GA is cheaper than after.
+
+### 12. `newDstPod` clone-src behavior is LOAD-BEARING for version discipline (Phase 3b spike Q3 lesson)
+
+Phase 3a's
+[`internal/controller/swiftmigration/dst_pod.go::newDstPod`](internal/controller/swiftmigration/dst_pod.go)
+constructs the destination pod by `srcPod.DeepCopy()` of the source
+pod's spec. This implementation choice provides a load-bearing
+property the original Phase 2 design did not acknowledge:
+**version-skew is structurally prevented at the controller layer**
+because dst image is atomically inherited from src. There is no
+controller code path that produces heterogeneous src/dst.
+
+**Future-proof by stating the constraint explicitly in the Phase
+3b design doc**: a future refactor that re-resolves the dst pod
+from SwiftGuest spec (which would sound cleaner architecturally —
+"single source of truth, no clone-and-mutate") would silently
+re-introduce the version-skew surface that Phase 2 Decision 3 was
+originally meant to address.
+
+Same structural pattern as Phase 3a's W26 lesson: an apparently
+clean refactor regresses a load-bearing property because the
+property was never explicitly named. The newDstPod docstring
+(lines 108-130) describes the clone-src approach in code; Phase 3b
+design doc must state explicitly that version-skew-prevention is
+one of the properties the clone-src approach delivers, so future
+maintainers see the constraint before refactoring. Don't rely on
+commit archaeology.
+
+**Disposition:** documentation only — no code change. Surfaces in
+Phase 3b design doc; cross-reference from `newDstPod` docstring if
+language is added there too.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
@@ -1062,6 +1139,87 @@ design must address.
    backlog item above. Operators watching a 38s SwiftMigration with
    no progress visibility will surface it as a usability gap during
    first production rollouts.
+
+## Phase 3b Spike — COMPLETE (Decisions Resolved)
+
+Phase 3b spike completed 2026-05-08. Findings doc:
+[`docs/design/live-migration-phase-3b-spike.md`](docs/design/live-migration-phase-3b-spike.md).
+All four Phase 2 pending-decision items from the Phase 3a close-
+out are answered. Branch `spike/phase-3b-q1-q4` retained for
+reference; **NOT for merge** per spike contract. Phase 3b design
+conversation begins in a separate session anchored on this
+findings doc.
+
+1. **swiftletd control surface for migration actions — SHIPPED via
+   spike (Q1).** PASS conditional: annotation-driven pattern holds
+   for Phase 3b's expected use (state-machine transitions, 4-6
+   patches per migration). Per-iteration progress reporting
+   rejected by Phase 3b design **independent of CH limitations** —
+   even if a future CH version exposes per-iteration timing,
+   annotation surface is wrong tool for streaming-progress data
+   (apiserver-bounded ~540ms median, 50 iterations × 540ms ≈ 27s
+   pure overhead vs 38s data-transfer body). Progress visibility,
+   if ever needed, routes through a separate streaming channel
+   (swiftletd HTTP status endpoint, upstream CH telemetry, or
+   external network observer). Supersedes Phase 2 Resolved
+   Decision 1.
+
+2. **mTLS posture — UNCHANGED.** Phase 2's plaintext-TCP-with-
+   security-gating + `kubeswift.io/migration-phase2-unsafe-
+   plaintext: ack` posture remains. Phase 3b inherits without
+   modification. mTLS handoff is Phase 3c+ work; spike did not
+   exercise this surface.
+
+3. **Same-CH-version constraint — SUPERSEDED via spike (Q3).**
+   Phase 3a's
+   [`internal/controller/swiftmigration/dst_pod.go::newDstPod`](internal/controller/swiftmigration/dst_pod.go)
+   constructs the destination pod via `srcPod.DeepCopy()` —
+   cloning the source pod's spec including launcher image. This
+   structurally guarantees match-tag at pod construction; there is
+   NO controller code path that produces a heterogeneous src/dst.
+   **Phase 2 Decision 3 retired**: webhook match-tag rule is
+   redundant (implementation already enforces atomically), and
+   `spec.allowVersionSkew=true` opt-in escape hatch is dropped
+   from Phase 3b API surface (no controller code path consumes
+   it). Cluster-empirical: cross-version v50.2 ↔ v51.1 deployment
+   could not be produced through the controller; both spike runs
+   ran homogeneous v50.2 ↔ v50.2 by structural construction.
+   Document `newDstPod` clone-src as a LOAD-BEARING architectural
+   property in Phase 3b design doc to future-proof against
+   refactor regression (W26 lesson pattern: a future "let's
+   re-resolve dst from SwiftGuest spec — cleaner" refactor
+   would silently re-introduce the skew surface).
+
+4. **Pre-copy convergence test surface — SHIPPED via spike (Q2).**
+   PASS through 50%-of-RAM dirtied (4 workers × 512M continuous
+   `rand-set` on a 4Gi guest). Termination behavior is
+   **iteration-cap-bounded, NOT classical algorithmic
+   convergence** — CH v51.1 hardcodes pre-copy to 5 iterations
+   then unconditionally enters final stop-and-copy regardless of
+   dirty rate. **This is a CH-version dependency** that Phase 3b
+   inherits: future CH versions making the cap configurable or
+   replacing it with classical dirty-rate-vs-bandwidth detection
+   would change Phase 3b's webhook policy ("no admission gate on
+   dirty rate" remains correct for CH v51.x) and operator-visible
+   downtime characteristics. Empirical numbers (4Gi guest, 4
+   migrations): pauseWindow scales 1.0× → 1.18× → 1.79× → 2.29×
+   across baseline → LOW (1×64M) → MED (2×256M) → HIGH (4×512M)
+   stress-ng intensities; observedDowntime stays bounded at
+   ~2-3s across ALL workloads. Supersedes Phase 2 Resolved
+   Decision 4.
+
+### Phase 3b spike — additional finding outside the four
+
+**Pod-network TCP plumbing (Q4) — PASS.** Default Calico VXLAN at
+MTU 1450 saturates the underlying NIC (~902 Mbit/s on the spike
+cluster's Hetzner gigabit interconnect) with low retransmissions,
+no MTU sensitivity, and symmetric direction-pair behavior. CH
+live-migration data path achieves **~95% of raw TCP bandwidth**
+(Q2 inferred 107.2 MB/s ÷ Q4 measured 112.75 MB/s = 0.951);
+orchestration overhead is ~5%. **No dedicated migration network
+needed for Phase 3b** — default pod network is sufficient.
+Operator sizing formula for live-migratable guests: expected
+pauseWindow ≈ `(guest_RAM × 1.05) / pod_network_bandwidth`.
 
 ### Phase 2 walkthrough resumption (post-PR-#30 redeploy)
 
