@@ -189,6 +189,29 @@ pub const MIGRATION_STATUS_DETAIL_KEY: &str = "kubeswift.io/migration-status-det
 /// terminal `complete` status. Mirrors snapshot's STATUS_PAUSE_WINDOW_MS_KEY
 /// shape but in the migration namespace.
 pub const MIGRATION_PAUSE_WINDOW_MS_KEY: &str = "kubeswift.io/migration-pause-window-ms";
+/// Best-effort heuristic progress percentage emitted by swiftletd-source
+/// during `vm.send-migration` per Phase 3b design doc §5.4. Monotonically
+/// increasing 0-95 (capped to make it obvious to operators that the
+/// number is heuristic, never authoritative). Read by `swiftctl
+/// migration describe` and surfaced with an explicit
+/// "(estimate)" qualifier per design §6.2.
+pub const MIGRATION_PROGRESS_ESTIMATE_KEY: &str = "kubeswift.io/migration-progress-estimate";
+
+/// Pod-network baseline bandwidth used to compute the
+/// `migration-progress-estimate` annotation per Phase 3b design doc
+/// §5.4. **Calico-VXLAN-specific** measurement from spike Q4 (107.2
+/// MB/s CH `vm.send-migration` throughput on the spike cluster's
+/// Hetzner gigabit interconnect, which is ~95% of the 112.75 MB/s raw
+/// TCP ceiling). Operators on other CNI implementations may see
+/// different efficiency floors; the estimate is least accurate on
+/// cluster configurations furthest from spike.
+///
+/// If walkthroughs find the heuristic drifts materially on
+/// representative workloads, the planned follow-up is to expose the
+/// baseline as `SwiftGuestClass.spec.migrationProgressBaselineMBps`
+/// (operator override). Phase 3b PR 1 ships the hardcoded constant;
+/// don't ship the field pre-emptively.
+pub const PROGRESS_BASELINE_MBPS: f64 = 108.0;
 
 /// Phase 2 unsafe-plaintext acknowledgement annotation. Required on
 /// the launcher pod for swiftletd to accept any migration action — the
@@ -597,6 +620,15 @@ struct MigrationSendArgs {
     /// memory size; Phase 2 defaults to DEFAULT_ACTION_TIMEOUT_SECS.
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// Phase 3b PR 1: guest RAM in MiB, used to compute the
+    /// `migration-progress-estimate` annotation heuristic per
+    /// design doc §5.4. When absent, swiftletd skips the
+    /// progress-estimate emission entirely — best-effort posture.
+    /// The Phase 3b PR 2 controller integration will always set
+    /// this from `SwiftGuest.spec.resources.memory`; PR 1 manual-
+    /// demo callers set it directly in the action-args annotation.
+    #[serde(default)]
+    guest_ram_mib: Option<u32>,
 }
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
@@ -642,6 +674,137 @@ struct MigrationReceiveArgs {
 /// (cancel is destination-kill per F2). Future versions may run this
 /// on a worker thread for symmetry with receive; for Phase 2 the
 /// current-thread block is acceptable on the source.
+/// Drop-guarded handle for the progress-estimate emitter thread.
+/// Stores `true` into the shared cancel flag on drop so the emitter
+/// exits at its next ~5s tick. The std::thread is intentionally
+/// not joined — emission is best-effort and the thread cleanly
+/// exits once its tokio runtime block_on returns; we don't gate
+/// dispatch return on cleanup.
+///
+/// Set on drop covers both the happy path (`client.send_migration`
+/// returns, the guard goes out of scope) AND async cancellation
+/// (the dispatch_migration_send future is dropped mid-flight, the
+/// guard's destructor still runs).
+struct ProgressEmitterGuard {
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for ProgressEmitterGuard {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Spawn the progress-estimate emitter per Phase 3b design doc §5.4.
+///
+/// Implementation notes:
+///
+/// - **Dedicated std::thread, not tokio::spawn.** The action loop's
+///   tokio runtime is `current_thread`; `client.send_migration` is a
+///   sync HTTP call that blocks the thread for tens of seconds. A
+///   `tokio::spawn`'d task would not get scheduled until send_migration
+///   returns, defeating the point of progress emission. Mirrors the
+///   lease poller's std::thread + own-runtime pattern at
+///   [`crate::lease`].
+/// - **Best-effort.** If `guest_ram_mib` is absent, env vars
+///   POD_NAMESPACE / POD_NAME are unset, or the kube client can't be
+///   created, the emitter logs at debug and exits cleanly. Annotation
+///   patch failures during the loop are also debug-level; we do NOT
+///   abort the send call on emitter problems.
+/// - **Cancellation.** The returned guard's Drop impl stores `true`
+///   into the cancel flag. The thread observes the flag at its next
+///   tick (worst-case ~5s after dispatch return). The thread is not
+///   joined.
+/// - **Why not also publish to the CRD status field?** Per design
+///   §5.4: the transient nature of progress data (changes every 5s,
+///   valid for ~30-100s) doesn't match status semantics; persisting
+///   it across post-completion reconciles would be misleading.
+///   swiftctl reads the annotation directly.
+fn spawn_progress_emitter(action_id: String, guest_ram_mib: Option<u32>) -> ProgressEmitterGuard {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_thread = cancel.clone();
+    std::thread::spawn(move || {
+        let Some(ram_mib) = guest_ram_mib else {
+            log::debug!(
+                "progress_estimate_disabled id={} reason=guest_ram_mib_absent",
+                action_id
+            );
+            return;
+        };
+        let (namespace, pod_name) = match (
+            std::env::var("POD_NAMESPACE").ok(),
+            std::env::var("POD_NAME").ok(),
+        ) {
+            (Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => (ns, name),
+            _ => {
+                log::debug!(
+                    "progress_estimate_disabled id={} reason=POD_NAMESPACE_or_POD_NAME_unset",
+                    action_id
+                );
+                return;
+            }
+        };
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::debug!(
+                    "progress_estimate_runtime_failed id={} err={}",
+                    action_id,
+                    e
+                );
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let client = match crate::kube_client::create_client().await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::debug!(
+                        "progress_estimate_kube_client_unavailable id={} err={}",
+                        action_id,
+                        e
+                    );
+                    return;
+                }
+            };
+            let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &namespace);
+            let started = std::time::Instant::now();
+            let expected_s = (ram_mib as f64) / PROGRESS_BASELINE_MBPS;
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            // First tick fires immediately; skip it so the first
+            // emission lands ~5s into the send call. Operators
+            // reading the annotation right at dispatch entry would
+            // otherwise see 0% which is uninformative noise.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if cancel_for_thread.load(Ordering::SeqCst) {
+                    log::debug!("progress_estimate_cancelled id={}", action_id);
+                    return;
+                }
+                let elapsed_s = started.elapsed().as_secs_f64();
+                let pct = compute_progress_estimate(elapsed_s, expected_s);
+                let mut annotations = BTreeMap::new();
+                annotations.insert(MIGRATION_PROGRESS_ESTIMATE_KEY.to_string(), pct.to_string());
+                let patch = json!({"metadata": {"annotations": annotations}});
+                let pp = PatchParams::default();
+                match api.patch(&pod_name, &pp, &Patch::Merge(&patch)).await {
+                    Ok(_) => log::debug!("progress_estimate_patched id={} pct={}", action_id, pct),
+                    Err(e) => log::debug!(
+                        "progress_estimate_patch_failed id={} pct={} err={}",
+                        action_id,
+                        pct,
+                        e
+                    ),
+                }
+            }
+        });
+    });
+    ProgressEmitterGuard { cancel }
+}
+
 async fn dispatch_migration_send(
     action: &PendingAction,
     api_socket: &Path,
@@ -663,6 +826,12 @@ async fn dispatch_migration_send(
     let timeout =
         std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
     let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
+
+    // Phase 3b PR 1 Commit D — spawn the progress-estimate emitter
+    // BEFORE the blocking send_migration call. Drop guard ensures
+    // the emitter is signaled to exit on any return path (success,
+    // error, async cancellation).
+    let _progress = spawn_progress_emitter(action.id.clone(), args.guest_ram_mib);
 
     let started = std::time::Instant::now();
     if let Err(e) = client.send_migration(&args.target_url) {
@@ -1758,6 +1927,64 @@ fn write_migration_status_fn<'a>(
     ))
 }
 
+/// Pre-dispatch status verb for a freshly-accepted action.
+///
+/// `handle_namespace` writes a status annotation between
+/// `ActionDecision::Accept` and the dispatcher returning. For most
+/// actions (snapshot, restore, migration-send, migration-cancel) the
+/// generic `StatusKind::Running` ("running") is the right pre-dispatch
+/// verb — operationally meaning "swiftletd has accepted the action and
+/// is now executing it."
+///
+/// For `MigrationReceive` we override to `Custom("receive-ready")`
+/// per Phase 3b design doc §5.1: the controller's PreparingLive
+/// phase gate-observes this annotation to know it can safely patch
+/// `migration-action: send` on the source pod. The annotation fires
+/// here (a few microseconds before `client.receive_migration()` is
+/// issued to CH) rather than from inside the dispatcher because
+/// threading the kube client into `dispatch()` would have grown the
+/// signature churn past the operator-set sanity-check budget
+/// (see Phase 3b PR 1 prompt; ~20 test-site callers of
+/// `dispatch()`). Operationally the few-microsecond gap between
+/// the annotation write and the actual TCP listener open is dwarfed
+/// by the controller's ~540ms reconcile→patch-send round-trip
+/// (Phase 3b spike Q1), so no race surfaces on cluster timing.
+///
+/// Commit D extended the match with
+/// `MigrationSend => Custom("sending")` per design doc §5.2.
+fn pre_dispatch_status(kind: &ActionKind) -> StatusKind {
+    match kind {
+        ActionKind::MigrationReceive => StatusKind::Custom("receive-ready"),
+        ActionKind::MigrationSend => StatusKind::Custom("sending"),
+        _ => StatusKind::Running,
+    }
+}
+
+/// Compute the heuristic progress percentage per Phase 3b design doc
+/// §5.4. Pure function — no I/O, no state. The emitter task wraps
+/// this with annotation patching at ~5s intervals.
+///
+///   raw = 100 * elapsed_s / expected_s
+///   capped = clamp(raw, 0, 95)
+///
+/// The cap at 95% (NOT 100%) is intentional: the transition from "95%
+/// from the heuristic" to "vm.send-migration RPC returned successfully"
+/// is the next discrete observable event, and we don't want operators
+/// seeing "100% complete" while the RPC is still in finalize. The
+/// floor at 0 is defensive against clock drift on swiftletd startup.
+///
+/// Defensive: if `expected_s` is non-positive (e.g., guest RAM
+/// unavailable, controller didn't set the args), return 0 — the
+/// emitter task should also skip emission entirely in this case;
+/// the helper's defensive zero is the fall-through.
+pub fn compute_progress_estimate(elapsed_s: f64, expected_s: f64) -> i64 {
+    if expected_s <= 0.0 || !expected_s.is_finite() || !elapsed_s.is_finite() {
+        return 0;
+    }
+    let raw = 100.0 * elapsed_s / expected_s;
+    raw.clamp(0.0, 95.0) as i64
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_namespace(
     client: &Client,
@@ -1852,7 +2079,7 @@ async fn handle_namespace(
                 namespace,
                 pod_name,
                 &pending.id,
-                StatusKind::Running,
+                pre_dispatch_status(&pending.kind),
                 None,
                 None,
             )
@@ -2059,6 +2286,121 @@ mod tests {
         assert_eq!(StatusKind::Failed.as_str(), "failed");
         assert_eq!(StatusKind::Rejected.as_str(), "rejected");
     }
+
+    // Phase 3b PR 1 Commit C — pre-dispatch annotation verb-
+    // specialization. Per design doc §5.1, the controller's
+    // PreparingLive phase gate-observes `migration-status:
+    // receive-ready` before patching `migration-action: send` on the
+    // source pod. This helper is the emission site.
+    #[test]
+    fn pre_dispatch_status_receive_emits_receive_ready() {
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationReceive).as_str(),
+            "receive-ready"
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_status_send_emits_sending() {
+        // Phase 3b PR 1 Commit D extends the match with a `sending`
+        // arm per design doc §5.2. The controller's StopAndCopyLive
+        // phase gate-observes this annotation as the substateSrcSending
+        // entry signal.
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationSend).as_str(),
+            "sending"
+        );
+    }
+
+    #[test]
+    fn pre_dispatch_status_other_actions_unchanged() {
+        // Snapshot + restore + cancel actions retain the
+        // pre-Phase-3b semantics; only the receive + send verbs get
+        // specialized pre-dispatch annotations.
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::SnapshotCapture).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::SnapshotResume).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::RestorePrepare).as_str(),
+            "running"
+        );
+        assert_eq!(
+            pre_dispatch_status(&ActionKind::MigrationCancel).as_str(),
+            "running"
+        );
+    }
+
+    // Phase 3b PR 1 Commit D — progress-estimate computation per
+    // design doc §5.4. The pure function is testable in isolation;
+    // the I/O wrapper (spawn_progress_emitter) is exercised in the
+    // manual demo walkthrough (Commit F) where annotation emission
+    // and the ~5s cadence can be observed on a real cluster.
+
+    #[test]
+    fn compute_progress_estimate_at_one_quarter() {
+        // 4096 MB guest at PROGRESS_BASELINE_MBPS=108.0:
+        //   expected_s = 4096 / 108 ≈ 37.93s
+        //   elapsed_s = 10s → raw ≈ 26.36%
+        //   capped at 26 (truncation, not rounding — `as i64`).
+        let expected_s = 4096.0 / PROGRESS_BASELINE_MBPS;
+        assert_eq!(compute_progress_estimate(10.0, expected_s), 26);
+    }
+
+    #[test]
+    fn compute_progress_estimate_caps_at_95() {
+        // 4096 MB guest at PROGRESS_BASELINE_MBPS=108.0, elapsed=60s:
+        //   expected_s ≈ 37.93s
+        //   raw ≈ 158% → capped to 95.
+        // Operators see 95 (never 100) until vm.send-migration returns;
+        // the transition to send-complete is the next discrete event.
+        let expected_s = 4096.0 / PROGRESS_BASELINE_MBPS;
+        assert_eq!(compute_progress_estimate(60.0, expected_s), 95);
+    }
+
+    #[test]
+    fn compute_progress_estimate_handles_degenerate_inputs() {
+        // expected_s = 0 (e.g., guest_ram_mib was 0): defensive 0.
+        assert_eq!(compute_progress_estimate(10.0, 0.0), 0);
+        // expected_s negative (impossible from the production path
+        // but cheap to defend): defensive 0.
+        assert_eq!(compute_progress_estimate(10.0, -1.0), 0);
+        // elapsed_s = 0 (called at t=0): clamps to 0.
+        assert_eq!(compute_progress_estimate(0.0, 38.0), 0);
+        // NaN / infinity (defensive against clock-drift or panic-into-
+        // f64-conversion): 0.
+        assert_eq!(compute_progress_estimate(f64::NAN, 38.0), 0);
+        assert_eq!(compute_progress_estimate(10.0, f64::INFINITY), 0);
+    }
+
+    #[test]
+    fn compute_progress_estimate_baseline_matches_spike_q4_constant() {
+        // PROGRESS_BASELINE_MBPS is the spike Q4 empirical baseline
+        // (107.2 MB/s rounded to 108.0). If a future spike measurement
+        // adjusts the constant, this assertion fails loud so the
+        // companion test data (and operator docs) get updated.
+        assert!(
+            (PROGRESS_BASELINE_MBPS - 108.0).abs() < f64::EPSILON,
+            "PROGRESS_BASELINE_MBPS changed to {}; update tests + docs",
+            PROGRESS_BASELINE_MBPS
+        );
+    }
+
+    // Note: spawn_progress_emitter's thread + drop-guard behaviour
+    // is not unit-tested here. The emitter requires POD_NAMESPACE
+    // / POD_NAME env vars and a working kube client to fire
+    // annotation patches; both are present on cluster but absent
+    // in the test harness. Cluster validation lands in the Commit F
+    // manual-demo walkthrough doc, where the operator reads
+    // `kubeswift.io/migration-progress-estimate` at 5s intervals
+    // during a real send_migration. The drop-guard's cancel-on-drop
+    // semantics ARE exercised by every test that calls
+    // dispatch_migration_send (the guard is constructed before
+    // send_migration and dropped on return).
 
     #[test]
     fn status_kind_custom_emits_verbatim() {
@@ -2686,10 +3028,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_receive_returns_running_when_state_running() {
+    async fn migration_receive_post_dispatch_status_is_running_when_state_running() {
         // Phase 2 spike Q1c: destination CH auto-resumes after
         // receive-migration completes. The dispatch handler probes
         // vm_info post-receive and requires state=Running.
+        //
+        // Note: this asserts the POST-dispatch terminal status verb
+        // (`outcome.success_status == Some("running")`, the
+        // destination-side success verb per design §3.1). It is NOT
+        // the Phase 3b pre-dispatch `receive-ready` annotation, which
+        // is covered by pre_dispatch_status_receive_emits_receive_ready.
+        // The test name was clarified in Phase 3b PR 1 Commit D to
+        // make the distinction unambiguous.
         let body = br#"{"config":{},"state":"Running"}"#;
         let info_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
         let mut info_full = info_response.into_bytes();

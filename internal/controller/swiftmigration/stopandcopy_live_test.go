@@ -790,11 +790,14 @@ func TestStopAndCopyLive_LeaderHandoverMidRecvIssued_ReentrantNoDuplicateWrite(t
 	}
 }
 
-// W27b: stampObservedPauseWindow reads the swiftletd-on-src reported
+// W27b + Phase 3b PR 1 Commit E: stampTransferDuration (renamed from
+// stampObservedPauseWindow) reads the swiftletd-on-src reported
 // pause window from the src pod's
-// kubeswift.io/migration-pause-window-ms annotation and stamps it
-// into status.ObservedPauseWindow. Verifies the happy-path read.
-func TestStampObservedPauseWindow_HappyPath_W27b(t *testing.T) {
+// kubeswift.io/migration-pause-window-ms annotation and DUAL-WRITES
+// both status.ObservedTransferDuration (canonical) and
+// status.ObservedPauseWindow (deprecated alias). Verifies the
+// happy-path dual-write.
+func TestStampTransferDuration_HappyPath_DualWrite(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{}
 	status := &migrationv1alpha1.SwiftMigrationStatus{}
 	src := &corev1.Pod{
@@ -802,19 +805,63 @@ func TestStampObservedPauseWindow_HappyPath_W27b(t *testing.T) {
 			Annotations: map[string]string{AnnotationMigrationPauseWindowMs: "312"},
 		},
 	}
-	stampObservedPauseWindow(context.Background(), mig, status, src)
+	stampTransferDuration(context.Background(), mig, status, src)
+	// Canonical field
+	if status.ObservedTransferDuration == nil {
+		t.Fatalf("ObservedTransferDuration not stamped")
+	}
+	if got := status.ObservedTransferDuration.Duration; got != 312*time.Millisecond {
+		t.Errorf("ObservedTransferDuration: want 312ms, got %v", got)
+	}
+	// Deprecated alias (Phase 3b release ships both; alias dropped in
+	// Phase 3b+1)
 	if status.ObservedPauseWindow == nil {
-		t.Fatalf("ObservedPauseWindow not stamped")
+		t.Fatalf("ObservedPauseWindow (deprecated alias) not stamped")
 	}
 	if got := status.ObservedPauseWindow.Duration; got != 312*time.Millisecond {
-		t.Errorf("ObservedPauseWindow: want 312ms, got %v", got)
+		t.Errorf("ObservedPauseWindow alias: want 312ms, got %v", got)
+	}
+	// Both fields read from the same source value, so they must
+	// match. If a future refactor breaks the dual-write coupling
+	// (e.g., introduces a second source for one field), this
+	// assertion fires.
+	if status.ObservedTransferDuration.Duration != status.ObservedPauseWindow.Duration {
+		t.Errorf("dual-write fields diverged: canonical=%v alias=%v",
+			status.ObservedTransferDuration.Duration,
+			status.ObservedPauseWindow.Duration)
 	}
 }
 
-// W27b defensive: malformed annotation leaves ObservedPauseWindow nil
-// (operators see a missing field, never a wrong one). Same posture as
-// W27a's defensive nil-check on missing CutoverStep2DispatchedAt.
-func TestStampObservedPauseWindow_ParseFailure_LeavesFieldNil_W27b(t *testing.T) {
+// Empirical-baseline assertion: the Phase 3b spike Q2 baseline
+// observation was 38.20s for a 4Gi guest with no stress. Operators
+// reading status.observedTransferDuration on a typical cluster
+// should see a value in this range; this test pins the field's
+// Duration parsing against the empirical value the operator
+// documentation cites.
+func TestStampTransferDuration_SpikeQ2BaselineValue(t *testing.T) {
+	mig := &migrationv1alpha1.SwiftMigration{}
+	status := &migrationv1alpha1.SwiftMigrationStatus{}
+	src := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{AnnotationMigrationPauseWindowMs: "38200"},
+		},
+	}
+	stampTransferDuration(context.Background(), mig, status, src)
+	want := 38200 * time.Millisecond
+	if status.ObservedTransferDuration == nil || status.ObservedTransferDuration.Duration != want {
+		t.Errorf("ObservedTransferDuration: want %v (spike Q2 baseline), got %v",
+			want, status.ObservedTransferDuration)
+	}
+	if status.ObservedPauseWindow == nil || status.ObservedPauseWindow.Duration != want {
+		t.Errorf("ObservedPauseWindow alias: want %v, got %v",
+			want, status.ObservedPauseWindow)
+	}
+}
+
+// W27b defensive: malformed annotation leaves BOTH fields nil
+// (operators see a missing field, never a wrong one). Same posture
+// as W27a's defensive nil-check on missing CutoverStep2DispatchedAt.
+func TestStampTransferDuration_ParseFailure_LeavesBothFieldsNil(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{}
 	status := &migrationv1alpha1.SwiftMigrationStatus{}
 	src := &corev1.Pod{
@@ -822,22 +869,30 @@ func TestStampObservedPauseWindow_ParseFailure_LeavesFieldNil_W27b(t *testing.T)
 			Annotations: map[string]string{AnnotationMigrationPauseWindowMs: "garbage"},
 		},
 	}
-	stampObservedPauseWindow(context.Background(), mig, status, src)
+	stampTransferDuration(context.Background(), mig, status, src)
+	if status.ObservedTransferDuration != nil {
+		t.Errorf("ObservedTransferDuration should be nil on parse failure; got %v",
+			status.ObservedTransferDuration)
+	}
 	if status.ObservedPauseWindow != nil {
-		t.Errorf("ObservedPauseWindow should be nil on parse failure; got %v",
+		t.Errorf("ObservedPauseWindow alias should be nil on parse failure; got %v",
 			status.ObservedPauseWindow)
 	}
 }
 
 // W27b: missing annotation (older swiftletd version, unexpected pod
-// state) is silent — no log spam, field stays nil.
-func TestStampObservedPauseWindow_MissingAnnotation_LeavesFieldNil_W27b(t *testing.T) {
+// state) is silent — no log spam, both fields stay nil.
+func TestStampTransferDuration_MissingAnnotation_LeavesBothFieldsNil(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{}
 	status := &migrationv1alpha1.SwiftMigrationStatus{}
 	src := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: nil}}
-	stampObservedPauseWindow(context.Background(), mig, status, src)
+	stampTransferDuration(context.Background(), mig, status, src)
+	if status.ObservedTransferDuration != nil {
+		t.Errorf("ObservedTransferDuration should be nil when annotation absent; got %v",
+			status.ObservedTransferDuration)
+	}
 	if status.ObservedPauseWindow != nil {
-		t.Errorf("ObservedPauseWindow should be nil when annotation absent; got %v",
+		t.Errorf("ObservedPauseWindow alias should be nil when annotation absent; got %v",
 			status.ObservedPauseWindow)
 	}
 }
