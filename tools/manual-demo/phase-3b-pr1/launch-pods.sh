@@ -83,9 +83,11 @@ metadata:
   name: pr1-class
   namespace: ${NS}
 spec:
-  resources:
-    cpu: "2"
-    memory: 4Gi
+  cpu: "2"
+  memory: 4Gi
+  rootDisk:
+    format: raw
+    size: 20Gi
   storage:
     accessMode: ReadWriteMany
     volumeMode: Block
@@ -136,8 +138,9 @@ step 5/5 "destination pod ${DST_POD_NAME} on ${DST_NODE}"
 # dst pod. Mirrors what Phase 3a dst_pod.go::newDstPod does at
 # runtime (LBA-1 — image is inherited from src by clone semantics);
 # we replicate by hand for the controller-less PR 1 demo.
+DST_POD_NAME="${DST_POD_NAME}" DST_NODE="${DST_NODE}" \
 kubectl -n "${NS}" get pod "${SRC_POD}" -o yaml \
-  | python3 -c '
+  | DST_POD_NAME="${DST_POD_NAME}" DST_NODE="${DST_NODE}" python3 -c '
 import sys, yaml
 p = yaml.safe_load(sys.stdin)
 import os
@@ -167,7 +170,7 @@ for c in p["spec"]["containers"]:
         env.append({"name": "KUBESWIFT_MIGRATION_ROLE", "value": "receiver"})
         c["env"] = env
 yaml.safe_dump(p, sys.stdout)
-' DST_POD_NAME="${DST_POD_NAME}" DST_NODE="${DST_NODE}" | kubectl apply -f -
+' | kubectl apply -f -
 
 echo "  waiting for destination pod to reach phase=Running ..."
 for i in $(seq 1 60); do
