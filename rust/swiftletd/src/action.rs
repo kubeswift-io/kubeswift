@@ -719,10 +719,7 @@ impl Drop for ProgressEmitterGuard {
 ///   valid for ~30-100s) doesn't match status semantics; persisting
 ///   it across post-completion reconciles would be misleading.
 ///   swiftctl reads the annotation directly.
-fn spawn_progress_emitter(
-    action_id: String,
-    guest_ram_mib: Option<u32>,
-) -> ProgressEmitterGuard {
+fn spawn_progress_emitter(action_id: String, guest_ram_mib: Option<u32>) -> ProgressEmitterGuard {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_thread = cancel.clone();
     std::thread::spawn(move || {
@@ -772,8 +769,7 @@ fn spawn_progress_emitter(
                     return;
                 }
             };
-            let api: Api<k8s_openapi::api::core::v1::Pod> =
-                Api::namespaced(client, &namespace);
+            let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &namespace);
             let started = std::time::Instant::now();
             let expected_s = (ram_mib as f64) / PROGRESS_BASELINE_MBPS;
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
@@ -791,18 +787,11 @@ fn spawn_progress_emitter(
                 let elapsed_s = started.elapsed().as_secs_f64();
                 let pct = compute_progress_estimate(elapsed_s, expected_s);
                 let mut annotations = BTreeMap::new();
-                annotations.insert(
-                    MIGRATION_PROGRESS_ESTIMATE_KEY.to_string(),
-                    pct.to_string(),
-                );
+                annotations.insert(MIGRATION_PROGRESS_ESTIMATE_KEY.to_string(), pct.to_string());
                 let patch = json!({"metadata": {"annotations": annotations}});
                 let pp = PatchParams::default();
                 match api.patch(&pod_name, &pp, &Patch::Merge(&patch)).await {
-                    Ok(_) => log::debug!(
-                        "progress_estimate_patched id={} pct={}",
-                        action_id,
-                        pct
-                    ),
+                    Ok(_) => log::debug!("progress_estimate_patched id={} pct={}", action_id, pct),
                     Err(e) => log::debug!(
                         "progress_estimate_patch_failed id={} pct={} err={}",
                         action_id,
