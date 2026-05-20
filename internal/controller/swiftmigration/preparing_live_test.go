@@ -147,6 +147,16 @@ func TestPreparingLive_PodReady_AdvancesToStopAndCopy(t *testing.T) {
 	}
 }
 
+// TestPreparingLive_BudgetExceeded_FailsWithDstNeverReady is the
+// regression guard for Commit C's semantic refinement: when the 60s
+// PreparingLive budget expires with the dst pod alive-but-not-Ready,
+// the failure reason must be DstNeverReady (NOT PodTerminated as
+// Phase 3a reported). A future refactor that collapses these two
+// codes back together would silently undo the operator-visible
+// distinction; this test fails loudly if that happens.
+//
+// See FailureReasonDstNeverReady docstring for the semantic-
+// refinement rationale and operator-upgrade note.
 func TestPreparingLive_BudgetExceeded_FailsWithDstNeverReady(t *testing.T) {
 	scheme := testScheme(t)
 	mig, guest, src := preparingLiveFixture(t, "uid-1")
@@ -209,6 +219,11 @@ func TestPreparingLive_IdempotentReentry_ExistingPodNotRecreated(t *testing.T) {
 	}
 }
 
+// TestPreparingLive_ExistingPodWrongShape_Fails is the regression
+// guard for Commit C's DstPodConflict wiring: a dst pod with the
+// expected deterministic name but unrelated labels (foreign
+// collision, not a leader-handover idempotent re-entry) must fail
+// with DstPodConflict, not the catch-all Other.
 func TestPreparingLive_ExistingPodWrongShape_Fails(t *testing.T) {
 	scheme := testScheme(t)
 	mig, guest, src := preparingLiveFixture(t, "uid-1")
