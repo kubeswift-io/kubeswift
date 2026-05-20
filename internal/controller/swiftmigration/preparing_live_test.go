@@ -147,7 +147,7 @@ func TestPreparingLive_PodReady_AdvancesToStopAndCopy(t *testing.T) {
 	}
 }
 
-func TestPreparingLive_BudgetExceeded_FailsWithPodTerminated(t *testing.T) {
+func TestPreparingLive_BudgetExceeded_FailsWithDstNeverReady(t *testing.T) {
 	scheme := testScheme(t)
 	mig, guest, src := preparingLiveFixture(t, "uid-1")
 	// PreparingStartedAt is 90s ago — past the 60s budget.
@@ -169,8 +169,8 @@ func TestPreparingLive_BudgetExceeded_FailsWithPodTerminated(t *testing.T) {
 	if res.FailureMsg == "" {
 		t.Fatalf("expected phaseFailure on budget exceeded; got %+v", res)
 	}
-	if res.FailureReason != migrationv1alpha1.FailureReasonPodTerminated {
-		t.Errorf("FailureReason: want PodTerminated, got %q", res.FailureReason)
+	if res.FailureReason != migrationv1alpha1.FailureReasonDstNeverReady {
+		t.Errorf("FailureReason: want DstNeverReady (Phase 3b PR 2 semantic refinement from PodTerminated), got %q", res.FailureReason)
 	}
 	if !strings.Contains(res.FailureMsg, "never reached Ready") {
 		t.Errorf("FailureMsg: want 'never reached Ready', got %q", res.FailureMsg)
@@ -235,8 +235,8 @@ func TestPreparingLive_ExistingPodWrongShape_Fails(t *testing.T) {
 	if !strings.Contains(res.FailureMsg, "does not match expected") {
 		t.Errorf("FailureMsg: want collision message, got %q", res.FailureMsg)
 	}
-	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
-		t.Errorf("FailureReason: want Other, got %q", res.FailureReason)
+	if res.FailureReason != migrationv1alpha1.FailureReasonDstPodConflict {
+		t.Errorf("FailureReason: want DstPodConflict (Phase 3b PR 2; refined from Other), got %q", res.FailureReason)
 	}
 }
 

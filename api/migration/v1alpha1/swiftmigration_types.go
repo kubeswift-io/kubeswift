@@ -140,15 +140,33 @@ const (
 	// scheduled onto the target node (insufficient capacity, taints,
 	// affinity rules, etc.) within the PreparingLive budget.
 	FailureReasonDstScheduleFailed = "DstScheduleFailed"
-	// FailureReasonDstNeverReady — set when the dst pod schedules and
-	// starts but never reaches receive-ready within the PreparingLive
-	// budget. Distinguishes a hung swiftletd dst from a terminated pod
-	// (PodTerminated).
+	// FailureReasonDstNeverReady — set when the dst pod is created but
+	// does not reach Ready within the PreparingLive budget (default
+	// 60s). Distinguishes a stuck-but-alive dst pod from one that
+	// terminated mid-migration (PodTerminated).
+	//
+	// SEMANTIC REFINEMENT FROM PHASE 3A: this code supersedes
+	// PodTerminated for the budget-timeout site in preparing_live.go.
+	// Phase 3a reported PodTerminated for the "pod alive but stuck"
+	// case as well as the "pod genuinely terminated" case; Phase 3b PR 2
+	// splits them. Operators with dashboards filtering on PodTerminated
+	// will no longer match the budget-timeout scenario — they should
+	// match DstNeverReady OR PodTerminated.
+	//
+	// Future work (tracked follow-up): DstScheduleFailed will split out
+	// the "could not be scheduled onto target node" case from
+	// DstNeverReady. Until then, scheduling-failure scenarios fall into
+	// DstNeverReady (the budget-timeout site catches both).
 	FailureReasonDstNeverReady = "DstNeverReady"
-	// FailureReasonReceiveDisconnect — set when the dst-side
-	// vm.receive-migration RPC reports a peer/network disconnect during
-	// transfer. Classified from swiftletd's failure-reason-code
-	// annotation on the dst pod.
+	// FailureReasonReceiveDisconnect — set when CH's migration RPC
+	// reports a peer/network disconnect (transport_error or
+	// connection_refused category from sanitize_ch_error). The name
+	// reflects the event — disconnect during the migration RPC — not
+	// the side that observed it. Both src-side (vm.send-migration
+	// observes peer drop) and dst-side (vm.receive-migration observes
+	// peer drop) detail strings classify to this code. Operator-
+	// visible naming asymmetry intentional: the underlying failure is
+	// the same network event regardless of which end reported it.
 	FailureReasonReceiveDisconnect = "ReceiveDisconnect"
 	// FailureReasonRpcError — set when CH's vm.send-migration or
 	// vm.receive-migration HTTP RPC returns an error that doesn't map to

@@ -76,7 +76,7 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	if guest.Spec.Migration != nil && guest.Spec.Migration.Enabled != nil && !*guest.Spec.Migration.Enabled {
 		return phaseFailure(
 			fmt.Sprintf("SwiftGuest %q has spec.migration.enabled=false", guest.Name),
-			migrationv1alpha1.FailureReasonOther)
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
 	// Stamp status.Mode + SourceNode + DestinationNode + SourcePodUID.
