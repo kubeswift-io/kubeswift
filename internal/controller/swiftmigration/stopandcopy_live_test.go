@@ -322,9 +322,12 @@ func TestStopAndCopyLive_SrcFailed_DstTerminating_MapsToPodTerminated_W18(t *tes
 }
 
 // W18 negative case: when dst is healthy (no DeletionTimestamp), the
-// existing classifier behavior is preserved (generic src failure →
-// Other, not PodTerminated).
-func TestStopAndCopyLive_SrcFailed_DstHealthy_PreservesOther_W18(t *testing.T) {
+// classifier output flows through unchanged (no PodTerminated
+// override). Phase 3b PR 2 reclassifies "send_migration:
+// internal_server_error" from Other → RpcError; the W18 test continues
+// to assert that the classifier output is preserved (not overridden to
+// PodTerminated), now matching the refined RpcError taxonomy.
+func TestStopAndCopyLive_SrcFailed_DstHealthy_PreservesClassifier_W18(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
@@ -336,8 +339,8 @@ func TestStopAndCopyLive_SrcFailed_DstHealthy_PreservesOther_W18(t *testing.T) {
 
 	status := mig.Status.DeepCopy()
 	res := r.handleStopAndCopyLive(context.Background(), mig, status)
-	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
-		t.Errorf("FailureReason: want Other (W18 preserves classifier when dst healthy), got %q",
+	if res.FailureReason != migrationv1alpha1.FailureReasonRpcError {
+		t.Errorf("FailureReason: want RpcError (W18 preserves classifier when dst healthy; PR 2 refined send_migration: internal_server_error from Other → RpcError), got %q",
 			res.FailureReason)
 	}
 }
@@ -553,18 +556,18 @@ func TestStopAndCopyLive_SrcCompleted_DispatchesCutoverStep1(t *testing.T) {
 	}
 }
 
-func TestStopAndCopyLive_DstFailed_GenericDetail_FailsWithOther(t *testing.T) {
+func TestStopAndCopyLive_DstFailed_ChInternalError_FailsWithRpcError(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
-	// Generic CH-internal error string (no D2 / W1 / cancel match).
-	// B3.3 classifier returns Other for unrecognised details.
+	// Phase 3b PR 2: "receive_migration:" prefix + non-transport
+	// category → RpcError (was Other in Phase 3a).
 	stamp(dst, migrationActionVerbReceive, recvActionID(mig), MigrationStatusFailed, recvActionID(mig), "receive_migration: ch_internal_error")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
 	status := mig.Status.DeepCopy()
 	res := r.handleStopAndCopyLive(context.Background(), mig, status)
-	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
-		t.Errorf("FailureReason: want Other for unrecognised detail, got %q", res.FailureReason)
+	if res.FailureReason != migrationv1alpha1.FailureReasonRpcError {
+		t.Errorf("FailureReason: want RpcError for receive_migration: non-transport category, got %q", res.FailureReason)
 	}
 	if !strings.Contains(res.FailureMsg, "destination reported migration failure") {
 		t.Errorf("FailureMsg: want dst-failed message, got %q", res.FailureMsg)

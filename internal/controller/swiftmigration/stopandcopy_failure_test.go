@@ -30,8 +30,19 @@ func TestClassifyFailureFromDetail_Table(t *testing.T) {
 		{"empty", "", migrationv1alpha1.FailureReasonOther},
 		{"whitespace", "   ", migrationv1alpha1.FailureReasonOther},
 		{"unrecognised", "some unknown error happened", migrationv1alpha1.FailureReasonOther},
-		{"send_migration raw", "send_migration: ch_internal_error", migrationv1alpha1.FailureReasonOther},
-		{"receive_migration raw", "receive_migration: socket_configure_failed", migrationv1alpha1.FailureReasonOther},
+
+		// Phase 3b PR 2 — sanitize_ch_error category tokens prefixed with
+		// "send_migration:" / "receive_migration:". transport_error or
+		// connection_refused → ReceiveDisconnect; all other categories
+		// → RpcError.
+		{"send_migration transport_error", "send_migration: transport_error", migrationv1alpha1.FailureReasonReceiveDisconnect},
+		{"send_migration connection_refused", "send_migration: connection_refused", migrationv1alpha1.FailureReasonReceiveDisconnect},
+		{"receive_migration transport_error", "receive_migration: transport_error", migrationv1alpha1.FailureReasonReceiveDisconnect},
+		{"receive_migration connection_refused", "receive_migration: connection_refused", migrationv1alpha1.FailureReasonReceiveDisconnect},
+		{"send_migration ch_error", "send_migration: ch_internal_error", migrationv1alpha1.FailureReasonRpcError},
+		{"receive_migration socket_configure_failed", "receive_migration: socket_configure_failed", migrationv1alpha1.FailureReasonRpcError},
+		{"send_migration bad_request", "send_migration: bad_request", migrationv1alpha1.FailureReasonRpcError},
+		{"receive_migration malformed_response", "receive_migration: malformed_response", migrationv1alpha1.FailureReasonRpcError},
 
 		// D2 watchdog actual + idealised → PodTerminated.
 		{"d2 actual prefix", "destination listener exited abnormally: exit_status: code(1)", migrationv1alpha1.FailureReasonPodTerminated},
@@ -40,11 +51,12 @@ func TestClassifyFailureFromDetail_Table(t *testing.T) {
 		{"CH process killed idealised", "CH process killed by SIGKILL", migrationv1alpha1.FailureReasonPodTerminated},
 		{"destination not reachable idealised", "destination not reachable", migrationv1alpha1.FailureReasonPodTerminated},
 
-		// W1 violation actual + idealised → Other.
-		{"w1 actual send", "w1_violation: send_migration returned 0 but CH state=Running", migrationv1alpha1.FailureReasonOther},
-		{"w1 actual receive", "w1_violation: receive_migration returned 0 but CH state=Paused", migrationv1alpha1.FailureReasonOther},
-		{"w1 idealised", "W1 violation observed at dispatch", migrationv1alpha1.FailureReasonOther},
-		{"w1 alt idealised", "destination not running post-receive", migrationv1alpha1.FailureReasonOther},
+		// Phase 3b PR 2 — W1 violation refined from Other to RpcError
+		// (wire-level inconsistency is RPC-semantic, not catch-all).
+		{"w1 actual send", "w1_violation: send_migration returned 0 but CH state=Running", migrationv1alpha1.FailureReasonRpcError},
+		{"w1 actual receive", "w1_violation: receive_migration returned 0 but CH state=Paused", migrationv1alpha1.FailureReasonRpcError},
+		{"w1 idealised", "W1 violation observed at dispatch", migrationv1alpha1.FailureReasonRpcError},
+		{"w1 alt idealised", "destination not running post-receive", migrationv1alpha1.FailureReasonRpcError},
 
 		// D1 cancel actual + idealised → Cancelled.
 		{"cancel actual exact", "cancelled", migrationv1alpha1.FailureReasonCancelled},
@@ -84,10 +96,12 @@ func TestStopAndCopyLive_DstFailed_D2WatchdogDetail_MapsToPodTerminated(t *testi
 	}
 }
 
-// TestStopAndCopyLive_SrcFailed_W1Violation_MapsToOther covers the
+// TestStopAndCopyLive_SrcFailed_W1Violation_MapsToRpcError covers the
 // migration-internal failure mode where the W1 dispatch-side gate
-// fires (vm_info post-call probe contradicts success).
-func TestStopAndCopyLive_SrcFailed_W1Violation_MapsToOther(t *testing.T) {
+// fires (vm_info post-call probe contradicts success). Phase 3b PR 2
+// refines this from Other → RpcError (wire-level inconsistency is
+// RPC-semantic, not catch-all).
+func TestStopAndCopyLive_SrcFailed_W1Violation_MapsToRpcError(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
@@ -97,8 +111,8 @@ func TestStopAndCopyLive_SrcFailed_W1Violation_MapsToOther(t *testing.T) {
 
 	status := mig.Status.DeepCopy()
 	res := r.handleStopAndCopyLive(context.Background(), mig, status)
-	if res.FailureReason != migrationv1alpha1.FailureReasonOther {
-		t.Errorf("FailureReason: want Other for W1 violation, got %q", res.FailureReason)
+	if res.FailureReason != migrationv1alpha1.FailureReasonRpcError {
+		t.Errorf("FailureReason: want RpcError for W1 violation, got %q", res.FailureReason)
 	}
 	if !strings.Contains(res.FailureMsg, "w1_violation") {
 		t.Errorf("FailureMsg should preserve W1 detail; got %q", res.FailureMsg)
