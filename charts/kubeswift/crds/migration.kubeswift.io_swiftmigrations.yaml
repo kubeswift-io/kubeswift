@@ -315,30 +315,47 @@ spec:
               failureReason:
                 description: |-
                   FailureReason classifies terminal Failed transitions for live mode.
-                  One of:
-                    - Cancelled: operator cancel via spec.cancelRequested or
-                      SwiftMigration deletion (also populated on Cancelled phase
-                      for symmetry).
-                    - PodTerminated: dst pod terminated mid-migration (drain,
-                      graceful delete, OOM, etc).
-                    - SourcePodReplaced: src pod was K8s-terminated and recreated
-                      mid-migration (UID change detected per F4.2).
-                    - Timeout: spec.timeout exceeded.
-                    - Other: catch-all for migration-internal errors (CH error,
-                      CPU incompatibility, W1 violation, etc) with detail in
-                      FailureMessage.
-                  Phase 1 offline mode does not populate this field — its failure
-                  modes are simpler and FailureMessage alone is sufficient. Phase 3a
-                  live mode uses this enum to give the operator a stable taxonomy
-                  for `kubectl get swiftmigration` output and dashboard alerting.
-                  See docs/design/live-migration-phase-3a.md §4.7 for the
+                  Phase 3a shipped the first five codes; Phase 3b PR 2 extends the
+                  taxonomy with seven additional codes that classify live-mode
+                  failures more precisely. See the per-constant docstrings at the
+                  top of this file for fire conditions; cross-reference
+                  docs/design/live-migration-phase-3b.md §4.7 for the
                   failure-mode-to-reason mapping.
+
+                  Phase 3a codes (carried through unchanged):
+                    - Cancelled, PodTerminated, SourcePodReplaced, Timeout, Other
+
+                  Phase 3b PR 2 codes (live-mode classification):
+                    - EligibilityMismatch — Validating defense-in-depth for
+                      post-admission eligibility drift.
+                    - DstScheduleFailed — dst pod could not be scheduled within
+                      the PreparingLive budget.
+                    - DstNeverReady — dst pod ran but never reached receive-ready;
+                      distinguishes hung swiftletd from a terminated pod.
+                    - ReceiveDisconnect — dst-side RPC reported peer/network
+                      disconnect during transfer.
+                    - RpcError — CH HTTP RPC error not otherwise classified.
+                    - ImageTagMismatch — LBA-1 trip-wire (defensive; should never
+                      fire). See docs/design/live-migration-phase-3b.md LBA-1.
+                    - DstPodConflict — dst pod name collision with foreign state.
+
+                  Phase 1 offline mode does not populate this field — its failure
+                  modes are simpler and FailureMessage alone is sufficient. Live
+                  mode uses this enum to give the operator a stable taxonomy
+                  for `kubectl get swiftmigration` output and dashboard alerting.
                 enum:
                 - Cancelled
                 - PodTerminated
                 - SourcePodReplaced
                 - Timeout
                 - Other
+                - EligibilityMismatch
+                - DstScheduleFailed
+                - DstNeverReady
+                - ReceiveDisconnect
+                - RpcError
+                - ImageTagMismatch
+                - DstPodConflict
                 type: string
               mode:
                 description: |-
