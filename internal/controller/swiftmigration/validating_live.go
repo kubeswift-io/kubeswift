@@ -11,6 +11,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
 // handleValidatingLive is the live-mode Validating phase.
@@ -75,7 +76,7 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	if guest.Spec.Migration != nil && guest.Spec.Migration.Enabled != nil && !*guest.Spec.Migration.Enabled {
 		return phaseFailure(
 			fmt.Sprintf("SwiftGuest %q has spec.migration.enabled=false", guest.Name),
-			migrationv1alpha1.FailureReasonOther)
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
 	// Stamp status.Mode + SourceNode + DestinationNode + SourcePodUID.
@@ -111,6 +112,27 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	// status.SourcePodRef.Name consistently regardless of cluster state
 	// drift mid-migration.
 	status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: srcPod.Name}
+
+	// LBA-1 defensive image-tag-match trip-wire.
+	//
+	// newDstPod (dst_pod.go) constructs the destination pod via
+	// srcPod.DeepCopy() which clones the source pod's launcher
+	// container image atomically. This guarantees match-tag migration
+	// as a structural property; the webhook does not need a
+	// version-skew rule because the implementation enforces it.
+	//
+	// This check is a fail-loud trip-wire: it fires only if a future
+	// refactor regresses the clone-src behavior or if the deployed
+	// controller's default launcher image diverges from the running
+	// guest's image (e.g., partial rolling upgrade mid-fleet). The
+	// common path always passes. If it ever fires, the migration
+	// enters Failed with ImageTagMismatch reason code, pointing
+	// operators at LBA-1.
+	//
+	// See docs/design/live-migration-phase-3b.md §4.1 + LBA-1.
+	if err := checkImageTagMatch(&srcPod); err != nil {
+		return phaseFailure(err.Error(), migrationv1alpha1.FailureReasonImageTagMismatch)
+	}
 
 	// IPWillChange surfacing (same logic as offline path; live mode
 	// on default networking still loses the IP because Cloud Hypervisor
@@ -221,4 +243,40 @@ func srcPodLookupName(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alpha
 		return mig.Status.SourcePodRef.Name
 	}
 	return canonicalPodNameForGuest(guest)
+}
+
+// checkImageTagMatch is the LBA-1 defensive trip-wire. Returns nil
+// when the src pod's launcher container image matches the controller's
+// default launcher image OR when either value is empty (defensive
+// skip — the trip-wire is not load-bearing for correctness).
+//
+// See handleValidatingLive's wire site for the rationale and
+// docs/design/live-migration-phase-3b.md LBA-1 for the architectural
+// property this trip-wire guards.
+func checkImageTagMatch(srcPod *corev1.Pod) error {
+	expected := swiftguest.LauncherImage()
+	actual := launcherContainerImage(srcPod)
+	if expected == "" || actual == "" {
+		// Missing config; not load-bearing. Common path skips.
+		return nil
+	}
+	if actual != expected {
+		return fmt.Errorf(
+			"image tag mismatch: source pod uses %q, controller default is %q "+
+				"(LBA-1 trip-wire — see docs/design/live-migration-phase-3b.md §9)",
+			actual, expected,
+		)
+	}
+	return nil
+}
+
+// launcherContainerImage returns the image of the pod's launcher
+// container, or "" if no container matches LauncherContainerName.
+func launcherContainerImage(pod *corev1.Pod) string {
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == LauncherContainerName {
+			return pod.Spec.Containers[i].Image
+		}
+	}
+	return ""
 }

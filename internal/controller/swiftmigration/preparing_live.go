@@ -177,7 +177,7 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		if !dstPodMatches(&existingDst, mig, &guest) {
 			return phaseFailure(
 				fmt.Sprintf("destination pod %q exists but does not match expected ownership/labels (possible name collision)", existingDst.Name),
-				migrationv1alpha1.FailureReasonOther)
+				migrationv1alpha1.FailureReasonDstPodConflict)
 		}
 		// Persist DestinationPodRef on re-entry too (status may have
 		// been lost across leader handover or status patches).
@@ -205,7 +205,7 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		time.Since(status.PreparingStartedAt.Time) > preparingLiveReadyBudget {
 		return phaseFailure(
 			fmt.Sprintf("destination pod %q never reached Ready within %s budget", existingDst.Name, preparingLiveReadyBudget),
-			migrationv1alpha1.FailureReasonPodTerminated)
+			migrationv1alpha1.FailureReasonDstNeverReady)
 	}
 
 	// Within budget; surface waiting state and requeue.
