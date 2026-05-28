@@ -57,7 +57,7 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	// Per-mode dispatch. isLiveMode handles both post-resolution
 	// (status.Mode=live) and explicit-live initial entry
 	// (status.Mode="" + spec.Mode=live).
-	if isLiveMode(mig) {
+	if isLiveMode(mig, status) {
 		return r.handleValidatingLive(ctx, mig, status)
 	}
 

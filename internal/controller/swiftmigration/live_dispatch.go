@@ -10,31 +10,37 @@ import (
 //
 // Two cases dispatch to live:
 //
-//  1. status.Mode == "live" — set by handleValidatingLive after mode
-//     resolution. All post-Validating phase handlers gate on this.
+//  1. status.Mode == "live" — set by resolveAutoMode (auto path) or
+//     stamped explicitly by handleValidatingLive. All post-Validating
+//     phase handlers gate on this.
 //
-//  2. status.Mode == "" AND spec.Mode == "live" — initial entry to
-//     Validating before mode resolution has run. Only handleValidating
-//     uses this branch (the other phase handlers cannot reach an
-//     unresolved-status path because Validating must run first).
+//  2. status.Mode == "" AND spec.Mode == "live" — explicit-live initial
+//     entry to Validating before status.Mode has been stamped.
 //
-// What this function does NOT do: resolve mode=auto. Auto-mode
-// resolution is B2 work in handleValidatingLive's body; a SwiftMigration
-// with spec.Mode=auto stays in the offline path until B2 lands the
-// auto-resolution logic. The B1 stub deliberately scopes dispatch to
-// explicit-live so the dispatch wiring itself is unambiguous and
-// testable in isolation from mode-resolution logic.
+// CRITICAL — reads the passed `status`, NOT mig.Status (Finding 1 fix):
+// the Reconcile loop hands each phase handler a DeepCopy of mig.Status
+// (controller.go); resolveAutoMode writes the resolved mode to THAT
+// copy. mig.Status.Mode is not updated until the copy is persisted at
+// the end of the reconcile. An earlier version read mig.Status.Mode
+// here, so an auto-resolved-live migration (resolveAutoMode wrote
+// status.Mode=live on the copy, mig.Status.Mode still "", spec.Mode
+// "auto") returned false → dispatch fell through to offline; auto-mode
+// could never reach live. Both the Validating dispatch AND the live
+// handlers' entry guards must read the resolved `status` for the
+// fix to hold (fixing only the dispatch would move the false-negative
+// to the guard). See docs/migration/phase-3b-pr2-walkthrough.md
+// Finding 1.
 //
 // Architect-discipline review answer (Q1) baked in: each handleXxxLive
-// asserts isLiveMode(mig) at entry. If the assertion fails (which would
-// indicate a bug, not a race), it returns phaseFailure with
-// FailureReasonOther rather than fall through to offline. Default-to-
-// explicit per PR #26.
-func isLiveMode(mig *migrationv1alpha1.SwiftMigration) bool {
-	if mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+// asserts isLiveMode(mig, status) at entry. If the assertion fails
+// (which would indicate a bug, not a race), it returns phaseFailure
+// with FailureReasonOther rather than fall through to offline.
+// Default-to-explicit per PR #26.
+func isLiveMode(mig *migrationv1alpha1.SwiftMigration, status *migrationv1alpha1.SwiftMigrationStatus) bool {
+	if status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
 		return true
 	}
-	if mig.Status.Mode == "" && mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+	if status.Mode == "" && mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
 		return true
 	}
 	return false
