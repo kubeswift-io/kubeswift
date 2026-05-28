@@ -516,3 +516,96 @@ func TestValidating_NodeNotReadyMidFlight(t *testing.T) {
 		t.Errorf("errMsg = %q, want mention of not Ready", errMsg)
 	}
 }
+
+// TestHandleValidating_AutoMode_FullPath_EntersLivePath is the Finding 1
+// regression guard. It exercises the FULL handleValidating path with
+// Reconcile's DeepCopy semantics (status := mig.Status.DeepCopy()),
+// reconstructing the cluster walkthrough's live-eligible guest
+// (RWX+Block, no interfaces, no VFIO, migration.enabled=true) and an
+// auto-mode SwiftMigration with allowIPChange=true.
+//
+// Finding 1 was: resolveAutoMode wrote status.Mode=live to the DeepCopy,
+// but isLiveMode read mig.Status.Mode (the original, still "") +
+// mig.Spec.Mode ("auto") → false → dispatch fell through to offline.
+//
+// PRIMARY assertions are the DISPATCH PATH, not the final mode value:
+// validating_live.go:85 self-stamps status.Mode=live in the live-phase
+// body, so "final status.Mode == live" alone is too weak — it can be
+// satisfied independently of a correct dispatch. Instead we assert
+// side effects produced ONLY by handleValidatingLive (SourcePodUID +
+// SourcePodRef are never set by the offline path; the Compatible
+// condition message carries the "(live mode)" suffix only on the live
+// path) AND that the entry guard did not false-fire. The final
+// status.Mode == live check is a secondary assertion.
+//
+// Load-bearing proof (documented in the Commit D message): reverting
+// Commit C's isLiveMode read-fix turns this test RED — the dispatch
+// reads empty mig.Status.Mode, routes to offline, and SourcePodRef
+// stays nil / Compatible lacks "(live mode)".
+func TestHandleValidating_AutoMode_FullPath_EntersLivePath(t *testing.T) {
+	scheme := validatingScheme(t)
+	enabled := true
+	guest := newGuestForValidating("dbg-guest", "default", "live-class")
+	guest.Spec.Migration = &swiftv1alpha1.MigrationSpec{Enabled: &enabled, PreferredMode: "auto"}
+	guest.Spec.Interfaces = nil // default node-local networking
+	guest.Status.NodeName = "miles"
+	class := newGuestClass("live-class", 2, 4096)
+	node := newSpaciousNode("boba", 8, 65536)
+	// canonicalPodNameForGuest returns guest.Name (no status.PodRef),
+	// so the src pod must be named "dbg-guest".
+	srcPod := newSourcePod("dbg-guest", "default", "src-uid-1")
+
+	mig := newMigration("m", "default")
+	mig.Spec.GuestRef.Name = "dbg-guest"
+	mig.Spec.Target.NodeName = "boba"
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeAuto
+	mig.Spec.AllowIPChange = true
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9} // satisfies MinLiveTimeout
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	// Mirror Reconcile (controller.go): hand the handler a DeepCopy.
+	status := mig.Status.DeepCopy()
+	result := r.handleValidating(context.Background(), mig, status)
+
+	// Guard must NOT have false-fired (would happen if the dispatch
+	// reached handleValidatingLive but its entry guard read empty
+	// mig.Status — the Finding 1 matched-pair failure).
+	if strings.Contains(result.FailureMsg, "invoked without live mode") {
+		t.Fatalf("live-path entry guard false-fired: %q", result.FailureMsg)
+	}
+	if result.FailureMsg != "" {
+		t.Fatalf("unexpected validation failure: %q", result.FailureMsg)
+	}
+
+	// PRIMARY: SourcePodRef is stamped ONLY by handleValidatingLive.
+	if status.SourcePodRef == nil || status.SourcePodRef.Name != "dbg-guest" {
+		t.Errorf("live path not entered: SourcePodRef=%+v (live path stamps it; offline never does)", status.SourcePodRef)
+	}
+	// PRIMARY: SourcePodUID is stamped ONLY by handleValidatingLive.
+	if status.SourcePodUID != "src-uid-1" {
+		t.Errorf("live path not entered: SourcePodUID=%q, want src-uid-1 (live-path-only side effect)", status.SourcePodUID)
+	}
+	// PRIMARY: Compatible message carries "(live mode)" only on the
+	// live path; offline path's message lacks the suffix.
+	var compatMsg string
+	for _, cond := range status.Conditions {
+		if cond.Type == migrationv1alpha1.SwiftMigrationConditionCompatible {
+			compatMsg = cond.Message
+		}
+	}
+	if !strings.Contains(compatMsg, "(live mode)") {
+		t.Errorf("Compatible condition must carry the live-mode message; got %q (offline path omits the suffix)", compatMsg)
+	}
+
+	// SECONDARY (weaker — validating_live.go:85 self-stamps this):
+	if status.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		t.Errorf("status.Mode: want live, got %q", status.Mode)
+	}
+}
