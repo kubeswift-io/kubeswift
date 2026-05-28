@@ -98,7 +98,7 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
-	if !isLiveMode(mig) {
+	if !isLiveMode(mig, status) {
 		return phaseFailure(
 			"internal: handleResumingLive invoked without live mode",
 			migrationv1alpha1.FailureReasonOther,
