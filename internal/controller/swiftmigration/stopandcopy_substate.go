@@ -36,17 +36,18 @@ const (
 	// migration-action matching $RECV_ID.
 	substatePreRecv stopAndCopySubstate = iota
 	// substateRecvPending is "receive-action written; waiting for
-	// swiftletd-on-dst to acknowledge via migration-status=running with
-	// matching status-id." Detected when dst pod's migration-action
-	// matches $RECV_ID but no migration-status=running yet.
+	// swiftletd-on-dst to acknowledge via migration-status=receive-ready
+	// with matching status-id." Detected when dst pod's migration-action
+	// matches $RECV_ID but no migration-status=receive-ready yet.
 	substateRecvPending
 	// substatePreSend is "dst acknowledged receive; controller must
 	// write send-action on src pod." Detected when dst pod's
-	// migration-status=running with matching $RECV_ID, AND src pod
-	// has no migration-action matching $SEND_ID. Collapses the design
-	// table's "recv-accepted" + "send-issued" into one state since
-	// the controller's only action in this state is to write the
-	// send-action.
+	// migration-status=receive-ready with matching $RECV_ID, AND src
+	// pod has no migration-action matching $SEND_ID. Collapses the
+	// design table's "recv-accepted" + "send-issued" into one state
+	// since the controller's only action in this state is to write the
+	// send-action. Gates on receive-ready (pre-dispatch), NOT running
+	// (terminal) — Finding 2 fix; see migrationStatusReceiveReady.
 	substatePreSend
 	// substateSendPending is "send-action written; waiting for
 	// swiftletd-on-src to write migration-status=complete (success)
@@ -155,10 +156,37 @@ const migrationActionVerbReceive = "receive"
 // MigrationSend handler.
 const migrationActionVerbSend = "send"
 
-// migrationStatusRunning matches the dst-side terminal-success verb
-// (StatusKind::Custom("running") in swiftletd's namespace map for
-// migration; per Phase 2 §3.1 the dst writes "running" while the
-// src writes "complete" — distinct verbs for distinct semantics).
+// migrationStatusReceiveReady matches the dst-side PRE-DISPATCH
+// readiness verb (StatusKind::Custom("receive-ready") in swiftletd's
+// migration namespace map — rust/swiftletd/src/action.rs
+// pre_dispatch_status). swiftletd-on-dst writes this BEFORE it issues
+// the blocking vm.receive-migration RPC: the CH receiver is listening
+// and ready for the source to connect. This is the signal the
+// controller gates the recv→send transition on (substatePreSend).
+//
+// LOAD-BEARING CONTRACT (Finding 2 fix): the recv→send gate MUST key
+// on receive-ready, NOT on migrationStatusRunning. swiftletd writes
+// receive-ready at pre-dispatch and "running" only at terminal
+// (after vm.receive-migration completes, which requires the source to
+// have connected and sent). Gating recv→send on "running" deadlocks:
+// the controller waits for "running" before dispatching send on src,
+// but the dst can only reach "running" after src sends. Phase 3b PR 1
+// Commit C introduced this pre-dispatch/terminal split; the Phase 3a
+// controller (written before PR 1) gated on "running" and was never
+// exercised by PR 1's controller-less manual demo. See
+// docs/migration/phase-3b-pr2-walkthrough.md Finding 2.
+const migrationStatusReceiveReady = "receive-ready"
+
+// migrationStatusRunning matches the dst-side TERMINAL-success verb
+// (StatusKind::Custom("running"), action.rs success_status). swiftletd
+// -on-dst writes "running" only AFTER vm.receive-migration completes
+// (CH state=Running with the migrated guest live). The controller does
+// NOT gate any transition on this verb: the W1 gate anchors on the
+// src-side "complete" (which swiftletd-on-src writes only after its
+// vm.send-migration internally probed dst CH for vm_info=Running per
+// F1.2). Kept as a named constant to document the dst terminal verb
+// and to keep the recv→send gate's "use receive-ready, not running"
+// distinction legible to future maintainers.
 const migrationStatusRunning = "running"
 
 // migrationStatusComplete matches the src-side W1-gate-passing verb
@@ -210,9 +238,13 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 	}
 
 	// Dst-side terminal: failed (D2 watchdog or CH receive error).
-	// We do NOT check dst-side "running" here as a terminal state —
-	// dst running means recv-accepted, NOT cutover-ready. The W1 gate
-	// is src=complete; dst=running is intermediate.
+	// We do NOT gate any transition on dst-side "running": post PR 1
+	// Commit C, dst "running" is the TERMINAL receive-complete verb
+	// (vm.receive-migration returned, guest live), not an intermediate
+	// signal. The W1 gate anchors on src="complete" (which implies dst
+	// is running per the F1.2 probe), so dst "running" needs no
+	// separate consumer here. The recv→send transition gates on
+	// dst="receive-ready" (the pre-dispatch readiness verb) below.
 	if podStatusMatches(dst, MigrationStatusFailed, rid) {
 		return substateDstFailed
 	}
@@ -229,9 +261,12 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 		return substateSendPending
 	}
 
-	// Recv-action acknowledged on dst with running status: dst
-	// accepted the receive; we need to write send-action on src next.
-	if podStatusMatches(dst, migrationStatusRunning, rid) {
+	// Recv-action acknowledged on dst with receive-ready status: dst's
+	// CH receiver is listening and ready; we need to write send-action
+	// on src next. Gates on receive-ready (pre-dispatch), NOT running
+	// (terminal) — see migrationStatusReceiveReady's load-bearing
+	// contract note (Finding 2 fix).
+	if podStatusMatches(dst, migrationStatusReceiveReady, rid) {
 		return substatePreSend
 	}
 

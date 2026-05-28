@@ -174,7 +174,7 @@ func TestIsLiveMode_StatusModeLive_ReturnsTrue(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{
 		Status: migrationv1alpha1.SwiftMigrationStatus{Mode: migrationv1alpha1.SwiftMigrationModeLive},
 	}
-	if !isLiveMode(mig) {
+	if !isLiveMode(mig, &mig.Status) {
 		t.Errorf("status.Mode=live must yield isLiveMode=true")
 	}
 }
@@ -183,7 +183,7 @@ func TestIsLiveMode_StatusEmptySpecLive_ReturnsTrue(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{
 		Spec: migrationv1alpha1.SwiftMigrationSpec{Mode: migrationv1alpha1.SwiftMigrationModeLive},
 	}
-	if !isLiveMode(mig) {
+	if !isLiveMode(mig, &mig.Status) {
 		t.Errorf("status empty + spec.Mode=live (initial entry) must yield true")
 	}
 }
@@ -195,7 +195,7 @@ func TestIsLiveMode_StatusOfflineSpecLive_ReturnsFalse(t *testing.T) {
 		Spec:   migrationv1alpha1.SwiftMigrationSpec{Mode: migrationv1alpha1.SwiftMigrationModeLive},
 		Status: migrationv1alpha1.SwiftMigrationStatus{Mode: migrationv1alpha1.SwiftMigrationModeOffline},
 	}
-	if isLiveMode(mig) {
+	if isLiveMode(mig, &mig.Status) {
 		t.Errorf("status.Mode=offline must override spec.Mode=live; want false")
 	}
 }
@@ -205,7 +205,7 @@ func TestIsLiveMode_AutoMode_ReturnsFalse(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{
 		Spec: migrationv1alpha1.SwiftMigrationSpec{Mode: migrationv1alpha1.SwiftMigrationModeAuto},
 	}
-	if isLiveMode(mig) {
+	if isLiveMode(mig, &mig.Status) {
 		t.Errorf("spec.Mode=auto must NOT dispatch to live in B1; want false")
 	}
 }
@@ -214,7 +214,7 @@ func TestIsLiveMode_OfflineMode_ReturnsFalse(t *testing.T) {
 	mig := &migrationv1alpha1.SwiftMigration{
 		Spec: migrationv1alpha1.SwiftMigrationSpec{Mode: migrationv1alpha1.SwiftMigrationModeOffline},
 	}
-	if isLiveMode(mig) {
+	if isLiveMode(mig, &mig.Status) {
 		t.Errorf("spec.Mode=offline must yield isLiveMode=false")
 	}
 }

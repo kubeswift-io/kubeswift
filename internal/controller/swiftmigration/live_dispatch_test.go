@@ -76,7 +76,7 @@ func TestDispatch_Validating_OfflineMode_DoesNotRouteToLiveStub(t *testing.T) {
 	// test asserts that isLiveMode returns false for offline, which
 	// means the dispatch gate in handleValidating won't take the
 	// live branch.
-	if isLiveMode(mig) {
+	if isLiveMode(mig, &mig.Status) {
 		t.Errorf("offline-mode mig must not dispatch to live; isLiveMode=true")
 	}
 }

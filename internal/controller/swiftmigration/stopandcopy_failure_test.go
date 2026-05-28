@@ -168,9 +168,10 @@ func TestStopAndCopyLive_DstFailed_CancelDetail_DefensiveClassification(t *testi
 func TestStopAndCopyLive_TimeoutMidStopAndCopy_MapsToTimeout(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	// Park at send-pending: send-action written, no terminal status yet.
+	// dst verb incidental (send-action presence gates send-pending).
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
 	startedAt := metav1.NewTime(time.Now().Add(-10 * time.Minute))
 	mig.Status.StartedAt = &startedAt
@@ -194,7 +195,9 @@ func TestStopAndCopyLive_SrcUIDChanged_MidSendPending_MapsToSourcePodReplaced(t 
 	mig.Status.SendAttempts = 1
 	mig.Status.PhaseDetail = migrationv1alpha1.PhaseDetailLiveTransferring
 	src.UID = "uid-B" // src was K8s-replaced
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst verb incidental: send-action presence gates send-pending;
+	// the UID-change check is what this test exercises.
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
@@ -211,18 +214,26 @@ func TestStopAndCopyLive_SrcUIDChanged_MidSendPending_MapsToSourcePodReplaced(t 
 // controller crashed after issuing recv-action but before incrementing
 // RecvAttempts. New leader observes recv-action on dst pod (with
 // $RECV_ID:1 since recvActionID's default is 1) and migration-status=
-// running matching that ID. RecvAttempts is still 0 in apiserver.
+// receive-ready matching that ID. RecvAttempts is still 0 in apiserver.
 //
-// deriveSubstate sees this as substatePreSend (dst is running with the
-// expected $RECV_ID). The handler proceeds to write send-action.
-// recvAttempts may or may not be bumped explicitly — the load-bearing
-// invariant is that the handler does NOT re-issue the receive-action.
+// deriveSubstate sees this as substatePreSend (dst is receive-ready
+// with the expected $RECV_ID — the recv→send trigger). The handler
+// proceeds to write the send-action and does NOT re-issue the
+// receive-action.
+//
+// Finding 2 note: this test previously stamped migration-status=running
+// and passed for the WRONG reason after the recv→send gate moved to
+// receive-ready — it then exercised substateRecvPending (a requeue
+// that also doesn't re-issue receive), so the weak "no re-issue"
+// assertion held while the documented substatePreSend path was no
+// longer taken. The assertion is now strengthened to verify the
+// handler reaches substatePreSend (writes the send-action), matching
+// the docstring.
 func TestStopAndCopyLive_RecvIssuedRecovery_DoesNotReIssueReceive(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	// Counter still 0 (controller crashed before bump). Annotation
 	// uses recvActionID(mig) which derives from RecvAttempts=0 → ":1".
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
-	preDstRV := dst.ResourceVersion
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
 	status := mig.Status.DeepCopy()
@@ -231,18 +242,28 @@ func TestStopAndCopyLive_RecvIssuedRecovery_DoesNotReIssueReceive(t *testing.T) 
 		t.Fatalf("unexpected failure: %q", res.FailureMsg)
 	}
 
-	// Verify dst pod's recv-action annotation was NOT re-written.
-	var got corev1.Pod
-	_ = r.Get(context.Background(), key(dst), &got)
-	if got.Annotations[AnnotationMigrationActionID] != recvActionID(mig) {
+	// Verify dst pod's recv-action annotation was NOT re-written
+	// (action-id stays stable — no NEW $RECV_ID:N+1).
+	var gotDst corev1.Pod
+	_ = r.Get(context.Background(), key(dst), &gotDst)
+	if gotDst.Annotations[AnnotationMigrationActionID] != recvActionID(mig) {
 		t.Errorf("recv action-id changed; want stable %q, got %q",
-			recvActionID(mig), got.Annotations[AnnotationMigrationActionID])
+			recvActionID(mig), gotDst.Annotations[AnnotationMigrationActionID])
 	}
-	// dst's annotations may still get the same recv-action re-written
-	// (apiserver no-ops same-value patch); accept either same RV or
-	// any RV change as long as the action-id stays stable. The test's
-	// load-bearing assertion is "no NEW $RECV_ID:N+1 appears."
-	_ = preDstRV
+
+	// Strengthened assertion (Finding 2): the handler must have reached
+	// substatePreSend and written the send-action on src — proving the
+	// receive-ready signal was consumed as the recv→send trigger, not
+	// silently parked at recv-pending.
+	if status.SendAttempts != 1 {
+		t.Errorf("SendAttempts: want 1 (substatePreSend wrote send-action), got %d", status.SendAttempts)
+	}
+	var gotSrc corev1.Pod
+	_ = r.Get(context.Background(), key(src), &gotSrc)
+	if gotSrc.Annotations[AnnotationMigrationAction] != migrationActionVerbSend {
+		t.Errorf("src migration-action: want %q (send dispatched), got %q",
+			migrationActionVerbSend, gotSrc.Annotations[AnnotationMigrationAction])
+	}
 }
 
 // TestStopAndCopyLive_SendIssuedRecovery_DoesNotReIssueSend: controller
@@ -253,7 +274,8 @@ func TestStopAndCopyLive_SendIssuedRecovery_DoesNotReIssueSend(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst verb incidental: src send-action presence gates send-pending.
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
 	preSrcRV := src.ResourceVersion
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)

@@ -95,17 +95,44 @@ func TestDeriveSubstate_RecvActionWritten_ReturnsRecvPending(t *testing.T) {
 	}
 }
 
-func TestDeriveSubstate_DstRunning_ReturnsPreSend(t *testing.T) {
+// TestDeriveSubstate_RecvReady_AdvancesToPreSend is the positive
+// regression guard for Finding 2. PR 1 Commit C split the dst signal
+// into receive-ready (pre-dispatch readiness) and running (terminal
+// receive-complete). The controller must gate the recv→send transition
+// on receive-ready: swiftletd-on-dst writes receive-ready, then blocks
+// in vm.receive-migration; the controller must then dispatch send on
+// src so the source connects. This test would have caught Finding 2
+// (the deadlock where the controller waited for "running", which the
+// dst can only reach after the source sends).
+func TestDeriveSubstate_RecvReady_AdvancesToPreSend(t *testing.T) {
+	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
+	if got := deriveSubstate(mig, src, dst); got != substatePreSend {
+		t.Errorf("substate: want pre-send (dst receive-ready), got %v", got)
+	}
+}
+
+// TestDeriveSubstate_DstRunning_DoesNotAdvanceToPreSend is the negative
+// guard pinning the post-PR-1 semantic: dst migration-status=running
+// is the TERMINAL receive-complete verb, NOT the recv→send trigger.
+// A dst showing "running" with the recv-action still present (and no
+// src send-action yet) must stay at recv-pending — gating recv→send on
+// "running" is exactly the Finding 2 deadlock. Pins the constant
+// distinction so a future refactor can't silently revert it.
+func TestDeriveSubstate_DstRunning_DoesNotAdvanceToPreSend(t *testing.T) {
 	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
 	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
-	if got := deriveSubstate(mig, src, dst); got != substatePreSend {
-		t.Errorf("substate: want pre-send, got %v", got)
+	if got := deriveSubstate(mig, src, dst); got != substateRecvPending {
+		t.Errorf("substate: dst=running must NOT advance to pre-send (running is terminal, not the recv→send trigger); want recv-pending, got %v", got)
 	}
 }
 
 func TestDeriveSubstate_SendActionWritten_ReturnsSendPending(t *testing.T) {
 	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst verb incidental: the src send-action presence is what gates
+	// substateSendPending (checked before the dst-status gate). Stamp
+	// receive-ready (the realistic dst state once send is dispatched).
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
 	if got := deriveSubstate(mig, src, dst); got != substateSendPending {
 		t.Errorf("substate: want send-pending, got %v", got)
@@ -141,9 +168,10 @@ func TestDeriveSubstate_SrcPriorityOverDst(t *testing.T) {
 	// Verify src-side check takes priority.
 	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), migrationStatusComplete, sendActionID(mig), "ok")
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst verb incidental: src-complete is checked first (priority test).
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	if got := deriveSubstate(mig, src, dst); got != substateSrcCompleted {
-		t.Errorf("src-complete must override dst-running; want src-completed, got %v", got)
+		t.Errorf("src-complete must override dst signal; want src-completed, got %v", got)
 	}
 }
 
@@ -152,7 +180,10 @@ func TestDeriveSubstate_StaleActionID_IgnoredAsNoMatch(t *testing.T) {
 	// match this migration's recvActionID. Treat as pre-recv (fresh
 	// entry).
 	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
-	stamp(dst, migrationActionVerbReceive, "previous-mig:recv:1", migrationStatusRunning, "previous-mig:recv:1", "")
+	// Status verb doubly irrelevant here: the action-id is stale, so
+	// neither receive-ready nor running would match this migration's
+	// $RECV_ID. Stamp receive-ready for convention consistency.
+	stamp(dst, migrationActionVerbReceive, "previous-mig:recv:1", migrationStatusReceiveReady, "previous-mig:recv:1", "")
 	if got := deriveSubstate(mig, src, dst); got != substatePreRecv {
 		t.Errorf("stale action-id must not match; want pre-recv, got %v", got)
 	}
@@ -463,8 +494,9 @@ func TestStopAndCopyLive_RecvPending_RequeuesWithDetail(t *testing.T) {
 func TestStopAndCopyLive_PreSend_WritesSendAction(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
-	// dst accepted: migration-status=running with matching recv-id
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst ready: migration-status=receive-ready with matching recv-id
+	// (PR 1 pre-dispatch readiness signal — the recv→send trigger).
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
 	status := mig.Status.DeepCopy()
@@ -504,7 +536,8 @@ func TestStopAndCopyLive_SendPending_RequeuesWithDetail(t *testing.T) {
 	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
+	// dst verb incidental: src send-action presence gates send-pending.
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 

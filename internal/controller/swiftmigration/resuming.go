@@ -49,7 +49,7 @@ func (r *SwiftMigrationReconciler) handleResuming(
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
 	// Phase 3a per-mode dispatch.
-	if isLiveMode(mig) {
+	if isLiveMode(mig, status) {
 		return r.handleResumingLive(ctx, mig, status)
 	}
 
