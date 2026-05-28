@@ -603,6 +603,8 @@ networking, 4Gi guests):
 - Kernel-boot: observedDowntime=1.75s, observedPauseWindow=38.17s
 - Disk-boot RWX+Block: observedDowntime=1.96s, observedPauseWindow=38.19s
 
+### 8. docs/design/known-issues-vswiftimage-finalizer-trap.md
+
 ### W28 candidate (split from W27): capture actual vCPU stop-the-world
 
 Currently `observedPauseWindow` measures the entire send-migration
