@@ -72,7 +72,7 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 ) *phaseResult {
 	// Phase 3a per-mode dispatch. By Preparing, status.Mode has been
 	// stamped by Validating; isLiveMode reads from status.
-	if isLiveMode(mig) {
+	if isLiveMode(mig, status) {
 		return r.handlePreparingLive(ctx, mig, status)
 	}
 
