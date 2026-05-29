@@ -926,6 +926,38 @@ approach unblocks source-side cancel responsiveness.
 **Disposition:** documentation in PR 2; architectural fix deferred
 to Phase 3c+ when a worker-thread refactor on src is in scope.
 
+**Empirical duration measured (Phase 3b PR 2 walkthrough T3a + T6,
+2026-05-28, image sha-ed55768):** when the dst pod *disappears*
+mid-send (force-deleted or CH killed), the src `vm.send-migration`
+RPC stays blocked for the full `timeout_seconds` budget before
+returning. Measured directly from src swiftletd logs:
+`t3-killdst:send:1` dispatched 16:21:55, `w23_terminal_write_signal`
+fired 16:31:58 — **~10 minutes** (the default `timeout_seconds=600`).
+During the entire window the src action loop AND the CH HTTP API are
+blocked (a `vm.info` curl against the src CH API socket hung) — it is
+not just the one RPC that's wedged but the whole single-threaded
+surface. The controller correctly drives the migration to its
+terminal state (Failed/Cancelled) via its own informer-based
+observation, independent of the wedged src, and the **source VM keeps
+running** (live-migration pre-copy does not pause the source), so
+there is no data loss — but the src pod's `migration-status`
+annotation stays stale at `sending` and the guest cannot accept a new
+migration action for up to 10 minutes. T6 reproduced the same wedge
+via cancel-mid-send (cancel is a no-op on src until the RPC times
+out; the controller force-deletes the dst as the fallback per the
+30s dst-ack budget, marks the migration Cancelled, but the src RPC
+remains blocked until its own 600s timeout).
+
+This bounds the cost of the wedge for whoever works TFU-14: the
+fix should either (a) shorten the dst-disappearance detection →
+shorter effective timeout, (b) interrupt the in-flight
+`send_migration` on observed dst-pod-disappearance, or (c) the
+worker-thread refactor above (so the action loop can tick and
+process cancel / report failed without waiting for the RPC). Option
+(b) directly addresses the 10-minute wedge; the worker-thread
+refactor (c) addresses cancel responsiveness but the RPC itself
+would still block its own thread until timeout.
+
 ### 15. Destination cancel-post-receive-complete race (Phase 3b PR 1 walkthrough LOW-3 / T5 finding)
 
 Phase 3b PR 1 walkthrough's T5 surfaced that the destination swiftletd
@@ -1042,6 +1074,106 @@ visible to operators who run `make help`. Future config splits
 (e.g., GPU node opt-in, multi-NIC opt-in) should expose Make
 targets analogously rather than relying on operators to know
 which overlay path to invoke.
+
+### 17. vswiftimage webhook traps SwiftImage deletion (finalizer removal blocked)
+
+The vswiftimage validating webhook's spec-immutability rule fires
+on ALL UPDATE operations including finalizer removal on
+being-deleted objects (deletionTimestamp != nil). Traps namespace
+deletion indefinitely; generates continuous controller
+reconcile-error storm. Same PR #26 lesson (per-operation
+validation discipline) recurring in a webhook predating that
+discipline. Cite Design Principle #10.
+
+Severity: MEDIUM-HIGH. Not data-loss, but operationally severe
+(stuck-terminating namespaces, log pollution, manual recovery
+requires temporarily removing webhook from cluster).
+
+Fix shape known: skip validation when newObj.metadata.deletionTimestamp
+!= nil, OR compare only spec fields. Audit obligation: check
+sibling webhooks (swiftsnapshot, swiftrestore, swiftguest,
+swiftguestpool) for same pattern.
+
+See [`docs/design/known-issues-vswiftimage-finalizer-trap.md`](docs/design/known-issues-vswiftimage-finalizer-trap.md)
+for full diagnosis, manual recovery procedure (performed 2026-05-28),
+and test obligation per Tracked Follow-up #2.
+
+### 18. Offline migration hangs for previously-live-migrated guest (canonical pod name trap)
+
+preparing.go:133 (offline path) resolves source pod by guest.Name
+not canonical status.podRef.name. After a prior live migration
+renamed the pod to <guest>-mig-<uid>, the Get returns NotFound;
+controller assumes pod is gone; waits indefinitely for a volume
+detach that never happens because the real (renamed) pod still
+holds the PVC. Guest left inconsistent (runPolicy=Stopped, pod
+still Running).
+
+Root cause: W26 canonical-pod-name lesson (the srcPodLookupName /
+LBA-2 invariant) applied to the live path but never to the Phase 1
+offline path. Offline preparing.go predates W26.
+
+Severity: HIGH (indefinite hang, inconsistent state) but clean
+manual recovery (delete the SwiftMigration). NOT a PR 2 regression
+— offline preparing.go is Phase 1 code, untouched by PR 2.
+
+Trigger sequence (realistic): live-migrate for load-balancing,
+later offline-migrate same guest for maintenance.
+
+Fix shape: offline Preparing uses canonicalPodNameForGuest(&guest)
+instead of literal guest.Name. One call site; PVC name at :161
+already correct. Audit other offline guest.Name pod lookups.
+
+See [`docs/design/known-issues-offline-after-live-pod-name-trap.md`](docs/design/known-issues-offline-after-live-pod-name-trap.md)
+for full diagnosis, 2026-05-28 reproduction (PR 2 T8 walkthrough),
+and test obligation per Tracked Follow-up #2.
+
+### 19. FailureReasonDstScheduleFailed enum constant unused
+
+FailureReasonDstScheduleFailed enum constant ships in PR 2 (PR #64)
+but is not wired to any detection site. The condition it describes
+("dst pod could not be placed onto target node, scheduler rejected")
+currently collapses into preparing_live.go:206-208's 60s budget
+timeout, which since PR 2 stamps FailureReasonDstNeverReady.
+
+Wiring requires distinguishing pod.Status.Conditions[PodScheduled].
+Status == False from "scheduled but never Ready" — a detection-logic
+change of ~10-15 LOC plus a test. Out of scope for PR 2 (one-line
+stamping wirings only); future PR that refines preparing_live's
+failure taxonomy.
+
+Severity: LOW. Until wired, scheduling failures report as
+DstNeverReady — mildly imprecise but better than the pre-PR-2
+PodTerminated catch-all.
+
+### 20. canonicalPodNameForGuest stale import-cycle comment
+
+A comment in validating_live.go (around lines 181-185, near the
+canonicalPodNameForGuest call site) claims a swiftmigration →
+swiftguest import cycle exists. No such cycle exists; preparing.go,
+validating.go, and validating_live.go all import swiftguest without
+issue. The comment is stale and corrosive — future contributors
+reading it may believe the constraint exists and either work
+around it or replicate it.
+
+Fix: remove the comment. Cosmetic; future-contributor-confusion
+risk only.
+
+Severity: LOW.
+
+### 21. FailureReason constants are untyped strings (typed-enum hygiene candidate)
+
+Phase 3a established FailureReason* as untyped string constants
+(matched by PR 2 in Commit A for consistency rather than mixing
+patterns). A typed FailureReasonCode enum would be cleaner:
+typos compile-fail rather than reach the cluster; invalid values
+are caught at compile time.
+
+Refactor requires migrating all Phase 3a + PR 2 references
+across the swiftmigration package with careful cluster-state
+migration consideration. Out of scope for any specific feature
+PR; future standalone hygiene PR.
+
+Severity: LOW (cosmetic + minor type safety; no functional impact).
 
 ---
 
