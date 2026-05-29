@@ -1,8 +1,58 @@
 # Tracked Follow-Up: Offline Migration Hangs for a Previously Live-Migrated Guest (Canonical Pod-Name Mismatch)
 
-**Status**: OPEN — discovered during Phase 3b PR 2 walkthrough T8
-(2026-05-28). Not yet fixed. Captured for future work as a SEPARATE
-fix-forward (NOT bundled with PR 2 close-out).
+**Status**: RESOLVED 2026-05-29 via branch
+`fix/tfu-18-offline-after-live-pod-name-trap` (Option A, full fix; see
+Resolution below). Discovered during Phase 3b PR 2 walkthrough T8
+(2026-05-28).
+
+## Resolution (2026-05-29)
+
+Fixed in two parts. The original writeup below scoped only "Bug 1"
+(`preparing.go:133`); recon found that fixing it alone **relocates** the
+hang, so a second fix was required.
+
+**Bug 1 — offline Preparing pod lookup.** `preparing.go` now resolves
+the source pod via `canonicalPodNameForGuest(&guest)` instead of literal
+`guest.Name`. Fresh never-live-migrated guests still resolve to
+`guest.Name`, so the Phase 1 offline path is unchanged. Contract test
+added and verified load-bearing against the reverted fix.
+
+**Bug 2 — SwiftGuest controller stale-PodRef self-heal (secondary trap,
+recon-found).** The SwiftGuest controller always (re)creates the
+launcher pod as `guest.Name` (pod.go) but looks it up via
+`canonicalPodName` (`status.PodRef.Name` when set). `status :=
+guest.Status.DeepCopy()` (controller.go) carries a stale PodRef, and
+PodRef is only ever set/cleared in `MapPodToStatus` — the *found*-pod
+branch. So after Bug 1's fix deletes the `-mig-` pod and offline
+StopAndCopy flips `runPolicy=Running`, the controller recreates
+`guest.Name` but the stale PodRef makes the next reconcile loop on
+`Create` AlreadyExists, never updating status — hanging the migration's
+Resuming phase. Fix: on the create branch, clear `status.PodRef` when
+`staleMigrationPodRef` (PodRef points at a pod ≠ `guest.Name`). This
+never fires during a healthy live migration (the dst `-mig-` pod exists
+while PodRef points at it → found → update branch). It also fixes a
+**broader latent bug**: any post-live-migrated guest whose launcher pod
+is lost (node failure, eviction, manual delete) hit the same wedge.
+
+**Audit finding — `stopandcopy.go:102` deliberately keeps `guest.Name`.**
+It polls for the SwiftGuest-controller-*recreated* pod, which is always
+created as `guest.Name`; switching it to `canonicalPodNameForGuest`
+would look up the stale deleted name and break it. A naive "fix all
+`guest.Name` pod lookups in the offline path" would have introduced a
+new bug here. `resuming.go` (offline) reads SwiftGuest status, not a pod
+by name — unaffected.
+
+**Verification.** Bug 1: contract unit test (red against reverted fix).
+Bug 2: decision helper (`staleMigrationPodRef`) unit-tested; end-to-end
+wedge confirmed by cluster offline-after-live validation (live-migrate a
+guest, then offline-migrate it → expect `Completed`, not hung) — the
+SwiftGuest full-`Reconcile` path has no fake-client test harness in the
+package, so cluster validation is the contract-level gate (C1).
+
+**Not done here — offline `spec.timeout` floor.** The defense-in-depth
+backstop suggested below is intentionally left out: Option A fixes the
+root cause, and the no-default-timeout reality is tracked in
+`kubeswift_context.md` Tracked Follow-up #22.
 
 **Severity**: HIGH. Offline migration of any guest whose canonical
 launcher pod was renamed by a prior live migration hangs indefinitely
