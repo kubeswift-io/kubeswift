@@ -35,6 +35,9 @@ spec:
     - jsonPath: .status.observedDowntime
       name: Downtime
       type: string
+    - jsonPath: .status.observedTransferDuration
+      name: Transfer
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date

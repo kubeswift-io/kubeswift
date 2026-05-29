@@ -203,16 +203,20 @@ func runMigrationList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAMESPACE\tNAME\tGUEST\tFROM\tTO\tMODE\tPHASE\tDOWNTIME\tAGE")
+	fmt.Fprintln(w, "NAMESPACE\tNAME\tGUEST\tFROM\tTO\tMODE\tPHASE\tDOWNTIME\tTRANSFER\tAGE")
 	for _, m := range list.Items {
 		downtime := "-"
 		if m.Status.ObservedDowntime != nil {
 			downtime = m.Status.ObservedDowntime.Duration.Truncate(1e9).String()
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		transfer := "-"
+		if m.Status.ObservedTransferDuration != nil {
+			transfer = m.Status.ObservedTransferDuration.Duration.Truncate(1e9).String()
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			m.Namespace, m.Name, m.Spec.GuestRef.Name,
 			emptyDash(m.Status.SourceNode), emptyDash(m.Status.DestinationNode),
-			emptyDash(string(m.Status.Mode)), m.Status.Phase, downtime,
+			emptyDash(string(m.Status.Mode)), m.Status.Phase, downtime, transfer,
 			cliAge(m.CreationTimestamp.Time))
 	}
 	return w.Flush()

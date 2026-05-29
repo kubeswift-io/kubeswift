@@ -575,6 +575,7 @@ type SwiftMigrationStatus struct {
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.status.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Downtime",type=string,JSONPath=`.status.observedDowntime`
+// +kubebuilder:printcolumn:name="Transfer",type=string,JSONPath=`.status.observedTransferDuration`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftMigration struct {
 	metav1.TypeMeta   `json:",inline"`
