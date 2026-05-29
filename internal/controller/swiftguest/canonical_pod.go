@@ -34,3 +34,32 @@ func canonicalPodName(guest *swiftv1alpha1.SwiftGuest) string {
 	}
 	return guest.Name
 }
+
+// staleMigrationPodRef reports whether status.PodRef points at a
+// launcher pod other than the canonical guest.Name pod — i.e. a
+// migration-renamed pod (<guest>-mig-<uid>) left over from a prior live
+// migration's cutover. It is equivalent to
+// canonicalPodName(guest) != guest.Name, named for intent.
+//
+// Why it matters: the controller always (re)creates the launcher pod as
+// guest.Name (see pod.go), but looks it up via canonicalPodName. After a
+// live migration, status.PodRef.Name is the <guest>-mig-<uid> dst pod.
+// Once that pod is gone — the guest was offline-migrated (its renamed
+// pod deleted in the migration's Preparing phase), or the launcher pod
+// was lost to node failure/eviction — and the controller must recreate
+// the pod, the canonical lookup misses the (deleted) renamed name and
+// the create path makes guest.Name. Unless the stale PodRef is cleared,
+// the next reconcile's canonicalPodName still resolves to the deleted
+// name → NotFound → Create(guest.Name) → AlreadyExists, looping forever
+// and never reaching MapPodToStatus to self-correct. Clearing the stale
+// PodRef on the create path lets canonicalPodName fall back to
+// guest.Name and find the recreated pod (TFU #18 secondary trap).
+//
+// This never fires during a healthy live migration: the dst <guest>-mig-
+// pod exists while status.PodRef points at it, so the canonical lookup
+// finds it and takes the update branch, never the create branch.
+func staleMigrationPodRef(guest *swiftv1alpha1.SwiftGuest) bool {
+	return guest.Status.PodRef != nil &&
+		guest.Status.PodRef.Name != "" &&
+		guest.Status.PodRef.Name != guest.Name
+}

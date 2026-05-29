@@ -118,9 +118,18 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		}
 	}
 
-	// Delete the source launcher pod. The pod name equals the
-	// SwiftGuest name (controller convention). Idempotent: NotFound
-	// is the success case here.
+	// Delete the source launcher pod. Resolve the pod by the canonical
+	// name (status.podRef.name when set), NOT literal guest.Name: after
+	// a prior LIVE migration the guest's launcher pod was renamed to
+	// `<guest>-mig-<uid>` and status.podRef.name points there. Looking
+	// up guest.Name would return NotFound, the controller would assume
+	// the pod is already gone, and advance to the volume-detach wait
+	// while the real (renamed) pod keeps the PVC attached — hanging
+	// Preparing indefinitely (TFU #18). For a fresh guest that was never
+	// live-migrated, canonicalPodNameForGuest returns guest.Name, so the
+	// Phase 1 offline path is unchanged. Same W26/LBA-2 canonical-pod-
+	// name invariant the live path uses; the offline path predates it.
+	// Idempotent: NotFound is the success case here.
 	//
 	// Note on Terminating-with-finalizer: a pod with DeletionTimestamp
 	// set but still existing (e.g., custom admission finalizer) is
@@ -130,7 +139,8 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 	// deletion path runs to completion. Don't try to "optimize" by
 	// treating Terminating as Gone.
 	var pod corev1.Pod
-	getErr := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &pod)
+	srcPodName := canonicalPodNameForGuest(&guest)
+	getErr := r.Get(ctx, client.ObjectKey{Name: srcPodName, Namespace: guest.Namespace}, &pod)
 	podGone := apierrors.IsNotFound(getErr)
 	if getErr != nil && !podGone {
 		return phaseTransient(fmt.Errorf("get source pod: %w", getErr))
