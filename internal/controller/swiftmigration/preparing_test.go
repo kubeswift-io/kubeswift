@@ -121,6 +121,73 @@ func TestPreparing_FirstEntry_ClaimsGuestAndDeletesPod(t *testing.T) {
 	}
 }
 
+// TestPreparing_AfterLiveMigration_DeletesRenamedSourcePod is the TFU
+// #18 contract test. A guest that was previously LIVE-migrated has its
+// launcher pod renamed to <guest>-mig-<uid> with status.podRef.name
+// pointing there. Offline Preparing must resolve the source pod by the
+// canonical name and delete THAT pod — not look up guest.Name (which is
+// NotFound), wrongly conclude the pod is gone, and advance while the
+// real renamed pod keeps the PVC attached.
+//
+// Load-bearing: against the pre-fix code (literal guest.Name lookup)
+// the renamed pod is never deleted and Preparing wrongly advances —
+// both assertions below fail.
+func TestPreparing_AfterLiveMigration_DeletesRenamedSourcePod(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Status.NodeName = "boba"
+	// Prior live migration renamed the canonical pod.
+	const renamedPodName = "guest-mig-511016"
+	guest.Status.PodRef = &corev1.ObjectReference{Name: renamedPodName, Namespace: "default"}
+	// The real running launcher pod carries the renamed name; there is
+	// NO pod named "guest".
+	renamedPod := newLauncherPod(renamedPodName, "default")
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, renamedPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handlePreparing(context.Background(), mig, status)
+	if result.Err != nil || result.FailureMsg != "" {
+		t.Fatalf("handlePreparing errored: err=%v errMsg=%q", result.Err, result.FailureMsg)
+	}
+
+	// Must NOT advance: the renamed pod was found and a Delete issued,
+	// so Preparing is still waiting for that pod to terminate. Pre-fix,
+	// the guest.Name lookup is NotFound and the controller wrongly
+	// advances to StopAndCopy.
+	if result.Advanced {
+		t.Error("must not advance: the renamed source pod was just deleted and is still terminating (pre-fix wrongly advances on guest.Name NotFound)")
+	}
+
+	// The renamed pod must be deleted (fake client removes it
+	// immediately on Delete since it has no finalizer). Pre-fix it
+	// stays Running, never stopped — keeping the PVC attached forever.
+	var podGot corev1.Pod
+	err := c.Get(context.Background(), client.ObjectKey{Name: renamedPodName, Namespace: "default"}, &podGot)
+	if err == nil && podGot.DeletionTimestamp == nil {
+		t.Errorf("renamed source pod %q must be deleted; it is still present (pre-fix never stops it)", renamedPodName)
+	}
+
+	// The claim must still have happened (annotation + runPolicy=Stopped).
+	var gotGuest swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "guest", Namespace: "default"}, &gotGuest); err != nil {
+		t.Fatalf("Get guest: %v", err)
+	}
+	if gotGuest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress] != "m" {
+		t.Errorf("annotation = %q, want %q", gotGuest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress], "m")
+	}
+	if gotGuest.Spec.RunPolicy != swiftv1alpha1.RunPolicyStopped {
+		t.Errorf("runPolicy = %q, want Stopped", gotGuest.Spec.RunPolicy)
+	}
+}
+
 // TestPreparing_AnnotationConflict_RejectedClearly verifies that when
 // the SwiftGuest already carries an in-progress annotation for a
 // different SwiftMigration, this migration fails with a clear error
