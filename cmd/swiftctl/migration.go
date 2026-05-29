@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -13,6 +15,14 @@ import (
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 )
+
+// migrationProgressEstimateAnnotation mirrors the key swiftletd-source
+// writes during the live send RPC (rust/swiftletd/src/action.rs
+// MIGRATION_PROGRESS_ESTIMATE_KEY). Per Phase 3b design doc §5.4 the
+// estimate is annotation-only (not mirrored to a CRD status field), so
+// swiftctl reads it directly off the source pod when describing an
+// in-flight live migration.
+const migrationProgressEstimateAnnotation = "kubeswift.io/migration-progress-estimate"
 
 var (
 	migrateTargetNode    string
@@ -222,7 +232,36 @@ func runMigrationDescribe(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
-	out := cmd.OutOrStdout()
+	// Best-effort: the live-transfer progress estimate lives only on the
+	// source pod's annotation (design §5.4, not mirrored to status). Fetch
+	// it while a live transfer is in flight so the renderer can surface
+	// it. Ignore errors — progress is informational, never load-bearing.
+	var srcPod *corev1.Pod
+	if isLiveTransferInFlight(&m) {
+		var pod corev1.Pod
+		if getErr := c.Get(context.Background(), client.ObjectKey{Name: m.Status.SourcePodRef.Name, Namespace: ns}, &pod); getErr == nil {
+			srcPod = &pod
+		}
+	}
+	renderMigrationDescribe(cmd.OutOrStdout(), &m, srcPod)
+	return nil
+}
+
+// isLiveTransferInFlight reports whether a live migration is in its
+// memory-transfer phase, where the source pod carries the progress
+// estimate. Live mode reuses the StopAndCopy phase constant
+// (distinguished by status.mode), so there is no StopAndCopyLive phase
+// to match on — gate on phase==StopAndCopy AND mode==live.
+func isLiveTransferInFlight(m *migrationv1alpha1.SwiftMigration) bool {
+	return m.Status.Phase == migrationv1alpha1.SwiftMigrationPhaseStopAndCopy &&
+		m.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive &&
+		m.Status.SourcePodRef != nil && m.Status.SourcePodRef.Name != ""
+}
+
+// renderMigrationDescribe writes the human-readable describe output.
+// Pure (no cluster access) so it is unit-testable: srcPod is the already-
+// fetched source pod (nil unless a live transfer is in flight).
+func renderMigrationDescribe(out io.Writer, m *migrationv1alpha1.SwiftMigration, srcPod *corev1.Pod) {
 	fmt.Fprintf(out, "Name:           %s\n", m.Name)
 	fmt.Fprintf(out, "Namespace:      %s\n", m.Namespace)
 	fmt.Fprintf(out, "Guest:          %s\n", m.Spec.GuestRef.Name)
@@ -253,6 +292,11 @@ func runMigrationDescribe(cmd *cobra.Command, args []string) error {
 	if m.Status.ObservedDowntime != nil {
 		fmt.Fprintf(out, "Downtime:       %s\n", m.Status.ObservedDowntime.Duration.Truncate(1e9))
 	}
+	// Transfer duration (live mode only — offline leaves it nil). Renamed
+	// from the deprecated observedPauseWindow; see CRD docstring.
+	if m.Status.ObservedTransferDuration != nil {
+		fmt.Fprintf(out, "Transfer:       %s\n", m.Status.ObservedTransferDuration.Duration.Truncate(1e9))
+	}
 	if m.Status.FailureMessage != "" {
 		fmt.Fprintf(out, "Failure:        %s\n", m.Status.FailureMessage)
 	}
@@ -263,6 +307,26 @@ func runMigrationDescribe(cmd *cobra.Command, args []string) error {
 				c.Type, c.Status, c.Reason, c.Message)
 		}
 	}
+	// Live-transfer progress estimate (best-effort, heuristic).
+	if srcPod != nil {
+		if pct := srcPod.Annotations[migrationProgressEstimateAnnotation]; pct != "" {
+			fmt.Fprintf(out, "Progress (estimate): %s%%\n", pct)
+			fmt.Fprintln(out, "")
+			fmt.Fprintln(out, "  Note: Progress is a heuristic based on ~108 MB/s baseline pod-network")
+			fmt.Fprintln(out, "  bandwidth (spike Q4); actual rate depends on the workload's memory")
+			fmt.Fprintln(out, "  dirty rate. The guest stays responsive throughout the transfer.")
+		}
+	}
+	// Completed live migration: gloss the two metrics, which mean
+	// different things. Offline leaves ObservedTransferDuration nil, so
+	// this only fires for live (offline downtime is self-explanatory).
+	if m.Status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && m.Status.ObservedTransferDuration != nil {
+		fmt.Fprintln(out, "")
+		fmt.Fprintln(out, "Downtime is the operator-visible cluster downtime window (cutover")
+		fmt.Fprintln(out, "dispatch -> guest healthy on destination). Transfer is the full")
+		fmt.Fprintln(out, "vm.send-migration RPC (pre-copy + stop-and-copy + finalize); the")
+		fmt.Fprintln(out, "guest stays responsive throughout most of that window.")
+	}
 	// UX hint: Resuming is boot-bound, not stuck. Operators reading
 	// this output during the boot window should see the explanation
 	// inline rather than reach for kubectl describe.
@@ -271,7 +335,6 @@ func runMigrationDescribe(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(out, "Note: Resuming waits for the guest VM to boot on the destination")
 		fmt.Fprintln(out, "node (~17s on a warm cache). The controller is not stuck.")
 	}
-	return nil
 }
 
 func runMigrationCancel(cmd *cobra.Command, args []string) error {
