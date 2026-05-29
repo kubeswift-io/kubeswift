@@ -18,6 +18,7 @@ var (
 	migrateTargetNode    string
 	migrateAllowIPChange bool
 	migrateName          string
+	migratePreferredMode string
 	migrationListAllNS   bool
 )
 
@@ -29,22 +30,33 @@ var migrateCmd = &cobra.Command{
 	Short: "Move a SwiftGuest to another node by creating a SwiftMigration",
 	Long: `Create a SwiftMigration that moves a SwiftGuest to a target node.
 
-Phase 1 ships offline migration: the source guest is fully stopped,
-its root-disk PVC is detached on the source node, and the guest is
-recreated on the target node with the same disk content. Downtime
-is bounded by storage detach + VM boot — ~70s on Longhorn full-copy,
-~25s on true CoW drivers (Rook Ceph RBD, EBS).
+--preferred-mode selects the strategy:
 
-VFIO/SR-IOV guests cannot cross-node-migrate in Phase 1 (no release-
-and-reallocate primitive yet — Phase 4+ work). The webhook rejects
-those at submission time with a clear error.
+  auto    (default) live-migrate when the guest is eligible
+          (ReadWriteMany+Block storage or kernel-boot, and no VFIO/
+          SR-IOV), otherwise fall back to offline. Read status.mode
+          to see which the controller picked.
+  live    live migration: memory + device state stream to the target
+          while the guest keeps running; sub-3s operator-visible
+          downtime. Rejected if the guest is ineligible.
+  offline the source guest is fully stopped, its root-disk PVC is
+          detached on the source node, and the guest is recreated on
+          the target with the same disk content. Downtime ~70s on
+          Longhorn full-copy, ~25s on true CoW drivers. The only mode
+          for VFIO/SR-IOV guests.
+
+VFIO/SR-IOV guests cannot live-migrate (no release-and-reallocate
+primitive yet — Phase 4+ work); use offline. The webhook rejects an
+explicit --preferred-mode live for an ineligible guest with a clear
+error.
 
 Default node-local-bridge networking does not preserve guest IPs
 across nodes. Pass --allow-ip-change to acknowledge and proceed,
 or attach the guest to a multi-node network (Multus + macvlan or
 OVN-K layer-2) for IP preservation.`,
 	Example: `  swiftctl migrate db --to worker-3
-  swiftctl migrate web --to worker-3 --allow-ip-change
+  swiftctl migrate web --to worker-3 --preferred-mode live --allow-ip-change
+  swiftctl migrate db --to worker-3 --preferred-mode offline
   swiftctl migrate db --to worker-3 --name db-rebalance-2026-04-28`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
@@ -91,6 +103,8 @@ func init() {
 		"Acknowledge that the guest IP will change cross-node on default node-local networking")
 	migrateCmd.Flags().StringVar(&migrateName, "name", "",
 		"Optional SwiftMigration resource name (default: <guest>-migrate-<rand>)")
+	migrateCmd.Flags().StringVar(&migratePreferredMode, "preferred-mode", "auto",
+		"Migration mode: auto (live when eligible, else offline), live, or offline")
 	_ = migrateCmd.MarkFlagRequired("to")
 
 	migrationListCmd.Flags().BoolVarP(&migrationListAllNS, "all-namespaces", "A", false, "List across all namespaces")
@@ -108,9 +122,28 @@ func newMigrationClient() (client.Client, error) {
 	return client.New(cfg, client.Options{Scheme: scheme.Scheme})
 }
 
+// parsePreferredMode validates the --preferred-mode flag and maps it to
+// the SwiftMigration spec.mode value. The flag is named --preferred-mode
+// (design doc Section 6.1) but the CRD field is spec.mode; this is the
+// translation point. Empty is treated as auto.
+func parsePreferredMode(s string) (migrationv1alpha1.SwiftMigrationMode, error) {
+	switch m := migrationv1alpha1.SwiftMigrationMode(s); m {
+	case "", migrationv1alpha1.SwiftMigrationModeAuto:
+		return migrationv1alpha1.SwiftMigrationModeAuto, nil
+	case migrationv1alpha1.SwiftMigrationModeLive, migrationv1alpha1.SwiftMigrationModeOffline:
+		return m, nil
+	default:
+		return "", fmt.Errorf("invalid --preferred-mode %q (must be auto, live, or offline)", s)
+	}
+}
+
 func runMigrate(cmd *cobra.Command, args []string) error {
 	guestName := args[0]
 	ns := getNamespace()
+	mode, err := parsePreferredMode(migratePreferredMode)
+	if err != nil {
+		return err
+	}
 	c, err := newMigrationClient()
 	if err != nil {
 		return err
@@ -129,7 +162,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 		Spec: migrationv1alpha1.SwiftMigrationSpec{
 			GuestRef:      migrationv1alpha1.SwiftMigrationGuestRef{Name: guestName},
 			Target:        migrationv1alpha1.SwiftMigrationTarget{NodeName: migrateTargetNode},
-			Mode:          migrationv1alpha1.SwiftMigrationModeAuto,
+			Mode:          mode,
 			AllowIPChange: migrateAllowIPChange,
 		},
 	}
