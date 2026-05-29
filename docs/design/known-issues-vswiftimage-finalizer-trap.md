@@ -1,7 +1,47 @@
 # Tracked Follow-Up: vswiftimage Webhook Traps SwiftImage Deletion (Finalizer Removal Blocked)
 
-**Status**: OPEN — discovered during PR 2 walkthrough namespace cleanup
-(2026-05-28). Not yet fixed. Captured for future work.
+**Status**: RESOLVED 2026-05-29 via branch `fix/tfu-17-vswiftimage-finalizer-trap`
+(Approach 1; see Resolution below). Discovered during PR 2 walkthrough
+namespace cleanup (2026-05-28).
+
+## Resolution (2026-05-29)
+
+Fixed via **Approach 1**: `vswiftimage` `ValidateUpdate` now returns
+early (allow) when `newObj.GetDeletionTimestamp() != nil`. A being-
+deleted object shedding finalizers is never performing a spec mutation,
+so the immutability rule must not gate it. Mirrors PR #26's
+`ValidateDelete` pass-through intent (Design Principle #10). Regression
+tests added (contract test + over-allow guard) — see "Test that must
+accompany the fix" below, now satisfied.
+
+**Mechanism correction:** the diagnosis below ("it treats ANY update as
+a spec-mutation attempt") describes the *symptom*, not the mechanism.
+The rule *does* compare old vs. new spec fields — but
+`oldImg.Spec.Source != img.Spec.Source` is a **pointer-identity**
+comparison over `ImageSource`'s pointer fields (`HTTP`/`Upload`/
+`PVCClone`). The old (etcd) and new (admission request) objects are
+independent decodes, so their Source pointers always differ and the
+rule fires unconditionally on every Ready-image update. The `Format`
+half (a string) compares by content and is correct. This matters for
+the fix: Approach 1 carves out being-deleted objects regardless of the
+comparison; a literal reading of Approach 2 ("compare only spec fields")
+is *already* what the buggy code does — a correct Approach 2 needs
+**content/deep equality**, not just field comparison.
+
+**Sibling-webhook audit (obligation discharged):** of the six validating
+webhooks (swiftguest, swiftimage, swiftseedprofile, swiftsnapshot,
+swiftrestore, swiftmigration), **only vswiftimage was vulnerable**. The
+others are immune because their immutability checks use content/deep
+comparison (`specsEqual` / `identityEqual` / value-struct `!=`) or have
+no immutability rule at all — *not* because they check `deletionTimestamp`
+(none do). Cross-referenced with finalizer-adding sites: vulnerable
+webhook ∩ finalizer-bearing resource = SwiftImage only. (swiftguestpool
+has no webhook.)
+
+**Residual deferred:** Approach 1 does not fix the pointer-comparison
+defect for *non-deletion* metadata edits (e.g. relabeling a Ready image
+still trips the false rejection). Filed as Tracked Follow-up #23 in
+`kubeswift_context.md` (LOW severity).
 
 **Severity**: MEDIUM-HIGH. Not a data-loss bug, but it permanently
 traps namespace deletion and generates a continuous controller
@@ -59,9 +99,9 @@ value vs. blocks legitimate work.** Finalizer removal on a
 being-deleted object is never a spec mutation; blocking it adds no
 protection and traps deletion.
 
-## Fix shape (NOT yet implemented)
+## Fix shape (Approach 1 IMPLEMENTED 2026-05-29)
 
-Two acceptable approaches:
+Two acceptable approaches were available; Approach 1 shipped:
 
 1. **Skip validation when being deleted** (simplest):
    In the `vswiftimage` ValidateUpdate handler, return early (allow)
@@ -88,15 +128,26 @@ potentially others — swiftsnapshot, swiftrestore, swiftguest,
 swiftguestpool webhooks should each be checked for "fires on all
 UPDATE including finalizer removal on being-deleted objects."
 
-## Test that must accompany the fix
+## Test that must accompany the fix (DONE 2026-05-29)
 
 Per the contract-level test discipline (TFU-2): a test that creates a
 Ready SwiftImage with a finalizer, sets deletionTimestamp, attempts
 finalizer removal, and asserts the webhook ALLOWS it. The existing
-webhook tests presumably assert spec-immutability holds on Ready
-images (the rule that's correct); they're missing the "but finalizer
-removal on a being-deleted Ready image is allowed" case — the gap that
-let this ship.
+webhook tests asserted spec-immutability for the *cloneStrategy* rule
+but never set `phase=Ready` on an update — so the Source-immutability
+path (the buggy one) was entirely uncovered. That gap let this ship.
+
+Shipped in `validator_test.go`:
+
+- `TestValidateUpdate_FinalizerRemovalOnDeletingReadyImage_Allowed` —
+  the contract test. Verified load-bearing: it fails against
+  guard-stripped code with the exact "spec is immutable" rejection and
+  passes with the guard. `old`/`new` are built via separate `makeImage`
+  calls so their `Spec.Source` pointers differ as in real admission.
+- `TestValidateUpdate_SpecMutationOnReadyImage_StillRejected` —
+  over-allow guard: a genuine spec change on a Ready image that is NOT
+  being deleted is still rejected (passes with or without the carve-out,
+  confirming it exercises the immutability rule itself, not the guard).
 
 ## Manual recovery procedure (for operators hitting this before the fix)
 
