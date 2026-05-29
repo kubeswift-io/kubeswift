@@ -234,6 +234,13 @@ listed below.
 
 ### 3.1 `spec.preferredMode`
 
+> **Shipped-code correction (PR 3):** the CRD field is **`spec.mode`**
+> (`SwiftMigrationMode`), not `spec.preferredMode` — that name only ever
+> existed in this design doc's prose; the Phase 3a Go types declared
+> `Mode`. The resolved value is `status.mode`. The swiftctl flag is named
+> `--preferred-mode` (Section 6.1) and maps to `spec.mode`. Read every
+> `spec.preferredMode` below as `spec.mode`.
+
 Existing field (`migration.kubeswift.io/v1alpha1.SwiftMigrationSpec`).
 Phase 3a shipped with three values; Phase 3b lights up `live`:
 
@@ -1045,27 +1052,25 @@ guest stays responsive throughout most of this window.
 
 ### 6.3 `kubectl describe smig` (controller-rendered)
 
-`kubectl describe` reads CRD printer columns + status fields.
-Phase 3b PR 3 updates the SwiftMigration CRD printer columns
-to surface the new field names:
+`kubectl get smig -o wide` reads CRD printer columns.
+
+> **Shipped-code correction (PR 3):** there was **no `PauseWindow`
+> column to remove** — the shipped Phase 3a columns are
+> Guest/From/To/Mode/Phase/Downtime/Age (the deprecated
+> `observedPauseWindow` was never surfaced as a column). PR 3 simply
+> **adds** a `Transfer` column reading `status.observedTransferDuration`,
+> after `Downtime`:
 
 ```diff
-- additionalPrinterColumns:
--   - name: Phase
--   - name: Mode
--   - name: Downtime
--   - name: PauseWindow
-+ additionalPrinterColumns:
-+   - name: Phase
-+   - name: Mode
-+   - name: Downtime
+  additionalPrinterColumns:
+    - name: Downtime
+      jsonPath: .status.observedDowntime
 +   - name: Transfer
++     jsonPath: .status.observedTransferDuration
+    - name: Age
 ```
 
-`PauseWindow` column → `Transfer` column reading from
-`observedTransferDuration`. The deprecated alias
-`observedPauseWindow` is still populated but not surfaced in
-the wide-output columns.
+`swiftctl migration list` gains a matching `TRANSFER` column for parity.
 
 ### 6.4 Operator runbook (`docs/migration/phase-3b.md`)
 
