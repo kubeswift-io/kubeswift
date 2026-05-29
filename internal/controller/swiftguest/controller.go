@@ -367,7 +367,15 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if staleMigrationPodRef(&guest) {
 			status.PodRef = nil
 		}
-		if err := r.Create(ctx, desiredPod); err != nil {
+		// Tolerate AlreadyExists. During the stale-PodRef self-heal above,
+		// the lookup name (canonicalPodName) and the create name
+		// (guest.Name) diverge, so a concurrent reconcile reading the
+		// pre-clear guest can race us to create the guest.Name pod. The
+		// pod existing is the desired outcome; the next reconcile (PodRef
+		// now cleared) resolves it via canonicalPodName and maps status.
+		// Without this, every offline-after-live migration logs a spurious
+		// ERROR-level "already exists" line even though it succeeds.
+		if err := r.Create(ctx, desiredPod); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, err
 		}
 		// Pod just created; set initial status (Pending/Scheduling)
