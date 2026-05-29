@@ -1175,6 +1175,32 @@ PR; future standalone hygiene PR.
 
 Severity: LOW (cosmetic + minor type safety; no functional impact).
 
+### 22. spec.timeout default reconciliation
+
+The SwiftMigration CRD has no +kubebuilder:default for
+spec.timeout, but code carries two contradictory documentary
+comments: swiftmigration_types.go:123,262 reference "30m
+default"; resuming_live.go:72 references "Default 5min per
+F3.5". Neither default is enforced; an unset spec.timeout
+means no runaway gate (both stopandcopy_live.go:136 and
+resuming_live.go:139 guard on Timeout != nil). swiftctl migrate
+has no --timeout flag, so it never sets one either.
+
+Operator decision required:
+  (a) Add +kubebuilder:default to spec.timeout (pick value —
+      30m matches comment count; 5m matches LBA-3 spirit).
+      CRD-schema change requiring upgrade-discipline
+      consideration for existing migrations.
+  (b) Keep no-default; remove both misleading comments;
+      document the operator-set expectation more prominently.
+
+Severity: LOW (runaway risk real but rare; manual cancellation
+works). Connected to LBA-3 runaway-gate framing in the design
+doc; [`docs/design/live-migration-phase-3b.md`](docs/design/live-migration-phase-3b.md)
+§2.2 now describes the no-default reality.
+
+Surfaced 2026-05-28 by PR B Gate A1 verification.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
