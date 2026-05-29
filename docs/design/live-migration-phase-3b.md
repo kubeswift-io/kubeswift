@@ -5,8 +5,10 @@
 > swiftletd action surface).
 >
 > Status: design lock-in. Implementation begins after this doc merges.
-> Spike findings:
-> [`live-migration-phase-3b-spike.md`](live-migration-phase-3b-spike.md).
+> Spike findings: summarized in `kubeswift_context.md` ("Phase 3b
+> Spike — COMPLETE" section). Full findings retained on the
+> `spike/phase-3b-q1-q4` reference branch per the spike contract
+> (not merged to main).
 > Phase 3a design (offline mode):
 > [`live-migration-phase-3a.md`](live-migration-phase-3a.md).
 >
@@ -75,6 +77,12 @@ The decoupling is the load-bearing operator-UX property:
 operators care about downtime; transfer duration is a planning
 input, not an SLO.
 
+**Cluster-validated on main 2026-05-28** (PR 2 walkthrough T1,
+PR #65 fix-forward): the no-stress 4Gi baseline measured
+`observedDowntime=2.283s` and `observedTransferDuration=38.246s` —
+within the spike Q2 range and a 0.1% deviation from the spike
+transfer baseline, confirming the spike numbers on main.
+
 ---
 
 ## 2. Settled by spike
@@ -134,10 +142,17 @@ operator expectations:
   because the algorithm decided "good enough." Admission
   rejection on the dirty-rate axis is the wrong policy
   surface for CH v51.x.
-- **`spec.timeout` (existing Phase 3a, 5-minute default) is
-  the runaway gate.** It covers the cluster-bandwidth-times-
-  iteration-count worst case the spike measured (~105s
-  total wall-clock for 50%-RAM-dirtied 4Gi).
+- **`spec.timeout` (existing Phase 3a) is the runaway gate.**
+  `spec.timeout` is operator-set; there is no default. An unset
+  timeout means no runaway gate — a stuck migration will not
+  auto-terminate. The webhook enforces a 60s floor for live mode
+  and a 24h ceiling. Operators SHOULD set `spec.timeout`
+  explicitly; appropriate values depend on workload (a 4Gi
+  no-stress guest transfers in ~38s, but memory-dirtying
+  workloads can extend pre-copy duration significantly — the
+  spike measured ~105s total wall-clock for 50%-RAM-dirtied 4Gi).
+  See Tracked Follow-up #22 in `kubeswift_context.md` for the
+  default-reconciliation decision.
 - **The 5-iteration cap is a CH-version dependency.** A
   future CH version that makes the cap configurable, raises
   it, or replaces the unconditional cap with classical
@@ -171,9 +186,9 @@ Consequences for Phase 3b:
   retired.** A webhook match-tag check would be redundant
   defense-in-depth; the implementation already enforces it
   atomically.
-- **`spec.allowVersionSkew` is dropped from the Phase 3b API
-  surface** (Section 3). The Phase 3a controller never
-  consumed it; the field was inert.
+- **`spec.allowVersionSkew` was never in the CRD** (Section 3).
+  It was speculative Phase 2 design-doc text; the Phase 3a Go
+  types never declared it. There is nothing to drop.
 - **A defensive image-tag-match check IS added at the
   Validating phase**, not as enforcement but as a fail-loud
   trip-wire: if a future refactor regresses `newDstPod`'s
@@ -304,29 +319,20 @@ SwiftMigration admission and reconcile). This is the same
 defense-in-depth shape as Phase 3a PR #26's per-operation
 validation discipline.
 
-### 3.4 `spec.allowVersionSkew` removed
+### 3.4 `spec.allowVersionSkew` — never existed
 
-Phase 3a CRD shipped `spec.allowVersionSkew bool` as a placeholder
-for Phase 2's proposed match-tag policy escape hatch. Phase 3a's
-controller never consumed it (because `newDstPod` clones src
-image atomically; see Section 2.3). Phase 3b **removes the field
-from the CRD**.
+Phase 2's design doc proposed `spec.allowVersionSkew bool` as a
+match-tag policy escape hatch. It was **never generated into the
+SwiftMigration CRD** — Phase 3a's `newDstPod` clones the source
+pod's image atomically (Section 2.3), so the controller never
+needed the field and the Go types never declared it. PR 1's recon
+confirmed the field is absent from `api/migration/`.
 
-This is a **CRD breaking change** in the strict OpenAPI sense,
-but no deployed manifests reference it (the field was inert from
-day one). The CRD generator removes the field; the controller
-deployment continues to accept Phase 3a-era SwiftMigration CRs
-because Kubernetes silently drops unknown fields.
-
-Migration discipline:
-
-- Phase 3b release notes flag the removal explicitly.
-- The Phase 3a → Phase 3b deployment runbook includes a step
-  to re-apply CRDs (`make deploy` or `helm upgrade` covers
-  this; manual `kubectl apply -k config/crd/bases/` operators
-  must update their pipelines).
-- No operator action needed for in-flight SwiftMigrations: the
-  field has no behavioral effect.
+There is **nothing to remove**: no CRD change, no breaking change,
+no migration discipline. The field exists only as stale prose in
+the Phase 2 design doc. This section is retained as a pointer so
+future readers don't re-introduce the field believing it was once
+shipped and then dropped — it was never there.
 
 ### 3.5 `status.observedTransferDuration` (new, replaces `observedPauseWindow`)
 
@@ -385,10 +391,8 @@ CRD changes (Go types + generated CRD YAML):
 
 ```diff
  type SwiftMigrationSpec struct {
-     // ... existing fields ...
--    // AllowVersionSkew opts in to migration across heterogeneous CH versions.
--    // Phase 3a inert; Phase 3b removes.
--    AllowVersionSkew bool `json:"allowVersionSkew,omitempty"`
+     // ... existing fields, unchanged (no AllowVersionSkew — it
+     // never existed; see Section 3.4) ...
  }
 
  type SwiftMigrationStatus struct {
@@ -501,7 +505,7 @@ This:
   `kubeswift.io/migration-role: destination`.
 - Sets pod ownership: SwiftGuest is the controller-owner.
 - Overrides node pinning: `pod.Spec.NodeName = target.nodeName`.
-- Adds receiver-mode env: `KUBESWIFT_MIGRATION_ROLE=receive`.
+- Adds receiver-mode env: `KUBESWIFT_MIGRATION_ROLE=receiver`.
 
 Submit pod via Create. Idempotency: if a pod with the expected
 name already exists (leader-handover replay), compare
@@ -569,12 +573,17 @@ Walking through each substate:
 
 **`substateInit`** (controller entry):
 - Patch `kubeswift.io/migration-action: send` on the source pod.
-- Pass the destination pod's IP via SwiftMigration CR
-  (`status.targetIP`, populated at PreparingLive step 4 from
-  the dst pod's status).
-- Patch annotation `kubeswift.io/migration-target-ip: <ip>` on
-  source pod (the swiftletd reads this to construct the
-  vm.send-migration request).
+- The destination's target URL is passed inside the
+  `kubeswift.io/migration-action-args` annotation's JSON payload
+  as `target_url` (`tcp:<dst-pod-ip>:6789`); the controller
+  writes it ([`stopandcopy_live.go`](../../internal/controller/swiftmigration/stopandcopy_live.go)
+  `target_url` field + `AnnotationMigrationActionArgs`) and
+  swiftletd reads it
+  ([`action.rs::dispatch_migration_send`](../../rust/swiftletd/src/action.rs)).
+  There is **no** `migration-target-ip` annotation. The only
+  "target IP" is `status.targetIP`, a SwiftMigration CR status
+  field (populated at Resuming from the dst pod's guest-ip
+  annotation), NOT a pod annotation.
 - Transition to `substateSrcSendDispatched`.
 
 **`substateSrcSendDispatched`**:
@@ -596,23 +605,25 @@ Walking through each substate:
   annotations — they are informational only.
 - When CH's `vm.send-migration` returns successfully,
   source swiftletd writes:
-  - `kubeswift.io/migration-status: send-complete`
-  - `kubeswift.io/migration-transfer-duration-ms: <ms>`
-    (full RPC wall-clock elapsed)
-- Controller observes `send-complete` and transitions to
-  `substateSrcCompleted`.
+  - `kubeswift.io/migration-status: complete` (the send-action
+    success status — there is no `send-complete` value)
+  - `kubeswift.io/migration-pause-window-ms: <ms>`
+    (full RPC wall-clock elapsed; W27b alias)
+- Controller observes `complete` (the source W1 gate) and
+  transitions to `substateSrcCompleted`.
 
 **`substateSrcCompleted`**:
 - Controller reads
-  `kubeswift.io/migration-transfer-duration-ms` from the
+  `kubeswift.io/migration-pause-window-ms` from the
   source pod and stamps
   `status.observedTransferDuration` (and the deprecated alias
   `status.observedPauseWindow`).
-- Controller waits for `kubeswift.io/migration-status:
-  receive-complete` from the destination pod. This is the W1
-  gate observation pattern from Phase 3a: the destination
-  swiftletd writes `receive-complete` once
-  `vm.receive-migration` returns and CH is ready to resume.
+- Controller waits for `kubeswift.io/migration-status: running`
+  from the destination pod. This is the W1 gate observation
+  pattern from Phase 3a: the destination swiftletd writes
+  `running` (its receive-action success status) once
+  `vm.receive-migration` returns and CH v51.1 has auto-resumed
+  the guest.
 - Controller transitions to `substateDstCompleted` on
   observation.
 
@@ -636,18 +647,18 @@ Walking through each substate:
 **`substateCutoverDispatched`**:
 - Controller waits for source pod's deletion event (Pod
   NotFound from watch).
-- On NotFound, controller patches
-  `kubeswift.io/migration-action: resume` on destination pod.
-  This is **new in Phase 3b** — Phase 3a's offline path uses
-  the SwiftGuest controller's standard pod-creation flow to
-  resume; Phase 3b's live path uses an explicit resume
-  annotation because the destination CH is already running
-  with the migrated state and just needs to leave the post-
-  receive paused state.
-- Destination swiftletd observes `resume` action, calls
-  Cloud Hypervisor's `vm.resume` HTTP API, writes
-  `kubeswift.io/migration-status: resumed`.
-- Controller observes `resumed`, transitions to
+- **No resume action is needed.** Cloud Hypervisor v51.1
+  auto-resumes the guest when `vm.receive-migration` returns —
+  the destination guest is already running by the time the
+  destination swiftletd writes `migration-status: running` (its
+  receive-action success status). There is no
+  `migration-action: resume`, no `vm.resume` call, and no
+  `resumed` status value. This was PR 2 Decision 1 (resume
+  action dropped from scope), validated empirically by PR 1
+  walkthrough T1 (PR #61) and PR 2 walkthrough T1 (PR #65
+  fix-forward, cluster-validated after the auto-mode dispatch
+  fix).
+- On source-pod NotFound, controller transitions to
   `substateCutoverComplete`.
 
 **`substateCutoverComplete`**:
@@ -721,14 +732,14 @@ to `Failed` and writes structured fields per D4c accepted (ii):
 ```yaml
 status:
   phase: Failed
-  failureReason: <enum>            # canonical category
-  failureReasonCode: <enum>        # narrow code for tooling
+  failureReason: <string>          # one of the constants below
   failureMessage: <human-readable> # operator-visible diagnostic
 ```
 
-**`failureReasonCode` enum (Phase 3b additions over Phase 3a)**:
+**`failureReason` values (untyped string constants; Phase 3b
+additions over Phase 3a)**:
 
-| Code | Origin | Meaning |
+| Value | Origin | Meaning |
 |---|---|---|
 | `Cancelled` | Phase 3a | Operator requested cancel; took effect pre-cutover. |
 | `PodTerminated` | Phase 3a | Source or destination pod was K8s-deleted mid-flight. |
@@ -743,15 +754,27 @@ status:
 | `ImageTagMismatch` | **3b new** | Defensive trip-wire (Section 4.1); should never fire. |
 | `DstPodConflict` | **3b new** | Idempotency check found a dst pod with conflicting image. |
 
-The `failureReason` field (broader category) groups the codes
-above for `kubectl describe smig` summarization. The
-`failureReasonCode` field is what swiftctl / operator tooling
-parses.
+There is a **single** `failureReason` field — a string typed by
+the untyped constants above (matching Phase 3a's convention, NOT
+a Go typed enum; see `swiftmigration_types.go` `FailureReason*`).
+There is **no** separate `failureReasonCode` field. `kubectl
+describe smig` and swiftctl both read this one field. (The CRD
+does carry a `+kubebuilder:validation:Enum` marker on the field
+listing all 12 values, but the Go-side constants are untyped
+strings.)
 
-The swiftletd annotation surface carries the structured code
-via `kubeswift.io/migration-failure-reason-code: <enum>` (the
-controller maps annotation values to the CRD enum). The
-mapping table is implemented in Phase 3b PR 2.
+The swiftletd annotation surface carries the failure category via
+`kubeswift.io/migration-status-detail` — the `sanitize_ch_error`
+category token (`action.rs::sanitize_ch_error`). The controller
+maps that token to the `failureReason` value
+([`stopandcopy_failure.go::classifyFailureFromDetail`](../../internal/controller/swiftmigration/stopandcopy_failure.go)),
+implemented in Phase 3b PR 2. There is no
+`migration-failure-reason-code` annotation.
+
+A typed `FailureReasonCode` enum (so typos compile-fail) is a
+tracked hygiene candidate — Tracked Follow-up #21 in
+`kubeswift_context.md`; not shipped, the values are untyped
+strings today.
 
 ---
 
@@ -763,16 +786,25 @@ Phase 3a action surface (existing):
 - `migration-send` action — source pod-mode.
 - `migration-cancel` action — both pod-modes.
 
-Phase 3b extends these with sub-state machines and additional
-status annotations. The annotation key schema and
-ack-gate-required-for-each-write semantics from Phase 3a
-PR-B are unchanged.
+Phase 3b extends these with additional published status values
+and annotations. swiftletd dispatches actions via a flat match on
+action kind (`decide()` → `dispatch_migration_{receive,send,
+cancel}()` in `action.rs`), not a state-machine subsystem; the
+"progressions" below are sequences of published
+`migration-status` annotation values, not internal states of a
+stateful object. The annotation key schema and
+ack-gate-required-for-each-write semantics from Phase 3a PR-B are
+unchanged.
 
-### 5.1 `migration-receive` action — receive state machine
+### 5.1 `migration-receive` action — receive status progression
 
-The destination swiftletd's receive action runs an internal
-state machine. **States are swiftletd-internal**; controller-
-visible signals are the published status annotations.
+The destination swiftletd's receive action dispatches via a flat
+match on action kind (`dispatch_migration_receive()`), not a
+state-machine subsystem. The progression below lists the sequence
+of published `kubeswift.io/migration-status` annotation values —
+controller-visible signals, not internal states of a stateful
+object. (The left column names the conceptual phase for
+readability; only the published values reach the controller.)
 
 ```
 receive-init → receive-listening → receive-ready
@@ -785,8 +817,8 @@ receive-init → receive-listening → receive-ready
 | `receive-listening` | swiftletd calls CH's `vm.create` (paused) + opens TCP listener on the migration port. | — |
 | `receive-ready` | TCP listener confirmed bound; CH ready to accept `vm.receive-migration`. swiftletd writes `kubeswift.io/migration-status: receive-ready`. | **`receive-ready`** → gate for substateInit (Section 4.3). |
 | `receive-active` | swiftletd's blocking call to CH's `vm.receive-migration` is in flight; CH is consuming the TCP stream. swiftletd may write `kubeswift.io/migration-status: receive-active` (informational, optional). | `receive-active` (informational). |
-| `receive-complete` | CH's `vm.receive-migration` returned successfully; guest paused on dst, ready to resume. swiftletd writes `kubeswift.io/migration-status: receive-complete`. | **`receive-complete`** → gate for substateDstCompleted. |
-| `receive-failed` | CH returned an error, listener disconnected, or cancel fired. swiftletd writes `kubeswift.io/migration-status: failed` + `kubeswift.io/migration-failure-reason-code: <code>`. | `failed` + code → controller transitions to Failed. |
+| `receive-complete` | CH's `vm.receive-migration` returned successfully; CH v51.1 auto-resumes the guest. swiftletd writes `kubeswift.io/migration-status: running` (the receive-action success status — there is no `receive-complete` value). | **`running`** → gate for substateDstCompleted. |
+| `receive-failed` | CH returned an error, listener disconnected, or cancel fired. swiftletd writes `kubeswift.io/migration-status: failed` + `kubeswift.io/migration-status-detail: <category token>`. | `failed` + detail → controller transitions to Failed. |
 
 Listener timeout: swiftletd-internal default 60s for the
 `receive-listening` → CH `vm.receive-migration` accept
@@ -796,11 +828,13 @@ controller's `PreparingLive` step 4 timeout (Section 4.2) is
 the broader cluster-level gate; swiftletd's listener timeout
 is the inner gate.
 
-### 5.2 `migration-send` action — send state machine
+### 5.2 `migration-send` action — send status progression
 
-The source swiftletd's send action is simpler — Cloud Hypervisor's
+The source swiftletd's send action also dispatches via flat match
+(`dispatch_migration_send()`). Cloud Hypervisor's
 `vm.send-migration` is synchronous and either completes or
 errors; there is no observable internal state during the call.
+The progression below lists published `migration-status` values.
 
 ```
 send-init → send-active → send-complete | send-failed
@@ -810,12 +844,12 @@ send-init → send-active → send-complete | send-failed
 |---|---|---|
 | `send-init` | Action handler picks up `migration-action: send`. Validates ack annotation (Phase 2 S2 gate) and target-IP. | — |
 | `send-active` | swiftletd writes `kubeswift.io/migration-status: sending`. Calls CH `vm.send-migration` (synchronous, blocking). During this state, swiftletd emits progress estimate (Section 5.4). | `sending` (gate for substateSrcSending). Progress estimate during. |
-| `send-complete` | CH returns successfully. swiftletd writes `migration-status: send-complete` + `migration-transfer-duration-ms: <ms>`. | **`send-complete`** + duration → gate for substateSrcCompleted. |
-| `send-failed` | CH returns an error (RpcError) or peer disconnect detected (ReceiveDisconnect). swiftletd writes `failed` + structured code. | `failed` + code → controller transitions to Failed. |
+| `send-complete` | CH returns successfully. swiftletd writes `migration-status: complete` (the send-action success status — no `send-complete` value) + `migration-pause-window-ms: <ms>`. | **`complete`** + duration → gate for substateSrcCompleted. |
+| `send-failed` | CH returns an error (RpcError) or peer disconnect detected (ReceiveDisconnect). swiftletd writes `failed` + `migration-status-detail: <category token>`. | `failed` + detail → controller transitions to Failed. |
 
-The Phase 2 PR-B sanitizer (CH error string → category token)
-maps CH's raw error strings to the Phase 3b reason code enum
-(Section 4.7).
+The Phase 2 PR-B sanitizer (`sanitize_ch_error`, CH error string
+→ category token) emits the token via `migration-status-detail`;
+the controller maps it to a `failureReason` value (Section 4.7).
 
 ### 5.3 `migration-cancel` action — receiver-side semantics
 
@@ -869,7 +903,7 @@ patch_annotation("kubeswift.io/migration-progress-estimate", capped);
   qualifier (Section 6).
 - Cap at 95%: prevents operators seeing "100% complete"
   while the RPC is still in finalize. The transition from
-  95% to send-complete observation is the next discrete
+  95% to the `complete` status observation is the next discrete
   event.
 - Floor at 0: defensive against clock drift on swiftletd
   startup.
@@ -877,8 +911,15 @@ patch_annotation("kubeswift.io/migration-progress-estimate", capped);
   Operators on other CNIs see different baselines; the
   estimate is least accurate on cluster configurations
   furthest from spike. Documented in Section 10 caveats.
-- Computation runs inline in the action handler, not on a
-  separate timer thread (simpler; ~5s granularity is fine).
+- Computation runs on a dedicated `std::thread`, **NOT inline and
+  NOT `tokio::spawn`**. The action-handler thread blocks in the
+  synchronous `vm.send-migration` call; an inline or
+  tokio-spawned emitter would be starved (the `current_thread`
+  runtime cannot schedule new tasks while a blocking call holds
+  the thread). The emitter (`spawn_progress_emitter`) is spawned
+  before the blocking call with a drop-guard that signals exit on
+  any return path. Mirrors the lease-poller `std::thread` pattern.
+  See PR #61 Commit D for the empirical rationale.
 
 **No status field**: progress estimate is annotation-only,
 NOT mirrored to a CRD status field. The transient nature of
@@ -898,22 +939,34 @@ Consolidated reference for the Phase 3b annotation surface
 | `migration-action: receive` | dst | controller | C→S | Action dispatch. |
 | `migration-action: send` | src | controller | C→S | Action dispatch. |
 | `migration-action: cancel` | both | controller | C→S | Cancel broadcast. |
-| `migration-action: resume` | dst | controller | C→S | Post-cutover resume trigger (new in 3b). |
-| `migration-target-ip: <ip>` | src | controller | C→S | Destination IP for `vm.send-migration`. |
+| `migration-action-id: <id>` | both | controller | C→S | Action idempotency id (swiftletd echoes via `migration-status-id`). |
+| `migration-action-args: <json>` | both | controller | C→S | Action args JSON: `listen_url`+`guest_ip` (receive); `target_url` (send). |
 | `migration-phase2-unsafe-plaintext: ack` | both | controller | C→S | Phase 2 S2 ack gate (unchanged). |
-| `migration-status: <substate>` | both | swiftletd | S→C | State machine published transitions. |
+| `migration-status: <value>` | both | swiftletd | S→C | Published status value (`receive-ready`, `sending`, `complete`, `running`, `failed`, `cancelled`). |
+| `migration-status-id: <id>` | both | swiftletd | S→C | Echoes the action-id the status pairs with. |
+| `migration-status-detail: <token>` | both | swiftletd | S→C | Detail / failure category token (`sanitize_ch_error`); the failure-reason transport (Section 4.7). |
 | `migration-progress-estimate: <0..95>` | src | swiftletd | S→C | Heuristic progress (Section 5.4). |
-| `migration-transfer-duration-ms: <ms>` | src | swiftletd | S→C | RPC wall-clock for `observedTransferDuration` stamping. |
-| `migration-failure-reason-code: <enum>` | both | swiftletd | S→C | Structured failure code. |
+| `migration-pause-window-ms: <ms>` | src | swiftletd | S→C | Full `vm.send-migration` RPC wall-clock; stamps `observedTransferDuration` / `observedPauseWindow` (W27b alias). |
 | `migration-in-progress: <UID>` | SwiftGuest | controller | C→C | Idempotency marker (Phase 3a). |
 
 `C→S` = controller → swiftletd; `S→C` = swiftletd → controller;
 `C→C` = controller-internal idempotency.
 
-Total patches per successful migration: ~6-8 controller-side
-writes (action transitions) + ~5-8 swiftletd-side writes
-(status + progress) + 1 idempotency = ~12-17 annotation patches
-per migration. Well within Q1's latency budget.
+There is **no** `migration-action: resume`, `migration-target-ip`,
+`migration-transfer-duration-ms`, or `migration-failure-reason-code`
+key — earlier design drafts named these, but the implementation
+auto-resumes (Section 4.3), passes the target URL inside
+`migration-action-args`, carries the transfer duration on
+`migration-pause-window-ms`, and carries the failure category on
+`migration-status-detail`.
+
+Total patches per successful migration: ~5-7 controller-side
+writes (action + action-id + action-args per dispatched action,
+plus the idempotency marker) + ~10-15 swiftletd-side writes
+(status / status-id / status-detail transitions + ~5-8
+progress-estimate emissions + the pause-window-ms stamp) ≈ 15-22
+annotation patches per migration. Well within Q1's latency budget
+(Section 2.1).
 
 ---
 
@@ -1128,11 +1181,13 @@ demonstration milestone and a walkthrough gate.
 - swiftletd gains the send state machine (Section 5.2) with
   progress-estimate emission (Section 5.4).
 - swiftletd action handler dispatches receive / send / cancel
-  / resume actions with the new sub-states.
+  actions with the new status-value progressions (no `resume`
+  action — CH v51.1 auto-resumes; see Section 4.3).
 - CRD rename: add `status.observedTransferDuration`; keep
   `status.observedPauseWindow` as a deprecated alias (both
-  populated by the controller from the same source value).
-  Drop `spec.allowVersionSkew`.
+  populated by the controller from the same source value). No
+  `spec.allowVersionSkew` change — the field never existed
+  (Section 3.4).
 - Controller side: status-stamping plumbing for the new field
   + deprecated alias. NO controller live-mode dispatch yet —
   PR 1 is annotation-driven only.
@@ -1199,8 +1254,8 @@ explicit `live` for ineligible guests is rejected.
   verification).
 
 **Estimated LOC**: ~7,000 LOC across controller (state machine
-extension across PreparingLive / StopAndCopyLive / cutover
-extension for `resume` action / failure-reason mapping) and
+extension across PreparingLive / StopAndCopyLive / cutover /
+failure-reason mapping; no resume action — CH auto-resumes) and
 webhook (eligibility-check extension; explicit-live admission
 rule).
 
@@ -1423,6 +1478,47 @@ Phase 3b).
 **Tracked in**: Section 2.1 + the progress-estimate Section 5.4
 explicitly caps at 95% to make heuristic nature evident.
 
+### LBA-6: auto-mode dispatch reads resolved status, not `mig.Status`
+
+**Where**:
+[`internal/controller/swiftmigration/live_dispatch.go::isLiveMode`](../../internal/controller/swiftmigration/live_dispatch.go)
++ all production call sites (Validating dispatch + the
+`handleValidatingLive` entry guard + downstream live phases).
+
+**What**: the Reconcile loop creates `status :=
+mig.Status.DeepCopy()` and passes that resolved copy through the
+phase handlers. `resolveAutoMode` writes `status.Mode = "live"` to
+this DeepCopy. The dispatch decision and the live-phase entry
+guard must read this **resolved `status.Mode`**, NOT
+`mig.Status.Mode` (the pre-resolution original, which stays empty
+for auto-mode until the status is persisted). `isLiveMode(mig,
+status)` takes both arguments for exactly this reason; every call
+site must pass the in-scope resolved `status`.
+
+**Why it's load-bearing**: a call site that reads `mig.Status`
+instead of the passed `status` creates a "two views of status"
+trap — auto-mode would never dispatch to live (`status.Mode=live`
+in the DeepCopy, but `isLiveMode` reads the empty
+`mig.Status.Mode` → false → silently falls through to offline).
+This is precisely the PR #65 fix-forward Finding 1 bug.
+
+**Refactor risk**: a future change that "simplifies" `isLiveMode`
+back to a single `mig` parameter, or that reads `mig.Status`
+directly in any live-dispatch site, silently re-introduces the
+auto-mode-never-dispatches-live regression.
+
+**Test discipline**: any test of mode dispatch must mirror the
+Reconcile DeepCopy semantics (`status := mig.Status.DeepCopy()`),
+NOT pass `&mig.Status` directly (same object — masks the
+divergence). This is a contract-level test gap (Tracked
+Follow-up #2): isolated tests passing `&mig.Status` go green
+while the production DeepCopy path diverges.
+
+**Discovered by**: PR #65 fix-forward Finding 1 (2026-05-28).
+
+**Tracked in**: PR #65 commit message; Tracked Follow-up #2
+(contract-level test discipline) in `kubeswift_context.md`.
+
 ### LBA index summary
 
 | ID | Property | Origin | Scope |
@@ -1432,6 +1528,7 @@ explicitly caps at 95% to make heuristic nature evident.
 | LBA-3 | CH 5-iteration cap termination | Spike Q2 | Pre-copy convergence |
 | LBA-4 | 95% pod-network efficiency | Spike Q4 | Operator sizing formula |
 | LBA-5 | Annotation surface granularity | Spike Q1 | Control plane scope |
+| LBA-6 | auto-mode dispatch reads resolved status | PR #65 Finding 1 | Mode-resolution correctness |
 
 ---
 
@@ -1589,7 +1686,7 @@ Section 5.4 refinement.
 
 ### 11.2 Cancel-during-receive race
 
-swiftletd destination pod state machine (Section 5.1) must
+the destination receive progression (Section 5.1) must
 handle cancel-before-ready cleanly:
 
 - Cancel during `receive-init`: handler exits before CH spawn.
@@ -1623,8 +1720,9 @@ specific items to confirm:
 - `observedDowntime` docstring states
   "cutoverStep2DispatchedAt → GuestRunning observation" (NOT
   any other framing).
-- `failureReasonCode` docstring enumerates all values from
-  Section 4.7 and notes which ones are Phase 3b-new.
+- `failureReason` docstring enumerates all values from
+  Section 4.7 and notes which ones are Phase 3b-new. (Single
+  field — there is no `failureReasonCode`.)
 
 ### 11.5 RBAC sufficiency for new watch resources
 
@@ -1693,6 +1791,14 @@ polling overhead: ~465ms median, ~665ms p95.
 4Gi RAM Ubuntu Noble guest, RWX+Block on `longhorn-migratable`,
 CH v51.1.
 
+> Note: the `pauseWindow` column reflects the original spike Q2
+> field naming. The field was renamed to `observedTransferDuration`
+> in PR 1 Commit E (PR #61); both names are populated during the
+> deprecation cycle (Section 3.5). Spike data is preserved verbatim
+> as historical record. Cluster-validated on main 2026-05-28 (PR 2
+> T1): baseline `observedTransferDuration=38.246s`,
+> `observedDowntime=2.283s` — see Section 1.
+
 | Workload | stress-ng config | total | downtime | pauseWindow | pauseWindow vs baseline |
 |---|---|---|---|---|---|
 | Baseline (no stress) | — | 57s | 2.14s | **38.20s** | 1.00× |
@@ -1720,8 +1826,11 @@ MB/s = **0.951** (95% efficiency).
 
 ## Appendix B — References
 
-- Spike findings:
-  [`docs/design/live-migration-phase-3b-spike.md`](live-migration-phase-3b-spike.md)
+- Spike findings: summarized in
+  [`kubeswift_context.md`](../../kubeswift_context.md) ("Phase 3b
+  Spike — COMPLETE" section); full findings on the
+  `spike/phase-3b-q1-q4` reference branch (not merged per spike
+  contract)
 - Phase 3a design:
   [`docs/design/live-migration-phase-3a.md`](live-migration-phase-3a.md)
 - Phase 2 design:
