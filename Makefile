@@ -12,6 +12,16 @@ CHART_OCI_PUSH ?= oci://ghcr.io/projectbeskar/charts
 # Install/pull reference: full path including chart name
 CHART_OCI_INSTALL ?= oci://ghcr.io/projectbeskar/charts/kubeswift
 
+# controller-gen is PINNED so `make generate` is reproducible regardless of
+# whatever version a developer has on PATH. An unpinned binary churns the
+# `controller-gen.kubebuilder.io/version` annotation on all 11 CRDs (and any
+# schema differences between versions) into unrelated diffs. Bumping is a
+# deliberate action: change CONTROLLER_TOOLS_VERSION, run `make generate`,
+# and commit the regenerated CRDs as their own change. `go run ...@version`
+# pins without depending on a prior `go install`.
+CONTROLLER_TOOLS_VERSION ?= v0.20.1
+CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
+
 # Version stamping (defaults for local dev; overridden by release-* targets)
 VERSION ?= dev
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -126,7 +136,7 @@ release-stable:
 	echo "Create GitHub Release: gh release create $(VERSION_TAG) --generate-notes"
 
 generate:
-	$(shell go env GOPATH)/bin/controller-gen object crd paths="./api/..." output:crd:dir=config/crd/bases
+	$(CONTROLLER_GEN) object crd paths="./api/..." output:crd:dir=config/crd/bases
 	@# After regen, copy the canonical CRDs into the Helm chart and run
 	@# the sync check. Without these two steps, deploys silently skip
 	@# new CRDs (the bug that produced the Phase 1 cluster gap).
