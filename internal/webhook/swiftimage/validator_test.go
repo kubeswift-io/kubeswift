@@ -92,3 +92,53 @@ func TestValidateUpdate_CloneStrategyMutableInPending(t *testing.T) {
 		t.Errorf("changing strategy in Pending should be allowed: %v", err)
 	}
 }
+
+// TestValidateUpdate_FinalizerRemovalOnDeletingReadyImage_Allowed is the
+// TFU-17 contract test. A Ready, snapshot-strategy SwiftImage that carries
+// CloneSeedFinalizer and is being deleted (deletionTimestamp set) must be
+// allowed to shed its finalizer via UPDATE — otherwise GC can never reap it
+// and the namespace stays Terminating forever.
+//
+// old and new are built via separate makeImage calls, so their Spec.Source
+// pointers differ exactly as in a real admission request (etcd decode vs.
+// request decode). Before the deletionTimestamp carve-out this UPDATE was
+// rejected by the spec-immutability rule's pointer-identity comparison.
+func TestValidateUpdate_FinalizerRemovalOnDeletingReadyImage_Allowed(t *testing.T) {
+	now := metav1.Now()
+
+	old := makeImage("img", imagev1alpha1.CloneStrategySnapshot, "csi-class")
+	old.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+	old.DeletionTimestamp = &now
+	old.Finalizers = []string{"kubeswift.io/clone-seed-protected"}
+
+	// new is the post-removal object: same Ready spec, still being deleted,
+	// finalizer dropped.
+	new := makeImage("img", imagev1alpha1.CloneStrategySnapshot, "csi-class")
+	new.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+	new.DeletionTimestamp = &now
+	new.Finalizers = nil
+
+	v := &Validator{}
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+		t.Errorf("finalizer removal on a being-deleted Ready image must be allowed: %v", err)
+	}
+}
+
+// TestValidateUpdate_SpecMutationOnReadyImage_StillRejected guards against
+// over-allowing: the deletionTimestamp carve-out must NOT weaken the
+// immutability rule for objects that are NOT being deleted. A genuine spec
+// change on a Ready image (not being deleted) must still be rejected.
+func TestValidateUpdate_SpecMutationOnReadyImage_StillRejected(t *testing.T) {
+	old := makeImage("img", imagev1alpha1.CloneStrategyCopy, "")
+	old.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+
+	new := makeImage("img", imagev1alpha1.CloneStrategyCopy, "")
+	new.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+	new.Spec.Source.HTTP.URL = "https://example.com/different.qcow2"
+
+	v := &Validator{}
+	_, err := v.ValidateUpdate(context.Background(), old, new)
+	if err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Errorf("spec mutation on a Ready image (not being deleted) must still be rejected, got: %v", err)
+	}
+}
