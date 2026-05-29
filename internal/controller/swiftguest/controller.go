@@ -357,6 +357,16 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
+		// Self-heal a stale migration PodRef before creating the pod.
+		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
+		// live migration that no longer exists, clear it so the next
+		// reconcile's canonicalPodName falls back to guest.Name (the name
+		// we create below) and finds the pod — otherwise the lookup keeps
+		// resolving to the deleted name and this Create loops on
+		// AlreadyExists (TFU #18 secondary trap). See staleMigrationPodRef.
+		if staleMigrationPodRef(&guest) {
+			status.PodRef = nil
+		}
 		if err := r.Create(ctx, desiredPod); err != nil {
 			return ctrl.Result{}, err
 		}
