@@ -30,6 +30,24 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftImage, got %T", oldObj)
 	}
+	// Per-operation discipline (Design Principle #10; same lesson as PR #26).
+	// A being-deleted object is shedding finalizers so GC can proceed;
+	// finalizer removal is a metadata-only UPDATE that is never a spec
+	// mutation. The spec-immutability rule must not block it, or the
+	// CloneSeedFinalizer can never be removed and the namespace stays
+	// Terminating forever (TFU-17).
+	//
+	// Note on why the rule fired here at all: validateSwiftImageUpdate
+	// compares Spec.Source with `!=`, which is a pointer-identity
+	// comparison over ImageSource's pointer fields (HTTP/Upload/PVCClone).
+	// The old (etcd) and new (admission request) objects are independent
+	// decodes, so their Source pointers always differ — the immutability
+	// rule fires on EVERY update of a Ready image, including finalizer
+	// removal. This guard is the carve-out; it does not depend on the
+	// comparison being fixed.
+	if img.GetDeletionTimestamp() != nil {
+		return nil, nil
+	}
 	return nil, validateSwiftImageUpdate(oldImg, img)
 }
 
