@@ -14,6 +14,13 @@ so the immutability rule must not gate it. Mirrors PR #26's
 tests added (contract test + over-allow guard) — see "Test that must
 accompany the fix" below, now satisfied.
 
+**Cluster-validated 2026-05-29** (image `sha-2c0d5a4`): a Ready,
+being-deleted SwiftImage carrying a finalizer shed it via UPDATE and
+GC'd cleanly; a control metadata-only edit on a non-deleted Ready image
+was still rejected with `spec is immutable when status.phase is Ready`,
+confirming the carve-out is narrowly scoped and the webhook still
+enforces.
+
 **Mechanism correction:** the diagnosis below ("it treats ANY update as
 a spec-mutation attempt") describes the *symptom*, not the mechanism.
 The rule *does* compare old vs. new spec fields — but

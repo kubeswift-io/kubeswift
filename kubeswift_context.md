@@ -1116,34 +1116,54 @@ See [`docs/design/known-issues-vswiftimage-finalizer-trap.md`](docs/design/known
 (now marked RESOLVED) for full diagnosis, the manual recovery procedure
 (performed 2026-05-28), and the discharged audit + test obligations.
 
-### 18. Offline migration hangs for previously-live-migrated guest (canonical pod name trap)
+### 18. Offline migration hangs for previously-live-migrated guest (canonical pod name trap) — RESOLVED via branch fix/tfu-18
 
-preparing.go:133 (offline path) resolves source pod by guest.Name
-not canonical status.podRef.name. After a prior live migration
-renamed the pod to <guest>-mig-<uid>, the Get returns NotFound;
-controller assumes pod is gone; waits indefinitely for a volume
-detach that never happens because the real (renamed) pod still
-holds the PVC. Guest left inconsistent (runPolicy=Stopped, pod
-still Running).
+**RESOLVED 2026-05-29** (branch `fix/tfu-18-offline-after-live-pod-name-trap`;
+Bug #68). Offline Preparing (preparing.go) resolved the source pod by
+literal guest.Name. After a prior live migration renamed the pod to
+`<guest>-mig-<uid>` (status.podRef.name points there), the guest.Name
+Get returned NotFound; the controller assumed the pod was gone and
+waited indefinitely for a volume detach that never happened because the
+real renamed pod still held the PVC. Root cause: the W26/LBA-2
+canonical-pod-name invariant applied to the live path but never to the
+Phase 1 offline path.
 
-Root cause: W26 canonical-pod-name lesson (the srcPodLookupName /
-LBA-2 invariant) applied to the live path but never to the Phase 1
-offline path. Offline preparing.go predates W26.
+**Fix — two parts (Option A, full fix):**
 
-Severity: HIGH (indefinite hang, inconsistent state) but clean
-manual recovery (delete the SwiftMigration). NOT a PR 2 regression
-— offline preparing.go is Phase 1 code, untouched by PR 2.
+1. **Bug 1 (preparing.go):** source-pod lookup uses
+   `canonicalPodNameForGuest(&guest)` instead of literal guest.Name.
+   Fresh never-live-migrated guests still resolve to guest.Name (Phase 1
+   offline unchanged). PVC name at the detach wait was already correct.
 
-Trigger sequence (realistic): live-migrate for load-balancing,
-later offline-migrate same guest for maintenance.
+2. **Bug 2 (SwiftGuest controller — secondary trap, found by recon):**
+   fixing Bug 1 alone relocated the hang. The SwiftGuest controller
+   always (re)creates the launcher pod as guest.Name but looks it up via
+   canonicalPodName; `status := guest.Status.DeepCopy()` carries a stale
+   PodRef and it is only ever set/cleared in MapPodToStatus (the
+   found-pod branch). So once the `-mig-` pod is gone and the controller
+   recreates guest.Name, the stale PodRef makes the next reconcile loop
+   on Create AlreadyExists, never updating status — hanging the
+   migration's Resuming phase. Fix: on the create branch, clear
+   status.PodRef when `staleMigrationPodRef` (PodRef points at a pod !=
+   guest.Name). Also covers post-live launcher-pod loss to node
+   failure/eviction, not just offline-after-live.
 
-Fix shape: offline Preparing uses canonicalPodNameForGuest(&guest)
-instead of literal guest.Name. One call site; PVC name at :161
-already correct. Audit other offline guest.Name pod lookups.
+**Audit finding (do NOT regress):** stopandcopy.go:102 (offline) keeps
+literal guest.Name deliberately — it polls for the SwiftGuest-controller-
+recreated pod, which is always created as guest.Name; switching it to
+canonicalPodNameForGuest would look up the stale deleted name. resuming.go
+(offline) reads SwiftGuest status, not a pod by name.
+
+**Verification:** Bug 1 has a contract unit test verified load-bearing
+against the reverted fix; Bug 2's decision helper is unit-tested and the
+end-to-end wedge is cluster-validated (offline-migrate a previously
+live-migrated guest → expect Completed, not hung). The offline
+`spec.timeout` defense-in-depth floor is NOT added here — Option A fixes
+the root cause; the no-default-timeout situation is tracked in TFU #22.
 
 See [`docs/design/known-issues-offline-after-live-pod-name-trap.md`](docs/design/known-issues-offline-after-live-pod-name-trap.md)
-for full diagnosis, 2026-05-28 reproduction (PR 2 T8 walkthrough),
-and test obligation per Tracked Follow-up #2.
+(now marked RESOLVED) for full diagnosis, the 2026-05-28 reproduction
+(PR 2 T8 walkthrough), and the secondary-trap analysis.
 
 ### 19. FailureReasonDstScheduleFailed enum constant unused
 
@@ -1791,6 +1811,7 @@ in test infrastructure).
 | 65 | swiftmigration controller (resuming_live + cutover + stopandcopy_live) | Phase 3a downtime metrics broken/half-wired. (W27a) status.observedDowntime measured two adjacent metav1.Now() calls in the same reconcile invocation, producing 34-114µs across all 17 walkthrough runs vs a real cutover window of ~38-48s. Fix: new status.cutoverStep2DispatchedAt timestamp stamped at cutoverStep2 Delete dispatch; observedDowntime computed against it at Resuming completion. (W27b) status.observedPauseWindow plumbing half-implemented — swiftletd wrote kubeswift.io/migration-pause-window-ms annotation correctly but controller had zero readers. Fix: stampObservedPauseWindow helper reads annotation at substateSrcCompleted (W1 gate observation), mirrors snapshot controller's pattern. Both fields now carry their documented semantics. Defensive nil/parse handling on both. (W27 follow-up to E12 walkthrough.) | PR #55 |
 | 66 | swiftctl (internal/cli/guest.go GuestResolver.ResolvePod) | swiftctl pod resolution had two foot-guns surfacing during Phase 3a live migration cutover and chain migration. **Foot-gun 1**: when status.podRef was set but the named pod returned NotFound (cutover transient: podRef just patched to dst-suffix but dst pod not yet created, OR src deleted before podRef patched), ResolvePod errored out instead of falling through to the label-selector path. **Foot-gun 2**: when the label selector returned multiple labeled pods (chain-migration transient: M1 src still Terminating + M2 dst Running, both labeled `swift.kubeswift.io/guest=<name>`), `list.Items[0]` was non-deterministic — apiserver might return Terminating-first. Fix: NotFound on PodRef.Get falls through to the label-selector path; multi-pod selector results stable-sorted by (non-Terminating > Running > newest CreationTimestamp); all-Terminating fallback returns newest with stderr warning. Function signatures unchanged. Cluster-validated: chain-migration dual-labeled-Running state captured at t+16s of M2; race probe ~290 calls during M3 hit zero "not found" errors; W2 walkthrough recorded clean state. (W2 walkthrough findings W2-1 + W2-2 are non-PR-2 issues filed as Tracked Follow-ups #8 + #9.) | PR #57 |
 | 67 | internal/webhook/swiftimage/validator.go | vswiftimage ValidateUpdate spec-immutability rule fired on every UPDATE of a Ready SwiftImage including the controller's finalizer-removal patch during deletion; with CloneSeedFinalizer present (cloneStrategy=snapshot) the finalizer never cleared and the namespace stayed Terminating forever with a reconcile-error storm. Root cause: PR #26 per-operation-validation lesson recurring in a webhook predating it (Design Principle #10); the immutability check compared Spec.Source with `!=`, a pointer-identity comparison over ImageSource's pointer fields (HTTP/Upload/PVCClone), so it fired unconditionally on Ready-image updates. Fix (Approach 1): ValidateUpdate returns early when newObj.GetDeletionTimestamp() != nil. Sibling-webhook audit discharged — of six validating webhooks only vswiftimage was vulnerable (others use content/deep comparison; none check deletionTimestamp); vulnerable-webhook ∩ finalizer-bearing = SwiftImage only. Regression tests added (contract test verified load-bearing + over-allow guard), satisfying TFU-2. Residual non-deletion metadata-edit false-rejection (pointer comparison) deferred to TFU #23. (TFU #17.) | branch fix/tfu-17 |
+| 68 | swiftmigration/preparing.go + swiftguest/controller.go + swiftguest/canonical_pod.go | Offline migration of a previously-live-migrated guest hung indefinitely. Two parts (Option A full fix). Bug 1: offline Preparing resolved the source pod by literal guest.Name; after a live migration renamed the pod to <guest>-mig-<uid> the lookup hit NotFound, the controller assumed the pod gone, and parked forever on a volume-detach wait while the real renamed pod kept the PVC. Fix: canonicalPodNameForGuest(&guest). Bug 2 (secondary trap, recon-found): the SwiftGuest controller always recreates the launcher pod as guest.Name but looks it up via canonicalPodName; status is a DeepCopy carrying a stale PodRef only ever cleared in MapPodToStatus's found-pod branch, so once the -mig- pod is gone the recreate loops on Create AlreadyExists and status never reflects the new pod — hanging the migration's Resuming. Fix: clear status.PodRef on the create branch when staleMigrationPodRef (PodRef != guest.Name); also covers post-live pod loss to node failure/eviction. stopandcopy.go:102 deliberately keeps guest.Name (recreated pod is guest.Name). Bug 1 contract test verified load-bearing; Bug 2 decision unit-tested + end-to-end cluster-validated. W26/LBA-2 lesson applied to the offline path it predated. (TFU #18.) | branch fix/tfu-18 |
 
 ---
 
