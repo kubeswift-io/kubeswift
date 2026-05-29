@@ -1075,28 +1075,46 @@ visible to operators who run `make help`. Future config splits
 targets analogously rather than relying on operators to know
 which overlay path to invoke.
 
-### 17. vswiftimage webhook traps SwiftImage deletion (finalizer removal blocked)
+### 17. vswiftimage webhook traps SwiftImage deletion (finalizer removal blocked) — RESOLVED via branch fix/tfu-17
 
-The vswiftimage validating webhook's spec-immutability rule fires
-on ALL UPDATE operations including finalizer removal on
-being-deleted objects (deletionTimestamp != nil). Traps namespace
-deletion indefinitely; generates continuous controller
-reconcile-error storm. Same PR #26 lesson (per-operation
-validation discipline) recurring in a webhook predating that
-discipline. Cite Design Principle #10.
+**RESOLVED 2026-05-29** (branch `fix/tfu-17-vswiftimage-finalizer-trap`;
+Bug #67). The vswiftimage validating webhook's spec-immutability rule
+fired on every UPDATE of a Ready SwiftImage — including the controller's
+finalizer-removal patch during deletion. With CloneSeedFinalizer present
+(cloneStrategy=snapshot), the finalizer never cleared and the namespace
+stayed Terminating forever with a continuous reconcile-error storm. Same
+PR #26 lesson (per-operation validation discipline) recurring in a
+webhook predating it; Design Principle #10.
 
-Severity: MEDIUM-HIGH. Not data-loss, but operationally severe
-(stuck-terminating namespaces, log pollution, manual recovery
-requires temporarily removing webhook from cluster).
+**Mechanism correction (recon finding):** the rule did NOT "treat any
+update as a mutation." It compared `oldImg.Spec.Source != img.Spec.Source`,
+a POINTER-identity comparison over ImageSource's pointer fields
+(HTTP/Upload/PVCClone). Old (etcd) and new (admission request) objects
+are independent decodes, so their Source pointers always differ → the
+rule fired unconditionally on every Ready-image update. The `Format`
+half (a string) compared correctly; only the Source pointer comparison
+was the trap.
 
-Fix shape known: skip validation when newObj.metadata.deletionTimestamp
-!= nil, OR compare only spec fields. Audit obligation: check
-sibling webhooks (swiftsnapshot, swiftrestore, swiftguest,
-swiftguestpool) for same pattern.
+**Fix (Approach 1):** ValidateUpdate returns early (allow) when
+`newObj.GetDeletionTimestamp() != nil`. Minimal; mirrors PR #26's
+ValidateDelete pass-through intent; does not depend on the comparison
+being fixed. Regression tests added (contract test verified load-bearing
+against guard-stripped code + over-allow guard), satisfying the TFU-2
+test obligation.
+
+**Sibling-webhook audit (obligation discharged):** of the six validating
+webhooks (swiftguest, swiftimage, swiftseedprofile, swiftsnapshot,
+swiftrestore, swiftmigration), ONLY vswiftimage was vulnerable. The
+others are immune because their immutability checks use content/deep
+comparison (specsEqual / identityEqual / value-struct !=) or have no
+immutability rule at all — NOT because they check deletionTimestamp
+(none do). Cross-referenced with finalizer-adding sites: vulnerable
+webhook ∩ finalizer-bearing resource = SwiftImage only. (swiftguestpool
+has no webhook.) Residual lower-severity defect filed as TFU #23.
 
 See [`docs/design/known-issues-vswiftimage-finalizer-trap.md`](docs/design/known-issues-vswiftimage-finalizer-trap.md)
-for full diagnosis, manual recovery procedure (performed 2026-05-28),
-and test obligation per Tracked Follow-up #2.
+(now marked RESOLVED) for full diagnosis, the manual recovery procedure
+(performed 2026-05-28), and the discharged audit + test obligations.
 
 ### 18. Offline migration hangs for previously-live-migrated guest (canonical pod name trap)
 
@@ -1200,6 +1218,31 @@ doc; [`docs/design/live-migration-phase-3b.md`](docs/design/live-migration-phase
 §2.2 now describes the no-default reality.
 
 Surfaced 2026-05-28 by PR B Gate A1 verification.
+
+### 23. vswiftimage pointer-comparison falsely rejects non-deletion metadata edits on Ready images
+
+TFU #17's Approach 1 fix (deletionTimestamp carve-out) resolves the
+namespace-deletion trap but does NOT fix the underlying
+pointer-comparison defect at
+[`internal/webhook/swiftimage/validator.go:103`](internal/webhook/swiftimage/validator.go)
+(`oldImg.Spec.Source != img.Spec.Source`, a pointer-identity comparison
+over ImageSource's pointer fields HTTP/Upload/PVCClone). For a Ready
+SwiftImage that is NOT being deleted, any metadata-only UPDATE
+(adding/changing a label or annotation) still trips the "spec is
+immutable" rejection even though the spec content is unchanged — because
+the old (etcd) and new (request) Source pointers differ.
+
+Severity: LOW. Confusing edit failure, not a trap (operators rarely
+relabel Ready images; the carve-out handles the operationally severe
+deletion path). No data-loss or availability impact.
+
+Fix shape: switch the immutability comparison to content/deep equality —
+`apiequality.Semantic.DeepEqual(oldImg.Spec, img.Spec)` (or compare the
+Source sub-pointers by dereferenced content, mirroring swiftsnapshot's
+and swiftmigration's `specsEqual`). ~3 LOC + a test asserting a label
+edit on a Ready image is allowed while a genuine spec change is still
+rejected. Deferred from branch fix/tfu-17 to keep that change scoped to
+the HIGH-severity trap (TFU #17). Surfaced 2026-05-29 by the PR C recon.
 
 ---
 
@@ -1747,6 +1790,7 @@ in test infrastructure).
 | 64 | swiftmigration controller (validating_live + stopandcopy_live + cutover + preparing_live) | Phase 3a back-to-back live migrations false-fired SourcePodReplaced (and carried a latent guest-destruction vector at cutoverStep2). Three live-mode src-pod lookup sites derived src pod from cluster state; both literal-guest.Name (W15 fix) and canonicalPodName broke for chain migrations. Fix: stamp status.SourcePodRef.Name at Validating-live (mirrors existing SourcePodUID lock-in); use srcPodLookupName helper at all sites. Race-immune AND chain-safe. Workload-class-independent — same code runs for kernel-boot and disk-boot. (W26 in E12 disk-boot validation 2026-05-04.) | PR #53 |
 | 65 | swiftmigration controller (resuming_live + cutover + stopandcopy_live) | Phase 3a downtime metrics broken/half-wired. (W27a) status.observedDowntime measured two adjacent metav1.Now() calls in the same reconcile invocation, producing 34-114µs across all 17 walkthrough runs vs a real cutover window of ~38-48s. Fix: new status.cutoverStep2DispatchedAt timestamp stamped at cutoverStep2 Delete dispatch; observedDowntime computed against it at Resuming completion. (W27b) status.observedPauseWindow plumbing half-implemented — swiftletd wrote kubeswift.io/migration-pause-window-ms annotation correctly but controller had zero readers. Fix: stampObservedPauseWindow helper reads annotation at substateSrcCompleted (W1 gate observation), mirrors snapshot controller's pattern. Both fields now carry their documented semantics. Defensive nil/parse handling on both. (W27 follow-up to E12 walkthrough.) | PR #55 |
 | 66 | swiftctl (internal/cli/guest.go GuestResolver.ResolvePod) | swiftctl pod resolution had two foot-guns surfacing during Phase 3a live migration cutover and chain migration. **Foot-gun 1**: when status.podRef was set but the named pod returned NotFound (cutover transient: podRef just patched to dst-suffix but dst pod not yet created, OR src deleted before podRef patched), ResolvePod errored out instead of falling through to the label-selector path. **Foot-gun 2**: when the label selector returned multiple labeled pods (chain-migration transient: M1 src still Terminating + M2 dst Running, both labeled `swift.kubeswift.io/guest=<name>`), `list.Items[0]` was non-deterministic — apiserver might return Terminating-first. Fix: NotFound on PodRef.Get falls through to the label-selector path; multi-pod selector results stable-sorted by (non-Terminating > Running > newest CreationTimestamp); all-Terminating fallback returns newest with stderr warning. Function signatures unchanged. Cluster-validated: chain-migration dual-labeled-Running state captured at t+16s of M2; race probe ~290 calls during M3 hit zero "not found" errors; W2 walkthrough recorded clean state. (W2 walkthrough findings W2-1 + W2-2 are non-PR-2 issues filed as Tracked Follow-ups #8 + #9.) | PR #57 |
+| 67 | internal/webhook/swiftimage/validator.go | vswiftimage ValidateUpdate spec-immutability rule fired on every UPDATE of a Ready SwiftImage including the controller's finalizer-removal patch during deletion; with CloneSeedFinalizer present (cloneStrategy=snapshot) the finalizer never cleared and the namespace stayed Terminating forever with a reconcile-error storm. Root cause: PR #26 per-operation-validation lesson recurring in a webhook predating it (Design Principle #10); the immutability check compared Spec.Source with `!=`, a pointer-identity comparison over ImageSource's pointer fields (HTTP/Upload/PVCClone), so it fired unconditionally on Ready-image updates. Fix (Approach 1): ValidateUpdate returns early when newObj.GetDeletionTimestamp() != nil. Sibling-webhook audit discharged — of six validating webhooks only vswiftimage was vulnerable (others use content/deep comparison; none check deletionTimestamp); vulnerable-webhook ∩ finalizer-bearing = SwiftImage only. Regression tests added (contract test verified load-bearing + over-allow guard), satisfying TFU-2. Residual non-deletion metadata-edit false-rejection (pointer comparison) deferred to TFU #23. (TFU #17.) | branch fix/tfu-17 |
 
 ---
 
