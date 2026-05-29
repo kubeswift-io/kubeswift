@@ -63,6 +63,35 @@ type migrationReceiveArgs struct {
 type migrationSendArgs struct {
 	TargetURL      string `json:"target_url"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	// GuestRAMMiB is the guest's RAM in MiB. swiftletd-source needs it to
+	// compute the kubeswift.io/migration-progress-estimate annotation
+	// (design §5.4); its emitter skips emission entirely when this is
+	// absent. Maps to MigrationSendArgs.guest_ram_mib in
+	// rust/swiftletd/src/action.rs. PR 2 shipped without populating this,
+	// so the progress estimate never appeared in the controller-driven
+	// path — wired here. Best-effort: a nil value (memory unresolvable)
+	// just disables the estimate; it never fails the migration.
+	GuestRAMMiB *uint32 `json:"guest_ram_mib,omitempty"`
+}
+
+// guestRAMMiB returns the guest's RAM in MiB from its SwiftGuestClass,
+// for the migration-progress-estimate heuristic. Returns nil (and never
+// errors) when the class can't be read or memory is zero — the progress
+// estimate is best-effort and must not gate the migration. SwiftGuest
+// has no per-guest memory override, so the class value matches
+// resolved.GetMemoryMiB() (resolved/merge.go) exactly. SwiftGuestClass
+// is cluster-scoped (no namespace on the key).
+func guestRAMMiB(ctx context.Context, r *SwiftMigrationReconciler, guest *swiftv1alpha1.SwiftGuest) *uint32 {
+	var class swiftv1alpha1.SwiftGuestClass
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
+		return nil
+	}
+	miB := class.Spec.Memory.Value() / (1024 * 1024)
+	if miB <= 0 {
+		return nil
+	}
+	v := uint32(miB)
+	return &v
 }
 
 // handleStopAndCopyLive implements the live-mode StopAndCopy phase
@@ -350,6 +379,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		args := migrationSendArgs{
 			TargetURL:      fmt.Sprintf("tcp:%s:%d", dstPod.Status.PodIP, migrationListenPort),
 			TimeoutSeconds: migrationActionTimeoutSeconds,
+			GuestRAMMiB:    guestRAMMiB(ctx, r, &guest),
 		}
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
