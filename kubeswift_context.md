@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: April 29, 2026 — Live Migration Phase 1 shipped; Snapshot Phases 0/1/2 operator-validated
+> Last updated: May 30, 2026 — Live Migration Phase 3a/3b shipped (mode: live, cluster-validated); Phase 3c mTLS transport spike COMPLETE (PR #75); Phase 3c design doc in progress
 
 ---
 
@@ -1628,6 +1628,75 @@ needed for Phase 3b** — default pod network is sufficient.
 Operator sizing formula for live-migratable guests: expected
 pauseWindow ≈ `(guest_RAM × 1.05) / pod_network_bandwidth`.
 
+## Phase 3c mTLS Transport Spike — COMPLETE (2026-05-30)
+
+Phase 3c spike completed 2026-05-30. Findings doc:
+[`docs/design/live-migration-phase-3c-mtls-spike.md`](docs/design/live-migration-phase-3c-mtls-spike.md);
+planning/intent doc:
+[`docs/design/live-migration-phase-3c-spike-prep.md`](docs/design/live-migration-phase-3c-spike-prep.md).
+Both landed on main via **PR #75** (findings + prep together so their
+cross-link resolves). Reproduction harness + Layer B–D walkthrough live
+on the unmerged `spike/phase-3c-mtls` branch — **NOT for merge** per the
+spike contract.
+
+**Goal validated:** Cloud Hypervisor live migration runs over a
+mutually-authenticated TLS channel **with no CH change and no swiftletd
+change**. A `stunnel` sidecar owns the cross-pod TLS hop; CH/swiftletd
+speak **plaintext to localhost only**.
+
+**Architecture (port plan):**
+- Cross-pod TLS on `:6789` (dst stunnel = TLS **server**; src stunnel =
+  TLS **client**).
+- CH↔stunnel plaintext on `127.0.0.1:6790` (localhost-only, both pods).
+- swiftletd driven unchanged: dst `listen_url=tcp:127.0.0.1:6790`, src
+  `target_url=tcp:127.0.0.1:6790`. (Today's controller binds
+  `tcp:0.0.0.0:6789` / `tcp:<dst-ip>:6789` at
+  [`stopandcopy_live.go`](internal/controller/swiftmigration/stopandcopy_live.go)
+  lines ~335/380 — Phase 3c repoints these two URL-build sites to
+  localhost and hands `:6789` to the sidecar.)
+- One sidecar image (`dweomer/stunnel:latest`) + one ConfigMap carrying
+  both server + client configs; entrypoint self-selects role from
+  `STUNNEL_ROLE` and injects the peer IP from `DST_POD_IP`.
+
+**All four spike questions PASS:**
+
+1. **Q1 correctness — PASS.** Sentinel md5
+   `e187f76732140367822efbd7ac675019` identical src→dst across the TLS
+   channel; guest state byte-identical post-migration.
+2. **Q2 performance — PASS, ~1% overhead.** 4326154986 bytes / 38.675s =
+   **111.86 MB/s** through the TLS tunnel vs ~112.75 MB/s raw (Phase 3b
+   Q4) — TLS framing/encryption costs ~1%. No dedicated migration network
+   needed; default pod network + stunnel is sufficient.
+3. **Q3 enforcement — PASS (positive + two negatives).** Positive: mutual
+   verify succeeds, full transfer. Negative Test A (client presents **no**
+   cert): rejected, **0 bytes** reach CH. Negative Test B (client presents
+   a **wrong-CA** cert, `CN=attacker`): rejected, **0 bytes** reach CH.
+   The plaintext `:6790` leg is localhost-only (not reachable cross-pod).
+4. **Q4 wiring — PASS, four findings (W-3c-1..4).**
+
+| # | Finding | Design consequence |
+|---|---|---|
+| W-3c-1 | `lifecycle: stop` poisons the receiver pod. The dst mounts the controller-managed `<guest>-runtime-intent` CM; patching `runPolicy: Stopped` makes the controller rewrite it to `lifecycle: stop`; swiftletd's launch gate (`main.rs:201`) skips **all** launch paths **including `migration_receiver_mode`** (receiver role is an env var, not exempt). | The controller-built dst pod must carry/freeze `lifecycle: run` in its intent — never reuse a live, controller-mutable intent CM that can flip to `stop` mid-migration. |
+| W-3c-2 | `newDstPod` DeepCopies the src → dst inherits the src's **client**-role sidecar config. | Post-DeepCopy the controller must flip `STUNNEL_ROLE=server` on dst, set `DST_POD_IP` on the **src** sidecar (known only after dst is scheduled — sequencing constraint the state machine already satisfies: Preparing-live creates dst before StopAndCopy on src). Role/peer must be **env-parameterized, not image-baked** (W26-class load-bearing property). |
+| W-3c-3 | `runPolicy: Stopped` is reactive-only (Phase 1 restated) — prevents recreation, does not delete the running pod. | Any controller path needing a launcher pod *gone* must `Delete` it. |
+| W-3c-4 | **Trust-model gap.** stunnel `verify = 2` = `verifyChain` **without subject checks** — proves "peer has a CA-signed cert", NOT "this is the legitimate src/dst for THIS migration". Spike used a single **shared leaf** (`CN=kubeswift-migration`) on both pods. | **The central Phase 3c design decision: the cert identity model** (shared long-lived leaf vs per-node/per-swiftletd vs per-migration). Whatever the choice, `verify = 2` alone is insufficient — the design must add subject/SAN pinning (`verify = 4` + `checkHost`). **RESOLVED in design doc §3 → Option B (per-node + SAN pinning, `verify = 4` + `checkHost`).** |
+
+**Trust-model carry-forwards (for the design doc):**
+- **mTLS does NOT subsume S1 (URLs-from-CR).** mTLS closes "redirect to an
+  arbitrary attacker endpoint" (Q3 Test B proves it); it does NOT close
+  "redirect to a different *valid* migration pod" under a shared-leaf
+  model, nor "operator-writable annotation inputs". Both mTLS **and**
+  URLs-from-SwiftMigration-CR are Phase 3c must-haves; neither subsumes
+  the other.
+- **`migration-phase2-unsafe-plaintext: ack` becomes a one-way switch.**
+  Once mTLS ships, the design must reject plaintext on the production
+  path (the ack annotation can no longer be the escape hatch it is in
+  Phase 2/3a/3b).
+- `spec.allowVersionSkew` stays retired (Phase 3b Q3 — `newDstPod`
+  clone-src structurally prevents skew).
+- Audit events on each migration phase transition (Phase 2 OQ7) compose
+  with the mTLS identity model.
+
 ### Phase 2 walkthrough resumption (post-PR-#30 redeploy)
 
 After PR #30 merged + redeployed, the walkthrough resumed in a fresh `mig-walkthrough` namespace. Two more findings surfaced (W6, W7); one (W7) was a follow-up to PR #30 fixed inline; one (W6) is a design contradiction in PR-C requiring disposition before further Phase 2 work.
@@ -1894,16 +1963,38 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
   boots from a cloneStrategy=snapshot SwiftImage
 
 **4. Live Migration Phase 3 — live mode + mTLS**
-- SwiftMigration controller gains live mode
-- mTLS sidecar for migration channel
-- Pre-copy convergence handling
+- **Live mode: SHIPPED.** Phase 3a (controller state machine, `mode:
+  live`) + Phase 3b (cluster-validated cross-node live migration,
+  sub-3s downtime). Pre-copy convergence handled (CH 5-iteration cap).
+- **mTLS transport: SPIKED (Phase 3c spike COMPLETE 2026-05-30, PR
+  #75).** stunnel-sidecar mTLS validated end-to-end with no CH/swiftletd
+  change — Q1-Q4 all PASS (correctness, ~1% perf overhead, enforcement
+  positive+two negatives). See "Phase 3c mTLS Transport Spike — COMPLETE"
+  section above and
+  [`docs/design/live-migration-phase-3c-mtls-spike.md`](docs/design/live-migration-phase-3c-mtls-spike.md).
+- **Open work = the Phase 3c design + implementation.** Design doc
+  drafted (`docs/design/live-migration-phase-3c.md`). The pivotal
+  decision — the **cert identity model** — is **RESOLVED to Option B
+  (per-node / per-swiftletd identity + SAN pinning)**: each node's
+  swiftletd gets a cert-manager-issued Certificate keyed by nodeName;
+  stunnel enforces `verify = 4` + `checkHost` against the peer's SAN.
+  Shared-leaf (Option A) and per-migration (Option C) considered and
+  rejected in the design doc §3. SAN/subject pinning (`verify = 4` +
+  `checkHost`) is required regardless (W-3c-4). Other design areas:
+  sidecar wiring into `newDstPod` (server-role flip on dst + dst-IP
+  onto src sidecar, env-parameterized; W-3c-2), freezing `lifecycle:
+  run` on the dst intent (W-3c-1), retiring the
+  `migration-phase2-unsafe-plaintext: ack` gate, and S1 URLs-from-CR
+  composition (mTLS does not subsume S1). Open implementation
+  sub-decisions remain (cert provisioning mechanics §3.B; §10
+  open questions).
 
-**4. Live Migration Phase 4 — drain integration via eviction webhook**
+**5. Live Migration Phase 4 — drain integration via eviction webhook**
 - `kubectl drain` triggers migration automatically
 - Independent value: drain integration with offline migration alone dramatically improves operator UX
 - Could jump sequence if operator demand for safe drain dominates
 
-**5. Live Migration Phase 5 — operational polish**
+**6. Live Migration Phase 5 — operational polish**
 - Prometheus metrics, dashboards, retention
 - **swiftletd progress annotations (Phase 3a spike F2.5).** Phase 2
   design §3 mentioned intermediate `migration-progress` annotation
