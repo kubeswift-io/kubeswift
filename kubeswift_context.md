@@ -1679,7 +1679,7 @@ speak **plaintext to localhost only**.
 | W-3c-1 | `lifecycle: stop` poisons the receiver pod. The dst mounts the controller-managed `<guest>-runtime-intent` CM; patching `runPolicy: Stopped` makes the controller rewrite it to `lifecycle: stop`; swiftletd's launch gate (`main.rs:201`) skips **all** launch paths **including `migration_receiver_mode`** (receiver role is an env var, not exempt). | The controller-built dst pod must carry/freeze `lifecycle: run` in its intent — never reuse a live, controller-mutable intent CM that can flip to `stop` mid-migration. |
 | W-3c-2 | `newDstPod` DeepCopies the src → dst inherits the src's **client**-role sidecar config. | Post-DeepCopy the controller must flip `STUNNEL_ROLE=server` on dst, set `DST_POD_IP` on the **src** sidecar (known only after dst is scheduled — sequencing constraint the state machine already satisfies: Preparing-live creates dst before StopAndCopy on src). Role/peer must be **env-parameterized, not image-baked** (W26-class load-bearing property). |
 | W-3c-3 | `runPolicy: Stopped` is reactive-only (Phase 1 restated) — prevents recreation, does not delete the running pod. | Any controller path needing a launcher pod *gone* must `Delete` it. |
-| W-3c-4 | **Trust-model gap.** stunnel `verify = 2` = `verifyChain` **without subject checks** — proves "peer has a CA-signed cert", NOT "this is the legitimate src/dst for THIS migration". Spike used a single **shared leaf** (`CN=kubeswift-migration`) on both pods. | **The central Phase 3c design decision: the cert identity model** (shared long-lived leaf vs per-node/per-swiftletd vs per-migration). Whatever the choice, `verify = 2` alone is insufficient — the design must add subject/SAN pinning (`verify = 4` + `checkHost`). |
+| W-3c-4 | **Trust-model gap.** stunnel `verify = 2` = `verifyChain` **without subject checks** — proves "peer has a CA-signed cert", NOT "this is the legitimate src/dst for THIS migration". Spike used a single **shared leaf** (`CN=kubeswift-migration`) on both pods. | **The central Phase 3c design decision: the cert identity model** (shared long-lived leaf vs per-node/per-swiftletd vs per-migration). Whatever the choice, `verify = 2` alone is insufficient — the design must add subject/SAN pinning (`verify = 4` + `checkHost`). **RESOLVED in design doc §3 → Option B (per-node + SAN pinning, `verify = 4` + `checkHost`).** |
 
 **Trust-model carry-forwards (for the design doc):**
 - **mTLS does NOT subsume S1 (URLs-from-CR).** mTLS closes "redirect to an
@@ -1972,16 +1972,22 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
   positive+two negatives). See "Phase 3c mTLS Transport Spike — COMPLETE"
   section above and
   [`docs/design/live-migration-phase-3c-mtls-spike.md`](docs/design/live-migration-phase-3c-mtls-spike.md).
-- **Open work = the Phase 3c design + implementation.** Design doc in
-  progress (`docs/design/live-migration-phase-3c.md`). Pivotal open
-  decision: the **cert identity model** (shared leaf vs per-node vs
-  per-migration), which shapes the whole doc; SAN/subject pinning
-  (`verify = 4` + `checkHost`) is required regardless (W-3c-4). Other
-  design areas: sidecar wiring into `newDstPod` (server-role flip on dst
-  + dst-IP onto src sidecar, env-parameterized; W-3c-2), freezing
-  `lifecycle: run` on the dst intent (W-3c-1), retiring the
-  `migration-phase2-unsafe-plaintext: ack` gate, and S1
-  URLs-from-CR composition (mTLS does not subsume S1).
+- **Open work = the Phase 3c design + implementation.** Design doc
+  drafted (`docs/design/live-migration-phase-3c.md`). The pivotal
+  decision — the **cert identity model** — is **RESOLVED to Option B
+  (per-node / per-swiftletd identity + SAN pinning)**: each node's
+  swiftletd gets a cert-manager-issued Certificate keyed by nodeName;
+  stunnel enforces `verify = 4` + `checkHost` against the peer's SAN.
+  Shared-leaf (Option A) and per-migration (Option C) considered and
+  rejected in the design doc §3. SAN/subject pinning (`verify = 4` +
+  `checkHost`) is required regardless (W-3c-4). Other design areas:
+  sidecar wiring into `newDstPod` (server-role flip on dst + dst-IP
+  onto src sidecar, env-parameterized; W-3c-2), freezing `lifecycle:
+  run` on the dst intent (W-3c-1), retiring the
+  `migration-phase2-unsafe-plaintext: ack` gate, and S1 URLs-from-CR
+  composition (mTLS does not subsume S1). Open implementation
+  sub-decisions remain (cert provisioning mechanics §3.B; §10
+  open questions).
 
 **5. Live Migration Phase 4 — drain integration via eviction webhook**
 - `kubectl drain` triggers migration automatically
