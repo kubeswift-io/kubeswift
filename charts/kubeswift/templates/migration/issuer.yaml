@@ -1,0 +1,64 @@
+{{- if .Values.migration.mtls.enabled }}
+# Live-migration mTLS PKI (Phase 3c, Option B: per-node identity + SAN pinning).
+#
+# Bootstrap chain, all in {{ .Values.namespace }}:
+#   1. a self-signed Issuer that mints the migration CA,
+#   2. the migration CA Certificate (isCA),
+#   3. a CA Issuer backed by that CA Secret.
+# The controller's migrationcert reconciler then issues one leaf Certificate
+# per worker node (SAN = nodeName) signed by the CA Issuer below. The stunnel
+# sidecar presents that leaf and pins the peer via verify=4 + checkHost.
+#
+# Namespaced Issuers (not ClusterIssuers) are deliberate: a ClusterIssuer
+# with ca.secretName reads the CA Secret from cert-manager's own namespace,
+# not this release's. Keeping the CA Secret and the per-node leaf
+# Certificates co-located in {{ .Values.namespace }} avoids that gotcha.
+#
+# Requires cert-manager installed cluster-side (same prerequisite as the
+# webhook serving cert). Gated entirely on migration.mtls.enabled — off by
+# default, so clusters without cert-manager are unaffected.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kubeswift-migration-selfsigned-issuer
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: migration-mtls
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kubeswift-migration-ca
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: migration-mtls
+spec:
+  isCA: true
+  commonName: kubeswift-migration-ca
+  secretName: kubeswift-migration-ca
+  duration: 87600h # 10 years (CA)
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: kubeswift-migration-selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kubeswift-migration-ca-issuer
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: migration-mtls
+spec:
+  ca:
+    secretName: kubeswift-migration-ca
+{{- end }}
