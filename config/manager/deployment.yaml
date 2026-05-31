@@ -25,6 +25,11 @@ spec:
           args:
             - --leader-elect
             - --webhook-enabled=false
+            # Live-migration mTLS (Phase 3c) is off in the minimal install.
+            # The config/overlays/migration-mtls overlay flips this to true
+            # and provisions the cert-manager PKI chain (mirrors the Helm
+            # migration.mtls.enabled gate). See `make deploy-with-mtls`.
+            - --migration-mtls-enabled=false
           env:
             - name: POD_NAMESPACE
               valueFrom:

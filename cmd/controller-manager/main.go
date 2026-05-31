@@ -20,6 +20,7 @@ import (
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftgpu"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
@@ -53,6 +54,7 @@ const (
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
+	migrationMTLSEnabled := flag.Bool("migration-mtls-enabled", false, "Enable the live-migration mTLS cert provisioner (Phase 3c; requires cert-manager)")
 	leaderElect := flag.Bool("leader-elect", false, "Enable leader election for controller manager")
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
@@ -187,6 +189,24 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftMigration controller")
 		os.Exit(1)
+	}
+
+	// Live-migration mTLS cert provisioner (Phase 3c, Option B per-node
+	// identity). Registered ONLY when --migration-mtls-enabled=true. The
+	// reconciler issues one cert-manager Certificate per worker node
+	// (SAN=nodeName) into the system namespace; it is dormant (not
+	// registered) by default so clusters without cert-manager are
+	// unaffected. SystemNamespace is the controller's own namespace
+	// (POD_NAMESPACE), where the Helm/overlay-managed CA Issuer lives.
+	if *migrationMTLSEnabled {
+		if err = (&migrationcert.MigrationCertReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			SystemNamespace: leaderElectionNS,
+		}).SetupWithManager(mgr); err != nil {
+			klog.ErrorS(err, "unable to create migrationcert controller")
+			os.Exit(1)
+		}
 	}
 
 	if *webhookEnabled {

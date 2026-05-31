@@ -58,3 +58,15 @@ gpuDiscovery:
 # Admission webhooks (optional). Requires cert-manager. When enabled, controller-manager runs with --webhook-enabled=true.
 webhook:
   enabled: false
+
+# Live migration settings.
+migration:
+  # mTLS transport for cross-node live migration (Phase 3c, Option B per-node
+  # identity). When enabled the chart provisions a per-namespace cert-manager
+  # PKI (selfSigned Issuer -> CA -> CA Issuer) in .Values.namespace and the
+  # controller-manager runs with --migration-mtls-enabled=true (issues one
+  # leaf Certificate per worker node). Requires cert-manager installed
+  # cluster-side. Off by default — default clusters incur no cert-manager
+  # dependency and no behavior change.
+  mtls:
+    enabled: false

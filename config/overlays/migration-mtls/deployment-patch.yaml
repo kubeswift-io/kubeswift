@@ -1,0 +1,22 @@
+# Patch controller-manager Deployment for live-migration mTLS mode.
+# Flips --migration-mtls-enabled to true so the migrationcert reconciler
+# registers and issues one per-node leaf Certificate (SAN=nodeName).
+#
+# The args list is replaced wholesale by strategic-merge (it is a list of
+# scalars), so the full minimal arg set must be restated here. webhook
+# stays disabled — composing webhook + mTLS is done via the webhook
+# overlay separately; this overlay is the minimal-plus-mTLS install.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: kubeswift-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller-manager
+          args:
+            - --leader-elect
+            - --webhook-enabled=false
+            - --migration-mtls-enabled=true

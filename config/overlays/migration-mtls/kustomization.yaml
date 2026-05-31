@@ -1,0 +1,23 @@
+# Migration-mTLS overlay: enables the Phase 3c live-migration mTLS cert
+# provisioner (Option B per-node identity). Layers on top of the minimal
+# install (config/default) and adds the cert-manager PKI chain
+# (selfSigned Issuer -> CA Certificate -> CA Issuer) plus a patch that
+# flips the controller-manager to --migration-mtls-enabled=true.
+#
+# Requires cert-manager installed cluster-side (the issuer.yaml resources
+# reference cert-manager CRDs). Apply: kubectl apply -k config/overlays/migration-mtls
+# Minimal path (no mTLS): kubectl apply -k config/default
+#
+# Mirrors the Helm migration.mtls.enabled gate (charts/kubeswift) — the
+# Helm chart provisions the same three resources from
+# templates/migration/issuer.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../default
+  - issuer.yaml
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: controller-manager
