@@ -118,7 +118,24 @@ jobs:
       - name: Install csi-driver-host-path
         run: |
           git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
-          /tmp/csi-host-path/deploy/kubernetes-latest/deploy.sh
+          # deploy.sh fetches version-matched sidecar RBAC from
+          # raw.githubusercontent.com at run time, then `kubectl apply
+          # --kustomize`s a temp dir. That fetch is occasionally rate-limited
+          # or truncated under CI, yielding a kustomize "missing Resource
+          # metadata" parse error on rbac.yaml. Retry so a transient fetch
+          # hiccup self-heals (kubectl apply is idempotent).
+          ok=false
+          for attempt in 1 2 3; do
+            if /tmp/csi-host-path/deploy/kubernetes-latest/deploy.sh; then
+              ok=true; break
+            fi
+            echo "deploy.sh attempt $attempt failed; retrying in 15s..."
+            sleep 15
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::csi-driver-host-path deploy.sh failed after 3 attempts"
+            exit 1
+          fi
           kubectl apply -f /tmp/csi-host-path/examples/csi-storageclass.yaml
           # deploy.sh already creates the csi-hostpath-snapclass VolumeSnapshotClass;
           # the standalone examples/csi-snapshotclass.yaml was removed upstream
