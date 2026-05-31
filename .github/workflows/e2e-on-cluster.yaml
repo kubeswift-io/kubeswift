@@ -51,8 +51,33 @@ jobs:
     name: Cluster e2e
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # IMAGE_TAG=dev is intentionally NOT a job-level env. It is scoped to
+    # only the build/load/deploy steps below. The upstream
+    # csi-driver-host-path deploy script reads IMAGE_TAG to override BOTH
+    # its sidecar RBAC refs AND its sidecar image tags; a job-wide
+    # IMAGE_TAG=dev makes that step fetch a non-existent `dev` RBAC ref and
+    # pull non-existent `:dev` sidecar images (hang at "waiting for hostpath
+    # deployment to complete"). Default-to-explicit per Design Principle #10.
     steps:
       - uses: actions/checkout@v6
+
+      # Hosted ubuntu-latest runners ship with only ~14 GB free on /. The
+      # disk-boot scenario imports a 40 GiB raw Ubuntu Noble image onto the
+      # kind worker's csi-hostpath volume — which IS the runner's own root
+      # filesystem — after downloading the ~600 MB cloud image. The full
+      # five-scenario smoke blew the disk ("Free space left: 0 MB"). Reclaim
+      # the preinstalled toolchains we don't use (Android SDK alone is ~9 GB)
+      # so even the single disk-boot import has headroom. Runs BEFORE setup-go
+      # so clearing hostedtoolcache can't delete the Go we then install.
+      - name: Reclaim disk space
+        run: |
+          echo "Disk before reclaim:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/swift || true
+          sudo docker image prune -af || true
+          echo "Disk after reclaim:"; df -h /
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -110,14 +135,56 @@ jobs:
       - name: Install csi-driver-host-path
         run: |
           git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
-          /tmp/csi-host-path/deploy/kubernetes-1.30/deploy.sh
+          # Root cause is an env-leak interaction, not a transient flake.
+          # deploy-hostpath.sh defaults UPDATE_RBAC_RULES=true, which makes its
+          # rbac_version() OVERRIDE each sidecar's RBAC ref with the IMAGE_TAG
+          # env var (deploy-hostpath.sh: `eval version=...${IMAGE_TAG:-$version}`).
+          # This job sets IMAGE_TAG=dev (for the KubeSwift images), so the
+          # script fetches e.g. external-provisioner/dev/deploy/kubernetes/rbac.yaml
+          # — a 404 (no `dev` branch exists upstream). The fetch used
+          # `--silent --location` with no `--fail`, so the 404 body landed in
+          # rbac.yaml and kustomize aborted with "missing Resource metadata:
+          # file is not directory".
+          #
+          # Fix: UPDATE_RBAC_RULES=false pins rbac_version() to the release tag
+          # baked into the local hostpath manifests (v5.1.0 etc.), which return
+          # 200, and severs the IMAGE_TAG=dev leak into the CSI deploy script.
+          export UPDATE_RBAC_RULES=false
+          # Defense-in-depth: also harden the one fragile curl so any genuine
+          # fetch error is loud (non-zero exit) rather than a silent bad body.
+          # `--silent --location` is unique to that curl (the only other fetch
+          # uses `wget --quiet`).
+          sed -i 's/--silent --location/--silent --location --fail --retry 5 --retry-delay 5 --retry-all-errors --remove-on-error/' \
+            /tmp/csi-host-path/deploy/util/deploy-hostpath.sh
+          # Outer retry is a belt-and-suspenders safety net (deploy.sh re-fetch
+          # + re-apply is idempotent) in case something beyond the RBAC fetch
+          # hiccups.
+          ok=false
+          for attempt in 1 2 3; do
+            if /tmp/csi-host-path/deploy/kubernetes-latest/deploy.sh; then
+              ok=true; break
+            fi
+            echo "deploy.sh attempt $attempt failed; retrying in 20s..."
+            sleep 20
+          done
+          if [ "$ok" != true ]; then
+            echo "::error::csi-driver-host-path deploy.sh failed after 3 attempts"
+            exit 1
+          fi
           kubectl apply -f /tmp/csi-host-path/examples/csi-storageclass.yaml
-          kubectl apply -f /tmp/csi-host-path/examples/csi-snapshotclass.yaml
+          # deploy.sh already creates the csi-hostpath-snapclass VolumeSnapshotClass;
+          # the standalone examples/csi-snapshotclass.yaml was removed upstream
+          # (renamed to csi-volumesnapshotclass.yaml). No separate apply needed.
           # Mark the snapshot class default so snapshot-test.sh auto-detects it.
           kubectl annotate volumesnapshotclass csi-hostpath-snapclass \
             snapshot.storage.kubernetes.io/is-default-class=true
 
+      # IMAGE_TAG=dev scoped to this step only (see job-level note above).
+      # Makefile default is sha-<git-short-hash> (IMAGE_TAG ?= ...); pinning
+      # :dev here keeps build-images, the kind load below, and deploy aligned.
       - name: Build and load images
+        env:
+          IMAGE_TAG: dev
         run: |
           make build-images
           kind load docker-image \
@@ -127,9 +194,25 @@ jobs:
             --name kubeswift-e2e
 
       - name: Deploy KubeSwift
+        env:
+          IMAGE_TAG: dev
         run: |
           make deploy
           kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=5m
+
+      # Hosted-runner capacity: the launcher pod is Guaranteed QoS with
+      # cpu request==limit==guest cpu (internal/controller/swiftguest/pod.go).
+      # The default guest class is cpu:"2", which does NOT schedule on a
+      # 4-vCPU kind worker already running kube-system + snapshot-controller
+      # + csi-hostpath + the KubeSwift controller (the disk-boot guest sat
+      # Pending "Insufficient cpu"). Shrink the checked-out sample to cpu:"1"
+      # so the single smoke VM fits. boot-test.sh's apply_shared re-applies
+      # this file from disk, so the edit is honoured. Local to the runner
+      # checkout only — never committed.
+      - name: Shrink default guest class for hosted-runner capacity
+        run: |
+          sed -i 's/cpu: "2"/cpu: "1"/' config/samples/shared/swiftguestclass-default.yaml
+          grep -n 'cpu:' config/samples/shared/swiftguestclass-default.yaml
 
       - name: Run e2e ${{ github.event.inputs.scenario || 'all' }}
         run: |
@@ -141,7 +224,19 @@ jobs:
             echo "::endgroup::"
           }
           case "$SCENARIO" in
-            smoke)               run_one smoke-test ;;
+            smoke)
+              # Hosted-runner honest smoke: ONE real Cloud Hypervisor VM
+              # (disk-boot) booted under nested KVM. The full `make smoke-test`
+              # runs five scenarios, each downloading its own ~40 GiB image —
+              # that exhausts the runner's disk and 4 vCPUs. Run just disk-boot
+              # here. The multi-scenario suite (and the snapshot/clonestrategy/
+              # local-* cluster e2e below) each boot their own VMs and need a
+              # self-hosted runner with more headroom — tracked as the next
+              # layer of this workflow's hardening.
+              echo "::group::e2e: smoke (disk-boot only)"
+              test/smoke/boot-test.sh --scenario disk-boot
+              echo "::endgroup::"
+              ;;
             snapshot)            run_one snapshot-test ;;
             clonestrategy)       run_one clonestrategy-test ;;
             local-roundtrip)     run_one local-roundtrip-test ;;
