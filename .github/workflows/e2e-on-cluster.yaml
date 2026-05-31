@@ -51,6 +51,14 @@ jobs:
     name: Cluster e2e
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Pin IMAGE_TAG=dev for the whole job so `make build-images`, the
+    # `kind load` step, and `make deploy` all agree on the :dev tag.
+    # The Makefile default is sha-<git-short-hash> (IMAGE_TAG ?= ...),
+    # which build-images produces but the kind-load/deploy steps below
+    # reference as :dev. The `?=` operator respects this env var, so one
+    # line keeps all three steps consistent.
+    env:
+      IMAGE_TAG: dev
     steps:
       - uses: actions/checkout@v6
 
