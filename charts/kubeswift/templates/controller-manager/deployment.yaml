@@ -36,6 +36,9 @@ spec:
             {{- else }}
             - --webhook-enabled=false
             {{- end }}
+            {{- if .Values.migration.mtls.enabled }}
+            - --migration-mtls-enabled=true
+            {{- end }}
           ports:
             - containerPort: 9443
               name: webhook

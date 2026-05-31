@@ -28,7 +28,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image generate deploy deploy-with-webhook undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image generate deploy deploy-with-webhook deploy-with-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
@@ -53,6 +53,7 @@ help:
 	@echo "  verify-crd-sync       Fail if config/crd/kustomization.yaml drifts from config/crd/bases/"
 	@echo "  deploy                Deploy controller-manager (minimal install, no webhooks). Use deploy-with-webhook for webhook-enabled deploys (requires cert-manager)."
 	@echo "  deploy-with-webhook   Deploy controller-manager with admission webhooks enabled (requires cert-manager cluster-side; applies config/overlays/webhook on top of the minimal install)"
+	@echo "  deploy-with-mtls      Deploy controller-manager with live-migration mTLS cert provisioner enabled (Phase 3c; requires cert-manager cluster-side; applies config/overlays/migration-mtls on top of the minimal install)"
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
 	@echo "  smoke-test            Run boot smoke test (requires KubeSwift cluster)"
@@ -192,6 +193,27 @@ deploy-with-webhook: deploy
 	@# triggers a rollout. The env var set by `deploy` survives across
 	@# kustomize-apply because env is not declared in deployment.yaml,
 	@# but re-set defensively to handle the case where it was cleared.
+	kubectl set env deployment/controller-manager -n kubeswift-system \
+		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
+	kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=120s
+
+# deploy-with-mtls layers config/overlays/migration-mtls on top of the
+# minimal install. The overlay composes config/default + the cert-manager
+# PKI chain (selfSigned Issuer -> CA Certificate -> CA Issuer) and patches
+# the controller-manager Deployment to --migration-mtls-enabled=true, which
+# registers the migrationcert reconciler (one per-node leaf Certificate,
+# SAN=nodeName). Requires cert-manager installed cluster-side (the overlay's
+# Issuer + Certificate reference cert-manager CRDs). Mirrors the Helm
+# migration.mtls.enabled gate. Phase 3c, Option B.
+deploy-with-mtls: deploy
+	@echo "Layering migration-mtls overlay (patches deployment to --migration-mtls-enabled=true; applies cert-manager PKI chain)"
+	@# Same IMAGE_TAG sed-patch trick as `deploy` — the overlay composes
+	@# config/manager, so kustomize re-renders manager with the patch on top.
+	cd config/manager && sed -i 's/newTag: .*/newTag: $(IMAGE_TAG)/' kustomization.yaml
+	kubectl apply -k config/overlays/migration-mtls
+	cd config/manager && sed -i 's/newTag: .*/newTag: latest/' kustomization.yaml
+	@# Re-set the launcher image env var defensively — the overlay's
+	@# deployment patch replaces the args list, which triggers a rollout.
 	kubectl set env deployment/controller-manager -n kubeswift-system \
 		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
 	kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=120s
