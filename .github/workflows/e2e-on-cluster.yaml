@@ -51,14 +51,13 @@ jobs:
     name: Cluster e2e
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # Pin IMAGE_TAG=dev for the whole job so `make build-images`, the
-    # `kind load` step, and `make deploy` all agree on the :dev tag.
-    # The Makefile default is sha-<git-short-hash> (IMAGE_TAG ?= ...),
-    # which build-images produces but the kind-load/deploy steps below
-    # reference as :dev. The `?=` operator respects this env var, so one
-    # line keeps all three steps consistent.
-    env:
-      IMAGE_TAG: dev
+    # IMAGE_TAG=dev is intentionally NOT a job-level env. It is scoped to
+    # only the build/load/deploy steps below. The upstream
+    # csi-driver-host-path deploy script reads IMAGE_TAG to override BOTH
+    # its sidecar RBAC refs AND its sidecar image tags; a job-wide
+    # IMAGE_TAG=dev makes that step fetch a non-existent `dev` RBAC ref and
+    # pull non-existent `:dev` sidecar images (hang at "waiting for hostpath
+    # deployment to complete"). Default-to-explicit per Design Principle #10.
     steps:
       - uses: actions/checkout@v6
 
@@ -162,7 +161,12 @@ jobs:
           kubectl annotate volumesnapshotclass csi-hostpath-snapclass \
             snapshot.storage.kubernetes.io/is-default-class=true
 
+      # IMAGE_TAG=dev scoped to this step only (see job-level note above).
+      # Makefile default is sha-<git-short-hash> (IMAGE_TAG ?= ...); pinning
+      # :dev here keeps build-images, the kind load below, and deploy aligned.
       - name: Build and load images
+        env:
+          IMAGE_TAG: dev
         run: |
           make build-images
           kind load docker-image \
@@ -172,6 +176,8 @@ jobs:
             --name kubeswift-e2e
 
       - name: Deploy KubeSwift
+        env:
+          IMAGE_TAG: dev
         run: |
           make deploy
           kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=5m
