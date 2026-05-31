@@ -97,9 +97,14 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # secrets — get,list,watch for general reads; create,update added for
+  # the Phase 3c live-migration mTLS path (--migration-mtls-enabled): the
+  # migrationcert controller copies a node's cert-manager-issued identity
+  # Secret into guest namespaces (distribution, not issuance). The verbs
+  # are dormant when mTLS is disabled (the reconciler is not registered).
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch"]
@@ -151,6 +156,18 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["get", "list", "watch", "create"]
+  # cert-manager.io Certificates — the Phase 3c migrationcert controller
+  # (--migration-mtls-enabled) creates one per-node leaf Certificate
+  # (SAN=nodeName, Option B) and deletes stale ones. list+watch are
+  # required by controller-runtime's cached client (same informer pattern
+  # as W7/W8 — without them the cache fails to sync). cert-manager must be
+  # installed when mTLS is enabled; when disabled the reconciler is not
+  # registered, so this grant is dormant. The CA Issuer + CA Certificate
+  # are Helm/overlay-managed (config/overlays/migration-mtls/issuer.yaml),
+  # not controller-created, so no issuers/clusterissuers grant is needed.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
