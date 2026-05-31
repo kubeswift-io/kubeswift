@@ -462,19 +462,35 @@ guest running and recoverable. mTLS adds handshake-rejection as a new
 
 1. **§3 cert identity model** — **RESOLVED 2026-05-30: Option B**
    (per-node identity + SAN pinning).
-2. **§3.B per-node cert provisioning** — per-node cert-manager
-   `Certificate` + `nodeName`-keyed Secret selection (lean (a)) vs
-   cert-manager csi-driver ((b)). Settle at implementation; leaning (a).
-3. **Sidecar image** — pin a maintained stunnel image + digest, or build a
-   tiny first-party one (alpine + stunnel, ASCII-only entrypoint per the
-   container-script rule). Supply-chain review for the third-party option.
+2. **§3.B per-node cert provisioning** — **RESOLVED 2026-05-31: (a)**
+   per-node cert-manager `Certificate` + `nodeName`-keyed Secret
+   selection (not the csi-driver (b)). Implemented in PR 1
+   (`internal/controller/migrationcert`): a Node-watch reconciler issues
+   one long-lived `Certificate` per worker node, SAN=nodeName, on node
+   join — satisfying the §3.B(a) / §4.4 precondition that no cert-manager
+   call sits on any migration path (the leaf is already issued; the
+   migration path only consumes the Secret). cert-manager types are
+   handled as `unstructured.Unstructured` to avoid a go.mod dependency on
+   an optional, operator-installed operator.
+3. **Sidecar image** — **RESOLVED 2026-05-31: build a tiny first-party
+   image** (alpine + stunnel, ASCII-only entrypoint per the
+   container-script rule), avoiding third-party supply-chain review.
+   Built in PR 2.
 4. **Cert lifetime vs `spec.timeout`** — ensure cert validity ≫ the
    longest permitted migration; document the relationship.
 5. **Ack-gate retirement sequencing** (§6.2) — controller-stop vs
    swiftletd-require-removal ordering across a rolling upgrade.
-6. **Cluster-level enable** — is mTLS unconditional once shipped, or gated
-   by a Helm value during rollout? (Lean: unconditional on the secured
-   path; no per-SwiftMigration opt-out, since plaintext is being retired.)
+6. **Cluster-level enable** — **RESOLVED 2026-05-31: Helm-gated opt-in
+   during rollout.** mTLS is gated by `migration.mtls.enabled` (off by
+   default) while Phase 3c lands across PRs 1-5, so clusters without
+   cert-manager are unaffected and the rollout is incremental. This is the
+   rollout posture, NOT a per-SwiftMigration opt-out: plaintext retirement
+   on the secured path (the `migration-phase2-unsafe-plaintext: ack` gate
+   becoming a one-way switch) still lands in PR 4 as designed. PR 1 ships
+   the `migration.mtls.enabled` Helm gate, the static
+   `--migration-mtls-enabled` flag, and the `deploy-with-mtls` kustomize
+   overlay (TFU-16 pattern: opt-in surfaces get an explicit Make target +
+   overlay).
 
 ---
 
