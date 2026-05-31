@@ -118,19 +118,26 @@ jobs:
       - name: Install csi-driver-host-path
         run: |
           git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
-          # deploy.sh fetches version-matched sidecar RBAC from
-          # raw.githubusercontent.com at run time, then `kubectl apply
-          # --kustomize`s a temp dir. That fetch is occasionally rate-limited
-          # or truncated under CI, yielding a kustomize "missing Resource
-          # metadata" parse error on rbac.yaml. Retry so a transient fetch
-          # hiccup self-heals (kubectl apply is idempotent).
+          # Root cause of the chronic CSI flake: deploy-hostpath.sh curls each
+          # sidecar's RBAC from raw.githubusercontent.com with
+          # `--silent --location` but NO `--fail`/`--retry`. A transient 429
+          # rate-limit response is then written into rbac.yaml as an HTML body
+          # and kustomize aborts with "missing Resource metadata": file is not
+          # directory. Harden that one fetch in the cloned script so it errors
+          # loudly and retries with backoff on any error. `--silent --location`
+          # is unique to that curl (the only other fetch uses `wget --quiet`).
+          sed -i 's/--silent --location/--silent --location --fail --retry 5 --retry-delay 5 --retry-all-errors --remove-on-error/' \
+            /tmp/csi-host-path/deploy/util/deploy-hostpath.sh
+          # Outer retry is a belt-and-suspenders safety net (deploy.sh re-fetch
+          # + re-apply is idempotent) in case something beyond the RBAC fetch
+          # hiccups.
           ok=false
           for attempt in 1 2 3; do
             if /tmp/csi-host-path/deploy/kubernetes-latest/deploy.sh; then
               ok=true; break
             fi
-            echo "deploy.sh attempt $attempt failed; retrying in 15s..."
-            sleep 15
+            echo "deploy.sh attempt $attempt failed; retrying in 20s..."
+            sleep 20
           done
           if [ "$ok" != true ]; then
             echo "::error::csi-driver-host-path deploy.sh failed after 3 attempts"
