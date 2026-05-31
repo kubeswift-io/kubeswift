@@ -61,6 +61,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Hosted ubuntu-latest runners ship with only ~14 GB free on /. The
+      # disk-boot scenario imports a 40 GiB raw Ubuntu Noble image onto the
+      # kind worker's csi-hostpath volume — which IS the runner's own root
+      # filesystem — after downloading the ~600 MB cloud image. The full
+      # five-scenario smoke blew the disk ("Free space left: 0 MB"). Reclaim
+      # the preinstalled toolchains we don't use (Android SDK alone is ~9 GB)
+      # so even the single disk-boot import has headroom. Runs BEFORE setup-go
+      # so clearing hostedtoolcache can't delete the Go we then install.
+      - name: Reclaim disk space
+        run: |
+          echo "Disk before reclaim:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc /usr/local/.ghcup || true
+          sudo rm -rf /usr/share/swift || true
+          sudo docker image prune -af || true
+          echo "Disk after reclaim:"; df -h /
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -182,6 +200,20 @@ jobs:
           make deploy
           kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=5m
 
+      # Hosted-runner capacity: the launcher pod is Guaranteed QoS with
+      # cpu request==limit==guest cpu (internal/controller/swiftguest/pod.go).
+      # The default guest class is cpu:"2", which does NOT schedule on a
+      # 4-vCPU kind worker already running kube-system + snapshot-controller
+      # + csi-hostpath + the KubeSwift controller (the disk-boot guest sat
+      # Pending "Insufficient cpu"). Shrink the checked-out sample to cpu:"1"
+      # so the single smoke VM fits. boot-test.sh's apply_shared re-applies
+      # this file from disk, so the edit is honoured. Local to the runner
+      # checkout only — never committed.
+      - name: Shrink default guest class for hosted-runner capacity
+        run: |
+          sed -i 's/cpu: "2"/cpu: "1"/' config/samples/shared/swiftguestclass-default.yaml
+          grep -n 'cpu:' config/samples/shared/swiftguestclass-default.yaml
+
       - name: Run e2e ${{ github.event.inputs.scenario || 'all' }}
         run: |
           set -euo pipefail
@@ -192,7 +224,19 @@ jobs:
             echo "::endgroup::"
           }
           case "$SCENARIO" in
-            smoke)               run_one smoke-test ;;
+            smoke)
+              # Hosted-runner honest smoke: ONE real Cloud Hypervisor VM
+              # (disk-boot) booted under nested KVM. The full `make smoke-test`
+              # runs five scenarios, each downloading its own ~40 GiB image —
+              # that exhausts the runner's disk and 4 vCPUs. Run just disk-boot
+              # here. The multi-scenario suite (and the snapshot/clonestrategy/
+              # local-* cluster e2e below) each boot their own VMs and need a
+              # self-hosted runner with more headroom — tracked as the next
+              # layer of this workflow's hardening.
+              echo "::group::e2e: smoke (disk-boot only)"
+              test/smoke/boot-test.sh --scenario disk-boot
+              echo "::endgroup::"
+              ;;
             snapshot)            run_one snapshot-test ;;
             clonestrategy)       run_one clonestrategy-test ;;
             local-roundtrip)     run_one local-roundtrip-test ;;
