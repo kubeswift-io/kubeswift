@@ -112,7 +112,9 @@ jobs:
           git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
           /tmp/csi-host-path/deploy/kubernetes-latest/deploy.sh
           kubectl apply -f /tmp/csi-host-path/examples/csi-storageclass.yaml
-          kubectl apply -f /tmp/csi-host-path/examples/csi-snapshotclass.yaml
+          # deploy.sh already creates the csi-hostpath-snapclass VolumeSnapshotClass;
+          # the standalone examples/csi-snapshotclass.yaml was removed upstream
+          # (renamed to csi-volumesnapshotclass.yaml). No separate apply needed.
           # Mark the snapshot class default so snapshot-test.sh auto-detects it.
           kubectl annotate volumesnapshotclass csi-hostpath-snapclass \
             snapshot.storage.kubernetes.io/is-default-class=true
