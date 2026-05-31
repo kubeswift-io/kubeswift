@@ -6,7 +6,9 @@
 #   3. a CA Issuer backed by that CA Secret.
 # The controller's migrationcert reconciler then issues one leaf Certificate
 # per worker node (SAN = nodeName) signed by the CA Issuer below. The stunnel
-# sidecar (PR 2/3) presents that leaf and pins the peer via verify=4 + checkHost.
+# sidecar (PR 2/3) presents that leaf and pins the peer via verifyChain +
+# checkHost (chains to this CA AND matches the expected peer-node SAN; not
+# literal verify=4, which would pin the exact leaf and break cert rotation).
 #
 # Namespaced Issuers (not ClusterIssuers) are deliberate: a ClusterIssuer
 # with ca.secretName reads the CA Secret from cert-manager's own namespace,
