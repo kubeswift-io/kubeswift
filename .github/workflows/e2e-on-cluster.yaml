@@ -118,14 +118,25 @@ jobs:
       - name: Install csi-driver-host-path
         run: |
           git clone --depth=1 --branch v1.15.0 https://github.com/kubernetes-csi/csi-driver-host-path /tmp/csi-host-path
-          # Root cause of the chronic CSI flake: deploy-hostpath.sh curls each
-          # sidecar's RBAC from raw.githubusercontent.com with
-          # `--silent --location` but NO `--fail`/`--retry`. A transient 429
-          # rate-limit response is then written into rbac.yaml as an HTML body
-          # and kustomize aborts with "missing Resource metadata": file is not
-          # directory. Harden that one fetch in the cloned script so it errors
-          # loudly and retries with backoff on any error. `--silent --location`
-          # is unique to that curl (the only other fetch uses `wget --quiet`).
+          # Root cause is an env-leak interaction, not a transient flake.
+          # deploy-hostpath.sh defaults UPDATE_RBAC_RULES=true, which makes its
+          # rbac_version() OVERRIDE each sidecar's RBAC ref with the IMAGE_TAG
+          # env var (deploy-hostpath.sh: `eval version=...${IMAGE_TAG:-$version}`).
+          # This job sets IMAGE_TAG=dev (for the KubeSwift images), so the
+          # script fetches e.g. external-provisioner/dev/deploy/kubernetes/rbac.yaml
+          # — a 404 (no `dev` branch exists upstream). The fetch used
+          # `--silent --location` with no `--fail`, so the 404 body landed in
+          # rbac.yaml and kustomize aborted with "missing Resource metadata:
+          # file is not directory".
+          #
+          # Fix: UPDATE_RBAC_RULES=false pins rbac_version() to the release tag
+          # baked into the local hostpath manifests (v5.1.0 etc.), which return
+          # 200, and severs the IMAGE_TAG=dev leak into the CSI deploy script.
+          export UPDATE_RBAC_RULES=false
+          # Defense-in-depth: also harden the one fragile curl so any genuine
+          # fetch error is loud (non-zero exit) rather than a silent bad body.
+          # `--silent --location` is unique to that curl (the only other fetch
+          # uses `wget --quiet`).
           sed -i 's/--silent --location/--silent --location --fail --retry 5 --retry-delay 5 --retry-all-errors --remove-on-error/' \
             /tmp/csi-host-path/deploy/util/deploy-hostpath.sh
           # Outer retry is a belt-and-suspenders safety net (deploy.sh re-fetch
