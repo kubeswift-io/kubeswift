@@ -93,6 +93,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push migration-stunnel
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/migration-stunnel/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/migration-stunnel:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
@@ -163,6 +177,7 @@ jobs:
             - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/projectbeskar/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
 
             ## swiftctl
 
