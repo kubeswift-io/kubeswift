@@ -1,0 +1,26 @@
+# Enables BOTH admission webhooks and the live-migration mTLS cert
+# provisioner, and mounts the webhook serving cert. Combines the webhook
+# overlay's patch (--webhook-enabled=true + cert volume) with the
+# migration-mtls overlay's flag (--migration-mtls-enabled=true).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: kubeswift-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: controller-manager
+          args:
+            - --leader-elect
+            - --webhook-enabled=true
+            - --migration-mtls-enabled=true
+          volumeMounts:
+            - name: webhook-cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+      volumes:
+        - name: webhook-cert
+          secret:
+            secretName: kubeswift-webhook-cert

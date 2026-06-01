@@ -1,0 +1,34 @@
+# Combined webhook + migration-mTLS overlay (Phase 3c PR 5).
+#
+# For clusters that want BOTH admission webhooks AND the live-migration
+# mTLS transport (Option B). It composes:
+#   - config/default once (the minimal install),
+#   - config/webhook (the ValidatingWebhookConfiguration + serving-cert
+#     Certificate the webhook overlay adds),
+#   - the migration-mtls PKI (selfSigned Issuer -> CA -> CA Issuer) and the
+#     stunnel sidecar ConfigMap, via the shared config/migration-mtls base
+#     (single source of truth, also used by config/overlays/migration-mtls),
+# plus a deployment patch enabling BOTH flags and mounting the webhook cert.
+#
+# Why not just compose config/overlays/webhook + config/overlays/migration-mtls?
+# Both of those include ../../default, so composing them would double-declare
+# every base resource. This overlay includes config/default exactly once and
+# pulls in each opt-in surface's resources directly.
+#
+# Requires cert-manager cluster-side (both the webhook serving cert and the
+# migration PKI reference cert-manager CRDs).
+# Apply: make deploy-with-webhook-and-mtls   (or: kubectl apply -k config/overlays/webhook-mtls)
+#
+# TFU #16 lesson applied: opt-in surfaces get an explicit, discoverable
+# make target rather than relying on operators to hand-compose overlays.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../default
+  - ../../webhook
+  - ../../migration-mtls
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: controller-manager
