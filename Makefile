@@ -29,7 +29,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image build-migration-stunnel-image generate deploy deploy-with-webhook deploy-with-mtls undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image build-migration-stunnel-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
@@ -56,6 +56,7 @@ help:
 	@echo "  deploy                Deploy controller-manager (minimal install, no webhooks). Use deploy-with-webhook for webhook-enabled deploys (requires cert-manager)."
 	@echo "  deploy-with-webhook   Deploy controller-manager with admission webhooks enabled (requires cert-manager cluster-side; applies config/overlays/webhook on top of the minimal install)"
 	@echo "  deploy-with-mtls      Deploy controller-manager with live-migration mTLS cert provisioner enabled (Phase 3c; requires cert-manager cluster-side; applies config/overlays/migration-mtls on top of the minimal install)"
+	@echo "  deploy-with-webhook-and-mtls  Deploy with BOTH admission webhooks AND live-migration mTLS (Phase 3c; requires cert-manager; applies config/overlays/webhook-mtls). Use this on a webhook-enabled cluster to avoid the TFU #16 stranded-webhook trap"
 	@echo "  undeploy              Remove KubeSwift from cluster, then CRDs"
 	@echo "  load-images           Load built images into kind/minikube (local clusters)"
 	@echo "  smoke-test            Run boot smoke test (requires KubeSwift cluster)"
@@ -223,6 +224,27 @@ deploy-with-mtls: deploy
 	@# deployment patch replaces the args list, which triggers a rollout.
 	kubectl set env deployment/controller-manager -n kubeswift-system \
 		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
+	kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=120s
+
+# deploy-with-webhook-and-mtls layers config/overlays/webhook-mtls — BOTH
+# admission webhooks AND the live-migration mTLS provisioner — on top of the
+# minimal install. Use this on a cluster that wants both: the migration-mtls
+# overlay alone sets --webhook-enabled=false, which on a webhook-enabled
+# cluster strands the ValidatingWebhookConfiguration at a dead endpoint
+# (TFU #16). Requires cert-manager (webhook serving cert + migration PKI).
+# Phase 3c, Option B.
+deploy-with-webhook-and-mtls: deploy
+	@echo "Layering webhook-mtls overlay (--webhook-enabled=true --migration-mtls-enabled=true; webhook cert + migration PKI)"
+	cd config/manager && sed -i 's/newTag: .*/newTag: $(IMAGE_TAG)/' kustomization.yaml
+	kubectl apply -k config/overlays/webhook-mtls
+	cd config/manager && sed -i 's/newTag: .*/newTag: latest/' kustomization.yaml
+	@# Pin BOTH the launcher (swiftletd) and the migration-stunnel sidecar
+	@# images to the same tag. The overlay's deployment patch replaces args
+	@# (triggers a rollout); the sidecar image must match the controller
+	@# (its default :latest is pushed only by release-stable, not release-dev).
+	kubectl set env deployment/controller-manager -n kubeswift-system \
+		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG) \
+		KUBESWIFT_MIGRATION_STUNNEL_IMAGE=$(IMAGE_REGISTRY)/migration-stunnel:$(IMAGE_TAG)
 	kubectl -n kubeswift-system rollout status deploy/controller-manager --timeout=120s
 
 undeploy:

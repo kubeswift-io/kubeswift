@@ -1,0 +1,16 @@
+# Shared base for the Phase 3c live-migration mTLS resources (Option B):
+# the cert-manager PKI chain (selfSigned Issuer -> CA Certificate -> CA
+# Issuer) and the stunnel sidecar ConfigMap. Contains NO deployment and NO
+# config/default base — it is purely the opt-in mTLS resources, so it can be
+# referenced as a base by BOTH overlays without double-declaring anything:
+#   - config/overlays/migration-mtls   (mTLS only, webhook off)
+#   - config/overlays/webhook-mtls      (mTLS + webhook)
+#
+# Single source of truth: edit the PKI / ConfigMap here, both overlays pick
+# it up. Mirrors the Helm chart's templates/migration/* (gated on
+# migration.mtls.enabled).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - issuer.yaml
+  - stunnel-configmap.yaml

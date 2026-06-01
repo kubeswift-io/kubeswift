@@ -15,8 +15,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../default
-  - issuer.yaml
-  - stunnel-configmap.yaml
+  - ../../migration-mtls
 patches:
   - path: deployment-patch.yaml
     target:
