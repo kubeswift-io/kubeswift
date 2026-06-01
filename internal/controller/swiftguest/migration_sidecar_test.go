@@ -142,6 +142,54 @@ func TestApplyMigrationSourceSidecar_InjectsIdleClient(t *testing.T) {
 	}
 }
 
+// TestApplyMigrationSourceSidecar_SetsLauncherMTLSEnv verifies the PR 4
+// secured-mode signal: the launcher container gets KUBESWIFT_MIGRATION_MTLS=1
+// so swiftletd enters secured mode (S1 loopback enforcement + ack bypass).
+// The env goes on the launcher, NOT the stunnel sidecar.
+func TestApplyMigrationSourceSidecar_SetsLauncherMTLSEnv(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "team-a"}}
+	pod := podWithLauncher()
+
+	applyMigrationSourceSidecar(pod, guest)
+
+	var launcher *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == "launcher" {
+			launcher = &pod.Spec.Containers[i]
+		}
+	}
+	if launcher == nil {
+		t.Fatal("launcher container missing")
+	}
+	var got string
+	var count int
+	for _, e := range launcher.Env {
+		if e.Name == migrationsidecar.EnvMTLSEnabled {
+			got = e.Value
+			count++
+		}
+	}
+	if got != migrationsidecar.EnvMTLSEnabledValue {
+		t.Errorf("launcher %s: want %q, got %q", migrationsidecar.EnvMTLSEnabled, migrationsidecar.EnvMTLSEnabledValue, got)
+	}
+	// Idempotent: re-applying must not duplicate the env var.
+	applyMigrationSourceSidecar(pod, guest)
+	count = 0
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name != "launcher" {
+			continue
+		}
+		for _, e := range pod.Spec.Containers[i].Env {
+			if e.Name == migrationsidecar.EnvMTLSEnabled {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("KUBESWIFT_MIGRATION_MTLS must appear exactly once after re-apply; got %d", count)
+	}
+}
+
 func TestEnsureMigrationStunnelConfig_CopiesAcrossNamespaces(t *testing.T) {
 	scheme := migrationSidecarScheme(t)
 	const sysNS = "kubeswift-system"

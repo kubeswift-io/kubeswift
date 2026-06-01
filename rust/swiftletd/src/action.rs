@@ -280,6 +280,88 @@ pub static MIGRATION_KEYS: KeySet = KeySet {
     namespace: "migration",
 };
 
+/// Env var the SwiftGuest controller sets on the launcher container when
+/// live-migration mTLS is enabled (Phase 3c PR 4). When set, swiftletd runs
+/// in "secured mode": it validates the migration URL is a loopback address
+/// (S1) and bypasses the plaintext-ack gate (the channel is TLS). Must
+/// match `internal/migrationsidecar.EnvMTLSEnabled` on the Go side.
+pub const MIGRATION_MTLS_ENV: &str = "KUBESWIFT_MIGRATION_MTLS";
+
+/// True when the launcher is running in secured (mTLS) migration mode.
+pub fn secured_migration_mode() -> bool {
+    secured_from(std::env::var(MIGRATION_MTLS_ENV).ok().as_deref())
+}
+
+/// Pure helper for [`secured_migration_mode`] — secured when the value is
+/// exactly "1" or "true".
+fn secured_from(v: Option<&str>) -> bool {
+    matches!(v, Some("1") | Some("true"))
+}
+
+/// Returns the migration [`KeySet`], dropping the plaintext-ack requirement
+/// when secured mode is active. Under mTLS the channel is authenticated, so
+/// the `migration-phase2-unsafe-plaintext: ack` escape-hatch is moot and
+/// must not gate the secured flow (design §6.2). The controller KEEPS
+/// emitting the ack for now (harmless — we ignore it here), so there is no
+/// version-skew window during a rolling upgrade.
+pub fn migration_keys() -> KeySet {
+    migration_keys_for(secured_migration_mode())
+}
+
+/// Pure helper for [`migration_keys`].
+fn migration_keys_for(secured: bool) -> KeySet {
+    let mut k = MIGRATION_KEYS;
+    if secured {
+        k.ack_key = None;
+    }
+    k
+}
+
+/// Validates that a CH migration URL targets a loopback address. Under
+/// secured mode the controller writes `tcp:127.0.0.1:<port>` (the local
+/// stunnel proxy); an attacker who rewrote the operator-writable
+/// `migration-action-args` to a remote IP would otherwise make CH stream
+/// the guest in cleartext to that endpoint — the S1 risk mTLS does not
+/// close on its own (design §6.1). `unix:` sockets are inherently local and
+/// always pass. Only invoked under secured mode (the plaintext path still
+/// targets the remote dst IP directly).
+pub fn validate_loopback_url(url: &str) -> Result<(), String> {
+    if url.strip_prefix("unix:").is_some() {
+        return Ok(());
+    }
+    let rest = url.strip_prefix("tcp:").ok_or_else(|| {
+        format!(
+            "secured migration: unsupported URL scheme (want tcp:/unix:): {}",
+            url
+        )
+    })?;
+    let host = if let Some(after) = rest.strip_prefix('[') {
+        // [ipv6]:port
+        let end = after
+            .find(']')
+            .ok_or_else(|| format!("secured migration: malformed bracketed host: {}", url))?;
+        &after[..end]
+    } else {
+        match rest.rfind(':') {
+            Some(i) => &rest[..i],
+            None => rest,
+        }
+    };
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if loopback {
+        Ok(())
+    } else {
+        Err(format!(
+            "secured migration: refusing non-loopback host {:?} (S1: migration URL must be localhost under mTLS): {}",
+            host, url
+        ))
+    }
+}
+
 /// Maps a snapshot-namespace verb string to an [`ActionKind`].
 fn parse_snapshot_verb(verb: &str) -> ActionKind {
     match verb {
@@ -809,13 +891,28 @@ async fn dispatch_migration_send(
     action: &PendingAction,
     api_socket: &Path,
 ) -> Result<ActionOutcome, String> {
-    // SECURITY-S1: target_url is read from operator-set pod annotation
-    // args (Phase 2 manual path ONLY). In Phase 3, this read is replaced
-    // by reading from the SwiftMigration CR via kube-rs to mitigate the
-    // annotation-trust-boundary issue. See
-    // docs/design/live-migration-phase-2.md §8.2.3.
+    // SECURITY-S1: target_url is read from the operator-writable pod
+    // annotation args. Phase 3c PR 4 mitigates the annotation-trust-boundary
+    // issue under mTLS by validating the URL is loopback below (a tampered
+    // remote URL is rejected, not dialed) rather than reading from the
+    // SwiftMigration CR — under the sidecar architecture the URL is always
+    // the local stunnel proxy, so loopback-validation is the equivalent and
+    // simpler mitigation. See docs/design/live-migration-phase-3c.md §6.1.
     let args: MigrationSendArgs = serde_json::from_value(action.args.clone())
         .map_err(|e| format!("parse migration_send args: {}", e))?;
+
+    // S1 (secured mode): the target_url comes from the operator-writable
+    // action-args annotation. Under mTLS it MUST be the local stunnel proxy
+    // (loopback); refuse a non-loopback target so a tampered annotation
+    // cannot redirect the plaintext CH stream to an attacker endpoint. The
+    // "secured migration:" detail is NOT a connection_refused token, so the
+    // controller does not retry it (it is a real rejection, not a sidecar-
+    // not-ready race).
+    if secured_migration_mode() {
+        if let Err(e) = validate_loopback_url(&args.target_url) {
+            return Err(format!("send_migration: {}", e));
+        }
+    }
 
     log::info!(
         "dispatch_migration_send id={} target={}",
@@ -906,10 +1003,22 @@ async fn dispatch_migration_receive(
     action: &PendingAction,
     api_socket: &Path,
 ) -> Result<ActionOutcome, String> {
-    // SECURITY-S1: listen_url is read from operator-set pod annotation
-    // args (Phase 2 manual path ONLY). Phase 3 replaces this read.
+    // SECURITY-S1: listen_url is read from the operator-writable pod
+    // annotation args. Phase 3c PR 4 validates it is loopback below under
+    // secured mode (same mitigation as the send path). See
+    // docs/design/live-migration-phase-3c.md §6.1.
     let args: MigrationReceiveArgs = serde_json::from_value(action.args.clone())
         .map_err(|e| format!("parse migration_receive args: {}", e))?;
+
+    // S1 (secured mode): same as the send path — the listen_url must bind a
+    // loopback address (CH receives behind the local stunnel server);
+    // refuse anything else so a tampered annotation cannot make CH accept a
+    // cleartext connection over the pod network.
+    if secured_migration_mode() {
+        if let Err(e) = validate_loopback_url(&args.listen_url) {
+            return Err(format!("receive_migration: {}", e));
+        }
+    }
 
     log::info!(
         "dispatch_migration_receive id={} listen={}",
@@ -1873,13 +1982,17 @@ async fn handle_pod_state(
     )
     .await;
 
+    // Secured mode drops the ack-gate from the migration KeySet (PR 4 §6.2):
+    // under mTLS the plaintext-ack escape-hatch is moot, so decide() must
+    // not reject the secured flow for a missing ack.
+    let mig_keys = migration_keys();
     handle_namespace(
         client,
         namespace,
         pod_name,
         api_socket,
         &mut state.migration,
-        &MIGRATION_KEYS,
+        &mig_keys,
         annotations,
         write_migration_status_fn,
     )
@@ -2894,6 +3007,73 @@ mod tests {
         // lands.
         assert!(SNAPSHOT_KEYS.ack_key.is_none());
         assert_eq!(MIGRATION_KEYS.ack_key, Some(MIGRATION_PHASE2_ACK_KEY));
+    }
+
+    // --- Phase 3c PR 4: secured-mode (mTLS) ----------------------------
+
+    #[test]
+    fn secured_from_recognises_truthy_values() {
+        assert!(secured_from(Some("1")));
+        assert!(secured_from(Some("true")));
+        assert!(!secured_from(Some("0")));
+        assert!(!secured_from(Some("false")));
+        assert!(!secured_from(Some("")));
+        assert!(!secured_from(Some("yes")));
+        assert!(!secured_from(None));
+    }
+
+    #[test]
+    fn migration_keys_for_drops_ack_gate_when_secured() {
+        // Plaintext: ack gate present. Secured: ack gate bypassed.
+        assert_eq!(
+            migration_keys_for(false).ack_key,
+            Some(MIGRATION_PHASE2_ACK_KEY)
+        );
+        assert!(migration_keys_for(true).ack_key.is_none());
+        // All other fields are untouched by the flip.
+        assert_eq!(
+            migration_keys_for(true).action_key,
+            MIGRATION_KEYS.action_key
+        );
+        assert_eq!(migration_keys_for(true).namespace, MIGRATION_KEYS.namespace);
+    }
+
+    #[test]
+    fn validate_loopback_url_accepts_loopback() {
+        for url in [
+            "tcp:127.0.0.1:6790",
+            "tcp:127.5.5.5:6790",
+            "tcp:localhost:6790",
+            "tcp:[::1]:6790",
+            "unix:/var/run/ch/migration.sock",
+        ] {
+            assert!(
+                validate_loopback_url(url).is_ok(),
+                "expected {} to be accepted as loopback",
+                url
+            );
+        }
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_remote_and_bad_scheme() {
+        for url in [
+            "tcp:1.2.3.4:6789",
+            "tcp:10.0.0.9:6789",
+            "tcp:example.com:6789",
+            "tcp:[2001:db8::1]:6789",
+            "http://127.0.0.1:6790",
+        ] {
+            let res = validate_loopback_url(url);
+            assert!(res.is_err(), "expected {} to be rejected", url);
+            // The rejection detail must NOT contain a connection_refused
+            // token (the controller must not retry an S1 rejection).
+            assert!(
+                !res.unwrap_err().contains("connection_refused"),
+                "S1 rejection detail must not look retryable: {}",
+                url
+            );
+        }
     }
 
     #[test]

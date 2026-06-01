@@ -150,9 +150,17 @@ func sourceStunnelVolumes(guestName string) []corev1.Volume {
 }
 
 // applyMigrationSourceSidecar appends the idle source stunnel client
-// sidecar and its three volumes to the launcher pod. Idempotent: a pod that
+// sidecar and its three volumes to the launcher pod, and sets the
+// secured-mode env on the launcher container. Idempotent: a pod that
 // already carries the sidecar container is left untouched.
 func applyMigrationSourceSidecar(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	// Secured-mode signal for swiftletd (PR 4): set on the launcher
+	// container, NOT the sidecar. The dst launcher inherits it via
+	// newDstPod's DeepCopy. Set first so it lands even on the idempotent
+	// re-entry guard below (a pod created before this code shipped that
+	// already has the sidecar still gets the env on the next reconcile-
+	// driven rebuild).
+	setLauncherMTLSEnv(pod)
 	for i := range pod.Spec.Containers {
 		if pod.Spec.Containers[i].Name == migrationsidecar.ContainerName {
 			return
@@ -160,6 +168,29 @@ func applyMigrationSourceSidecar(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGues
 	}
 	pod.Spec.Containers = append(pod.Spec.Containers, sourceStunnelSidecar())
 	pod.Spec.Volumes = append(pod.Spec.Volumes, sourceStunnelVolumes(guest.Name)...)
+}
+
+// setLauncherMTLSEnv sets KUBESWIFT_MIGRATION_MTLS=1 on the launcher
+// container so swiftletd enters secured mode (S1 loopback enforcement +
+// plaintext-ack bypass). Idempotent: replaces any existing entry.
+func setLauncherMTLSEnv(pod *corev1.Pod) {
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != "launcher" {
+			continue
+		}
+		filtered := c.Env[:0]
+		for _, e := range c.Env {
+			if e.Name != migrationsidecar.EnvMTLSEnabled {
+				filtered = append(filtered, e)
+			}
+		}
+		c.Env = append(filtered, corev1.EnvVar{
+			Name:  migrationsidecar.EnvMTLSEnabled,
+			Value: migrationsidecar.EnvMTLSEnabledValue,
+		})
+		return
+	}
 }
 
 // EnsureMigrationStunnelConfig copies the kubeswift-migration-stunnel
