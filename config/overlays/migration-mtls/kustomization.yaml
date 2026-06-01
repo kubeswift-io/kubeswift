@@ -16,6 +16,7 @@ kind: Kustomization
 resources:
   - ../../default
   - issuer.yaml
+  - stunnel-configmap.yaml
 patches:
   - path: deployment-patch.yaml
     target:

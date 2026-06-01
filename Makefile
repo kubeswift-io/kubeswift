@@ -6,6 +6,7 @@ IMAGE_TAG ?= sha-$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
 GPU_DISCOVERY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/gpu-discovery:$(IMAGE_TAG)
+MIGRATION_STUNNEL_IMAGE ?= ghcr.io/projectbeskar/kubeswift/migration-stunnel:$(IMAGE_TAG)
 IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
 # Push destination: parent OCI repo only (Helm appends chart name from Chart.yaml)
 CHART_OCI_PUSH ?= oci://ghcr.io/projectbeskar/charts
@@ -28,7 +29,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image generate deploy deploy-with-webhook deploy-with-mtls undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image build-migration-stunnel-image generate deploy deploy-with-webhook deploy-with-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
@@ -42,6 +43,7 @@ help:
 	@echo "  build-images          Build all container images (with version stamping)"
 	@echo "  build-controller-image  Build controller-manager image"
 	@echo "  build-swiftletd-image Build swiftletd image"
+	@echo "  build-migration-stunnel-image  Build live-migration mTLS stunnel sidecar image (Phase 3c)"
 	@echo "  push-images           Push images to registry (requires auth)"
 	@echo "  package-chart         Package Helm chart"
 	@echo "  push-chart            Push chart to OCI registry"
@@ -75,7 +77,7 @@ build-go:
 build-rust:
 	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build
 
-build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image
+build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image build-migration-stunnel-image
 
 build-controller-image:
 	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE) \
@@ -89,10 +91,15 @@ build-gpu-discovery-image:
 	docker build -f images/gpu-discovery/Containerfile . -t $(GPU_DISCOVERY_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
+build-migration-stunnel-image:
+	docker build -f images/migration-stunnel/Containerfile . -t $(MIGRATION_STUNNEL_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT)
+
 push-images: build-images
 	docker push $(CONTROLLER_IMAGE)
 	docker push $(SWIFTLETD_IMAGE)
 	docker push $(GPU_DISCOVERY_IMAGE)
+	docker push $(MIGRATION_STUNNEL_IMAGE)
 
 package-chart:
 	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \

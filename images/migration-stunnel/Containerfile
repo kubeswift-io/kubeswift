@@ -1,0 +1,35 @@
+# KubeSwift live-migration mTLS stunnel sidecar (Phase 3c).
+#
+# Minimal first-party image: alpine + stunnel + a role-selecting entrypoint.
+# It owns the cross-pod TLS hop so Cloud Hypervisor and swiftletd stay
+# plaintext-on-localhost and unaware of TLS (the spike's load-bearing
+# non-change). See docs/design/live-migration-phase-3c.md.
+#
+# The stunnel server/client configs are NOT baked into this image: they
+# arrive via a mounted ConfigMap (ONE ConfigMap, BOTH configs). The
+# entrypoint self-selects server-vs-client from STUNNEL_ROLE and injects the
+# peer IP / peer SAN from env (DST_POD_IP / CHECK_HOST). W-3c-2 load-bearing
+# property: role and peer are env-parameterized, never image-baked, so the
+# controller can DeepCopy the source pod's sidecar onto the destination and
+# flip its role rather than maintaining two images.
+FROM alpine:3.20
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+LABEL org.opencontainers.image.title="kubeswift-migration-stunnel"
+LABEL org.opencontainers.image.description="stunnel mTLS sidecar for KubeSwift live migration (Phase 3c)"
+
+RUN apk add --no-cache stunnel
+
+COPY images/migration-stunnel/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Non-root. stunnel binds 0.0.0.0:6789 (server) or 127.0.0.1:6790 (client) -
+# both unprivileged ports - reads the per-node identity from a mounted Secret
+# at /etc/migration-tls/, and renders its active config + logs under /tmp.
+# No Linux capabilities required.
+USER 65534:65534
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
