@@ -113,7 +113,7 @@ func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 	}
 	src := templateSrcPod("guest", "default")
 
-	dst, err := newDstPod(mig, guest, src, scheme)
+	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{})
 	if err != nil {
 		t.Fatalf("newDstPod: %v", err)
 	}
@@ -190,6 +190,15 @@ func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 	if dst.Status.Phase != "" {
 		t.Errorf("status should be reset; got phase=%q", dst.Status.Phase)
 	}
+	// mTLS off (zero config): no stunnel sidecar, no extra volumes.
+	if len(dst.Spec.Containers) != 1 {
+		t.Errorf("mTLS-off dst pod must have exactly the launcher container; got %d containers", len(dst.Spec.Containers))
+	}
+	for _, c := range dst.Spec.Containers {
+		if c.Name == stunnelSidecarContainerName {
+			t.Errorf("mTLS-off dst pod must NOT carry the stunnel sidecar")
+		}
+	}
 }
 
 func TestNewDstPod_NoLauncherContainer_Errors(t *testing.T) {
@@ -202,8 +211,108 @@ func TestNewDstPod_NoLauncherContainer_Errors(t *testing.T) {
 	src := templateSrcPod("guest", "default")
 	src.Spec.Containers[0].Name = "not-launcher"
 
-	if _, err := newDstPod(mig, guest, src, scheme); err == nil {
+	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}); err == nil {
 		t.Errorf("expected error when launcher container is missing")
+	}
+}
+
+// TestNewDstPod_MTLS_InjectsServerSidecar verifies the Phase 3c
+// destination-side wiring: with mTLS enabled, newDstPod appends the
+// stunnel server sidecar (role=server, peer-SAN pinned to the SOURCE
+// node) plus the config + identity-Secret volumes, and leaves the
+// launcher container untouched.
+func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
+	mig.Spec.Target.NodeName = "miles"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+	}
+	src := templateSrcPod("guest", "default")
+
+	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
+		mtlsEnabled: true,
+		srcNodeName: "boba",  // source node — dst pins this SAN
+		dstNodeName: "miles", // destination node — dst presents this identity
+	})
+	if err != nil {
+		t.Fatalf("newDstPod (mTLS): %v", err)
+	}
+
+	// Launcher container still present and is still the FIRST container
+	// (receiver-env lookup + launcherContainerImage rely on finding it by
+	// name, but its primacy keeps existing index-0 assumptions valid).
+	if dst.Spec.Containers[0].Name != LauncherContainerName {
+		t.Fatalf("launcher must remain the first container; got %q", dst.Spec.Containers[0].Name)
+	}
+
+	// Exactly one stunnel sidecar, role=server, CHECK_HOST=source node.
+	var sidecar *corev1.Container
+	for i := range dst.Spec.Containers {
+		if dst.Spec.Containers[i].Name == stunnelSidecarContainerName {
+			sidecar = &dst.Spec.Containers[i]
+			break
+		}
+	}
+	if sidecar == nil {
+		t.Fatalf("mTLS dst pod must carry the %q sidecar", stunnelSidecarContainerName)
+	}
+	env := map[string]string{}
+	for _, e := range sidecar.Env {
+		env[e.Name] = e.Value
+	}
+	if env[envStunnelRole] != stunnelRoleServer {
+		t.Errorf("sidecar role: want %q, got %q", stunnelRoleServer, env[envStunnelRole])
+	}
+	if env[envStunnelCheckHost] != "boba" {
+		t.Errorf("sidecar CHECK_HOST: want source node %q, got %q", "boba", env[envStunnelCheckHost])
+	}
+	if _, present := env[envStunnelDstPodIP]; present {
+		t.Errorf("server-role sidecar must NOT set DST_POD_IP (that is client-only, PR 3b)")
+	}
+
+	// Config + identity volumes present; identity Secret is the DST node's.
+	wantVols := map[string]bool{stunnelConfigVolumeName: false, stunnelCertVolumeName: false}
+	for _, v := range dst.Spec.Volumes {
+		if _, ok := wantVols[v.Name]; ok {
+			wantVols[v.Name] = true
+		}
+		if v.Name == stunnelCertVolumeName {
+			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-miles" {
+				t.Errorf("identity volume must mount the DST node Secret kubeswift-migration-node-miles; got %+v", v.Secret)
+			}
+		}
+		if v.Name == stunnelConfigVolumeName {
+			if v.ConfigMap == nil || v.ConfigMap.Name != stunnelConfigMapName {
+				t.Errorf("config volume must mount %q; got %+v", stunnelConfigMapName, v.ConfigMap)
+			}
+		}
+	}
+	for name, found := range wantVols {
+		if !found {
+			t.Errorf("mTLS dst pod missing expected volume %q", name)
+		}
+	}
+}
+
+// TestNewDstPod_MTLS_EmptyNode_Errors verifies the guard: mTLS enabled
+// with an unresolved node name is a clean construction error rather than
+// a sidecar with an empty SAN pin / unresolvable identity Secret.
+func TestNewDstPod_MTLS_EmptyNode_Errors(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigrationWithUID("m", "default", "abcdef1234567890abcdef1234567890")
+	mig.Spec.Target.NodeName = "miles"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+	}
+	src := templateSrcPod("guest", "default")
+
+	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
+		mtlsEnabled: true,
+		srcNodeName: "", // unresolved
+		dstNodeName: "miles",
+	}); err == nil {
+		t.Errorf("expected error when mTLS enabled but source node name empty")
 	}
 }
 

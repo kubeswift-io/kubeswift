@@ -139,16 +139,34 @@ func dstPodName(mig *migrationv1alpha1.SwiftMigration, guestName string) (string
 //   - scheme: needed by SetControllerReference to resolve the
 //     SwiftGuest's GVK for the ownerRef.
 //
+// dstSidecarConfig carries the Phase 3c (Option B) mTLS parameters
+// newDstPod needs to optionally inject the destination stunnel sidecar.
+// The zero value (mtlsEnabled=false) reproduces the pre-Phase-3c
+// destination pod byte-for-byte — the plaintext path is unchanged.
+//
+// srcNodeName: the SOURCE node. The dst sidecar pins its SAN via
+// CHECK_HOST so the TLS channel authorizes the specific source node for
+// THIS migration (W-3c-4), not merely any CA-signed peer.
+// dstNodeName: the DESTINATION node, whose per-node identity Secret the
+// dst sidecar mounts and presents.
+type dstSidecarConfig struct {
+	mtlsEnabled bool
+	srcNodeName string
+	dstNodeName string
+}
+
 // Returns an error if dstPodName() fails, if SetControllerReference
-// fails (scheme without SwiftGuest registered), or if the launcher
-// container can't be found (corrupt src pod). All errors are
-// programming-error class — callers should phaseFailure with
-// FailureReasonOther.
+// fails (scheme without SwiftGuest registered), if the launcher
+// container can't be found (corrupt src pod), or if mTLS is enabled but
+// the src/dst node names are empty (the SAN pin / identity Secret would
+// be unresolvable). All errors are programming-error class — callers
+// should phaseFailure with FailureReasonOther.
 func newDstPod(
 	mig *migrationv1alpha1.SwiftMigration,
 	guest *swiftv1alpha1.SwiftGuest,
 	srcPod *corev1.Pod,
 	scheme *runtime.Scheme,
+	sidecar dstSidecarConfig,
 ) (*corev1.Pod, error) {
 	name, err := dstPodName(mig, guest.Name)
 	if err != nil {
@@ -182,6 +200,29 @@ func newDstPod(
 	// Add KUBESWIFT_MIGRATION_ROLE=receiver to the launcher container.
 	if err := addReceiverEnvToLauncher(pod); err != nil {
 		return nil, err
+	}
+
+	// Phase 3c (Option B): inject the destination stunnel sidecar (TLS
+	// server). Gated on mtlsEnabled; the plaintext path skips this
+	// entirely. The dst CH receives on localhost behind this sidecar
+	// (listen_url repoint in stopandcopy_live), so swiftletd/CH stay
+	// TLS-unaware (design §5 opacity contract).
+	//
+	// W-3c-1 lifecycle:run freeze is intentionally NOT done here: the
+	// controller-driven live cutover Deletes the src pod and never
+	// patches runPolicy:Stopped (cutover.go), and the dst receiver reads
+	// its runtime intent once at boot during Preparing-live — before any
+	// cutover action — so the <guest>-runtime-intent CM cannot flip to
+	// lifecycle:stop while this pod depends on it. The freeze is
+	// defense-in-depth for a hypothetical future stop-during-migration
+	// path (e.g., Phase 4 drain integration); tracked as a follow-up.
+	if sidecar.mtlsEnabled {
+		if sidecar.srcNodeName == "" || sidecar.dstNodeName == "" {
+			return nil, fmt.Errorf(
+				"dst pod construction: mTLS enabled but node names unresolved (src=%q dst=%q); cannot pin SAN / mount identity Secret",
+				sidecar.srcNodeName, sidecar.dstNodeName)
+		}
+		injectDstStunnelSidecar(pod, sidecar.srcNodeName, sidecar.dstNodeName)
 	}
 
 	// Reset pod status (Create rejects non-empty status; defensive even

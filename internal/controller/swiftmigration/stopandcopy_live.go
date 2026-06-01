@@ -25,14 +25,21 @@ import (
 // missed events.
 const stopAndCopyLivePollInterval = 2 * time.Second
 
-// migrationListenPort is the TCP port both src and dst CH use for
-// the migration channel. Phase 2 manual demo uses 6789
-// (docs/design/live-migration-phase-2.md §2 example flow); Phase 3a
-// PR 1 keeps the same fixed port. mTLS sidecar (Phase 3b) may move
-// the port to localhost-proxy semantics — the design note in Phase 2
-// §spike "Decision 2" calls this out, so callers should NOT bake-in
-// assumptions about whether the port is direct CH or via a proxy.
+// migrationListenPort is the cross-pod TCP port for the migration
+// channel. In the plaintext path (mTLS off) it is the port CH itself
+// binds/dials. In the Phase 3c mTLS path it is the port the stunnel
+// SERVER sidecar binds on the destination pod (0.0.0.0:6789); CH then
+// receives on the localhost plaintext port behind it.
 const migrationListenPort = 6789
+
+// migrationLocalPlaintextPort is the loopback port the destination CH
+// receiver listens on when mTLS is enabled (Phase 3c). The dst stunnel
+// server accepts cross-pod TLS on migrationListenPort and forwards
+// decrypted bytes to 127.0.0.1:migrationLocalPlaintextPort, where CH's
+// vm.receive-migration listens. Localhost-only — no plaintext leaves
+// the pod. The SOURCE-side counterpart (CH sends to 127.0.0.1:6790 via
+// the src stunnel client) lands in PR 3b.
+const migrationLocalPlaintextPort = 6790
 
 // migrationActionTimeoutSeconds is the per-action HTTP timeout the
 // controller passes to swiftletd via migration-action-args. Phase 2
@@ -331,8 +338,18 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		if srcArg != nil {
 			guestIP = srcArg.Annotations[AnnotationGuestIP]
 		}
+		// Phase 3c: when mTLS is enabled the dst CH receives on the
+		// loopback plaintext port behind the stunnel server sidecar
+		// (which terminates cross-pod TLS on migrationListenPort and
+		// forwards here). swiftletd is handed a localhost URL and stays
+		// TLS-unaware (design §5 opacity contract). With mTLS off, CH
+		// binds the cross-pod port directly exactly as in Phase 3a/3b.
+		listenURL := fmt.Sprintf("tcp:0.0.0.0:%d", migrationListenPort)
+		if r.MigrationMTLSEnabled {
+			listenURL = fmt.Sprintf("tcp:127.0.0.1:%d", migrationLocalPlaintextPort)
+		}
 		args := migrationReceiveArgs{
-			ListenURL:      fmt.Sprintf("tcp:0.0.0.0:%d", migrationListenPort),
+			ListenURL:      listenURL,
 			TimeoutSeconds: migrationActionTimeoutSeconds,
 			GuestIP:        guestIP,
 		}
