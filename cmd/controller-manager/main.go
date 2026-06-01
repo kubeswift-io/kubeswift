@@ -138,6 +138,13 @@ func main() {
 	if err = (&swiftguest.SwiftGuestReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		// Phase 3c (Option B): when mTLS is enabled, migration-eligible
+		// launcher pods carry an idle source-side stunnel client sidecar so
+		// a later live migration has its TLS client already in the
+		// immutable source pod. SystemNamespace is where the stunnel
+		// ConfigMap + per-node identity Secrets live.
+		MigrationMTLSEnabled: *migrationMTLSEnabled,
+		SystemNamespace:      leaderElectionNS,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuest controller")
 		os.Exit(1)
