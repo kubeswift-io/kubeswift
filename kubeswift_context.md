@@ -1340,6 +1340,70 @@ post-DeepCopy" fix in
 [`sidecar.go::injectDstStunnelSidecar`](internal/controller/swiftmigration/sidecar.go)
 is what makes the FIRST migration correct; this TFU is about the SECOND.
 
+### 26. New ghcr image packages default private — one-time manual publicize needed
+
+Phase 3c PR 5 cluster walkthrough finding. The new
+`ghcr.io/projectbeskar/kubeswift/migration-stunnel` package was created
+**private** (GitHub's default for org packages), unlike the other
+kubeswift packages which were publicized once. The cluster's launcher
+pods stuck at `1/2` with `ImagePullBackOff` / `401 Unauthorized` on the
+sidecar. **GitHub provides NO REST API to change container-package
+visibility** (the PATCH returns 404) — it is a web-UI-only action
+(Package settings → Danger Zone → Change visibility → Public), so the
+release workflow cannot automate it. Resolved for this package by the
+maintainer flipping it public.
+
+**Tracked as a release-runbook item:** whenever a NEW image is added to
+the build/push matrix, a maintainer must manually publicize its ghcr
+package once (or the deployment needs an imagePullSecret). The existing
+public packages (controller-manager / swiftletd / gpu-discovery) each
+went through this once; migration-stunnel was the first new image since.
+Document in the release runbook; cross-referenced from
+`docs/migration/phase-3c.md` §2. Severity: LOW (one-time per new image;
+fail-loud — ImagePullBackOff is obvious). Surfaced 2026-06-01.
+
+### Phase 3c PR 5 — cluster walkthrough COMPLETE (mTLS validated end-to-end)
+
+PR 5 deployed the combined webhook+mTLS overlay on the dev cluster
+(`make deploy-with-webhook-and-mtls`) and validated the full Phase 3c
+mTLS stack end-to-end:
+
+- **Cert issuance (PR 1):** migrationcert reconciler auto-issued per-node
+  certs for both nodes (`kubeswift-migration-node-{miles,boba}`, Ready).
+- **Sidecar injection (PR 3b/4):** source launcher gets the client
+  sidecar + `KUBESWIFT_MIGRATION_MTLS=1` + downward-API volume + per-guest
+  identity Secret; dst gets the server sidecar (W-3c-2 flip).
+- **End-to-end migration (WT2):** `miles→boba` live migration
+  **Completed** — SAN-pinned mutual TLSv1.3 (`CERT: Host name "boba"
+  matched`), `observedDowntime=1.80s`, `observedTransferDuration=38.48s`
+  (matches Phase 3b plaintext baseline → mTLS overhead ≈ 0).
+- **Chain fail-fast (WT4):** chain migration of a post-cutover guest
+  fails fast with `SourceSidecarNotReady` + recycle hint (validates
+  TFU #25; covers the pre-mTLS-pod case too).
+
+**Three findings, two fixed in PR 5:**
+1. **Sidecar CPU-limit throttle** — the source sidecar's `cpu: 100m`
+   limit (PR 3b) throttled TLS to ~7 MB/s; a 4 GiB migration took ~4 min
+   and failed. FIXED: both sidecars use request-only CPU (no limit). A
+   CPU limit on a throughput-sensitive TLS proxy is an anti-pattern.
+2. **`failureReason` enum mismatch** — `status.failureReason` carries a
+   `+kubebuilder:validation:Enum` that was missing the two reasons added
+   in PR 3 (`MigrationIdentityNotReady`) and PR 3d
+   (`SourceSidecarNotReady`); the earlier "free string, no CRD change"
+   assessment was WRONG. The apiserver REJECTED those status patches, so
+   affected migrations stuck in a reconcile-error storm. Unit tests
+   checked the in-memory `phaseResult`, not the apiserver enum, so they
+   passed — the W5 gap. FIXED: added both to the enum, regenerated the
+   CRD. **Lesson: any new `FailureReason` constant MUST also be added to
+   the CRD enum marker + `make generate` + redeploy the CRD.**
+3. **ghcr package visibility** — TFU #26 above (operational).
+
+The W5 pattern restated for the Nth time: unit tests verify in-memory
+control flow; only the cluster walkthrough catches the
+apiserver-enum-vs-Go-constant mismatch, the CPU-throttle resource bug,
+and the ghcr package-visibility gap. PR 5 runbook:
+[`docs/migration/phase-3c.md`](docs/migration/phase-3c.md).
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)

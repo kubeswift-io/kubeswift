@@ -41,6 +41,45 @@ These are non-negotiable before Phase 3 production migration traffic flows. The 
 
 See `docs/design/live-migration-phase-2.md` §8 (security posture), §10.1 (Phase 3 work surface inventory), and `docs/design/live-migration-phase-2-spike.md` Section 9 (security review findings S1–S4) for the full detail.
 
+### Phase 3c — status (shipped behind `--migration-mtls-enabled`)
+
+Phase 3c (PRs #79–#84 + the PR 5 walkthrough) closes the must-haves above.
+The mechanisms differ from the original Phase 2 plan in two places — the
+stunnel-sidecar architecture made simpler closures possible — so the
+actual posture is recorded here:
+
+- **mTLS transport — DONE.** A first-party `stunnel` sidecar owns the
+  cross-pod TLS hop; CH/swiftletd speak plaintext to localhost only (no
+  CH change, no swiftletd data-path change). **Option B** identity:
+  cert-manager issues one leaf per worker node (SAN = nodeName); the peer
+  is pinned via `verifyChain` + `checkHost` (chains to the migration CA
+  **and** matches the expected peer-node SAN — not bare `verify=2`).
+  Cluster-validated: SAN-pinned mutual TLSv1.3, ~0% throughput overhead.
+- **S1 (untrusted migration URL) — DONE, via loopback validation.** Under
+  secured mode the migration URL is always the local stunnel proxy, so
+  swiftletd **rejects any non-loopback `target_url`/`listen_url`** rather
+  than reading from the SwiftMigration CR (the equivalent, simpler closure
+  the sidecar architecture enables). A tampered remote URL can no longer
+  redirect the cleartext CH stream off-box. The annotation keys are NOT
+  deleted (the controller is their sole legitimate writer and swiftletd no
+  longer trusts their host); the `SECURITY-S1` tags now document the
+  loopback mitigation.
+- **Plaintext-ack gate — RETIRED on the secured path.** swiftletd bypasses
+  the `migration-phase2-unsafe-plaintext: ack` requirement in secured
+  mode (the channel is TLS). The controller still emits the ack (harmless,
+  ignored) to avoid a rolling-upgrade version-skew window; the
+  stop-emitting + key-deletion cleanup is a tracked follow-up.
+- **Audit events — DONE.** An `MTLSChannel` Kubernetes Event names the
+  pinned per-node peer identities (`src`/`dst`) at Validating; the
+  handshake outcome surfaces via the Completed event or the failure
+  event's TLS-related detail.
+- **CPU-feature pre-flight check — DEFERRED** (Tracked Follow-up #10;
+  procedural mitigation: operator verifies `lscpu` flag uniformity).
+- **`spec.allowVersionSkew` — RETIRED, not implemented** (Phase 3b Q3:
+  `newDstPod` clone-src structurally prevents version skew).
+
+Operator runbook: `docs/migration/phase-3c.md`.
+
 ---
 
 ## Other KubeSwift threat surfaces
