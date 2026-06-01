@@ -359,6 +359,8 @@ spec:
                 - RpcError
                 - ImageTagMismatch
                 - DstPodConflict
+                - MigrationIdentityNotReady
+                - SourceSidecarNotReady
                 type: string
               mode:
                 description: |-
