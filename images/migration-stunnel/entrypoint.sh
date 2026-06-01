@@ -1,26 +1,50 @@
 #!/bin/sh
 # KubeSwift live-migration mTLS stunnel sidecar entrypoint (Phase 3c).
 #
-# Selects the server-vs-client stunnel config by STUNNEL_ROLE and injects the
-# per-migration parameters (peer IP, peer SAN) from env. Role and peer are
-# env-parameterized, NEVER image-baked - W-3c-2 load-bearing property: the
-# controller DeepCopies the source pod's sidecar onto the destination and
-# flips STUNNEL_ROLE rather than maintaining two images.
+# Selects the server-vs-client stunnel config by STUNNEL_ROLE and renders
+# the per-migration parameters (peer IP, peer SAN) into the active config.
+# Role and peer are env/file-parameterized, NEVER image-baked - W-3c-2
+# load-bearing property: the controller picks role + peer per migration
+# rather than maintaining two images.
 #
-# Env contract (stamped by the SwiftMigration controller in PR 3):
-#   STUNNEL_ROLE   server | client          (required)
-#   CHECK_HOST     expected peer node SAN    (required, both roles)
-#   DST_POD_IP     destination pod IP        (required, client role only)
+# Two input models, by role:
 #
-# The mounted ConfigMap (STUNNEL_CONFIG_DIR) carries server.conf + client.conf
-# with __CHECK_HOST__ / __DST_POD_IP__ placeholders; this script renders the
-# active config into a writable runtime path and execs stunnel on it.
+#   server (DESTINATION pod): created fresh by the SwiftMigration
+#     controller at migration time, so CHECK_HOST and the identity Secret
+#     are available at container start. Inputs come from ENV + the mounted
+#     per-node identity Secret. Starts immediately.
+#
+#   client (SOURCE pod): lives inside the pre-existing, immutable launcher
+#     pod, born long before any migration. Its inputs (peer IP, peer SAN,
+#     and this guest's identity) are unknown at pod creation and arrive
+#     only when a migration starts: the controller stamps pod annotations
+#     (surfaced here via a downward-API volume) and populates the per-guest
+#     identity Secret. So the client IDLE-POLLS for those inputs and only
+#     then starts stunnel. Idling keeps the launcher pod Running/Ready at
+#     rest (no migration in flight) instead of crash-looping.
+#
+# Env contract:
+#   STUNNEL_ROLE        server | client                 (required)
+#   CHECK_HOST          expected peer node SAN           (server: required)
+#   STUNNEL_CONFIG_DIR  server.conf/client.conf dir      (default /etc/stunnel-config)
+#   STUNNEL_INPUT_DIR   downward-API input dir (client)  (default /etc/migration-input)
+#   STUNNEL_TLS_DIR     identity Secret mount            (default /etc/migration-tls)
+#   STUNNEL_RUNTIME_DIR writable dir for rendered config (default /tmp)
+#   STUNNEL_POLL_SECONDS client idle-poll interval       (default 2)
+#
+# Client inputs arrive as files (controller-stamped, downward-API + Secret):
+#   ${STUNNEL_INPUT_DIR}/dst-ip    destination pod IP   (TLS connect target)
+#   ${STUNNEL_INPUT_DIR}/peer-san  destination node SAN (checkHost pin)
+#   ${STUNNEL_TLS_DIR}/tls.crt, tls.key, ca.crt          (this guest's identity)
 #
 # Pure ASCII; explicit interpreter; POSIX sh (BusyBox-compatible).
 set -eu
 
 CONFIG_DIR="${STUNNEL_CONFIG_DIR:-/etc/stunnel-config}"
 RUNTIME_DIR="${STUNNEL_RUNTIME_DIR:-/tmp}"
+INPUT_DIR="${STUNNEL_INPUT_DIR:-/etc/migration-input}"
+TLS_DIR="${STUNNEL_TLS_DIR:-/etc/migration-tls}"
+POLL_SECONDS="${STUNNEL_POLL_SECONDS:-2}"
 ROLE="${STUNNEL_ROLE:-}"
 
 case "${ROLE}" in
@@ -41,32 +65,54 @@ if [ ! -f "${SRC_CONF}" ]; then
   exit 1
 fi
 
-# CHECK_HOST (expected peer node SAN) is required for BOTH roles. It is the
-# subject-check that closes the W-3c-4 gap: verifyChain alone proves "chains
-# to the migration CA"; checkHost pins the peer to the specific node the
-# controller chose from the SwiftMigration CR. Fail fast if unset rather than
-# render a config that would accept any CA-signed peer.
-if [ -z "${CHECK_HOST:-}" ]; then
-  echo "stunnel-sidecar: CHECK_HOST (expected peer node SAN) is required" >&2
-  exit 1
-fi
+# read_file prints a file's contents with trailing newlines stripped, or an
+# empty string when the file is absent. Used to read controller-stamped
+# downward-API inputs without tripping 'set -e' on a missing file.
+read_file() {
+  if [ -f "$1" ]; then
+    tr -d '\n\r' < "$1"
+  else
+    printf ''
+  fi
+}
 
-# DST_POD_IP is the TLS connect target; required only for the client (source)
-# sidecar. It is known only after the destination pod is scheduled, so the
-# controller stamps it during Preparing-live (W-3c-2 sequencing).
-if [ "${ROLE}" = "client" ] && [ -z "${DST_POD_IP:-}" ]; then
-  echo "stunnel-sidecar: DST_POD_IP is required for client role" >&2
-  exit 1
+EFF_DST_POD_IP=""
+
+if [ "${ROLE}" = "server" ]; then
+  # Destination: CHECK_HOST (expected SOURCE node SAN) arrives by env at
+  # container start; the identity Secret is mounted populated. The SAN pin
+  # closes the W-3c-4 subject-check gap - fail fast rather than render a
+  # config that would accept any CA-signed peer.
+  if [ -z "${CHECK_HOST:-}" ]; then
+    echo "stunnel-sidecar: CHECK_HOST (expected peer node SAN) is required for server role" >&2
+    exit 1
+  fi
+  EFF_CHECK_HOST="${CHECK_HOST}"
+else
+  # Source: idle-poll for the controller-stamped inputs (downward-API
+  # annotations) and the populated per-guest identity Secret. Stays in this
+  # loop - container Running, pod Ready - until a migration starts.
+  echo "stunnel-sidecar: client idle; waiting for migration inputs (dst-ip, peer-san, identity) under ${INPUT_DIR} + ${TLS_DIR}" >&2
+  while : ; do
+    EFF_CHECK_HOST="$(read_file "${INPUT_DIR}/peer-san")"
+    EFF_DST_POD_IP="$(read_file "${INPUT_DIR}/dst-ip")"
+    if [ -n "${EFF_CHECK_HOST}" ] && [ -n "${EFF_DST_POD_IP}" ] && \
+       [ -s "${TLS_DIR}/tls.crt" ] && [ -s "${TLS_DIR}/tls.key" ] && [ -s "${TLS_DIR}/ca.crt" ]; then
+      break
+    fi
+    sleep "${POLL_SECONDS}"
+  done
+  echo "stunnel-sidecar: inputs ready (peer-san=${EFF_CHECK_HOST} dst-ip=${EFF_DST_POD_IP}); starting" >&2
 fi
 
 ACTIVE_CONF="${RUNTIME_DIR}/stunnel.conf"
 # The mounted ConfigMap is read-only; render the substituted config into a
 # writable runtime path.
 cp "${SRC_CONF}" "${ACTIVE_CONF}"
-sed -i "s|__CHECK_HOST__|${CHECK_HOST}|g" "${ACTIVE_CONF}"
+sed -i "s|__CHECK_HOST__|${EFF_CHECK_HOST}|g" "${ACTIVE_CONF}"
 if [ "${ROLE}" = "client" ]; then
-  sed -i "s|__DST_POD_IP__|${DST_POD_IP}|g" "${ACTIVE_CONF}"
+  sed -i "s|__DST_POD_IP__|${EFF_DST_POD_IP}|g" "${ACTIVE_CONF}"
 fi
 
-echo "stunnel-sidecar: starting role=${ROLE} peer-SAN=${CHECK_HOST}${DST_POD_IP:+ dst-ip=${DST_POD_IP}}" >&2
+echo "stunnel-sidecar: starting role=${ROLE} peer-san=${EFF_CHECK_HOST}${EFF_DST_POD_IP:+ dst-ip=${EFF_DST_POD_IP}}" >&2
 exec stunnel "${ACTIVE_CONF}"

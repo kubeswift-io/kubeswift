@@ -57,6 +57,23 @@ const (
 type SwiftGuestReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// MigrationMTLSEnabled mirrors the controller-manager's
+	// --migration-mtls-enabled flag (Phase 3c, Option B). When true, every
+	// migration-eligible launcher pod is born with an idle source-side
+	// stunnel client sidecar (plus its downward-API input volume and a
+	// per-guest identity Secret), so that a future live migration has the
+	// TLS client already in place inside the immutable, already-running
+	// source pod. When false (default) the launcher pod is byte-for-byte
+	// unchanged from Phase 3a/3b.
+	MigrationMTLSEnabled bool
+
+	// SystemNamespace is the controller-manager's own namespace, where the
+	// migration CA Issuer, the per-node identity Secrets, and the
+	// kubeswift-migration-stunnel ConfigMap live. Used to copy the stunnel
+	// ConfigMap into guest namespaces. Only consulted when
+	// MigrationMTLSEnabled.
+	SystemNamespace string
 }
 
 // Reconcile implements the reconcile loop.
@@ -341,6 +358,23 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Override the PVC name to use the clone instead of the shared image PVC.
 		rg.PreparedImage.PVCName = res.PVCName
 	}
+	// Phase 3c (Option B): when mTLS is enabled, the launcher pod for a
+	// migration-eligible guest mounts the stunnel-config ConfigMap and a
+	// per-guest identity Secret (see applyMigrationSourceSidecar). Ensure
+	// both exist in the guest namespace BEFORE building/creating the pod —
+	// a pod that references a missing ConfigMap/Secret never starts. These
+	// are idempotent and never clobber a migration-populated identity.
+	if r.MigrationMTLSEnabled && migrationEligible(&guest) {
+		if err := EnsureMigrationStunnelConfig(ctx, r.Client, r.SystemNamespace, guest.Namespace); err != nil {
+			logger.Error(err, "failed to ensure migration stunnel ConfigMap")
+			return ctrl.Result{}, err
+		}
+		if err := EnsurePerGuestMigrationIdentitySecret(ctx, r.Client, r.Scheme, &guest); err != nil {
+			logger.Error(err, "failed to ensure per-guest migration identity Secret")
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Build and create/update pod
 	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
 	if err != nil {

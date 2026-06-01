@@ -256,7 +256,29 @@ func expandCPURange(s string) ([]int, error) {
 // rootDiskClone is non-nil for disk-boot guests after EnsureRootDiskClone
 // has succeeded. It controls whether a clone-grow-init init container is
 // added on the snapshot clone strategy.
+// buildPod resolves the launcher pod and, when Phase 3c mTLS is enabled,
+// injects the idle source-side stunnel client sidecar for migration-
+// eligible guests. The base-pod construction lives in buildBasePod; this
+// thin wrapper keeps the sidecar concern (and the r-scoped mTLS flag) out
+// of the three boot-path branches.
 func (r *SwiftGuestReconciler) buildPod(
+	ctx context.Context,
+	guest *swiftv1alpha1.SwiftGuest,
+	rg *resolved.ResolvedGuest,
+	seedConfigMapName, intentConfigMapName string,
+	rootDiskClone *RootDiskCloneResult,
+) (*corev1.Pod, error) {
+	pod, err := r.buildBasePod(ctx, guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
+	if err != nil {
+		return nil, err
+	}
+	if r.MigrationMTLSEnabled && migrationEligible(guest) {
+		applyMigrationSourceSidecar(pod, guest)
+	}
+	return pod, nil
+}
+
+func (r *SwiftGuestReconciler) buildBasePod(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
