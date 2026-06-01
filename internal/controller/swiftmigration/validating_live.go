@@ -226,6 +226,16 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 				fmt.Sprintf("populate source migration identity: %v", err),
 				migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
 		}
+		// PR 4 audit event (§6.3): record that this migration's channel is
+		// mTLS-secured and which per-node identities are pinned, so an
+		// operator can see WHICH identity the channel will authenticate.
+		// The handshake OUTCOME surfaces later as the Completed event
+		// (success) or the failure event's TLS-related detail.
+		if r.Recorder != nil {
+			r.Recorder.Eventf(mig, corev1.EventTypeNormal, "MTLSChannel",
+				"live-migration channel secured with mTLS; pinned peers src=%q dst=%q (SAN-pinned per-node identities)",
+				status.SourceNode, status.DestinationNode)
+		}
 	}
 
 	// Compatible=True, advance to Preparing.
