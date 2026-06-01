@@ -2,6 +2,7 @@ package swiftmigration
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 	"github.com/projectbeskar/kubeswift/internal/migrationsidecar"
@@ -77,6 +78,21 @@ func dstStunnelSidecar(srcNodeSAN string) corev1.Container {
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: stunnelConfigVolumeName, MountPath: stunnelConfigDir, ReadOnly: true},
 			{Name: stunnelCertVolumeName, MountPath: migrationTLSDir, ReadOnly: true},
+		},
+		// Resources: mirror the source sidecar (PR 5 walkthrough finding) —
+		// request a small reservation, set NO CPU limit. TLS decryption of
+		// the migration stream is CPU-bound and bursts to line rate; a CPU
+		// limit would throttle migration throughput. The dst sidecar
+		// previously had no Resources at all; an explicit request gives the
+		// scheduler a reservation without capping the burst.
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(50, resource.DecimalSI),
+				corev1.ResourceMemory: *resource.NewQuantity(32*1024*1024, resource.BinarySI),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: *resource.NewQuantity(128*1024*1024, resource.BinarySI),
+			},
 		},
 		// Minimal privilege: a TLS proxy needs no Linux capabilities.
 		// The image already runs as USER 65534; this makes the
