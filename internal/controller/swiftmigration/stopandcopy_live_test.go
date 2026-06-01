@@ -278,6 +278,34 @@ func TestStopAndCopyLive_PreRecv_WritesReceiveAction(t *testing.T) {
 	}
 }
 
+// TestStopAndCopyLive_PreRecv_MTLS_RepointsListenToLocalhost verifies the
+// Phase 3c destination repoint: with mTLS enabled, the dst CH receive
+// listen_url targets the loopback plaintext port (behind the stunnel
+// server sidecar), not the cross-pod port. CH stays TLS-unaware.
+func TestStopAndCopyLive_PreRecv_MTLS_RepointsListenToLocalhost(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	r.MigrationMTLSEnabled = true
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("unexpected failure: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+
+	var got corev1.Pod
+	if err := r.Get(context.Background(), key(dst), &got); err != nil {
+		t.Fatalf("re-get dst: %v", err)
+	}
+	var args migrationReceiveArgs
+	if err := json.Unmarshal([]byte(got.Annotations[AnnotationMigrationActionArgs]), &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	if args.ListenURL != "tcp:127.0.0.1:6790" {
+		t.Errorf("mTLS listen_url: want tcp:127.0.0.1:6790 (loopback behind stunnel), got %q", args.ListenURL)
+	}
+}
+
 // W13 regression: substatePreRecv must patch src pod with BOTH the
 // migration-name label (informer observability per architect F-3) AND
 // the Phase 2 plaintext-ack annotation. Without the ack, swiftletd's

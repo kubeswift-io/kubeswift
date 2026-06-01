@@ -186,6 +186,12 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("swiftmigration-controller"),
+		// Phase 3c (Option B): destination-side mTLS wiring is gated on
+		// the same --migration-mtls-enabled flag that registers the
+		// migrationcert provisioner below. SystemNamespace is where the
+		// per-node identity Secrets live (cert-manager writes them there).
+		MigrationMTLSEnabled: *migrationMTLSEnabled,
+		SystemNamespace:      leaderElectionNS,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftMigration controller")
 		os.Exit(1)

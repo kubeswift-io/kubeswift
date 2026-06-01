@@ -81,6 +81,32 @@ type SwiftMigrationReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// MigrationMTLSEnabled mirrors the controller-manager's
+	// --migration-mtls-enabled flag (Phase 3c, Option B). When false
+	// (default) the live-migration data channel is plaintext exactly as
+	// in Phase 3a/3b — no sidecar, no precondition check, no URL repoint.
+	// When true the destination-side mTLS wiring fires: newDstPod injects
+	// the stunnel server sidecar, the dst CH listen_url is repointed to
+	// localhost (behind the sidecar), and Validating-live requires both
+	// node identity Secrets to be present.
+	//
+	// NOTE (Phase 3c PR 3 = destination side only): the SOURCE-side
+	// sidecar + target_url repoint land in PR 3b (downward-API + poll
+	// delivery of DST_POD_IP into the pre-existing, immutable launcher
+	// pod). Between PR 3 and PR 3b, enabling this flag yields a
+	// half-wired channel (dst expects TLS; src still sends plaintext) —
+	// acceptable because the flag is off by default and end-to-end mTLS
+	// is validated in PR 5.
+	MigrationMTLSEnabled bool
+
+	// SystemNamespace is the controller-manager's own namespace
+	// (POD_NAMESPACE / leader-election namespace), where the migration CA
+	// Issuer and the per-node identity Secrets live. Used by the
+	// Validating-live precondition to copy a node's identity Secret into
+	// the guest namespace (EnsureMigrationIdentitySecret). Only consulted
+	// when MigrationMTLSEnabled.
+	SystemNamespace string
 }
 
 // phaseResult is the return type of every per-phase handler. It

@@ -189,6 +189,16 @@ const (
 	// owner ref, etc.). Distinguishes a clean leader-handover idempotent
 	// re-entry from a name collision with foreign state.
 	FailureReasonDstPodConflict = "DstPodConflict"
+	// FailureReasonMigrationIdentityNotReady — set by the Validating-live
+	// precondition (Phase 3c, Option B) when live-migration mTLS is
+	// enabled but a participating node's per-node identity Secret is not
+	// yet provisioned in the system namespace (cert-manager precondition
+	// not ready). Per design §4.4 the per-node cert is a long-lived
+	// precondition, not a per-migration artifact — failing fast here keeps
+	// a missing/expired node identity from ever reaching the cutover
+	// window. Untyped string (TFU #21) for consistency with the rest of
+	// this enum.
+	FailureReasonMigrationIdentityNotReady = "MigrationIdentityNotReady"
 )
 
 // Phase 3a phaseDetail vocabulary additions (live mode only). These
