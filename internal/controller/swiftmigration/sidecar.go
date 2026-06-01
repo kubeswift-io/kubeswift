@@ -1,11 +1,10 @@
 package swiftmigration
 
 import (
-	"os"
-
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
+	"github.com/projectbeskar/kubeswift/internal/migrationsidecar"
 )
 
 // Phase 3c (Option B) live-migration mTLS stunnel sidecar wiring.
@@ -28,65 +27,32 @@ import (
 // the kubeswift-migration-stunnel ConfigMap (charts + kustomize overlay,
 // PR 2). The entrypoint self-selects by STUNNEL_ROLE and pins the peer
 // via CHECK_HOST (verifyChain + checkHost — W-3c-4).
+// The sidecar contract (image, container name, mount paths, env keys,
+// roles) lives in internal/migrationsidecar so the SwiftGuest controller
+// (source sidecar) and this controller (destination sidecar + PR 3d
+// stamping) share one source of truth. These file-local aliases keep the
+// destination code + tests reading the same short names introduced in
+// PR 3 while sourcing the values from the shared package.
 const (
-	// MigrationStunnelImageEnv overrides the sidecar image. Mirrors
-	// swiftguest.LauncherImageEnv. The release pipeline sets this to the
-	// version-stamped tag; local dev and tests fall back to the default.
-	MigrationStunnelImageEnv = "KUBESWIFT_MIGRATION_STUNNEL_IMAGE"
-	// MigrationStunnelImageDefault is the default sidecar image.
-	MigrationStunnelImageDefault = "ghcr.io/projectbeskar/kubeswift/migration-stunnel:latest"
+	stunnelSidecarContainerName = migrationsidecar.ContainerName
+	stunnelConfigMapName        = migrationsidecar.ConfigMapName
+	stunnelConfigDir            = migrationsidecar.ConfigDir
+	migrationTLSDir             = migrationsidecar.TLSDir
+	stunnelConfigVolumeName     = migrationsidecar.ConfigVolumeName
+	stunnelCertVolumeName       = migrationsidecar.CertVolumeName
 
-	// stunnelSidecarContainerName is the dst pod's sidecar container.
-	// Distinct from LauncherContainerName so dstPodMatches and the
-	// launcher-container lookups (addReceiverEnvToLauncher,
-	// launcherContainerImage) never mistake it for the swiftletd
-	// container.
-	stunnelSidecarContainerName = "migration-stunnel"
+	envStunnelRole      = migrationsidecar.EnvRole
+	envStunnelConfigDir = migrationsidecar.EnvConfigDir
+	envStunnelCheckHost = migrationsidecar.EnvCheckHost
+	envStunnelDstPodIP  = migrationsidecar.EnvDstPodIP
 
-	// stunnelConfigMapName is the ConfigMap carrying server.conf +
-	// client.conf (PR 2: charts/kubeswift/templates/migration/
-	// stunnel-configmap.yaml + config/overlays/migration-mtls). Must
-	// exist in the guest namespace for the sidecar to start; the Helm
-	// chart/overlay provision it in .Values.namespace, and operators
-	// running migrations in other namespaces must replicate it (PR 5
-	// documents this — same shape as the migration identity Secret copy).
-	stunnelConfigMapName = "kubeswift-migration-stunnel"
-
-	// stunnelConfigDir is where the ConfigMap mounts (matches the PR 2
-	// entrypoint's STUNNEL_CONFIG_DIR default).
-	stunnelConfigDir = "/etc/stunnel-config"
-	// migrationTLSDir is where the per-node identity Secret mounts
-	// (matches the cert/key/CAfile paths baked into the PR 2 configs).
-	migrationTLSDir = "/etc/migration-tls"
-
-	// stunnelConfigVolumeName / stunnelCertVolumeName name the two
-	// sidecar volumes on the dst pod.
-	stunnelConfigVolumeName = "migration-stunnel-config"
-	stunnelCertVolumeName   = "migration-tls"
-
-	// Env keys the entrypoint reads (PR 2 entrypoint.sh contract).
-	envStunnelRole      = "STUNNEL_ROLE"
-	envStunnelConfigDir = "STUNNEL_CONFIG_DIR"
-	envStunnelCheckHost = "CHECK_HOST"
-	// envStunnelDstPodIP is the client-only connect target. Destination
-	// sidecars (server role) do not set it; PR 3b stamps it on the src
-	// sidecar via downward API.
-	envStunnelDstPodIP = "DST_POD_IP"
-
-	// stunnelRoleServer is the dst sidecar role (TLS server: accept
-	// 0.0.0.0:6789, forward to the local CH receiver on 127.0.0.1:6790).
-	stunnelRoleServer = "server"
-	// stunnelRoleClient is the src sidecar role (PR 3b).
-	stunnelRoleClient = "client"
+	stunnelRoleServer = migrationsidecar.RoleServer
+	stunnelRoleClient = migrationsidecar.RoleClient
 )
 
-// MigrationStunnelImage returns the stunnel sidecar image, from
-// KUBESWIFT_MIGRATION_STUNNEL_IMAGE env or MigrationStunnelImageDefault.
+// MigrationStunnelImage returns the stunnel sidecar image (shared helper).
 func MigrationStunnelImage() string {
-	if img := os.Getenv(MigrationStunnelImageEnv); img != "" {
-		return img
-	}
-	return MigrationStunnelImageDefault
+	return migrationsidecar.Image()
 }
 
 // dstStunnelSidecar builds the destination-side stunnel sidecar
