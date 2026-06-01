@@ -1,0 +1,73 @@
+{{- if .Values.migration.mtls.enabled }}
+# Live-migration mTLS stunnel sidecar configs (Phase 3c, Option B).
+#
+# ONE ConfigMap carrying BOTH the server and client stunnel configs. The
+# sidecar entrypoint self-selects by STUNNEL_ROLE and injects the peer IP /
+# peer SAN from env (__DST_POD_IP__ / __CHECK_HOST__ placeholders). W-3c-2:
+# role and peer are env-parameterized, never image-baked, so the controller
+# can DeepCopy the source pod's sidecar onto the destination and flip its role.
+#
+# Gated entirely on migration.mtls.enabled - off by default. The SwiftMigration
+# controller (PR 3) mounts this ConfigMap into each migration sidecar. The
+# kustomize mirror is config/overlays/migration-mtls/stunnel-configmap.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubeswift-migration-stunnel
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: migration-mtls
+data:
+  # SERVER role (destination pod): terminates the cross-pod TLS connection and
+  # forwards plaintext to the co-located CH receiver on localhost.
+  server.conf: |
+    foreground = yes
+    syslog = no
+    debug = info
+    ; No pid file - runs in the container's non-root user, no daemonization.
+    pid =
+
+    [migration]
+    ; Cross-pod TLS: accept the source node's sidecar over the pod network.
+    accept = 0.0.0.0:6789
+    ; Forward decrypted bytes to the local CH receiver (vm.receive-migration,
+    ; listen_url=tcp:127.0.0.1:6790). Localhost-only; no plaintext leaves the pod.
+    connect = 127.0.0.1:6790
+    ; This sidecar's own per-node identity (migration Secret, SAN = nodeName).
+    cert = /etc/migration-tls/tls.crt
+    key = /etc/migration-tls/tls.key
+    ; The migration CA that signed every node's leaf.
+    CAfile = /etc/migration-tls/ca.crt
+    ; Require + chain-verify the peer's client cert AND pin it to the expected
+    ; source-node SAN. verifyChain proves "chains to the migration CA";
+    ; checkHost closes the W-3c-4 subject-check gap. NOT verify=4: that ignores
+    ; the CA chain and pins the exact leaf, breaking on cert-manager rotation.
+    verifyChain = yes
+    checkHost = __CHECK_HOST__
+  # CLIENT role (source pod): accepts the local CH sender's plaintext and
+  # tunnels it over TLS to the destination node's sidecar.
+  client.conf: |
+    foreground = yes
+    syslog = no
+    debug = info
+    pid =
+    client = yes
+
+    [migration]
+    ; Accept the local CH sender (vm.send-migration target_url=tcp:127.0.0.1:6790).
+    ; Localhost-only; no plaintext leaves the pod.
+    accept = 127.0.0.1:6790
+    ; Dial the destination node's sidecar over the pod network (TLS). The
+    ; controller substitutes __DST_POD_IP__ once the dst pod is scheduled.
+    connect = __DST_POD_IP__:6789
+    ; This sidecar's own per-node identity (migration Secret, SAN = nodeName).
+    cert = /etc/migration-tls/tls.crt
+    key = /etc/migration-tls/tls.key
+    ; The migration CA that signed every node's leaf.
+    CAfile = /etc/migration-tls/ca.crt
+    ; Chain-verify the destination sidecar's server cert AND pin it to the
+    ; expected destination-node SAN. See server.conf for why not verify=4.
+    verifyChain = yes
+    checkHost = __CHECK_HOST__
+{{- end }}

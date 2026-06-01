@@ -175,9 +175,21 @@ prove "this peer is the legitimate src/dst for THIS migration." Under a
 shared leaf, any pod that can mount the migration Secret is accepted.
 
 **`verify = 2` alone is not shippable** — the chosen model adds subject/
-SAN pinning (`verify = 4` + `checkHost = <expected-peer-SAN>`). The axis
-the decision settled is **how strongly the cert identity binds to the
+SAN pinning (`verifyChain = yes` + `checkHost = <expected-peer-SAN>`). The
+axis the decision settled is **how strongly the cert identity binds to the
 migration, vs. how much provisioning machinery it costs.**
+
+> **Directive note (PR 2 correction):** earlier drafts wrote this as
+> `verify = 4`; that was imprecise shorthand for "chain-verify *and*
+> subject-pin." The implemented sidecar config (PR 2) uses
+> `verifyChain = yes` (numerically `verify = 2`) **plus** `checkHost`.
+> stunnel's literal `verify = 4` is the wrong primitive for Option B:
+> it ignores the CA chain and pins the *exact* leaf, which would require
+> each sidecar to mount its peer's exact cert and would break on
+> cert-manager rotation (the per-node certs renew via `renewBefore`).
+> `verifyChain` proves "chains to the migration CA"; `checkHost` closes
+> the W-3c-4 subject-check gap — together they authorize a *specific*
+> peer while staying rotation-safe.
 
 ### Option A — Shared long-lived leaf (what the spike used)
 
@@ -272,8 +284,9 @@ path. Option A remains an **explicit fallback** for clusters unwilling to
 provision per-node certs (shipping *only* with S1 + a tightly-scoped
 Secret); Option C is held for a future multi-tenancy phase.
 
-The choice sets, downstream: the `verify = 4` + `checkHost = <peer-node
-SAN>` config the controller stamps onto each sidecar (§4.2); **no** cert
+The choice sets, downstream: the `verifyChain = yes` + `checkHost =
+<peer-node SAN>` config the controller stamps onto each sidecar (§4.2;
+see the directive note above on why not literal `verify = 4`); **no** cert
 issuance in the state machine — the per-node cert is a precondition
 (§4.4); the cert-manager dependency stays at "already required" (§6.3);
 and the failure modes reduce to precondition + handshake + expiry (§7).
@@ -439,9 +452,12 @@ guest running and recoverable. mTLS adds handshake-rejection as a new
    patch during cutover would poison it to `lifecycle: stop`.
 5. **CH/swiftletd speak localhost plaintext only** (§5): the cross-pod hop
    is the sidecar's, exclusively. No TLS below the controller.
-6. **`verify = 4` + SAN pinning, never bare `verify = 2`** (W-3c-4): the
-   shippable config authorizes a *specific* peer, not merely a CA-signed
-   one.
+6. **`verifyChain = yes` + SAN pinning (`checkHost`), never bare
+   `verify = 2`** (W-3c-4): the shippable config authorizes a *specific*
+   peer, not merely a CA-signed one. (Earlier drafts said `verify = 4`;
+   see the §3 directive note — literal `verify = 4` pins the exact leaf
+   and breaks cert rotation, so the implementation uses
+   `verifyChain` + `checkHost`.)
 
 ---
 
