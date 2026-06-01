@@ -1300,6 +1300,46 @@ at the injection site so a future maintainer sees the constraint before
 adding a source-stop to the live path. Severity: LOW (latent; not
 reachable today). Surfaced 2026-06-01 during PR 3 planning.
 
+### 25. Chain migrations under live-migration mTLS require a pod recycle
+
+Phase 3c PR 3d (source-side mTLS activation, PR #83) ships with a known
+limitation around back-to-back ("chain") live migrations when mTLS is
+enabled. The source sidecar is a TLS **client** and the destination
+sidecar is a TLS **server**; the role is an immutable env on an immutable
+pod. After a migration's cutover, the destination pod becomes the guest's
+running pod — carrying a **server**-role sidecar. If that guest is then
+live-migrated again, it is the *source* of the next migration but cannot
+act as a TLS client (wrong-role sidecar). The same applies to any guest
+whose launcher pod predates mTLS enablement (no sidecar at all — the
+SwiftGuest controller only injects the sidecar on newly created pods).
+
+**Current behaviour (fail-fast, not silent):** Validating-live's
+`sourcePodMTLSReady` check fails such a migration immediately with
+`FailureReason=SourceSidecarNotReady` and a message hinting the operator
+to recycle the guest's pod (stop/start), rather than letting it run the
+~60s bounded-send-retry and then time out. The source VM is never harmed
+(live-migration pre-copy does not pause the source).
+
+**Operator workaround:** recycle the guest's launcher pod between chained
+mTLS migrations (a stop/start, which recreates the pod via the SwiftGuest
+controller with a fresh client-role sidecar). PR 5 documents this.
+
+**Possible future fixes (not scoped):**
+- Give the destination pod BOTH a server sidecar (for the inbound
+  migration) AND a client sidecar (for a future outbound migration) —
+  heavier per-pod footprint, but removes the limitation.
+- A controller-driven post-cutover pod recycle (invasive: recreating a
+  running VM pod is downtime; likely not worth it).
+- Revisit once a single stunnel instance / config can serve both roles on
+  the localhost port pair (not possible with the current stunnel model).
+
+Severity: LOW-MEDIUM (operators doing rapid chained rebalancing under
+mTLS hit it; the fail-fast makes it diagnosable). Surfaced 2026-06-01
+during PR 3d implementation. Cross-reference: the W-3c-2 "flip role
+post-DeepCopy" fix in
+[`sidecar.go::injectDstStunnelSidecar`](internal/controller/swiftmigration/sidecar.go)
+is what makes the FIRST migration correct; this TFU is about the SECOND.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
