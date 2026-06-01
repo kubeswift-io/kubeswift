@@ -57,6 +57,17 @@ const (
 	RoleServer = "server" // destination: TLS server, inputs by env at start
 	RoleClient = "client" // source: TLS client, idle-polls InputDir + TLSDir
 
+	// EnvMTLSEnabled is set on the LAUNCHER container (not the sidecar) by
+	// the SwiftGuest controller when mTLS is enabled; the dst launcher
+	// inherits it via newDstPod's DeepCopy. swiftletd reads it at startup
+	// to enter "secured mode" (Phase 3c PR 4): it then (a) validates the
+	// migration target_url/listen_url is a loopback address and rejects
+	// otherwise (S1 — the URL becomes untrusted), and (b) bypasses the
+	// plaintext-ack gate (the channel is TLS). The string MUST match the
+	// constant swiftletd reads (rust/swiftletd/src/action.rs).
+	EnvMTLSEnabled      = "KUBESWIFT_MIGRATION_MTLS"
+	EnvMTLSEnabledValue = "1"
+
 	// Controller-stamped SOURCE-pod annotations. The SwiftGuest controller's
 	// downward-API volume projects these into InputFileDstIP / InputFilePeerSAN
 	// under InputDir; the SwiftMigration controller (PR 3d) writes them when a
