@@ -114,23 +114,53 @@ func dstStunnelVolumes(dstSecretName string) []corev1.Volume {
 	}
 }
 
-// injectDstStunnelSidecar appends the destination stunnel sidecar
-// container and its two volumes to the dst pod. Idempotent: a pod that
-// already carries a container named stunnelSidecarContainerName is left
-// untouched (defensive against a future DeepCopy bringing a sidecar
-// over — though in PR 3 the src pod has no sidecar yet).
+// injectDstStunnelSidecar makes the dst pod's stunnel sidecar authoritative
+// as the TLS SERVER. It is W-3c-2's "flip role post-DeepCopy": newDstPod
+// builds the dst by srcPod.DeepCopy(), and since PR 3b the source pod
+// carries a CLIENT-role sidecar (+ a downward-API input volume + a
+// per-GUEST identity Secret). The dst must instead run a SERVER (+ its
+// per-NODE identity Secret, no input volume). So we STRIP any inherited
+// sidecar container and the three sidecar volumes, then add the server
+// sidecar + server volumes. Correct whether or not the src had a sidecar,
+// and idempotent on re-entry.
 //
-// srcNodeName is the SOURCE node (the dst pins its SAN as the expected
-// peer); dstNodeName is the DESTINATION node (whose identity Secret the
-// sidecar presents).
+// srcNodeName is the SOURCE node (the dst pins its SAN via checkHost);
+// dstNodeName is the DESTINATION node (whose per-node identity Secret the
+// server sidecar presents).
 func injectDstStunnelSidecar(pod *corev1.Pod, srcNodeName, dstNodeName string) {
-	for i := range pod.Spec.Containers {
-		if pod.Spec.Containers[i].Name == stunnelSidecarContainerName {
-			return
-		}
-	}
+	pod.Spec.Containers = removeContainerByName(pod.Spec.Containers, stunnelSidecarContainerName)
+	pod.Spec.Volumes = removeVolumesByName(pod.Spec.Volumes,
+		migrationsidecar.ConfigVolumeName, migrationsidecar.CertVolumeName, migrationsidecar.InputVolumeName)
 	pod.Spec.Containers = append(pod.Spec.Containers,
 		dstStunnelSidecar(migrationcert.MigrationNodeCertSAN(srcNodeName)))
 	pod.Spec.Volumes = append(pod.Spec.Volumes,
 		dstStunnelVolumes(migrationcert.MigrationNodeSecretName(dstNodeName))...)
+}
+
+// removeContainerByName returns containers with any entry named `name`
+// removed (preserving order).
+func removeContainerByName(containers []corev1.Container, name string) []corev1.Container {
+	out := containers[:0:0]
+	for _, c := range containers {
+		if c.Name != name {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// removeVolumesByName returns volumes with any entry whose name is in
+// `names` removed (preserving order).
+func removeVolumesByName(volumes []corev1.Volume, names ...string) []corev1.Volume {
+	drop := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		drop[n] = struct{}{}
+	}
+	out := volumes[:0:0]
+	for _, v := range volumes {
+		if _, ok := drop[v.Name]; !ok {
+			out = append(out, v)
+		}
+	}
+	return out
 }
