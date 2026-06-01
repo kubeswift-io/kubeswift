@@ -194,6 +194,16 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	// the src-node Secret (PR 3b) — both are ensured up front so PR 3b
 	// needs no Validating-phase change.
 	if r.MigrationMTLSEnabled {
+		// Fail fast if the source pod can't act as the TLS client: a pod
+		// that predates mTLS enablement (no sidecar) or a post-cutover
+		// destination pod (server-role sidecar) would otherwise retry the
+		// send for ~60s and then time out. A clear admission-time failure
+		// with a recycle hint is far better.
+		if !sourcePodMTLSReady(&srcPod) {
+			return phaseFailure(
+				fmt.Sprintf("source pod %q is not mTLS-source-ready (no client-role migration-stunnel sidecar); it predates mTLS enablement or is a post-cutover destination pod — recycle the guest's pod before live-migrating with mTLS", srcPod.Name),
+				migrationv1alpha1.FailureReasonSourceSidecarNotReady)
+		}
 		for _, n := range []string{status.SourceNode, status.DestinationNode} {
 			if n == "" {
 				return phaseFailure(
@@ -205,6 +215,16 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 					fmt.Sprintf("migration identity Secret for node %q not ready: %v", n, err),
 					migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
 			}
+		}
+		// PR 3d: populate the per-guest identity Secret the SOURCE sidecar
+		// mounts with the source node's issued identity, so the idle client
+		// sidecar (PR 3b) has its cert/key/ca well before the send. Done
+		// here (early) to give kubelet time to propagate the Secret into the
+		// mounted volume before StopAndCopy.
+		if err := r.populateSourceIdentity(ctx, &guest, status.SourceNode); err != nil {
+			return phaseFailure(
+				fmt.Sprintf("populate source migration identity: %v", err),
+				migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
 		}
 	}
 

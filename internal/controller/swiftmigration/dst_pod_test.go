@@ -295,6 +295,79 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 	}
 }
 
+// TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer verifies W-3c-2:
+// when the source pod already carries a CLIENT sidecar (PR 3b), newDstPod's
+// DeepCopy brings it over and the dst construction must FLIP it to a SERVER
+// (and replace the client-only volumes: drop the downward-API input volume,
+// swap the per-guest identity Secret for the dst per-node Secret). Without
+// this, the dst would run a misconfigured client and mTLS would break even
+// for the first migration.
+func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
+	mig.Spec.Target.NodeName = "miles"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+	}
+	src := templateSrcPod("guest", "default")
+	// Source carries a CLIENT sidecar + the client-only volumes (as PR 3b
+	// produces): config, per-guest identity Secret, downward-API input.
+	src.Spec.Containers = append(src.Spec.Containers, corev1.Container{
+		Name: stunnelSidecarContainerName,
+		Env: []corev1.EnvVar{
+			{Name: envStunnelRole, Value: stunnelRoleClient},
+			{Name: "STUNNEL_INPUT_DIR", Value: "/etc/migration-input"},
+		},
+	})
+	src.Spec.Volumes = append(src.Spec.Volumes,
+		corev1.Volume{Name: stunnelConfigVolumeName},
+		corev1.Volume{Name: stunnelCertVolumeName, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "guest-migration-identity"}}},
+		corev1.Volume{Name: "migration-input", VolumeSource: corev1.VolumeSource{DownwardAPI: &corev1.DownwardAPIVolumeSource{}}},
+	)
+
+	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
+		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
+	})
+	if err != nil {
+		t.Fatalf("newDstPod: %v", err)
+	}
+
+	// Exactly ONE migration-stunnel container, role=server.
+	var count int
+	var sc *corev1.Container
+	for i := range dst.Spec.Containers {
+		if dst.Spec.Containers[i].Name == stunnelSidecarContainerName {
+			count++
+			sc = &dst.Spec.Containers[i]
+		}
+	}
+	if count != 1 {
+		t.Fatalf("want exactly 1 stunnel sidecar after flip, got %d", count)
+	}
+	role := ""
+	for _, e := range sc.Env {
+		if e.Name == envStunnelRole {
+			role = e.Value
+		}
+	}
+	if role != stunnelRoleServer {
+		t.Errorf("inherited client sidecar must be flipped to server; got role %q", role)
+	}
+
+	// The downward-API input volume must be gone; the cert volume must now
+	// point at the dst per-node Secret, not the inherited per-guest one.
+	for _, v := range dst.Spec.Volumes {
+		if v.Name == "migration-input" {
+			t.Errorf("dst must not carry the client downward-API input volume")
+		}
+		if v.Name == stunnelCertVolumeName {
+			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-miles" {
+				t.Errorf("dst cert volume must be the dst per-node Secret; got %+v", v.Secret)
+			}
+		}
+	}
+}
+
 // TestNewDstPod_MTLS_EmptyNode_Errors verifies the guard: mTLS enabled
 // with an unresolved node name is a clean construction error rather than
 // a sidecar with an empty SAN pin / unresolvable identity Secret.

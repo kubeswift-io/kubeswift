@@ -12,6 +12,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 )
 
 // preparingLiveReadyBudget is the wall-clock window for the dst pod
@@ -196,6 +197,19 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		// been lost across leader handover or status patches).
 		if status.DestinationPodRef == nil || status.DestinationPodRef.Name != existingDst.Name {
 			status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: existingDst.Name}
+		}
+		// PR 3d: as soon as the dst pod has an IP, stamp the dst-ip /
+		// peer-san annotations on the SOURCE pod. The SwiftGuest
+		// controller's downward-API volume surfaces them to the idle
+		// client sidecar, which then renders its config and brings stunnel
+		// up — giving it the full Preparing-Ready window to start before
+		// StopAndCopy issues the send ("stamp early" — design §4.2). The
+		// dst node's SAN is what the source client pins via checkHost.
+		if r.MigrationMTLSEnabled && existingDst.Status.PodIP != "" {
+			dstNodeSAN := migrationcert.MigrationNodeCertSAN(mig.Spec.Target.NodeName)
+			if err := r.stampSourceMigrationInputs(ctx, &srcPod, existingDst.Status.PodIP, dstNodeSAN); err != nil {
+				return phaseTransient(fmt.Errorf("stamp source migration inputs: %w", err))
+			}
 		}
 	}
 
