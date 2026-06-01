@@ -1264,6 +1264,42 @@ edit on a Ready image is allowed while a genuine spec change is still
 rejected. Deferred from branch fix/tfu-17 to keep that change scoped to
 the HIGH-severity trap (TFU #17). Surfaced 2026-05-29 by the PR C recon.
 
+### 24. W-3c-1 `lifecycle: run` freeze on the migration dst pod — deferred (defense-in-depth, not needed by the current live flow)
+
+Phase 3c PR 3 (destination-side mTLS wiring, PR #81) deliberately did
+NOT implement the design doc §4.1 / §8-invariant-#4 `lifecycle: run`
+freeze on the destination launcher pod. The freeze guards against a
+narrow poisoning: if the controller patched the source guest to
+`runPolicy: Stopped` mid-migration, the SwiftGuest controller would
+rewrite `<guest>-runtime-intent` to `lifecycle: stop`, and swiftletd's
+launch gate (`main.rs:201`) honors that for ALL launch paths including
+`migration_receiver_mode` (receiver role is an env var, not an
+exemption) — poisoning the dst receiver.
+
+**Why it cannot fire in the controller-driven live flow:**
+[`cutover.go`](internal/controller/swiftmigration/cutover.go) commits
+cutover by **`Delete`-ing the src pod** (step 2) and patching
+`SwiftGuest.status.podRef.name` (step 1); it **never patches
+`runPolicy: Stopped`** on the source guest. And the dst receiver reads
+its runtime intent **once at boot during Preparing-live** — long before
+any cutover action — so the `<guest>-runtime-intent` CM cannot flip to
+`lifecycle: stop` while the dst depends on it (RestartPolicy: Never, no
+re-read). The W-3c-1 finding originated in the Phase 3c **spike**, whose
+manual flow patched `runPolicy: Stopped` directly.
+
+Implementing the freeze now would be a speculative, non-trivial change
+(minting a frozen per-migration intent CM and repointing the dst pod's
+volume) against Design Principle #1 (minimal changes) / #7 (no
+speculative fixes). **Tracked as defense-in-depth** for a hypothetical
+future stop-during-migration path — most plausibly **Phase 4 drain
+integration**, where an eviction-triggered stop could coincide with a
+live migration. If/when such a path lands, the freeze (or an equivalent
+guard ensuring the dst intent stays `lifecycle: run`) must land with it.
+Documented in [`dst_pod.go::newDstPod`](internal/controller/swiftmigration/dst_pod.go)
+at the injection site so a future maintainer sees the constraint before
+adding a source-stop to the live path. Severity: LOW (latent; not
+reachable today). Surfaced 2026-06-01 during PR 3 planning.
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)

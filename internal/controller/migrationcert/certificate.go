@@ -5,11 +5,14 @@
 // (per-node identity + SAN pinning). Each worker node gets one
 // cert-manager Certificate whose SAN (and CN) is the node name; the
 // stunnel sidecar on a migration's source/destination pod presents
-// that cert and the peer pins it via `verify = 4` + `checkHost =
-// <peer-node-name>`. A bare `verify = 2` (verifyChain without subject
+// that cert and the peer pins it via `verifyChain = yes` + `checkHost =
+// <peer-node-name>`. A bare `verifyChain` (verify=2 without subject
 // checks) is insufficient (W-3c-4) — the SAN pin is what proves "this
 // is the legitimate src/dst node for THIS migration", not merely "the
-// peer holds a CA-signed cert".
+// peer holds a CA-signed cert". (Not literal stunnel `verify = 4`,
+// which ignores the CA chain and pins the exact leaf, breaking
+// cert-manager rotation — see docs/design/live-migration-phase-3c.md
+// §3 directive note.)
 //
 // This file owns the per-node Certificate lifecycle:
 //   - newNodeCertificate builds the cert-manager Certificate object,

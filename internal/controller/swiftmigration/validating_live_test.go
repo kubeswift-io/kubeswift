@@ -9,12 +9,32 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
+
+// migrationNodeIdentitySecret builds a per-node identity Secret fixture
+// (the shape cert-manager writes into the system namespace) for the
+// Phase 3c Validating-live precondition tests.
+func migrationNodeIdentitySecret(systemNS, node string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      migrationcert.MigrationNodeSecretName(node),
+			Namespace: systemNS,
+		},
+		Type: corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"tls.crt": []byte("crt-" + node),
+			"tls.key": []byte("key-" + node),
+			"ca.crt":  []byte("ca"),
+		},
+	}
+}
 
 // newSourcePodWithLauncherImage builds a source pod with a launcher
 // container whose image is set explicitly. Used by image-tag-match
@@ -86,6 +106,123 @@ func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 	}
 	if status.DestinationNode != "miles" {
 		t.Errorf("DestinationNode: want miles, got %q", status.DestinationNode)
+	}
+}
+
+// TestValidatingLive_MTLS_IdentitiesPresent_Advances verifies the
+// Phase 3c precondition: with mTLS enabled and both node identity
+// Secrets present in the system namespace, Validating-live advances AND
+// distributes both Secrets into the guest namespace so the launcher
+// pods can mount them.
+func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
+	scheme := validatingScheme(t)
+	const sysNS = "kubeswift-system"
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	node := newSpaciousNode("miles", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1") // src node "boba"
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	srcSecret := migrationNodeIdentitySecret(sysNS, "boba")
+	dstSecret := migrationNodeIdentitySecret(sysNS, "miles")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod, srcSecret, dstSecret).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{
+		Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10),
+		MigrationMTLSEnabled: true, SystemNamespace: sysNS,
+	}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleValidatingLive(context.Background(), mig, status)
+	if result.Err != nil || result.FailureMsg != "" {
+		t.Fatalf("handleValidatingLive failure: err=%v msg=%q reason=%q", result.Err, result.FailureMsg, result.FailureReason)
+	}
+	if !result.Advanced {
+		t.Fatal("expected Advanced=true with both identities present")
+	}
+	// Both node identity Secrets copied into the guest namespace.
+	for _, n := range []string{"boba", "miles"} {
+		var s corev1.Secret
+		if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: migrationcert.MigrationNodeSecretName(n)}, &s); err != nil {
+			t.Errorf("identity Secret for node %q not distributed into guest namespace: %v", n, err)
+		}
+	}
+}
+
+// TestValidatingLive_MTLS_IdentityMissing_FailsNotReady verifies the
+// precondition fails fast (before Preparing) when a participating node's
+// identity Secret has not been provisioned.
+func TestValidatingLive_MTLS_IdentityMissing_FailsNotReady(t *testing.T) {
+	scheme := validatingScheme(t)
+	const sysNS = "kubeswift-system"
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	node := newSpaciousNode("miles", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	// Only the source-node Secret present; destination-node Secret missing.
+	srcSecret := migrationNodeIdentitySecret(sysNS, "boba")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod, srcSecret).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{
+		Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10),
+		MigrationMTLSEnabled: true, SystemNamespace: sysNS,
+	}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleValidatingLive(context.Background(), mig, status)
+	if result.FailureReason != migrationv1alpha1.FailureReasonMigrationIdentityNotReady {
+		t.Fatalf("want FailureReason=%q, got reason=%q msg=%q advanced=%v err=%v",
+			migrationv1alpha1.FailureReasonMigrationIdentityNotReady, result.FailureReason, result.FailureMsg, result.Advanced, result.Err)
+	}
+	if status.Phase == migrationv1alpha1.SwiftMigrationPhasePreparing {
+		t.Errorf("must not advance to Preparing when an identity Secret is missing")
+	}
+}
+
+// TestValidatingLive_MTLSDisabled_SkipsPrecondition verifies the default
+// (plaintext) path is unchanged: no identity Secrets, mTLS off → advances.
+func TestValidatingLive_MTLSDisabled_SkipsPrecondition(t *testing.T) {
+	scheme := validatingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	node := newSpaciousNode("miles", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod).
+		WithStatusSubresource(mig).
+		Build()
+	// MigrationMTLSEnabled left false; SystemNamespace irrelevant.
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleValidatingLive(context.Background(), mig, status)
+	if result.Err != nil || result.FailureMsg != "" {
+		t.Fatalf("mTLS-off Validating must not fail on missing identities: err=%v msg=%q", result.Err, result.FailureMsg)
+	}
+	if !result.Advanced {
+		t.Fatal("expected Advanced=true on the plaintext path")
 	}
 }
 

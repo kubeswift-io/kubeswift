@@ -142,7 +142,20 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 	switch {
 	case apierrors.IsNotFound(getErr):
 		// No dst pod yet — construct and Create.
-		dst, buildErr := newDstPod(mig, &guest, &srcPod, r.Scheme)
+		//
+		// Phase 3c: when mTLS is enabled, newDstPod injects the dst
+		// stunnel sidecar. srcNodeName is the node the source guest runs
+		// on right now (its identity is what the dst pins via CHECK_HOST);
+		// dstNodeName is the migration target (whose identity Secret the
+		// dst sidecar presents). Both are guaranteed non-empty here:
+		// Validating-live verified the guest is scheduled and the target
+		// node exists, and (when mTLS is on) distributed both identity
+		// Secrets into this namespace.
+		dst, buildErr := newDstPod(mig, &guest, &srcPod, r.Scheme, dstSidecarConfig{
+			mtlsEnabled: r.MigrationMTLSEnabled,
+			srcNodeName: guest.Status.NodeName,
+			dstNodeName: mig.Spec.Target.NodeName,
+		})
 		if buildErr != nil {
 			return phaseFailure(
 				fmt.Sprintf("construct dst pod: %v", buildErr),
