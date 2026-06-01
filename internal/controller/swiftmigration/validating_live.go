@@ -11,6 +11,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
@@ -179,6 +180,33 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	}
 
 	// CPU pre-flight: silent success per design §7.3.
+
+	// Phase 3c (Option B) mTLS precondition (§4.4). When live-migration
+	// mTLS is enabled, BOTH participating nodes' per-node identity
+	// Secrets must already be provisioned (cert-manager precondition) and
+	// are distributed into this guest namespace so the launcher pods can
+	// mount them. This is DISTRIBUTION, not issuance — no cert-manager
+	// call sits on the migration path; EnsureMigrationIdentitySecret
+	// copies an already-issued Secret and returns an error when the
+	// source Secret is absent. Failing fast here keeps a missing/expired
+	// node identity from ever reaching the cutover window. The dst
+	// sidecar mounts the dst-node Secret (PR 3); the src sidecar mounts
+	// the src-node Secret (PR 3b) — both are ensured up front so PR 3b
+	// needs no Validating-phase change.
+	if r.MigrationMTLSEnabled {
+		for _, n := range []string{status.SourceNode, status.DestinationNode} {
+			if n == "" {
+				return phaseFailure(
+					"migration mTLS enabled but a participating node name is empty; cannot resolve per-node identity",
+					migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
+			}
+			if err := migrationcert.EnsureMigrationIdentitySecret(ctx, r.Client, r.SystemNamespace, guest.Namespace, n); err != nil {
+				return phaseFailure(
+					fmt.Sprintf("migration identity Secret for node %q not ready: %v", n, err),
+					migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
+			}
+		}
+	}
 
 	// Compatible=True, advance to Preparing.
 	setCondition(status, migrationv1alpha1.SwiftMigrationConditionCompatible,
