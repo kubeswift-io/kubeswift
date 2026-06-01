@@ -199,6 +199,15 @@ const (
 	// window. Untyped string (TFU #21) for consistency with the rest of
 	// this enum.
 	FailureReasonMigrationIdentityNotReady = "MigrationIdentityNotReady"
+	// FailureReasonSourceSidecarNotReady — set by Validating-live (Phase
+	// 3c, Option B) when live-migration mTLS is enabled but the source pod
+	// lacks a client-role migration-stunnel sidecar. Happens when the
+	// source pod predates mTLS enablement (the sidecar is only injected on
+	// newly created launcher pods) or is a post-cutover destination pod
+	// from a prior migration (server-role sidecar; chain migrations under
+	// mTLS need a pod recycle). Operators recycle the guest's pod and
+	// retry. Untyped string (TFU #21).
+	FailureReasonSourceSidecarNotReady = "SourceSidecarNotReady"
 )
 
 // Phase 3a phaseDetail vocabulary additions (live mode only). These

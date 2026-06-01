@@ -16,7 +16,19 @@ import (
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
+	"github.com/projectbeskar/kubeswift/internal/migrationsidecar"
 )
+
+// withClientStunnelSidecar adds a client-role migration-stunnel sidecar to a
+// source pod so it passes the Phase 3c sourcePodMTLSReady fail-fast (the
+// SwiftGuest controller injects this on real migration-eligible pods).
+func withClientStunnelSidecar(p *corev1.Pod) *corev1.Pod {
+	p.Spec.Containers = append(p.Spec.Containers, corev1.Container{
+		Name: migrationsidecar.ContainerName,
+		Env:  []corev1.EnvVar{{Name: migrationsidecar.EnvRole, Value: migrationsidecar.RoleClient}},
+	})
+	return p
+}
 
 // migrationNodeIdentitySecret builds a per-node identity Secret fixture
 // (the shape cert-manager writes into the system namespace) for the
@@ -120,7 +132,7 @@ func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
 	node := newSpaciousNode("miles", 8, 65536)
-	srcPod := newSourcePod("guest", "default", "src-pod-uid-1") // src node "boba"
+	srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1")) // src node "boba"
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
@@ -165,7 +177,7 @@ func TestValidatingLive_MTLS_IdentityMissing_FailsNotReady(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
 	node := newSpaciousNode("miles", 8, 65536)
-	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
+	srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1"))
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
@@ -192,6 +204,42 @@ func TestValidatingLive_MTLS_IdentityMissing_FailsNotReady(t *testing.T) {
 	}
 	if status.Phase == migrationv1alpha1.SwiftMigrationPhasePreparing {
 		t.Errorf("must not advance to Preparing when an identity Secret is missing")
+	}
+}
+
+// TestValidatingLive_MTLS_SourceNotSidecarReady_Fails verifies the fail-fast
+// for a source pod that lacks a client-role stunnel sidecar (predates mTLS
+// enablement, or is a post-cutover dst pod). Even with both identities
+// present, it must fail with SourceSidecarNotReady rather than advance and
+// later retry-then-timeout.
+func TestValidatingLive_MTLS_SourceNotSidecarReady_Fails(t *testing.T) {
+	scheme := validatingScheme(t)
+	const sysNS = "kubeswift-system"
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	node := newSpaciousNode("miles", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1") // NO sidecar
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod,
+			migrationNodeIdentitySecret(sysNS, "boba"), migrationNodeIdentitySecret(sysNS, "miles")).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{
+		Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10),
+		MigrationMTLSEnabled: true, SystemNamespace: sysNS,
+	}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleValidatingLive(context.Background(), mig, status)
+	if result.FailureReason != migrationv1alpha1.FailureReasonSourceSidecarNotReady {
+		t.Fatalf("want FailureReason=%q, got reason=%q msg=%q",
+			migrationv1alpha1.FailureReasonSourceSidecarNotReady, result.FailureReason, result.FailureMsg)
 	}
 }
 

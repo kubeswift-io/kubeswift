@@ -393,8 +393,16 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			// Requeue briefly.
 			return phaseRequeue(stopAndCopyLivePollInterval)
 		}
+		// Phase 3c: when mTLS is enabled the src CH sends to the LOCAL
+		// stunnel client (127.0.0.1:6790), which tunnels over TLS to the
+		// dst sidecar; swiftletd stays TLS-unaware (design §5). With mTLS
+		// off, CH dials the dst pod IP directly exactly as in Phase 3a/3b.
+		targetURL := fmt.Sprintf("tcp:%s:%d", dstPod.Status.PodIP, migrationListenPort)
+		if r.MigrationMTLSEnabled {
+			targetURL = fmt.Sprintf("tcp:127.0.0.1:%d", migrationLocalPlaintextPort)
+		}
 		args := migrationSendArgs{
-			TargetURL:      fmt.Sprintf("tcp:%s:%d", dstPod.Status.PodIP, migrationListenPort),
+			TargetURL:      targetURL,
 			TimeoutSeconds: migrationActionTimeoutSeconds,
 			GuestRAMMiB:    guestRAMMiB(ctx, r, &guest),
 		}
@@ -405,7 +413,12 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		if err := r.writeMigrationAction(ctx, &srcPod, migrationActionVerbSend, sendActionID(mig), string(argsJSON)); err != nil {
 			return phaseTransient(fmt.Errorf("write send-action on src pod: %w", err))
 		}
-		status.SendAttempts = 1
+		// Persist the SAME attempt number sendActionID just used (NOT a
+		// hard-coded 1) so the mTLS retry counter is preserved across
+		// reconciles: a retry bumps mig.Status.SendAttempts at
+		// substateSrcFailed, and re-entering substatePreSend with the new
+		// id must not reset it.
+		status.SendAttempts = sendAttemptNumber(mig)
 		setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveIssuingSend)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
 			"issuing send action on source pod")
@@ -460,6 +473,32 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		detail := ""
 		if srcArg != nil {
 			detail = srcArg.Annotations[AnnotationMigrationStatusDtl]
+		}
+		// Phase 3d — bounded retry for the mTLS source-sidecar readiness
+		// race. With mTLS on, target_url is the LOCAL stunnel client
+		// (127.0.0.1:6790); a "send_migration: connection_refused" means
+		// the client sidecar hasn't finished idle-polling its inputs and
+		// brought stunnel up yet (CH couldn't connect to localhost). The
+		// src CH never reached the dst, so NO migration data flowed and
+		// re-issuing is safe. The dst is still receive-ready (it never saw
+		// a connection), so bumping SendAttempts yields a fresh $SEND_ID
+		// that re-drives substatePreSend on the next reconcile. Bounded by
+		// maxMTLSSendRetries; the overall spec.timeout is the hard cap.
+		// Gated on dst NOT terminating so a genuine dst-gone failure (which
+		// surfaces as transport_error, not connection_refused) is never
+		// mistaken for sidecar-not-ready.
+		if r.MigrationMTLSEnabled && isLocalStunnelNotReady(detail) &&
+			dstPod.DeletionTimestamp == nil && sendAttemptNumber(mig) < maxMTLSSendRetries {
+			status.SendAttempts = sendAttemptNumber(mig) + 1
+			setPhaseDetail(status, "source mTLS sidecar not ready; retrying send")
+			setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
+				"waiting for source mTLS sidecar to become ready; retrying send")
+			if r.Recorder != nil {
+				r.Recorder.Eventf(mig, corev1.EventTypeNormal, "SendRetry",
+					"source mTLS sidecar not yet listening (attempt %d/%d); re-issuing send",
+					sendAttemptNumber(mig), maxMTLSSendRetries)
+			}
+			return phaseRequeue(stopAndCopyLivePollInterval)
 		}
 		// W18 (PR #46 Scenario 4): when dst pod is being K8s-
 		// terminated mid-StopAndCopy, src CH's vm.send-migration

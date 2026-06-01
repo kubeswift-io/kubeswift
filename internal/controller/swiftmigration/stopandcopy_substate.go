@@ -134,17 +134,28 @@ func recvActionID(mig *migrationv1alpha1.SwiftMigration) string {
 	return fmt.Sprintf("%s:recv:%d", mig.Name, n)
 }
 
+// sendAttemptNumber returns the current send attempt number, clamped to a
+// minimum of 1. Phase 3a kept this at 1 (no retry). Phase 3d's mTLS
+// source-sidecar readiness retry increments mig.Status.SendAttempts, so
+// the attempt number (and thus $SEND_ID) advances; this helper is the one
+// place that derives it, shared by sendActionID and the substatePreSend
+// counter write so the written action-id and the persisted counter never
+// disagree.
+func sendAttemptNumber(mig *migrationv1alpha1.SwiftMigration) int32 {
+	n := int32(1)
+	if mig.Status.SendAttempts > n {
+		n = mig.Status.SendAttempts
+	}
+	return n
+}
+
 // sendActionID returns the deterministic $SEND_ID per design F1.8:
 //
 //	$SEND_ID = "<swiftmigration.Name>:send:<SendAttempts>"
 //
 // Same min-clamp semantics as recvActionID.
 func sendActionID(mig *migrationv1alpha1.SwiftMigration) string {
-	n := int32(1)
-	if mig.Status.SendAttempts > n {
-		n = mig.Status.SendAttempts
-	}
-	return fmt.Sprintf("%s:send:%d", mig.Name, n)
+	return fmt.Sprintf("%s:send:%d", mig.Name, sendAttemptNumber(mig))
 }
 
 // migrationActionVerbReceive is the action verb the controller writes
