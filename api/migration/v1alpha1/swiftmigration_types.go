@@ -485,7 +485,7 @@ type SwiftMigrationStatus struct {
 	// modes are simpler and FailureMessage alone is sufficient. Live
 	// mode uses this enum to give the operator a stable taxonomy
 	// for `kubectl get swiftmigration` output and dashboard alerting.
-	// +kubebuilder:validation:Enum=Cancelled;PodTerminated;SourcePodReplaced;Timeout;Other;EligibilityMismatch;DstScheduleFailed;DstNeverReady;ReceiveDisconnect;RpcError;ImageTagMismatch;DstPodConflict
+	// +kubebuilder:validation:Enum=Cancelled;PodTerminated;SourcePodReplaced;Timeout;Other;EligibilityMismatch;DstScheduleFailed;DstNeverReady;ReceiveDisconnect;RpcError;ImageTagMismatch;DstPodConflict;MigrationIdentityNotReady;SourceSidecarNotReady
 	// +optional
 	FailureReason string `json:"failureReason,omitempty"`
 	// SourcePodUID is the source launcher pod's UID at Validating-phase

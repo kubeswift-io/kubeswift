@@ -82,17 +82,26 @@ func sourceStunnelSidecar() corev1.Container {
 			{Name: migrationsidecar.CertVolumeName, MountPath: migrationsidecar.TLSDir, ReadOnly: true},
 			{Name: migrationsidecar.InputVolumeName, MountPath: migrationsidecar.InputDir, ReadOnly: true},
 		},
-		// Idle-poll is cheap; cap it small. No readinessProbe: the sidecar
-		// is "ready" (running) at rest, and a data-port probe would mark the
-		// launcher pod NotReady whenever no migration is in flight.
+		// No readinessProbe: the sidecar is "ready" (running) at rest, and a
+		// data-port probe would mark the launcher pod NotReady whenever no
+		// migration is in flight.
+		//
+		// Resources: TLS encryption of the migration stream is CPU-bound and
+		// bursts to line rate (~112 MB/s) during the brief transfer window.
+		// A CPU *limit* throttles throughput and cripples migration time —
+		// PR 5 cluster walkthrough: a 100m limit dropped a 4 GiB migration to
+		// ~7 MB/s (~16x slower) and it failed when CH errored on the
+		// abnormally long send. So request a small reservation for
+		// scheduling and set NO CPU limit (the proxy is idle at rest and
+		// only bursts during a migration). Keep a modest memory limit —
+		// stunnel's buffers are small.
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    *resource.NewMilliQuantity(10, resource.DecimalSI),
-				corev1.ResourceMemory: *resource.NewQuantity(16*1024*1024, resource.BinarySI),
+				corev1.ResourceCPU:    *resource.NewMilliQuantity(50, resource.DecimalSI),
+				corev1.ResourceMemory: *resource.NewQuantity(32*1024*1024, resource.BinarySI),
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    *resource.NewMilliQuantity(100, resource.DecimalSI),
-				corev1.ResourceMemory: *resource.NewQuantity(64*1024*1024, resource.BinarySI),
+				corev1.ResourceMemory: *resource.NewQuantity(128*1024*1024, resource.BinarySI),
 			},
 		},
 		// Minimal privilege: a TLS proxy needs no Linux capabilities. The
