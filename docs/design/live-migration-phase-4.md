@@ -109,12 +109,28 @@ New field `spec.migration.drainPolicy`, enum, default `Migrate`:
 
 | Value | Drain behaviour |
 |---|---|
-| `Migrate` (default) | `mode=auto` — live where possible, **offline** (bounded downtime) for VFIO/GPU. Drain always succeeds. |
-| `LiveMigrate` | live only; if the guest can't live-migrate (VFIO/GPU), **deny the drain** (block) rather than incur downtime. |
+| `Migrate` (default) | `mode=auto` — live where possible, **offline** (bounded downtime) otherwise. Drain always succeeds **for non-VFIO guests**. |
+| `LiveMigrate` | live only; if the guest can't live-migrate, **deny the drain** (block) rather than incur downtime. |
 | `Block` | always deny the drain; operator handles the guest manually. |
 
 `migration.enabled: false` is orthogonal and stronger — it disables
 migration entirely; drain denies with a manual-handling message.
+
+> **VFIO/GPU scope correction (initial Phase 4).** The original §4.3 text
+> promised `Migrate` does "offline for VFIO/GPU." That is **not deliverable
+> in the initial Phase 4**: the SwiftMigration webhook still rejects ALL
+> VFIO/GPU cross-node migration (`internal/webhook/swiftmigration/validator.go`
+> — "Phase 4+ work pending a release-and-reallocate primitive"), and that
+> primitive (SwiftGPU deallocate-on-source + reallocate-on-target) does not
+> exist. Until it ships, **VFIO/GPU guests block the drain under ANY
+> drainPolicy** (the eviction webhook denies them with a manual-handling
+> message and does NOT mark them — a marker would drive the drain controller
+> to create a webhook-rejected migration every 5s). Building the
+> release-and-reallocate primitive is a follow-on sub-phase (decision
+> 2026-06-02: build it next, after the non-VFIO drain ships); it cannot be
+> cross-node-validated on the current single-GPU-node cluster (validation:
+> same-node release→reacquire on boba + mocked second SwiftGPUNode in
+> unit/envtest). Tracked in `kubeswift_context.md`.
 
 ### 4.4 Target-node selection
 
@@ -181,17 +197,50 @@ enum fields must be regenerated, not just constant-added — Phase 3c PR 5).
 
 ## 9. Implementation plan (PRs)
 
-1. **PR 1** — this design doc + the `drainPolicy` CRD field (+ generate +
-   chart sync). Design + API surface only; reviewable in isolation.
-2. **PR 2** — the TFU #24 `lifecycle: run` freeze on the dst intent (now
-   reachable: Phase 4 introduces the stop-during-migration path). Split
-   out because it touches `newDstPod` / dst-pod construction and is
-   logically independent of drain. Can land in parallel with PR 3.
-3. **PR 3** — the eviction webhook (`pods/eviction` admission handler, VWC
-   rule, `failurePolicy: Ignore`, marker patch with dry-run skip) + RBAC.
-   Unit-tested; no controller yet (marker is inert).
-4. **PR 4** — the drain controller (marker → SwiftMigration → clear) +
-   per-guest PDB creation in the SwiftGuest controller + target selection.
-5. **PR 5** — cluster walkthrough (drain miles → guest live-migrates to
-   boba → drain completes; VFIO-offline path; Block deny; webhook-down PDB
-   safety) + operator runbook (`docs/migration/phase-4.md`).
+1. **PR 1** (#87, merged) — this design doc + the `drainPolicy` CRD field
+   (+ generate + chart sync). Design + API surface only.
+2. **PR 2** (#88, merged) — the TFU #24 `lifecycle: run` freeze on the dst
+   intent (now reachable: Phase 4 introduces the stop-during-migration
+   path). Split out because it touches `newDstPod` / dst-pod construction
+   and is logically independent of drain.
+3. **PR 3** (#89, merged) — the eviction webhook (`pods/eviction` admission
+   handler, VWC rule, `failurePolicy: Ignore`, marker patch with dry-run
+   skip). Unit-tested; marker inert until PR 4a.
+4. **PR 4a** — the drain controller (marker → SwiftMigration → clear +
+   target selection). Handles **non-VFIO** guests; VFIO/GPU guests are
+   denied-without-marking by the eviction webhook (VFIO correctness fix
+   folded in here, since 4a makes the marker live). Reuses the migration
+   Validating phase's `NodeHasCapacity` gate. Unit-tested.
+   *(Split from the original single PR 4 per the same Design-Principle-#1
+   reviewability discipline used throughout Phase 4.)*
+5. **PR 4b** — per-guest `maxUnavailable: 0` PodDisruptionBudget creation in
+   the SwiftGuest controller (the hard floor, independent of the
+   webhook/controller; §4.2). Logically independent of 4a.
+6. **PR 5** — cluster walkthrough (drain miles → guest live-migrates to
+   boba → drain completes; `Block` deny; webhook-down PDB safety) +
+   operator runbook (`docs/migration/phase-4.md`). VFIO-offline is **not**
+   in this walkthrough (deferred to the release-and-reallocate sub-phase).
+
+### Follow-on sub-phase — VFIO/GPU release-and-reallocate
+
+Builds the missing primitive so VFIO/GPU guests can be offline-evacuated on
+drain (decision 2026-06-02: build it after the non-VFIO drain ships). Its
+own design doc + spike + PRs. Surface (from recon):
+- **New SwiftGPU capability**: allocate on a *specific* requested node (today
+  `findAndAllocate` auto-picks the first node with capacity) + release-from-
+  node, exposed for the migration controller to call.
+- **GPU target pre-flight**: target node must have free GPUs matching the
+  profile (count/model/tier/NUMA/FM partition) — a GPU analogue of
+  `NodeHasCapacity`, in both drain target-selection and the migration
+  Validating phase.
+- **Two-phase atomicity**: reserve target GPUs *before* stopping the source
+  (Phase 1's "drive-forward post-cutover, restore pre-cutover"), else a
+  failed realloc strands a stopped, GPU-less guest.
+- **Lift the webhook VFIO rejection** for offline mode only (live + VFIO
+  stays blocked).
+- **FM partition handoff** (Tier 2/3): deactivate on source, activate on
+  target.
+- **Validation**: same-node `boba→boba` release→reacquire on the real GTX
+  1080 + mocked second `SwiftGPUNode` in unit/envtest. Cross-node GPU
+  migration **cannot** be hardware-validated on the single-GPU-node cluster;
+  ships explicitly labeled as such.

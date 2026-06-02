@@ -111,22 +111,26 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 			guestName, node))
 	}
 
+	// VFIO/GPU guests cannot be auto-migrated yet — neither live nor offline
+	// cross-node migration of VFIO devices is supported (the SwiftGPU
+	// release-and-reallocate primitive is a tracked follow-up). Deny with a
+	// manual-handling message under ANY drainPolicy and do NOT mark: a marker
+	// would drive the drain controller to create a SwiftMigration the
+	// migration webhook rejects, looping a doomed object every 5s.
+	if guest.HasVFIODevices() {
+		return denyRetry(fmt.Sprintf(
+			"SwiftGuest %q uses VFIO/GPU devices that cannot be auto-migrated yet; it will not be evacuated off node %q — handle it manually (cross-node VFIO migration is pending the release-and-reallocate primitive)",
+			guestName, node))
+	}
+
 	switch policy {
 	case swiftv1alpha1.DrainPolicyBlock:
 		return denyRetry(fmt.Sprintf(
 			"SwiftGuest %q has drainPolicy=Block; it will not be auto-migrated off node %q — handle this guest manually",
 			guestName, node))
-	case swiftv1alpha1.DrainPolicyLiveMigrate:
-		if guest.HasVFIODevices() {
-			// LiveMigrate forbids incurring downtime; a VFIO/GPU guest can
-			// only migrate offline, so block the drain rather than evacuate
-			// it with downtime.
-			return denyRetry(fmt.Sprintf(
-				"SwiftGuest %q has drainPolicy=LiveMigrate but uses VFIO/GPU devices that cannot live-migrate; it will not be evacuated off node %q — handle it manually or set drainPolicy=Migrate to allow offline migration",
-				guestName, node))
-		}
-	case swiftv1alpha1.DrainPolicyMigrate:
-		// auto: live where possible, offline for VFIO/GPU — always migratable.
+	case swiftv1alpha1.DrainPolicyLiveMigrate, swiftv1alpha1.DrainPolicyMigrate:
+		// Non-VFIO + Migrate (auto: live where possible, offline otherwise)
+		// or LiveMigrate (live only) — migratable; fall through to mark.
 	default:
 		// Unknown/unvalidated policy: treat as Migrate (the CRD enum should
 		// have rejected anything else at admission of the SwiftGuest).
