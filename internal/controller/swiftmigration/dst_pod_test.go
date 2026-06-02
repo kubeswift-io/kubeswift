@@ -371,6 +371,38 @@ func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 // TestNewDstPod_MTLS_EmptyNode_Errors verifies the guard: mTLS enabled
 // with an unresolved node name is a clean construction error rather than
 // a sidecar with an empty SAN pin / unresolvable identity Secret.
+// TestNewDstPod_MTLS_OmitsPlaintextAck verifies the Phase 3c cleanup: the
+// plaintext-ack annotation is set on the dst pod ONLY on the plaintext
+// path. Under mTLS swiftletd bypasses the ack gate, so the annotation is
+// omitted (and would be misleading on a TLS-secured pod).
+func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
+	mig.Spec.Target.NodeName = "miles"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+	}
+	src := templateSrcPod("guest", "default")
+
+	off, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{})
+	if err != nil {
+		t.Fatalf("newDstPod (plaintext): %v", err)
+	}
+	if off.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue {
+		t.Errorf("plaintext dst must carry the ack annotation")
+	}
+
+	on, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
+		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
+	})
+	if err != nil {
+		t.Fatalf("newDstPod (mTLS): %v", err)
+	}
+	if _, present := on.Annotations[AnnotationMigrationPhase2Ack]; present {
+		t.Errorf("mTLS dst must NOT carry the plaintext-ack annotation; got %q", on.Annotations[AnnotationMigrationPhase2Ack])
+	}
+}
+
 func TestNewDstPod_MTLS_EmptyNode_Errors(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("m", "default", "abcdef1234567890abcdef1234567890")
