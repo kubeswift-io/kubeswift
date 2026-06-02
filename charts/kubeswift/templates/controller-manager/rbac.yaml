@@ -45,6 +45,13 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # poddisruptionbudgets — Phase 4 drain integration: the SwiftGuest
+  # controller creates a per-guest maxUnavailable:0 PDB (the hard floor that
+  # protects VMs from drain even when the eviction webhook is down). list,watch
+  # alongside get because the cached client opens an informer on GET (W7/W8).
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # secrets — get,list,watch for general reads; create,update added for
   # the Phase 3c live-migration mTLS path (migration.mtls.enabled): the
   # migrationcert controller copies a node's cert-manager-issued identity
