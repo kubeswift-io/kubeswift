@@ -1374,6 +1374,55 @@ Document in the release runbook; cross-referenced from
 `docs/migration/phase-3c.md` §2. Severity: LOW (one-time per new image;
 fail-loud — ImagePullBackOff is obvious). Surfaced 2026-06-01.
 
+### 27. VFIO/GPU release-and-reallocate primitive (Phase 4 drain follow-on sub-phase)
+
+Surfaced 2026-06-02 during Phase 4 PR 4a recon. The Phase 4 design doc
+§4.3 promised `drainPolicy: Migrate` does "offline (bounded downtime) for
+VFIO/GPU." That is **NOT deliverable** in the initial Phase 4: the
+SwiftMigration validating webhook
+([`internal/webhook/swiftmigration/validator.go`](internal/webhook/swiftmigration/validator.go))
+still **unconditionally rejects ALL VFIO/GPU cross-node migration**
+("Phase 4+ work pending a release-and-reallocate primitive"), and that
+primitive does not exist. The SwiftGPU model is the blocker:
+`findAndAllocate` (allocate.go) **auto-picks** the first GPU node with
+matching free capacity and pins the guest there; `deallocateGPUs` frees by
+`guest.Status.GPU.NodeName`. There is **no "allocate on a specific
+requested node"** capability — exactly what migrating a GPU guest to a
+chosen target needs.
+
+**Initial-Phase-4 handling (shipped in PR 4a):** VFIO/GPU guests block the
+drain under ANY drainPolicy. The eviction webhook denies them with a
+manual-handling message and does NOT mark them (a marker would drive the
+drain controller to create a webhook-rejected SwiftMigration every 5s); the
+drain controller also guards defensively (`HasVFIODevices` → Warning event,
+no migration). Design doc §4.3 corrected with a prominent scope note.
+
+**Decision (2026-06-02):** build the release-and-reallocate primitive
+**next**, after the non-VFIO drain (PR 4a/4b/5) ships. Its own
+design→spike→multi-PR track. Surface (design doc §9 "Follow-on sub-phase"):
+1. New SwiftGPU capability: allocate-on-specific-node + release-from-node,
+   exposed for the migration controller.
+2. GPU target pre-flight (free GPUs matching profile count/model/tier/NUMA/
+   FM partition) — a GPU analogue of `swiftmigration.NodeHasCapacity`, in
+   drain target-selection AND the migration Validating phase.
+3. Two-phase atomicity: reserve target GPUs BEFORE stopping the source
+   (Phase 1's drive-forward-post-cutover / restore-pre-cutover), else a
+   failed realloc strands a stopped GPU-less guest.
+4. Lift the webhook VFIO rejection for **offline mode only** (live+VFIO
+   stays blocked).
+5. FM partition handoff (Tier 2/3): deactivate on source, activate on
+   target.
+
+**Hard validation constraint:** the cluster has **one GPU node** (boba,
+GTX 1080), so true cross-node GPU migration **cannot be hardware-validated**
+here. Validation strategy (decided 2026-06-02): degenerate same-node
+`boba→boba` release→reacquire of the real GTX 1080 (exercises the
+dealloc→realloc choreography) + a mocked second `SwiftGPUNode` in
+unit/envtest for the cross-node target-selection logic. Ship explicitly
+labeled "cross-node GPU migration not hardware-validated (needs 2nd GPU
+node)." Severity: MEDIUM (real operator value for GPU nodes; the W5 pattern
+again — the design under-constrained reality at the SwiftGPU boundary).
+
 ### Phase 3c PR 5 — cluster walkthrough COMPLETE (mTLS validated end-to-end)
 
 PR 5 deployed the combined webhook+mTLS overlay on the dev cluster

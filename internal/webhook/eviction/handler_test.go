@@ -68,8 +68,8 @@ func markerOf(t *testing.T, c client.Client, ns, name string) string {
 
 func TestHandle(t *testing.T) {
 	const ns = "default"
-	vfioGuestSpec := func(name string) *swiftv1alpha1.SwiftGuest {
-		g := swiftGuest(name, ns, &swiftv1alpha1.MigrationSpec{DrainPolicy: swiftv1alpha1.DrainPolicyLiveMigrate})
+	vfioGuestSpec := func(name, policy string) *swiftv1alpha1.SwiftGuest {
+		g := swiftGuest(name, ns, &swiftv1alpha1.MigrationSpec{DrainPolicy: policy})
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
 		return g
 	}
@@ -140,10 +140,20 @@ func TestHandle(t *testing.T) {
 			wantMarked:  "",
 		},
 		{
-			name: "LiveMigrate on VFIO guest denies without marking",
+			name: "VFIO guest with LiveMigrate denies without marking",
 			objects: []client.Object{
 				guestPod("g-pod", ns, "g", "miles"),
-				vfioGuestSpec("g"),
+				vfioGuestSpec("g", swiftv1alpha1.DrainPolicyLiveMigrate),
+			},
+			req:         evictReq(ns, "g-pod", false),
+			wantAllowed: false,
+			wantMarked:  "",
+		},
+		{
+			name: "VFIO guest with Migrate denies without marking (cannot auto-migrate yet)",
+			objects: []client.Object{
+				guestPod("g-pod", ns, "g", "miles"),
+				vfioGuestSpec("g", swiftv1alpha1.DrainPolicyMigrate),
 			},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,
