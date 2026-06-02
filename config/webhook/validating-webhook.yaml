@@ -66,3 +66,25 @@ webhooks:
         apiGroups: ["migration.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftmigrations"]
+  # Phase 4 drain integration. Fires on EVERY pod eviction cluster-wide; the
+  # handler fast-allows any pod that is not a SwiftGuest launcher pod.
+  # failurePolicy: Ignore so a webhook outage never breaks evictions (the
+  # per-guest PodDisruptionBudget is the hard floor). sideEffects:
+  # NoneOnDryRun because the handler stamps a drain-requested marker on the
+  # SwiftGuest (skipped on dry-run).
+  - name: veviction.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: NoneOnDryRun
+    failurePolicy: Ignore
+    matchPolicy: Equivalent
+    timeoutSeconds: 10
+    clientConfig:
+      service:
+        namespace: kubeswift-system
+        name: kubeswift-webhook-service
+        path: /validate-pods-eviction
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/eviction"]

@@ -415,13 +415,7 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	//   - If sourceNode == target: the same-node check above already
 	//     rejected; this branch wouldn't be reached.
 	// So: reject any GPU SwiftMigration in Phase 1, period.
-	hasGPUWorkload := guest.Spec.GPUProfileRef != nil
-	for _, iface := range guest.Spec.Interfaces {
-		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV {
-			hasGPUWorkload = true
-			break
-		}
-	}
+	hasGPUWorkload := guest.HasVFIODevices()
 	if hasGPUWorkload {
 		return nil, fmt.Errorf("SwiftGuest %q has VFIO devices (gpuProfileRef or sriov interface); cross-node migration is not supported in Phase 1 — Phase 4+ work pending a release-and-reallocate primitive",
 			guest.Name)
