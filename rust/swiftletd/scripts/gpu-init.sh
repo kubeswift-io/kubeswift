@@ -88,53 +88,80 @@ bind_to_vfio() {
   echo "${addr} (${label}): bound to vfio-pci"
 }
 
-# Bind all non-bridge devices in the same IOMMU group as the given GPU.
-bind_iommu_group_peers() {
+# Unbind a device from its current host driver so vfio-pci can claim it -- and
+# so its IOMMU-group peers become bindable. Idempotent: no-op if the device is
+# already unbound or already on vfio-pci.
+unbind_from_host() {
+  local addr="$1"
+  if [ ! -e "${SYSFS_PCI}/devices/${addr}/driver" ]; then
+    return 0
+  fi
+  local cur
+  cur=$(basename "$(readlink ${SYSFS_PCI}/devices/${addr}/driver 2>/dev/null)" 2>/dev/null || echo "none")
+  if [ "$cur" = "vfio-pci" ]; then
+    return 0
+  fi
+  echo "Unbinding ${addr} from ${cur}"
+  echo "${addr}" > "${SYSFS_PCI}/devices/${addr}/driver/unbind" 2>/dev/null || true
+}
+
+# Bind the GPU and every non-bridge device in its IOMMU group to vfio-pci.
+#
+# Uses the correct two-pass order: UNBIND all group devices from their host
+# drivers FIRST, then bind them all to vfio-pci. vfio-pci's viability check
+# refuses to bind any device while ANOTHER device in the same IOMMU group is
+# still on a non-vfio host driver -- so the old one-pass order (bind peers,
+# then the GPU) failed on hosts where the GPU is bound to nvidia/nouveau: the
+# peer could not bind because the GPU was not yet isolated.
+process_iommu_group() {
   local gpu_addr="$1"
 
   local group_id
   group_id=$(get_iommu_group_id "$gpu_addr")
-  if [ -z "$group_id" ]; then
-    echo "WARNING: could not determine IOMMU group for ${gpu_addr}"
-    return 0
-  fi
 
-  # The IOMMU group devices directory under our host sysfs mount.
+  # Collect the non-bridge devices in the group (the GPU plus its peers).
+  # Bridges (class 0x0604xx) are skipped -- VFIO handles them internally and
+  # binding them would break the PCI hierarchy. Fall back to the GPU alone
+  # when the group cannot be enumerated.
+  local devices=""
   local group_devices="${HOST_SYS}/kernel/iommu_groups/${group_id}/devices"
-  if [ ! -d "$group_devices" ]; then
-    echo "WARNING: IOMMU group ${group_id} devices dir not found at ${group_devices}"
-    return 0
+  if [ -n "$group_id" ] && [ -d "$group_devices" ]; then
+    echo "IOMMU group ${group_id}: scanning devices for ${gpu_addr}"
+    local dev_link
+    for dev_link in "$group_devices"/*; do
+      local peer_addr
+      peer_addr=$(basename "$dev_link")
+      validate_bdf "$peer_addr"
+      local pci_class
+      pci_class=$(cat "${SYSFS_PCI}/devices/${peer_addr}/class" 2>/dev/null || echo "0x000000")
+      case "$pci_class" in
+        0x0604*)
+          echo "${peer_addr}: PCIe bridge (class ${pci_class}) -- skipping (VFIO handles internally)"
+          continue
+          ;;
+      esac
+      devices="${devices} ${peer_addr}"
+    done
+  else
+    echo "WARNING: IOMMU group for ${gpu_addr} not enumerable; binding the GPU alone"
+    devices=" ${gpu_addr}"
   fi
 
-  echo "IOMMU group ${group_id}: scanning peer devices for ${gpu_addr}"
+  # Pass 1: unbind every group device from its host driver so the whole group
+  # is isolatable.
+  local d
+  for d in $devices; do
+    unbind_from_host "$d"
+  done
 
-  for dev_link in "$group_devices"/*; do
-    local peer_addr
-    peer_addr=$(basename "$dev_link")
-
-    # Skip the GPU itself -- we handle it in the main loop.
-    if [ "$peer_addr" = "$gpu_addr" ]; then
-      continue
+  # Pass 2: bind every group device to vfio-pci. With the group now isolated,
+  # vfio-pci's viability check passes regardless of order.
+  for d in $devices; do
+    if [ "$d" = "$gpu_addr" ]; then
+      bind_to_vfio "$d" "GPU"
+    else
+      bind_to_vfio "$d" "IOMMU group ${group_id} peer"
     fi
-
-    validate_bdf "$peer_addr"
-
-    # Read the PCI class to determine device type.
-    local pci_class
-    pci_class=$(cat "${SYSFS_PCI}/devices/${peer_addr}/class" 2>/dev/null || echo "0x000000")
-
-    # Skip PCI/PCIe bridges (class 0x0604xx). VFIO handles bridges internally
-    # via the pci-stub or vfio-pci bridge support. Binding them to vfio-pci
-    # would break the PCI hierarchy.
-    case "$pci_class" in
-      0x0604*)
-        echo "${peer_addr}: PCIe bridge (class ${pci_class}) -- skipping (VFIO handles internally)"
-        continue
-        ;;
-    esac
-
-    # Bind the peer device to vfio-pci.
-    bind_to_vfio "$peer_addr" "IOMMU group ${group_id} peer"
   done
 }
 
@@ -149,24 +176,23 @@ for addr in "${ADDRS[@]}"; do
   if [ -z "$addr" ]; then
     continue
   fi
+  validate_bdf "$addr"
 
-  # Bind IOMMU group peers first -- they must be isolated before VFIO will
-  # grant access to the GPU.
+  # Dedup by IOMMU group: process_iommu_group binds the GPU AND all its group
+  # peers together, so a second requested GPU sharing the same group is already
+  # handled. (For multiple GPUs in one group, the first one binds them all.)
   local_group=$(get_iommu_group_id "$addr")
   if [ -n "$local_group" ]; then
     case " $PROCESSED_GROUPS " in
       *" $local_group "*)
         echo "IOMMU group ${local_group}: already processed"
-        ;;
-      *)
-        bind_iommu_group_peers "$addr"
-        PROCESSED_GROUPS="$PROCESSED_GROUPS $local_group"
+        continue
         ;;
     esac
+    PROCESSED_GROUPS="$PROCESSED_GROUPS $local_group"
   fi
 
-  # Now bind the GPU itself.
-  bind_to_vfio "$addr" "GPU"
+  process_iommu_group "$addr"
 done
 
 # Activate Fabric Manager partition for shared NVSwitch mode (Tier 2).
