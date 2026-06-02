@@ -296,18 +296,24 @@ func (r *SwiftGuestReconciler) buildBasePod(
 	// restore with `bar 0 already used`), so the restore branch sits
 	// before the GPU branch and the two are mutually exclusive in
 	// practice.
-	// Precedence check: when both spec.NodeName and a GPU allocation are
-	// present, they MUST agree. The SwiftMigration validation webhook
-	// rejects cross-node GPU migrations in Phase 1 (no release-and-
-	// reallocate primitive yet — Phase 4+ work) so disagreement here is a
-	// either an operator bypass of the webhook OR a future Phase 4 bug.
-	// Either way: refuse to build, surface as Resolved=False via the
-	// controller's existing ResolutionError mapping.
+	// Precedence consistency assertion: when both spec.NodeName and a GPU
+	// allocation are present, they MUST agree (status.GPU.NodeName is the
+	// binding source for which GPUs gpu-init binds; spec.NodeName pins the
+	// pod). The VFIO release-and-reallocate offline migration cutover commits
+	// BOTH together (ReleaseFromNode(source) + stamp status.GPU=target, THEN
+	// patch spec.NodeName=target), so by the time the dst pod is built they
+	// agree. A disagreement here is therefore a real bug or an out-of-band
+	// edit — refuse to build, surfaced as Resolved=False via the controller's
+	// ResolutionError mapping.
+	//
+	// LOAD-BEARING (W26-class): do NOT weaken this to "trust spec.NodeName
+	// alone" — status.GPU.NodeName must stay the binding source, or a
+	// half-committed cutover could bind the wrong node's GPUs.
 	if guest.Spec.NodeName != "" &&
 		guest.Status.GPU != nil &&
 		guest.Status.GPU.NodeName != "" &&
 		guest.Status.GPU.NodeName != guest.Spec.NodeName {
-		return nil, fmt.Errorf("spec.nodeName=%q disagrees with status.gpu.nodeName=%q; cross-node GPU migration is not supported in Phase 1",
+		return nil, fmt.Errorf("spec.nodeName=%q disagrees with status.gpu.nodeName=%q; the GPU migration cutover must commit both together",
 			guest.Spec.NodeName, guest.Status.GPU.NodeName)
 	}
 
