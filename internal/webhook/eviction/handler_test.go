@@ -73,6 +73,11 @@ func TestHandle(t *testing.T) {
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
 		return g
 	}
+	sriovGuest := func(name, policy string) *swiftv1alpha1.SwiftGuest {
+		g := swiftGuest(name, ns, &swiftv1alpha1.MigrationSpec{DrainPolicy: policy})
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{{Name: "data", Type: swiftv1alpha1.InterfaceTypeSRIOV}}
+		return g
+	}
 
 	tests := []struct {
 		name        string
@@ -150,10 +155,20 @@ func TestHandle(t *testing.T) {
 			wantMarked:  "",
 		},
 		{
-			name: "VFIO guest with Migrate denies without marking (cannot auto-migrate yet)",
+			name: "GPU guest with Migrate marks (offline release-and-reallocate)",
 			objects: []client.Object{
 				guestPod("g-pod", ns, "g", "miles"),
 				vfioGuestSpec("g", swiftv1alpha1.DrainPolicyMigrate),
+			},
+			req:         evictReq(ns, "g-pod", false),
+			wantAllowed: false,
+			wantMarked:  "miles",
+		},
+		{
+			name: "SR-IOV guest with Migrate denies without marking (NIC reattach unsupported)",
+			objects: []client.Object{
+				guestPod("g-pod", ns, "g", "miles"),
+				sriovGuest("g", swiftv1alpha1.DrainPolicyMigrate),
 			},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,

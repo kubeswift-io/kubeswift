@@ -9,7 +9,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftgpu"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftmigration"
 )
 
@@ -32,6 +34,17 @@ func (r *Reconciler) selectTarget(ctx context.Context, guest *swiftv1alpha1.Swif
 			return "", fmt.Errorf("SwiftGuestClass %q not found", guest.Spec.GuestClassRef.Name)
 		}
 		return "", fmt.Errorf("get SwiftGuestClass %q: %w", guest.Spec.GuestClassRef.Name, err)
+	}
+
+	// For an offline-GPU-migratable guest, resolve its GPU profile so each
+	// candidate node is also checked for vfio-readiness + free matching GPUs.
+	var gpuProfile *gpuv1alpha1.SwiftGPUProfile
+	if guest.OfflineGPUMigratable() {
+		var p gpuv1alpha1.SwiftGPUProfile
+		if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Spec.GPUProfileRef.Name}, &p); err != nil {
+			return "", fmt.Errorf("get SwiftGPUProfile %q: %w", guest.Spec.GPUProfileRef.Name, err)
+		}
+		gpuProfile = &p
 	}
 
 	var nodes corev1.NodeList
@@ -68,6 +81,13 @@ func (r *Reconciler) selectTarget(ctx context.Context, guest *swiftv1alpha1.Swif
 		if err := swiftmigration.NodeHasCapacity(ctx, r.Client, n, &class); err != nil {
 			skipped++
 			continue
+		}
+		// GPU guests: the target must also be vfio-ready with free matching GPUs.
+		if gpuProfile != nil {
+			if err := swiftgpu.GPUNodeHasCapacity(ctx, r.Client, n.Name, gpuProfile); err != nil {
+				skipped++
+				continue
+			}
 		}
 		fitting = append(fitting, cand{name: n.Name, allocCPU: n.Status.Allocatable.Cpu().MilliValue()})
 	}

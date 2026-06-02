@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
@@ -150,17 +151,65 @@ func TestReconcile_GuestMovedOff_ClearsMarker(t *testing.T) {
 	}
 }
 
-func TestReconcile_VFIOGuest_NoMigration(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()), node("miles"), node("boba"), smallClass())
+func gpuProfileFixture() *gpuv1alpha1.SwiftGPUProfile {
+	return &gpuv1alpha1.SwiftGPUProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "gpu", Namespace: ns},
+		Spec:       gpuv1alpha1.SwiftGPUProfileSpec{Count: 1, PartitionMode: "isolated"},
+	}
+}
+
+func swiftGPUNode(name string, vfioReady bool, free int) *gpuv1alpha1.SwiftGPUNode {
+	return &gpuv1alpha1.SwiftGPUNode{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status:     gpuv1alpha1.SwiftGPUNodeStatus{VfioReady: vfioReady, FreeGPUs: free, GPUModel: "GeForce GTX 1080"},
+	}
+}
+
+func TestReconcile_GPUGuest_NoGPUTarget_NoMigration(t *testing.T) {
+	// GPU guest, profile exists, but boba is not a GPU node (no SwiftGPUNode)
+	// → no schedulable GPU target → no migration; marker stays.
+	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
+		node("miles"), node("boba"), smallClass(), gpuProfileFixture())
+	res := reconcileGuest(t, r, "g")
+	if migs := listMigs(t, c); len(migs) != 0 {
+		t.Errorf("no GPU target → no migration; got %d", len(migs))
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("no GPU target should requeue")
+	}
+	if getGuest(t, c, "g").Annotations[swiftv1alpha1.AnnotationDrainRequested] != "miles" {
+		t.Errorf("marker must stay when there is no GPU target")
+	}
+}
+
+func TestReconcile_GPUGuest_CreatesOfflineMigration(t *testing.T) {
+	// GPU guest with a vfio-ready GPU target (boba) → creates an offline
+	// (auto→offline) migration via release-and-reallocate.
+	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
+		node("miles"), node("boba"), smallClass(), gpuProfileFixture(),
+		swiftGPUNode("boba", true, 1))
+	reconcileGuest(t, r, "g")
+	migs := listMigs(t, c)
+	if len(migs) != 1 {
+		t.Fatalf("GPU guest with a vfio-ready GPU target should create 1 migration; got %d", len(migs))
+	}
+	if migs[0].Spec.Target.NodeName != "boba" {
+		t.Errorf("target = %q, want boba (the vfio-ready GPU node)", migs[0].Spec.Target.NodeName)
+	}
+	if migs[0].Spec.Mode != migrationv1alpha1.SwiftMigrationModeAuto {
+		t.Errorf("mode = %q, want auto (resolves to offline for VFIO)", migs[0].Spec.Mode)
+	}
+}
+
+func TestReconcile_GPUGuest_NonVfioReadyTarget_NoMigration(t *testing.T) {
+	// boba is a GPU node but NOT vfio-ready → GPUNodeHasCapacity rejects it →
+	// no GPU target → no migration.
+	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
+		node("miles"), node("boba"), smallClass(), gpuProfileFixture(),
+		swiftGPUNode("boba", false, 1))
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
-		t.Errorf("VFIO guest cannot auto-migrate yet; must create no migration, got %d", len(migs))
-	}
-	// Marker is left as-is (the controller doesn't clear it; the operator
-	// handles the guest manually).
-	g := getGuest(t, c, "g")
-	if g.Annotations[swiftv1alpha1.AnnotationDrainRequested] != "miles" {
-		t.Errorf("VFIO marker should be left for manual handling")
+		t.Errorf("a non-vfio-ready GPU node is not a valid target; got %d migrations", len(migs))
 	}
 }
 
