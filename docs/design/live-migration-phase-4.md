@@ -185,10 +185,17 @@ enum fields must be regenerated, not just constant-added — Phase 3c PR 5).
 
 ## 8. Open implementation sub-decisions
 
-- **PDB scope:** create for migratable guests (and `Block` guests, for the
-  same hard protection) — but NOT before the launcher pod exists, and
-  clean up via ownerRef on guest delete. SwiftGuestPool replicas: per-pod
-  PDB vs pool-level; per-pod is simpler and uniform.
+- **PDB scope (RESOLVED: universal, per-guest).** Shipped in PR 4b: the
+  SwiftGuest controller creates a `maxUnavailable: 0` PDB for **every** guest
+  with a launcher pod (migratable, `Block`, and `migration.enabled: false`
+  alike — a VM is never evicted-to-death regardless of policy). Created only
+  past the pod-ensure block (NOT before the launcher pod exists); selects the
+  launcher pod by `swift.kubeswift.io/guest` (so protection follows the guest
+  across a live-migration pod rename); owned by the guest (GC on delete).
+  SwiftGuestPool replicas get a per-pod PDB each (uniform, simpler than
+  pool-level). The PDB does not impede the happy-path drain — the webhook
+  denies and the migration cutover `Delete`s the source pod (a Delete, not an
+  Eviction); the PDB only bites when the webhook is down.
 - **Marker on the SwiftGuest vs the pod:** the SwiftGuest (survives the
   cutover pod rename; the controller already reconciles it).
 - **Re-drain idempotency:** the deterministic SwiftMigration name +
