@@ -400,24 +400,17 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 		}
 	}
 
-	// GPU cross-node refusal: Phase 1 has no release-and-reallocate
-	// primitive for the SwiftGPU controller. Migrating a GPU guest at
-	// all (regardless of whether it's already scheduled) is rejected
-	// because:
-	//   - If sourceNode != "" and != target: classic cross-node
-	//     migration — would orphan the source-node GPU reservation.
-	//   - If sourceNode == "": guest is unscheduled, but the SwiftGPU
-	//     controller's allocation is independent of spec.NodeName.
-	//     Migrating an unscheduled GPU guest creates a race between
-	//     SwiftGPU picking the allocation node and SwiftMigration
-	//     pinning spec.NodeName, ending in the precedence rule from
-	//     commit 3 rejecting the pod build.
-	//   - If sourceNode == target: the same-node check above already
-	//     rejected; this branch wouldn't be reached.
-	// So: reject any GPU SwiftMigration in Phase 1, period.
-	hasGPUWorkload := guest.HasVFIODevices()
-	if hasGPUWorkload {
-		return nil, fmt.Errorf("SwiftGuest %q has VFIO devices (gpuProfileRef or sriov interface); cross-node migration is not supported in Phase 1 — Phase 4+ work pending a release-and-reallocate primitive",
+	// GPU/VFIO migration mode gate. VFIO devices (gpuProfileRef or sriov)
+	// CANNOT live-migrate — Cloud Hypervisor cannot transfer the device's
+	// state to the destination. They CAN migrate OFFLINE via the release-and-
+	// reallocate path (the migration controller reserves target GPUs before
+	// stopping the source, frees the source at cutover, and stamps
+	// status.GPU=target). So:
+	//   - mode=live + VFIO  -> reject (no live VFIO migration, ever).
+	//   - mode=auto/offline + VFIO -> allow; resolveAutoMode sends VFIO guests
+	//     to offline, and the offline GPU sequence handles the handoff.
+	if guest.HasVFIODevices() && mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		return nil, fmt.Errorf("SwiftGuest %q has VFIO devices (gpuProfileRef or sriov interface); they cannot live-migrate — use mode=offline (or auto, which resolves to offline for VFIO)",
 			guest.Name)
 	}
 

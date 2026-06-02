@@ -129,6 +129,17 @@ func (r *SwiftMigrationReconciler) handleValidating(
 		return phaseFailure(err.Error(), "")
 	}
 
+	// GPU target pre-flight (VFIO release-and-reallocate): the target node must
+	// be vfio-ready and have free GPUs matching the guest's profile. Early,
+	// clear rejection before the migration stops anything. Offline-only — VFIO
+	// guests never reach the live branch (resolveAutoMode sends them offline;
+	// the webhook rejects explicit mode=live for them).
+	if guest.HasVFIODevices() {
+		if res := r.gpuPreflight(ctx, mig, &guest); res != nil {
+			return res
+		}
+	}
+
 	// All checks passed. Mark Compatible=True, transition to Preparing.
 	setCondition(status, migrationv1alpha1.SwiftMigrationConditionCompatible,
 		metav1.ConditionTrue, ReasonValidating, "validation passed; target node has capacity")

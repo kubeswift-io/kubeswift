@@ -97,6 +97,16 @@ func (r *SwiftMigrationReconciler) handlePreparing(
 		return phaseFailure(fmt.Sprintf("another SwiftMigration %q is already in progress for SwiftGuest %q", current, guest.Name), "")
 	}
 
+	// GPU release-and-reallocate: reserve the target GPUs BEFORE stopping the
+	// source (the reserve-before-stop atomicity — a failed reserve never
+	// strands a stopped, GPU-less guest). Idempotent across re-entries; runs
+	// before the claim+stop below. Non-GPU guests skip this entirely.
+	if guest.HasVFIODevices() {
+		if res := r.reserveTargetGPUs(ctx, mig, &guest, status); res != nil {
+			return res
+		}
+	}
+
 	if current == "" {
 		// First entry: claim the guest. Single combined MergeFrom
 		// patch sets both the annotation and runPolicy=Stopped so the
