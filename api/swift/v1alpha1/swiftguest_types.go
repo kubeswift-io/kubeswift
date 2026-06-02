@@ -127,6 +127,22 @@ type MigrationSpec struct {
 	// +kubebuilder:default=auto
 	// +optional
 	PreferredMode string `json:"preferredMode,omitempty"`
+	// DrainPolicy controls how kubectl drain / the eviction API evacuates
+	// this guest off a node (Phase 4 drain integration):
+	//   Migrate (default): mode=auto — live-migrate where possible,
+	//     offline-migrate (bounded downtime) for VFIO/GPU guests. Drain
+	//     always succeeds for an eligible guest.
+	//   LiveMigrate: live only; if the guest cannot live-migrate
+	//     (VFIO/GPU), deny the drain rather than incur downtime.
+	//   Block: always deny the drain; the operator handles the guest
+	//     manually.
+	// Orthogonal to Enabled (Enabled=false disables migration entirely and
+	// also denies drain). Has no effect until the Phase 4 eviction webhook
+	// + drain controller ship.
+	// +kubebuilder:validation:Enum=Migrate;LiveMigrate;Block
+	// +kubebuilder:default=Migrate
+	// +optional
+	DrainPolicy string `json:"drainPolicy,omitempty"`
 }
 
 // DataDiskRef references either a SwiftImage or a PVC for a data disk.
