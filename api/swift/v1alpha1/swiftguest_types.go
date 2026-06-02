@@ -183,12 +183,28 @@ func (g *SwiftGuest) HasVFIODevices() bool {
 	if g.Spec.GPUProfileRef != nil {
 		return true
 	}
+	return g.HasSRIOVInterface()
+}
+
+// HasSRIOVInterface reports whether the guest has any SR-IOV (VFIO NIC)
+// interface. SR-IOV NIC passthrough cannot be migrated off a node by the GPU
+// release-and-reallocate path (that handles GPUs only; NIC reattach on the
+// target is out of scope) — so an sriov guest is not auto-evacuated on drain,
+// regardless of GPU presence.
+func (g *SwiftGuest) HasSRIOVInterface() bool {
 	for _, iface := range g.Spec.Interfaces {
 		if iface.Type == InterfaceTypeSRIOV {
 			return true
 		}
 	}
 	return false
+}
+
+// OfflineGPUMigratable reports whether the guest can be evacuated off a node by
+// the offline GPU release-and-reallocate path: it has a GPU profile and no
+// SR-IOV NIC (which the path cannot reattach on the target).
+func (g *SwiftGuest) OfflineGPUMigratable() bool {
+	return g.Spec.GPUProfileRef != nil && !g.HasSRIOVInterface()
 }
 
 // DataDiskRef references either a SwiftImage or a PVC for a data disk.

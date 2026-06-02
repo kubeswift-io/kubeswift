@@ -111,29 +111,40 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 			guestName, node))
 	}
 
-	// VFIO/GPU guests cannot be auto-migrated yet — neither live nor offline
-	// cross-node migration of VFIO devices is supported (the SwiftGPU
-	// release-and-reallocate primitive is a tracked follow-up). Deny with a
-	// manual-handling message under ANY drainPolicy and do NOT mark: a marker
-	// would drive the drain controller to create a SwiftMigration the
-	// migration webhook rejects, looping a doomed object every 5s.
-	if guest.HasVFIODevices() {
-		return denyRetry(fmt.Sprintf(
-			"SwiftGuest %q uses VFIO/GPU devices that cannot be auto-migrated yet; it will not be evacuated off node %q — handle it manually (cross-node VFIO migration is pending the release-and-reallocate primitive)",
-			guestName, node))
-	}
-
 	switch policy {
 	case swiftv1alpha1.DrainPolicyBlock:
 		return denyRetry(fmt.Sprintf(
 			"SwiftGuest %q has drainPolicy=Block; it will not be auto-migrated off node %q — handle this guest manually",
 			guestName, node))
-	case swiftv1alpha1.DrainPolicyLiveMigrate, swiftv1alpha1.DrainPolicyMigrate:
-		// Non-VFIO + Migrate (auto: live where possible, offline otherwise)
-		// or LiveMigrate (live only) — migratable; fall through to mark.
+	case swiftv1alpha1.DrainPolicyLiveMigrate:
+		// LiveMigrate forbids incurring downtime. A VFIO/GPU guest can only
+		// move OFFLINE (CH cannot live-migrate a VFIO device), so block the
+		// drain rather than evacuate it with downtime — the operator opted out
+		// of offline by choosing LiveMigrate. Non-VFIO LiveMigrate falls
+		// through to mark (live).
+		if guest.HasVFIODevices() {
+			return denyRetry(fmt.Sprintf(
+				"SwiftGuest %q has drainPolicy=LiveMigrate but uses VFIO/GPU devices that cannot live-migrate; it will not be evacuated off node %q — set drainPolicy=Migrate to allow offline (release-and-reallocate) migration, or handle it manually",
+				guestName, node))
+		}
+	case swiftv1alpha1.DrainPolicyMigrate:
+		// Migratable: non-VFIO resolves to live where possible; VFIO/GPU
+		// resolves to OFFLINE via the release-and-reallocate path. Fall
+		// through to mark.
 	default:
 		// Unknown/unvalidated policy: treat as Migrate (the CRD enum should
 		// have rejected anything else at admission of the SwiftGuest).
+	}
+
+	// SR-IOV NIC passthrough cannot be auto-migrated: the GPU release-and-
+	// reallocate path handles GPUs only; reattaching an SR-IOV NIC on the
+	// target is out of scope. Deny without marking (a marker would drive a
+	// migration that fails for lack of a GPU profile). Reaches here only for
+	// Migrate/unknown policy (LiveMigrate already denied any VFIO above).
+	if guest.HasSRIOVInterface() {
+		return denyRetry(fmt.Sprintf(
+			"SwiftGuest %q uses SR-IOV NIC passthrough that cannot be auto-migrated off node %q — handle it manually",
+			guestName, node))
 	}
 
 	// Migratable. Stamp the drain-requested marker (skip on dry-run) and

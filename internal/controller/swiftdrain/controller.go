@@ -11,11 +11,11 @@
 // guest is off the draining node, it clears the marker; the next eviction
 // retry then finds the pod gone (or moved) and is allowed, so drain proceeds.
 //
-// VFIO/GPU guests are NOT handled here: cross-node migration of VFIO devices
-// needs a release-and-reallocate primitive that does not exist yet (tracked
-// follow-up). The eviction webhook denies those without marking; this
-// controller guards defensively and surfaces a manual-handling event if a
-// VFIO guest is somehow marked.
+// VFIO/GPU guests ARE handled (offline): the eviction webhook marks them under
+// drainPolicy=Migrate (not LiveMigrate — VFIO can't live-migrate), the created
+// migration resolves to offline, and the migration controller's release-and-
+// reallocate sequence moves the GPUs. selectTarget requires a vfio-ready
+// target with free matching GPUs for these guests.
 package swiftdrain
 
 import (
@@ -70,15 +70,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	// VFIO/GPU guests cannot be auto-migrated yet (release-and-reallocate
-	// pending). The eviction webhook should not have marked them; guard
-	// defensively and surface a manual-handling event rather than create a
-	// migration the SwiftMigration webhook would reject.
-	if guest.HasVFIODevices() {
-		r.event(&guest, corev1.EventTypeWarning, "DrainUnsupported",
-			fmt.Sprintf("guest on node %q uses VFIO/GPU devices; automatic evacuation is not supported yet (release-and-reallocate pending) — handle manually", drainingNode))
-		return ctrl.Result{}, nil
-	}
+	// VFIO/GPU guests ARE now auto-migratable (offline, via the SwiftGPU
+	// release-and-reallocate path). The eviction webhook only marks them under
+	// drainPolicy=Migrate (LiveMigrate+VFIO is denied — VFIO can't live-
+	// migrate), so a marked VFIO guest here is a Migrate guest: drainMode
+	// resolves to auto, and the migration controller's auto-mode sends VFIO to
+	// offline. selectTarget additionally requires a vfio-ready target with free
+	// matching GPUs for these guests (GPUNodeHasCapacity).
 
 	migName := drainMigrationName(guest.Name, drainingNode)
 	var mig migrationv1alpha1.SwiftMigration
