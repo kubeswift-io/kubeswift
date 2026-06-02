@@ -400,17 +400,21 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 		}
 	}
 
-	// GPU/VFIO migration mode gate. VFIO devices (gpuProfileRef or sriov)
-	// CANNOT live-migrate — Cloud Hypervisor cannot transfer the device's
-	// state to the destination. They CAN migrate OFFLINE via the release-and-
-	// reallocate path (the migration controller reserves target GPUs before
-	// stopping the source, frees the source at cutover, and stamps
-	// status.GPU=target). So:
-	//   - mode=live + VFIO  -> reject (no live VFIO migration, ever).
-	//   - mode=auto/offline + VFIO -> allow; resolveAutoMode sends VFIO guests
-	//     to offline, and the offline GPU sequence handles the handoff.
+	// VFIO migration gate. VFIO devices CANNOT live-migrate — Cloud Hypervisor
+	// cannot transfer device state to the destination — so mode=live + VFIO is
+	// rejected. GPU guests CAN migrate OFFLINE via the release-and-reallocate
+	// path (the migration controller reserves target GPUs before stopping the
+	// source, frees the source at cutover, stamps status.GPU=target).
 	if guest.HasVFIODevices() && mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
-		return nil, fmt.Errorf("SwiftGuest %q has VFIO devices (gpuProfileRef or sriov interface); they cannot live-migrate — use mode=offline (or auto, which resolves to offline for VFIO)",
+		return nil, fmt.Errorf("SwiftGuest %q has VFIO devices (gpuProfileRef or sriov interface); they cannot live-migrate — use mode=offline (or auto, which resolves to offline for VFIO GPU guests)",
+			guest.Name)
+	}
+	// SR-IOV NIC passthrough cannot migrate cross-node at all: the offline GPU
+	// release-and-reallocate path handles GPUs only; reattaching an SR-IOV NIC
+	// on the target is out of scope. (A GPU-only guest, no sriov, IS offline-
+	// migratable.)
+	if guest.HasSRIOVInterface() {
+		return nil, fmt.Errorf("SwiftGuest %q has an SR-IOV interface; cross-node migration of SR-IOV NIC passthrough is not supported",
 			guest.Name)
 	}
 

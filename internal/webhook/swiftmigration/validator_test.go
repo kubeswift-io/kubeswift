@@ -530,6 +530,26 @@ func TestValidateClusterState_VFIOOfflineNotRejected(t *testing.T) {
 	}
 }
 
+func TestValidateClusterState_SRIOVOfflineRejected(t *testing.T) {
+	// SR-IOV NIC passthrough cannot migrate cross-node at all (the offline GPU
+	// release-and-reallocate path handles GPUs only; NIC reattach is out of
+	// scope) — rejected even for mode=offline.
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+		{Name: "data", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice"},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	_, err := v.validate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "SR-IOV") {
+		t.Errorf("offline SR-IOV migration should reject; got %v", err)
+	}
+}
+
 func TestValidateClusterState_DefaultNetworkingNeedsAllowIPChange(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default") // no spec.interfaces, default networking
