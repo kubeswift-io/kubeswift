@@ -1423,6 +1423,32 @@ labeled "cross-node GPU migration not hardware-validated (needs 2nd GPU
 node)." Severity: MEDIUM (real operator value for GPU nodes; the W5 pattern
 again — the design under-constrained reality at the SwiftGPU boundary).
 
+**Spike COMPLETE 2026-06-02 — PASS** (decisions: migration-controller-
+orchestrated; spike-first). Findings doc:
+[`docs/design/vfio-release-reallocate-spike.md`](docs/design/vfio-release-reallocate-spike.md).
+The same-node release->reacquire choreography is validated on the real GTX
+1080: delete guest -> finalizer frees the GPU (~3s) -> a fresh guest
+reacquires the SAME device (`0000:01:00.0`) and boots. The dealloc->realloc
+primitive is de-risked. **Two prerequisite blockers surfaced and were
+cleared:**
+1. **gpu-init IOMMU-group bind order (FIXED, PR #93, merged + hw-validated):**
+   gpu-init bound the HD-Audio peer to vfio-pci before unbinding the GPU from
+   `nvidia`; vfio-pci viability rejected it (`bound to ''`), `Init:Error`.
+   Fixed with the two-pass unbind-all-then-bind-all procedure.
+2. **`vfio-pci` not loaded on boba (HOST PREREQUISITE, loaded manually for the
+   spike, NOT persistent):** no vfio-pci module -> nothing binds. GPU nodes
+   must load `vfio-pci` persistently. Design items: gpu-discovery could
+   `modprobe vfio-pci` + surface a vfio-ready condition; the GPU target
+   pre-flight must confirm vfio-ready, not just free GPUs; gpu-init must NOT
+   load the module (minimal caps). **boba will lose vfio-pci on reboot until
+   this is made persistent.**
+
+Design insight for the sub-phase: the GPU stays vfio-bound across
+release->reacquire (CH closes the device on exit but leaves it vfio-bound;
+gpu-init is idempotent), so the realloc'd pod's gpu-init is a fast no-op on
+the bind. Next: the release-and-reallocate design doc
+(migration-controller-orchestrated), now with a hardware baseline.
+
 ### Phase 3c PR 5 — cluster walkthrough COMPLETE (mTLS validated end-to-end)
 
 PR 5 deployed the combined webhook+mTLS overlay on the dev cluster
