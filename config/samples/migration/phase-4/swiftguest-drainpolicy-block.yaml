@@ -1,0 +1,25 @@
+# Phase 4 drain integration — a guest that BLOCKS `kubectl drain`.
+#
+# drainPolicy: Block — the eviction webhook denies the eviction with a
+# manual-handling message and never stamps the drain marker, so the guest is
+# never auto-migrated. The per-guest maxUnavailable:0 PDB also blocks the
+# eviction. Draining the node stalls until the operator moves/stops the guest
+# manually (or `kubectl drain --force`, which deletes the VM).
+#
+# Use for pinned/stateful guests that must not move automatically.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: phase4-block
+  namespace: default
+spec:
+  kernelRef:
+    name: faas-minimal
+  guestClassRef:
+    name: default
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  runPolicy: Running
+  nodeName: miles
+  migration:
+    enabled: true
+    drainPolicy: Block
