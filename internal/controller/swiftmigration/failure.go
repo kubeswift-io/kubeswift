@@ -156,6 +156,18 @@ func (r *SwiftMigrationReconciler) cleanupSourceGuest(
 		}
 		return err
 	}
+
+	// GPU release-and-reallocate: on a pre-cutover failure (restoreRunPolicy),
+	// drop the target-node GPU reservation so a failed migration does not
+	// strand it. The source resumes on its own node with its existing GPUs
+	// (status.GPU is unchanged pre-cutover). Idempotent; no-op for non-GPU
+	// guests. Post-cutover failures drive forward, so the reservation has
+	// already become the live allocation — don't release it there.
+	if restoreRunPolicy && guest.HasVFIODevices() {
+		if err := r.releaseTargetReservation(ctx, mig, &guest); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

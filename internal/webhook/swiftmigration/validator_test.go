@@ -448,7 +448,11 @@ func TestValidateClusterState_KernelBootMissingLabel(t *testing.T) {
 	}
 }
 
-func TestValidateClusterState_GPUCrossNodeRejected(t *testing.T) {
+func TestValidateClusterState_GPULiveRejected(t *testing.T) {
+	// GPU/VFIO guests cannot live-migrate; mode=live is rejected. (The Phase 4
+	// release-and-reallocate sub-phase lifted the old unconditional rejection:
+	// offline VFIO migration is now allowed — see
+	// TestValidateClusterState_VFIOOfflineNotRejected.)
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu-pcie"}
@@ -456,27 +460,22 @@ func TestValidateClusterState_GPUCrossNodeRejected(t *testing.T) {
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	_, err := v.validate(context.Background(), mig)
 	if err == nil {
-		t.Fatal("validate GPU guest cross-node should reject")
+		t.Fatal("validate GPU guest with mode=live should reject")
 	}
 	if !strings.Contains(err.Error(), "VFIO devices") {
 		t.Errorf("error should mention VFIO devices; got %q", err.Error())
 	}
-	// The Phase-1-not-supported gate text — lock in so a future relax
-	// of the rule (Phase 4 work) requires updating this assertion.
-	if !strings.Contains(err.Error(), "cross-node migration is not supported in Phase 1") {
-		t.Errorf("error should mention the Phase 1 gate; got %q", err.Error())
+	if !strings.Contains(err.Error(), "cannot live-migrate") {
+		t.Errorf("error should mention the live-migration gate; got %q", err.Error())
 	}
 }
 
-func TestValidateClusterState_GPUUnscheduledRejected(t *testing.T) {
-	// GPU guest that hasn't been scheduled yet (status.NodeName empty).
-	// Phase 1 rejects unconditionally — the architect's GPU rejection
-	// rule is unconditional (security tightening), not gated on
-	// sourceNode being known. Without this rule, an operator could
-	// submit a SwiftMigration on an unscheduled GPU guest and create a
-	// race with the SwiftGPU controller's allocation logic.
+func TestValidateClusterState_GPUUnscheduledLiveRejected(t *testing.T) {
+	// An unscheduled GPU guest (status.NodeName empty) with mode=live is
+	// rejected — VFIO cannot live-migrate regardless of scheduling state.
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Status.NodeName = "" // unscheduled
@@ -485,13 +484,17 @@ func TestValidateClusterState_GPUUnscheduledRejected(t *testing.T) {
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	_, err := v.validate(context.Background(), mig)
 	if err == nil || !strings.Contains(err.Error(), "VFIO devices") {
-		t.Errorf("validate unscheduled GPU guest should reject; got %v", err)
+		t.Errorf("validate unscheduled GPU guest with mode=live should reject; got %v", err)
 	}
 }
 
-func TestValidateClusterState_SRIOVCrossNodeRejected(t *testing.T) {
+func TestValidateClusterState_SRIOVLiveRejected(t *testing.T) {
+	// VFIO devices (here SR-IOV) cannot LIVE-migrate; mode=live is rejected.
+	// Offline VFIO migration is allowed (the release-and-reallocate path) — see
+	// TestValidateClusterState_VFIOOfflineNotRejected.
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
@@ -501,9 +504,29 @@ func TestValidateClusterState_SRIOVCrossNodeRejected(t *testing.T) {
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	_, err := v.validate(context.Background(), mig)
 	if err == nil || !strings.Contains(err.Error(), "VFIO devices") {
-		t.Errorf("validate SR-IOV guest cross-node should reject; got %v", err)
+		t.Errorf("validate SR-IOV guest with mode=live should reject; got %v", err)
+	}
+}
+
+func TestValidateClusterState_VFIOOfflineNotRejected(t *testing.T) {
+	// A VFIO (GPU) guest migrating OFFLINE must NOT be rejected by the
+	// VFIO-live rule. (It may still fail other cluster-state checks in a real
+	// run; what we assert here is that the "cannot live-migrate" rejection does
+	// not fire for offline.)
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu-pcie"}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	_, err := v.validate(context.Background(), mig)
+	if err != nil && strings.Contains(err.Error(), "cannot live-migrate") {
+		t.Errorf("offline VFIO migration must not hit the VFIO-live rejection; got %v", err)
 	}
 }
 

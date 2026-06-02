@@ -494,8 +494,8 @@ func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
 	}
 	// Operators reading the Resolved=False condition need to see both
 	// node names in the message to diagnose; assert both appear.
-	if !strings.Contains(err.Error(), "cross-node GPU migration is not supported") {
-		t.Errorf("error message should mention cross-node GPU migration; got %q", err.Error())
+	if !strings.Contains(err.Error(), "must commit both together") {
+		t.Errorf("error message should mention the cutover-consistency assertion; got %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "boba") || !strings.Contains(err.Error(), "miles") {
 		t.Errorf("error message should name both spec.nodeName (boba) and status.gpu.nodeName (miles); got %q", err.Error())
