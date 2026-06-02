@@ -167,6 +167,7 @@ func newDstPod(
 	srcPod *corev1.Pod,
 	scheme *runtime.Scheme,
 	sidecar dstSidecarConfig,
+	frozenIntentCMName string,
 ) (*corev1.Pod, error) {
 	name, err := dstPodName(mig, guest.Name)
 	if err != nil {
@@ -200,6 +201,15 @@ func newDstPod(
 	// Add KUBESWIFT_MIGRATION_ROLE=receiver to the launcher container.
 	if err := addReceiverEnvToLauncher(pod); err != nil {
 		return nil, err
+	}
+
+	// W-3c-1 / TFU #24: repoint the runtime-intent volume at the FROZEN
+	// per-migration intent CM (lifecycle: start), so a stop-during-migration
+	// flip of the live `<guest>-runtime-intent` CM cannot poison the dst
+	// receiver's launch gate. Empty name (tests / pre-freeze callers) leaves
+	// the inherited live CM in place.
+	if frozenIntentCMName != "" {
+		repointRuntimeIntentVolume(pod, frozenIntentCMName)
 	}
 
 	// Phase 3c (Option B): inject the destination stunnel sidecar (TLS

@@ -1264,7 +1264,19 @@ edit on a Ready image is allowed while a genuine spec change is still
 rejected. Deferred from branch fix/tfu-17 to keep that change scoped to
 the HIGH-severity trap (TFU #17). Surfaced 2026-05-29 by the PR C recon.
 
-### 24. W-3c-1 `lifecycle: run` freeze on the migration dst pod — deferred (defense-in-depth, not needed by the current live flow)
+### 24. W-3c-1 `lifecycle: run` freeze on the migration dst pod — RESOLVED in Phase 4 PR 2
+
+**RESOLVED** (Phase 4 PR 2, `feat/phase-4-intent-freeze`). The freeze
+landed once Phase 4 made the stop-during-migration path reachable. The
+migration controller now mints a frozen per-migration intent ConfigMap
+(`<dstpod>-runtime-intent`, lifecycle forced to `start`, owned by the
+SwiftGuest) at Preparing-live via `ensureFrozenDstIntent`, and `newDstPod`
+repoints the dst pod's `runtime-intent` volume at it
+([`frozen_intent.go`](internal/controller/swiftmigration/frozen_intent.go)).
+A stop-during-migration flip of the live `<guest>-runtime-intent` CM can no
+longer poison the dst receiver's launch gate. Graceful skip if the live CM
+is absent (defense-in-depth, not a blocker). Original deferral rationale
+preserved below for context.
 
 Phase 3c PR 3 (destination-side mTLS wiring, PR #81) deliberately did
 NOT implement the design doc §4.1 / §8-invariant-#4 `lifecycle: run`

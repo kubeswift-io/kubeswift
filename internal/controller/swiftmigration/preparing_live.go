@@ -152,11 +152,19 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		// Validating-live verified the guest is scheduled and the target
 		// node exists, and (when mTLS is on) distributed both identity
 		// Secrets into this namespace.
+		// W-3c-1 / TFU #24: mint the frozen lifecycle:run intent CM the dst
+		// pod will mount, BEFORE creating the pod. A stop-during-migration
+		// flip of the live `<guest>-runtime-intent` CM then cannot poison
+		// the dst receiver's launch gate.
+		frozenIntentCM, frozenErr := r.ensureFrozenDstIntent(ctx, &guest, expectedDstName)
+		if frozenErr != nil {
+			return phaseTransient(fmt.Errorf("ensure frozen dst intent: %w", frozenErr))
+		}
 		dst, buildErr := newDstPod(mig, &guest, &srcPod, r.Scheme, dstSidecarConfig{
 			mtlsEnabled: r.MigrationMTLSEnabled,
 			srcNodeName: guest.Status.NodeName,
 			dstNodeName: mig.Spec.Target.NodeName,
-		})
+		}, frozenIntentCM)
 		if buildErr != nil {
 			return phaseFailure(
 				fmt.Sprintf("construct dst pod: %v", buildErr),
