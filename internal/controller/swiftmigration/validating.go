@@ -153,6 +153,20 @@ func (r *SwiftMigrationReconciler) checkNodeCapacity(
 	node *corev1.Node,
 	class *swiftv1alpha1.SwiftGuestClass,
 ) error {
+	return NodeHasCapacity(ctx, r.Client, node, class)
+}
+
+// NodeHasCapacity verifies the node has headroom for the guest's CPU +
+// memory (including launcher overhead). Exported so the Phase 4 drain
+// controller reuses the exact capacity gate the migration Validating phase
+// applies, instead of a second, drift-prone copy. Returns nil when the node
+// fits; a descriptive error otherwise.
+func NodeHasCapacity(
+	ctx context.Context,
+	c client.Client,
+	node *corev1.Node,
+	class *swiftv1alpha1.SwiftGuestClass,
+) error {
 	allocCPU, ok := node.Status.Allocatable[corev1.ResourceCPU]
 	if !ok {
 		return fmt.Errorf("target node %q has no Allocatable CPU reported", node.Name)
@@ -168,7 +182,7 @@ func (r *SwiftMigrationReconciler) checkNodeCapacity(
 	// doesn't provide by default). The filter by spec.nodeName is
 	// done manually below; the cluster is small enough this is cheap.
 	var pods corev1.PodList
-	if err := r.List(ctx, &pods); err != nil {
+	if err := c.List(ctx, &pods); err != nil {
 		return fmt.Errorf("list pods for capacity check: %w", err)
 	}
 	usedCPU := *resource.NewQuantity(0, resource.DecimalSI)
