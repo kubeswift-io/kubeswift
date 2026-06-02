@@ -181,7 +181,7 @@ func newDstPod(
 	// useful labels (guest, etc) by starting from src.Labels and
 	// adding migration-specific keys.
 	preservedLabels := mergeLabelsForDst(srcPod.Labels, guest.Name, mig.Name)
-	preservedAnnotations := mergeAnnotationsForDst(srcPod.Annotations)
+	preservedAnnotations := mergeAnnotationsForDst(srcPod.Annotations, sidecar.mtlsEnabled)
 
 	pod.ObjectMeta = metav1.ObjectMeta{
 		Name:        name,
@@ -255,11 +255,21 @@ func mergeLabelsForDst(srcLabels map[string]string, guestName, migName string) m
 // runtime status the dst's swiftletd will repopulate, plus operator
 // annotations that don't transfer to the dst pod cleanly.
 //
-// Future B3 / B2.4 may extend this to copy specific allowlisted keys
-// (e.g., a label-selector indexer might want a subset of the src
-// pod's labels copied as annotations on the dst). For B2.2 the only
-// required annotation is the Phase 2 ack-gate; nothing else.
-func mergeAnnotationsForDst(srcAnnotations map[string]string) map[string]string {
+// The Phase 2 plaintext-ack annotation is set ONLY on the plaintext
+// path. Under mTLS (Phase 3c) the channel is TLS, swiftletd bypasses the
+// ack gate in secured mode (KUBESWIFT_MIGRATION_MTLS=1), and emitting an
+// "unsafe-plaintext: ack" annotation on a TLS-secured pod is misleading.
+// So when mtlsEnabled we omit it. This is safe from version skew: mTLS
+// only ever runs against the Phase 3c swiftletd (same release that added
+// the secured-mode bypass), so no in-flight migration sees an old
+// swiftletd that still requires the ack.
+//
+// The key is NOT deleted outright: the plaintext path still uses the ack
+// gate as the THREAT-MODEL's "operator acknowledged cleartext" guard.
+func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool) map[string]string {
+	if mtlsEnabled {
+		return map[string]string{}
+	}
 	return map[string]string{
 		AnnotationMigrationPhase2Ack: AnnotationMigrationPhase2AckValue,
 	}

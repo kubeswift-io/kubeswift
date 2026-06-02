@@ -309,7 +309,14 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// src pod is the existing SwiftGuest launcher pod which
 		// predates the migration, so the controller must add it.
 		needLabelPatch := srcPodPresent && srcPod.Labels[LabelMigrationName] != mig.Name
-		needAckPatch := srcPodPresent && srcPod.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue
+		// Phase 3c cleanup: only stamp the plaintext-ack annotation on the
+		// plaintext path. Under mTLS swiftletd bypasses the ack gate
+		// (secured mode), so the patch is unnecessary and the annotation
+		// would be misleading on a TLS-secured pod. Safe from version skew
+		// (mTLS implies the Phase 3c swiftletd). The key is retained for the
+		// plaintext path's THREAT-MODEL acknowledgement gate.
+		needAckPatch := !r.MigrationMTLSEnabled && srcPodPresent &&
+			srcPod.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue
 		if needLabelPatch || needAckPatch {
 			patch := client.MergeFrom(srcPod.DeepCopy())
 			if srcPod.Labels == nil {

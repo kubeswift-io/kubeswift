@@ -66,9 +66,13 @@ actual posture is recorded here:
   loopback mitigation.
 - **Plaintext-ack gate — RETIRED on the secured path.** swiftletd bypasses
   the `migration-phase2-unsafe-plaintext: ack` requirement in secured
-  mode (the channel is TLS). The controller still emits the ack (harmless,
-  ignored) to avoid a rolling-upgrade version-skew window; the
-  stop-emitting + key-deletion cleanup is a tracked follow-up.
+  mode (the channel is TLS), and the controller **no longer emits** the
+  ack on the secured path (Phase 3c cleanup) — an "unsafe-plaintext"
+  annotation on a TLS-secured pod is misleading. The annotation key is
+  **retained** (not deleted): the plaintext path still uses it as the
+  operator's "I acknowledge cleartext" gate. Safe from version skew
+  because mTLS only ever runs against the Phase 3c swiftletd that added
+  the secured-mode bypass.
 - **Audit events — DONE.** An `MTLSChannel` Kubernetes Event names the
   pinned per-node peer identities (`src`/`dst`) at Validating; the
   handshake outcome surfaces via the Completed event or the failure
