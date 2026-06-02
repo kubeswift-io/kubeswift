@@ -342,6 +342,18 @@ func isIOMMUEnabled() bool {
 	return len(entries) > 0
 }
 
+// isVfioPciLoaded reports whether the vfio-pci driver is registered on this
+// node (the driver directory exists in sysfs), which is required for GPU
+// passthrough: gpu-init binds devices to vfio-pci, and that fails if the
+// module is not loaded. This is a READ-ONLY check — the gpu-discovery
+// DaemonSet runs with drop-ALL capabilities and a read-only /sys, so it
+// reports readiness but cannot load the module; loading vfio-pci is a host
+// responsibility (e.g. /etc/modules-load.d/vfio.conf).
+func isVfioPciLoaded() bool {
+	info, err := os.Stat("/sys/bus/pci/drivers/vfio-pci")
+	return err == nil && info.IsDir()
+}
+
 func discoverHugepages() gpuv1alpha1.HugepageInfo {
 	total := readIntFile("/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages")
 	free := readIntFile("/sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages")

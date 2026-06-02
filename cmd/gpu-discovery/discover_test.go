@@ -573,3 +573,13 @@ func TestParseIntList(t *testing.T) {
 		}
 	}
 }
+
+func TestMergeStatus_VfioReady(t *testing.T) {
+	for _, ready := range []bool{true, false} {
+		discovered := &SwiftGPUNodeStatus{VfioReady: ready}
+		merged := mergeStatus(discovered, &gpuv1alpha1.SwiftGPUNodeStatus{})
+		if merged.VfioReady != ready {
+			t.Errorf("VfioReady = %v, want %v (must carry through from discovery)", merged.VfioReady, ready)
+		}
+	}
+}
