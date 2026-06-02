@@ -7,6 +7,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -436,6 +437,15 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// Phase 4 drain integration: ensure the per-guest PodDisruptionBudget
+	// (maxUnavailable: 0). The hard floor that protects the VM from drain even
+	// when the eviction webhook is down. Reached only past the pod-ensure
+	// block above, so the launcher pod exists; owned by the guest (GC on
+	// delete). See ensureMigrationPDB.
+	if err := r.ensureMigrationPDB(ctx, &guest); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -531,6 +541,7 @@ func (r *SwiftGuestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&batchv1.Job{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Watches(&imagev1alpha1.SwiftImage{}, handler.EnqueueRequestsFromMapFunc(r.swiftImageToSwiftGuests)).
 		Complete(r)
 }
