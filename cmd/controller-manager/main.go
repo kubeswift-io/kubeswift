@@ -31,6 +31,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
+	evictionwebhook "github.com/projectbeskar/kubeswift/internal/webhook/eviction"
 	swiftguestwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftimage"
 	swiftmigrationwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftmigration"
@@ -262,6 +263,14 @@ func main() {
 			klog.ErrorS(err, "unable to create SwiftMigration webhook")
 			os.Exit(1)
 		}
+		// Phase 4 drain integration: raw admission handler on pods/eviction
+		// (not a CRD validator, so registered directly on the webhook-server
+		// path). The VWC entry uses failurePolicy: Ignore — a webhook outage
+		// must never break cluster-wide evictions; the per-guest PDB is the
+		// hard floor that protects VMs when the webhook is down.
+		mgr.GetWebhookServer().Register("/validate-pods-eviction",
+			&webhook.Admission{Handler: &evictionwebhook.Handler{Client: mgr.GetClient()}})
+		klog.InfoS("registered pods/eviction webhook at /validate-pods-eviction")
 	}
 
 	klog.InfoS("starting manager", "version", version.Version, "git", version.GitCommit)

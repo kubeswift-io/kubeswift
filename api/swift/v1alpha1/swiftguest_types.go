@@ -145,6 +145,52 @@ type MigrationSpec struct {
 	DrainPolicy string `json:"drainPolicy,omitempty"`
 }
 
+// DrainPolicy values for MigrationSpec.DrainPolicy (Phase 4 drain
+// integration). Kept in sync with the +kubebuilder:validation:Enum marker
+// above.
+const (
+	// DrainPolicyMigrate (default) evacuates the guest with mode=auto: live
+	// where possible, offline (bounded downtime) for VFIO/GPU. Drain always
+	// succeeds for an eligible guest.
+	DrainPolicyMigrate = "Migrate"
+	// DrainPolicyLiveMigrate evacuates live only; a guest that cannot
+	// live-migrate (VFIO/GPU) blocks the drain rather than incur downtime.
+	DrainPolicyLiveMigrate = "LiveMigrate"
+	// DrainPolicyBlock always blocks the drain; the operator handles the
+	// guest manually.
+	DrainPolicyBlock = "Block"
+)
+
+// AnnotationDrainRequested, when present on a SwiftGuest, carries the name
+// of the node being drained. The Phase 4 eviction webhook stamps it when it
+// intercepts an eviction of the guest's launcher pod; the Phase 4 drain
+// controller consumes it to create a SwiftMigration off that node and
+// clears it once the guest has moved. Inert until the drain controller
+// ships.
+const AnnotationDrainRequested = "kubeswift.io/drain-requested"
+
+// HasVFIODevices reports whether the guest references VFIO passthrough
+// devices (GPU via gpuProfileRef, or any SR-IOV interface). VFIO devices
+// cannot live-migrate cross-node — the destination Cloud Hypervisor has no
+// equivalent host device to receive the guest's device state — so a guest
+// with VFIO devices can only be moved by an offline (release-and-reallocate)
+// migration.
+//
+// This is the canonical predicate. The SwiftMigration controller
+// (auto_mode.go) and validation webhook (validator.go) carry the same check
+// inline (a package-cycle workaround that predates this method).
+func (g *SwiftGuest) HasVFIODevices() bool {
+	if g.Spec.GPUProfileRef != nil {
+		return true
+	}
+	for _, iface := range g.Spec.Interfaces {
+		if iface.Type == InterfaceTypeSRIOV {
+			return true
+		}
+	}
+	return false
+}
+
 // DataDiskRef references either a SwiftImage or a PVC for a data disk.
 type DataDiskRef struct {
 	// Name identifies this data disk (used for volume naming).
