@@ -30,6 +30,22 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.
 
 Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI (`oci://ghcr.io/projectbeskar/charts` — parent repo; Helm appends chart name). `release-stable` also creates a GitHub Release. See [Helm OCI](install/helm-oci.md#push-vs-install-reference) for push vs install reference.
 
+### Adding a NEW image to the build/push matrix — one-time publicize step
+
+New ghcr container packages are created **private** by default (GitHub's
+default for org packages), and **GitHub provides no REST API to change
+package visibility** — the release workflow cannot automate it. After the
+first push of a new image, a maintainer must publicize the package **once**:
+
+> `https://github.com/orgs/projectbeskar/packages/container/<package>/settings`
+> → **Danger Zone → Change visibility → Public** (confirm by typing the name).
+
+Otherwise pods pulling the image stick at `ImagePullBackOff` / `401
+Unauthorized`. The existing public packages (`controller-manager`,
+`swiftletd`, `gpu-discovery`, `migration-stunnel`) each went through this
+once. (Alternatively, deploy an `imagePullSecret` — but publicizing matches
+the other packages.) Surfaced by the Phase 3c PR 5 walkthrough (TFU #26).
+
 ## Manual release
 
 ```bash
