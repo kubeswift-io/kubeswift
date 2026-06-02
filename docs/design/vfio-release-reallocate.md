@@ -93,17 +93,22 @@ on **both** the source (status.GPU.NodeName=S, the running pod) and the target
 
 ### 4.2 Node vfio-readiness
 
-`SwiftGPUNode.status` gains a `vfioReady` condition (or boolean), set by the
-gpu-discovery DaemonSet (already privileged, already per-GPU-node):
-- gpu-discovery checks `/sys/bus/pci/drivers/vfio-pci` exists (module loaded)
-  and, if missing, **`modprobe vfio-pci`** (it has the privilege; gpu-init
-  does not — minimal caps). Surfaces the result on `SwiftGPUNode.status`.
+`SwiftGPUNode.status` gains a `vfioReady` boolean (PR 1, shipped):
+- gpu-discovery **detects and reports** vfio-readiness — a read-only check
+  that `/sys/bus/pci/drivers/vfio-pci` exists (module loaded). It does **NOT**
+  load the module: the gpu-discovery DaemonSet runs with `privileged: false`,
+  `drop: ALL`, and a read-only `/sys` (verified — an earlier design draft
+  wrongly assumed it was privileged), so it has neither `CAP_SYS_MODULE` nor a
+  writable sysfs / `/lib/modules`.
+- **Loading `vfio-pci` is a host responsibility** — `/etc/modules-load.d/
+  vfio.conf` (persistent) or `modprobe vfio-pci` (transient). Documented as a
+  GPU-node prerequisite. A future opt-in privileged loader (a separate
+  minimal, dedicated DaemonSet, NOT gpu-discovery) could automate it if
+  operators want it; out of scope for this sub-phase.
 - `ReserveOnNode` and the GPU target pre-flight **refuse a node that is not
   vfioReady**, turning a silent gpu-init `Init:Error` into a clear, early
-  rejection.
-- Operators should also load `vfio-pci` persistently
-  (`/etc/modules-load.d/vfio.conf`); the modprobe is a safety net, documented
-  as such.
+  rejection — this is the value the surface delivers regardless of who loads
+  the module.
 
 ### 4.3 GPU target pre-flight (a GPU analogue of `NodeHasCapacity`)
 
@@ -199,9 +204,10 @@ status, shipped explicitly labeled. Tier 1 (the validatable case) has no FM.
 2. **vfioReady representation.** A `SwiftGPUNode.status.conditions[vfioReady]`
    vs a boolean `status.vfioReady`. Conditions are the kube-idiomatic choice;
    confirm with the discovery DaemonSet's existing status shape.
-3. **modprobe in gpu-discovery: opt-in?** Auto-modprobe vs only-report. Lean
-   auto (it is the safety net) but gate behind a discovery flag if operators
-   want host config to be authoritative.
+3. **modprobe — RESOLVED (PR 1): only-report.** gpu-discovery is minimal-cap
+   (drop ALL, read-only /sys) and cannot modprobe; it detects + reports
+   vfioReady. Loading `vfio-pci` is a host responsibility. A future opt-in
+   privileged loader (separate DaemonSet) is the path if auto-load is wanted.
 4. **Same-node migration semantics.** `boba->boba` is degenerate (source ==
    target). The migration webhook today rejects same-node; the validation path
    needs a test-only allowance OR the design treats `boba->boba` as a

@@ -135,6 +135,7 @@ func mergeStatus(discovered *SwiftGPUNodeStatus, existing *gpuv1alpha1.SwiftGPUN
 		LastDiscovery: &now,
 		Host:          discovered.Host,
 		NVSwitches:    discovered.NVSwitches,
+		VfioReady:     discovered.VfioReady,
 	}
 
 	// Build a map of existing GPU allocations keyed by PCI address.
@@ -230,6 +231,7 @@ type SwiftGPUNodeStatus struct {
 	GPUs          []gpuv1alpha1.GPUDevice
 	NVSwitches    []gpuv1alpha1.NVSwitchDevice
 	FabricManager *gpuv1alpha1.FabricManagerStatus
+	VfioReady     bool
 }
 
 // discoverHardware reads GPU inventory, NUMA topology, and Fabric Manager state
@@ -270,5 +272,6 @@ func discoverHardware() (*SwiftGPUNodeStatus, error) {
 		GPUs:          gpus,
 		NVSwitches:    nvSwitches,
 		FabricManager: fm,
+		VfioReady:     isVfioPciLoaded(),
 	}, nil
 }
