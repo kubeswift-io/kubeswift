@@ -83,6 +83,31 @@ func TestStopAndCopyLive_PreSend_Plaintext_TargetDstIP(t *testing.T) {
 	}
 }
 
+// TestStopAndCopyLive_PreRecv_MTLS_SkipsAckPatch verifies the Phase 3c
+// cleanup: under mTLS the src pod is NOT patched with the plaintext-ack
+// annotation (swiftletd bypasses the gate in secured mode) — but the
+// migration-name label IS still applied (informer observability).
+func TestStopAndCopyLive_PreRecv_MTLS_SkipsAckPatch(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	r.MigrationMTLSEnabled = true
+
+	status := mig.Status.DeepCopy()
+	_ = r.handleStopAndCopyLive(context.Background(), mig, status)
+
+	var got corev1.Pod
+	if err := r.Get(context.Background(), key(src), &got); err != nil {
+		t.Fatalf("re-get src: %v", err)
+	}
+	if _, present := got.Annotations[AnnotationMigrationPhase2Ack]; present {
+		t.Errorf("mTLS src must NOT be patched with the plaintext-ack annotation; got %q",
+			got.Annotations[AnnotationMigrationPhase2Ack])
+	}
+	if got.Labels[LabelMigrationName] != mig.Name {
+		t.Errorf("src must still get the migration-name label under mTLS; got %q", got.Labels[LabelMigrationName])
+	}
+}
+
 // --- bounded send retry (substateSrcFailed) ------------------------------
 
 func srcFailedReconciler(t *testing.T, mtls bool, sendAttempts int32, detail string, dstTerminating bool) (*SwiftMigrationReconciler, *migrationv1alpha1.SwiftMigration) {
