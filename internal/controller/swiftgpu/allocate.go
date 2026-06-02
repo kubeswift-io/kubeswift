@@ -7,9 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
@@ -130,36 +127,10 @@ func (r *SwiftGPUReconciler) deallocateGPUs(ctx context.Context, guest *swiftv1a
 	if guest.Status.GPU == nil || guest.Status.GPU.NodeName == "" {
 		return nil
 	}
-
-	var gpuNode gpuv1alpha1.SwiftGPUNode
-	if err := r.Get(ctx, client.ObjectKey{Name: guest.Status.GPU.NodeName}, &gpuNode); err != nil {
-		if apierrors.IsNotFound(err) {
-			// Node is gone; nothing to clean up.
-			return nil
-		}
-		return err
-	}
-
-	allocatedTo := guest.Namespace + "/" + guest.Name
-
-	for i := range gpuNode.Status.GPUs {
-		if gpuNode.Status.GPUs[i].AllocatedTo == allocatedTo {
-			gpuNode.Status.GPUs[i].Allocated = false
-			gpuNode.Status.GPUs[i].AllocatedTo = ""
-		}
-	}
-
-	if gpuNode.Status.FabricManager != nil {
-		for i := range gpuNode.Status.FabricManager.Partitions {
-			if gpuNode.Status.FabricManager.Partitions[i].AllocatedTo == allocatedTo {
-				gpuNode.Status.FabricManager.Partitions[i].AllocatedTo = ""
-			}
-		}
-	}
-
-	gpuNode.Status.FreeGPUs = countFreeGPUs(gpuNode.Status.GPUs)
-
-	return r.Status().Update(ctx, &gpuNode)
+	// Delegate to the exported ReleaseFromNode primitive (the same one the
+	// migration release-and-reallocate path uses), keyed on the guest's
+	// currently-allocated node.
+	return ReleaseFromNode(ctx, r.Client, guest, guest.Status.GPU.NodeName)
 }
 
 // selectGPUs picks count free GPUs from gpus, preferring GPUs on the same NUMA
