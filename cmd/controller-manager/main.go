@@ -21,6 +21,7 @@ import (
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftdrain"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftgpu"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftguestpool"
@@ -202,6 +203,20 @@ func main() {
 		SystemNamespace:      leaderElectionNS,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftMigration controller")
+		os.Exit(1)
+	}
+
+	// Phase 4 drain controller: the "controller creates" half of drain
+	// integration. Watches SwiftGuests for the kubeswift.io/drain-requested
+	// marker (stamped by the eviction webhook) and creates a SwiftMigration to
+	// evacuate the guest. Always registered — it is a no-op until a marker
+	// appears (which only the eviction webhook stamps).
+	if err = (&swiftdrain.Reconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftdrain-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftDrain controller")
 		os.Exit(1)
 	}
 
