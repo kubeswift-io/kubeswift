@@ -74,6 +74,18 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 
 	target := mig.Spec.Target.NodeName
 
+	// GPU release-and-reallocate cutover: free the source GPUs and stamp
+	// status.GPU=target BEFORE the runPolicy+nodeName spec patch below — so the
+	// pod builder's precedence rule (spec.NodeName must agree with
+	// status.GPU.NodeName) holds when the destination pod is created on the
+	// target. Idempotent: a no-op once status.GPU already points at the target.
+	// Non-GPU guests skip this entirely.
+	if guest.HasVFIODevices() {
+		if res := r.cutoverGPUs(ctx, mig, &guest, status); res != nil {
+			return res
+		}
+	}
+
 	// Combined patch: runPolicy=Running AND nodeName=target. Single
 	// MergeFrom produces one PATCH request → atomic at the API server.
 	// If the spec already matches (re-entry after the patch landed),
