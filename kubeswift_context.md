@@ -1465,6 +1465,51 @@ apiserver-enum-vs-Go-constant mismatch, the CPU-throttle resource bug,
 and the ghcr package-visibility gap. PR 5 runbook:
 [`docs/migration/phase-3c.md`](docs/migration/phase-3c.md).
 
+### Phase 4 — Drain Integration (non-VFIO) — SHIPPED + cluster-validated
+
+Phase 4 makes `kubectl drain` automatically and safely evacuate SwiftGuest
+VMs (webhook-marks / controller-creates / PDB-guarantees). Design:
+[`docs/design/live-migration-phase-4.md`](docs/design/live-migration-phase-4.md);
+operator runbook: [`docs/migration/phase-4.md`](docs/migration/phase-4.md).
+Shipped across 6 PRs:
+
+- **PR 1 (#87)** — design doc + `spec.migration.drainPolicy` enum
+  (Migrate|LiveMigrate|Block, default Migrate) + generate + chart sync.
+- **PR 2 (#88)** — TFU #24 `lifecycle: run` freeze on the dst intent (now
+  reachable: Phase 4 introduces the stop-during-migration path). RESOLVED.
+- **PR 3 (#89)** — `pods/eviction` admission webhook (`veviction`,
+  `failurePolicy: Ignore`, `sideEffects: NoneOnDryRun`): denies a guest
+  launcher pod's eviction with 429 + stamps `kubeswift.io/drain-requested`.
+- **PR 4a (#90)** — drain controller (`internal/controller/swiftdrain`):
+  marker → guest-owned SwiftMigration (mode from drainPolicy, target by
+  capacity reusing the exported `swiftmigration.NodeHasCapacity`) → clear on
+  move. Plus the VFIO correctness fix (VFIO guests denied-without-marking
+  under any policy) and the canonical `SwiftGuest.HasVFIODevices` predicate.
+- **PR 4b (#91)** — universal per-guest `maxUnavailable: 0` PDB in the
+  SwiftGuest controller (the hard floor; protects VMs even when the webhook
+  is down). policy/poddisruptionbudgets RBAC (get,list,watch,...).
+- **PR 5** — cluster walkthrough + operator runbook + drainPolicy samples.
+
+**PR 5 cluster walkthrough (2026-06-02, image sha-04c054d, kernel-boot
+guest, miles/boba). All four scenarios PASS; no bugs surfaced** (the
+pre-spiked eviction mechanism held — a rare clean cluster walkthrough):
+
+| Scenario | Result |
+|---|---|
+| Drain → auto-migrate (Migrate) | 6× 429 deny (5s retry) → drain controller created `*-drain-*` (resolved **mode=live**, reason=node-drain, target=boba) → live-migrated → `node/miles drained` (exit 0). **observedDowntime 2.30s**, transfer 38.48s. |
+| Block | denied with manual-handling message, **no marker, no migration**, drain stalls, guest stayed put. |
+| Webhook down (controller→0) | webhook Ignored → the maxUnavailable:0 **PDB denied the eviction** ("would violate the pod's disruption budget") → drain stalls safely, VM protected. |
+| Per-guest PDB | every guest got a guest-owned maxUnavailable:0 PDB; GC'd (PDB + drain SwiftMigration both cascade on guest delete). |
+
+**Operator finding (documented in the runbook, not a bug):** draining a
+SwiftGuest node needs `--delete-emptydir-data` (the launcher pod uses
+emptyDir) — a plain `kubectl drain` refuses on local-storage **before** the
+eviction webhook fires, so the guest is not migrated.
+
+**VFIO/GPU guests are NOT auto-evacuated yet** — they block the drain
+(manual handling). The release-and-reallocate primitive is the next sub-phase
+(**TFU #27**).
+
 ---
 
 ## Phase 2 Decisions Resolved (live migration)
