@@ -12,6 +12,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:printcolumn:name="GPUs",type=integer,JSONPath=`.status.gpuCount`
 // +kubebuilder:printcolumn:name="Free",type=integer,JSONPath=`.status.freeGPUs`
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.status.gpuModel`
+// +kubebuilder:printcolumn:name="VfioReady",type=boolean,JSONPath=`.status.vfioReady`
 type SwiftGPUNode struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -38,6 +39,17 @@ type SwiftGPUNodeStatus struct {
 
 	// GPUVendor is the vendor of the GPUs (assumes homogeneous node): "NVIDIA", "AMD", "Intel".
 	GPUVendor string `json:"gpuVendor,omitempty"`
+
+	// VfioReady is true when the vfio-pci driver is loaded on this node
+	// (/sys/bus/pci/drivers/vfio-pci exists), so GPU passthrough can bind
+	// devices. When false, gpu-init would fail to bind the GPU to vfio-pci.
+	// GPU allocation and the migration GPU target pre-flight refuse a node
+	// that is not VfioReady (rather than allocate and let gpu-init fail).
+	// Loading vfio-pci is a host responsibility (e.g. /etc/modules-load.d);
+	// the minimal-capability gpu-discovery DaemonSet only DETECTS and reports
+	// it (it cannot modprobe — drop ALL, no CAP_SYS_MODULE).
+	// +optional
+	VfioReady bool `json:"vfioReady,omitempty"`
 
 	// Host describes the physical host topology.
 	Host HostTopology `json:"host,omitempty"`
