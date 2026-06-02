@@ -97,17 +97,9 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 // node; the receiver CH would have no equivalent device on the
 // destination.
 //
-// Mirrors the webhook's check (validator.go line 418-424). Duplicated
-// rather than imported because the webhook lives in a separate package
-// and importing the webhook from the controller would create a cycle.
+// Delegates to the canonical SwiftGuest.HasVFIODevices predicate in
+// api/swift/v1alpha1 (the cycle-free home). Kept as a package-local thunk
+// so existing call sites and tests are unaffected.
 func hasVFIODevices(guest *swiftv1alpha1.SwiftGuest) bool {
-	if guest.Spec.GPUProfileRef != nil {
-		return true
-	}
-	for _, iface := range guest.Spec.Interfaces {
-		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV {
-			return true
-		}
-	}
-	return false
+	return guest.HasVFIODevices()
 }
