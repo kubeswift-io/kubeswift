@@ -213,20 +213,22 @@ enum fields must be regenerated, not just constant-added — Phase 3c PR 5).
 3. **PR 3** (#89, merged) — the eviction webhook (`pods/eviction` admission
    handler, VWC rule, `failurePolicy: Ignore`, marker patch with dry-run
    skip). Unit-tested; marker inert until PR 4a.
-4. **PR 4a** — the drain controller (marker → SwiftMigration → clear +
-   target selection). Handles **non-VFIO** guests; VFIO/GPU guests are
-   denied-without-marking by the eviction webhook (VFIO correctness fix
+4. **PR 4a** (#90, merged) — the drain controller (marker → SwiftMigration →
+   clear + target selection). Handles **non-VFIO** guests; VFIO/GPU guests
+   are denied-without-marking by the eviction webhook (VFIO correctness fix
    folded in here, since 4a makes the marker live). Reuses the migration
    Validating phase's `NodeHasCapacity` gate. Unit-tested.
    *(Split from the original single PR 4 per the same Design-Principle-#1
    reviewability discipline used throughout Phase 4.)*
-5. **PR 4b** — per-guest `maxUnavailable: 0` PodDisruptionBudget creation in
-   the SwiftGuest controller (the hard floor, independent of the
-   webhook/controller; §4.2). Logically independent of 4a.
-6. **PR 5** — cluster walkthrough (drain miles → guest live-migrates to
-   boba → drain completes; `Block` deny; webhook-down PDB safety) +
-   operator runbook (`docs/migration/phase-4.md`). VFIO-offline is **not**
-   in this walkthrough (deferred to the release-and-reallocate sub-phase).
+5. **PR 4b** (#91, merged) — universal per-guest `maxUnavailable: 0`
+   PodDisruptionBudget creation in the SwiftGuest controller (the hard floor,
+   independent of the webhook/controller; §4.2). Logically independent of 4a.
+6. **PR 5** (SHIPPED) — cluster walkthrough + operator runbook
+   (`docs/migration/phase-4.md`) + drainPolicy samples. Validated on
+   miles/boba (image sha-04c054d): drain → live-migrate to boba
+   (observedDowntime 2.30s) → drain completes; `Block` deny; webhook-down PDB
+   safety; per-guest PDB. All PASS, no bugs. VFIO-offline deferred to the
+   release-and-reallocate sub-phase.
 
 ### Follow-on sub-phase — VFIO/GPU release-and-reallocate
 

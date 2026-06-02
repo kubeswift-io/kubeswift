@@ -1,0 +1,26 @@
+# Phase 4 drain integration — a guest that auto-migrates on `kubectl drain`.
+#
+# drainPolicy: Migrate (the default) — when the guest's node is drained, the
+# eviction webhook blocks the eviction (429, retry) and the drain controller
+# creates a SwiftMigration (mode=auto: live-migrate where possible) to
+# evacuate it. Drain completes once the guest has moved.
+#
+# Kernel-boot guest (faas-minimal) — live-migration-capable with no storage
+# gymnastics. Requires: SwiftKernel "faas-minimal" Ready, SwiftGuestClass
+# "default", and the target/source nodes labeled kubeswift.io/kernel-node=true.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: phase4-migrate
+  namespace: default
+spec:
+  kernelRef:
+    name: faas-minimal
+  guestClassRef:
+    name: default
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  runPolicy: Running
+  nodeName: miles          # start on miles so `kubectl drain miles` moves it
+  migration:
+    enabled: true
+    drainPolicy: Migrate    # Migrate | LiveMigrate | Block
