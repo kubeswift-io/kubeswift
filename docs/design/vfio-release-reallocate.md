@@ -227,11 +227,14 @@ next (finding-behind-a-finding):
 
 ## 10. Open questions (resolve during implementation)
 
-1. **Reservation leak on guest-delete-mid-migration.** If the guest is deleted
-   while a target reservation is held (status.GPU=S), `deallocateGPUs` frees
-   only S; T's reservation leaks. Fix: the SwiftMigration finalizer/cleanup
-   `ReleaseFromNode(T)` on abort; OR a periodic reconcile that GCs reservations
-   whose owning migration is gone. Lean toward the former (explicit).
+1. **Reservation leak on guest-delete-mid-migration — RESOLVED.** If the guest
+   was deleted while a target reservation was held (status.GPU=S),
+   `deallocateGPUs` freed only S and T's reservation leaked (a GPU stranded
+   AllocatedTo a now-deleted guest). Fixed: `deallocateGPUs` now lists **all**
+   SwiftGPUNodes and `ReleaseFromNode`s each (idempotent), so it frees both the
+   source allocation and any held target reservation — robust even if the
+   SwiftMigration object is also gone. Regression test: double-hold
+   (source+target) delete frees both nodes.
 2. **vfioReady representation.** A `SwiftGPUNode.status.conditions[vfioReady]`
    vs a boolean `status.vfioReady`. Conditions are the kube-idiomatic choice;
    confirm with the discovery DaemonSet's existing status shape.
