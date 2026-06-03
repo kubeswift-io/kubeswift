@@ -84,3 +84,28 @@ func TestFindAndAllocate_PrefersStatusGPUNode(t *testing.T) {
 		}
 	})
 }
+
+// TestDeallocateGPUs_FreesAllNodes is the §10.1 regression: a guest allocated on
+// BOTH the source ("miles", = status.GPU.NodeName) and the target ("boba", a
+// held reservation) — the reserve-before-stop double-hold — must have BOTH
+// freed when the guest is deleted. Releasing only status.GPU.NodeName would
+// strand the target reservation forever (AllocatedTo a now-deleted guest).
+func TestDeallocateGPUs_FreesAllNodes(t *testing.T) {
+	source := nodeAllocatedTo("miles", "0000:01:00.0", "default/g")
+	target := nodeAllocatedTo("boba", "0000:ff:00.0", "default/g")
+	guest := wgpu1Guest("miles") // status.GPU.NodeName = miles (source)
+	r := newReconciler(source, target, guest)
+
+	if err := r.deallocateGPUs(context.Background(), guest); err != nil {
+		t.Fatalf("deallocateGPUs: %v", err)
+	}
+	for _, name := range []string{"miles", "boba"} {
+		n := getNode(t, r.Client, name)
+		if got := n.Status.GPUs[0].AllocatedTo; got != "" {
+			t.Errorf("node %q GPU still AllocatedTo %q after dealloc; reservation/allocation leaked", name, got)
+		}
+		if n.Status.FreeGPUs != 1 {
+			t.Errorf("node %q FreeGPUs=%d, want 1 after dealloc", name, n.Status.FreeGPUs)
+		}
+	}
+}
