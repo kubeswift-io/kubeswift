@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: May 30, 2026 — Live Migration Phase 3a/3b shipped (mode: live, cluster-validated); Phase 3c mTLS transport spike COMPLETE (PR #75); Phase 3c design doc in progress
+> Last updated: June 3, 2026 — VFIO/GPU release-and-reallocate SHIPPED (TFU #27, PRs #96–#102): GPU guests auto-evacuate OFFLINE on drain; cluster walkthrough surfaced + fixed 3 multi-controller bugs (W-GPU-1/2/3). Prior: Live Migration Phase 3a/3b/3c + Phase 4 drain shipped
 
 ---
 
@@ -1375,6 +1375,57 @@ Document in the release runbook; cross-referenced from
 fail-loud — ImagePullBackOff is obvious). Surfaced 2026-06-01.
 
 ### 27. VFIO/GPU release-and-reallocate primitive (Phase 4 drain follow-on sub-phase)
+
+**SHIPPED 2026-06-03** across PRs #96–#102 (5 feature PRs + 3 walkthrough
+bug-fixes). GPU guests are now auto-evacuated **offline** on `kubectl drain` via
+the migration-controller-orchestrated release-and-reallocate path; SR-IOV NIC
+guests stay manual (NIC reattach out of scope). Design + validation:
+[`docs/design/vfio-release-reallocate.md`](docs/design/vfio-release-reallocate.md);
+operator runbook: [`docs/migration/phase-4.md`](docs/migration/phase-4.md).
+
+- **PR 1 (#96)** — `SwiftGPUNode.status.vfioReady` + gpu-discovery read-only
+  vfio-pci detection (modprobe descoped — minimal-cap DaemonSet) +
+  `GPUNodeHasCapacity` pre-flight. Cluster-validated `boba vfioReady=true`.
+- **PR 2 (#97)** — `ReserveOnNode` / `ReleaseFromNode` primitives (reservation
+  reuses `GPUDevice.AllocatedTo`, no CRD change) + `deallocateGPUs` refactor.
+- **PR 3 (#98)** — migration offline-GPU sequence (Validating pre-flight,
+  Preparing reserve-before-stop, cutover release+`status.GPU=target` stamp,
+  failure release) + precedence-rule reframe + webhook VFIO-offline lift.
+- **PR 4 (#99)** — drain wiring: VFIO `Migrate` → offline migration; SR-IOV
+  denied (manual); GPU target selection via `GPUNodeHasCapacity`. New
+  `SwiftGuest.OfflineGPUMigratable()` / `HasSRIOVInterface()` predicates.
+- **PR 5 (#100/#101/#102 + docs)** — cluster walkthrough (mock 2nd `SwiftGPUNode`
+  + `drain boba`, single-GPU-node ceiling) which surfaced **three** real
+  multi-controller/lifecycle bugs unit tests missed (the W5 pattern, each behind
+  the previous):
+  - **W-GPU-1 (#100)** — SwiftGPU controller re-stamps `status.GPU` to the first
+    allocated node during the reserve double-hold, racing the migration. Fix:
+    `findAndAllocate` prefers the node `status.GPU` already references. (The
+    design's "SwiftGPU idle while status.GPU non-nil" assumption was false.)
+  - **W-GPU-2 (#101)** — offline StopAndCopy read `pod.Spec.NodeName` before the
+    scheduler bound the nodeSelector-pinned GPU pod → false "atomicity violated".
+    Fix: empty nodeName = not-yet-scheduled (requeue) unless a hostname
+    nodeSelector pins it away from the target.
+  - **W-GPU-3 (#102, most serious)** — offline Resuming concluded `Completed`
+    off the stale `GuestRunning`+IP (they survive the cutover pod swap), a
+    **false success** when the dst never boots. Latent in Phase-1 offline
+    migration generally. Fix: gate completion on the dst pod's real state (fail
+    on terminal init failure; require launcher Ready before trusting
+    GuestRunning/IP).
+
+  Final cluster re-run (image sha-fafc2c9): the full chain drives correctly to an
+  HONEST terminal state — migration `Failed: destination guest failed to boot on
+  "miles": init container "gpu-init" exited 1`, `status.GPU=miles` stable (no
+  flip-back), boba freed, `node/boba drained`. **Cross-node dst *boot*
+  (`Completed`) is NOT hardware-validated — needs a second real GPU node.**
+
+- **Tracked-not-blocking:** reservation leak on guest-delete-mid-migration
+  (design §10.1), reservation timeout (§10.5), Tier 2/3 FM-partition handoff
+  (no HGX hardware). The "drain completes when the guest leaves the source even
+  if the migration later fails on the target" is a pre-existing Phase 4 property
+  (not GPU-specific).
+
+Original scoping detail (preserved for context):
 
 Surfaced 2026-06-02 during Phase 4 PR 4a recon. The Phase 4 design doc
 §4.3 promised `drainPolicy: Migrate` does "offline (bounded downtime) for
