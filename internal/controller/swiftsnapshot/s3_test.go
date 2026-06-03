@@ -1,9 +1,11 @@
 package swiftsnapshot
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -123,4 +125,51 @@ func TestBuildUploadJob_OptionalFlagsOmitted(t *testing.T) {
 			t.Errorf("flag %q should be omitted when unset; got %q", absent, a)
 		}
 	}
+}
+
+func uploadJobWith(snap *snapshotv1alpha1.SwiftSnapshot, cond batchv1.JobConditionType) *batchv1.Job {
+	j := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: s3UploadJobName(snap), Namespace: snap.Namespace}}
+	if cond != "" {
+		j.Status.Conditions = []batchv1.JobCondition{{Type: cond, Status: corev1.ConditionTrue, Message: "boom"}}
+	}
+	return j
+}
+
+func TestHandleUploading(t *testing.T) {
+	base := s3Snap("snap1", "ns", nil)
+	base.Status.NodeName = "boba"
+
+	t.Run("complete -> Ready + status.S3", func(t *testing.T) {
+		snap := base.DeepCopy()
+		r, _ := newReconciler(t, snap, uploadJobWith(snap, batchv1.JobComplete))
+		status := snap.Status.DeepCopy()
+		ready, errMsg, err := r.handleUploading(context.Background(), snap, status)
+		if err != nil || errMsg != "" || !ready {
+			t.Fatalf("complete: ready=%v errMsg=%q err=%v", ready, errMsg, err)
+		}
+		if status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseReady {
+			t.Errorf("phase = %s, want Ready", status.Phase)
+		}
+		if status.S3 == nil || status.S3.Location != s3Location(snap) {
+			t.Errorf("status.S3 = %+v, want Location=%s", status.S3, s3Location(snap))
+		}
+	})
+
+	t.Run("failed -> errMsg", func(t *testing.T) {
+		snap := base.DeepCopy()
+		r, _ := newReconciler(t, snap, uploadJobWith(snap, batchv1.JobFailed))
+		ready, errMsg, err := r.handleUploading(context.Background(), snap, snap.Status.DeepCopy())
+		if err != nil || ready || !strings.Contains(errMsg, "upload Job failed") {
+			t.Fatalf("failed: ready=%v errMsg=%q err=%v", ready, errMsg, err)
+		}
+	})
+
+	t.Run("running -> requeue", func(t *testing.T) {
+		snap := base.DeepCopy()
+		r, _ := newReconciler(t, snap, uploadJobWith(snap, ""))
+		ready, errMsg, err := r.handleUploading(context.Background(), snap, snap.Status.DeepCopy())
+		if err != nil || ready || errMsg != "" {
+			t.Fatalf("running should requeue; ready=%v errMsg=%q err=%v", ready, errMsg, err)
+		}
+	})
 }
