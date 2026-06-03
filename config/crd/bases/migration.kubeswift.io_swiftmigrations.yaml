@@ -32,6 +32,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.transferProgress
+      name: Progress
+      type: integer
     - jsonPath: .status.observedDowntime
       name: Downtime
       type: string
@@ -552,6 +555,21 @@ spec:
                   mode populates SwiftGuest.status.network.primaryIP via the
                   existing first-boot lease poller path.
                 type: string
+              transferProgress:
+                description: |-
+                  TransferProgress is the live-migration pre-copy progress estimate, an
+                  integer percentage 0-100, surfaced from the swiftletd-on-source
+                  kubeswift.io/migration-progress-estimate annotation during the
+                  StopAndCopy transferring substate (Phase 5). It is a BANDWIDTH HEURISTIC
+                  (Phase 3b design §5.4, calibrated on Calico-VXLAN), not a byte-exact
+                  counter — accuracy degrades on CNIs far from that baseline. It climbs
+                  during pre-copy and is pinned to 100 once the source reports transfer
+                  complete. Not populated for status.mode=offline migrations (no memory
+                  transfer). Operators reading it should treat it as approximate.
+                format: int32
+                maximum: 100
+                minimum: 0
+                type: integer
             type: object
         type: object
     served: true

@@ -563,6 +563,20 @@ type SwiftMigrationStatus struct {
 	// to ObservedTransferDuration.
 	// +optional
 	ObservedPauseWindow *metav1.Duration `json:"observedPauseWindow,omitempty"`
+
+	// TransferProgress is the live-migration pre-copy progress estimate, an
+	// integer percentage 0-100, surfaced from the swiftletd-on-source
+	// kubeswift.io/migration-progress-estimate annotation during the
+	// StopAndCopy transferring substate (Phase 5). It is a BANDWIDTH HEURISTIC
+	// (Phase 3b design §5.4, calibrated on Calico-VXLAN), not a byte-exact
+	// counter — accuracy degrades on CNIs far from that baseline. It climbs
+	// during pre-copy and is pinned to 100 once the source reports transfer
+	// complete. Not populated for status.mode=offline migrations (no memory
+	// transfer). Operators reading it should treat it as approximate.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	TransferProgress *int32 `json:"transferProgress,omitempty"`
 	// TargetIP is the destination guest's primary IP, propagated from
 	// the source pod's pre-migration kubeswift.io/guest-ip annotation
 	// via swiftletd at receive-complete time (PR #41 D3 propagation).
@@ -593,6 +607,7 @@ type SwiftMigrationStatus struct {
 // +kubebuilder:printcolumn:name="To",type=string,JSONPath=`.status.destinationNode`
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.status.mode`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Progress",type=integer,JSONPath=`.status.transferProgress`
 // +kubebuilder:printcolumn:name="Downtime",type=string,JSONPath=`.status.observedDowntime`
 // +kubebuilder:printcolumn:name="Transfer",type=string,JSONPath=`.status.observedTransferDuration`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

@@ -33,9 +33,16 @@ const (
 	// stopandcopy_live's substateSendComplete handler and stamped into
 	// status.ObservedPauseWindow per W27b.
 	AnnotationMigrationPauseWindowMs = "kubeswift.io/migration-pause-window-ms"
-	MigrationActionCancel            = "cancel"
-	MigrationStatusFailed            = "failed"
-	MigrationStatusFailedCancelDt    = "cancelled" // expected substring in status-detail
+	// AnnotationMigrationProgressEstimate is the swiftletd-on-src-emitted
+	// pre-copy progress estimate (an integer percentage 0-100, a bandwidth
+	// heuristic per Phase 3b design §5.4) written on the source pod at ~5s
+	// intervals during the live send. The controller reads it during the
+	// transferring substate and surfaces it as status.transferProgress
+	// (Phase 5). Best-effort and approximate — see the field docstring.
+	AnnotationMigrationProgressEstimate = "kubeswift.io/migration-progress-estimate"
+	MigrationActionCancel               = "cancel"
+	MigrationStatusFailed               = "failed"
+	MigrationStatusFailedCancelDt       = "cancelled" // expected substring in status-detail
 
 	// MigrationStatusRejected is swiftletd's status for an action it
 	// refused to execute (Phase 2 PR-B's decide() rejection path —
