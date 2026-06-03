@@ -99,11 +99,44 @@ func TestValidate_LocalCarrier_OnNonLocalBackend_Rejected(t *testing.T) {
 	}
 }
 
-func TestValidate_S3Backend_Rejected(t *testing.T) {
+func TestValidate_S3Backend(t *testing.T) {
 	v := &Validator{}
-	_, err := v.ValidateCreate(context.Background(), makeSnap(snapshotv1alpha1.SnapshotBackendS3))
-	if err == nil || !strings.Contains(err.Error(), "Phase 2") {
-		t.Errorf("expected Phase 2 rejection of s3 backend, got: %v", err)
+	valid := func() *snapshotv1alpha1.SwiftSnapshot {
+		s := makeSnap(snapshotv1alpha1.SnapshotBackendS3)
+		s.Spec.Backend.S3 = &snapshotv1alpha1.S3Backend{
+			Bucket:               "b",
+			Region:               "us-east-1",
+			CredentialsSecretRef: &snapshotv1alpha1.SecretObjectReference{Name: "creds"},
+		}
+		return s
+	}
+	if _, err := v.ValidateCreate(context.Background(), valid()); err != nil {
+		t.Errorf("valid s3 backend should be accepted; got %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mut    func(*snapshotv1alpha1.S3Backend)
+		reject string
+	}{
+		{"missing bucket", func(s *snapshotv1alpha1.S3Backend) { s.Bucket = "" }, "bucket"},
+		{"missing creds", func(s *snapshotv1alpha1.S3Backend) { s.CredentialsSecretRef = nil }, "credentialsSecretRef"},
+		{"missing region and endpoint", func(s *snapshotv1alpha1.S3Backend) { s.Region = "" }, "region"},
+	}
+	for _, tc := range cases {
+		s := valid()
+		tc.mut(s.Spec.Backend.S3)
+		if _, err := v.ValidateCreate(context.Background(), s); err == nil || !strings.Contains(err.Error(), tc.reject) {
+			t.Errorf("%s: want rejection mentioning %q; got %v", tc.name, tc.reject, err)
+		}
+	}
+
+	// Endpoint set (S3-compatible) without region is accepted.
+	s := valid()
+	s.Spec.Backend.S3.Region = ""
+	s.Spec.Backend.S3.Endpoint = "minio.svc:9000"
+	if _, err := v.ValidateCreate(context.Background(), s); err != nil {
+		t.Errorf("endpoint without region should be accepted; got %v", err)
 	}
 }
 

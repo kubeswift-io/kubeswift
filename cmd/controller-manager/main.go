@@ -176,8 +176,9 @@ func main() {
 	}
 
 	if err = (&swiftsnapshot.SwiftSnapshotReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SnapshotS3Image: os.Getenv("KUBESWIFT_SNAPSHOT_S3_IMAGE"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
 		os.Exit(1)

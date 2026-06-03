@@ -143,10 +143,11 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	status.NodeName = pod.Spec.NodeName
 	status.SnapshotDirVersion = SnapshotDirVersionV1
 
-	// Resolve destination directory. The webhook ensures the operator
-	// supplied a hostPath under HostPathBaseDir; the controller does
-	// not auto-generate paths in this commit.
-	destDir := snap.Spec.Backend.Local.HostPath
+	// Resolve destination directory. For the local backend the webhook
+	// ensures the operator supplied a hostPath under HostPathBaseDir; for the
+	// s3 backend the controller derives the dir (s3LocalDir). swiftletd mkdir's
+	// it before capture.
+	destDir := captureDestDir(snap)
 	srcURL := destDir
 	if !strings.HasSuffix(srcURL, "/") {
 		srcURL = srcURL + "/"
@@ -260,7 +261,21 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 	now := metav1.Now()
 	status.CapturedAt = &now
 	status.MemorySnapshot = &snapshotv1alpha1.MemorySnapshotRef{
-		Handle: snap.Spec.Backend.Local.HostPath,
+		Handle: captureDestDir(snap),
+	}
+
+	// s3 backend: capture is done locally; now upload to S3. Create the
+	// node-pinned upload Job and advance to Uploading (handleUploading watches
+	// it to completion, then stamps status.S3 + Ready). The local backend is
+	// done — go straight to Ready.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
+		if err := r.ensureUploadJob(ctx, snap, status); err != nil {
+			return false, "", err
+		}
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseUploading)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonCapturing,
+			"capture complete on node "+status.NodeName+"; uploading to S3")
+		return true, "", nil
 	}
 
 	setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseReady)
