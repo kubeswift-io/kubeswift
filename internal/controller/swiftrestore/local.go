@@ -173,10 +173,15 @@ func parseVersion(s string) (int, int, int, bool) {
 	return major, minor, patch, true
 }
 
-// IsTierBRestore returns true when the snapshot's backend is local —
-// i.e. this restore should follow the Tier B path rather than CSI.
+// IsTierBRestore returns true when the snapshot's backend drives the
+// node-local-cache restore path (CH --restore from a hostPath) rather than
+// CSI. That covers both local (Tier B) and s3 (Tier C): once the s3 download
+// Job has populated the node-local cache, the Restoring/Resuming phases are
+// identical to local. The Pending phase still forks (local vs s3-download)
+// before reaching that shared path.
 func IsTierBRestore(snap *snapshotv1alpha1.SwiftSnapshot) bool {
-	return snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal
+	return snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3
 }
 
 // IsInPlaceRestore returns true when this is the fast-path: target name
@@ -222,33 +227,9 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 ) (bool, time.Duration, error) {
-	// Hypervisor version check (architect risk #3). Operator can
-	// override via SkipHypervisorVersionCheckAnnotation for disaster-
-	// recovery scenarios where the cluster's CH was upgraded past the
-	// snapshot's. Default policy: block on minor or major mismatch,
-	// allow patch drift with a Warning, allow exact match.
-	skip := restore.Annotations[SkipHypervisorVersionCheckAnnotation] == "true"
-	if !skip && r.CurrentHypervisorVersion != "" {
-		switch CompareHypervisorVersions(snap.Status.HypervisorVersion, r.CurrentHypervisorVersion) {
-		case VersionMajorMismatch:
-			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-			setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-				"hypervisor major-version mismatch: snapshot "+snap.Status.HypervisorVersion+
-					" vs cluster "+r.CurrentHypervisorVersion+
-					" (override with annotation "+SkipHypervisorVersionCheckAnnotation+"=true)")
-			return true, 0, nil
-		case VersionMinorMismatch:
-			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-			setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-				"hypervisor minor-version mismatch: snapshot "+snap.Status.HypervisorVersion+
-					" vs cluster "+r.CurrentHypervisorVersion+
-					" (override with annotation "+SkipHypervisorVersionCheckAnnotation+"=true)")
-			return true, 0, nil
-		case VersionPatchDrift, VersionExactMatch, VersionUnknown:
-			// Proceed. Patch drift could be surfaced as a Warning
-			// condition in a future iteration — for now the version
-			// fields on status are enough for an operator to see.
-		}
+	// Hypervisor version check (architect risk #3). Shared with the s3 path.
+	if r.hypervisorVersionBlocked(restore, snap, status) {
+		return true, 0, nil
 	}
 
 	// Sanity-check the snapshot fields we depend on. The webhook
@@ -268,6 +249,27 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 		return true, 0, nil
 	}
 
+	// Local backend: the snapshot dir is the operator-supplied hostPath, pinned
+	// to the capture node. The s3 backend reaches materializeRestoreTarget from
+	// handleDownloading with a download-cache dir + a chosen node instead.
+	return r.materializeRestoreTarget(ctx, restore, snap, status,
+		snap.Spec.Backend.Local.HostPath, snap.Status.NodeName)
+}
+
+// materializeRestoreTarget is the backend-agnostic tail of the restore: given
+// the node-local snapshot directory and the node it lives on, it stamps the
+// target SwiftGuest (in-place) or creates it from the source spec (clone) with
+// the restore annotations, then advances to Restoring. The local backend calls
+// this with the operator hostPath + capture node; the s3 backend calls it after
+// the download Job has populated the node-local cache on the chosen node.
+func (r *SwiftRestoreReconciler) materializeRestoreTarget(
+	ctx context.Context,
+	restore *snapshotv1alpha1.SwiftRestore,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+	status *snapshotv1alpha1.SwiftRestoreStatus,
+	snapshotDir string,
+	nodeName string,
+) (bool, time.Duration, error) {
 	// Identity-regen contract: a clone (target.Name != source) MUST
 	// regenerate macAddresses. Without this two clones share a MAC
 	// and L2 collides. The validation webhook enforces the same rule
@@ -302,7 +304,7 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 	// Annotation set both branches write onto the target SwiftGuest.
 	// The SwiftGuest controller picks these up in buildPod() and routes
 	// to BuildRestorePod() instead of the normal disk-boot path.
-	annos := r.restoreAnnotations(restore, snap, &source, inPlace)
+	annos := r.restoreAnnotations(restore, snap, &source, inPlace, snapshotDir, nodeName)
 
 	if inPlace {
 		// In-place: target name == source name. The source SwiftGuest
@@ -358,7 +360,7 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 	setPhase(status, snapshotv1alpha1.SwiftRestorePhaseRestoring)
 	setReadyCondition(status, metav1.ConditionFalse, ReasonRestoring,
 		"restore-receive launcher requested for SwiftGuest "+restore.Spec.TargetGuest.Name+
-			" on node "+snap.Status.NodeName)
+			" on node "+nodeName)
 	return true, 0, nil
 }
 
@@ -503,6 +505,8 @@ func (r *SwiftRestoreReconciler) restoreAnnotations(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	source *swiftv1alpha1.SwiftGuest,
 	inPlace bool,
+	snapshotDir string,
+	nodeName string,
 ) map[string]string {
 	mode := swiftguestctrl.RestoreModeClone
 	if inPlace {
@@ -510,8 +514,8 @@ func (r *SwiftRestoreReconciler) restoreAnnotations(
 	}
 	annos := map[string]string{
 		swiftguestctrl.AnnotationActiveRestore:       restore.Name,
-		swiftguestctrl.AnnotationRestoreSnapshotPath: snap.Spec.Backend.Local.HostPath,
-		swiftguestctrl.AnnotationRestoreNodeName:     snap.Status.NodeName,
+		swiftguestctrl.AnnotationRestoreSnapshotPath: snapshotDir,
+		swiftguestctrl.AnnotationRestoreNodeName:     nodeName,
 		swiftguestctrl.AnnotationRestoreMode:         mode,
 	}
 	if !inPlace {

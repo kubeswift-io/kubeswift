@@ -130,9 +130,13 @@ func (v *Validator) validateMacAddressesOnClone(ctx context.Context, r *snapshot
 	if err != nil {
 		return fmt.Errorf("look up SwiftSnapshot: %w", err)
 	}
-	// Rule applies only to memory snapshots being cloned (not in-place).
+	// Rule applies only to memory snapshots being cloned (not in-place). Both
+	// the local (Tier B) and s3 (Tier C) backends capture via the same
+	// CH-pause path, so a clone of either resumes byte-for-byte and collides
+	// on MAC/identity without regeneration.
 	hasMemory := snap.Status.MemorySnapshot != nil ||
-		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3
 	if !hasMemory {
 		return nil
 	}
