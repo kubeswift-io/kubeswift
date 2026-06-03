@@ -882,6 +882,24 @@ gap before re-running the dance.
 
 ### 14. Source-side cancel-during-send is a no-op until send returns (Phase 3b PR 1 walkthrough LOW-2 / T5 finding)
 
+**RESOLVED (mTLS path) / residual-plaintext-only — 2026-06-03 spike.** The
+10-minute dst-disappearance wedge does NOT reproduce under the Phase 3c mTLS
+sidecar (the production-recommended path). Cluster repro (live miles→boba,
+dst pod force-deleted at progress=26%): the source CH dials the LOCAL stunnel
+(`tcp:127.0.0.1:6790`); when the dst pod vanishes the source stunnel resets the
+loopback connection, so source CH fails **immediately** with `Connection reset
+by peer (errno 104)` — send returned sub-second (not 600s), CH stayed responsive
+(vm.info OK), the migration went `Failed (PodTerminated)` cleanly, and the source
+guest stayed Running on miles unharmed. The mTLS sidecar architecture
+incidentally fixed TFU #14. **No swiftletd worker-thread refactor is warranted.**
+Residual: the legacy plaintext path (gated behind the unsafe-plaintext ack) still
+has the remote-connection wedge (inferred from the mechanism, not re-validated);
+acceptable to leave, since plaintext is the explicitly-unsafe non-recommended
+path and the source VM is never harmed. Full findings:
+[`docs/design/live-migration-tfu14-wedge-spike.md`](docs/design/live-migration-tfu14-wedge-spike.md).
+
+Original finding (preserved):
+
 Phase 3b PR 1 walkthrough's T5 confirmed empirically what the Phase
 2 PR-B comment at
 [`rust/swiftletd/src/action.rs:640-644`](rust/swiftletd/src/action.rs#L640)
