@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,7 @@ var (
 	migrateAllowIPChange bool
 	migrateName          string
 	migratePreferredMode string
+	migrateTimeout       time.Duration
 	migrationListAllNS   bool
 )
 
@@ -113,6 +115,8 @@ func init() {
 		"Acknowledge that the guest IP will change cross-node on default node-local networking")
 	migrateCmd.Flags().StringVar(&migrateName, "name", "",
 		"Optional SwiftMigration resource name (default: <guest>-migrate-<rand>)")
+	migrateCmd.Flags().DurationVar(&migrateTimeout, "timeout", 0,
+		"Runaway backstop for the whole migration (e.g. 10m); 0 uses the CRD default of 30m")
 	migrateCmd.Flags().StringVar(&migratePreferredMode, "preferred-mode", "auto",
 		"Migration mode: auto (live when eligible, else offline), live, or offline")
 	_ = migrateCmd.MarkFlagRequired("to")
@@ -176,6 +180,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 			AllowIPChange: migrateAllowIPChange,
 		},
 	}
+	// Only set spec.timeout when the operator passed --timeout; leaving it nil
+	// lets the apiserver apply the CRD default (30m).
+	mig.Spec.Timeout = migrationTimeoutPtr(migrateTimeout)
 	if name == "" {
 		mig.GenerateName = guestName + "-migrate-"
 	} else {
@@ -186,6 +193,16 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "swiftmigration.migration.kubeswift.io/%s created\n", mig.Name)
 	return nil
+}
+
+// migrationTimeoutPtr maps the --timeout flag to spec.timeout: a positive
+// duration becomes an explicit override; zero (the flag default) returns nil so
+// the apiserver applies the CRD default (30m).
+func migrationTimeoutPtr(d time.Duration) *metav1.Duration {
+	if d <= 0 {
+		return nil
+	}
+	return &metav1.Duration{Duration: d}
 }
 
 func runMigrationList(cmd *cobra.Command, _ []string) error {
