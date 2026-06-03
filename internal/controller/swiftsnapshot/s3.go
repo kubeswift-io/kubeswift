@@ -2,21 +2,79 @@
 //
 // The s3 backend reuses Tier B's node-local capture, then runs a node-pinned
 // upload Job that pushes the captured artifacts to S3 via the snapshot-s3 image.
-// This file builds that Job; the phase-machine wiring (Capturing -> Uploading ->
-// Ready) lands in a follow-up so this controller change stays small.
+// This file builds that Job and drives the Capturing -> Uploading -> Ready
+// transition (ensureUploadJob + handleUploading); the controller's phase switch
+// routes the Uploading phase here.
 package swiftsnapshot
 
 import (
+	"context"
+	"fmt"
 	"path"
 	"path/filepath"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 )
+
+// ensureUploadJob creates the node-pinned upload Job (idempotent) owned by the
+// SwiftSnapshot. Fails if the snapshot-s3 image is not configured.
+func (r *SwiftSnapshotReconciler) ensureUploadJob(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, status *snapshotv1alpha1.SwiftSnapshotStatus) error {
+	if r.SnapshotS3Image == "" {
+		return fmt.Errorf("snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)")
+	}
+	job := buildUploadJob(snap, r.SnapshotS3Image, status.NodeName)
+	if err := ctrl.SetControllerReference(snap, job, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create s3 upload Job: %w", err)
+	}
+	return nil
+}
+
+// handleUploading watches the upload Job. On Complete it stamps status.S3 and
+// transitions to Ready; on Failed it returns an errMsg (caller -> Failed).
+// Returns (ready, errMsg, err) following handleCapturing's contract.
+func (r *SwiftSnapshotReconciler) handleUploading(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, status *snapshotv1alpha1.SwiftSnapshotStatus) (bool, string, error) {
+	var job batchv1.Job
+	err := r.Get(ctx, client.ObjectKey{Name: s3UploadJobName(snap), Namespace: snap.Namespace}, &job)
+	if apierrors.IsNotFound(err) {
+		// Job missing (e.g. controller restarted before observing creation, or
+		// it was deleted). Recreate — idempotent, and the binary resumes.
+		if cerr := r.ensureUploadJob(ctx, snap, status); cerr != nil {
+			return false, "", cerr
+		}
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			now := metav1.Now()
+			status.S3 = &snapshotv1alpha1.S3SnapshotStatus{
+				Location:   s3Location(snap),
+				UploadedAt: &now,
+			}
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseReady)
+			setReadyCondition(status, metav1.ConditionTrue, ReasonSnapshotReady,
+				"snapshot uploaded to "+s3Location(snap))
+			return true, "", nil
+		}
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return false, "S3 upload Job failed: " + c.Message, nil
+		}
+	}
+	return false, "", nil // still uploading
+}
 
 const (
 	// s3UploadMount is where the node-local snapshot dir is mounted (read-only)
@@ -26,6 +84,19 @@ const (
 	// idempotent (skips already-uploaded objects), so a retry resumes.
 	s3UploadBackoffLimit int32 = 4
 )
+
+// captureDestDir is the node-local directory the launcher captures the snapshot
+// into. The local backend uses the operator-supplied hostPath; the s3 backend
+// uses a controller-derived dir the upload Job then reads.
+func captureDestDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
+		return s3LocalDir(snap)
+	}
+	if snap.Spec.Backend.Local != nil {
+		return snap.Spec.Backend.Local.HostPath
+	}
+	return ""
+}
 
 // s3LocalDir is the node-local hostPath directory the s3 backend captures into
 // (and the upload Job reads from). Derived deterministically — the s3 backend
