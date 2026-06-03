@@ -69,7 +69,7 @@ const (
 //     and D3's write. spec.timeout is the safety net.
 //  7. spec.timeout enforcement (F4.3 detection mechanism per §4.3):
 //     elapsed > spec.timeout from status.StartedAt → Failed with
-//     FailureReasonTimeout. Default 5min per F3.5; webhook minimum
+//     FailureReasonTimeout. Default 30m; webhook minimum
 //     60s for mode=live (PR B1).
 //  8. Compute and stamp:
 //     - status.ObservedDowntime = now - status.ResumingStartedAt
@@ -134,7 +134,7 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 	}
 
 	// spec.timeout enforcement. F4.3 per §4.3: total-migration cap
-	// from status.StartedAt. Default 5min per F3.5; webhook minimum
+	// from status.StartedAt. Default 30m; webhook minimum
 	// 60s for mode=live.
 	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
 		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
