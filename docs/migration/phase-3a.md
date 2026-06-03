@@ -36,9 +36,11 @@ When to use it:
 
 - Kernel-boot SwiftGuests (no disk handoff complexity).
 - Disk-boot SwiftGuests on RWX+Block storage (PR #35 / W9 path).
-  Use `cloneStrategy: copy` until W9.x ships
-  (`cloneStrategy: snapshot` + `volumeMode: Block` is gapped at
-  the CSI provisioner — see `docs/snapshots/walkthrough-findings.md`).
+  Both `cloneStrategy: copy` and `cloneStrategy: snapshot` work with
+  `volumeMode: Block` — W9.x (PR #37) shipped the
+  `snapshot.storage.kubernetes.io/allow-volume-mode-change` annotation on the
+  cloneSeed VolumeSnapshotContent, so the CSI provisioner permits the
+  Filesystem-snapshot → Block-PVC clone (cluster-validated).
 - Workloads where multi-second downtime is unacceptable but
   sub-second is not strictly required.
 

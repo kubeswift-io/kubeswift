@@ -536,12 +536,14 @@ Two follow-ups from the walkthrough:
   succeeds. Non-blocking; investigate as a CH v51.1 quirk in the early-
   boot virtio-blk request validation path. Document for operators.
 - **W11 / W9.x — `cloneStrategy=snapshot` + `volumeMode: Block` fails at
-  PVC provisioning.** CSI external-snapshotter requires the
+  PVC provisioning. — RESOLVED (PR #37, cluster-validated 2026-06-03).** CSI
+  external-snapshotter requires the
   `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"`
   annotation on the source VolumeSnapshotContent when destination
-  volumeMode differs from source. The SwiftImage controller's
-  cloneSeed-creation path needs to set this annotation. Small fix;
-  separate follow-up issue per W9 prompt's binding language.
+  volumeMode differs from source. Fixed: the SwiftImage controller's
+  `ensureAllowVolumeModeChange` patches the bound VolumeSnapshotContent with it.
+  See Next-Priorities item 3 for the cluster-validation evidence. (The
+  operator workaround "use `cloneStrategy: copy`" is no longer needed.)
 
 For historical reference (the original W9 scoping doc still describes
 the gap as it existed before PR #35):
@@ -2310,15 +2312,23 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
   W11=W9.x (cloneStrategy=snapshot + Block, separate follow-up — see
   Tracked Follow-up #6 for details and Tracked Follow-up #7 below)
 
-**3. W9.x — `cloneStrategy=snapshot` + `volumeMode: Block` (small follow-up to PR #35)**
-- The SwiftImage controller's cloneSeed VolumeSnapshot needs the
-  `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"`
-  annotation when the SwiftImage may be cloned to Block-mode PVCs
-  (or unconditionally — the annotation is no-op when destination
-  volumeMode matches source)
-- ~30 lines of Go change in the SwiftImage controller's snapshot
-  creation path; one cluster integration test verifying RWX+Block guest
-  boots from a cloneStrategy=snapshot SwiftImage
+**3. W9.x — `cloneStrategy=snapshot` + `volumeMode: Block` — SHIPPED (PR #37) + cluster-validated 2026-06-03**
+- Code shipped in PR #37 (`08bf42b`): `SwiftImageReconciler.ensureAllowVolumeModeChange`
+  patches the cloneSeed's **bound VolumeSnapshotContent** with
+  `snapshot.storage.kubernetes.io/allow-volume-mode-change: "true"` once the
+  snapshotter populates `status.boundVolumeSnapshotContentName` (the annotation
+  must be on the VSC, not the VolumeSnapshot). 5 unit tests
+  (`snapshot_w9x_test.go`).
+- **Cluster validation (the never-run W5 gap, done 2026-06-03):** a
+  `cloneStrategy: snapshot` SwiftImage (Rocky9, `volumeSnapshotClassName:
+  longhorn-snapshot`) reached Ready with the cloneSeed VSC carrying
+  `allow-volume-mode-change=true`; a SwiftGuest on the `live-migratable`
+  (RWX+Block / longhorn-migratable) class cloned from it → the clone PVC bound
+  `volumeMode=Block` `dataSource=<Filesystem cloneSeed>` with **no
+  "modifies the mode of the source volume" provisioning error**, and the guest
+  reached **Running**. The original W9.x failure case now works end-to-end.
+- Stale "use `cloneStrategy: copy` until W9.x ships" guidance corrected in
+  `docs/migration/phase-3a.md`.
 
 **4. Live Migration Phase 3 — live mode + mTLS**
 - **Live mode: SHIPPED.** Phase 3a (controller state machine, `mode:
