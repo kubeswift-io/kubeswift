@@ -439,6 +439,10 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveTransferring)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
 			"transferring guest state from source to destination")
+		// Phase 5: surface the swiftletd pre-copy progress estimate so
+		// operators see movement on `kubectl get swiftmigration` instead of a
+		// static "transferring" for the whole send window.
+		stampTransferProgress(status, srcArg)
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
 	case substateSrcCompleted:
@@ -457,6 +461,11 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// internal/controller/swiftsnapshot/local.go:249-251. Idempotent
 		// (same observed value on every reconcile until cutover advances).
 		stampTransferDuration(ctx, mig, status, srcArg)
+		// Phase 5: the source reported transfer complete — pin progress to 100
+		// (the bandwidth estimate caps below 100 since it excludes the final
+		// stop-and-copy; completion is the unambiguous 100%).
+		hundred := int32(100)
+		status.TransferProgress = &hundred
 		//
 		// **B3.2 CUTOVER**: dispatch to the 3-step cutover sequence
 		// per §2.3 + §3.5 cutover ordering invariant. Each reconcile
@@ -646,6 +655,32 @@ func stampTransferDuration(
 	// see the same value.
 	status.ObservedTransferDuration = &d
 	status.ObservedPauseWindow = &d
+}
+
+// stampTransferProgress surfaces the swiftletd-on-src
+// migration-progress-estimate annotation (an integer percentage) as
+// status.TransferProgress (Phase 5). Best-effort: a missing or unparseable
+// annotation leaves the field unchanged; the value is clamped to [0,100].
+func stampTransferProgress(status *migrationv1alpha1.SwiftMigrationStatus, srcPod *corev1.Pod) {
+	if srcPod == nil {
+		return
+	}
+	v := srcPod.Annotations[AnnotationMigrationProgressEstimate]
+	if v == "" {
+		return
+	}
+	pct, err := strconv.Atoi(v)
+	if err != nil {
+		return
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	p := int32(pct)
+	status.TransferProgress = &p
 }
 
 // normalizeStatusDetail returns a single-line, length-bounded variant
