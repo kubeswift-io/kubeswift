@@ -32,8 +32,29 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 
 	allocatedTo := guest.Namespace + "/" + guest.Name
 
-	// First pass: check whether a previous allocation already exists for this
-	// guest (idempotency guard — handles partial status patch failure).
+	// The node status.GPU already references, if any. The first pass prefers it.
+	preferredNode := ""
+	if guest.Status.GPU != nil {
+		preferredNode = guest.Status.GPU.NodeName
+	}
+
+	// First pass: return an existing allocation for this guest (idempotency
+	// guard — handles partial status patch failure). PREFER the node
+	// status.GPU already points at over the first node found.
+	//
+	// W-GPU-1: during a VFIO offline migration's reserve-before-stop window the
+	// guest is briefly allocated on BOTH the source and the target node (the
+	// reservation reuses AllocatedTo). Returning the FIRST allocated node would
+	// make this controller re-stamp status.GPU to that node — racing the
+	// migration controller, which owns status.GPU during the migration (it sets
+	// status.GPU=target at cutover). Preferring the node status.GPU already
+	// references makes the re-stamp a no-op that never fights the migration:
+	// status.GPU=source during reserve → returns source; status.GPU=target
+	// after cutover → returns target.
+	var fbNode *gpuv1alpha1.SwiftGPUNode
+	var fbGPUs []gpuv1alpha1.GPUDevice
+	var fbNUMA []int
+	fbPart := -1
 	for i := range nodeList.Items {
 		n := &nodeList.Items[i]
 		var existing []gpuv1alpha1.GPUDevice
@@ -53,10 +74,18 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 				}
 			}
 		}
-		if len(existing) > 0 {
-			nodes := numaSetToSlice(numaSet)
-			return n, existing, nodes, existingPartID, nil
+		if len(existing) == 0 {
+			continue
 		}
+		if preferredNode != "" && n.Name == preferredNode {
+			return n, existing, numaSetToSlice(numaSet), existingPartID, nil
+		}
+		if fbNode == nil {
+			fbNode, fbGPUs, fbNUMA, fbPart = n, existing, numaSetToSlice(numaSet), existingPartID
+		}
+	}
+	if fbNode != nil {
+		return fbNode, fbGPUs, fbNUMA, fbPart, nil
 	}
 
 	// Second pass: find a node with capacity and allocate.
