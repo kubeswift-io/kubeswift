@@ -61,6 +61,46 @@ func (r *SwiftMigrationReconciler) handleResuming(
 		return phaseTransient(fmt.Errorf("get source guest: %w", getErr))
 	}
 
+	// W-GPU-3: gate completion on the DESTINATION pod's actual state, not on
+	// the GuestRunning condition / primaryIP alone. Those are written by
+	// swiftletd and SURVIVE the cutover pod swap — they stay at the source
+	// pod's last values until the destination's swiftletd boots the VM and
+	// overwrites them. If the destination never boots (e.g., gpu-init fails on
+	// the target), the stale GuestRunning=True + stale IP would otherwise drive
+	// a FALSE "Completed". Surfaced by the release-and-reallocate walkthrough.
+	var dstPod corev1.Pod
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Name, Namespace: guest.Namespace}, &dstPod); err != nil {
+		if apierrors.IsNotFound(err) {
+			setPhaseDetail(status, "awaiting destination pod (re)creation")
+			setReadyCondition(status, metav1.ConditionFalse, ReasonResuming, "awaiting destination pod creation")
+			return phaseRequeue(resumingPollInterval)
+		}
+		return phaseTransient(fmt.Errorf("get destination pod: %w", err))
+	}
+	// A terminal init-container failure (launcher pods are RestartPolicy: Never)
+	// means the destination guest cannot boot — fail rather than hang.
+	for _, ic := range dstPod.Status.InitContainerStatuses {
+		if t := ic.State.Terminated; t != nil && t.ExitCode != 0 {
+			return phaseFailure(fmt.Sprintf("destination guest failed to boot on %q: init container %q exited %d (%s)",
+				status.DestinationNode, ic.Name, t.ExitCode, t.Reason), "")
+		}
+	}
+	// The launcher container must be running (past init) before its
+	// GuestRunning/IP reports can be trusted as the destination's, not the
+	// source's stale values.
+	launcherUp := false
+	for _, cs := range dstPod.Status.ContainerStatuses {
+		if cs.Name == "launcher" && cs.Ready {
+			launcherUp = true
+			break
+		}
+	}
+	if !launcherUp {
+		setPhaseDetail(status, "awaiting destination launcher start")
+		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming, "awaiting destination guest boot")
+		return phaseRequeue(resumingPollInterval)
+	}
+
 	// Poll for GuestRunning=True. Observe + primaryIP also populated
 	// — operators expect the IP to show up at completion in
 	// `kubectl get swiftmigration -o wide`.
