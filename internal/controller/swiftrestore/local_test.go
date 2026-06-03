@@ -336,7 +336,7 @@ func TestRestoreAnnotations_Clone_SetsRuntimeDirPrefixAndNullifyHostMAC(t *testi
 	}
 	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
 
-	annos := r.restoreAnnotations(restore, snap, source, false /* inPlace */)
+	annos := r.restoreAnnotations(restore, snap, source, false /* inPlace */, snap.Spec.Backend.Local.HostPath, snap.Status.NodeName)
 
 	wantFrom := "/var/lib/kubeswift/run/default-src/"
 	wantTo := "/var/lib/kubeswift/run/default-clone-a/"
@@ -378,7 +378,7 @@ func TestRestoreAnnotations_InPlace_DoesNotSetCloneOnlyAnnotations(t *testing.T)
 	}
 	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
 
-	annos := r.restoreAnnotations(restore, snap, source, true /* inPlace */)
+	annos := r.restoreAnnotations(restore, snap, source, true /* inPlace */, snap.Spec.Backend.Local.HostPath, snap.Status.NodeName)
 
 	for _, key := range []string{
 		swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix,
