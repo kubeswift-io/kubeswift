@@ -153,13 +153,30 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 // deallocateGPUs releases the GPU allocation recorded in guest.status.gpu from
 // the SwiftGPUNode. No-op if no allocation is recorded or the node is gone.
 func (r *SwiftGPUReconciler) deallocateGPUs(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
-	if guest.Status.GPU == nil || guest.Status.GPU.NodeName == "" {
+	if guest.Status.GPU == nil {
 		return nil
 	}
-	// Delegate to the exported ReleaseFromNode primitive (the same one the
-	// migration release-and-reallocate path uses), keyed on the guest's
-	// currently-allocated node.
-	return ReleaseFromNode(ctx, r.Client, guest, guest.Status.GPU.NodeName)
+	// Free the guest's GPUs (and FM partitions) on EVERY SwiftGPUNode, not just
+	// status.GPU.NodeName. During a VFIO offline migration's reserve-before-stop
+	// window the guest is briefly allocated on BOTH the source
+	// (status.GPU.NodeName) and the target node — the reservation reuses
+	// GPUDevice.AllocatedTo. If the guest is deleted in that window, releasing
+	// only status.GPU.NodeName would strand the target reservation forever
+	// (AllocatedTo a now-deleted guest, never freed). Listing all nodes and
+	// releasing each covers both the source allocation and any held reservation.
+	// ReleaseFromNode is idempotent (a no-op on nodes the guest doesn't hold),
+	// so this is safe and the per-node Get cost is trivial (few GPU nodes).
+	// (Design doc vfio-release-reallocate.md §10.1.)
+	var nodes gpuv1alpha1.SwiftGPUNodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return fmt.Errorf("list SwiftGPUNodes for deallocation: %w", err)
+	}
+	for i := range nodes.Items {
+		if err := ReleaseFromNode(ctx, r.Client, guest, nodes.Items[i].Name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // selectGPUs picks count free GPUs from gpus, preferring GPUs on the same NUMA
