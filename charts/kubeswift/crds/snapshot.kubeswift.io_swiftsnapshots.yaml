@@ -84,19 +84,37 @@ spec:
                     description: S3 is reserved for Phase 3.
                     properties:
                       bucket:
+                        description: Bucket is the S3 bucket. Required.
                         type: string
                       credentialsSecretRef:
-                        description: SecretObjectReference references a Secret in
-                          the same namespace.
+                        description: |-
+                          CredentialsSecretRef references a Secret (same namespace) with keys
+                          accessKeyId, secretAccessKey, and optional sessionToken.
                         properties:
                           name:
                             type: string
                         required:
                         - name
                         type: object
+                      endpoint:
+                        description: |-
+                          Endpoint is an S3-compatible endpoint host[:port] (MinIO, Ceph RGW).
+                          Empty targets AWS S3.
+                        type: string
+                      forcePathStyle:
+                        description: |-
+                          ForcePathStyle uses path-style addressing (bucket in the path, not the
+                          host) — typically required by MinIO / Ceph RGW.
+                        type: boolean
                       prefix:
+                        description: |-
+                          Prefix is an optional key prefix; objects land at
+                          <prefix>/<namespace>/<snapshot>/.
                         type: string
                       region:
+                        description: |-
+                          Region is the S3 region (required for AWS; optional for some
+                          S3-compatible stores).
                         type: string
                     type: object
                   type:
@@ -287,6 +305,27 @@ spec:
                 - Ready
                 - Failed
                 type: string
+              s3:
+                description: |-
+                  S3 records the object-storage location of an s3-backend export
+                  (Phase 3 / Tier C). Set when the Uploading phase completes.
+                properties:
+                  location:
+                    description: Location is the s3 URI of the snapshot prefix (s3://bucket/key/).
+                    type: string
+                  manifestDigest:
+                    description: ManifestDigest is the sha256 of the uploaded manifest.json.
+                    type: string
+                  uploadedAt:
+                    description: UploadedAt is when the Uploading phase completed.
+                    format: date-time
+                    type: string
+                  uploadedBytes:
+                    description: UploadedBytes is the total artifact bytes pushed
+                      to S3.
+                    format: int64
+                    type: integer
+                type: object
               snapshotDirVersion:
                 description: |-
                   SnapshotDirVersion is the on-disk format version of the snapshot
