@@ -51,7 +51,7 @@ const migrationLocalPlaintextPort = 6790
 // 600s covers typical workloads (Phase 2 spike Q2: LOW dirty-rate
 // ~19s, HIGH dirty-rate ~37s for 1 GiB guest; large guests scale
 // roughly linearly with memory). The migration's overall timeout
-// is governed by spec.timeout (default 5min per F3.5; webhook
+// is governed by spec.timeout (default 30m; webhook
 // minimum 60s for mode=live).
 const migrationActionTimeoutSeconds = 600
 
@@ -152,7 +152,7 @@ func guestRAMMiB(ctx context.Context, r *SwiftMigrationReconciler, guest *swiftv
 //
 // **spec.timeout enforcement (F4.3)**: every reconcile compares
 // elapsed time since status.StartedAt against spec.timeout. Default
-// 5min per F3.5; webhook minimum 60s for mode=live (B1).
+// 30m; webhook minimum 60s for mode=live (B1).
 //
 // **Defensive guard**: assert isLiveMode at entry per architect Q1.
 func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
@@ -168,7 +168,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 	}
 
 	// spec.timeout enforcement (F4.3). Total-migration cap from
-	// status.StartedAt; default 5min per F3.5.
+	// status.StartedAt; default 30m.
 	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
 		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
 			return phaseFailure(

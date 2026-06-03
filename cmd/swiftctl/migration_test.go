@@ -131,3 +131,16 @@ func TestRenderMigrationDescribe_LiveProgress(t *testing.T) {
 		t.Errorf("output missing heuristic note\n---\n%s", out)
 	}
 }
+
+func TestMigrationTimeoutPtr(t *testing.T) {
+	if got := migrationTimeoutPtr(0); got != nil {
+		t.Errorf("0 (flag default) must return nil so the CRD default applies; got %v", got)
+	}
+	if got := migrationTimeoutPtr(-5 * time.Second); got != nil {
+		t.Errorf("negative must return nil; got %v", got)
+	}
+	got := migrationTimeoutPtr(10 * time.Minute)
+	if got == nil || got.Duration != 10*time.Minute {
+		t.Errorf("positive must return an explicit override; got %v", got)
+	}
+}
