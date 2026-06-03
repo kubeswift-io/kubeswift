@@ -57,11 +57,26 @@ type LocalBackend struct {
 	HostPath string `json:"hostPath,omitempty"`
 }
 
-// S3Backend is reserved for Phase 3 (object-storage export).
+// S3Backend configures the s3 (Tier C, object-storage export) backend.
 type S3Backend struct {
-	Bucket               string                 `json:"bucket,omitempty"`
-	Region               string                 `json:"region,omitempty"`
-	Prefix               string                 `json:"prefix,omitempty"`
+	// Bucket is the S3 bucket. Required.
+	Bucket string `json:"bucket,omitempty"`
+	// Region is the S3 region (required for AWS; optional for some
+	// S3-compatible stores).
+	Region string `json:"region,omitempty"`
+	// Prefix is an optional key prefix; objects land at
+	// <prefix>/<namespace>/<snapshot>/.
+	Prefix string `json:"prefix,omitempty"`
+	// Endpoint is an S3-compatible endpoint host[:port] (MinIO, Ceph RGW).
+	// Empty targets AWS S3.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+	// ForcePathStyle uses path-style addressing (bucket in the path, not the
+	// host) — typically required by MinIO / Ceph RGW.
+	// +optional
+	ForcePathStyle bool `json:"forcePathStyle,omitempty"`
+	// CredentialsSecretRef references a Secret (same namespace) with keys
+	// accessKeyId, secretAccessKey, and optional sessionToken.
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
 }
 
@@ -161,6 +176,25 @@ type SwiftSnapshotStatus struct {
 	// risk #3) compares this alongside major.minor of the CH version
 	// before allowing a restore to proceed.
 	SnapshotDirVersion string `json:"snapshotDirVersion,omitempty"`
+
+	// S3 records the object-storage location of an s3-backend export
+	// (Phase 3 / Tier C). Set when the Uploading phase completes.
+	// +optional
+	S3 *S3SnapshotStatus `json:"s3,omitempty"`
+}
+
+// S3SnapshotStatus records where an s3-backend snapshot was exported and how to
+// verify it. The manifest at Location+"/manifest.json" is the source of truth
+// for restore; ManifestDigest pins the exact manifest the restore must match.
+type S3SnapshotStatus struct {
+	// Location is the s3 URI of the snapshot prefix (s3://bucket/key/).
+	Location string `json:"location,omitempty"`
+	// ManifestDigest is the sha256 of the uploaded manifest.json.
+	ManifestDigest string `json:"manifestDigest,omitempty"`
+	// UploadedBytes is the total artifact bytes pushed to S3.
+	UploadedBytes int64 `json:"uploadedBytes,omitempty"`
+	// UploadedAt is when the Uploading phase completed.
+	UploadedAt *metav1.Time `json:"uploadedAt,omitempty"`
 }
 
 // SwiftSnapshot is a point-in-time capture of a SwiftGuest's disk (and
