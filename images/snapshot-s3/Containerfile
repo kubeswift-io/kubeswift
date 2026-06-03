@@ -1,0 +1,34 @@
+# Multi-stage build for snapshot-s3 (Tier C object-storage uploader/downloader)
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+# Copy module files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build snapshot-s3 with version stamping (static — pure-Go minio-go, no cgo)
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -o snapshot-s3 ./cmd/snapshot-s3
+
+# Runtime stage — needs CA certificates for TLS to S3/MinIO; nothing else.
+FROM debian:bookworm-slim
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/snapshot-s3 /snapshot-s3
+USER 65534:65534
+ENTRYPOINT ["/snapshot-s3"]
