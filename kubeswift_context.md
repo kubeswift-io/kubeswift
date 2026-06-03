@@ -1419,11 +1419,15 @@ operator runbook: [`docs/migration/phase-4.md`](docs/migration/phase-4.md).
   flip-back), boba freed, `node/boba drained`. **Cross-node dst *boot*
   (`Completed`) is NOT hardware-validated — needs a second real GPU node.**
 
-- **Tracked-not-blocking:** reservation leak on guest-delete-mid-migration
-  (design §10.1), reservation timeout (§10.5), Tier 2/3 FM-partition handoff
-  (no HGX hardware). The "drain completes when the guest leaves the source even
-  if the migration later fails on the target" is a pre-existing Phase 4 property
-  (not GPU-specific).
+- **Follow-up fix (post-PR-5):** reservation leak on guest-delete-mid-migration
+  (design §10.1) — **RESOLVED**: `deallocateGPUs` now frees the guest's GPUs on
+  **all** SwiftGPUNodes (not just status.GPU.NodeName), so a guest deleted in the
+  reserve-before-stop window no longer strands the held target reservation.
+  Double-hold regression test added.
+- **Tracked-not-blocking:** reservation timeout (§10.5 / TFU #22), Tier 2/3
+  FM-partition handoff (no HGX hardware). The "drain completes when the guest
+  leaves the source even if the migration later fails on the target" is a
+  pre-existing Phase 4 property (not GPU-specific).
 
 Original scoping detail (preserved for context):
 
