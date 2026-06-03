@@ -183,16 +183,47 @@ status, shipped explicitly labeled. Tier 1 (the validatable case) has no FM.
 
 ## 9. Validation strategy (one GPU node)
 
-- **Same-node `boba->boba` (real GTX 1080):** a degenerate offline migration
-  that release->reacquires the real GPU exercises ReserveOnNode / ReleaseFromNode
-  / the cutover status stamp / gpu-init rebind end-to-end. The spike already
-  proved the raw choreography; the PR-level test confirms the *orchestrated*
-  sequence.
-- **Cross-node (mocked):** unit/envtest with a second mocked `SwiftGPUNode`
-  for target-selection, pre-flight, reservation-holds-against-other-guests,
-  and the failure/restore path.
-- Ship explicitly labeled **"cross-node GPU migration not hardware-validated
-  (needs a 2nd GPU node)."**
+**Actual approach used (PR 5 walkthrough, 2026-06-03).** Same-node `boba->boba`
+was NOT viable — the SwiftMigration webhook rejects same-node migration
+(`validator.go`: "same-node migration is meaningless", open question §10.4). So
+the orchestration was validated against a **mock second SwiftGPUNode**: a real
+GTX-1080 guest runs on boba, a fake `SwiftGPUNode/miles` (vfioReady, one free
+GPU at a **non-existent PCI `0000:ff:00.0`** so the dst gpu-init fails
+harmlessly without touching any real miles device) is the migration target, and
+`kubectl drain boba` (scoped to the guest pod) drives the whole chain on the
+real apiserver. The dst cannot *boot* (no real GPU on miles) — that is the
+**validation ceiling on a single GPU node** — but every control-plane step is
+exercised end-to-end, and the migration must reach an HONEST terminal state
+(Failed: "destination guest failed to boot"), never a false success.
+
+**Validated end-to-end on the cluster** (image sha-fafc2c9): eviction webhook
+marks the GPU guest -> drain controller selects the GPU target via
+`GPUNodeHasCapacity` -> migration resolves `auto->offline` -> Preparing reserves
+the target (benign double-hold: both nodes `allocatedTo` the guest) -> cutover
+releases the source + stamps `status.GPU=target` -> Resuming detects the dst
+init failure -> **Failed** with `destination guest failed to boot on "miles":
+init container "gpu-init" exited 1`. Final state consistent: `status.GPU=miles`,
+boba freed, no `status.GPU` flip-back. `node/boba drained` (exit 0).
+
+**Cross-node (mocked):** unit/envtest with a second mocked `SwiftGPUNode` for
+target-selection, pre-flight, reservation-holds-against-other-guests, the
+reserve/cutover/release primitives, and the dst-pod-state Resuming gate.
+
+Ship explicitly labeled **"cross-node GPU migration not hardware-validated
+(needs a 2nd real GPU node)"** — the dst *boot* + a `Completed` migration
+require two real GPU nodes.
+
+### 9.1 Bugs the walkthrough surfaced (all fixed; the W5 pattern)
+
+Three real multi-controller / lifecycle bugs that all unit tests missed (fake
+clients, no concurrent controllers, dst always "boots") — each fix revealed the
+next (finding-behind-a-finding):
+
+| # | Bug | Fix (PR) |
+|---|---|---|
+| **W-GPU-1** | The live SwiftGPU controller re-stamps `status.GPU` on every reconcile via `findAndAllocate`, whose first-pass returned the FIRST allocated node. During the reserve double-hold it re-stamped the source, racing the migration. (The §5.1 "SwiftGPU is idle while status.GPU is non-nil" assumption was FALSE.) | `findAndAllocate` prefers the node `status.GPU` already references (#100) |
+| **W-GPU-2** | Offline StopAndCopy checked `pod.Spec.NodeName != target` — but GPU pods pin via a `kubernetes.io/hostname` nodeSelector, so the scheduler fills `spec.NodeName` a moment later. The eager check false-failed "atomicity invariant violated". | Empty `spec.NodeName` = "not yet scheduled" (requeue), unless a nodeSelector pins it away from the target (#101) |
+| **W-GPU-3** | Offline Resuming concluded `Completed` off `GuestRunning=True` + IP, which SURVIVE the cutover pod swap (stale source values). A dst that never boots produced a **false success**. Latent in Phase-1 offline migration generally. | Gate completion on the dst pod's real state: fail on a terminal init failure, require the launcher Ready before trusting GuestRunning/IP (#102) |
 
 ## 10. Open questions (resolve during implementation)
 
@@ -217,22 +248,23 @@ status, shipped explicitly labeled. Tier 1 (the validatable case) has no FM.
    target GPUs for other guests. Bound by `spec.timeout` (the migration's
    runaway gate) + the abort-release in (1).
 
-## 11. Implementation plan (PRs)
+## 11. Implementation plan (PRs) — SHIPPED
 
-1. **PR 1** — this design doc + the `SwiftGPUNode.status` vfioReady surface +
-   gpu-discovery `vfio-pci` check/modprobe + a `GPUNodeHasCapacity` pre-flight
-   helper (no migration wiring yet). Cluster-validate vfioReady on boba.
-2. **PR 2** — `ReserveOnNode` / `ReleaseFromNode` primitives + `deallocateGPUs`
-   refactor to `ReleaseFromNode`. Unit-tested (mock SwiftGPUNodes), including
-   reservation-holds-against-other-guests.
-3. **PR 3** — migration controller offline-GPU sequence (Validating pre-flight,
-   Preparing reserve-before-stop, cutover release+status-stamp, failure
-   release) + the precedence-rule change + lift the webhook VFIO-offline
-   rejection. Unit-tested.
-4. **PR 4** — drain controller: VFIO guests under `drainPolicy: Migrate` now
-   get a marker + an offline migration (remove the PR-4a "VFIO denied" path
-   for Migrate; keep LiveMigrate+VFIO blocked). GPU target selection uses
-   `GPUNodeHasCapacity`.
-5. **PR 5** — cluster walkthrough (same-node `boba->boba` release->reacquire
-   via the orchestrated path; mocked cross-node in tests) + operator runbook
-   (GPU drain + the vfio-pci prerequisite) + design-doc updates.
+1. **PR 1 (#96) — DONE.** `SwiftGPUNode.status.vfioReady` surface + gpu-discovery
+   read-only vfio-pci detection (modprobe descoped — minimal-cap DaemonSet,
+   §4.2) + `GPUNodeHasCapacity` pre-flight. Cluster-validated `boba vfioReady=true`.
+2. **PR 2 (#97) — DONE.** `ReserveOnNode` / `ReleaseFromNode` primitives +
+   `deallocateGPUs` refactor. Unit-tested incl. reservation-holds-against-others.
+3. **PR 3 (#98) — DONE.** Migration offline-GPU sequence (pre-flight,
+   reserve-before-stop, cutover release+stamp, failure release) + precedence-rule
+   reframe + webhook VFIO-offline lift (SR-IOV stays rejected).
+4. **PR 4 (#99) — DONE.** Drain controller GPU wiring (VFIO `Migrate` -> offline
+   migration; SR-IOV stays manual; GPU target selection via `GPUNodeHasCapacity`).
+5. **PR 5 (this doc + #100/#101/#102) — DONE.** Cluster walkthrough
+   (mock-2nd-GPU-node + drain boba; §9) + the three bug fixes it surfaced
+   (W-GPU-1/2/3) + operator runbook (`docs/migration/phase-4.md` GPU drain + the
+   vfio-pci prerequisite) + this design-doc validation update.
+
+**Remaining (tracked, not blocking):** open questions §10.1 (reservation leak on
+guest-delete-mid-migration) and §10.5 (reservation timeout) are not yet
+exercised; cross-node dst *boot* (`Completed`) needs a second real GPU node.
