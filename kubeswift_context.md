@@ -1213,7 +1213,20 @@ PR; future standalone hygiene PR.
 
 Severity: LOW (cosmetic + minor type safety; no functional impact).
 
-### 22. spec.timeout default reconciliation
+### 22. spec.timeout default reconciliation — RESOLVED
+
+**RESOLVED** via Option (a): added `+kubebuilder:default="30m0s"` to
+SwiftMigration.spec.timeout. The apiserver now stamps 30m on every migration
+that doesn't set one, activating the existing runaway-cancel gate (the
+stopandcopy_live/resuming_live checks guard on `Timeout != nil`). 30m chosen
+deliberately as a runaway BACKSTOP above swiftletd's own 600s per-action
+timeout (a 5min cap could pre-empt a legitimately slow ~200 GiB transfer); the
+stale "5min per F3.5" controller comments reconciled to 30m. Added `swiftctl
+migrate --timeout` for a tighter operator-set bound (nil-when-zero so the CRD
+default applies). Cluster-validated: a migration created without spec.timeout
+returns spec.timeout=30m0s. The webhook's 60s live-mode minimum is unaffected.
+
+Original framing (preserved):
 
 The SwiftMigration CRD has no +kubebuilder:default for
 spec.timeout, but code carries two contradictory documentary

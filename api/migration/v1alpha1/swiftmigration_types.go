@@ -277,9 +277,16 @@ type SwiftMigrationSpec struct {
 	// migration stream in live mode. Ignored in Phase 1.
 	// +optional
 	ParallelConnections int32 `json:"parallelConnections,omitempty"`
-	// Timeout bounds the entire migration operation. On expiry, behavior
-	// is controlled by TimeoutStrategy. Phase 1 default: 30 minutes.
+	// Timeout bounds the entire migration operation (StartedAt -> terminal).
+	// On expiry, behaviour is controlled by TimeoutStrategy (default cancel).
+	// It is a runaway BACKSTOP, not a tight SLA: the default 30m sits well
+	// above swiftletd's own per-action timeout (600s, sized for a ~200 GiB
+	// VM), so it never pre-empts a legitimately slow transfer — it only
+	// rescues a genuinely wedged migration. The webhook enforces a 60s
+	// minimum for mode=live. Operators wanting a tighter bound set it
+	// explicitly (e.g. swiftctl migrate --timeout).
 	// +optional
+	// +kubebuilder:default="30m0s"
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 	// TimeoutStrategy controls behavior on timeout. Phase 1 supports cancel
 	// only (the default); ignore is reserved for live mode.
