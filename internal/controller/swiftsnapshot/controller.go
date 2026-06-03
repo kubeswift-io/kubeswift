@@ -16,6 +16,7 @@ import (
 	"time"
 
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +34,9 @@ import (
 type SwiftSnapshotReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// SnapshotS3Image is the snapshot-s3 uploader image used by the s3
+	// (Tier C) backend's upload Job. Wired from KUBESWIFT_SNAPSHOT_S3_IMAGE.
+	SnapshotS3Image string
 }
 
 // Reconcile drives the SwiftSnapshot state machine.
@@ -107,9 +111,25 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
+	case snapshotv1alpha1.SwiftSnapshotPhaseUploading:
+		// s3 backend only: the capture is on the node-local hostPath; watch the
+		// upload Job push it to S3, then stamp status.S3 and go Ready.
+		ready, errMsg, err := r.handleUploading(ctx, &snap, status)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if errMsg != "" {
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed, errMsg)
+		} else if !ready {
+			if updateErr := r.persist(ctx, &snap, status); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
 	default:
-		// Unknown phase — treat as Pending. Future-phase additions
-		// (Uploading) live in their own cases.
+		// Unknown phase — treat as Pending.
 		logger.Info("unknown phase, restarting at Pending", "phase", phase)
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhasePending)
 	}
@@ -132,11 +152,12 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	// Backend dispatch:
 	//   csi-volume-snapshot (Phase 1): create snapshot.storage VolumeSnapshot
 	//   local              (Phase 2): drive launcher pod via action annotations
-	//   s3                 (reserved Phase 3): rejected by webhook
+	//   s3                 (Phase 3): reuse the local capture (into a derived
+	//                       node-local dir), then upload to S3 in the Uploading phase
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
 		// Falls through to the existing csi-volume-snapshot path.
-	case snapshotv1alpha1.SnapshotBackendLocal:
+	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3:
 		return r.handlePendingLocal(ctx, snap, status)
 	default:
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
@@ -201,9 +222,10 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	status *snapshotv1alpha1.SwiftSnapshotStatus,
 ) (bool, string, error) {
-	// Backend dispatch — local takes its own path (poll launcher pod
-	// status annotations); CSI continues to drive VolumeSnapshot below.
-	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+	// Backend dispatch — local and s3 both capture via the launcher pod's
+	// status annotations (s3 just uploads afterward); CSI drives VolumeSnapshot.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
 		return r.handleCapturingLocal(ctx, snap, status)
 	}
 	pvc, err := r.guestRootPVC(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
@@ -275,6 +297,7 @@ func (r *SwiftSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&snapshotv1alpha1.SwiftSnapshot{}).
 		Owns(&volumesnapshotv1.VolumeSnapshot{}).
+		Owns(&batchv1.Job{}).
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.podToSnapshots),

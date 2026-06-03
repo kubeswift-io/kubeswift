@@ -149,21 +149,41 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 			return err
 		}
 	case snapshotv1alpha1.SnapshotBackendS3:
-		return fmt.Errorf("spec.backend.type %q is not implemented in Phase 2; use csi-volume-snapshot or local", snap.Spec.Backend.Type)
+		if err := validateS3Backend(snap); err != nil {
+			return err
+		}
 	case "":
 		return fmt.Errorf("spec.backend.type is required")
 	default:
 		return fmt.Errorf("spec.backend.type %q is not a recognised value", snap.Spec.Backend.Type)
 	}
-	// Carrier-only fields for not-yet-implemented backends, and for backends
-	// other than the one selected, must be empty — otherwise the admission
-	// tells the operator immediately rather than the controller silently
-	// ignoring the values at runtime.
+	// Carrier-only fields for backends other than the one selected must be
+	// empty — otherwise admission tells the operator immediately rather than
+	// the controller silently ignoring the values at runtime.
 	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendLocal && snap.Spec.Backend.Local != nil {
 		return fmt.Errorf("spec.backend.local is only valid when spec.backend.type=local")
 	}
-	if snap.Spec.Backend.S3 != nil {
-		return fmt.Errorf("spec.backend.s3 is reserved for Phase 3 and must be unset")
+	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendS3 && snap.Spec.Backend.S3 != nil {
+		return fmt.Errorf("spec.backend.s3 is only valid when spec.backend.type=s3")
+	}
+	return nil
+}
+
+// validateS3Backend checks the Tier C (Phase 3) object-storage backend config.
+func validateS3Backend(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	s3 := snap.Spec.Backend.S3
+	if s3 == nil {
+		return fmt.Errorf("spec.backend.s3 is required when spec.backend.type=s3")
+	}
+	if s3.Bucket == "" {
+		return fmt.Errorf("spec.backend.s3.bucket is required")
+	}
+	if s3.CredentialsSecretRef == nil || s3.CredentialsSecretRef.Name == "" {
+		return fmt.Errorf("spec.backend.s3.credentialsSecretRef.name is required (Secret with accessKeyId/secretAccessKey)")
+	}
+	// AWS needs a region; an S3-compatible store is identified by its endpoint.
+	if s3.Endpoint == "" && s3.Region == "" {
+		return fmt.Errorf("spec.backend.s3.region is required for AWS S3 (or set spec.backend.s3.endpoint for an S3-compatible store)")
 	}
 	return nil
 }
