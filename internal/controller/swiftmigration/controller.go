@@ -57,6 +57,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // Standard reasons used for Conditions and Events. Centralised so
@@ -440,6 +441,11 @@ func (r *SwiftMigrationReconciler) persist(
 	if equality.Semantic.DeepEqual(&mig.Status, status) {
 		return nil
 	}
+	// Detect the non-terminal -> terminal transition BEFORE overwriting
+	// mig.Status, so the Phase 5 metric is recorded exactly once per migration
+	// (the Reconcile terminal-phase short-circuit prevents re-entry, and we
+	// only emit after the status patch actually lands).
+	freshTerminal := isTerminalPhase(status.Phase) && !isTerminalPhase(mig.Status.Phase)
 	patch := client.MergeFrom(mig.DeepCopy())
 	mig.Status = *status
 	if err := r.Status().Patch(ctx, mig, patch); err != nil {
@@ -450,7 +456,35 @@ func (r *SwiftMigrationReconciler) persist(
 		}
 		return fmt.Errorf("patch SwiftMigration status: %w", err)
 	}
+	if freshTerminal {
+		recordMigrationTerminal(status)
+	}
 	return nil
+}
+
+// recordMigrationTerminal emits the Phase 5 migration metrics on the
+// non-terminal -> terminal transition: a per-mode/result counter, plus the
+// observed-downtime histogram for completed migrations.
+func recordMigrationTerminal(status *migrationv1alpha1.SwiftMigrationStatus) {
+	mode := string(status.Mode)
+	if mode == "" {
+		mode = "unknown"
+	}
+	var result string
+	switch status.Phase {
+	case migrationv1alpha1.SwiftMigrationPhaseCompleted:
+		result = "completed"
+	case migrationv1alpha1.SwiftMigrationPhaseFailed:
+		result = "failed"
+	case migrationv1alpha1.SwiftMigrationPhaseCancelled:
+		result = "cancelled"
+	default:
+		return
+	}
+	metrics.MigrationTotal.WithLabelValues(mode, result).Inc()
+	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && status.ObservedDowntime != nil {
+		metrics.MigrationDowntimeSeconds.WithLabelValues(mode).Observe(status.ObservedDowntime.Duration.Seconds())
+	}
 }
 
 // SetupWithManager registers the reconciler. The watch on Pod is

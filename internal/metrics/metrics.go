@@ -55,6 +55,31 @@ var (
 		},
 		[]string{"namespace"},
 	)
+
+	// MigrationTotal counts SwiftMigrations that reached a terminal phase,
+	// labelled by resolved mode (live/offline) and result
+	// (completed/failed/cancelled). Recorded once per migration on the
+	// non-terminal -> terminal transition.
+	MigrationTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_migration_total",
+			Help: "Total SwiftMigrations that reached a terminal phase, by mode and result",
+		},
+		[]string{"mode", "result"},
+	)
+
+	// MigrationDowntimeSeconds observes status.observedDowntime for completed
+	// migrations (the operator-visible guest-unavailable window), by mode.
+	// Live migrations sit near the low buckets (~1-3s); offline span the
+	// tens-of-seconds range.
+	MigrationDowntimeSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kubeswift_migration_downtime_seconds",
+			Help:    "Observed guest downtime for completed SwiftMigrations, by mode",
+			Buckets: []float64{0.5, 1, 2, 3, 5, 10, 20, 30, 45, 60, 90, 120},
+		},
+		[]string{"mode"},
+	)
 )
 
 func init() {
@@ -63,5 +88,7 @@ func init() {
 		VMBootSeconds,
 		VMFailuresTotal,
 		ImageImportSeconds,
+		MigrationTotal,
+		MigrationDowntimeSeconds,
 	)
 }
