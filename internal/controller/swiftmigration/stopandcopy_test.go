@@ -181,6 +181,76 @@ func TestStopAndCopy_PodOnWrongNode_Fails(t *testing.T) {
 	}
 }
 
+// TestStopAndCopy_GPUPodUnscheduled_NodeSelectorTarget_Requeues is the W-GPU-2
+// regression: a GPU destination pod pins to the target via a hostname
+// nodeSelector and is not yet scheduled (pod.Spec.NodeName==""). The atomicity
+// check must REQUEUE (await the scheduler), not false-fail.
+func TestStopAndCopy_GPUPodUnscheduled_NodeSelectorTarget_Requeues(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Status.NodeName = "boba"
+	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
+	guest.Spec.NodeName = "miles"
+	guest.Annotations = map[string]string{migrationv1alpha1.AnnotationMigrationInProgress: "m"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName:     "", // not yet scheduled (GPU pod pins via nodeSelector)
+			NodeSelector: map[string]string{"kubernetes.io/hostname": "miles"},
+			Containers:   []corev1.Container{{Name: "launcher", Image: "x"}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, pod).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	if result.Err != nil || result.FailureMsg != "" {
+		t.Fatalf("unscheduled GPU pod pinned to target must NOT fail; err=%v msg=%q", result.Err, result.FailureMsg)
+	}
+	if result.Advanced {
+		t.Fatal("must not advance until the dst pod is scheduled")
+	}
+	if result.Requeue == 0 {
+		t.Fatal("must requeue to await the scheduler binding the GPU pod")
+	}
+}
+
+// TestStopAndCopy_GPUPodNodeSelectorWrongNode_Fails verifies the atomicity
+// check still fires when an unscheduled pod's hostname nodeSelector pins it AWAY
+// from the target.
+func TestStopAndCopy_GPUPodNodeSelectorWrongNode_Fails(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	guest.Status.NodeName = "boba"
+	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
+	guest.Spec.NodeName = "miles"
+	guest.Annotations = map[string]string{migrationv1alpha1.AnnotationMigrationInProgress: "m"}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			NodeName:     "",
+			NodeSelector: map[string]string{"kubernetes.io/hostname": "boba"}, // pinned to the WRONG node
+			Containers:   []corev1.Container{{Name: "launcher", Image: "x"}},
+		},
+	}
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, pod).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleStopAndCopy(context.Background(), mig, status)
+	if !strings.Contains(result.FailureMsg, "atomicity invariant violated") {
+		t.Errorf("nodeSelector pinned to wrong node should fail; got %q", result.FailureMsg)
+	}
+}
+
 // TestStopAndCopy_GuestDeleted_Fails verifies graceful handling when
 // the source guest is deleted mid-flight.
 func TestStopAndCopy_GuestDeleted_Fails(t *testing.T) {
