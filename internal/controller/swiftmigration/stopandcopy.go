@@ -121,9 +121,26 @@ func (r *SwiftMigrationReconciler) handleStopAndCopy(
 		return phaseTransient(fmt.Errorf("get destination pod: %w", getErr))
 	}
 
-	// Pod exists. Verify it's pinned to the destination node — if it
-	// somehow landed elsewhere (race window we believe is closed but
-	// belt-and-suspenders), surface as Failed.
+	// Pod exists. Verify it's committed to the destination node.
+	//
+	// Two pinning mechanisms (W-GPU-2): non-VFIO guests bind directly
+	// (pod.Spec.NodeName=target at creation, via applyNodeName); GPU guests pin
+	// via a kubernetes.io/hostname nodeSelector and the SCHEDULER fills in
+	// pod.Spec.NodeName a moment later (controller-cache lag can also briefly
+	// show an empty nodeName right after the cutover spec patch). So an empty
+	// pod.Spec.NodeName is "not yet scheduled", NOT a violation — requeue and
+	// wait, as long as nothing pins the pod AWAY from the target. Only a
+	// populated nodeName (or a hostname nodeSelector) that disagrees with the
+	// target is the real atomicity violation.
+	if pod.Spec.NodeName == "" {
+		if sel := pod.Spec.NodeSelector["kubernetes.io/hostname"]; sel != "" && sel != target {
+			return phaseFailure(fmt.Sprintf("destination pod %q pins to %q via nodeSelector, expected %q (atomicity invariant violated)",
+				pod.Name, sel, target), "")
+		}
+		setPhaseDetail(status, fmt.Sprintf("awaiting destination pod scheduling on %q", target))
+		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy, "awaiting destination pod scheduling")
+		return phaseRequeue(stopAndCopyPollInterval)
+	}
 	if pod.Spec.NodeName != target {
 		return phaseFailure(fmt.Sprintf("destination pod %q scheduled on %q, expected %q (atomicity invariant violated)",
 			pod.Name, pod.Spec.NodeName, target), "")
