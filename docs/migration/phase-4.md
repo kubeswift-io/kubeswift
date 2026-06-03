@@ -1,9 +1,9 @@
 # Live Migration Phase 4 — Drain Integration (Operator Guide)
 
-> Status: SHIPPED (non-VFIO). `kubectl drain` automatically evacuates
-> SwiftGuest VMs off a node instead of killing them. VFIO/GPU guests block
-> the drain (manual handling) pending the release-and-reallocate sub-phase
-> (TFU #27).
+> Status: SHIPPED. `kubectl drain` automatically evacuates SwiftGuest VMs off
+> a node instead of killing them — including **GPU guests** (offline, via the
+> release-and-reallocate path). SR-IOV NIC passthrough guests still need manual
+> handling (NIC reattach on the target is out of scope).
 
 ## What it does
 
@@ -33,8 +33,8 @@ Set `spec.migration.drainPolicy` on a SwiftGuest (default `Migrate`):
 
 | Value | On drain |
 |---|---|
-| `Migrate` (default) | `mode=auto` — live-migrate where possible, offline otherwise. Drain succeeds (non-VFIO). |
-| `LiveMigrate` | live only; if the guest can't live-migrate, **deny the drain** rather than incur downtime. |
+| `Migrate` (default) | `mode=auto` — live where possible; **offline** for GPU guests (release-and-reallocate) and other non-live-capable guests. Drain succeeds. |
+| `LiveMigrate` | live only; if the guest can't live-migrate (GPU, or non-live-capable storage), **deny the drain** rather than incur downtime. |
 | `Block` | always **deny the drain**; handle the guest manually. |
 
 `spec.migration.enabled: false` is stronger — it disables migration entirely;
@@ -52,14 +52,36 @@ spec:
     drainPolicy: Migrate   # Migrate | LiveMigrate | Block
 ```
 
-## VFIO/GPU guests — NOT auto-evacuated (yet)
+## GPU guests — auto-evacuated OFFLINE
 
-Guests with VFIO devices (`gpuProfileRef`, or any `sriov` interface) **cannot
-be auto-migrated** in this release: cross-node VFIO migration needs a
-release-and-reallocate primitive that does not exist yet (TFU #27). Under any
-`drainPolicy`, the eviction webhook denies their eviction with a
-manual-handling message and does **not** stamp the marker. To drain a node
-with a VFIO/GPU guest, move or stop the guest manually first, or
+GPU guests (`gpuProfileRef`) **are** auto-evacuated on drain, via the SwiftGPU
+**release-and-reallocate** path: the migration controller reserves matching
+GPUs on the target node *before* stopping the source, frees the source GPUs at
+cutover, and the guest reboots on the target with its GPUs. GPU migration is
+**offline only** (Cloud Hypervisor cannot live-migrate a VFIO device), so:
+
+- `drainPolicy: Migrate` (default) → GPU guest is offline-migrated.
+- `drainPolicy: LiveMigrate` → drain is **denied** (GPU can't live-migrate;
+  set `Migrate` to allow the offline move).
+
+**GPU-node prerequisites** for a drain *target*:
+- The node must be a GPU node (`kubeswift.io/gpu-node=true`) with free GPUs
+  matching the guest's `SwiftGPUProfile` (the drain controller's target
+  selection enforces this — `SwiftGPUNode.status.vfioReady` + free matching
+  GPUs).
+- **`vfio-pci` must be loaded** on the target node, persistently —
+  `/etc/modules-load.d/vfio.conf` (one line: `vfio-pci`). The GPU-discovery
+  DaemonSet reports `vfioReady` from `/sys/bus/pci/drivers/vfio-pci`; a node
+  that is not `vfioReady` is never chosen as a target. (gpu-init binds the
+  GPU to vfio-pci at guest start; it needs the module loaded.)
+
+## SR-IOV NIC guests — NOT auto-evacuated
+
+Guests with an `sriov` interface **cannot** be auto-migrated: the
+release-and-reallocate path handles GPUs only; reattaching an SR-IOV NIC on the
+target is out of scope. Under any `drainPolicy`, the eviction webhook denies
+their eviction with a manual-handling message and does **not** mark them. To
+drain a node with an SR-IOV guest, move or stop it manually first, or
 `kubectl drain --force` (which deletes the pod — **the VM is lost**; only do
 this if the guest is disposable).
 
@@ -141,16 +163,19 @@ networking, live-migration mTLS enabled:
 | No schedulable target | webhook keeps denying with a clear message; drain stalls; free capacity or `--force` |
 | Migration fails mid-drain | marker stays; `SwiftMigration` shows the failure; webhook keeps denying (VM unharmed — live pre-copy never pauses the source). `kubectl delete swiftmigration <name>` to retry, or handle manually |
 | `drainPolicy: Block` / `migration.enabled=false` | deny with a manual-handling message; move the guest manually or `--force` |
-| VFIO/GPU guest | deny with a manual-handling message (no marker); not auto-evacuated yet (TFU #27) |
+| GPU guest, no vfio-ready GPU target | webhook marks it, but the drain controller finds no GPU target with capacity → no migration, drain stalls; free a GPU node or load `vfio-pci` on one |
+| SR-IOV NIC guest | deny with a manual-handling message (no marker); not auto-evacuated (NIC reattach out of scope) |
 | `drain --dry-run` | webhook denies (shows it would block) but skips the marker patch (`sideEffects: NoneOnDryRun`) |
 
 ## Troubleshooting
 
 - **Drain hangs forever, no migration created.** Check the SwiftGuest for a
   `DrainNoTarget` event (`kubectl describe swiftguest <g>`): no peer node has
-  capacity. Free capacity on another worker, or `--force`.
-- **Drain hangs, `DrainUnsupported` event.** The guest is VFIO/GPU — not
-  auto-evacuated yet. Handle manually.
+  capacity. For a GPU guest, "capacity" includes a vfio-ready GPU node with
+  free matching GPUs — confirm another GPU node exists, is `vfioReady`
+  (`kubectl get swiftgpunode`), and has free GPUs. Free capacity, or `--force`.
+- **GPU guest won't drain (SR-IOV).** A guest with an `sriov` interface is not
+  auto-evacuated (NIC reattach is out of scope) — handle it manually.
 - **Drain hangs, controller is down.** Expected (PDB hard floor). Bring the
   controller back; the drain then auto-migrates. Or `--force` to delete the
   VM (data loss).
