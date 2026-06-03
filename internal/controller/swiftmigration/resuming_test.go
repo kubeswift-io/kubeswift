@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -14,6 +15,20 @@ import (
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
+
+// readyDstPod builds a destination launcher pod whose init containers have
+// completed and whose launcher container is Ready (the W-GPU-3 gate's
+// happy-path precondition).
+func readyDstPod(name, ns, node string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       corev1.PodSpec{NodeName: node, Containers: []corev1.Container{{Name: "launcher"}}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "launcher", Ready: true}},
+		},
+	}
+}
 
 // guestRunning constructs a SwiftGuest with the GuestRunning=True
 // condition set and an IP populated. Helper for the happy-path
@@ -46,7 +61,7 @@ func TestResuming_GuestRunningPlusIP_TransitionsToCompleted(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -103,7 +118,7 @@ func TestResuming_GuestRunningButNoIP_StaysInResuming(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -142,7 +157,7 @@ func TestResuming_GuestNotRunning_StaysInResuming(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -179,5 +194,75 @@ func TestResuming_GuestDeletedMidFlight(t *testing.T) {
 	errMsg := result.FailureMsg
 	if !strings.Contains(errMsg, "deleted during Resuming") {
 		t.Errorf("guest deleted should fail clearly; got %q", errMsg)
+	}
+}
+
+// TestResuming_DstInitFailed_Fails is the W-GPU-3 regression: the destination
+// pod's init container terminated with an error (e.g., gpu-init could not bind
+// the GPU on the target), so the guest cannot boot there. Even with a STALE
+// GuestRunning=True + IP carried over from the source pod, the migration must
+// FAIL — not falsely report Completed.
+func TestResuming_DstInitFailed_Fails(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := guestRunning("guest", "default", "10.244.125.17") // stale True + IP from source
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
+	mig.Status.DestinationNode = "miles"
+
+	dstPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: "miles"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{
+				{Name: "gpu-init", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, dstPod).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleResuming(context.Background(), mig, status)
+	if !strings.Contains(result.FailureMsg, "failed to boot") {
+		t.Errorf("dst init failure must fail the migration (no false Completed); got advanced=%v msg=%q",
+			result.Advanced, result.FailureMsg)
+	}
+	if result.Advanced {
+		t.Error("must NOT advance to Completed when the destination guest failed to boot")
+	}
+}
+
+// TestResuming_DstLauncherNotReady_StaysInResuming: the destination launcher
+// container is not yet Ready (still booting), so even a stale GuestRunning=True
+// must not complete — requeue and wait for the real destination boot.
+func TestResuming_DstLauncherNotReady_StaysInResuming(t *testing.T) {
+	scheme := preparingScheme(t)
+	guest := guestRunning("guest", "default", "10.244.125.17") // stale True + IP
+	mig := newMigration("m", "default")
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
+	mig.Status.DestinationNode = "miles"
+
+	dstPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec:       corev1.PodSpec{NodeName: "miles", Containers: []corev1.Container{{Name: "launcher"}}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "launcher", Ready: false}}, // not ready yet
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, dstPod).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	status := mig.Status.DeepCopy()
+	result := r.handleResuming(context.Background(), mig, status)
+	if result.Advanced || result.FailureMsg != "" {
+		t.Errorf("launcher-not-ready must requeue, not complete/fail; got advanced=%v msg=%q", result.Advanced, result.FailureMsg)
+	}
+	if result.Requeue == 0 {
+		t.Error("must requeue while the destination launcher is not ready")
+	}
+	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted {
+		t.Error("must not be Completed on a stale GuestRunning when the dst launcher isn't ready")
 	}
 }
