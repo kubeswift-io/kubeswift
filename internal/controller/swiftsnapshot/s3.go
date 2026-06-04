@@ -10,6 +10,7 @@ package swiftsnapshot
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 
@@ -23,6 +24,26 @@ import (
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 )
+
+// SnapshotS3ImageEnv overrides the snapshot-s3 uploader/downloader image used
+// by the Tier C (s3) upload + download Jobs.
+const SnapshotS3ImageEnv = "KUBESWIFT_SNAPSHOT_S3_IMAGE"
+
+// SnapshotS3ImageDefault is the fallback when SnapshotS3ImageEnv is unset (the
+// Helm chart overrides it with a version-pinned tag). Mirrors swiftguest's
+// LauncherImage pattern so a chart-less deploy (make deploy / kustomize) still
+// resolves a usable image rather than failing "image not configured".
+const SnapshotS3ImageDefault = "ghcr.io/projectbeskar/kubeswift/snapshot-s3:latest"
+
+// SnapshotS3Image returns the snapshot-s3 image, from SnapshotS3ImageEnv or
+// SnapshotS3ImageDefault. Used to populate the SwiftSnapshot and SwiftRestore
+// reconcilers' SnapshotS3Image field.
+func SnapshotS3Image() string {
+	if img := os.Getenv(SnapshotS3ImageEnv); img != "" {
+		return img
+	}
+	return SnapshotS3ImageDefault
+}
 
 // ensureUploadJob creates the node-pinned upload Job (idempotent) owned by the
 // SwiftSnapshot. Fails if the snapshot-s3 image is not configured.

@@ -1,0 +1,22 @@
+# S3 credentials Secret, referenced by spec.backend.s3.credentialsSecretRef on
+# the SwiftSnapshot. Must live in the SAME namespace as the SwiftSnapshot /
+# SwiftRestore. Keys:
+#   accessKeyId      (required)
+#   secretAccessKey  (required)
+#   sessionToken     (optional — for temporary STS credentials)
+#
+# These demo values match the MinIO root user in 00-minio.yaml. Replace with
+# real, least-privilege credentials for production (the IAM principal needs
+# s3:PutObject / s3:GetObject / s3:ListBucket on the bucket+prefix only).
+#
+# The credentials are surfaced to the upload/download Jobs as the standard
+# AWS_* environment variables — never written to annotations, logs, or status.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s3-creds
+  namespace: default
+type: Opaque
+stringData:
+  accessKeyId: minioadmin
+  secretAccessKey: minioadmin
