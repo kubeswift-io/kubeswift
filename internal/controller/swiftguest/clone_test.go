@@ -206,3 +206,32 @@ func TestCloneRegenIncludesNonMAC(t *testing.T) {
 		})
 	}
 }
+
+func TestResumeCloneIfNeeded(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "clone-a", Namespace: "ns"}}
+	r := poolCloneReconciler(t, pod)
+	g := cloneGuest()
+
+	// First call: stamps the resume action onto the pod.
+	if err := r.resumeCloneIfNeeded(context.Background(), pod, g); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Annotations[cloneActionKey] != cloneVerbResume || pod.Annotations[cloneActionIDKey] != "clone-a-clone-resume" {
+		t.Fatalf("resume action not stamped: %+v", pod.Annotations)
+	}
+	// Second call (action-id already set): no-op (idempotent).
+	before := pod.Annotations[cloneActionIDKey]
+	if err := r.resumeCloneIfNeeded(context.Background(), pod, g); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Annotations[cloneActionIDKey] != before {
+		t.Errorf("resume should be idempotent once the action-id is set")
+	}
+}
+
+func poolCloneReconciler(t *testing.T, objs ...client.Object) *SwiftGuestReconciler {
+	t.Helper()
+	s := cloneScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	return &SwiftGuestReconciler{Client: c, Scheme: s}
+}

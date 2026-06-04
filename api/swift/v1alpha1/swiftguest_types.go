@@ -58,8 +58,9 @@ type SwiftGuestSpec struct {
 	// captured state byte-for-byte (CH --restore) with per-clone identity
 	// regeneration. Mutually exclusive with imageRef, kernelRef, and
 	// gpuProfileRef (VFIO state cannot be CH-restored). The resumed VM's CPU/
-	// memory come from the snapshot, so guestClassRef is optional in this mode.
-	// (Snapshot Phase 4.)
+	// memory come from the snapshot, so guestClassRef is not used for resources
+	// in this mode — but it is still required by the CRD schema (set it to any
+	// class). (Snapshot Phase 4.)
 	// +optional
 	CloneFromSnapshot *CloneFromSnapshotSource `json:"cloneFromSnapshot,omitempty"`
 	// DataDiskRef references a SwiftImage to attach as a secondary data disk.
