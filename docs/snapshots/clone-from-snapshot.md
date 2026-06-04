@@ -139,6 +139,40 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 
 ## Cluster walkthrough
 
-<!-- Populated after the cluster pool-of-clones validation (PR 5). -->
-_Empirical validation (an N-replica pool cloned from one Tier C snapshot, spread
-across nodes, sentinel per replica) is recorded here after the cluster run._
+Validated on the dev cluster (k0s 1.34, CH v51.1, in-cluster MinIO, miles+boba).
+A `clone-source` (rocky9) on boba got a sentinel + a Tier C `clone-snap`
+(Ready); a 2-replica `clone-pool` then cloned it. The walkthrough caught **two
+real bugs** unit tests structurally cannot (the recurring **W5 pattern** —
+fake-client tests verify control flow, not on-cluster runtime behavior); both
+are fixed.
+
+1. **The clone loaded `--restore` but stayed PAUSED.** The restore-receive
+   launcher runs `CH --restore` (which loads the guest with vCPUs *stopped*) and
+   reports `GuestRunning=True`, but nothing unpaused it — a cloneFromSnapshot
+   guest has no SwiftRestore controller to drive a Resuming phase. On-cluster:
+   `vm.info` `state=Paused`, console dead. **Fix:** the SwiftGuest controller
+   sends the one-shot `kubeswift.io/snapshot-action: resume` to the clone's
+   launcher pod once it is Running (idempotent), mirroring SwiftRestore.
+2. **`guestClassRef` CRD-vs-webhook mismatch.** PR 2's webhook made
+   `guestClassRef` optional for clones, but the CRD schema **requires** it — so
+   the apiserver rejected the pool template before the webhook ran. **Fix:**
+   require `guestClassRef` for every boot source (clones ignore it for resources
+   but must set it).
+
+Results after the fixes:
+
+| | clone-pool-0 | clone-pool-1 |
+|---|---|---|
+| Assigned node | **boba** | **miles** (cross-node) |
+| Tier C download Job | on boba ✓ | on miles ✓ |
+| Phase | Running | Running |
+| Hypervisor MAC | `52:54:00:7e:0c:47` | `52:54:00:fd:c6:1a` (distinct) |
+| Sentinel `CLONE-POOL-…` | survived ✓ | survived ✓ |
+| machine-id | inherited (resume-vs-boot) | inherited (resume-vs-boot) |
+
+The 2-replica pool pre-assigned one replica per worker node, each ran its own
+node-pinned download from object storage, booted as a clone via `CH --restore`,
+resumed (one-shot resume action), and came up with the source's in-VM state
+preserved and a distinct per-clone hypervisor MAC. Guest-visible identity
+(machine-id / hostname / MAC) is inherited until each clone's first reboot — the
+documented resume-vs-boot rule.
