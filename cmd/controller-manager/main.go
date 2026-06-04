@@ -185,8 +185,9 @@ func main() {
 	}
 
 	if err = (&swiftrestore.SwiftRestoreReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SnapshotS3Image: os.Getenv("KUBESWIFT_SNAPSHOT_S3_IMAGE"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftRestore controller")
 		os.Exit(1)

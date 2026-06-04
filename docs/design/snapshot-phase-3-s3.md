@@ -77,7 +77,19 @@ type S3Backend struct {
 
 Status additions (SwiftSnapshotStatus): `s3.location` (`s3://bucket/key/`),
 `s3.manifestDigest` (sha256 of the manifest), `observedUploadBytes`,
-`uploadCompletedAt`. SwiftRestore gains a `Downloading` phase + `downloadedBytes`.
+`uploadCompletedAt`. SwiftRestore gains a `Downloading` phase + a `spec.targetNode`
+field (pins where the s3 restore lands — the download Job + restore-receive
+launcher co-locate there; empty falls back to an in-place target guest's current
+node).
+
+> **Byte-count metrics deferred (downloadedBytes / observedUploadBytes).** The
+> original sketch listed `downloadedBytes` (and `observedUploadBytes`) status
+> fields. Surfacing transferred-byte counts requires the snapshot-s3 binary to
+> report them back through a pod annotation that the controller then reads —
+> the same half-wired hazard W27b flagged (a status field with zero writers
+> reads as "implemented" when it isn't). Deferred to Phase 5 (snapshot
+> observability) where the annotation-read plumbing is the explicit deliverable;
+> PR 4 ships the functional `Downloading` phase without the byte gauges.
 
 `includeMemory` is honoured for s3 exactly as for Tier B (memory captured at
 Capturing time); a disk-only s3 snapshot (`includeMemory: false`) exports just

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +41,10 @@ type SwiftRestoreReconciler struct {
 	// Empty string disables the check — controller surfaces a Warning
 	// rather than blocking.
 	CurrentHypervisorVersion string
+
+	// SnapshotS3Image is the snapshot-s3 image used by the s3 (Tier C)
+	// backend's download Job. Wired from KUBESWIFT_SNAPSHOT_S3_IMAGE.
+	SnapshotS3Image string
 }
 
 // Reconcile drives the SwiftRestore state machine.
@@ -74,6 +79,24 @@ func (r *SwiftRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 		if !advanced {
+			if updateErr := r.persist(ctx, &restore, status); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
+			return ctrl.Result{RequeueAfter: requeue}, nil
+		}
+
+	case snapshotv1alpha1.SwiftRestorePhaseDownloading:
+		// s3 backend only: watch the download Job pull artifacts into the
+		// node-local cache, then hand off to the shared Tier B restore tail
+		// (materializeRestoreTarget) and advance to Restoring.
+		advanced, requeue, errMsg, err := r.handleDownloading(ctx, &restore, status)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if errMsg != "" {
+			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed, errMsg)
+		} else if !advanced {
 			if updateErr := r.persist(ctx, &restore, status); updateErr != nil {
 				return ctrl.Result{}, updateErr
 			}
@@ -185,12 +208,16 @@ func (r *SwiftRestoreReconciler) handlePending(
 	//     actual restore-launcher-pod creation is wired in commit 12 along
 	//     with config.json patching for identity regen — splitting them
 	//     would require two passes over the snapshot's config.json.
-	//   s3                 (Phase 3, reserved): rejected by webhook.
+	//   s3                 (Phase 3): download from object storage to a
+	//     node-local cache (handlePendingS3 -> Downloading), then hand off to
+	//     the same Tier B restore path once the cache is populated.
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
 		// Continue to existing CSI flow below.
 	case snapshotv1alpha1.SnapshotBackendLocal:
 		return r.handlePendingLocal(ctx, restore, &snap, status)
+	case snapshotv1alpha1.SnapshotBackendS3:
+		return r.handlePendingS3(ctx, restore, &snap, status)
 	default:
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
@@ -384,5 +411,6 @@ func (r *SwiftRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&snapshotv1alpha1.SwiftRestore{}).
 		Owns(&swiftv1alpha1.SwiftGuest{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&batchv1.Job{}).
 		Complete(r)
 }
