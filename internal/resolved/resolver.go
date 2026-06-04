@@ -27,6 +27,14 @@ type resolver struct {
 
 // Resolve fetches referenced resources, validates, merges, and returns ResolvedGuest or ResolutionError.
 func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*ResolvedGuest, error) {
+	// cloneFromSnapshot is a distinct boot source resolved by the SwiftGuest
+	// controller's clone path (Snapshot Phase 4 PR 3), not by the image/kernel
+	// resolver. Until that path lands, surface an honest message rather than the
+	// misleading "exactly one of imageRef or kernelRef" below.
+	if guest.UsesCloneFromSnapshot() {
+		return nil, &ResolutionError{Reason: "cloneFromSnapshot boot is not yet implemented (Snapshot Phase 4)"}
+	}
+
 	hasImage := guest.Spec.ImageRef != nil
 	hasKernel := guest.Spec.KernelRef != nil
 
