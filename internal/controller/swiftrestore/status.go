@@ -9,6 +9,7 @@ import (
 // Condition reasons for SwiftRestore.
 const (
 	ReasonPending          = "Pending"
+	ReasonDownloading      = "Downloading"
 	ReasonRestoring        = "Restoring"
 	ReasonResuming         = "Resuming"
 	ReasonRestoreReady     = "RestoreReady"

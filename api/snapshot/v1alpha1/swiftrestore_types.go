@@ -77,6 +77,16 @@ type SwiftRestoreSpec struct {
 	// (memory snapshots only); accepted in Phase 1 for forward compatibility.
 	// +optional
 	Identity *IdentityRegeneration `json:"identity,omitempty"`
+	// TargetNode pins the node the restore lands on. It is only consulted for
+	// the s3 (Tier C) backend, where the artifacts live in object storage and
+	// the download Job + restore-receive launcher must be co-located on the
+	// chosen node. When empty for an s3 restore, the controller falls back to
+	// the in-place target guest's current node; a clone/cross-node s3 restore
+	// (target guest does not yet exist) requires this field. Ignored for the
+	// csi-volume-snapshot and local backends (local is pinned to the capture
+	// node).
+	// +optional
+	TargetNode string `json:"targetNode,omitempty"`
 }
 
 // SwiftRestoreGuestRef is the SwiftGuest the SwiftRestore produced (or
