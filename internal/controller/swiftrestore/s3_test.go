@@ -107,6 +107,7 @@ func TestBuildDownloadJob(t *testing.T) {
 	snap := s3ReadySnap("snap1", "team-a", "g1")
 	snap.Spec.Backend.S3.Endpoint = "minio.svc:9000"
 	snap.Spec.Backend.S3.ForcePathStyle = true
+	snap.Spec.Backend.S3.Insecure = true
 	snap.Spec.IncludeMemory = true
 	job := buildDownloadJob(s3Restore("r1", "team-a", "snap1", "g1", "boba"), snap, "ghcr.io/x/snapshot-s3:t", "boba")
 	pod := job.Spec.Template.Spec
@@ -132,7 +133,7 @@ func TestBuildDownloadJob(t *testing.T) {
 	// args carry download mode + derived prefix + flags.
 	a := strings.Join(c.Args, " ")
 	for _, want := range []string{"--mode=download", "--bucket=backups", "--key-prefix=kubeswift/team-a/snap1",
-		"--region=us-east-1", "--endpoint=minio.svc:9000", "--path-style", "--include-memory"} {
+		"--region=us-east-1", "--endpoint=minio.svc:9000", "--path-style", "--insecure", "--include-memory"} {
 		if !strings.Contains(a, want) {
 			t.Errorf("args missing %q; got %q", want, a)
 		}

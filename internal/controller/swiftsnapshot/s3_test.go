@@ -59,6 +59,7 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 		s.Spec.Backend.S3.Region = "us-east-1"
 		s.Spec.Backend.S3.Endpoint = "minio.svc:9000"
 		s.Spec.Backend.S3.ForcePathStyle = true
+		s.Spec.Backend.S3.Insecure = true
 	})
 	job := buildUploadJob(s, "ghcr.io/x/snapshot-s3:t", "boba")
 	pod := job.Spec.Template.Spec
@@ -84,7 +85,7 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 	// args carry the derived prefix + flags.
 	a := strings.Join(c.Args, " ")
 	for _, want := range []string{"--mode=upload", "--bucket=backups", "--key-prefix=kubeswift/team-a/snap1",
-		"--region=us-east-1", "--endpoint=minio.svc:9000", "--path-style", "--include-memory", "--snapshot=team-a/snap1"} {
+		"--region=us-east-1", "--endpoint=minio.svc:9000", "--path-style", "--insecure", "--include-memory", "--snapshot=team-a/snap1"} {
 		if !strings.Contains(a, want) {
 			t.Errorf("args missing %q; got %q", want, a)
 		}
@@ -107,11 +108,14 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 		}
 	}
 
-	// hardened container.
+	// Runs as root (must read the root-owned 0600 snapshot artifacts) but
+	// otherwise hardened: drop ALL, no priv-esc, ro-rootfs.
 	sc := c.SecurityContext
-	if sc == nil || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot || sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem ||
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 0 ||
+		sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem ||
+		sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
 		len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
-		t.Errorf("upload container must be hardened (non-root, ro-rootfs, drop ALL); got %+v", sc)
+		t.Errorf("upload container must run as root with drop ALL / no-priv-esc / ro-rootfs; got %+v", sc)
 	}
 }
 
@@ -120,7 +124,7 @@ func TestBuildUploadJob_OptionalFlagsOmitted(t *testing.T) {
 	s := s3Snap("snap1", "ns", nil)
 	job := buildUploadJob(s, "img", "miles")
 	a := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
-	for _, absent := range []string{"--region", "--endpoint", "--path-style", "--include-memory"} {
+	for _, absent := range []string{"--region", "--endpoint", "--path-style", "--insecure", "--include-memory"} {
 		if strings.Contains(a, absent) {
 			t.Errorf("flag %q should be omitted when unset; got %q", absent, a)
 		}

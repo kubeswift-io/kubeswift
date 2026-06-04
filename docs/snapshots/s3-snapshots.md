@@ -131,13 +131,15 @@ reboot via the seed profile's bootcmd. See
   env vars. They are never written to annotations, logs, or status. Grant the
   IAM principal least privilege: `s3:PutObject` / `s3:GetObject` /
   `s3:ListBucket` scoped to the bucket + prefix.
-- **The upload Job** mounts the snapshot dir **read-only** and runs as the
-  image's non-root uid.
-- **The download Job** runs **as root** — it must write the kubelet-created,
-  root-owned node-local cache hostPath (`DirectoryOrCreate`, mode 0755). It is
-  otherwise maximally constrained: drop `ALL` capabilities, no privilege
-  escalation, read-only root filesystem, and the hostPath mount exposes only
-  the single snapshot directory.
+- **Both Jobs run as root**, because both operate on the **root-owned `0600`**
+  snapshot artifacts (the capture writes `config.json` / `state.json` /
+  `memory-ranges` as root with restrictive perms — they contain serialized
+  guest RAM). The upload Job must *read* them (a read-only mount doesn't help —
+  read-only constrains writes, not the files' own mode bits); the download Job
+  must *write* the kubelet-created, root-owned node-local cache hostPath. Both
+  are otherwise maximally constrained: drop `ALL` capabilities, no privilege
+  escalation, read-only root filesystem, and the hostPath mount exposes only the
+  single snapshot directory.
 - **Encryption** is the object store's responsibility (SSE on the bucket).
   KubeSwift does not encrypt artifacts client-side in Phase 3.
 
@@ -152,10 +154,44 @@ reboot via the seed profile's bootcmd. See
 | Download Job `Error`, *"checksum mismatch"* / *"size mismatch"* | Corrupted or partial object. The manifest verification is doing its job — re-run the snapshot. |
 | Restore `Failed`, *"has no status.s3"* | The source SwiftSnapshot never finished uploading (not `Ready`). |
 | MinIO: upload fails with a host/addressing error | Set `forcePathStyle: true` (MinIO / Ceph RGW require path-style addressing). |
+| Upload/download fails *"server gave HTTP response to HTTPS client"* | The endpoint speaks plain HTTP but the client defaulted to TLS. Set `spec.backend.s3.insecure: true` (UNSAFE — trusted-network in-cluster MinIO only) or front the store with TLS. |
 
 ## Cluster walkthrough
 
-<!-- Populated after the cluster MinIO round-trip validation (PR 5). -->
-_Empirical round-trip validation (source on one node → s3 snapshot → clone
-restore on another node, sentinel survives) is recorded here after the
-cluster run._
+Validated on the dev cluster (k0s 1.34, CH v51.1, in-cluster MinIO) with a 2Gi
+rocky9 memory snapshot. Source guest on **boba**, restore target **miles**
+(cross-node). The walkthrough caught **two real bugs** that unit tests
+structurally cannot (the recurring "W5 pattern" — fake-client tests verify
+control flow, not on-cluster kubelet/filesystem/network behavior); both are
+fixed in this PR:
+
+1. **Upload Job permission-denied.** The capture writes the snapshot artifacts
+   as **root, mode `0600`** (they contain serialized guest RAM). The upload Job
+   was running as the image's non-root uid and got `open /snap/config.json:
+   permission denied` — a read-only mount does not grant read access to a file
+   whose own mode bits exclude `other`. **Fix:** the upload Job runs as root
+   (mirroring the download Job), still drop-`ALL` / no-priv-esc / ro-rootfs.
+
+2. **HTTPS-vs-HTTP against plaintext MinIO.** The `snapshot-s3` client defaulted
+   to TLS; the demo MinIO serves plain HTTP → `server gave HTTP response to
+   HTTPS client`. **Fix:** `spec.backend.s3.insecure: true` plumbs `--insecure`
+   through to both Jobs (UNSAFE — trusted-network in-cluster store only).
+
+Empirical results after the fixes (run as standalone Jobs to validate the
+data path independently of the controller image):
+
+| Step | Result |
+|---|---|
+| Capture (boba) | `Capturing → Uploading`, artifacts written to the node-local cache |
+| Upload → MinIO | **SUCCEEDED** — `config.json` + `state.json` + 2GiB `memory-ranges` + `manifest.json` (uploaded last) landed under `demo/default/snapshot-s3-mem/` |
+| manifest.json | well-formed: per-artifact sha256 + size, `totalBytes: 2147549372` |
+| Download → miles (cross-node) | **SUCCEEDED** — all 3 artifacts pulled and **sha256-verified** against the manifest (`got memory-ranges … verified`) |
+
+The s3-specific data movement (capture → upload → cross-node download +
+checksum verification) is validated end-to-end. The restore *orchestration*
+that follows the download (materialize the target SwiftGuest → restore-receive
+launcher → `CH --restore` → resume) is the **shared Tier B path** already
+validated in the local-snapshot walkthroughs; a state sentinel
+(`S3-ROUNDTRIP-…`, md5 `a6deb3ca…`) was written into the source guest before
+capture for that final boot-and-verify step, which completes once a controller
+image carrying these two fixes is deployed.

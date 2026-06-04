@@ -165,6 +165,9 @@ func buildUploadJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode str
 	if s3.ForcePathStyle {
 		args = append(args, "--path-style")
 	}
+	if s3.Insecure {
+		args = append(args, "--insecure")
+	}
 	if snap.Spec.IncludeMemory {
 		args = append(args, "--include-memory")
 	}
@@ -216,9 +219,19 @@ func buildUploadJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode str
 							MountPath: s3UploadMount,
 							ReadOnly:  true,
 						}},
+						// Runs as root: the capture writes the snapshot artifacts
+						// (config.json, state.json, memory-ranges) as root with
+						// mode 0600 — they contain serialized guest RAM, so the
+						// restrictive perms are deliberate — and a non-root upload
+						// container cannot read them even via a read-only mount
+						// (read-only constrains writes, not the file's own mode
+						// bits). Mirrors the download Job. Otherwise maximally
+						// constrained: drop ALL, no privilege escalation, read-only
+						// rootfs; the mount exposes only the single snapshot dir.
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptr.To(false),
-							RunAsNonRoot:             ptr.To(true),
+							RunAsUser:                ptr.To(int64(0)),
+							RunAsNonRoot:             ptr.To(false),
 							ReadOnlyRootFilesystem:   ptr.To(true),
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 						},
