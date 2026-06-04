@@ -14,35 +14,23 @@ package swiftrestore
 import (
 	"context"
 	"fmt"
-	"path"
-	"path/filepath"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
-const (
-	// s3DownloadMount is where the node-local restore cache is mounted (RW)
-	// inside the download Job — the snapshot-s3 binary writes the artifacts here.
-	s3DownloadMount = "/snap"
-	// s3RestoreCacheBase mirrors swiftsnapshot.HostPathBaseDir — the kubeswift-
-	// managed subtree the restore cache lives under. Kept as a local constant to
-	// avoid importing the swiftsnapshot controller package into swiftrestore.
-	s3RestoreCacheBase = "/var/lib/kubeswift/snapshots/"
-	// s3DownloadBackoffLimit bounds Job retries; the snapshot-s3 binary is
-	// idempotent (skips already-downloaded objects, verifies checksums), so a
-	// retry resumes.
-	s3DownloadBackoffLimit int32 = 4
-)
+// s3DownloadMount aliases the shared mount path (referenced by tests + the
+// node-local cache layout); the download Job itself is built by clonecommon.
+const s3DownloadMount = clonecommon.DownloadMount
 
 // hypervisorVersionBlocked runs the architect-risk-#3 CH version compatibility
 // gate shared by the local and s3 restore paths. Returns true (and stamps
@@ -86,13 +74,13 @@ func (r *SwiftRestoreReconciler) hypervisorVersionBlocked(
 // snapshot's identity so it is stable across reconciles and matches the
 // capture-side layout when the target happens to be the capture node.
 func s3RestoreLocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return filepath.Join(s3RestoreCacheBase, snap.Namespace+"-"+snap.Name)
+	return clonecommon.S3LocalDir(snap)
 }
 
 // s3RestoreKeyPrefix is the object-key prefix the artifacts live under, derived
 // the same way the upload side derives it: <prefix>/<namespace>/<name>.
 func s3RestoreKeyPrefix(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return path.Join(snap.Spec.Backend.S3.Prefix, snap.Namespace, snap.Name)
+	return clonecommon.S3KeyPrefix(snap)
 }
 
 // s3DownloadJobName is the deterministic name of the download Job.
@@ -256,103 +244,13 @@ func (r *SwiftRestoreReconciler) handleDownloading(
 // --mode=download. Pinned to the resolved restore node. The caller sets the
 // SwiftRestore ownerRef for GC.
 func buildDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1alpha1.SwiftSnapshot, image, node string) *batchv1.Job {
-	s3 := snap.Spec.Backend.S3
-	args := []string{
-		"--mode=download",
-		"--dir=" + s3DownloadMount,
-		"--bucket=" + s3.Bucket,
-		"--key-prefix=" + s3RestoreKeyPrefix(snap),
-		"--snapshot=" + snap.Namespace + "/" + snap.Name,
-	}
-	if s3.Region != "" {
-		args = append(args, "--region="+s3.Region)
-	}
-	if s3.Endpoint != "" {
-		args = append(args, "--endpoint="+s3.Endpoint)
-	}
-	if s3.ForcePathStyle {
-		args = append(args, "--path-style")
-	}
-	if s3.Insecure {
-		args = append(args, "--insecure")
-	}
-	if snap.Spec.IncludeMemory {
-		args = append(args, "--include-memory")
-	}
-
-	credName := ""
-	if s3.CredentialsSecretRef != nil {
-		credName = s3.CredentialsSecretRef.Name
-	}
-	secretEnv := func(envName, key string, optional bool) corev1.EnvVar {
-		return corev1.EnvVar{
-			Name: envName,
-			ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: credName},
-					Key:                  key,
-					Optional:             ptr.To(optional),
-				},
-			},
-		}
-	}
-
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      s3DownloadJobName(restore),
-			Namespace: restore.Namespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":      "kubeswift",
-				"app.kubernetes.io/component": "snapshot-s3-download",
-				"kubeswift.io/swiftrestore":   restore.Name,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: ptr.To(s3DownloadBackoffLimit),
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					NodeName:      node,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
-					Containers: []corev1.Container{{
-						Name:  "download",
-						Image: image,
-						Args:  args,
-						Env: []corev1.EnvVar{
-							secretEnv("AWS_ACCESS_KEY_ID", "accessKeyId", false),
-							secretEnv("AWS_SECRET_ACCESS_KEY", "secretAccessKey", false),
-							secretEnv("AWS_SESSION_TOKEN", "sessionToken", true),
-						},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      "cache",
-							MountPath: s3DownloadMount,
-						}},
-						// Unlike the upload Job (read-only mount, runs as the
-						// image's non-root uid), the download Job WRITES into the
-						// node-local cache hostPath. kubelet creates that
-						// DirectoryOrCreate path root-owned (0755), so the
-						// container must run as root to write it. Still maximally
-						// constrained otherwise: drop ALL capabilities, no
-						// privilege escalation, read-only root filesystem. The
-						// hostPath mount exposes only the single snapshot dir.
-						SecurityContext: &corev1.SecurityContext{
-							AllowPrivilegeEscalation: ptr.To(false),
-							RunAsUser:                ptr.To(int64(0)),
-							RunAsNonRoot:             ptr.To(false),
-							ReadOnlyRootFilesystem:   ptr.To(true),
-							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-						},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "cache",
-						VolumeSource: corev1.VolumeSource{
-							HostPath: &corev1.HostPathVolumeSource{
-								Path: s3RestoreLocalDir(snap),
-								Type: ptr.To(corev1.HostPathDirectoryOrCreate),
-							},
-						},
-					}},
-				},
-			},
-		},
-	}
+	return clonecommon.BuildDownloadJob(clonecommon.DownloadJobParams{
+		Snapshot:    snap,
+		Image:       image,
+		Name:        s3DownloadJobName(restore),
+		Namespace:   restore.Namespace,
+		Node:        node,
+		Component:   "snapshot-s3-download",
+		ExtraLabels: map[string]string{"kubeswift.io/swiftrestore": restore.Name},
+	})
 }
