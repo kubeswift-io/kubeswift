@@ -13,25 +13,29 @@ import (
 // fakeStore is an in-memory objectStore for round-trip + idempotency tests.
 type fakeStore struct {
 	objs map[string][]byte
+	meta map[string]string // key -> recorded sha256 (mirrors x-amz-meta-sha256)
 	puts int
 	gets int
 }
 
-func newFakeStore() *fakeStore { return &fakeStore{objs: map[string][]byte{}} }
+func newFakeStore() *fakeStore {
+	return &fakeStore{objs: map[string][]byte{}, meta: map[string]string{}}
+}
 
-func (f *fakeStore) stat(_ context.Context, key string) (int64, bool, error) {
+func (f *fakeStore) stat(_ context.Context, key string) (int64, string, bool, error) {
 	b, ok := f.objs[key]
 	if !ok {
-		return 0, false, nil
+		return 0, "", false, nil
 	}
-	return int64(len(b)), true, nil
+	return int64(len(b)), f.meta[key], true, nil
 }
-func (f *fakeStore) put(_ context.Context, key string, r io.Reader, _ int64) error {
+func (f *fakeStore) put(_ context.Context, key string, r io.Reader, _ int64, sha256 string) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}
 	f.objs[key] = data
+	f.meta[key] = sha256
 	f.puts++
 	return nil
 }
@@ -116,6 +120,43 @@ func TestUpload_IdempotentSkipsExisting(t *testing.T) {
 	}
 	if delta := store.puts - first; delta != 1 {
 		t.Errorf("re-upload should only re-put the manifest (1 put); got %d extra puts", delta)
+	}
+}
+
+// TestUpload_ReuploadsStaleSameSizeContent reproduces the cluster-walkthrough
+// bug: a memory-ranges file is always exactly the guest's RAM size, so a second
+// snapshot reusing the same key prefix (a deleted+recreated same-named snapshot)
+// with same-size-but-different-content must RE-UPLOAD it — a size-only resume
+// check would keep the stale object while the manifest records the new hash, and
+// the restore would then fail verification forever.
+func TestUpload_ReuploadsStaleSameSizeContent(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+
+	// First snapshot at ns/snap.
+	src1, _ := seedSnapshotDir(t)
+	if err := runUpload(ctx, store, src1, "ns/snap", "ns/snap", false); err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+
+	// Second snapshot reusing the SAME key prefix: memory.img is the SAME 4096
+	// bytes but DIFFERENT content; config.json + root.raw are unchanged.
+	src2 := t.TempDir()
+	writeFile(t, src2, "config.json", []byte(`{"cpus":2}`))
+	writeFile(t, src2, "memory.img", bytes.Repeat([]byte("X"), 4096))
+	writeFile(t, src2, "disks/root.raw", bytes.Repeat([]byte("D"), 8192))
+	if err := runUpload(ctx, store, src2, "ns/snap", "ns/snap", false); err != nil {
+		t.Fatalf("second upload: %v", err)
+	}
+
+	// memory.img must now hold the NEW content (re-uploaded), not the stale "M".
+	if got := store.objs["ns/snap/memory.img"]; !bytes.Equal(got, bytes.Repeat([]byte("X"), 4096)) {
+		t.Fatalf("memory.img kept stale content; size-only skip not fixed (len=%d, first byte=%q)", len(got), got[0])
+	}
+	// And a fresh download must verify cleanly against the new manifest.
+	dst := t.TempDir()
+	if err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+		t.Fatalf("download after re-upload must verify clean: %v", err)
 	}
 }
 
