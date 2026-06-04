@@ -1,0 +1,29 @@
+# Tier C (s3) memory snapshot of clone-source — the source the pool clones from.
+#
+# Apply once clone-source is Running (and after writing whatever in-VM state you
+# want every clone to start from). The snapshot must reach Ready (its artifacts
+# uploaded to object storage) before the clone pool can boot.
+#
+# endpoint + forcePathStyle + insecure target the in-cluster demo MinIO; drop
+# them and set a real region for AWS S3.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: clone-snap
+  namespace: default
+spec:
+  guestRef:
+    name: clone-source
+  backend:
+    type: s3
+    s3:
+      bucket: kubeswift-snapshots
+      prefix: clones
+      endpoint: minio.minio.svc:9000
+      forcePathStyle: true
+      insecure: true            # demo MinIO serves plain HTTP; UNSAFE — drop for TLS
+      region: us-east-1
+      credentialsSecretRef:
+        name: s3-creds
+  includeMemory: true
+  resumeAfterSnapshot: true

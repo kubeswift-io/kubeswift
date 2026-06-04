@@ -43,16 +43,21 @@ func TestValidate_BootSourceExclusivity(t *testing.T) {
 	})); err != nil {
 		t.Errorf("kernelRef-only should be valid: %v", err)
 	}
-	// cloneFromSnapshot alone (no guestClassRef): OK.
+	// cloneFromSnapshot (with guestClassRef, which the CRD requires): OK.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.ImageRef = nil
-		g.Spec.GuestClassRef = corev1.LocalObjectReference{}
 		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{
 			SnapshotRef: corev1.LocalObjectReference{Name: "snap"},
 		}
 	})); err != nil {
-		t.Errorf("cloneFromSnapshot-only should be valid (guestClassRef optional): %v", err)
+		t.Errorf("cloneFromSnapshot should be valid: %v", err)
 	}
+	// cloneFromSnapshot without guestClassRef: rejected (CRD requires it; webhook aligned).
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.ImageRef = nil
+		g.Spec.GuestClassRef = corev1.LocalObjectReference{}
+		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{SnapshotRef: corev1.LocalObjectReference{Name: "snap"}}
+	})), "spec.guestClassRef.name is required")
 	// none set.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) { g.Spec.ImageRef = nil })),
 		"exactly one of spec.imageRef")
