@@ -273,6 +273,9 @@ func buildDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1al
 	if s3.ForcePathStyle {
 		args = append(args, "--path-style")
 	}
+	if s3.Insecure {
+		args = append(args, "--insecure")
+	}
 	if snap.Spec.IncludeMemory {
 		args = append(args, "--include-memory")
 	}

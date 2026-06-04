@@ -27,6 +27,7 @@ spec:
       prefix: demo
       endpoint: minio.minio.svc:9000
       forcePathStyle: true
+      insecure: true            # demo MinIO serves plain HTTP; UNSAFE — drop for TLS endpoints
       region: us-east-1
       credentialsSecretRef:
         name: s3-creds

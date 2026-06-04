@@ -106,6 +106,13 @@ spec:
                           ForcePathStyle uses path-style addressing (bucket in the path, not the
                           host) — typically required by MinIO / Ceph RGW.
                         type: boolean
+                      insecure:
+                        description: |-
+                          Insecure allows a plaintext (http) endpoint instead of TLS. UNSAFE —
+                          credentials and snapshot bytes traverse the network unencrypted. Use only
+                          for an in-cluster MinIO / test store on a trusted network. Production S3
+                          (AWS, TLS-fronted MinIO/RGW) must leave this false.
+                        type: boolean
                       prefix:
                         description: |-
                           Prefix is an optional key prefix; objects land at

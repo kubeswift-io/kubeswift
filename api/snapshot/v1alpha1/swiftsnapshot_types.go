@@ -75,6 +75,12 @@ type S3Backend struct {
 	// host) — typically required by MinIO / Ceph RGW.
 	// +optional
 	ForcePathStyle bool `json:"forcePathStyle,omitempty"`
+	// Insecure allows a plaintext (http) endpoint instead of TLS. UNSAFE —
+	// credentials and snapshot bytes traverse the network unencrypted. Use only
+	// for an in-cluster MinIO / test store on a trusted network. Production S3
+	// (AWS, TLS-fronted MinIO/RGW) must leave this false.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
 	// CredentialsSecretRef references a Secret (same namespace) with keys
 	// accessKeyId, secretAccessKey, and optional sessionToken.
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
