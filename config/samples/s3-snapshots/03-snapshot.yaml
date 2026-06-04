@@ -1,0 +1,34 @@
+# Tier C (s3) SwiftSnapshot of snapshot-s3-source.
+#
+# Capture-then-upload: the launcher captures the VM state node-locally
+# (exactly like Tier B, into a controller-derived dir under
+# /var/lib/kubeswift/snapshots/) and then a node-pinned upload Job pushes the
+# artifacts to object storage. Phases: Pending -> Capturing -> Uploading ->
+# Ready. status.s3.location records the s3:// URI on Ready.
+#
+# includeMemory: true captures RAM (the upload then includes memory-ranges).
+# Set false for a disk-only export.
+#
+# The bucket must already exist; prefix is optional (objects land at
+# <prefix>/<namespace>/<snapshot>/). endpoint + forcePathStyle target MinIO;
+# drop both and set a real region for AWS S3.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: snapshot-s3-mem
+  namespace: default
+spec:
+  guestRef:
+    name: snapshot-s3-source
+  backend:
+    type: s3
+    s3:
+      bucket: kubeswift-snapshots
+      prefix: demo
+      endpoint: minio.minio.svc:9000
+      forcePathStyle: true
+      region: us-east-1
+      credentialsSecretRef:
+        name: s3-creds
+  includeMemory: true
+  resumeAfterSnapshot: true

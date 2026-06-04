@@ -173,3 +173,14 @@ func TestHandleUploading(t *testing.T) {
 		}
 	})
 }
+
+func TestSnapshotS3Image_Resolver(t *testing.T) {
+	t.Setenv(SnapshotS3ImageEnv, "")
+	if got := SnapshotS3Image(); got != SnapshotS3ImageDefault {
+		t.Errorf("unset env: got %q, want default %q", got, SnapshotS3ImageDefault)
+	}
+	t.Setenv(SnapshotS3ImageEnv, "ghcr.io/x/snapshot-s3:pinned")
+	if got := SnapshotS3Image(); got != "ghcr.io/x/snapshot-s3:pinned" {
+		t.Errorf("set env: got %q", got)
+	}
+}

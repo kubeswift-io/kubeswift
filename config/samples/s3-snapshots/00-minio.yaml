@@ -1,0 +1,64 @@
+# In-cluster MinIO for exercising the Tier C (s3) snapshot backend without an
+# external object store. NOT for production — single replica, emptyDir storage,
+# demo credentials. For production point spec.backend.s3.endpoint at your real
+# S3-compatible store (AWS S3, MinIO, Ceph RGW) and supply real credentials.
+#
+# After this is Running, create the bucket once (e.g. via the MinIO console at
+# the service's :9001 port, or `mc mb local/kubeswift-snapshots`). The snapshot
+# controller does NOT create the bucket.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minio
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          ports:
+            - containerPort: 9000
+              name: s3
+            - containerPort: 9001
+              name: console
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: minio
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001

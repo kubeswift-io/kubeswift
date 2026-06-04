@@ -25,6 +25,8 @@ spec:
           env:
             - name: KUBESWIFT_LAUNCHER_IMAGE
               value: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ include "kubeswift.imageTag" (dict "tag" .Values.swiftletd.image.tag "appVersion" .Chart.AppVersion) }}
+            - name: KUBESWIFT_SNAPSHOT_S3_IMAGE
+              value: {{ .Values.snapshotS3.image.registry }}/snapshot-s3:{{ include "kubeswift.imageTag" (dict "tag" .Values.snapshotS3.image.tag "appVersion" .Chart.AppVersion) }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
