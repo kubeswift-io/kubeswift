@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
 // SnapshotS3ImageEnv overrides the snapshot-s3 uploader/downloader image used
@@ -123,13 +123,13 @@ func captureDestDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // (and the upload Job reads from). Derived deterministically — the s3 backend
 // does not take an operator-supplied hostPath (unlike the local backend).
 func s3LocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return filepath.Join(HostPathBaseDir, snap.Namespace+"-"+snap.Name)
+	return clonecommon.S3LocalDir(snap)
 }
 
 // s3KeyPrefix is the object-key prefix for this snapshot:
 // <prefix>/<namespace>/<name>.
 func s3KeyPrefix(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return path.Join(snap.Spec.Backend.S3.Prefix, snap.Namespace, snap.Name)
+	return clonecommon.S3KeyPrefix(snap)
 }
 
 // s3UploadJobName is the deterministic name of the upload Job.
