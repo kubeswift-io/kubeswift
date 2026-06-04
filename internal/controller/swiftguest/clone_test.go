@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -116,17 +117,64 @@ func TestPrepareCloneFromSnapshot_NotReady(t *testing.T) {
 	}
 }
 
-func TestPrepareCloneFromSnapshot_TierCRejected(t *testing.T) {
-	g := cloneGuest()
-	snap := localSnap(snapshotv1alpha1.SwiftSnapshotPhaseReady)
-	snap.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{
-		Type: snapshotv1alpha1.SnapshotBackendS3,
-		S3:   &snapshotv1alpha1.S3Backend{Bucket: "b"},
+func s3CloneSnap() *snapshotv1alpha1.SwiftSnapshot {
+	return &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap", Namespace: "ns"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "src"},
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendS3,
+				S3:   &snapshotv1alpha1.S3Backend{Bucket: "bk", CredentialsSecretRef: &snapshotv1alpha1.SecretObjectReference{Name: "c"}},
+			},
+		},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{
+			Phase: snapshotv1alpha1.SwiftSnapshotPhaseReady,
+			S3:    &snapshotv1alpha1.S3SnapshotStatus{Location: "s3://bk/ns/snap/"},
+		},
 	}
-	r, _ := newCloneReconciler(t, g, sourceGuest(), snap)
+}
+
+func TestPrepareCloneFromSnapshot_TierC_RequiresTargetNode(t *testing.T) {
+	g := cloneGuest() // no targetNode
+	r, _ := newCloneReconciler(t, g, sourceGuest(), s3CloneSnap())
+	r.SnapshotS3Image = "img"
 	_, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
-	if err != nil || !strings.Contains(fail, "Phase 4 PR 3b") {
-		t.Fatalf("s3 snapshot should fail with PR-3b message; fail=%q err=%v", fail, err)
+	if err != nil || !strings.Contains(fail, "requires spec.cloneFromSnapshot.targetNode") {
+		t.Fatalf("Tier C without targetNode should fail; fail=%q err=%v", fail, err)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "miles"
+	r, c := newCloneReconciler(t, g, sourceGuest(), s3CloneSnap())
+	r.SnapshotS3Image = "img"
+
+	// First pass: creates the download Job + requeues (not yet complete).
+	_, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || !requeue {
+		t.Fatalf("first pass should create the download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "clone-a-clone-download", Namespace: "ns"}, &job); err != nil {
+		t.Fatalf("download Job not created: %v", err)
+	}
+	if job.Spec.Template.Spec.NodeName != "miles" {
+		t.Errorf("download Job must pin to targetNode miles; got %q", job.Spec.Template.Spec.NodeName)
+	}
+
+	// Mark the Job complete; second pass should proceed (effective + stamped).
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &job); err != nil {
+		t.Fatal(err)
+	}
+	eff, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || requeue || eff == nil {
+		t.Fatalf("after download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	if g.Annotations[AnnotationRestoreNodeName] != "miles" ||
+		g.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns-snap" {
+		t.Errorf("Tier C restore annotations wrong: %+v", g.Annotations)
 	}
 }
 
