@@ -46,7 +46,7 @@ import (
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
 // SkipHypervisorVersionCheckAnnotation lets an operator bypass the
@@ -561,7 +561,7 @@ func (r *SwiftRestoreReconciler) restoreAnnotations(
 // the patcher's prefix match doesn't clip a longer name that happens
 // to start with a shorter one.
 func runtimeDirPrefix(namespace, name string) string {
-	return "/var/lib/kubeswift/run/" + namespace + "-" + name + "/"
+	return clonecommon.RuntimeDirPrefix(namespace, name)
 }
 
 // computeMACRewrites returns a CSV of new MACs indexed by NIC ordinal
@@ -569,15 +569,7 @@ func runtimeDirPrefix(namespace, name string) string {
 // no NetworkRef) first, then secondary NICs. A SwiftGuest with no
 // explicit Interfaces uses a single default NIC named "eth0".
 func computeMACRewrites(targetNs, targetName string, source *swiftv1alpha1.SwiftGuest) string {
-	if len(source.Spec.Interfaces) == 0 {
-		return runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(targetNs, targetName, "eth0"))
-	}
-	parts := make([]string, 0, len(source.Spec.Interfaces))
-	for _, iface := range source.Spec.Interfaces {
-		seed := runtimeintent.InterfaceMACSeed(targetNs, targetName, iface.Name)
-		parts = append(parts, runtimeintent.GenerateMAC(seed))
-	}
-	return strings.Join(parts, ",")
+	return clonecommon.ComputeMACRewrites(targetNs, targetName, source)
 }
 
 // regenIncludes returns true when the given identity item is present
