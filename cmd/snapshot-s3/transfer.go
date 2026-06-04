@@ -26,8 +26,13 @@ func runUpload(ctx context.Context, store objectStore, srcDir, keyPrefix, snapNa
 
 	for _, a := range m.Artifacts {
 		key := path.Join(keyPrefix, a.Path)
-		if size, ok, serr := store.stat(ctx, key); serr == nil && ok && size == a.Bytes {
-			log.Printf("  skip %s (already uploaded, %d bytes)", a.Path, size)
+		// Resume only when the existing object matches BOTH size and content
+		// hash. Size alone is unsafe: a memory-ranges file is always exactly the
+		// guest's RAM size, so a stale object left at this key by a prior
+		// same-named snapshot would be silently kept while the manifest records
+		// the new hash — a permanent mismatch the restore then fails on.
+		if size, sha, ok, serr := store.stat(ctx, key); serr == nil && ok && size == a.Bytes && sha == a.SHA256 {
+			log.Printf("  skip %s (already uploaded, %d bytes, sha matches)", a.Path, size)
 			continue
 		}
 		f, err := os.Open(filepath.Join(srcDir, filepath.FromSlash(a.Path)))
@@ -35,7 +40,7 @@ func runUpload(ctx context.Context, store objectStore, srcDir, keyPrefix, snapNa
 			return fmt.Errorf("open artifact %q: %w", a.Path, err)
 		}
 		log.Printf("  put %s (%d bytes)", a.Path, a.Bytes)
-		err = store.put(ctx, key, f, a.Bytes)
+		err = store.put(ctx, key, f, a.Bytes, a.SHA256)
 		f.Close()
 		if err != nil {
 			return fmt.Errorf("upload artifact %q: %w", a.Path, err)
@@ -46,7 +51,7 @@ func runUpload(ctx context.Context, store objectStore, srcDir, keyPrefix, snapNa
 	if err != nil {
 		return err
 	}
-	if err := store.put(ctx, path.Join(keyPrefix, manifestObjectName), bytes.NewReader(data), int64(len(data))); err != nil {
+	if err := store.put(ctx, path.Join(keyPrefix, manifestObjectName), bytes.NewReader(data), int64(len(data)), sha256Hex(data)); err != nil {
 		return fmt.Errorf("upload manifest: %w", err)
 	}
 	log.Printf("snapshot-s3 upload complete: %s/%s", keyPrefix, manifestObjectName)

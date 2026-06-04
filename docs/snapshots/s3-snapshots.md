@@ -177,21 +177,42 @@ fixed in this PR:
    HTTPS client`. **Fix:** `spec.backend.s3.insecure: true` plumbs `--insecure`
    through to both Jobs (UNSAFE — trusted-network in-cluster store only).
 
-Empirical results after the fixes (run as standalone Jobs to validate the
-data path independently of the controller image):
+A third bug surfaced while re-running the full controller-driven flow (fixed in
+a follow-up PR):
+
+3. **Upload resume used size-only idempotency → stale content on key reuse.** A
+   `memory-ranges` file is always *exactly* the guest's RAM size, so when a
+   same-named snapshot was deleted and recreated (reusing the `<prefix>/<ns>/
+   <name>` key), the re-upload `stat`'d the old object, saw a matching size, and
+   **skipped** it — leaving capture #1's bytes in the bucket while the fresh
+   `manifest.json` recorded capture #2's hash. The cross-node download then
+   failed `verify memory-ranges: sha256 mismatch` forever. **Fix:** the upload
+   records each artifact's sha256 as object metadata and skips only when **size
+   AND sha256** match; same-size-different-content re-uploads.
+
+### Full controller-driven round-trip — VALIDATED ✅
+
+After deploying a controller image carrying all three fixes, the complete flow
+was driven entirely by the controllers (no manual Jobs):
 
 | Step | Result |
 |---|---|
-| Capture (boba) | `Capturing → Uploading`, artifacts written to the node-local cache |
-| Upload → MinIO | **SUCCEEDED** — `config.json` + `state.json` + 2GiB `memory-ranges` + `manifest.json` (uploaded last) landed under `demo/default/snapshot-s3-mem/` |
-| manifest.json | well-formed: per-artifact sha256 + size, `totalBytes: 2147549372` |
-| Download → miles (cross-node) | **SUCCEEDED** — all 3 artifacts pulled and **sha256-verified** against the manifest (`got memory-ranges … verified`) |
+| Sentinel written into source (boba) | `S3-RT-FULL-1780557632`, md5 `2b945b3e57ba25efd687bb370953eff0` |
+| SwiftSnapshot (s3) | `Pending → Capturing → Uploading → Ready` (~20s); `status.s3.location = s3://kubeswift-snapshots/demo/default/s3-clean/` |
+| MinIO objects | `config.json` + `state.json` + 2GiB `memory-ranges` + `manifest.json`, per-artifact sha256 |
+| SwiftRestore (`targetNode: miles`, clone) | `Pending → Downloading → Restoring → Resuming → Ready` |
+| Download → miles (cross-node) | all 3 artifacts **sha256-verified** against the manifest |
+| Clone guest | **Running on miles** (cross-node from boba), `GuestRunning=True` |
+| **Sentinel on the clone** | `S3-RT-FULL-1780557632`, md5 `2b945b3e57ba25efd687bb370953eff0` — **byte-identical** ✅ |
 
-The s3-specific data movement (capture → upload → cross-node download +
-checksum verification) is validated end-to-end. The restore *orchestration*
-that follows the download (materialize the target SwiftGuest → restore-receive
-launcher → `CH --restore` → resume) is the **shared Tier B path** already
-validated in the local-snapshot walkthroughs; a state sentinel
-(`S3-ROUNDTRIP-…`, md5 `a6deb3ca…`) was written into the source guest before
-capture for that final boot-and-verify step, which completes once a controller
-image carrying these two fixes is deployed.
+Guest state survived the full Tier C round-trip **across nodes via object
+storage**: capture on boba → upload to MinIO → cross-node download on miles →
+`CH --restore` → resume, with the in-guest sentinel preserved exactly.
+
+### Tracked follow-up
+
+S3 object lifecycle on snapshot deletion is **not** part of Phase 3: deleting a
+SwiftSnapshot does not purge its bucket objects, so reusing a snapshot *name*
+relies on bug-3's checksum-aware re-upload to overwrite stale artifacts (it
+does). A future phase should add `deletionPolicy: Delete` S3 cleanup so a reused
+name starts from an empty prefix.
