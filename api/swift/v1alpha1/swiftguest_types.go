@@ -53,6 +53,15 @@ type SwiftGuestSpec struct {
 	// Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
 	// +optional
 	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
+	// CloneFromSnapshot boots this guest as a clone of a SwiftSnapshot (Tier B
+	// local or Tier C s3) instead of imageRef/kernelRef — the guest resumes the
+	// captured state byte-for-byte (CH --restore) with per-clone identity
+	// regeneration. Mutually exclusive with imageRef, kernelRef, and
+	// gpuProfileRef (VFIO state cannot be CH-restored). The resumed VM's CPU/
+	// memory come from the snapshot, so guestClassRef is optional in this mode.
+	// (Snapshot Phase 4.)
+	// +optional
+	CloneFromSnapshot *CloneFromSnapshotSource `json:"cloneFromSnapshot,omitempty"`
 	// DataDiskRef references a SwiftImage to attach as a secondary data disk.
 	// The referenced image must be in Ready state. The disk appears as /dev/vdb
 	// inside the guest. Works with all boot paths (disk, kernel, GPU).
@@ -205,6 +214,44 @@ func (g *SwiftGuest) HasSRIOVInterface() bool {
 // SR-IOV NIC (which the path cannot reattach on the target).
 func (g *SwiftGuest) OfflineGPUMigratable() bool {
 	return g.Spec.GPUProfileRef != nil && !g.HasSRIOVInterface()
+}
+
+// UsesCloneFromSnapshot reports whether this guest boots as a clone of a
+// SwiftSnapshot (Snapshot Phase 4) rather than from imageRef/kernelRef.
+func (g *SwiftGuest) UsesCloneFromSnapshot() bool {
+	return g.Spec.CloneFromSnapshot != nil && g.Spec.CloneFromSnapshot.SnapshotRef.Name != ""
+}
+
+// CloneIdentityItem names a guest-identity attribute to regenerate on a
+// cloneFromSnapshot clone. Mirrors snapshot.IdentityRegenerationItem but is
+// defined locally to keep the swift and snapshot api groups decoupled.
+// +kubebuilder:validation:Enum=hostname;machineId;sshHostKeys;macAddresses
+type CloneIdentityItem string
+
+const (
+	CloneRegenHostname     CloneIdentityItem = "hostname"
+	CloneRegenMachineID    CloneIdentityItem = "machineId"
+	CloneRegenSSHHostKeys  CloneIdentityItem = "sshHostKeys"
+	CloneRegenMACAddresses CloneIdentityItem = "macAddresses"
+)
+
+// CloneFromSnapshotSource selects a SwiftSnapshot to clone a SwiftGuest from.
+type CloneFromSnapshotSource struct {
+	// SnapshotRef names a SwiftSnapshot in the same namespace. It must be Ready.
+	SnapshotRef corev1.LocalObjectReference `json:"snapshotRef"`
+	// TargetNode pins where this clone runs. Required for an s3 (Tier C) snapshot
+	// whose capture node is not where the clone should run (same role as
+	// SwiftRestore.spec.targetNode); ignored for a Tier B (local) snapshot (the
+	// clone is pinned to the capture node). In a SwiftGuestPool, the pool fills
+	// this per replica from the replica's scheduled node.
+	// +optional
+	TargetNode string `json:"targetNode,omitempty"`
+	// Regenerate lists identity attributes reset on the clone. macAddresses is
+	// ALWAYS forced on (two clones sharing a host-side MAC L2-collide); this list
+	// controls hostname/machineId/sshHostKeys (which fire on the clone's first
+	// reboot via the seed bootcmd). Empty defaults to all four.
+	// +optional
+	Regenerate []CloneIdentityItem `json:"regenerate,omitempty"`
 }
 
 // DataDiskRef references either a SwiftImage or a PVC for a data disk.

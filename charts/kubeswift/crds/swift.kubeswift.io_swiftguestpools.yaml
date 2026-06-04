@@ -109,6 +109,60 @@ spec:
                   spec:
                     description: Spec is the SwiftGuestSpec for each replica.
                     properties:
+                      cloneFromSnapshot:
+                        description: |-
+                          CloneFromSnapshot boots this guest as a clone of a SwiftSnapshot (Tier B
+                          local or Tier C s3) instead of imageRef/kernelRef — the guest resumes the
+                          captured state byte-for-byte (CH --restore) with per-clone identity
+                          regeneration. Mutually exclusive with imageRef, kernelRef, and
+                          gpuProfileRef (VFIO state cannot be CH-restored). The resumed VM's CPU/
+                          memory come from the snapshot, so guestClassRef is optional in this mode.
+                          (Snapshot Phase 4.)
+                        properties:
+                          regenerate:
+                            description: |-
+                              Regenerate lists identity attributes reset on the clone. macAddresses is
+                              ALWAYS forced on (two clones sharing a host-side MAC L2-collide); this list
+                              controls hostname/machineId/sshHostKeys (which fire on the clone's first
+                              reboot via the seed bootcmd). Empty defaults to all four.
+                            items:
+                              description: |-
+                                CloneIdentityItem names a guest-identity attribute to regenerate on a
+                                cloneFromSnapshot clone. Mirrors snapshot.IdentityRegenerationItem but is
+                                defined locally to keep the swift and snapshot api groups decoupled.
+                              enum:
+                              - hostname
+                              - machineId
+                              - sshHostKeys
+                              - macAddresses
+                              type: string
+                            type: array
+                          snapshotRef:
+                            description: SnapshotRef names a SwiftSnapshot in the
+                              same namespace. It must be Ready.
+                            properties:
+                              name:
+                                default: ""
+                                description: |-
+                                  Name of the referent.
+                                  This field is effectively required, but due to backwards compatibility is
+                                  allowed to be empty. Instances of this type with an empty value here are
+                                  almost certainly wrong.
+                                  More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                          targetNode:
+                            description: |-
+                              TargetNode pins where this clone runs. Required for an s3 (Tier C) snapshot
+                              whose capture node is not where the clone should run (same role as
+                              SwiftRestore.spec.targetNode); ignored for a Tier B (local) snapshot (the
+                              clone is pinned to the capture node). In a SwiftGuestPool, the pool fills
+                              this per replica from the replica's scheduled node.
+                            type: string
+                        required:
+                        - snapshotRef
+                        type: object
                       dataDiskRef:
                         description: |-
                           DataDiskRef references a SwiftImage to attach as a secondary data disk.
