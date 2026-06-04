@@ -1,0 +1,36 @@
+# A SwiftGuestPool whose replicas are each a clone of clone-snap (Snapshot Phase 4).
+#
+# The pool pre-assigns each replica a targetNode (round-robin across schedulable
+# worker nodes), so the Tier C clones spread across the cluster. Each replica:
+#   - runs a node-pinned download Job that pulls clone-snap's artifacts into that
+#     node's cache,
+#   - boots via CH --restore from the cache (resumes the captured memory state),
+#   - gets a deterministic per-replica hypervisor MAC (no L2 collision).
+#
+# IMPORTANT: keep replicas <= number of schedulable worker nodes until the
+# same-node download dedup ships (a Phase 4 follow-up) — multiple replicas on one
+# node would otherwise race on the shared snapshot-keyed node cache. This demo
+# uses 2 replicas for a 2-worker cluster (one per node).
+#
+# Identity: macAddresses is always regenerated (forced). hostname/machineId/
+# sshHostKeys regenerate on each clone's FIRST REBOOT (CH --restore resumes
+# byte-for-byte; cloud-init does not re-run on resume). Reboot each replica once
+# for unique guest-visible identity — see docs/snapshots/clone-from-snapshot.md.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: clone-pool
+  namespace: default
+spec:
+  replicas: 2
+  template:
+    spec:
+      runPolicy: Running
+      cloneFromSnapshot:
+        snapshotRef:
+          name: clone-snap
+        regenerate:
+          - macAddresses
+          - hostname
+          - machineId
+          - sshHostKeys
