@@ -178,7 +178,7 @@ func main() {
 	if err = (&swiftsnapshot.SwiftSnapshotReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		SnapshotS3Image: os.Getenv("KUBESWIFT_SNAPSHOT_S3_IMAGE"),
+		SnapshotS3Image: swiftsnapshot.SnapshotS3Image(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
 		os.Exit(1)
@@ -187,7 +187,7 @@ func main() {
 	if err = (&swiftrestore.SwiftRestoreReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),
-		SnapshotS3Image: os.Getenv("KUBESWIFT_SNAPSHOT_S3_IMAGE"),
+		SnapshotS3Image: swiftsnapshot.SnapshotS3Image(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftRestore controller")
 		os.Exit(1)

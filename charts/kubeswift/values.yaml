@@ -39,6 +39,16 @@ swiftletd:
       cpu: 2
       memory: 2Gi
 
+# snapshot-s3: the uploader/downloader image for the Tier C (s3 / object-storage)
+# snapshot backend. The controller passes this to the per-snapshot upload Job and
+# the per-restore download Job via the KUBESWIFT_SNAPSHOT_S3_IMAGE env var. No
+# separate workload is deployed for it; this only sets the image reference.
+snapshotS3:
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    # Same as controllerManager; use tag: latest for local build+load.
+    tag: latest
+
 # GPU discovery DaemonSet: auto-discovers GPU hardware on nodes labeled kubeswift.io/gpu-node=true.
 # Populates SwiftGPUNode status with GPU inventory, NUMA topology, and Fabric Manager state.
 gpuDiscovery:
