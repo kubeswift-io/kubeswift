@@ -241,6 +241,14 @@ func (r *SwiftGuestPoolReconciler) createSwiftGuest(ctx context.Context, pool *s
 
 	spec := pool.Spec.Template.Spec.DeepCopy()
 
+	// cloneFromSnapshot (Snapshot Phase 4): pre-assign each replica's targetNode
+	// (round-robin across schedulable worker nodes) so a Tier C clone's download
+	// + restore-receive land on a decided node. No-op for non-clone templates;
+	// ignored by the SwiftGuest controller for Tier B clones (capture-node-pinned).
+	if err := r.assignCloneTargetNode(ctx, spec, index); err != nil {
+		return fmt.Errorf("assign clone target node for %s: %w", name, err)
+	}
+
 	// Apply topology spread constraints.
 	spec.TopologySpreadConstraints = r.buildTopologyConstraints(pool)
 
