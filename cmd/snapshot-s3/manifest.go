@@ -89,6 +89,13 @@ func fileSHA256(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
+// sha256Hex returns the hex sha256 of an in-memory byte slice (used for the
+// manifest object's own content-hash metadata).
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // verifyArtifact checks a file under dir against its manifest entry (size +
 // sha256). Returns a descriptive error on any mismatch or read failure.
 func verifyArtifact(dir string, a Artifact) error {
