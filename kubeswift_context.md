@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: June 3, 2026 — VFIO/GPU release-and-reallocate SHIPPED (TFU #27, PRs #96–#102): GPU guests auto-evacuate OFFLINE on drain; cluster walkthrough surfaced + fixed 3 multi-controller bugs (W-GPU-1/2/3). Prior: Live Migration Phase 3a/3b/3c + Phase 4 drain shipped
+> Last updated: June 4, 2026 — Snapshot Phase 3 (Tier C / S3 object-storage snapshots) SHIPPED + cluster-validated (PRs #111–#118: 5 feature + 3 walkthrough fixes). Cross-node round-trip validated boba→miles via MinIO, sentinel byte-identical. Prior: VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
 
 ---
 
@@ -2241,6 +2241,10 @@ in test infrastructure).
 | 66 | swiftctl (internal/cli/guest.go GuestResolver.ResolvePod) | swiftctl pod resolution had two foot-guns surfacing during Phase 3a live migration cutover and chain migration. **Foot-gun 1**: when status.podRef was set but the named pod returned NotFound (cutover transient: podRef just patched to dst-suffix but dst pod not yet created, OR src deleted before podRef patched), ResolvePod errored out instead of falling through to the label-selector path. **Foot-gun 2**: when the label selector returned multiple labeled pods (chain-migration transient: M1 src still Terminating + M2 dst Running, both labeled `swift.kubeswift.io/guest=<name>`), `list.Items[0]` was non-deterministic — apiserver might return Terminating-first. Fix: NotFound on PodRef.Get falls through to the label-selector path; multi-pod selector results stable-sorted by (non-Terminating > Running > newest CreationTimestamp); all-Terminating fallback returns newest with stderr warning. Function signatures unchanged. Cluster-validated: chain-migration dual-labeled-Running state captured at t+16s of M2; race probe ~290 calls during M3 hit zero "not found" errors; W2 walkthrough recorded clean state. (W2 walkthrough findings W2-1 + W2-2 are non-PR-2 issues filed as Tracked Follow-ups #8 + #9.) | PR #57 |
 | 67 | internal/webhook/swiftimage/validator.go | vswiftimage ValidateUpdate spec-immutability rule fired on every UPDATE of a Ready SwiftImage including the controller's finalizer-removal patch during deletion; with CloneSeedFinalizer present (cloneStrategy=snapshot) the finalizer never cleared and the namespace stayed Terminating forever with a reconcile-error storm. Root cause: PR #26 per-operation-validation lesson recurring in a webhook predating it (Design Principle #10); the immutability check compared Spec.Source with `!=`, a pointer-identity comparison over ImageSource's pointer fields (HTTP/Upload/PVCClone), so it fired unconditionally on Ready-image updates. Fix (Approach 1): ValidateUpdate returns early when newObj.GetDeletionTimestamp() != nil. Sibling-webhook audit discharged — of six validating webhooks only vswiftimage was vulnerable (others use content/deep comparison; none check deletionTimestamp); vulnerable-webhook ∩ finalizer-bearing = SwiftImage only. Regression tests added (contract test verified load-bearing + over-allow guard), satisfying TFU-2. Residual non-deletion metadata-edit false-rejection (pointer comparison) deferred to TFU #23. (TFU #17.) | branch fix/tfu-17 |
 | 68 | swiftmigration/preparing.go + swiftguest/controller.go + swiftguest/canonical_pod.go | Offline migration of a previously-live-migrated guest hung indefinitely. Two parts (Option A full fix). Bug 1: offline Preparing resolved the source pod by literal guest.Name; after a live migration renamed the pod to <guest>-mig-<uid> the lookup hit NotFound, the controller assumed the pod gone, and parked forever on a volume-detach wait while the real renamed pod kept the PVC. Fix: canonicalPodNameForGuest(&guest). Bug 2 (secondary trap, recon-found): the SwiftGuest controller always recreates the launcher pod as guest.Name but looks it up via canonicalPodName; status is a DeepCopy carrying a stale PodRef only ever cleared in MapPodToStatus's found-pod branch, so once the -mig- pod is gone the recreate loops on Create AlreadyExists and status never reflects the new pod — hanging the migration's Resuming. Fix: clear status.PodRef on the create branch when staleMigrationPodRef (PodRef != guest.Name); also covers post-live pod loss to node failure/eviction. stopandcopy.go:102 deliberately keeps guest.Name (recreated pod is guest.Name). Bug 1 contract test verified load-bearing; Bug 2 decision unit-tested + end-to-end cluster-validated. W26/LBA-2 lesson applied to the offline path it predated. (TFU #18.) | branch fix/tfu-18 |
+| 69 | internal/controller/swiftsnapshot/s3.go (buildUploadJob) | Snapshot Phase 3 Tier C: the s3 upload Job ran as the image's non-root uid and mounted the snapshot dir read-only, but the capture writes config.json/state.json/memory-ranges as root mode 0600 (serialized guest RAM) — so the upload got `open /snap/config.json: permission denied` (a read-only mount does not grant read access to a file whose mode bits exclude other). Fix: upload Job runs as root (RunAsUser 0), still drop ALL / no-priv-esc / ro-rootfs / single-snapshot-dir mount; mirrors the download Job. Cluster-walkthrough finding (W5 pattern — unit tests pass an explicit non-root SC and never exercise the kubelet mount). | PR #117 |
+| 70 | internal/controller/{swiftsnapshot,swiftrestore}/s3.go + api S3Backend | Tier C: the snapshot-s3 client defaulted to TLS but an in-cluster MinIO serves plain HTTP → `server gave HTTP response to HTTPS client`. The binary already had an --insecure flag; the controller never passed it. Fix: new spec.backend.s3.insecure bool plumbs --insecure through both the upload and download Job builders (UNSAFE — trusted-network in-cluster store only; documented). Cluster-walkthrough finding. | PR #117 |
+| 71 | cmd/snapshot-s3/{store,transfer,manifest}.go | Tier C: upload resume skipped an artifact when an object already existed at its key with a matching SIZE. A memory-ranges file is always exactly the guest RAM size, so a deleted+recreated same-named SwiftSnapshot (reused key prefix) kept capture #1's stale bytes while the fresh manifest.json recorded capture #2's hash → cross-node download failed `verify memory-ranges: sha256 mismatch` permanently. Fix: record each artifact's sha256 as object user-metadata (x-amz-meta-sha256); skip only when size AND sha256 match; objectStore.stat returns the recorded sha256, put takes+stores it. Regression test reproduces the same-size-different-content reupload. Surfaced re-running the full controller-driven round-trip; tracked follow-up: S3 object cleanup on snapshot delete. | PR #118 |
+| 72 | cmd/controller-manager/main.go + charts/kubeswift (deployment env + values.snapshotS3) | Tier C: KUBESWIFT_SNAPSHOT_S3_IMAGE was read by main.go (PRs #114/#115) but set by NO deployment manifest and had no default — so every s3 snapshot/restore would fail "snapshot-s3 image not configured" on a deployed cluster. Fix: swiftsnapshot.SnapshotS3Image() resolver (env override + SnapshotS3ImageDefault fallback, mirrors LauncherImage); chart sets the env version-pinned + a values.snapshotS3.image section. Caught during PR 5 walkthrough prep (the deploy path is never exercised by fake-client unit tests). | PR #116 |
 
 ---
 
@@ -2381,9 +2385,52 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
 
 ### Snapshot Roadmap Continuation (deferred behind live migration)
 
-**Snapshot Phase 3 — Tier C (S3 / object storage export)** — cluster-portable snapshots, ~4-5 days
+**Snapshot Phase 3 — Tier C (S3 / object storage export) — SHIPPED + cluster-validated 2026-06-04.**
+Cluster-portable, off-cluster-durable snapshots via any S3-compatible store
+(AWS S3 / MinIO / Ceph RGW). Capture-then-upload, download-then-restore:
+`SwiftSnapshot(backend.type: s3)` reuses the Tier B node-local capture then a
+node-pinned upload Job pushes a checksummed manifest + artifacts to object
+storage (`Pending → Capturing → Uploading → Ready`); `SwiftRestore` from an
+s3-backed snapshot runs a node-pinned download Job (pinned via the new
+`SwiftRestore.spec.targetNode`) that pulls + sha256-verifies into a node-local
+cache, then hands off to the **shared Tier B restore tail**
+(`Pending → Downloading → Restoring → Resuming → Ready`). Design:
+[`docs/design/snapshot-phase-3-s3.md`](docs/design/snapshot-phase-3-s3.md);
+operator runbook: [`docs/snapshots/s3-snapshots.md`](docs/snapshots/s3-snapshots.md).
+
+Shipped across 8 PRs (5 feature + 3 cluster-walkthrough fixes):
+- **PR #111** — design doc. **PR #112** — `snapshot-s3` Go uploader/downloader
+  image (minio-go; checksummed layout-agnostic `manifest.json` uploaded last;
+  idempotent/resumable; fail-loud sha256/size verify). **PR #113** — `S3Backend`
+  CRD surface + node-pinned upload Job builder. **PR #114** — capture-path phase
+  wiring (`Capturing → Uploading → Ready`, `Owns(Job)`). **PR #115** —
+  restore-side download path + `spec.targetNode` + `materializeRestoreTarget`
+  extraction (local + s3 share the restore tail). **PR #116** — deploy wiring
+  (`KUBESWIFT_SNAPSHOT_S3_IMAGE` default + chart env — was read by main.go but
+  set by no manifest), MinIO samples, runbook.
+- **Cluster walkthrough (boba→miles, 2Gi rocky9 memory snapshot)** surfaced and
+  fixed **three** real bugs unit tests structurally cannot catch (the W5
+  pattern): **PR #117** — (1) upload Job ran non-root → `permission denied` on
+  the capture's root-owned `0600` artifacts (read-only mount ≠ read perm); fix:
+  upload runs as root (hardened), mirroring the download Job. (2) client
+  defaulted to TLS → `HTTP response to HTTPS client` vs plaintext MinIO; fix:
+  `spec.backend.s3.insecure` plumbs `--insecure`. **PR #118** — (3) upload
+  resume skipped by **size only**; a `memory-ranges` file is always exactly the
+  guest RAM size, so a deleted+recreated same-named snapshot kept capture #1's
+  stale bytes while the manifest recorded capture #2's hash → permanent
+  `sha256 mismatch`; fix: record sha256 as object metadata, skip only when
+  size AND sha256 match.
+- **Final validation:** full controller-driven round-trip — sentinel written
+  into the source on boba came back **byte-identical** on the clone Running on
+  miles (cross-node), state preserved across nodes via object storage.
+- **Tracked follow-up:** S3 object lifecycle on snapshot deletion
+  (`deletionPolicy: Delete` should purge bucket objects; today name-reuse relies
+  on PR #118's checksum re-upload to overwrite stale artifacts). Also: download
+  uses `runAsUser: 0` to write the kubelet-created root-owned cache hostPath
+  (documented).
+
 **Snapshot Phase 4 — cloneFromSnapshot ergonomics** — pool template support, ~3-5 days, walkthrough Scenario 7 documented operator demand
-**Snapshot Phase 5 — operational polish** — Prometheus metrics, dashboards, retention, ~2-3 days
+**Snapshot Phase 5 — operational polish** — Prometheus metrics, dashboards, retention, ~2-3 days (incl. the deferred s3 `downloadedBytes`/`observedUploadBytes` byte gauges — surfacing them needs the snapshot-s3 binary to report counts via a pod annotation the controller reads)
 
 ### Other Roadmap Items Not Progressed
 - **Windows guest support** — no design doc, implementable
