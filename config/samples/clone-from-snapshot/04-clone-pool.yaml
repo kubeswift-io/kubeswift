@@ -26,6 +26,11 @@ spec:
   template:
     spec:
       runPolicy: Running
+      # guestClassRef is required by the CRD schema. A clone resumes the
+      # snapshot's CPU/memory, so this class is not used for resources — it just
+      # satisfies the schema (reuse the source's class).
+      guestClassRef:
+        name: clone-src-class
       cloneFromSnapshot:
         snapshotRef:
           name: clone-snap

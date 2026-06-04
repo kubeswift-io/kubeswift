@@ -37,8 +37,9 @@ spec:
 ```
 
 `cloneFromSnapshot` is **mutually exclusive** with `imageRef`, `kernelRef`, and
-`gpuProfileRef` (VFIO state cannot be CH-restored). `guestClassRef` is optional —
-the resumed VM's CPU/memory come from the snapshot.
+`gpuProfileRef` (VFIO state cannot be CH-restored). `guestClassRef` is **still
+required** by the CRD schema (set it to any class) but is not used for
+resources — the resumed VM's CPU/memory come from the snapshot.
 
 ## How it works
 

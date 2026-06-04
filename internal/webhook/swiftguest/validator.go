@@ -61,9 +61,12 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 		}
 	}
 
-	// guestClassRef is required for image/kernel boot but optional for a clone
-	// (the resumed VM's CPU/memory come from the snapshot).
-	if !hasClone && spec.GuestClassRef.Name == "" {
+	// guestClassRef is required by the CRD schema (a non-pointer struct field),
+	// so it is required for every boot source — including clones, which ignore
+	// it for resources (the resumed VM's CPU/memory come from the snapshot) but
+	// must still set it to satisfy admission. Keeping the webhook aligned with
+	// the CRD avoids a confusing "webhook says optional, apiserver rejects" gap.
+	if spec.GuestClassRef.Name == "" {
 		return fmt.Errorf("spec.guestClassRef.name is required")
 	}
 	validPolicies := map[swiftv1alpha1.RunPolicy]bool{
