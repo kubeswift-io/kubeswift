@@ -37,10 +37,33 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	spec := &g.Spec
 	hasImage := spec.ImageRef != nil && spec.ImageRef.Name != ""
 	hasKernel := spec.KernelRef != nil && spec.KernelRef.Name != ""
-	if hasImage == hasKernel {
-		return fmt.Errorf("exactly one of spec.imageRef or spec.kernelRef must be set")
+	hasClone := spec.CloneFromSnapshot != nil
+
+	// Exactly one boot source: imageRef, kernelRef, or cloneFromSnapshot.
+	sources := 0
+	for _, s := range []bool{hasImage, hasKernel, hasClone} {
+		if s {
+			sources++
+		}
 	}
-	if spec.GuestClassRef.Name == "" {
+	if sources != 1 {
+		return fmt.Errorf("exactly one of spec.imageRef, spec.kernelRef, or spec.cloneFromSnapshot must be set")
+	}
+
+	if hasClone {
+		if spec.CloneFromSnapshot.SnapshotRef.Name == "" {
+			return fmt.Errorf("spec.cloneFromSnapshot.snapshotRef.name is required")
+		}
+		// VFIO/GPU state cannot be CH-restored (Phase 0 Constraint #1), the same
+		// rule the includeMemory+VFIO snapshot path enforces.
+		if spec.GPUProfileRef != nil {
+			return fmt.Errorf("spec.cloneFromSnapshot is mutually exclusive with spec.gpuProfileRef (VFIO state cannot be restored)")
+		}
+	}
+
+	// guestClassRef is required for image/kernel boot but optional for a clone
+	// (the resumed VM's CPU/memory come from the snapshot).
+	if !hasClone && spec.GuestClassRef.Name == "" {
 		return fmt.Errorf("spec.guestClassRef.name is required")
 	}
 	validPolicies := map[swiftv1alpha1.RunPolicy]bool{
