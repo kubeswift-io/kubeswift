@@ -186,6 +186,36 @@ func cloneDownloadJobName(guest *swiftv1alpha1.SwiftGuest) string {
 	return guest.Name + "-clone-download"
 }
 
+// swiftletd action-loop annotation surface (mirrors the snapshot/restore
+// controllers): the controller writes these onto the launcher pod and swiftletd
+// dedupes by action-id.
+const (
+	cloneActionKey     = "kubeswift.io/snapshot-action"
+	cloneActionIDKey   = "kubeswift.io/snapshot-action-id"
+	cloneActionArgsKey = "kubeswift.io/snapshot-action-args"
+	cloneVerbResume    = "resume"
+)
+
+// resumeCloneIfNeeded sends the one-shot resume action to a cloneFromSnapshot
+// clone's launcher pod. CH --restore loads the guest PAUSED; swiftletd's action
+// loop unpauses it when this annotation appears. Idempotent: a stable action-id
+// means swiftletd resumes exactly once (and we skip re-patching once it's set).
+// Without this the clone reports GuestRunning but its vCPUs never start.
+func (r *SwiftGuestReconciler) resumeCloneIfNeeded(ctx context.Context, pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) error {
+	id := guest.Name + "-clone-resume"
+	if pod.Annotations[cloneActionIDKey] == id {
+		return nil // already sent
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[cloneActionKey] = cloneVerbResume
+	pod.Annotations[cloneActionIDKey] = id
+	pod.Annotations[cloneActionArgsKey] = "{}"
+	return r.Patch(ctx, pod, patch)
+}
+
 // ensureCloneDownloadJob creates (idempotently) a guest-owned, node-pinned
 // download Job that pulls a Tier C snapshot's artifacts into the target node's
 // cache, and reports whether it has completed. Returns (done, failReason, err):
