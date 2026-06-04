@@ -75,6 +75,13 @@ type SwiftGuestReconciler struct {
 	// ConfigMap into guest namespaces. Only consulted when
 	// MigrationMTLSEnabled.
 	SystemNamespace string
+
+	// SnapshotS3Image is the snapshot-s3 downloader image used by a
+	// cloneFromSnapshot guest cloning from a Tier C (s3) snapshot — the
+	// per-guest download Job pulls the artifacts into the target node's cache
+	// before the restore-receive launcher boots. Wired from
+	// KUBESWIFT_SNAPSHOT_S3_IMAGE.
+	SnapshotS3Image string
 }
 
 // Reconcile implements the reconcile loop.
