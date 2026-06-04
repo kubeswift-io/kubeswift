@@ -3,7 +3,10 @@ package swiftguest
 import (
 	"context"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
@@ -47,15 +50,40 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 		return nil, "", true, nil
 	}
 
+	// Resolve the on-node snapshot directory + the node the clone runs on.
+	// Tier B (local): the snapshot already lives on its capture node. Tier C
+	// (s3): a per-guest download Job pulls the artifacts into the chosen target
+	// node's cache first (mirrors the SwiftRestore download path); the clone
+	// then boots once the cache is populated.
+	var snapshotPath, node string
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendLocal:
 		if snap.Status.NodeName == "" || snap.Spec.Backend.Local == nil || snap.Spec.Backend.Local.HostPath == "" {
 			return nil, "SwiftSnapshot " + snap.Name + " is missing status.nodeName or backend.local.hostPath", false, nil
 		}
+		snapshotPath, node = snap.Spec.Backend.Local.HostPath, snap.Status.NodeName
 	case snapshotv1alpha1.SnapshotBackendS3:
-		return nil, "cloneFromSnapshot from an s3 (Tier C) snapshot is not yet implemented (Snapshot Phase 4 PR 3b)", false, nil
+		node = src.TargetNode
+		if node == "" {
+			return nil, "cloneFromSnapshot from a Tier C (s3) snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
+		}
+		if snap.Status.S3 == nil || snap.Status.S3.Location == "" {
+			return nil, "SwiftSnapshot " + snap.Name + " has no status.s3 — its upload is not complete", false, nil
+		}
+		done, failReason, derr := r.ensureCloneDownloadJob(ctx, guest, &snap, node)
+		if derr != nil {
+			return nil, "", false, derr
+		}
+		if failReason != "" {
+			return nil, failReason, false, nil
+		}
+		if !done {
+			// Still downloading the snapshot artifacts onto the target node.
+			return nil, "", true, nil
+		}
+		snapshotPath = clonecommon.S3LocalDir(&snap)
 	default:
-		return nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local); got " + string(snap.Spec.Backend.Type), false, nil
+		return nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local or s3); got " + string(snap.Spec.Backend.Type), false, nil
 	}
 
 	// The clone needs the source guest's full spec (image/seed/class) to build
@@ -72,7 +100,7 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 
 	// Self-stamp the clone-mode restore annotations (mirrors what the
 	// SwiftRestore controller stamps on its clone targets) if not already set.
-	annos := cloneRestoreAnnotations(guest, &snap, &source)
+	annos := cloneRestoreAnnotations(guest, &snap, &source, snapshotPath, node)
 	if !cloneAnnotationsMatch(guest.Annotations, annos) {
 		patched := guest.DeepCopy()
 		if patched.Annotations == nil {
@@ -106,11 +134,12 @@ func cloneRestoreAnnotations(
 	guest *swiftv1alpha1.SwiftGuest,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	source *swiftv1alpha1.SwiftGuest,
+	snapshotPath, node string,
 ) map[string]string {
 	annos := map[string]string{
 		AnnotationActiveRestore:               snap.Name,
-		AnnotationRestoreSnapshotPath:         snap.Spec.Backend.Local.HostPath,
-		AnnotationRestoreNodeName:             snap.Status.NodeName,
+		AnnotationRestoreSnapshotPath:         snapshotPath,
+		AnnotationRestoreNodeName:             node,
 		AnnotationRestoreMode:                 RestoreModeClone,
 		AnnotationRestoreMACRewrites:          clonecommon.ComputeMACRewrites(guest.Namespace, guest.Name, source),
 		AnnotationRestoreRuntimeDirFromPrefix: clonecommon.RuntimeDirPrefix(source.Namespace, source.Name),
@@ -149,4 +178,67 @@ func cloneAnnotationsMatch(have, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// cloneDownloadJobName is the deterministic name of a cloneFromSnapshot guest's
+// Tier C download Job.
+func cloneDownloadJobName(guest *swiftv1alpha1.SwiftGuest) string {
+	return guest.Name + "-clone-download"
+}
+
+// ensureCloneDownloadJob creates (idempotently) a guest-owned, node-pinned
+// download Job that pulls a Tier C snapshot's artifacts into the target node's
+// cache, and reports whether it has completed. Returns (done, failReason, err):
+//   - done=true       → the cache is populated; proceed to boot the clone.
+//   - failReason != "" → terminal (image unset, or the Job failed).
+//   - otherwise        → still downloading (caller requeues).
+//
+// The cache dir (clonecommon.S3LocalDir) is snapshot-keyed, so the snapshot-s3
+// binary's checksum-aware idempotency means a re-download is a fast no-op when
+// the artifacts are already present (e.g. a second clone on the same node). The
+// Job itself is per-guest here; a SwiftGuestPool placing MANY replicas on ONE
+// node would create concurrent same-path downloads — PR 4 (pool integration)
+// should deduplicate the download per (node, snapshot) to avoid the concurrent-
+// write race. For a single clone (or clones spread across nodes) this is correct.
+func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
+	ctx context.Context,
+	guest *swiftv1alpha1.SwiftGuest,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+	node string,
+) (bool, string, error) {
+	if r.SnapshotS3Image == "" {
+		return false, "snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)", nil
+	}
+	var job batchv1.Job
+	err := r.Get(ctx, client.ObjectKey{Name: cloneDownloadJobName(guest), Namespace: guest.Namespace}, &job)
+	if apierrors.IsNotFound(err) {
+		j := clonecommon.BuildDownloadJob(clonecommon.DownloadJobParams{
+			Snapshot:    snap,
+			Image:       r.SnapshotS3Image,
+			Name:        cloneDownloadJobName(guest),
+			Namespace:   guest.Namespace,
+			Node:        node,
+			Component:   "snapshot-s3-clone-download",
+			ExtraLabels: map[string]string{"kubeswift.io/swiftguest": guest.Name},
+		})
+		if cerr := ctrl.SetControllerReference(guest, j, r.Scheme); cerr != nil {
+			return false, "", cerr
+		}
+		if cerr := r.Create(ctx, j); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			return false, "", cerr
+		}
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return true, "", nil
+		}
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return false, "snapshot download Job failed: " + c.Message, nil
+		}
+	}
+	return false, "", nil
 }

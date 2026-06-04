@@ -147,6 +147,7 @@ func main() {
 		// ConfigMap + per-node identity Secrets live.
 		MigrationMTLSEnabled: *migrationMTLSEnabled,
 		SystemNamespace:      leaderElectionNS,
+		SnapshotS3Image:      swiftsnapshot.SnapshotS3Image(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuest controller")
 		os.Exit(1)
