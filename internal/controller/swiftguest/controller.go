@@ -100,8 +100,43 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// cloneFromSnapshot (Snapshot Phase 4): a guest that boots as a clone of a
+	// SwiftSnapshot has no imageRef/kernelRef. Resolve the snapshot + the live
+	// source guest, self-stamp the clone-mode restore annotations, and resolve
+	// using the SOURCE guest's spec (the "effective" guest). Everything after
+	// resolution (seed/intent/rootdisk/pod) runs unchanged off the now-stamped
+	// restore annotations + the source-resolved rg.
+	guestForResolve := &guest
+	if guest.UsesCloneFromSnapshot() {
+		effective, failReason, requeue, perr := r.prepareCloneFromSnapshot(ctx, &guest)
+		if perr != nil {
+			return ctrl.Result{}, perr
+		}
+		if failReason != "" {
+			status := guest.Status.DeepCopy()
+			SetResolvedCondition(status, false, failReason)
+			status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
+			recordGuestMetrics(&guest, &guest.Status, status, nil)
+			if err := r.patchStatus(ctx, &guest, status); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info("cloneFromSnapshot preparation failed", "reason", failReason)
+			return ctrl.Result{}, nil
+		}
+		if requeue {
+			status := guest.Status.DeepCopy()
+			status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+			SetResolvedCondition(status, false, "waiting for SwiftSnapshot "+guest.Spec.CloneFromSnapshot.SnapshotRef.Name+" to be Ready")
+			if err := r.patchStatus(ctx, &guest, status); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		guestForResolve = effective
+	}
+
 	res := resolved.NewResolver(r.Client)
-	rg, err := res.Resolve(ctx, &guest)
+	rg, err := res.Resolve(ctx, guestForResolve)
 	if err != nil {
 		var re *resolved.ResolutionError
 		if errors.As(err, &re) {
