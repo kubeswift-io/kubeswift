@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: June 4, 2026 — Snapshot Phase 3 (Tier C / S3 object-storage snapshots) SHIPPED + cluster-validated (PRs #111–#118: 5 feature + 3 walkthrough fixes). Cross-node round-trip validated boba→miles via MinIO, sentinel byte-identical. Prior: VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
+> Last updated: June 4, 2026 — Snapshot Phase 4 (cloneFromSnapshot ergonomics) SHIPPED + cluster-validated (PRs #119–#126: design+spike, 5 feature PRs, 2 walkthrough fixes). A SwiftGuestPool clones N replicas from one Tier C snapshot, spread across nodes, each resuming the captured state with a distinct per-clone MAC. Prior: Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
 
 ---
 
@@ -137,10 +137,14 @@ SwiftGuest Pod
 **SwiftGuest** — represents a running VM
 ```yaml
 spec:
-  imageRef:
-  kernelRef:
+  imageRef:                         # boot source: disk image (mutually exclusive)
+  kernelRef:                        # boot source: kernel (mutually exclusive)
+  cloneFromSnapshot:                # NEW (Snapshot Phase 4) — boot as a clone (mutually exclusive)
+    snapshotRef: {name: ...}        #   a Ready SwiftSnapshot (Tier B local or Tier C s3)
+    targetNode: ...                 #   REQUIRED for Tier C (ignored for Tier B); pool fills it per replica
+    regenerate: [macAddresses, hostname, machineId, sshHostKeys]
   kernelCmdline:
-  guestClassRef:
+  guestClassRef:                    # required by the CRD even for clones (ignored for resources)
   seedProfileRef:
   runPolicy: Running | Stopped | RestartOnFailure | Always
   gpuProfileRef:
@@ -2245,6 +2249,8 @@ in test infrastructure).
 | 70 | internal/controller/{swiftsnapshot,swiftrestore}/s3.go + api S3Backend | Tier C: the snapshot-s3 client defaulted to TLS but an in-cluster MinIO serves plain HTTP → `server gave HTTP response to HTTPS client`. The binary already had an --insecure flag; the controller never passed it. Fix: new spec.backend.s3.insecure bool plumbs --insecure through both the upload and download Job builders (UNSAFE — trusted-network in-cluster store only; documented). Cluster-walkthrough finding. | PR #117 |
 | 71 | cmd/snapshot-s3/{store,transfer,manifest}.go | Tier C: upload resume skipped an artifact when an object already existed at its key with a matching SIZE. A memory-ranges file is always exactly the guest RAM size, so a deleted+recreated same-named SwiftSnapshot (reused key prefix) kept capture #1's stale bytes while the fresh manifest.json recorded capture #2's hash → cross-node download failed `verify memory-ranges: sha256 mismatch` permanently. Fix: record each artifact's sha256 as object user-metadata (x-amz-meta-sha256); skip only when size AND sha256 match; objectStore.stat returns the recorded sha256, put takes+stores it. Regression test reproduces the same-size-different-content reupload. Surfaced re-running the full controller-driven round-trip; tracked follow-up: S3 object cleanup on snapshot delete. | PR #118 |
 | 72 | cmd/controller-manager/main.go + charts/kubeswift (deployment env + values.snapshotS3) | Tier C: KUBESWIFT_SNAPSHOT_S3_IMAGE was read by main.go (PRs #114/#115) but set by NO deployment manifest and had no default — so every s3 snapshot/restore would fail "snapshot-s3 image not configured" on a deployed cluster. Fix: swiftsnapshot.SnapshotS3Image() resolver (env override + SnapshotS3ImageDefault fallback, mirrors LauncherImage); chart sets the env version-pinned + a values.snapshotS3.image section. Caught during PR 5 walkthrough prep (the deploy path is never exercised by fake-client unit tests). | PR #116 |
+| 73 | internal/controller/swiftguest/{clone.go,controller.go} | Snapshot Phase 4: a cloneFromSnapshot guest loaded CH --restore but stayed PAUSED forever. The restore-receive launcher reports GuestRunning=True (API socket up) but CH loads the guest with vCPUs stopped; SwiftRestore drives a Resuming phase to unpause, but a cloneFromSnapshot guest has no SwiftRestore — nothing sent the resume. On-cluster: vm.info state=Paused, console unresponsive. Fix: resumeCloneIfNeeded sends the one-shot kubeswift.io/snapshot-action: resume to the clone's launcher pod once it is Running (idempotent via a stable action-id), mirroring SwiftRestore's Resuming phase. W5 pattern — unit tests verify the pod/annotation build but cannot observe the paused VM. | PR #126 |
+| 74 | internal/webhook/swiftguest/validator.go + api/swift/v1alpha1 (doc) + sample/runbook | Snapshot Phase 4: guestClassRef CRD-vs-webhook mismatch. PR #122's webhook made guestClassRef optional for a cloneFromSnapshot guest, but the CRD OpenAPI schema requires it (GuestClassRef is a non-pointer struct field → controller-gen marks it required), so the apiserver rejected a clone/pool-template WITHOUT guestClassRef BEFORE the webhook ran ("spec.template.spec.guestClassRef: Required value"). Unit tests call validateSwiftGuest directly (bypassing the CRD schema) and missed it. Fix: align the webhook to require guestClassRef for every boot source (a clone ignores it for resources — CPU/mem come from the snapshot — but must set it to satisfy admission); CRD docstring + runbook + clone-pool sample updated. W5 pattern. | PR #126 |
 
 ---
 
@@ -2429,7 +2435,60 @@ Shipped across 8 PRs (5 feature + 3 cluster-walkthrough fixes):
   uses `runAsUser: 0` to write the kubelet-created root-owned cache hostPath
   (documented).
 
-**Snapshot Phase 4 — cloneFromSnapshot ergonomics** — pool template support, ~3-5 days, walkthrough Scenario 7 documented operator demand
+**Snapshot Phase 4 — cloneFromSnapshot ergonomics — SHIPPED + cluster-validated 2026-06-04.**
+`SwiftGuest.spec.cloneFromSnapshot` boots a guest as a clone of a SwiftSnapshot
+(Tier B local or Tier C s3) — the guest resumes the captured memory state
+byte-for-byte (CH `--restore`) with a per-clone hypervisor identity. Templated on
+a `SwiftGuestPool`, it spins up **N VMs all cloned from one snapshot** (the
+Scenario 7 demand). It adds **no new runtime mechanism** — it reuses the
+restore-receive launcher + the s3 download. Design:
+[`docs/design/snapshot-phase-4-clonefromsnapshot.md`](docs/design/snapshot-phase-4-clonefromsnapshot.md)
++ spike [`docs/design/snapshot-phase-4-spike.md`](docs/design/snapshot-phase-4-spike.md);
+operator runbook: [`docs/snapshots/clone-from-snapshot.md`](docs/snapshots/clone-from-snapshot.md).
+
+Shipped across 8 PRs (design+spike, 5 feature, 2 walkthrough fixes):
+- **PR #119/#120** — design + spike (Option A SwiftGuest-native; spike validated
+  two coexisting clones with distinct hypervisor MACs + the per-pod-netns
+  collision-safety finding). **PR #121** — extract `internal/snapshot/clonecommon`
+  (the shared s3-download + MAC + path primitives, neutral package, no import
+  cycle). **PR #122** — `SwiftGuest.spec.cloneFromSnapshot` CRD
+  (`CloneFromSnapshotSource`: snapshotRef + targetNode + regenerate; local
+  `CloneIdentityItem` enum) + webhook (three-way boot-source exclusivity;
+  gpuProfileRef rejected). **PR #123** — Tier B clone-boot path:
+  `prepareCloneFromSnapshot` resolves the snapshot + LIVE source guest,
+  self-stamps the clone restore annotations, resolves using the source spec
+  ("effective guest") — reuses `BuildRestorePod` unchanged. **PR #124** — Tier C
+  cross-node: a guest-owned node-pinned download Job populates the target node's
+  cache, then the clone boots. **PR #125** — `SwiftGuestPool` node pre-assignment
+  (round-robin across schedulable worker nodes; design OQ1).
+- **Cluster walkthrough (PR #126, 2-replica clone-pool boba+miles)** surfaced and
+  fixed **two** real bugs unit tests structurally cannot catch (the W5 pattern):
+  - **The clone loaded `--restore` but stayed PAUSED** — the restore-receive
+    launcher reports `GuestRunning=True` but CH loads the guest with vCPUs
+    stopped, and a cloneFromSnapshot guest has no SwiftRestore controller to drive
+    a Resuming phase (`vm.info state=Paused`, console dead). Fix: the SwiftGuest
+    controller sends the one-shot `kubeswift.io/snapshot-action: resume` to the
+    clone's launcher pod once it is Running (`resumeCloneIfNeeded`, idempotent).
+  - **`guestClassRef` CRD-vs-webhook mismatch** — PR #122's webhook made
+    guestClassRef optional for clones, but the CRD schema requires it (non-pointer
+    struct field), so the apiserver rejected the pool template *before* the
+    webhook. Fix: align the webhook to require guestClassRef for every boot source
+    (the clone ignores it for resources — CPU/mem come from the snapshot).
+- **Final validation:** the 2-replica pool pre-assigned one replica per node
+  (boba/miles), each ran its own node-pinned S3 download, booted via `CH
+  --restore`, resumed, and came up with the source sentinel **byte-identical** and
+  **distinct** per-clone hypervisor MACs (`52:54:00:7e:0c:47` / `52:54:00:fd:c6:1a`).
+  machine-id inherited per the resume-vs-boot rule.
+- **Tracked follow-ups (documented, not blocking):** same-node download dedup (a
+  pool with replicas > nodes races on the shared snapshot-keyed node cache — keep
+  `replicas ≤ schedulable nodes` until a per-`(node,snapshot)` shared download
+  Job ships); snapshot-lifetime guard (OQ2 — a finalizer/webhook preventing
+  deletion of a SwiftSnapshot a pool still references); cross-cluster/source-gone
+  clones (the snapshot's `CapturedGuestSpec` is validation-only, so the live
+  source guest is required today). The controller **auto-resume** validates on
+  the next deploy (the resume *action* is cluster-proven; the controller
+  auto-sending it is PR #126's new code).
+
 **Snapshot Phase 5 — operational polish** — Prometheus metrics, dashboards, retention, ~2-3 days (incl. the deferred s3 `downloadedBytes`/`observedUploadBytes` byte gauges — surfacing them needs the snapshot-s3 binary to report counts via a pod annotation the controller reads)
 
 ### Other Roadmap Items Not Progressed
