@@ -19,15 +19,15 @@ var errNoSchedulableNodes = errors.New("no schedulable worker nodes for cloneFro
 // must be co-located on a chosen node, decided BEFORE the guest is created
 // (Snapshot Phase 4 design OQ1 — pre-assign, not float-then-pin). Replicas are
 // round-robined across the schedulable worker nodes by ordinal, spreading them
-// (replicas ≤ nodes → one per node). Tier B clones ignore targetNode (the
-// SwiftGuest controller pins them to the capture node), so setting it for any
-// cloneFromSnapshot template is harmless.
+// (replicas ≤ nodes → one per node; replicas > nodes → stacked round-robin).
+// Tier B clones ignore targetNode (the SwiftGuest controller pins them to the
+// capture node), so setting it for any cloneFromSnapshot template is harmless.
 //
-// NOTE (Phase 4 follow-up): a pool with replicas > nodes places multiple
-// replicas on one node, whose per-guest Tier C download Jobs would write the
-// same snapshot-keyed node cache concurrently. The download dedup (a shared
-// per-(node,snapshot) Job) is a tracked follow-up; until then keep
-// cloneFromSnapshot pools at replicas ≤ schedulable nodes.
+// replicas > nodes is now supported: multiple replicas stacked on one node from
+// the same snapshot share ONE Tier C download Job — keyed per (node, snapshot)
+// and deduplicated in the SwiftGuest controller's ensureCloneDownloadJob — so
+// they no longer race concurrent writers on the shared snapshot-keyed node
+// cache. (The earlier "keep replicas ≤ schedulable nodes" guidance is lifted.)
 func (r *SwiftGuestPoolReconciler) assignCloneTargetNode(
 	ctx context.Context, spec *swiftv1alpha1.SwiftGuestSpec, index int,
 ) error {

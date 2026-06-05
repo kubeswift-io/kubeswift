@@ -156,11 +156,16 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 		t.Fatalf("first pass should create the download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
 	var job batchv1.Job
-	if err := c.Get(context.Background(), client.ObjectKey{Name: "clone-a-clone-download", Namespace: "ns"}, &job); err != nil {
+	wantJob := cloneDownloadJobName(s3CloneSnap(), "miles")
+	if err := c.Get(context.Background(), client.ObjectKey{Name: wantJob, Namespace: "ns"}, &job); err != nil {
 		t.Fatalf("download Job not created: %v", err)
 	}
 	if job.Spec.Template.Spec.NodeName != "miles" {
 		t.Errorf("download Job must pin to targetNode miles; got %q", job.Spec.Template.Spec.NodeName)
+	}
+	// The shared Job is owned by the clone guest that created it.
+	if oc := metav1.GetControllerOf(&job); oc == nil || oc.Kind != "SwiftGuest" || oc.Name != "clone-a" {
+		t.Errorf("download Job must be owned by the creating SwiftGuest; got %+v", job.OwnerReferences)
 	}
 
 	// Mark the Job complete; second pass should proceed (effective + stamped).
@@ -176,6 +181,82 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 		g.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns-snap" {
 		t.Errorf("Tier C restore annotations wrong: %+v", g.Annotations)
 	}
+}
+
+func TestCloneDownloadJobName_PerNodeSnapshot(t *testing.T) {
+	snap := s3CloneSnap()
+	// Deterministic + DNS-1123 valid + guest-independent.
+	if a, b := cloneDownloadJobName(snap, "miles"), cloneDownloadJobName(snap, "miles"); a != b {
+		t.Errorf("name must be deterministic; got %q vs %q", a, b)
+	}
+	if !strings.HasPrefix(cloneDownloadJobName(snap, "miles"), "clone-dl-") {
+		t.Errorf("name must carry the clone-dl- prefix; got %q", cloneDownloadJobName(snap, "miles"))
+	}
+	// Different node → different Job (each node's cache is a separate hostPath).
+	if cloneDownloadJobName(snap, "miles") == cloneDownloadJobName(snap, "boba") {
+		t.Error("different nodes must yield different download Job names")
+	}
+	// Different snapshot → different Job.
+	other := s3CloneSnap()
+	other.Name = "snap2"
+	if cloneDownloadJobName(snap, "miles") == cloneDownloadJobName(other, "miles") {
+		t.Error("different snapshots must yield different download Job names")
+	}
+}
+
+// TestEnsureCloneDownloadJob_DedupPerNodeSnapshot proves two clones on the same
+// node from the same snapshot converge on ONE shared download Job — the fix that
+// lifts the "replicas <= schedulable nodes" constraint.
+func TestEnsureCloneDownloadJob_DedupPerNodeSnapshot(t *testing.T) {
+	snap := s3CloneSnap()
+	gA := cloneGuest() // "clone-a"
+	gB := cloneGuest() // a second, distinct clone
+	gB.Name = "clone-b"
+	r, c := newCloneReconciler(t, gA, gB, snap)
+	r.SnapshotS3Image = "img"
+
+	// Two distinct clone guests, both targeting node "miles".
+	for _, g := range []*swiftv1alpha1.SwiftGuest{gA, gB} {
+		done, fail, err := r.ensureCloneDownloadJob(context.Background(), g, snap, "miles")
+		if err != nil || fail != "" || done {
+			t.Fatalf("%s: expected in-progress (not done, no fail); done=%v fail=%q err=%v", g.Name, done, fail, err)
+		}
+	}
+
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected exactly ONE shared download Job for (miles, snap); got %d: %v", len(jobs.Items), jobNames(jobs))
+	}
+	job := jobs.Items[0]
+	if job.Name != cloneDownloadJobName(snap, "miles") {
+		t.Errorf("shared Job name = %q, want %q", job.Name, cloneDownloadJobName(snap, "miles"))
+	}
+	// Owned by the race-winner (clone-a, created first here); the sibling reads it.
+	if oc := metav1.GetControllerOf(&job); oc == nil || oc.Kind != "SwiftGuest" || oc.Name != "clone-a" {
+		t.Errorf("shared Job must be owned by the creating SwiftGuest; got %+v", job.OwnerReferences)
+	}
+
+	// A clone on a DIFFERENT node gets its own Job (separate node-local cache).
+	if _, _, err := r.ensureCloneDownloadJob(context.Background(), gA, snap, "boba"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Items) != 2 {
+		t.Fatalf("a clone on a second node must add a second Job; got %d: %v", len(jobs.Items), jobNames(jobs))
+	}
+}
+
+func jobNames(l batchv1.JobList) []string {
+	out := make([]string, 0, len(l.Items))
+	for i := range l.Items {
+		out = append(out, l.Items[i].Name)
+	}
+	return out
 }
 
 func TestPrepareCloneFromSnapshot_SourceGone(t *testing.T) {
