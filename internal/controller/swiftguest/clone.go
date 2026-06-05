@@ -2,6 +2,8 @@ package swiftguest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -52,9 +54,10 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 
 	// Resolve the on-node snapshot directory + the node the clone runs on.
 	// Tier B (local): the snapshot already lives on its capture node. Tier C
-	// (s3): a per-guest download Job pulls the artifacts into the chosen target
-	// node's cache first (mirrors the SwiftRestore download path); the clone
-	// then boots once the cache is populated.
+	// (s3): a download Job — shared per (node, snapshot) across all clones that
+	// land on the same node — pulls the artifacts into that node's cache first
+	// (mirrors the SwiftRestore download path); the clone then boots once the
+	// cache is populated.
 	var snapshotPath, node string
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendLocal:
@@ -180,10 +183,19 @@ func cloneAnnotationsMatch(have, want map[string]string) bool {
 	return true
 }
 
-// cloneDownloadJobName is the deterministic name of a cloneFromSnapshot guest's
-// Tier C download Job.
-func cloneDownloadJobName(guest *swiftv1alpha1.SwiftGuest) string {
-	return guest.Name + "-clone-download"
+// cloneDownloadJobName is the deterministic name of the Tier C clone download
+// Job, keyed by (node, snapshot) — NOT by the guest. Every clone that lands on
+// the same node from the same snapshot resolves to the SAME Job name, so they
+// share one downloader instead of racing concurrent writers on the shared
+// node-local cache hostPath (S3LocalDir is snapshot-keyed and identical on a
+// given node). The (namespace, name, node) tuple is hashed to a short, always
+// DNS-1123-valid suffix (node names can be long or contain characters invalid
+// in a resource name). The snapshot lives in the guest's namespace, so the
+// namespace is constant across the clones that could collide; it is folded into
+// the hash for completeness.
+func cloneDownloadJobName(snap *snapshotv1alpha1.SwiftSnapshot, node string) string {
+	sum := sha256.Sum256([]byte(snap.Namespace + "/" + snap.Name + "@" + node))
+	return "clone-dl-" + hex.EncodeToString(sum[:8])
 }
 
 // swiftletd action-loop annotation surface (mirrors the snapshot/restore
@@ -216,20 +228,36 @@ func (r *SwiftGuestReconciler) resumeCloneIfNeeded(ctx context.Context, pod *cor
 	return r.Patch(ctx, pod, patch)
 }
 
-// ensureCloneDownloadJob creates (idempotently) a guest-owned, node-pinned
-// download Job that pulls a Tier C snapshot's artifacts into the target node's
-// cache, and reports whether it has completed. Returns (done, failReason, err):
+// ensureCloneDownloadJob creates (idempotently) a node-pinned download Job that
+// pulls a Tier C snapshot's artifacts into the target node's cache, and reports
+// whether it has completed. Returns (done, failReason, err):
 //   - done=true       → the cache is populated; proceed to boot the clone.
 //   - failReason != "" → terminal (image unset, or the Job failed).
 //   - otherwise        → still downloading (caller requeues).
 //
-// The cache dir (clonecommon.S3LocalDir) is snapshot-keyed, so the snapshot-s3
-// binary's checksum-aware idempotency means a re-download is a fast no-op when
-// the artifacts are already present (e.g. a second clone on the same node). The
-// Job itself is per-guest here; a SwiftGuestPool placing MANY replicas on ONE
-// node would create concurrent same-path downloads — PR 4 (pool integration)
-// should deduplicate the download per (node, snapshot) to avoid the concurrent-
-// write race. For a single clone (or clones spread across nodes) this is correct.
+// Dedup per (node, snapshot): the Job name (cloneDownloadJobName) and the cache
+// dir (clonecommon.S3LocalDir) are both functions of the snapshot, not the
+// guest, so every clone on a given node from the same snapshot converges on ONE
+// download Job. Concurrent reconciles all Get-then-Create the same name; the
+// first wins and the rest get AlreadyExists (swallowed below). That guarantees a
+// single writer to the snapshot-keyed hostPath, eliminating the concurrent-write
+// race a SwiftGuestPool would otherwise hit when it places more replicas than
+// nodes — which is what lifts the prior "keep replicas <= schedulable nodes"
+// constraint. (A second clone arriving after the cache is already populated is a
+// fast checksum-verified no-op via the snapshot-s3 binary's idempotency.)
+//
+// Ownership is the requesting clone (the race-winner that first creates it),
+// matching how every other guest-owned Job in this controller works (e.g. the
+// rootdisk clone Job) — so this adds NO new finalizers-RBAC surface (a
+// SwiftSnapshot owner would, via OwnerReferencesPermissionEnforcement on
+// hardened clusters, a 403 the default dev cluster wouldn't catch). A sibling
+// clone that finds the Job already present just reads it; it is not an owner and
+// is woken by its own 5s requeue, not the Owns(Job) watch. If the owning clone
+// is deleted mid-download the Job is GC'd, but a surviving sibling's next
+// reconcile recreates it by the same name and the snapshot-s3 binary resumes
+// idempotently (the same recreate-on-missing self-heal the SwiftRestore download
+// path uses); once the cache is populated the Job is no longer load-bearing —
+// the artifacts live on the node-local hostPath, not in the Job.
 func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
@@ -239,17 +267,19 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 	if r.SnapshotS3Image == "" {
 		return false, "snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)", nil
 	}
+	// The Job lives in the snapshot's namespace (== the guest's namespace).
+	name := cloneDownloadJobName(snap, node)
 	var job batchv1.Job
-	err := r.Get(ctx, client.ObjectKey{Name: cloneDownloadJobName(guest), Namespace: guest.Namespace}, &job)
+	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: snap.Namespace}, &job)
 	if apierrors.IsNotFound(err) {
 		j := clonecommon.BuildDownloadJob(clonecommon.DownloadJobParams{
 			Snapshot:    snap,
 			Image:       r.SnapshotS3Image,
-			Name:        cloneDownloadJobName(guest),
-			Namespace:   guest.Namespace,
+			Name:        name,
+			Namespace:   snap.Namespace,
 			Node:        node,
 			Component:   "snapshot-s3-clone-download",
-			ExtraLabels: map[string]string{"kubeswift.io/swiftguest": guest.Name},
+			ExtraLabels: map[string]string{"kubeswift.io/snapshot": snap.Name},
 		})
 		if cerr := ctrl.SetControllerReference(guest, j, r.Scheme); cerr != nil {
 			return false, "", cerr

@@ -86,10 +86,11 @@ spec:
         regenerate: [macAddresses, hostname, machineId, sshHostKeys]
 ```
 
-> ⚠️ **Keep `replicas` ≤ schedulable worker nodes** until the same-node download
-> dedup ships (a Phase 4 follow-up). With more replicas than nodes, multiple
-> replicas land on one node and their per-guest download Jobs would race on the
-> shared snapshot-keyed node cache.
+> ℹ️ **`replicas` may exceed the worker-node count.** When more replicas than
+> nodes land on the same node from the same snapshot, they **share one Tier C
+> download Job** (keyed per `(node, snapshot)`), so they no longer race on the
+> shared snapshot-keyed node cache. (The earlier "keep `replicas` ≤ nodes"
+> guidance is lifted.) Replicas are still round-robined across nodes for spread.
 
 ## Identity (the resume-vs-boot rule)
 
