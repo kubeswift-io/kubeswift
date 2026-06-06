@@ -71,7 +71,13 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.ensureFinalizer(ctx, &snap); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil
+		// TTL-driven retention: delete once capturedAt+ttl elapses (deferred
+		// while still referenced). No-op when spec.ttl is unset.
+		requeue, err := r.handleRetention(ctx, &snap)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 	if snap.Status.Phase == snapshotv1alpha1.SwiftSnapshotPhaseFailed {
 		return ctrl.Result{}, nil
