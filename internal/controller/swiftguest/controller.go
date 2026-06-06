@@ -546,6 +546,19 @@ func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *s
 		}
 		metrics.VMFailuresTotal.WithLabelValues(ns, reason).Inc()
 	}
+
+	// CloneTotal (Phase 5): cloneFromSnapshot guests, by result. Rides the same
+	// phase-transition detection above so it fires once per entry into the
+	// state (Running on a successful clone-resume; Failed on a clone prep/boot
+	// failure).
+	if guest.UsesCloneFromSnapshot() {
+		if newPhase == swiftv1alpha1.SwiftGuestPhaseRunning && oldPhase != swiftv1alpha1.SwiftGuestPhaseRunning {
+			metrics.CloneTotal.WithLabelValues("running").Inc()
+		}
+		if newPhase == swiftv1alpha1.SwiftGuestPhaseFailed && oldPhase != swiftv1alpha1.SwiftGuestPhaseFailed {
+			metrics.CloneTotal.WithLabelValues("failed").Inc()
+		}
+	}
 }
 
 func findCondition(status *swiftv1alpha1.SwiftGuestStatus, condType string) *metav1.Condition {
