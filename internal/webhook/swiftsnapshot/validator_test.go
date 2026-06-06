@@ -63,9 +63,10 @@ func TestValidate_DeletionPolicyWarning(t *testing.T) {
 	}
 
 	localRetain := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	localRetain.Spec.IncludeMemory = true // production default; avoid the includeMemory no-op warning
 	localRetain.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
 	if w, _ := v.ValidateCreate(context.Background(), localRetain); len(w) != 0 {
-		t.Errorf("local + Retain is honored, must NOT warn; got %v", w)
+		t.Errorf("local + Retain (honored) must NOT warn; got %v", w)
 	}
 }
 
@@ -343,16 +344,72 @@ func TestValidate_MemoryCapture_NoClient_SkipsLookup(t *testing.T) {
 }
 
 func TestValidate_DiskOnlyCapture_BypassesMemoryRules(t *testing.T) {
-	// includeMemory=false (disk-only / CSI path) doesn't trigger the
-	// VFIO/QEMU rules even when the guest has them.
+	// csi-volume-snapshot is disk-only — the VFIO/QEMU memory rules don't apply
+	// even for a GPU guest. Gated on the BACKEND, not the includeMemory flag.
 	guest := makeSourceGuest("g1", "default")
 	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "h200"}
 
 	v := validatorWithGuest(t, guest)
 	snap := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
 	snap.Spec.GuestRef.Name = "g1"
-	// Note: IncludeMemory left as default (false) for CSI snaps.
 	if _, err := v.ValidateCreate(context.Background(), snap); err != nil {
-		t.Errorf("disk-only capture should bypass GPU rule: %v", err)
+		t.Errorf("disk-only (csi) capture should bypass GPU rule: %v", err)
+	}
+}
+
+// TestValidate_CSIWithDefaultIncludeMemory_GPUGuest_NotRejected reproduces the
+// production false-positive: includeMemory defaults to true, so a csi disk-only
+// snapshot of a GPU guest used to be wrongly rejected. Backend-gating fixes it.
+func TestValidate_CSIWithDefaultIncludeMemory_GPUGuest_NotRejected(t *testing.T) {
+	guest := makeSourceGuest("g1", "default")
+	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "h200"}
+	v := validatorWithGuest(t, guest)
+	snap := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+	snap.Spec.GuestRef.Name = "g1"
+	snap.Spec.IncludeMemory = true // the apiserver default
+	if _, err := v.ValidateCreate(context.Background(), snap); err != nil {
+		t.Errorf("csi (disk-only) snapshot of a GPU guest must NOT be rejected: %v", err)
+	}
+}
+
+// TestValidate_LocalIncludeMemoryFalse_GPUGuest_StillRejected proves the bypass
+// is closed: a local snapshot captures memory regardless of the flag, so the
+// VFIO compat check must fire even when includeMemory:false.
+func TestValidate_LocalIncludeMemoryFalse_GPUGuest_StillRejected(t *testing.T) {
+	guest := makeSourceGuest("g1", "default")
+	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "h200"}
+	v := validatorWithGuest(t, guest)
+	snap := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	snap.Spec.GuestRef.Name = "g1"
+	snap.Spec.IncludeMemory = false // must NOT bypass — local always captures memory
+	if _, err := v.ValidateCreate(context.Background(), snap); err == nil {
+		t.Error("local + includeMemory:false on a GPU guest must still be rejected (memory is captured anyway)")
+	}
+}
+
+// TestValidate_IncludeMemoryFalse_LocalWarns: a no-op includeMemory:false on a
+// memory backend surfaces a warning (not a rejection).
+func TestValidate_IncludeMemoryFalse_LocalWarns(t *testing.T) {
+	v := &Validator{} // no client — shape + warning only
+	snap := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	snap.Spec.IncludeMemory = false
+	w, err := v.ValidateCreate(context.Background(), snap)
+	if err != nil {
+		t.Fatalf("includeMemory:false must warn, not reject: %v", err)
+	}
+	found := false
+	for _, s := range w {
+		if strings.Contains(s, "includeMemory:false is ignored") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected an includeMemory no-op warning; got %v", w)
+	}
+	// csi + includeMemory:true (the default) does NOT warn.
+	csi := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+	csi.Spec.IncludeMemory = true
+	if w, _ := v.ValidateCreate(context.Background(), csi); len(w) != 0 {
+		t.Errorf("csi + includeMemory:true must not warn; got %v", w)
 	}
 }

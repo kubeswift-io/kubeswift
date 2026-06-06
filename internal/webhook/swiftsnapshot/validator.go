@@ -48,7 +48,7 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", obj)
 	}
-	return deletionPolicyWarnings(snap), v.validateSwiftSnapshot(ctx, snap)
+	return advisoryWarnings(snap), v.validateSwiftSnapshot(ctx, snap)
 }
 
 func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
@@ -70,7 +70,17 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !specsEqual(&oldSnap.Spec, &snap.Spec) {
 		return nil, fmt.Errorf("SwiftSnapshot spec is immutable")
 	}
-	return deletionPolicyWarnings(snap), nil
+	return advisoryWarnings(snap), nil
+}
+
+// backendCapturesMemory reports whether the backend takes a Cloud Hypervisor
+// memory snapshot (vm.snapshot always includes guest RAM). The
+// csi-volume-snapshot backend is disk-only. This — NOT the includeMemory flag —
+// is the correct signal for "does this capture memory", because includeMemory
+// defaults to true and is not plumbed into the capture action.
+func backendCapturesMemory(snap *snapshotv1alpha1.SwiftSnapshot) bool {
+	return snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3
 }
 
 // deletionPolicyWarnings surfaces the OQ3 advisory: spec.deletionPolicy is a
@@ -79,15 +89,25 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 // applied to every snapshot) happens to match the no-op, so warning on it would
 // fire on every CSI snapshot. Retain is the operator choice that is silently
 // not honored — the case worth flagging.
-func deletionPolicyWarnings(snap *snapshotv1alpha1.SwiftSnapshot) admission.Warnings {
+func advisoryWarnings(snap *snapshotv1alpha1.SwiftSnapshot) admission.Warnings {
+	var w admission.Warnings
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot &&
 		snap.Spec.DeletionPolicy == snapshotv1alpha1.SnapshotDeletionPolicyRetain {
-		return admission.Warnings{
-			"spec.deletionPolicy is ignored for csi-volume-snapshot backends; " +
-				"the VolumeSnapshotClass deletionPolicy governs the underlying VolumeSnapshot",
-		}
+		w = append(w,
+			"spec.deletionPolicy is ignored for csi-volume-snapshot backends; "+
+				"the VolumeSnapshotClass deletionPolicy governs the underlying VolumeSnapshot")
 	}
-	return nil
+	// includeMemory:false is a no-op on the local/s3 backends — a Cloud
+	// Hypervisor snapshot always captures guest RAM. Surface it rather than
+	// silently capturing memory the operator asked to skip (Principle #6). For a
+	// truly disk-only snapshot, use the csi-volume-snapshot backend.
+	if backendCapturesMemory(snap) && !snap.Spec.IncludeMemory {
+		w = append(w,
+			"spec.includeMemory:false is ignored for the "+string(snap.Spec.Backend.Type)+
+				" backend — a Cloud Hypervisor snapshot always captures memory; "+
+				"use the csi-volume-snapshot backend for a disk-only snapshot")
+	}
+	return w
 }
 
 func (v *Validator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {
@@ -98,10 +118,14 @@ func (v *Validator) validateSwiftSnapshot(ctx context.Context, snap *snapshotv1a
 	if err := validateShape(snap); err != nil {
 		return err
 	}
-	// Source-guest-dependent rules (memory + VFIO/QEMU/SR-IOV). Only
-	// applied when IncludeMemory=true — disk-only captures are unaffected
-	// by these constraints (CSI VolumeSnapshot doesn't pause the VM).
-	if snap.Spec.IncludeMemory && v.Client != nil {
+	// Source-guest-dependent rules (memory + VFIO/QEMU/SR-IOV). Gated on the
+	// BACKEND, not the includeMemory flag: only the local/s3 backends capture
+	// memory (a CH vm.snapshot always includes RAM), while csi-volume-snapshot
+	// is disk-only and doesn't pause the VM. Gating on the flag was wrong twice
+	// over: includeMemory defaults to true, so a csi disk-only snapshot of a GPU
+	// guest was wrongly rejected; and includeMemory:false on a local/s3 snapshot
+	// bypassed the check while the capture included memory anyway.
+	if backendCapturesMemory(snap) && v.Client != nil {
 		return v.validateMemoryCaptureCompat(ctx, snap)
 	}
 	return nil
