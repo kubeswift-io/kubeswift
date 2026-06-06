@@ -28,6 +28,7 @@ import (
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // SwiftSnapshotReconciler reconciles SwiftSnapshot resources.
@@ -273,8 +274,59 @@ func capturedGuestSpec(guest *swiftv1alpha1.SwiftGuest) *snapshotv1alpha1.Captur
 
 // persist writes status changes back to the API server.
 func (r *SwiftSnapshotReconciler) persist(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, status *snapshotv1alpha1.SwiftSnapshotStatus) error {
+	// Fire the Phase 5 metric exactly once, on the non-terminal -> terminal
+	// transition (compare the live object's old phase against the new one).
+	freshTerminal := isSnapshotTerminal(status.Phase) && !isSnapshotTerminal(snap.Status.Phase)
 	snap.Status = *status
-	return r.Status().Update(ctx, snap)
+	if err := r.Status().Update(ctx, snap); err != nil {
+		return err
+	}
+	if freshTerminal {
+		recordSnapshotTerminal(snap)
+	}
+	return nil
+}
+
+// isSnapshotTerminal reports whether a SwiftSnapshot phase is terminal.
+func isSnapshotTerminal(p snapshotv1alpha1.SwiftSnapshotPhase) bool {
+	return p == snapshotv1alpha1.SwiftSnapshotPhaseReady || p == snapshotv1alpha1.SwiftSnapshotPhaseFailed
+}
+
+// recordSnapshotTerminal emits the Phase 5 snapshot metrics on the
+// non-terminal -> terminal transition: a per-backend/result counter, plus
+// capture/pause/upload latency and size for successful captures.
+func recordSnapshotTerminal(snap *snapshotv1alpha1.SwiftSnapshot) {
+	backend := string(snap.Spec.Backend.Type)
+	st := &snap.Status
+	var result string
+	switch st.Phase {
+	case snapshotv1alpha1.SwiftSnapshotPhaseReady:
+		result = "ready"
+	case snapshotv1alpha1.SwiftSnapshotPhaseFailed:
+		result = "failed"
+	default:
+		return
+	}
+	metrics.SnapshotTotal.WithLabelValues(backend, result).Inc()
+	if result != "ready" {
+		return
+	}
+	if st.CapturedAt != nil {
+		if d := st.CapturedAt.Sub(snap.CreationTimestamp.Time); d > 0 {
+			metrics.SnapshotCaptureSeconds.WithLabelValues(backend).Observe(d.Seconds())
+		}
+	}
+	if st.ObservedPauseWindowMs > 0 {
+		metrics.SnapshotPauseWindowSeconds.WithLabelValues(backend).Observe(float64(st.ObservedPauseWindowMs) / 1000.0)
+	}
+	if st.TotalSizeBytes > 0 {
+		metrics.SnapshotSizeBytes.WithLabelValues(backend).Observe(float64(st.TotalSizeBytes))
+	}
+	if st.S3 != nil && st.S3.UploadedAt != nil && st.CapturedAt != nil {
+		if d := st.S3.UploadedAt.Sub(st.CapturedAt.Time); d > 0 {
+			metrics.SnapshotUploadSeconds.Observe(d.Seconds())
+		}
+	}
 }
 
 // isNotFound is a small wrapper so this package doesn't grow extra imports
