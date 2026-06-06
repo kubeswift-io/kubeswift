@@ -13,6 +13,7 @@ import (
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -294,6 +295,14 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 	}
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			// Record the clone download's wire traffic once per shared
+			// (node, snapshot) Job (the SwiftGuest controller re-reads the
+			// completed Job every reconcile; clones have no status byte field).
+			if metrics.MarkCloneDownloadObserved(name + "@" + node) {
+				if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, name); rerr == nil && ok {
+					metrics.RestoreDownloadBytesTotal.Add(float64(rep.TransferredBytes))
+				}
+			}
 			return true, "", nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
