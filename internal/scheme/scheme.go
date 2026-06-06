@@ -36,7 +36,7 @@ func init() {
 	Scheme.AddKnownTypes(gvGPU, &gpuv1alpha1.SwiftGPUProfile{}, &gpuv1alpha1.SwiftGPUProfileList{}, &gpuv1alpha1.SwiftGPUNode{}, &gpuv1alpha1.SwiftGPUNodeList{})
 	metav1.AddToGroupVersion(Scheme, gvGPU)
 	gvSnapshot := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
-	Scheme.AddKnownTypes(gvSnapshot, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{}, &snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftRestoreList{})
+	Scheme.AddKnownTypes(gvSnapshot, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{}, &snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftRestoreList{}, &snapshotv1alpha1.SwiftSnapshotSchedule{}, &snapshotv1alpha1.SwiftSnapshotScheduleList{})
 	metav1.AddToGroupVersion(Scheme, gvSnapshot)
 	gvMigration := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
