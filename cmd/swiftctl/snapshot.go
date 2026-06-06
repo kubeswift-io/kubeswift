@@ -83,7 +83,7 @@ func init() {
 	snapshotCreateCmd.Flags().StringVar(&snapshotBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot or local")
 	snapshotCreateCmd.Flags().StringVar(&snapshotVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only; default: cluster default)")
 	snapshotCreateCmd.Flags().StringVar(&snapshotHostPath, "hostpath", "", "On-node directory for local backend (required when --backend=local; must be under /var/lib/kubeswift/snapshots/)")
-	snapshotCreateCmd.Flags().BoolVar(&snapshotIncludeMem, "include-memory", true, "Capture memory (ignored on csi-volume-snapshot)")
+	snapshotCreateCmd.Flags().BoolVar(&snapshotIncludeMem, "include-memory", true, "Backend-determined: local/s3 always capture memory, csi is always disk-only; --include-memory=false is a no-op (use --backend=csi-volume-snapshot for disk-only)")
 	snapshotCreateCmd.Flags().BoolVar(&snapshotResumeAfter, "resume", true, "Resume the source VM after snapshot (no-op on csi-volume-snapshot)")
 	_ = snapshotCreateCmd.MarkFlagRequired("guest")
 
