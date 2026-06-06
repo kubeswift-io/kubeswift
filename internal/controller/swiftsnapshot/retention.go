@@ -75,8 +75,18 @@ func (r *SwiftSnapshotReconciler) handleRetention(ctx context.Context, snap *sna
 // referenced (and so must NOT be TTL-deleted): a cloneFromSnapshot SwiftGuest,
 // or a non-terminal SwiftRestore, in the same namespace.
 func (r *SwiftSnapshotReconciler) retentionBlocker(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (string, error) {
+	return ReferenceBlocker(ctx, r.Client, snap)
+}
+
+// ReferenceBlocker returns a non-empty human reason when a snapshot is still
+// referenced (and so must NOT be auto-deleted by TTL or keep-N retention): a
+// cloneFromSnapshot SwiftGuest, or a non-terminal SwiftRestore, in the same
+// namespace. Exported so the SwiftSnapshotSchedule keep-N controller reuses the
+// exact same gate (Phase 6, OQ4). An operator-initiated `kubectl delete` is
+// never gated by this — it only governs controller-driven retention deletes.
+func ReferenceBlocker(ctx context.Context, c client.Reader, snap *snapshotv1alpha1.SwiftSnapshot) (string, error) {
 	var guests swiftv1alpha1.SwiftGuestList
-	if err := r.List(ctx, &guests, client.InNamespace(snap.Namespace)); err != nil {
+	if err := c.List(ctx, &guests, client.InNamespace(snap.Namespace)); err != nil {
 		return "", err
 	}
 	for i := range guests.Items {
@@ -86,7 +96,7 @@ func (r *SwiftSnapshotReconciler) retentionBlocker(ctx context.Context, snap *sn
 		}
 	}
 	var restores snapshotv1alpha1.SwiftRestoreList
-	if err := r.List(ctx, &restores, client.InNamespace(snap.Namespace)); err != nil {
+	if err := c.List(ctx, &restores, client.InNamespace(snap.Namespace)); err != nil {
 		return "", err
 	}
 	for i := range restores.Items {
