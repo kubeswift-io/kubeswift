@@ -47,6 +47,9 @@ rules:
   - apiGroups: ["snapshot.kubeswift.io"]
     resources: ["swiftrestores", "swiftrestores/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.kubeswift.io"]
+    resources: ["swiftsnapshotschedules", "swiftsnapshotschedules/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftMigration (migration.kubeswift.io). Status patches go through
   # the /status subresource. The controller patches SwiftGuest spec
   # fields (runPolicy, nodeName) using the existing
