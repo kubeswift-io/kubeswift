@@ -30,6 +30,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftmigration"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshotschedule"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	evictionwebhook "github.com/projectbeskar/kubeswift/internal/webhook/eviction"
@@ -191,6 +192,14 @@ func main() {
 		SnapshotS3Image: swiftsnapshot.SnapshotS3Image(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftRestore controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftsnapshotschedule.SwiftSnapshotScheduleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSnapshotSchedule controller")
 		os.Exit(1)
 	}
 
