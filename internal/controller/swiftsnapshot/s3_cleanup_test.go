@@ -7,6 +7,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -154,6 +155,26 @@ func TestHandleS3Deletion_NoImage_DropsFinalizer(t *testing.T) {
 	}
 	if hasFin(t, c, snap, S3ObjectFinalizer) {
 		t.Error("finalizer should be dropped when the snapshot-s3 image is unconfigured")
+	}
+}
+
+// TestHandleS3Deletion_Retain drops the finalizer WITHOUT a purge Job when
+// deletionPolicy: Retain.
+func TestHandleS3Deletion_Retain(t *testing.T) {
+	snap := s3SnapReady("snap1", "team-a")
+	snap.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
+	r, c := newReconciler(t, snap)
+	r.SnapshotS3Image = "img"
+	done, err := r.handleS3Deletion(context.Background(), snap)
+	if err != nil || !done {
+		t.Fatalf("Retain should drop the finalizer immediately; done=%v err=%v", done, err)
+	}
+	if hasFin(t, c, snap, S3ObjectFinalizer) {
+		t.Error("Retain must drop the S3 finalizer")
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: s3DeleteJobName(snap), Namespace: snap.Namespace}, &job); !apierrors.IsNotFound(err) {
+		t.Errorf("Retain must NOT create a delete Job; err=%v", err)
 	}
 }
 

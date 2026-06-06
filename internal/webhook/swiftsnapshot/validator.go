@@ -48,7 +48,7 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", obj)
 	}
-	return nil, v.validateSwiftSnapshot(ctx, snap)
+	return deletionPolicyWarnings(snap), v.validateSwiftSnapshot(ctx, snap)
 }
 
 func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
@@ -65,10 +65,29 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	}
 	// Spec is immutable after creation: snapshots are point-in-time
 	// captures, mutating them would break the contract callers rely on.
+	// (deletionPolicy is deliberately NOT part of specsEqual — an operator
+	// may flip it before deleting.)
 	if !specsEqual(&oldSnap.Spec, &snap.Spec) {
 		return nil, fmt.Errorf("SwiftSnapshot spec is immutable")
 	}
-	return nil, nil
+	return deletionPolicyWarnings(snap), nil
+}
+
+// deletionPolicyWarnings surfaces the OQ3 advisory: spec.deletionPolicy is a
+// no-op for csi-volume-snapshot (the VolumeSnapshotClass governs the
+// VolumeSnapshot lifecycle). Only Retain is warned: Delete (the CRD default,
+// applied to every snapshot) happens to match the no-op, so warning on it would
+// fire on every CSI snapshot. Retain is the operator choice that is silently
+// not honored — the case worth flagging.
+func deletionPolicyWarnings(snap *snapshotv1alpha1.SwiftSnapshot) admission.Warnings {
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot &&
+		snap.Spec.DeletionPolicy == snapshotv1alpha1.SnapshotDeletionPolicyRetain {
+		return admission.Warnings{
+			"spec.deletionPolicy is ignored for csi-volume-snapshot backends; " +
+				"the VolumeSnapshotClass deletionPolicy governs the underlying VolumeSnapshot",
+		}
+	}
+	return nil
 }
 
 func (v *Validator) ValidateDelete(_ context.Context, _ runtime.Object) (admission.Warnings, error) {

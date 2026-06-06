@@ -42,6 +42,33 @@ func TestValidate_CSIBackend_OK(t *testing.T) {
 	}
 }
 
+// TestValidate_DeletionPolicyWarning: Retain on a CSI snapshot warns (it's
+// ignored there); Delete on CSI and Retain on local/s3 do not warn.
+func TestValidate_DeletionPolicyWarning(t *testing.T) {
+	v := &Validator{}
+	csiRetain := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+	csiRetain.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
+	w, err := v.ValidateCreate(context.Background(), csiRetain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w) == 0 || !strings.Contains(w[0], "ignored for csi-volume-snapshot") {
+		t.Errorf("CSI + Retain should warn; got %v", w)
+	}
+
+	csiDelete := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+	csiDelete.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyDelete
+	if w, _ := v.ValidateCreate(context.Background(), csiDelete); len(w) != 0 {
+		t.Errorf("CSI + Delete (the no-op default) should NOT warn; got %v", w)
+	}
+
+	localRetain := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	localRetain.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
+	if w, _ := v.ValidateCreate(context.Background(), localRetain); len(w) != 0 {
+		t.Errorf("local + Retain is honored, must NOT warn; got %v", w)
+	}
+}
+
 func TestValidate_LocalBackend_OK(t *testing.T) {
 	v := &Validator{}
 	if _, err := v.ValidateCreate(context.Background(), makeSnap(snapshotv1alpha1.SnapshotBackendLocal)); err != nil {
