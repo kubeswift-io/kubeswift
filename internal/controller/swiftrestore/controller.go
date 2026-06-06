@@ -28,6 +28,7 @@ import (
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // SwiftRestoreReconciler reconciles SwiftRestore resources.
@@ -373,8 +374,43 @@ func isGuestRunning(guest *swiftv1alpha1.SwiftGuest) bool {
 }
 
 func (r *SwiftRestoreReconciler) persist(ctx context.Context, restore *snapshotv1alpha1.SwiftRestore, status *snapshotv1alpha1.SwiftRestoreStatus) error {
+	// Fire the Phase 5 metric once, on the non-terminal -> terminal transition.
+	freshTerminal := isRestoreTerminal(status.Phase) && !isRestoreTerminal(restore.Status.Phase)
 	restore.Status = *status
-	return r.Status().Update(ctx, restore)
+	if err := r.Status().Update(ctx, restore); err != nil {
+		return err
+	}
+	if freshTerminal {
+		recordRestoreTerminal(restore)
+	}
+	return nil
+}
+
+// isRestoreTerminal reports whether a SwiftRestore phase is terminal.
+func isRestoreTerminal(p snapshotv1alpha1.SwiftRestorePhase) bool {
+	return p == snapshotv1alpha1.SwiftRestorePhaseReady || p == snapshotv1alpha1.SwiftRestorePhaseFailed
+}
+
+// recordRestoreTerminal emits the Phase 5 restore metrics on the
+// non-terminal -> terminal transition: a per-result counter plus the
+// start->complete latency for successful restores.
+func recordRestoreTerminal(restore *snapshotv1alpha1.SwiftRestore) {
+	st := &restore.Status
+	var result string
+	switch st.Phase {
+	case snapshotv1alpha1.SwiftRestorePhaseReady:
+		result = "ready"
+	case snapshotv1alpha1.SwiftRestorePhaseFailed:
+		result = "failed"
+	default:
+		return
+	}
+	metrics.RestoreTotal.WithLabelValues(result).Inc()
+	if result == "ready" && st.StartedAt != nil && st.CompletedAt != nil {
+		if d := st.CompletedAt.Sub(st.StartedAt.Time); d > 0 {
+			metrics.RestoreSeconds.Observe(d.Seconds())
+		}
+	}
 }
 
 func isNotFound(err error) bool {
