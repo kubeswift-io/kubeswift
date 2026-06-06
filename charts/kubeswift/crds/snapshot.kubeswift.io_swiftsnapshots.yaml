@@ -175,6 +175,16 @@ spec:
                   was already stopped at snapshot time (csi-volume-snapshot backend
                   stops the VM gracefully and restarts it iff this is true).
                 type: boolean
+              ttl:
+                description: |-
+                  TTL, when set, makes the controller delete this SwiftSnapshot once
+                  status.capturedAt + ttl has elapsed; the normal deletion path then runs,
+                  honoring deletionPolicy. The controller refuses to delete a snapshot
+                  still referenced by a cloneFromSnapshot SwiftGuest or an in-flight
+                  SwiftRestore — it sets a RetentionBlocked condition and retries until the
+                  references clear. An operator-initiated `kubectl delete` is never blocked.
+                  Unset means keep until deleted by hand.
+                type: string
             required:
             - backend
             - guestRef

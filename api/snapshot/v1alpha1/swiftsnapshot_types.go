@@ -37,6 +37,11 @@ const (
 // day one (per the GitOps design's recommendation).
 const (
 	SwiftSnapshotConditionReady = "Ready"
+	// SwiftSnapshotConditionRetentionBlocked is set True when spec.ttl has
+	// elapsed but the snapshot is still referenced (a cloneFromSnapshot
+	// SwiftGuest or an in-flight SwiftRestore), so TTL-driven deletion is
+	// deferred until the references clear.
+	SwiftSnapshotConditionRetentionBlocked = "RetentionBlocked"
 )
 
 // SnapshotDeletionPolicy controls whether deleting a SwiftSnapshot also purges
@@ -145,6 +150,16 @@ type SwiftSnapshotSpec struct {
 	// +kubebuilder:default=Delete
 	// +optional
 	DeletionPolicy SnapshotDeletionPolicy `json:"deletionPolicy,omitempty"`
+
+	// TTL, when set, makes the controller delete this SwiftSnapshot once
+	// status.capturedAt + ttl has elapsed; the normal deletion path then runs,
+	// honoring deletionPolicy. The controller refuses to delete a snapshot
+	// still referenced by a cloneFromSnapshot SwiftGuest or an in-flight
+	// SwiftRestore — it sets a RetentionBlocked condition and retries until the
+	// references clear. An operator-initiated `kubectl delete` is never blocked.
+	// Unset means keep until deleted by hand.
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
 }
 
 // SnapshotDiskRef records one captured disk (root or data) by role + handle.
