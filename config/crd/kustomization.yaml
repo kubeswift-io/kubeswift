@@ -16,4 +16,5 @@ resources:
   - bases/gpu.kubeswift.io_swiftgpunodes.yaml
   - bases/snapshot.kubeswift.io_swiftsnapshots.yaml
   - bases/snapshot.kubeswift.io_swiftrestores.yaml
+  - bases/snapshot.kubeswift.io_swiftsnapshotschedules.yaml
   - bases/migration.kubeswift.io_swiftmigrations.yaml
