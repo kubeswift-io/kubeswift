@@ -129,8 +129,13 @@ type SwiftSnapshotSpec struct {
 	GuestRef SwiftSnapshotGuestRef `json:"guestRef"`
 	// Backend selects how and where the snapshot is captured.
 	Backend SwiftSnapshotBackend `json:"backend"`
-	// IncludeMemory requests a memory snapshot in addition to disks. Ignored
-	// for the csi-volume-snapshot backend (which is disk-only by definition).
+	// IncludeMemory requests a memory snapshot in addition to disks. NOTE: the
+	// captured set is backend-determined, not controlled by this flag —
+	// local/s3 use a Cloud Hypervisor vm.snapshot, which ALWAYS includes memory,
+	// while csi-volume-snapshot is disk-only by definition. So includeMemory:false
+	// is a no-op on every backend (the webhook surfaces a warning for local/s3);
+	// for a truly disk-only snapshot, use the csi-volume-snapshot backend. The
+	// field remains for forward compatibility and manifest metadata.
 	// +kubebuilder:default=true
 	IncludeMemory bool `json:"includeMemory,omitempty"`
 	// ResumeAfterSnapshot controls whether the source SwiftGuest is resumed
