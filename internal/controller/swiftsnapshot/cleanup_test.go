@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -177,6 +178,33 @@ func TestHandleDeletion_CreatesCleanupPod(t *testing.T) {
 	// Defense check: must not rm the parent.
 	if strings.Contains(args, "rm -rf "+HostPathBaseMount+" ") || strings.HasSuffix(args, "rm -rf "+HostPathBaseMount) {
 		t.Errorf("cleanup args targets parent mount, not subdir: %q", args)
+	}
+}
+
+// TestHandleLocalDeletion_Retain drops the finalizer WITHOUT running a cleanup
+// pod when deletionPolicy: Retain.
+func TestHandleLocalDeletion_Retain(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	now := metav1.Now()
+	snap.DeletionTimestamp = &now
+	snap.Finalizers = []string{HostPathFinalizer}
+	snap.Status.NodeName = "boba"
+	snap.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
+	r, c := newReconciler(t, snap)
+
+	done, err := r.handleDeletion(context.Background(), snap)
+	if err != nil || !done {
+		t.Fatalf("Retain should drop the finalizer immediately; done=%v err=%v", done, err)
+	}
+	var pod corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKey{Name: cleanupPodName(snap), Namespace: "default"}, &pod); !apierrors.IsNotFound(err) {
+		t.Errorf("Retain must NOT create a cleanup pod; err=%v", err)
+	}
+	// Dropping the last finalizer on a deletion-stamped object lets it GC —
+	// the snapshot is now gone, proving the finalizer was removed without a purge.
+	var got snapshotv1alpha1.SwiftSnapshot
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(snap), &got); !apierrors.IsNotFound(err) {
+		t.Errorf("Retain should drop the finalizer and let the snapshot GC; get err=%v", err)
 	}
 }
 

@@ -116,6 +116,13 @@ func (r *SwiftSnapshotReconciler) handleDeletion(
 	}
 }
 
+// retainArtifacts reports whether the snapshot's deletionPolicy is Retain — in
+// which case the deletion handlers drop the cleanup finalizer WITHOUT purging.
+// An empty policy (snapshots created before the field existed) means Delete.
+func retainArtifacts(snap *snapshotv1alpha1.SwiftSnapshot) bool {
+	return snap.Spec.DeletionPolicy == snapshotv1alpha1.SnapshotDeletionPolicyRetain
+}
+
 // handleLocalDeletion runs the Tier B hostPath cleanup pod on the source node;
 // once it reports Succeeded, removes HostPathFinalizer.
 func (r *SwiftSnapshotReconciler) handleLocalDeletion(
@@ -125,6 +132,10 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 	if !hasFinalizer(snap, HostPathFinalizer) {
 		// Nothing to do — apiserver will GC the resource.
 		return true, nil
+	}
+	// deletionPolicy: Retain — leave the hostPath, just drop the finalizer.
+	if retainArtifacts(snap) {
+		return r.removeFinalizer(ctx, snap)
 	}
 	// CSI-backed snapshots wouldn't have HostPathFinalizer in the first
 	// place, but guard the cleanup logic against bad state where one
@@ -277,14 +288,18 @@ func (r *SwiftSnapshotReconciler) removeNamedFinalizer(ctx context.Context, snap
 // wedge namespace deletion on a snapshot we cannot clean (the finalizer-trap
 // lesson, Design Principle #10).
 //
-// NOTE: deletionPolicy (Delete|Retain) lands in the next PR; until then a Tier C
-// snapshot deletion always purges (the implicit default).
+// deletionPolicy: Retain short-circuits the purge (drop the finalizer, keep the
+// objects); Delete (the default) purges.
 func (r *SwiftSnapshotReconciler) handleS3Deletion(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 ) (bool, error) {
 	if !hasFinalizer(snap, S3ObjectFinalizer) {
 		return true, nil
+	}
+	// deletionPolicy: Retain — leave the S3 objects, just drop the finalizer.
+	if retainArtifacts(snap) {
+		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
 	}
 	// Nothing to purge: never uploaded, or no s3 config. Drop the finalizer.
 	if snap.Status.S3 == nil || snap.Spec.Backend.S3 == nil || snap.Spec.Backend.S3.Bucket == "" {
