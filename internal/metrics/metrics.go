@@ -172,7 +172,39 @@ var (
 		},
 		[]string{"result"},
 	)
+
+	// SnapshotUploadBytesTotal counts artifact bytes actually pushed to S3
+	// (Tier C uploads), excluding resume-skipped objects — the wire-traffic
+	// counter (vs status.s3.uploadedBytes, which is the snapshot's S3 footprint).
+	SnapshotUploadBytesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kubeswift_snapshot_upload_bytes_total",
+			Help: "Artifact bytes pushed to S3 by Tier C snapshot uploads (excludes resume-skipped)",
+		},
+	)
+
+	// RestoreDownloadBytesTotal counts artifact bytes actually pulled from S3
+	// (Tier C restores + cloneFromSnapshot downloads), excluding skipped.
+	RestoreDownloadBytesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kubeswift_restore_download_bytes_total",
+			Help: "Artifact bytes pulled from S3 by Tier C restore/clone downloads (excludes skipped)",
+		},
+	)
 )
+
+// cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
+// report so it fires once per shared download Job (the SwiftGuest controller
+// re-reads the completed Job every reconcile). In-memory, mirroring
+// MarkVMBootObserved; a controller restart may re-count once (acceptable for a
+// bandwidth counter).
+var cloneDownloadObserved sync.Map
+
+// MarkCloneDownloadObserved returns true the first time key is seen.
+func MarkCloneDownloadObserved(key string) bool {
+	_, loaded := cloneDownloadObserved.LoadOrStore(key, struct{}{})
+	return !loaded
+}
 
 func init() {
 	metrics.Registry.MustRegister(
@@ -190,5 +222,7 @@ func init() {
 		RestoreTotal,
 		RestoreSeconds,
 		CloneTotal,
+		SnapshotUploadBytesTotal,
+		RestoreDownloadBytesTotal,
 	)
 }

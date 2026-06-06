@@ -197,7 +197,11 @@ type S3SnapshotStatus struct {
 	Location string `json:"location,omitempty"`
 	// ManifestDigest is the sha256 of the uploaded manifest.json.
 	ManifestDigest string `json:"manifestDigest,omitempty"`
-	// UploadedBytes is the total artifact bytes pushed to S3.
+	// UploadedBytes is the snapshot's total artifact footprint in S3 (read from
+	// the upload Job's byte report). This is the snapshot's S3 size, not the
+	// per-Job wire traffic — a resumed upload that skipped already-present
+	// objects still reports the full footprint. Wire traffic is the
+	// kubeswift_snapshot_upload_bytes_total metric.
 	UploadedBytes int64 `json:"uploadedBytes,omitempty"`
 	// UploadedAt is when the Uploading phase completed.
 	UploadedAt *metav1.Time `json:"uploadedAt,omitempty"`

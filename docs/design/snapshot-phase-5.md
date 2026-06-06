@@ -131,17 +131,26 @@ already tracks per-artifact byte counts and skip decisions
 (`transfer.go`), so emitting the JSON is a few lines at the end of
 `runUpload`/`runDownload`.
 
-### 4.3 Surfaces
+### 4.3 Surfaces — footprint (status) vs wire traffic (metric)
 
-- `status.s3.uploadedBytes` (existing field) — populated by the swiftsnapshot
-  controller from the upload Job's termination message at the
-  `Uploading→Ready` transition.
-- **New** `status.downloadedBytes` on SwiftRestore — populated by the swiftrestore
-  controller at `Downloading→Restoring`. (Also populated on the cloneFromSnapshot
-  download Job in the swiftguest controller.)
-- Metrics: `kubeswift_snapshot_upload_bytes_total` (Counter, Tier C) and
-  `kubeswift_restore_download_bytes_total` (Counter) incremented by
-  `transferredBytes`.
+The report carries `transferredBytes` (actual wire bytes, excluding
+resume-skips), `skippedBytes`, and `totalBytes` (the snapshot's full artifact
+footprint). The two surfaces split cleanly:
+
+- **Status fields = footprint (`totalBytes`)** — stable, operator-meaningful
+  ("how big is this snapshot in S3 / how much was materialized"):
+  - `status.s3.uploadedBytes` (existing field) — stamped by the swiftsnapshot
+    controller at `Uploading→Ready`.
+  - **New** `status.downloadedBytes` on SwiftRestore — stamped at the download
+    Job's completion (guarded on the already-set field so a Tier-B-tail requeue
+    doesn't re-read). Clones have no status field — metric only.
+- **Metrics = wire traffic (`transferredBytes`)** — bandwidth/cost, excludes
+  resumed skips: `kubeswift_snapshot_upload_bytes_total` and
+  `kubeswift_restore_download_bytes_total` (the clone download increments the
+  latter, deduped per `(node, snapshot)` so the shared Job counts once).
+- Read via `clonecommon.JobTransferReport` (lists the Job's pod by the
+  `job-name` label, parses the terminated container's message). Missing/garbled
+  → bytes stay 0, no metric, never a failure.
 
 > Defensive: termination message missing/garbled → leave the byte field nil and
 > the metric un-incremented (Design Principle #6: no fabricated status). The
