@@ -150,6 +150,113 @@ func s3Location(snap *snapshotv1alpha1.SwiftSnapshot) string {
 	return "s3://" + path.Join(snap.Spec.Backend.S3.Bucket, s3KeyPrefix(snap)) + "/"
 }
 
+// s3DeleteJobName is the deterministic name of the object-cleanup Job.
+func s3DeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	return snap.Name + "-s3-delete"
+}
+
+// s3JobArgs builds the common snapshot-s3 flags for a given mode (the S3
+// connection/auth-independent ones; credentials come from env). mode is
+// "upload"/"download"/"delete".
+func s3JobArgs(snap *snapshotv1alpha1.SwiftSnapshot, mode string) []string {
+	s3 := snap.Spec.Backend.S3
+	args := []string{"--mode=" + mode, "--bucket=" + s3.Bucket, "--key-prefix=" + s3KeyPrefix(snap)}
+	if s3.Region != "" {
+		args = append(args, "--region="+s3.Region)
+	}
+	if s3.Endpoint != "" {
+		args = append(args, "--endpoint="+s3.Endpoint)
+	}
+	if s3.ForcePathStyle {
+		args = append(args, "--path-style")
+	}
+	if s3.Insecure {
+		args = append(args, "--insecure")
+	}
+	return args
+}
+
+// ensureDeleteJob creates (idempotently) the snapshot-owned object-cleanup Job
+// that purges the snapshot's S3 prefix. Unlike the upload Job it is
+// node-agnostic (S3 is reachable from anywhere), mounts nothing, and runs
+// non-root (it touches no local files) — maximally constrained.
+func (r *SwiftSnapshotReconciler) ensureDeleteJob(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
+	if r.SnapshotS3Image == "" {
+		return fmt.Errorf("snapshot-s3 image not configured (set %s)", SnapshotS3ImageEnv)
+	}
+	job := buildDeleteJob(snap, r.SnapshotS3Image)
+	if err := ctrl.SetControllerReference(snap, job, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+// buildDeleteJob constructs the object-cleanup Job: snapshot-s3 --mode=delete
+// against the snapshot's S3 prefix, credentials from the referenced Secret. No
+// volumes, node-agnostic, non-root, drop ALL.
+func buildDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string) *batchv1.Job {
+	s3 := snap.Spec.Backend.S3
+	credName := ""
+	if s3.CredentialsSecretRef != nil {
+		credName = s3.CredentialsSecretRef.Name
+	}
+	secretEnv := func(envName, key string, optional bool) corev1.EnvVar {
+		return corev1.EnvVar{
+			Name: envName,
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: credName},
+					Key:                  key,
+					Optional:             ptr.To(optional),
+				},
+			},
+		}
+	}
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s3DeleteJobName(snap),
+			Namespace: snap.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "kubeswift",
+				"app.kubernetes.io/component": "snapshot-s3-delete",
+				"kubeswift.io/swiftsnapshot":  snap.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: ptr.To(s3UploadBackoffLimit),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{{
+						Name:  "delete",
+						Image: image,
+						Args:  s3JobArgs(snap, "delete"),
+						Env: []corev1.EnvVar{
+							secretEnv("AWS_ACCESS_KEY_ID", "accessKeyId", false),
+							secretEnv("AWS_SECRET_ACCESS_KEY", "secretAccessKey", false),
+							secretEnv("AWS_SESSION_TOKEN", "sessionToken", true),
+						},
+						// Non-root: delete touches no local files (pure S3 API). The
+						// image's USER is 65534; set it explicitly so RunAsNonRoot
+						// can't trip an admission check on clusters that demand a
+						// numeric uid. Otherwise maximally constrained.
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptr.To(false),
+							RunAsNonRoot:             ptr.To(true),
+							RunAsUser:                ptr.To(int64(65534)),
+							ReadOnlyRootFilesystem:   ptr.To(true),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
+					}},
+				},
+			},
+		},
+	}
+}
+
 // buildUploadJob constructs the node-pinned upload Job. It mounts the captured
 // snapshot dir read-only, takes S3 credentials from the referenced Secret as
 // the standard AWS env vars, and runs snapshot-s3 --mode=upload. Pinned to the

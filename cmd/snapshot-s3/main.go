@@ -7,6 +7,7 @@
 //
 //	snapshot-s3 --mode=upload   --dir=/snap --bucket=B --key-prefix=ns/snap [--endpoint=...] [--path-style]
 //	snapshot-s3 --mode=download --dir=/snap --bucket=B --key-prefix=ns/snap [--endpoint=...] [--path-style]
+//	snapshot-s3 --mode=delete   --bucket=B --key-prefix=ns/snap [--endpoint=...] [--path-style]
 //
 // Credentials come from the standard AWS environment variables (mounted from a
 // Secret by the controller) — never from flags, annotations, or logs.
@@ -40,7 +41,7 @@ func reportTransfer(s transferStats) {
 }
 
 func main() {
-	mode := flag.String("mode", "", "upload | download")
+	mode := flag.String("mode", "", "upload | download | delete")
 	dir := flag.String("dir", "", "local snapshot directory (source for upload, destination for download)")
 	bucket := flag.String("bucket", "", "S3 bucket")
 	keyPrefix := flag.String("key-prefix", "", "object key prefix for this snapshot (e.g. backups/ns/snap)")
@@ -68,11 +69,18 @@ type runArgs struct {
 }
 
 func (a runArgs) validate() error {
-	if a.mode != "upload" && a.mode != "download" {
-		return fmt.Errorf("--mode must be \"upload\" or \"download\"")
+	switch a.mode {
+	case "upload", "download":
+		if a.dir == "" {
+			return fmt.Errorf("--dir is required for %s", a.mode)
+		}
+	case "delete":
+		// delete operates purely on S3 (no local dir).
+	default:
+		return fmt.Errorf("--mode must be \"upload\", \"download\", or \"delete\"")
 	}
-	if a.dir == "" || a.bucket == "" || a.keyPrefix == "" {
-		return fmt.Errorf("--dir, --bucket and --key-prefix are required")
+	if a.bucket == "" || a.keyPrefix == "" {
+		return fmt.Errorf("--bucket and --key-prefix are required")
 	}
 	if a.endpoint == "" && a.insecure {
 		return fmt.Errorf("--insecure has no effect with the default AWS endpoint (always TLS)")
@@ -102,6 +110,8 @@ func run(a runArgs) error {
 			return err
 		}
 		reportTransfer(stats)
+	case "delete":
+		return runDelete(ctx, store, a.keyPrefix)
 	}
 	return nil
 }
