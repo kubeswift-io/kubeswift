@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
 
 // fixed minute boundary for deterministic cron math.
@@ -29,8 +30,13 @@ func schedScheme(t *testing.T) *runtime.Scheme {
 	s.AddKnownTypes(gv,
 		&snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{},
 		&snapshotv1alpha1.SwiftSnapshotSchedule{}, &snapshotv1alpha1.SwiftSnapshotScheduleList{},
+		&snapshotv1alpha1.SwiftRestore{}, &snapshotv1alpha1.SwiftRestoreList{},
 	)
 	metav1.AddToGroupVersion(s, gv)
+	// ReferenceBlocker (keep-N) lists SwiftGuests + SwiftRestores.
+	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	metav1.AddToGroupVersion(s, gvSwift)
 	return s
 }
 

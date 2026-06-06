@@ -191,6 +191,16 @@ var (
 			Help: "Artifact bytes pulled from S3 by Tier C restore/clone downloads (excludes skipped)",
 		},
 	)
+
+	// SnapshotSchedulePrunedTotal counts snapshots a SwiftSnapshotSchedule
+	// deleted by keep-N retention (excludes those skipped because still
+	// referenced).
+	SnapshotSchedulePrunedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kubeswift_snapshot_schedule_pruned_total",
+			Help: "Snapshots deleted by SwiftSnapshotSchedule keep-N retention",
+		},
+	)
 )
 
 // cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
@@ -224,5 +234,6 @@ func init() {
 		CloneTotal,
 		SnapshotUploadBytesTotal,
 		RestoreDownloadBytesTotal,
+		SnapshotSchedulePrunedTotal,
 	)
 }

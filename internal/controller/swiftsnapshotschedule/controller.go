@@ -103,6 +103,14 @@ func (r *SwiftSnapshotScheduleReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
+	// keep-N retention: prune the oldest Ready snapshots beyond keepLast. Runs
+	// every reconcile (the Owns(SwiftSnapshot) watch fires this as children
+	// reach Ready), not just on a tick. Uses the pre-create child list — a
+	// just-created snapshot is still Capturing, so never a prune candidate.
+	if err := r.pruneKeepN(ctx, &sched, children); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{RequeueAfter: requeueToNext(cronSched, now)}, nil
 }
 
