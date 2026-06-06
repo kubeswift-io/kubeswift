@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,15 @@ func (f *fakeStore) get(_ context.Context, key string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 func (f *fakeStore) remove(_ context.Context, key string) error { delete(f.objs, key); return nil }
+func (f *fakeStore) list(_ context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for k := range f.objs {
+		if strings.HasPrefix(k, prefix) {
+			keys = append(keys, k)
+		}
+	}
+	return keys, nil
+}
 
 func writeFile(t *testing.T, dir, rel string, content []byte) {
 	t.Helper()
@@ -242,15 +252,54 @@ func TestDownload_DetectsCorruption(t *testing.T) {
 	}
 }
 
+// TestRunDelete removes every object under the snapshot prefix and refuses an
+// empty prefix (whole-bucket blast-radius guard).
+func TestRunDelete(t *testing.T) {
+	ctx := context.Background()
+	src, _ := seedSnapshotDir(t)
+	store := newFakeStore()
+	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	// An unrelated object under a different prefix must survive.
+	store.objs["other/keep.bin"] = []byte("keep")
+
+	if err := runDelete(ctx, store, "ns/snap"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	for k := range store.objs {
+		if k != "other/keep.bin" {
+			t.Errorf("object %q under the deleted prefix survived", k)
+		}
+	}
+	if _, ok := store.objs["other/keep.bin"]; !ok {
+		t.Error("delete must not touch objects outside the snapshot prefix")
+	}
+
+	// Empty / whitespace prefix is refused (would target the whole bucket).
+	for _, bad := range []string{"", "  ", "/"} {
+		if err := runDelete(ctx, store, bad); err == nil {
+			t.Errorf("empty-ish prefix %q must be refused", bad)
+		}
+	}
+}
+
 func TestRunArgs_Validate(t *testing.T) {
-	ok := runArgs{mode: "upload", dir: "/d", bucket: "b", keyPrefix: "p"}
-	if err := ok.validate(); err != nil {
-		t.Errorf("valid args rejected: %v", err)
+	for _, ok := range []runArgs{
+		{mode: "upload", dir: "/d", bucket: "b", keyPrefix: "p"},
+		{mode: "download", dir: "/d", bucket: "b", keyPrefix: "p"},
+		{mode: "delete", bucket: "b", keyPrefix: "p"}, // delete needs no dir
+	} {
+		if err := ok.validate(); err != nil {
+			t.Errorf("valid args rejected: %+v: %v", ok, err)
+		}
 	}
 	for _, bad := range []runArgs{
 		{mode: "sideways", dir: "/d", bucket: "b", keyPrefix: "p"},
 		{mode: "upload", bucket: "b", keyPrefix: "p"},              // no dir
 		{mode: "upload", dir: "/d", keyPrefix: "p"},                // no bucket
+		{mode: "delete", bucket: "b"},                              // no key-prefix
+		{mode: "delete", keyPrefix: "p"},                           // no bucket
 		{mode: "download", dir: "/d", bucket: "b", insecure: true}, // insecure + default endpoint
 	} {
 		if err := bad.validate(); err == nil {
