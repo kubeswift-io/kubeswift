@@ -187,6 +187,13 @@ spec:
                   - type
                   type: object
                 type: array
+              downloadedBytes:
+                description: |-
+                  DownloadedBytes is the snapshot's total artifact footprint materialized on
+                  the target node for an s3 (Tier C) restore — read from the download Job's
+                  byte report. Absent for local/csi restores (no download step).
+                format: int64
+                type: integer
               guestRef:
                 description: |-
                   SwiftRestoreGuestRef is the SwiftGuest the SwiftRestore produced (or

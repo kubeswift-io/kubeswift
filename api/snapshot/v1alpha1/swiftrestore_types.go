@@ -102,6 +102,12 @@ type SwiftRestoreStatus struct {
 	GuestRef    *SwiftRestoreGuestRef `json:"guestRef,omitempty"`
 	StartedAt   *metav1.Time          `json:"startedAt,omitempty"`
 	CompletedAt *metav1.Time          `json:"completedAt,omitempty"`
+
+	// DownloadedBytes is the snapshot's total artifact footprint materialized on
+	// the target node for an s3 (Tier C) restore — read from the download Job's
+	// byte report. Absent for local/csi restores (no download step).
+	// +optional
+	DownloadedBytes int64 `json:"downloadedBytes,omitempty"`
 }
 
 // SwiftRestore restores a SwiftSnapshot into a new (or existing) SwiftGuest.
