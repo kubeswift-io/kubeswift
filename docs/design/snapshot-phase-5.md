@@ -237,23 +237,36 @@ multi-controller surface — the W5 pattern lives here: a TTL-GC that deletes a
 pool-referenced snapshot, or an S3 delete Job that 403s on a missing-cred path,
 won't show up in fake-client tests).
 
-## 8. Open questions
+## 8. Open questions — RESOLVED (2026-06-05)
 
-- **OQ1 — delete-Job key set.** `--mode=delete` could (a) read `manifest.json`
-  from S3 and remove exactly its artifacts, or (b) list-and-remove the whole key
-  prefix. (b) is simpler and also catches stale/orphaned objects under the prefix;
-  (a) is precise but misses orphans. **Lean (b)** (prefix-scoped, the prefix is
-  per-`<namespace>/<snapshot>` so blast radius is one snapshot), with a guard
-  refusing an empty prefix.
-- **OQ2 — TTL re-check cap.** A 30-day TTL shouldn't pin a reconcile for 30 days;
-  cap `RequeueAfter` at ~1h so controller restarts/clock are tolerated. Confirm
-  the cap value.
-- **OQ3 — `deletionPolicy` for csi-volume-snapshot.** Proposed: ignored (the
-  VolumeSnapshot's own policy governs). Confirm we don't want to surface a
-  warning when an operator sets `Delete`/`Retain` on a CSI snapshot.
-- **OQ4 — byte report on a *failed* transfer.** If the Job fails mid-transfer the
-  termination message may be partial/absent; we leave the field nil (no metric).
-  Confirm we don't want a `…_failed_bytes` surface (probably not — noise).
+- **OQ1 — delete-Job key set → (b) prefix-scoped list-and-remove**, with an
+  empty/short-prefix guard. The prefix is per-`<namespace>/<snapshot>` (blast
+  radius = one snapshot) and (b) also reaps orphans a manifest-driven delete
+  would miss (a partial upload that never reached `manifest.json`, PR #118's
+  stale same-size objects). Requires `s3:ListBucket` on the prefix alongside
+  delete — standard for creds that already get/put there.
+- **OQ2 — TTL re-check cap → 1h.** Bounds worst-case staleness after a controller
+  restart / clock skew to ≤1h past expiry without pinning a reconcile for a
+  30-day TTL. Matches the project's other backstop intervals (30m migration
+  timeout, SyncPeriod defense-in-depth).
+- **OQ3 — `deletionPolicy` on csi-volume-snapshot → ignored + a webhook
+  Warning.** The VolumeSnapshotClass `deletionPolicy` + ownerRefs govern the
+  VolumeSnapshot; our field is a no-op there. A non-blocking `admission.Warnings`
+  from `vswiftsnapshot` makes that visible in `kubectl` (no silent surprise,
+  Principle #6) without rejecting a valid spec.
+- **OQ4 — bytes on a *failed* transfer → leave nil, no `…_failed_bytes`
+  metric.** A partial count isn't operationally meaningful; the failure is already
+  captured by `kubeswift_snapshot_total{result="failed"}`.
+
+### 8.1 PR 1 implementation note (metrics)
+
+`kubeswift_restore_total` / `kubeswift_restore_seconds` carry **no `backend`
+label** (the §3.1 inventory listed one). A `SwiftRestore` does not store its
+source snapshot's backend, and a status-path `Get` purely to recover it for a
+label isn't worth the cost. Snapshot metrics keep `backend` (the
+`SwiftSnapshot` object has it). If a backend split on restore is wanted later,
+PR 2 (which already touches restore status for `downloadedBytes`) can stamp a
+`status.backend` to label off.
 
 ## 9. Non-goals
 
