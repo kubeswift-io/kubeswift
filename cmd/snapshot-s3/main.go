@@ -14,10 +14,30 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 )
+
+// terminationMessagePath is the default Kubernetes terminationMessagePath. On a
+// successful transfer we write the transferStats JSON here; the kubelet copies
+// it into pod.status.containerStatuses[].state.terminated.message, which the
+// controller reads to stamp status bytes + the byte counters — no kube client
+// or RBAC in this Job. Overridable for tests.
+var terminationMessagePath = "/dev/termination-log"
+
+// reportTransfer best-effort writes the transfer stats to the termination
+// message file. A write failure is non-fatal: the transfer already succeeded,
+// and the byte report is a metrics surface only (the controller treats a
+// missing report as nil, never a failure).
+func reportTransfer(s transferStats) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(terminationMessagePath, data, 0o644)
+}
 
 func main() {
 	mode := flag.String("mode", "", "upload | download")
@@ -71,9 +91,17 @@ func run(a runArgs) error {
 	ctx := context.Background()
 	switch a.mode {
 	case "upload":
-		return runUpload(ctx, store, a.dir, a.keyPrefix, a.snapName, a.includeMemory)
+		stats, err := runUpload(ctx, store, a.dir, a.keyPrefix, a.snapName, a.includeMemory)
+		if err != nil {
+			return err
+		}
+		reportTransfer(stats)
 	case "download":
-		return runDownload(ctx, store, a.dir, a.keyPrefix)
+		stats, err := runDownload(ctx, store, a.dir, a.keyPrefix)
+		if err != nil {
+			return err
+		}
+		reportTransfer(stats)
 	}
 	return nil
 }

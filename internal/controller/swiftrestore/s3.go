@@ -25,6 +25,7 @@ import (
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -219,6 +220,15 @@ func (r *SwiftRestoreReconciler) handleDownloading(
 
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			// Read the download Job's byte report once (guard on the already-set
+			// status field so a requeue in the Tier B tail doesn't double-count
+			// the metric). Best-effort: a missing report leaves bytes 0.
+			if status.DownloadedBytes == 0 {
+				if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, restore.Namespace, s3DownloadJobName(restore)); rerr == nil && ok {
+					status.DownloadedBytes = rep.TotalBytes
+					metrics.RestoreDownloadBytesTotal.Add(float64(rep.TransferredBytes))
+				}
+			}
 			node, failMsg, rerr := r.resolveS3RestoreNode(ctx, restore, &snap)
 			if rerr != nil {
 				return false, 0, "", rerr

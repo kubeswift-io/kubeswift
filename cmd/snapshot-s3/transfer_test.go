@@ -79,7 +79,7 @@ func TestUploadDownload_RoundTrip(t *testing.T) {
 	src, files := seedSnapshotDir(t)
 	store := newFakeStore()
 
-	if err := runUpload(ctx, store, src, "ns/snap", "ns/snap", true); err != nil {
+	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", true); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
 	// manifest + 3 artifacts uploaded.
@@ -91,7 +91,7 @@ func TestUploadDownload_RoundTrip(t *testing.T) {
 	}
 
 	dst := t.TempDir()
-	if err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
 		t.Fatalf("download: %v", err)
 	}
 	for rel, want := range files {
@@ -105,17 +105,58 @@ func TestUploadDownload_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestTransferStats verifies the byte report the controller reads back: the
+// first upload transfers everything; a resumed upload skips everything; a
+// download mirrors it. transferred + skipped == total throughout.
+func TestTransferStats(t *testing.T) {
+	ctx := context.Background()
+	src, files := seedSnapshotDir(t)
+	var total int64
+	for _, c := range files {
+		total += int64(len(c))
+	}
+	store := newFakeStore()
+
+	up, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if up.TransferredBytes != total || up.SkippedBytes != 0 || up.TotalBytes != total {
+		t.Errorf("first upload stats = %+v, want transferred=%d skipped=0 total=%d", up, total, total)
+	}
+
+	up2, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
+	if err != nil {
+		t.Fatalf("re-upload: %v", err)
+	}
+	if up2.TransferredBytes != 0 || up2.SkippedBytes != total {
+		t.Errorf("resumed upload stats = %+v, want transferred=0 skipped=%d", up2, total)
+	}
+
+	dst := t.TempDir()
+	dl, err := runDownload(ctx, store, dst, "ns/snap")
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if dl.TransferredBytes != total || dl.SkippedBytes != 0 {
+		t.Errorf("download stats = %+v, want transferred=%d skipped=0", dl, total)
+	}
+	if dl.TransferredBytes+dl.SkippedBytes != dl.TotalBytes {
+		t.Errorf("invariant transferred+skipped==total violated: %+v", dl)
+	}
+}
+
 func TestUpload_IdempotentSkipsExisting(t *testing.T) {
 	ctx := context.Background()
 	src, _ := seedSnapshotDir(t)
 	store := newFakeStore()
-	if err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
+	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
 		t.Fatalf("first upload: %v", err)
 	}
 	first := store.puts
 	// Re-upload: artifacts already present with matching size -> skipped; only
 	// the manifest is re-put.
-	if err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
+	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
 		t.Fatalf("second upload: %v", err)
 	}
 	if delta := store.puts - first; delta != 1 {
@@ -135,7 +176,7 @@ func TestUpload_ReuploadsStaleSameSizeContent(t *testing.T) {
 
 	// First snapshot at ns/snap.
 	src1, _ := seedSnapshotDir(t)
-	if err := runUpload(ctx, store, src1, "ns/snap", "ns/snap", false); err != nil {
+	if _, err := runUpload(ctx, store, src1, "ns/snap", "ns/snap", false); err != nil {
 		t.Fatalf("first upload: %v", err)
 	}
 
@@ -145,7 +186,7 @@ func TestUpload_ReuploadsStaleSameSizeContent(t *testing.T) {
 	writeFile(t, src2, "config.json", []byte(`{"cpus":2}`))
 	writeFile(t, src2, "memory.img", bytes.Repeat([]byte("X"), 4096))
 	writeFile(t, src2, "disks/root.raw", bytes.Repeat([]byte("D"), 8192))
-	if err := runUpload(ctx, store, src2, "ns/snap", "ns/snap", false); err != nil {
+	if _, err := runUpload(ctx, store, src2, "ns/snap", "ns/snap", false); err != nil {
 		t.Fatalf("second upload: %v", err)
 	}
 
@@ -155,7 +196,7 @@ func TestUpload_ReuploadsStaleSameSizeContent(t *testing.T) {
 	}
 	// And a fresh download must verify cleanly against the new manifest.
 	dst := t.TempDir()
-	if err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
 		t.Fatalf("download after re-upload must verify clean: %v", err)
 	}
 }
@@ -164,14 +205,14 @@ func TestDownload_IdempotentSkipsVerified(t *testing.T) {
 	ctx := context.Background()
 	src, _ := seedSnapshotDir(t)
 	store := newFakeStore()
-	_ = runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
+	_, _ = runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
 
 	dst := t.TempDir()
-	if err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
 		t.Fatalf("first download: %v", err)
 	}
 	getsAfterFirst := store.gets
-	if err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
 		t.Fatalf("second download: %v", err)
 	}
 	// Second download re-reads only the manifest; artifacts already verify.
@@ -184,14 +225,14 @@ func TestDownload_DetectsCorruption(t *testing.T) {
 	ctx := context.Background()
 	src, _ := seedSnapshotDir(t)
 	store := newFakeStore()
-	_ = runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
+	_, _ = runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
 
 	// Corrupt one artifact object (size preserved, content changed) so only the
 	// sha256 check can catch it.
 	store.objs["ns/snap/disks/root.raw"] = bytes.Repeat([]byte("X"), 8192)
 
 	dst := t.TempDir()
-	err := runDownload(ctx, store, dst, "ns/snap")
+	_, err := runDownload(ctx, store, dst, "ns/snap")
 	if err == nil {
 		t.Fatal("download must fail verification on a corrupt artifact")
 	}

@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -84,6 +85,13 @@ func (r *SwiftSnapshotReconciler) handleUploading(ctx context.Context, snap *sna
 			status.S3 = &snapshotv1alpha1.S3SnapshotStatus{
 				Location:   s3Location(snap),
 				UploadedAt: &now,
+			}
+			// Read the upload Job's byte report (best-effort; a missing report
+			// leaves bytes 0 and is not a failure). status carries the S3
+			// footprint; the metric counts actual wire traffic.
+			if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, s3UploadJobName(snap)); rerr == nil && ok {
+				status.S3.UploadedBytes = rep.TotalBytes
+				metrics.SnapshotUploadBytesTotal.Add(float64(rep.TransferredBytes))
 			}
 			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseReady)
 			setReadyCondition(status, metav1.ConditionTrue, ReasonSnapshotReady,
