@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: June 4, 2026 — Snapshot Phase 4 (cloneFromSnapshot ergonomics) SHIPPED + cluster-validated (PRs #119–#126: design+spike, 5 feature PRs, 2 walkthrough fixes). A SwiftGuestPool clones N replicas from one Tier C snapshot, spread across nodes, each resuming the captured state with a distinct per-clone MAC. Prior: Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
+> Last updated: June 6, 2026 — Snapshot Phase 5 (operational polish) SHIPPED + cluster-validated (PRs #129–#135: design doc, metrics, byte gauges, Tier C S3 cleanup, deletionPolicy, ttl+reference-aware GC, dashboards). Prometheus metrics for the snapshot/restore/clone machinery, Tier C upload/download byte reporting via the container termination message, `deletionPolicy: Delete|Retain`, `spec.ttl` auto-expiry that won't delete a still-referenced snapshot, and a Grafana dashboard. Clean cluster walkthrough (no bugs). Also closed the long-standing "S3 objects leak on snapshot delete" follow-up. Prior: Snapshot Phase 4 (cloneFromSnapshot ergonomics, PRs #119–#126 + same-node download dedup #128); Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
 
 ---
 
@@ -2489,7 +2489,60 @@ Shipped across 8 PRs (design+spike, 5 feature, 2 walkthrough fixes):
   the next deploy (the resume *action* is cluster-proven; the controller
   auto-sending it is PR #126's new code).
 
-**Snapshot Phase 5 — operational polish** — Prometheus metrics, dashboards, retention, ~2-3 days (incl. the deferred s3 `downloadedBytes`/`observedUploadBytes` byte gauges — surfacing them needs the snapshot-s3 binary to report counts via a pod annotation the controller reads)
+**Snapshot Phase 5 — operational polish — SHIPPED + cluster-validated 2026-06-06.**
+Prometheus metrics, byte gauges, deletionPolicy, TTL retention, and a Grafana
+dashboard for the snapshot/restore/clone machinery. Design:
+[`docs/design/snapshot-phase-5.md`](docs/design/snapshot-phase-5.md); operator
+runbook: [`docs/snapshots/observability.md`](docs/snapshots/observability.md).
+Shipped across 7 PRs (design + 6 build PRs):
+
+- **PR #129** — design/scoping doc; settled the retention semantics + the four
+  open questions (OQ1 prefix-scoped delete, OQ2 1h TTL re-check cap, OQ3 CSI
+  deletionPolicy warning, OQ4 no failed-transfer bytes) up front.
+- **PR #130** — snapshot/restore/clone Prometheus metrics in `internal/metrics`,
+  recorded once on the non-terminal→terminal transition (mirrors
+  `recordMigrationTerminal`). `kubeswift_snapshot_total{backend,result}`,
+  capture/pause/upload/restore latency histograms, size histogram,
+  `kubeswift_restore_total{result}`, `kubeswift_clone_total{result}`. Cardinality
+  discipline (backend×result; no per-namespace on result-bearing series).
+- **PR #131** — Tier C **byte gauges** via the container **termination message**
+  (`/dev/termination-log` → `pod.status…terminated.message`, read by
+  `clonecommon.JobTransferReport`) — zero new RBAC, better than the roadmap's
+  pod-self-annotation plan. Status fields carry the snapshot S3 **footprint**
+  (`status.s3.uploadedBytes` + new `SwiftRestore.status.downloadedBytes` =
+  `totalBytes`); the `…_bytes_total` counters carry **wire traffic**
+  (`transferredBytes`, excludes resume-skips).
+- **PR #132** — Tier C **S3 object cleanup** on snapshot deletion (closes the
+  long-standing leak): `snapshot-s3 --mode=delete` (prefix-scoped list-and-remove)
+  + `S3ObjectFinalizer`; `handleDeletion` dispatches Tier B (hostPath pod) vs
+  Tier C (delete Job). Never wedges namespace deletion (Principle #10).
+- **PR #133** — `spec.deletionPolicy: Delete|Retain` (default Delete) gating the
+  purge; `vswiftsnapshot` warns on CSI+Retain (OQ3).
+- **PR #134** — `spec.ttl` + reference-aware GC: TTL-expired snapshots self-Delete
+  (honoring deletionPolicy) UNLESS still referenced by a cloneFromSnapshot
+  SwiftGuest or an in-flight SwiftRestore — then a `RetentionBlocked` condition +
+  requeue (operator `kubectl delete` is never blocked). 1h re-check cap (OQ2).
+- **PR #135** — Grafana dashboard (`config/grafana/kubeswift-snapshots.json`) +
+  ServiceMonitor sample + observability runbook.
+- **Cluster walkthrough (2026-06-06, image sha-2e964da, rocky9-cloud guest on
+  boba, in-cluster MinIO)** — a rare **clean** walkthrough, no bugs:
+  - Tier C round-trip: `status.s3.uploadedBytes=2147549587` + `…_upload_bytes_total`
+    matched; `snapshot_total{backend=s3,result=ready}=1`; 4 artifacts in MinIO.
+  - Restore: `status.downloadedBytes=2147549587` (footprint). **`…_download_bytes_total=0`
+    — correct, not a bug:** the restore pinned to the capture node (boba) found the
+    artifacts already in the snapshot-keyed node-local cache and skipped them all,
+    so wire traffic was legitimately 0 — a live validation of the footprint-vs-wire
+    split (a cross-node restore would show non-zero).
+  - `deletionPolicy: Delete` → delete Job purged the prefix; `Retain` → finalizer
+    dropped, NO Job, objects survived; the Delete purge was **prefix-scoped** (a
+    coexisting snapshot's objects survived — blast radius = one snapshot).
+  - `spec.ttl`: at expiry the snapshot stayed alive with
+    `RetentionBlocked=True ("referenced by SwiftGuest … (cloneFromSnapshot)")`;
+    deleting the clone-ref → TTL-deleted within ~10s and the Delete policy purged
+    the objects.
+- **Tracked follow-up (deferred, documented in §5 design):** snapshot **scheduling**
+  (CronSnapshot) + **keep-N** retention — they only pay off with a scheduler, so
+  they're a coherent future phase; Phase 5 shipped TTL + deletionPolicy.
 
 ### Other Roadmap Items Not Progressed
 - **Windows guest support** — no design doc, implementable
