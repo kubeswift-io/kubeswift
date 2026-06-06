@@ -138,6 +138,19 @@ spec:
                 required:
                 - type
                 type: object
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  DeletionPolicy controls whether deleting this SwiftSnapshot also purges
+                  its backend artifacts. Delete (default) purges the local hostPath / s3
+                  objects; Retain leaves them in place (the cleanup finalizer is dropped
+                  without a purge) for out-of-band archival. Ignored for
+                  csi-volume-snapshot — the VolumeSnapshotClass deletionPolicy governs the
+                  underlying VolumeSnapshot.
+                enum:
+                - Delete
+                - Retain
+                type: string
               guestRef:
                 description: GuestRef points at the SwiftGuest in the same namespace
                   to snapshot.

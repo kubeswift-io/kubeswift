@@ -39,6 +39,21 @@ const (
 	SwiftSnapshotConditionReady = "Ready"
 )
 
+// SnapshotDeletionPolicy controls whether deleting a SwiftSnapshot also purges
+// its backend artifacts.
+// +kubebuilder:validation:Enum=Delete;Retain
+type SnapshotDeletionPolicy string
+
+const (
+	// SnapshotDeletionPolicyDelete purges the backend artifacts (local hostPath
+	// / s3 objects) when the SwiftSnapshot is deleted. The default.
+	SnapshotDeletionPolicyDelete SnapshotDeletionPolicy = "Delete"
+	// SnapshotDeletionPolicyRetain leaves the backend artifacts in place when
+	// the SwiftSnapshot is deleted (the finalizer is dropped without a purge),
+	// for out-of-band archival.
+	SnapshotDeletionPolicyRetain SnapshotDeletionPolicy = "Retain"
+)
+
 // SwiftSnapshotGuestRef references the SwiftGuest to snapshot.
 type SwiftSnapshotGuestRef struct {
 	Name string `json:"name"`
@@ -120,6 +135,16 @@ type SwiftSnapshotSpec struct {
 	// stops the VM gracefully and restarts it iff this is true).
 	// +kubebuilder:default=true
 	ResumeAfterSnapshot bool `json:"resumeAfterSnapshot,omitempty"`
+
+	// DeletionPolicy controls whether deleting this SwiftSnapshot also purges
+	// its backend artifacts. Delete (default) purges the local hostPath / s3
+	// objects; Retain leaves them in place (the cleanup finalizer is dropped
+	// without a purge) for out-of-band archival. Ignored for
+	// csi-volume-snapshot — the VolumeSnapshotClass deletionPolicy governs the
+	// underlying VolumeSnapshot.
+	// +kubebuilder:default=Delete
+	// +optional
+	DeletionPolicy SnapshotDeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // SnapshotDiskRef records one captured disk (root or data) by role + handle.
