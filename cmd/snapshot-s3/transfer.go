@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 )
 
 // transferStats reports how many artifact bytes a transfer moved vs skipped
@@ -114,6 +115,31 @@ func runDownload(ctx context.Context, store objectStore, dstDir, keyPrefix strin
 	}
 	log.Printf("snapshot-s3 download complete into %s (%d transferred, %d skipped)", dstDir, stats.TransferredBytes, stats.SkippedBytes)
 	return stats, nil
+}
+
+// runDelete removes every object under keyPrefix (prefix-scoped list-and-remove,
+// per the Phase 5 design OQ1). The prefix is per-<namespace>/<snapshot>, so the
+// blast radius is a single snapshot — and a prefix-list also reaps orphans a
+// manifest-driven delete would miss (a partial upload that never reached
+// manifest.json, stale same-size objects). Refuses an empty prefix (which would
+// target the whole bucket).
+func runDelete(ctx context.Context, store objectStore, keyPrefix string) error {
+	if strings.Trim(keyPrefix, "/ ") == "" {
+		return fmt.Errorf("refusing to delete: empty key prefix would target the whole bucket")
+	}
+	keys, err := store.list(ctx, keyPrefix)
+	if err != nil {
+		return fmt.Errorf("list %q: %w", keyPrefix, err)
+	}
+	log.Printf("snapshot-s3 delete: %d object(s) under %s", len(keys), keyPrefix)
+	for _, k := range keys {
+		if err := store.remove(ctx, k); err != nil {
+			return fmt.Errorf("remove %q: %w", k, err)
+		}
+		log.Printf("  rm %s", k)
+	}
+	log.Printf("snapshot-s3 delete complete: %s", keyPrefix)
+	return nil
 }
 
 func downloadOne(ctx context.Context, store objectStore, key, dst string) error {

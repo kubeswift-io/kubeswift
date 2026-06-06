@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"strings"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 )
@@ -32,6 +34,25 @@ import (
 // transition to Ready. The deletion handler runs the cleanup pod and
 // removes the finalizer once the pod reports Succeeded.
 const HostPathFinalizer = "kubeswift.io/snapshot-hostpath-cleanup"
+
+// S3ObjectFinalizer is added to s3-backend (Tier C) SwiftSnapshots once
+// they transition to Ready. The deletion handler runs a delete Job that
+// purges the snapshot's object-storage prefix, then removes the finalizer.
+const S3ObjectFinalizer = "kubeswift.io/snapshot-s3-cleanup"
+
+// cleanupFinalizerFor returns the cleanup finalizer a SwiftSnapshot's
+// backend needs, or "" for backends with no controller-managed artifact
+// cleanup (csi-volume-snapshot — the VolumeSnapshot lifecycle handles it).
+func cleanupFinalizerFor(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendLocal:
+		return HostPathFinalizer
+	case snapshotv1alpha1.SnapshotBackendS3:
+		return S3ObjectFinalizer
+	default:
+		return ""
+	}
+}
 
 // CleanupImage is the container image used by the cleanup pod. Kept
 // minimal — just needs `rm -rf` and a writable hostPath mount.
@@ -50,12 +71,13 @@ func cleanupPodName(snap *snapshotv1alpha1.SwiftSnapshot) string {
 	return "swift-snap-cleanup-" + snap.Name
 }
 
-// ensureFinalizer adds HostPathFinalizer to a Tier B SwiftSnapshot
-// once it reaches Ready. No-op for csi-volume-snapshot snapshots —
-// VolumeSnapshot deletion is handled via OwnerReferences, not a
-// finalizer.
+// ensureFinalizer adds the backend's cleanup finalizer once a SwiftSnapshot
+// reaches Ready: HostPathFinalizer for Tier B (local), S3ObjectFinalizer for
+// Tier C (s3). No-op for csi-volume-snapshot — VolumeSnapshot deletion is
+// handled via OwnerReferences, not a finalizer.
 func (r *SwiftSnapshotReconciler) ensureFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
-	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendLocal {
+	fin := cleanupFinalizerFor(snap)
+	if fin == "" {
 		return nil
 	}
 	if snap.DeletionTimestamp != nil {
@@ -63,27 +85,40 @@ func (r *SwiftSnapshotReconciler) ensureFinalizer(ctx context.Context, snap *sna
 		// the apiserver's "finalizer added during deletion" warning.
 		return nil
 	}
-	for _, f := range snap.Finalizers {
-		if f == HostPathFinalizer {
-			return nil
-		}
+	if hasFinalizer(snap, fin) {
+		return nil
 	}
 	patched := snap.DeepCopy()
-	patched.Finalizers = append(patched.Finalizers, HostPathFinalizer)
+	patched.Finalizers = append(patched.Finalizers, fin)
 	return r.Patch(ctx, patched, client.MergeFrom(snap))
 }
 
-// handleDeletion runs when DeletionTimestamp is set on a SwiftSnapshot
-// that still carries HostPathFinalizer. Creates (or re-checks) a
-// cleanup pod on the source node; once the pod reports Succeeded,
-// removes the finalizer so the apiserver garbage-collects the
-// SwiftSnapshot.
+// handleDeletion dispatches the backend-specific artifact cleanup when a
+// SwiftSnapshot is being deleted: Tier B (local) runs a node-pinned hostPath
+// cleanup pod; Tier C (s3) runs a delete Job that purges the object-storage
+// prefix. Each removes its finalizer once cleanup succeeds, so the apiserver
+// can GC. A snapshot with neither finalizer (csi-volume-snapshot, or never
+// reached Ready) has nothing to clean — done immediately.
 //
-// Returns (done, requeue, err):
-//   - done=true: finalizer removed. Caller can return without requeue.
-//   - done=false, err==nil: pod still running or just created;
-//     caller requeues.
+// Returns (done, err): done=true means the finalizer is gone (or never
+// existed); done=false (nil err) means cleanup is in flight — requeue.
 func (r *SwiftSnapshotReconciler) handleDeletion(
+	ctx context.Context,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+) (bool, error) {
+	switch {
+	case hasFinalizer(snap, S3ObjectFinalizer):
+		return r.handleS3Deletion(ctx, snap)
+	case hasFinalizer(snap, HostPathFinalizer):
+		return r.handleLocalDeletion(ctx, snap)
+	default:
+		return true, nil
+	}
+}
+
+// handleLocalDeletion runs the Tier B hostPath cleanup pod on the source node;
+// once it reports Succeeded, removes HostPathFinalizer.
+func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 ) (bool, error) {
@@ -215,10 +250,16 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 }
 
 func (r *SwiftSnapshotReconciler) removeFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
+	return r.removeNamedFinalizer(ctx, snap, HostPathFinalizer)
+}
+
+// removeNamedFinalizer strips a specific finalizer and patches. Returns
+// (true, nil) on success so a caller can `return r.removeNamedFinalizer(...)`.
+func (r *SwiftSnapshotReconciler) removeNamedFinalizer(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, name string) (bool, error) {
 	patched := snap.DeepCopy()
 	out := patched.Finalizers[:0]
 	for _, f := range patched.Finalizers {
-		if f != HostPathFinalizer {
+		if f != name {
 			out = append(out, f)
 		}
 	}
@@ -227,6 +268,60 @@ func (r *SwiftSnapshotReconciler) removeFinalizer(ctx context.Context, snap *sna
 		return false, err
 	}
 	return true, nil
+}
+
+// handleS3Deletion purges a Tier C snapshot's object-storage prefix via a
+// delete Job, then removes S3ObjectFinalizer. Drops the finalizer without a
+// purge in the cases where there is nothing to purge or no way to (never
+// uploaded, no s3 config, or the snapshot-s3 image is unconfigured) — never
+// wedge namespace deletion on a snapshot we cannot clean (the finalizer-trap
+// lesson, Design Principle #10).
+//
+// NOTE: deletionPolicy (Delete|Retain) lands in the next PR; until then a Tier C
+// snapshot deletion always purges (the implicit default).
+func (r *SwiftSnapshotReconciler) handleS3Deletion(
+	ctx context.Context,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+) (bool, error) {
+	if !hasFinalizer(snap, S3ObjectFinalizer) {
+		return true, nil
+	}
+	// Nothing to purge: never uploaded, or no s3 config. Drop the finalizer.
+	if snap.Status.S3 == nil || snap.Spec.Backend.S3 == nil || snap.Spec.Backend.S3.Bucket == "" {
+		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
+	}
+	// Can't purge without the snapshot-s3 image — don't wedge deletion forever.
+	if r.SnapshotS3Image == "" {
+		log.FromContext(ctx).Info("snapshot-s3 image not configured; dropping S3 cleanup finalizer without purging objects (orphan objects remain)", "snapshot", snap.Name)
+		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
+	}
+
+	podName := s3DeleteJobName(snap)
+	var job batchv1.Job
+	getErr := r.Get(ctx, client.ObjectKey{Name: podName, Namespace: snap.Namespace}, &job)
+	if apierrors.IsNotFound(getErr) {
+		if err := r.ensureDeleteJob(ctx, snap); err != nil {
+			return false, fmt.Errorf("create s3 delete Job: %w", err)
+		}
+		return false, nil // Job just created; requeue.
+	}
+	if getErr != nil {
+		return false, getErr
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			// Objects purged. Best-effort delete the Job (+ its pod) then drop
+			// the finalizer so the apiserver GCs the SwiftSnapshot.
+			_ = r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
+		}
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			// Leave the finalizer so the failure is visible; operator can
+			// `kubectl delete job` to retry, or delete the finalizer by hand.
+			return false, nil
+		}
+	}
+	return false, nil // still purging
 }
 
 func hasFinalizer(snap *snapshotv1alpha1.SwiftSnapshot, target string) bool {

@@ -24,6 +24,8 @@ type objectStore interface {
 	put(ctx context.Context, key string, r io.Reader, size int64, sha256 string) error
 	get(ctx context.Context, key string) (io.ReadCloser, error)
 	remove(ctx context.Context, key string) error
+	// list returns every object key under prefix (recursive).
+	list(ctx context.Context, prefix string) ([]string, error)
 }
 
 // objectSHA256MetaKey is the user-metadata key (sent as the x-amz-meta-sha256
@@ -98,4 +100,15 @@ func (s *minioStore) get(ctx context.Context, key string) (io.ReadCloser, error)
 
 func (s *minioStore) remove(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+func (s *minioStore) list(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return nil, obj.Err
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
 }
