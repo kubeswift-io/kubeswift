@@ -1,0 +1,24 @@
+# Daily disk-only (CSI) snapshot of a SwiftGuest at 02:00 UTC, keeping the 7
+# most recent. csi-volume-snapshot is the recommended scheduling backend: each
+# tick takes a fresh per-snapshot VolumeSnapshot (no shared hostPath), and the
+# capture is crash-consistent without pausing the VM.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshotSchedule
+metadata:
+  name: nightly-db
+  namespace: default
+spec:
+  schedule: "0 2 * * *"            # 5-field cron, UTC
+  concurrencyPolicy: Forbid        # skip a tick while a prior capture is still running
+  retention:
+    keepLast: 7                    # keep the 7 most recent Ready snapshots; prune older
+  template:
+    metadata:
+      labels: {tier: db}           # merged onto every created SwiftSnapshot
+    spec:
+      guestRef:
+        name: db
+      backend:
+        type: csi-volume-snapshot
+        # csiVolumeSnapshot:
+        #   volumeSnapshotClassName: csi-hostpath-snapclass   # optional; default class if unset
