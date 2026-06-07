@@ -1,8 +1,19 @@
 # Windows Guest Support
 
-> Status: DESIGN (pre-spike). First scoping pass for running Windows VMs as
-> SwiftGuests. Greenfield — there is no `osType` concept in the codebase today;
-> several runtime layers assume a Linux guest. Last updated: 2026-06-07.
+> Status: DESIGN — **spike complete, OQ1 reopened**. First scoping pass for running
+> Windows VMs as SwiftGuests. Greenfield — there is no `osType` concept in the
+> codebase today; several runtime layers assume a Linux guest. Last updated:
+> 2026-06-07.
+>
+> **Spike result (see [`windows-guest-support-spike.md`](windows-guest-support-spike.md)):**
+> the image-prep pipeline works and **QEMU+OVMF boots Windows cleanly and stably**,
+> but **Cloud Hypervisor v51.1 is BLOCKED** — Windows bugchecks `0xD1` in
+> `viostor.sys` (virtio-blk) and reboot-loops (even at `num_queues=1` / single
+> vCPU; `kvm_hyperv=on` is required just to reach that point). This **flips OQ1**:
+> v1 Windows should run on **QEMU+OVMF** (the former "escape hatch" becomes the
+> primary path), with CH-for-Windows deferred behind a newer `virtio-win`/CH that
+> clears the viostor crash. The rest of the design (the `osType` gate, import-step
+> skipping, cloudbase-init, the virtio+BCD image-prep runbook) stands.
 
 ## 1. Goal
 
@@ -23,7 +34,7 @@ Linux-only steps and preparing the guest.
 
 | Layer | Linux today | Windows |
 |---|---|---|
-| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | **Same — Cloud Hypervisor.** Windows is supported on CH; reuse the existing disk-boot path. QEMU is an opt-in escape hatch (see §4) only for graphical-console or emulated-device cases — the same "QEMU only when needed" rule the GPU tiers follow. |
+| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | **QEMU+OVMF for v1** (spike-corrected). CH *loads* the Windows boot manager and runs the kernel, but **CH v51.1 bugchecks `0xD1` in `viostor.sys` and reboot-loops** ([spike](windows-guest-support-spike.md) §4) — so for `osType: windows` the runtime routes to QEMU+OVMF (the same `swift-qemu-client` path used for GPU). "QEMU only when the OS requires it." CH-for-Windows deferred. |
 | **Firmware** | CLOUDHV.fd (EDK2 UEFI) for disk boot | **Same CLOUDHV.fd.** Windows is UEFI-only; the existing EDK2 UEFI firmware path already provides it. Not a divergence. |
 | **virtio drivers** | in-tree (Linux ships virtio-blk/net) | The real Windows problem — Windows has **no** virtio drivers OOTB, so a stock image sees neither the virtio-blk disk nor the virtio-net NIC. **This is hypervisor-agnostic** (identical for CH and QEMU; both present virtio devices). §3. |
 | **Provisioning** | cloud-init NoCloud seed.iso | **cloudbase-init** reads the same NoCloud/ConfigDrive seed the runtime already builds. Hypervisor-agnostic. |
@@ -85,9 +96,14 @@ pre-prepare an image.
 
 ## 5. Open decisions (for the kickoff conversation)
 
-- **OQ1 — Hypervisor: RESOLVED → Cloud Hypervisor default** (principle-
-  consistent; CH supports Windows). QEMU is the escape hatch for graphical-
-  console / emulated-device cases only. No CH-vs-QEMU default question remains.
+- **OQ1 — Hypervisor: REOPENED by the spike → QEMU+OVMF for v1.** The CH-first
+  resolution assumed "CH supports Windows"; the spike shows **CH v51.1 bugchecks
+  `0xD1` in `viostor.sys` and reboot-loops** (details:
+  [`windows-guest-support-spike.md`](windows-guest-support-spike.md) §4/§7), while
+  **QEMU+OVMF boots Windows cleanly and stably**. So for `osType: windows` the
+  hypervisor default flips to **QEMU+OVMF** — consistent with "QEMU only when a
+  feature/OS requires it." CH-for-Windows is a future track gated on a newer
+  `virtio-win` viostor and/or newer CH clearing the crash.
 - **OQ2 — virtio strategy for v1:** (A) operator-prepped virtio image on CH
   (recommended) vs (B) emulated devices on the QEMU escape hatch for stock
   images.
@@ -101,34 +117,46 @@ pre-prepare an image.
   scope now, or do we ship behind the same "asset not available" caveat as Tier
   2/3 GPU until a Windows image exists?
 
-## 6. Spike (before committing to the full build)
+## 6. Spike — COMPLETE (2026-06-07)
 
-Once OQ2/OQ4/OQ5 are settled, a spike answers the load-bearing unknowns —
-notably **on Cloud Hypervisor**:
+Full findings: [`windows-guest-support-spike.md`](windows-guest-support-spike.md).
+Ran entirely off-cluster with the **real CH v51.1 binary + `CLOUDHV.fd`** from the
+`swiftletd` image. Answers to the load-bearing unknowns:
 
-1. Does a virtio-ready Windows Server eval guest **boot on Cloud Hypervisor**
-   via the existing `--kernel CLOUDHV.fd` + virtio-blk + virtio-net path, and
-   shut down cleanly (ACPI)?
-2. Does cloudbase-init read the existing NoCloud seed.iso and apply hostname /
-   admin password / network?
-3. (Escape hatch, only if doing graphical install in-cluster) does QEMU+OVMF+VNC
-   give a usable install console?
+1. **Does a virtio-ready Windows guest boot on Cloud Hypervisor?** — **NO, on CH
+   v51.1.** The kernel runs (needs `--cpus kvm_hyperv=on`) and SAC initializes, then
+   Windows bugchecks **`0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`** (the
+   virtio-blk driver) and reboot-loops. Reproduces at `num_queues=1` and single
+   vCPU → a fundamental viostor↔CH-virtio-blk incompatibility, not a flag.
+2. **Does QEMU+OVMF boot it?** — **YES, cleanly and stably** (SAC up, no crash). The
+   image-prep pipeline (unattended virtio install + headless **BCD prep**: EMS/SAC +
+   `recoveryenabled no` + `bootstatuspolicy ignoreallfailures`) is validated here.
+3. **cloudbase-init / NoCloud seed** — **not exercised** (gated behind a booting
+   guest; the install used `autounattend.xml`). Carried forward to the QEMU-path
+   build (PR 5).
 
-If the spike can't run (no Windows image obtainable on this cluster), the design
-ships as "code-complete, asset-gated validation" — explicitly labelled, like
-Tier 2/3 GPU and multi-NIC.
+Net: the spike **could** run, and it **flips OQ1** — v1 Windows is **QEMU+OVMF**;
+CH-for-Windows is deferred behind a newer `virtio-win`/CH that clears the viostor
+`0xD1` (untested mitigations listed in the findings doc §7). The image-prep,
+`kvm_hyperv=on`, and `\EFI\Boot\bootx64.efi` fallback-path findings carry forward
+to whichever hypervisor.
 
-## 7. Phased PR breakdown (provisional — refined after the spike)
+## 7. Phased PR breakdown (refined after the spike — QEMU+OVMF for v1)
+
+The spike flipped the runtime target from CH to QEMU+OVMF (§6/OQ1). The
+`osType` gate, import-skip, provisioning, and image-prep PRs are unchanged; only
+the runtime PR's hypervisor flips.
 
 | PR | Scope |
 |---|---|
-| 1 | This design doc. |
+| 1 | This design doc (+ spike findings doc). |
 | 2 | `osType` field on SwiftGuest + SwiftImage (+ webhook rules) + resolver wiring. Default `linux` — no behavior change for existing guests. |
 | 3 | Image import: skip GRUB/serial patch + growpart for `osType: windows` (keep qcow2→raw + resize). |
-| 4 | Runtime: `osType: windows` boots on the **existing CH disk-boot path** (CLOUDHV.fd + virtio) with the Linux-only cmdline/console assumptions gated off. (Small — it's mostly reuse.) |
-| 5 | Provisioning: cloudbase-init userdata over the NoCloud seed. |
-| 6 | QEMU+OVMF+VNC **escape hatch** (graphical console + emulated device model) for install/driver-injection/stock-image cases. |
-| 7 | Operator runbook (virtio-ready image prep) + samples; spike/cluster validation (asset permitting). |
+| 4 | Runtime: `osType: windows` routes to **QEMU+OVMF** (the `swift-qemu-client` path already in `swiftletd` for GPU), boots via the `\EFI\Boot\bootx64.efi` fallback, with Linux-only cmdline/console assumptions gated off. (CH-for-Windows deferred — spike F6.) |
+| 5 | Provisioning: cloudbase-init userdata over the NoCloud seed (the spike used `autounattend.xml`; cloudbase-init is the runtime path). |
+| 6 | Image-prep tooling/runbook: virtio (viostor/NetKVM) + the **headless BCD prep** (EMS/SAC, `recoveryenabled no`, `bootstatuspolicy ignoreallfailures`) the spike validated; the `autounattend.xml` + `run-install.sh` from the spike are the seed. |
+| 7 | Operator runbook + samples; cluster validation (asset-gated — no Windows license on the dev cluster). |
+| (future) | CH-for-Windows re-spike once a newer `virtio-win`/CH clears the viostor `0xD1`. |
 
 ## 8. Non-goals (v1)
 
