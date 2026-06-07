@@ -43,7 +43,7 @@ SwiftGuest Pod
   |- init: gpu-init      (VFIO bind, FM partition) [GPU path only]
   |- launcher: swiftletd (Rust)
         |
-  Cloud Hypervisor v51.1  (default)
+  Cloud Hypervisor v52.0  (default)
   or QEMU               (GPU Tier 2/3)
         |
   Guest VM

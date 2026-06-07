@@ -81,7 +81,10 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - Guest OS (disk boot): Ubuntu Noble (24.04) cloud image — all modern distributions supported
 - Guest OS (kernel boot): faas-minimal — Linux 6.6.44 + BusyBox musl
 - Firmware (disk boot): CLOUDHV.fd loaded via `--kernel` flag (NOT `--firmware`)
-- Cloud Hypervisor: v51.1
+- Cloud Hypervisor: **v52.0** (bumped from v51.1 — the swiftletd image ships v52.0;
+  v51.1's virtio-blk bugchecks Windows' viostor driver, fixed in v52.0. CLOUDHV.fd
+  firmware unchanged: `ch-13b4963ec4`, the spike-validated pairing. Linux-guest
+  regression validation lands with the redeploy.)
 - Seed format: NoCloud flat layout
 - DHCP range: 10.244.125.10–20 on br0 (10.244.125.1)
 - ORAS CLI: v1.3.1
@@ -2649,7 +2652,7 @@ Shipped across 6 PRs (design + 5 build):
 ---
 
 ## Hardware Available
-- 3-node k0s cluster (frida control-plane, miles + boba workers), Ubuntu 24.04, CH v51.1, Longhorn 22d
+- 3-node k0s cluster (frida control-plane, miles + boba workers), Ubuntu 24.04, CH v52.0 (swiftletd image; bumped from v51.1 — verify with the redeploy), Longhorn 22d
 - boba has GeForce GTX 1080 (Tier 1 GPU validated)
 - No SR-IOV NICs, no HGX, no multi-NIC servers currently
 
