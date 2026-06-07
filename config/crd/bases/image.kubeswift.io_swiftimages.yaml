@@ -66,6 +66,17 @@ spec:
                 - raw
                 - qcow2
                 type: string
+              osType:
+                default: linux
+                description: |-
+                  OSType is the OS family this image contains: "linux" (default) or
+                  "windows". Gates the Linux-only import steps (GRUB/serial patch,
+                  growpart resize expectation). Default linux; existing images are
+                  unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+                enum:
+                - linux
+                - windows
+                type: string
               rootDisk:
                 description: SwiftImageRootDiskSpec specifies root disk options for
                   the import PVC.

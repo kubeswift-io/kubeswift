@@ -99,6 +99,21 @@ type PreparedArtifactRef struct {
 	Size   *resource.Quantity  `json:"size,omitempty"`
 }
 
+// OSType is the operating-system family the image contains: "linux"
+// (default) or "windows". It gates the Linux-only import steps (GRUB/serial
+// patch, growpart resize expectation) in the import pipeline. For a Windows
+// image the operator supplies a virtio-ready disk (viostor pre-installed); the
+// import keeps qcow2->raw + resize but skips the Linux-only steps. Default
+// linux. (Defined per-API-group to avoid a cross-group import; mirrors
+// api/swift/v1alpha1.OSType.)
+// +kubebuilder:validation:Enum=linux;windows
+type OSType string
+
+const (
+	OSTypeLinux   OSType = "linux"
+	OSTypeWindows OSType = "windows"
+)
+
 // DiskFormat is the disk image format.
 // +kubebuilder:validation:Enum=raw;qcow2
 type DiskFormat string
@@ -120,6 +135,13 @@ type SwiftImageSpec struct {
 	Source   ImageSource             `json:"source"`
 	Format   DiskFormat              `json:"format"`
 	RootDisk *SwiftImageRootDiskSpec `json:"rootDisk,omitempty"`
+	// OSType is the OS family this image contains: "linux" (default) or
+	// "windows". Gates the Linux-only import steps (GRUB/serial patch,
+	// growpart resize expectation). Default linux; existing images are
+	// unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+	// +kubebuilder:default=linux
+	// +optional
+	OSType OSType `json:"osType,omitempty"`
 	// CloneStrategy controls how per-guest root disk PVCs are produced.
 	// Defaults to "copy" for backward compatibility — existing images keep
 	// working without changes. "snapshot" requires a snapshot-capable CSI

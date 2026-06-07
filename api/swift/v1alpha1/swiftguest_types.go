@@ -16,6 +16,18 @@ const (
 	RunPolicyAlways           RunPolicy = "Always"
 )
 
+// OSType is the guest operating-system family. It gates the Linux-only
+// provisioning datasource and, for windows, the Cloud Hypervisor runtime
+// settings (kvm_hyperv on the disk-boot path). Default "linux" — existing
+// guests are unaffected. See docs/design/windows-guest-support.md.
+// +kubebuilder:validation:Enum=linux;windows
+type OSType string
+
+const (
+	OSTypeLinux   OSType = "linux"
+	OSTypeWindows OSType = "windows"
+)
+
 // ConditionGPUAllocated is set on SwiftGuest when the SwiftGPU controller has
 // allocated GPU devices and the guest is ready to be scheduled.
 const ConditionGPUAllocated = "GPUAllocated"
@@ -105,6 +117,15 @@ type SwiftGuestSpec struct {
 	// validation webhook rejects migrations of pinned guests.
 	// +optional
 	Migration *MigrationSpec `json:"migration,omitempty"`
+	// OSType is the guest OS family: "linux" (default) or "windows". For a
+	// disk boot the referenced SwiftImage's osType is authoritative and this
+	// field, when set, must agree with it (the resolver cross-checks). windows
+	// requires disk boot (imageRef) — kernel boot is Linux-only — and is not
+	// supported with gpuProfileRef in v1. Default linux; existing guests are
+	// unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+	// +kubebuilder:default=linux
+	// +optional
+	OSType OSType `json:"osType,omitempty"`
 	// Storage overrides the SwiftGuestClass storage defaults for PVCs
 	// the controller creates for this guest (today: the root-disk clone).
 	// Per-field merge: each non-empty field overrides the same field on
