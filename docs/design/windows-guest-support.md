@@ -1,19 +1,21 @@
 # Windows Guest Support
 
-> Status: DESIGN — **spike complete, OQ1 reopened**. First scoping pass for running
-> Windows VMs as SwiftGuests. Greenfield — there is no `osType` concept in the
-> codebase today; several runtime layers assume a Linux guest. Last updated:
-> 2026-06-07.
+> Status: DESIGN — **spike complete, OQ1 RESOLVED → CH-first (on CH v52.0)**. First
+> scoping pass for running Windows VMs as SwiftGuests. Greenfield — there is no
+> `osType` concept in the codebase today; several runtime layers assume a Linux
+> guest. Last updated: 2026-06-07.
 >
 > **Spike result (see [`windows-guest-support-spike.md`](windows-guest-support-spike.md)):**
-> the image-prep pipeline works and **QEMU+OVMF boots Windows cleanly and stably**,
-> but **Cloud Hypervisor v51.1 is BLOCKED** — Windows bugchecks `0xD1` in
-> `viostor.sys` (virtio-blk) and reboot-loops (even at `num_queues=1` / single
-> vCPU; `kvm_hyperv=on` is required just to reach that point). This **flips OQ1**:
-> v1 Windows should run on **QEMU+OVMF** (the former "escape hatch" becomes the
-> primary path), with CH-for-Windows deferred behind a newer `virtio-win`/CH that
-> clears the viostor crash. The rest of the design (the `osType` gate, import-step
-> skipping, cloudbase-init, the virtio+BCD image-prep runbook) stands.
+> the image-prep pipeline works, QEMU+OVMF boots Windows cleanly, and — the decisive
+> follow-up — **Cloud Hypervisor v52.0 boots Windows cleanly and stably**. The
+> `viostor.sys` `0xD1` crash that blocked the first pass was a **CH _v51.1_
+> virtio-blk bug, fixed in v52.0** (verified: stable >180 s, `bootstat`+`evtx`
+> updated, zero crash dumps, default queues). So **`osType: windows` stays on Cloud
+> Hypervisor**, conditioned on **bumping the shipped CH v51.1 → v52.0** (a
+> platform-wide change — needs Linux-guest regression validation). Windows needs
+> `--cpus kvm_hyperv=on` + a virtio-ready image + headless BCD prep. **QEMU+OVMF
+> reverts to the escape hatch.** The rest of the design (`osType` gate, import-step
+> skipping, cloudbase-init, virtio+BCD image-prep runbook) stands.
 
 ## 1. Goal
 
@@ -34,7 +36,7 @@ Linux-only steps and preparing the guest.
 
 | Layer | Linux today | Windows |
 |---|---|---|
-| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | **QEMU+OVMF for v1** (spike-corrected). CH *loads* the Windows boot manager and runs the kernel, but **CH v51.1 bugchecks `0xD1` in `viostor.sys` and reboot-loops** ([spike](windows-guest-support-spike.md) §4) — so for `osType: windows` the runtime routes to QEMU+OVMF (the same `swift-qemu-client` path used for GPU). "QEMU only when the OS requires it." CH-for-Windows deferred. |
+| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | **Same — Cloud Hypervisor, on CH v52.0** (spike-confirmed). CH v51.1 bugchecked `0xD1` in `viostor.sys`, but **CH v52.0 boots Windows cleanly and stably** ([spike](windows-guest-support-spike.md) §4.1) — reuse the existing disk-boot path with `--cpus kvm_hyperv=on`. Requires bumping the shipped CH v51.1 → v52.0 (platform-wide). QEMU+OVMF stays the escape hatch. |
 | **Firmware** | CLOUDHV.fd (EDK2 UEFI) for disk boot | **Same CLOUDHV.fd.** Windows is UEFI-only; the existing EDK2 UEFI firmware path already provides it. Not a divergence. |
 | **virtio drivers** | in-tree (Linux ships virtio-blk/net) | The real Windows problem — Windows has **no** virtio drivers OOTB, so a stock image sees neither the virtio-blk disk nor the virtio-net NIC. **This is hypervisor-agnostic** (identical for CH and QEMU; both present virtio devices). §3. |
 | **Provisioning** | cloud-init NoCloud seed.iso | **cloudbase-init** reads the same NoCloud/ConfigDrive seed the runtime already builds. Hypervisor-agnostic. |
@@ -96,14 +98,15 @@ pre-prepare an image.
 
 ## 5. Open decisions (for the kickoff conversation)
 
-- **OQ1 — Hypervisor: REOPENED by the spike → QEMU+OVMF for v1.** The CH-first
-  resolution assumed "CH supports Windows"; the spike shows **CH v51.1 bugchecks
-  `0xD1` in `viostor.sys` and reboot-loops** (details:
-  [`windows-guest-support-spike.md`](windows-guest-support-spike.md) §4/§7), while
-  **QEMU+OVMF boots Windows cleanly and stably**. So for `osType: windows` the
-  hypervisor default flips to **QEMU+OVMF** — consistent with "QEMU only when a
-  feature/OS requires it." CH-for-Windows is a future track gated on a newer
-  `virtio-win` viostor and/or newer CH clearing the crash.
+- **OQ1 — Hypervisor: RESOLVED → Cloud Hypervisor (on CH v52.0).** The first spike
+  pass hit a `0xD1 viostor` bugcheck on **CH v51.1**; the CH-version follow-up showed
+  **CH v52.0 boots Windows cleanly and stably** — the `0xD1` was a v51.1 virtio-blk
+  bug, fixed in v52.0 ([spike](windows-guest-support-spike.md) §4.1). So
+  `osType: windows` **stays on Cloud Hypervisor** (principle-consistent),
+  **conditioned on bumping the shipped CH v51.1 → v52.0** (platform-wide — needs
+  Linux-guest regression validation). Required: `--cpus kvm_hyperv=on`. **QEMU+OVMF
+  is the escape hatch** for graphical-install / emulated-device cases and the interim
+  fallback if the CH bump is deferred.
 - **OQ2 — virtio strategy for v1:** (A) operator-prepped virtio image on CH
   (recommended) vs (B) emulated devices on the QEMU escape hatch for stock
   images.
@@ -123,11 +126,12 @@ Full findings: [`windows-guest-support-spike.md`](windows-guest-support-spike.md
 Ran entirely off-cluster with the **real CH v51.1 binary + `CLOUDHV.fd`** from the
 `swiftletd` image. Answers to the load-bearing unknowns:
 
-1. **Does a virtio-ready Windows guest boot on Cloud Hypervisor?** — **NO, on CH
-   v51.1.** The kernel runs (needs `--cpus kvm_hyperv=on`) and SAC initializes, then
-   Windows bugchecks **`0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`** (the
-   virtio-blk driver) and reboot-loops. Reproduces at `num_queues=1` and single
-   vCPU → a fundamental viostor↔CH-virtio-blk incompatibility, not a flag.
+1. **Does a virtio-ready Windows guest boot on Cloud Hypervisor?** — **NO on CH
+   v51.1, YES on CH v52.0.** On v51.1 the kernel runs (needs `--cpus kvm_hyperv=on`)
+   and SAC initializes, then Windows bugchecks **`0xD1` in `viostor.sys`** and
+   reboot-loops. The CH-version follow-up showed this is a **v51.1 virtio-blk bug
+   fixed in v52.0**: the same image under **CH v52.0** boots **cleanly and stably**
+   (>180 s, no reset, zero crash dumps, `bootstat`+`evtx` updated; default queues).
 2. **Does QEMU+OVMF boot it?** — **YES, cleanly and stably** (SAC up, no crash). The
    image-prep pipeline (unattended virtio install + headless **BCD prep**: EMS/SAC +
    `recoveryenabled no` + `bootstatuspolicy ignoreallfailures`) is validated here.
@@ -135,28 +139,30 @@ Ran entirely off-cluster with the **real CH v51.1 binary + `CLOUDHV.fd`** from t
    guest; the install used `autounattend.xml`). Carried forward to the QEMU-path
    build (PR 5).
 
-Net: the spike **could** run, and it **flips OQ1** — v1 Windows is **QEMU+OVMF**;
-CH-for-Windows is deferred behind a newer `virtio-win`/CH that clears the viostor
-`0xD1` (untested mitigations listed in the findings doc §7). The image-prep,
-`kvm_hyperv=on`, and `\EFI\Boot\bootx64.efi` fallback-path findings carry forward
-to whichever hypervisor.
+Net: the spike **confirms OQ1 → CH-first on CH v52.0**. The runtime PR routes
+`osType: windows` to the existing CH disk-boot path with `--cpus kvm_hyperv=on`,
+**gated on bumping the shipped CH v51.1 → v52.0** (platform-wide; run the
+Linux-guest regression pass with it). QEMU+OVMF stays the escape hatch (and the
+interim fallback if the bump is deferred). The image-prep, `kvm_hyperv=on`, and
+`\EFI\Boot\bootx64.efi` fallback-path findings carry forward to whichever VMM.
 
-## 7. Phased PR breakdown (refined after the spike — QEMU+OVMF for v1)
+## 7. Phased PR breakdown (refined after the spike — CH-first on CH v52.0)
 
-The spike flipped the runtime target from CH to QEMU+OVMF (§6/OQ1). The
-`osType` gate, import-skip, provisioning, and image-prep PRs are unchanged; only
-the runtime PR's hypervisor flips.
+The spike confirmed CH-first **on CH v52.0** (§6/OQ1). The runtime PR reuses the
+existing CH disk-boot path; a **prerequisite** is the CH v51.1 → v52.0 bump (its
+own change, with the Linux-guest regression pass). The `osType` gate, import-skip,
+provisioning, and image-prep PRs are hypervisor-independent.
 
 | PR | Scope |
 |---|---|
+| 0 | **Prereq: bump CH v51.1 → v52.0** in the `swiftletd` image (+ matching `CLOUDHV.fd`) with a Linux-guest regression pass. Platform-wide; gates the Windows runtime path. |
 | 1 | This design doc (+ spike findings doc). |
 | 2 | `osType` field on SwiftGuest + SwiftImage (+ webhook rules) + resolver wiring. Default `linux` — no behavior change for existing guests. |
 | 3 | Image import: skip GRUB/serial patch + growpart for `osType: windows` (keep qcow2→raw + resize). |
-| 4 | Runtime: `osType: windows` routes to **QEMU+OVMF** (the `swift-qemu-client` path already in `swiftletd` for GPU), boots via the `\EFI\Boot\bootx64.efi` fallback, with Linux-only cmdline/console assumptions gated off. (CH-for-Windows deferred — spike F6.) |
+| 4 | Runtime: `osType: windows` boots on the **existing CH disk-boot path** (CLOUDHV.fd + virtio) via the `\EFI\Boot\bootx64.efi` fallback, adding `--cpus kvm_hyperv=on` and gating off Linux-only cmdline/console assumptions. (Mostly reuse; QEMU+OVMF remains the escape hatch / interim fallback.) |
 | 5 | Provisioning: cloudbase-init userdata over the NoCloud seed (the spike used `autounattend.xml`; cloudbase-init is the runtime path). |
 | 6 | Image-prep tooling/runbook: virtio (viostor/NetKVM) + the **headless BCD prep** (EMS/SAC, `recoveryenabled no`, `bootstatuspolicy ignoreallfailures`) the spike validated; the `autounattend.xml` + `run-install.sh` from the spike are the seed. |
 | 7 | Operator runbook + samples; cluster validation (asset-gated — no Windows license on the dev cluster). |
-| (future) | CH-for-Windows re-spike once a newer `virtio-win`/CH clears the viostor `0xD1`. |
 
 ## 8. Non-goals (v1)
 

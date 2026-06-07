@@ -2606,8 +2606,9 @@ Shipped across 6 PRs (design + 5 build):
   [`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md),
   [`docs/design/windows-guest-support-spike.md`](docs/design/windows-guest-support-spike.md).
   Greenfield: no `osType` concept exists; several runtime layers assume Linux. The
-  spike ran entirely off-cluster with the **real CH v51.1 binary + `CLOUDHV.fd`**
-  from the `swiftletd` image and **flipped OQ1 (hypervisor)** away from CH-first:
+  spike ran entirely off-cluster with the **real CH binaries + `CLOUDHV.fd`** from
+  the `swiftletd` image. **OQ1 RESOLVED → CH-first on CH v52.0** (the first pass
+  appeared to block CH; a CH-version follow-up restored CH-first):
   - **Image-prep pipeline works** — automatable WS2022 unattended install under
     QEMU/KVM with **viostor (virtio-blk) driver injection** → virtio-ready raw
     image (~3.5 min, repeatable). Windows Setup creates the `\EFI\Boot\bootx64.efi`
@@ -2616,26 +2617,29 @@ Shipped across 6 PRs (design + 5 build):
     `recoveryenabled no` + `bootstatuspolicy ignoreallfailures` (without it a
     fallback-path boot drops into graphical "Automatic Repair"/WinRE that hangs on
     a console-less VMM).
-  - **QEMU+OVMF boots Windows cleanly & stably** (SAC up, no crash) — the design's
-    former "escape hatch" is the **validated v1 path**.
-  - **CH v51.1 is BLOCKED.** CH loads the boot manager and the kernel runs (needs
+  - **QEMU+OVMF boots Windows cleanly & stably** (SAC up, no crash) — the escape
+    hatch works (and is the interim fallback if the CH bump is deferred).
+  - **CH v51.1 blocked, CH v52.0 WORKS.** On **v51.1** the kernel runs (needs
     `--cpus kvm_hyperv=on`, else a silent early-MP/HAL hang), SAC initializes, then
     Windows **bugchecks `0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`** and
-    reboot-loops. Confirmed from the CH-written `MEMORY.DMP` (bugcheck `0xD1`,
-    `\Driver\viostor`). **Reproduces at `num_queues=1` and single vCPU** → a
-    fundamental viostor↔CH-virtio-blk incompatibility, not a launch flag. (CH v51.1
-    also exits on guest warm-reset rather than resetting in place.)
-  - **Decision implication (user's call — flips the CH-first they previously
-    steered to):** v1 Windows = **QEMU+OVMF** via the `osType: windows` gate
-    (reuses the `swift-qemu-client` path already in swiftletd for GPU). CH-for-
-    Windows is a future track gated on a newer `virtio-win` viostor and/or newer
-    CH clearing the `0xD1`. The `osType` gate, import-step skipping, cloudbase-init,
-    and the virtio+BCD image-prep runbook are unchanged.
-  - **Phased PRs (refined):** PR 2 `osType` field+webhook; PR 3 import-skip; PR 4
-    runtime → **QEMU+OVMF** (was CH); PR 5 cloudbase-init; PR 6 image-prep
-    runbook/tooling (the spike's `autounattend.xml` + `run-install.sh` are the
-    seed); PR 7 runbook+samples (validation asset-gated — no Windows license on the
-    dev cluster).
+    reboot-loops (confirmed from the CH-written `MEMORY.DMP`; reproduces at
+    `num_queues=1` and single vCPU). The CH-version follow-up showed this is a
+    **v51.1 virtio-blk bug FIXED in v52.0**: the **same image under CH v52.0 boots
+    cleanly and stably** — alive >180 s, no reset, **zero crash dumps**,
+    `bootstat.dat`+`evtx` updated, **default queues OK**. The only non-default CH
+    setting Windows needs is `kvm_hyperv=on`. (v52.0 also resets in place; v51.1
+    exited on warm-reset.)
+  - **Decision (user chose "unblock CH first" → it worked):** `osType: windows`
+    **stays on Cloud Hypervisor**, conditioned on **bumping the shipped CH
+    v51.1 → v52.0** in the `swiftletd` image — a **platform-wide** change needing a
+    Linux-guest regression pass (treat as its own PR). Reuses the existing CH
+    disk-boot path; QEMU+OVMF reverts to the escape hatch.
+  - **Phased PRs (refined):** **PR 0 prereq = bump CH → v52.0** (+ matching
+    `CLOUDHV.fd`, Linux regression); PR 2 `osType` field+webhook; PR 3 import-skip;
+    PR 4 runtime → **CH disk-boot path + `kvm_hyperv=on`**; PR 5 cloudbase-init;
+    PR 6 image-prep runbook/tooling (the spike's `autounattend.xml` + `run-install.sh`
+    are the seed); PR 7 runbook+samples (validation asset-gated — no Windows license
+    on the dev cluster).
 
 ### Other Roadmap Items Not Progressed
 - **Multi-NIC + SR-IOV hardware validation** — code shipped, hardware not available
