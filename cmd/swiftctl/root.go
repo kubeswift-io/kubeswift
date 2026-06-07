@@ -43,6 +43,7 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(restoreCmd)
+	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(migrationCmd)
 }

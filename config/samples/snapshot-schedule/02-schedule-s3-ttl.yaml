@@ -1,0 +1,33 @@
+# Hourly memory snapshot exported to S3 (Tier C), keeping the 24 most recent AND
+# auto-expiring any older than 7 days. keep-N (count) and ttl (age) compose:
+# whichever bound a snapshot crosses first deletes it (honoring deletionPolicy).
+# Requires an S3 credentials Secret + bucket (see config/samples/s3-snapshots/).
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshotSchedule
+metadata:
+  name: hourly-web-s3
+  namespace: default
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600      # after an outage, skip a tick missed by >10m
+  retention:
+    keepLast: 24
+  template:
+    spec:
+      guestRef:
+        name: web
+      backend:
+        type: s3
+        s3:
+          bucket: kubeswift-snapshots
+          prefix: scheduled
+          endpoint: minio.minio.svc:9000
+          forcePathStyle: true
+          insecure: true            # demo MinIO over HTTP; UNSAFE — drop for TLS endpoints
+          region: us-east-1
+          credentialsSecretRef:
+            name: s3-creds
+      includeMemory: true
+      deletionPolicy: Delete        # each pruned/expired snapshot purges its S3 objects
+      ttl: 7d                       # per-snapshot max age, composes with keepLast
