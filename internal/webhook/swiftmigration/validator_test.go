@@ -222,6 +222,24 @@ func TestValidateShape_AcceptTimeoutAtMax(t *testing.T) {
 	}
 }
 
+func TestValidateShape_RejectNonPositiveTTL(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Hour} {
+		mig := newSwiftMigration("m", "default")
+		mig.Spec.TTL = &metav1.Duration{Duration: d}
+		if err := validateShape(mig); err == nil || !strings.Contains(err.Error(), "ttl must be > 0") {
+			t.Errorf("validateShape ttl=%s should reject; got %v", d, err)
+		}
+	}
+}
+
+func TestValidateShape_AcceptPositiveTTL(t *testing.T) {
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.TTL = &metav1.Duration{Duration: time.Hour}
+	if err := validateShape(mig); err != nil {
+		t.Errorf("validateShape ttl=1h should accept; got %v", err)
+	}
+}
+
 func TestValidateShape_RejectLiveTimeoutBelowMin(t *testing.T) {
 	mig := newSwiftMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive

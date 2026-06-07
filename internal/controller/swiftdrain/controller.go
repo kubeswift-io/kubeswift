@@ -36,6 +36,12 @@ import (
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
 
+// drainMigrationTTL is the spec.ttl set on drain-created SwiftMigrations so a
+// terminal drain record auto-cleans rather than accumulating across repeated
+// drains. 1h is long enough to inspect a recent drain, short enough to not
+// clutter; operators wanting the record kept can recreate the migration by hand.
+const drainMigrationTTL = time.Hour
+
 // Reconciler drives drain-requested SwiftGuests to a SwiftMigration.
 type Reconciler struct {
 	client.Client
@@ -159,6 +165,10 @@ func (r *Reconciler) createDrainMigration(ctx context.Context, guest *swiftv1alp
 			// node-local networking. Without this the migration webhook
 			// rejects the cross-node move and the drain would stall.
 			AllowIPChange: true,
+			// Auto-clean the drain migration record after it finishes so
+			// repeated drains don't accumulate terminal SwiftMigrations
+			// (Phase 5 retention). Long enough to inspect a recent drain.
+			TTL: &metav1.Duration{Duration: drainMigrationTTL},
 		},
 	}
 	if err := ctrl.SetControllerReference(guest, mig, r.Scheme); err != nil {

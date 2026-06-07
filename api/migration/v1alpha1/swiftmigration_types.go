@@ -297,6 +297,14 @@ type SwiftMigrationSpec struct {
 	// may use it for audit trail purposes.
 	// +optional
 	Reason string `json:"reason,omitempty"`
+	// TTL, when set, makes the controller delete this SwiftMigration once it has
+	// been in a terminal phase (Completed/Failed/Cancelled) for at least ttl —
+	// keeping `kubectl get swiftmigration` from accumulating finished records.
+	// A SwiftMigration carries no backend artifacts, so deletion just removes
+	// the CR (no purge). Unset = keep until deleted by hand. Drain-initiated
+	// migrations get a default ttl set by the drain controller.
+	// +optional
+	TTL *metav1.Duration `json:"ttl,omitempty"`
 	// AllowIPChange opts the operator into a migration that will produce a
 	// fresh guest IP on the destination side. Required for guests on the
 	// default node-local-bridge network (KubeSwift's default) when source
@@ -417,6 +425,11 @@ type SwiftMigrationStatus struct {
 	// Phase 1 offline mode does not populate this field.
 	// +optional
 	CutoverStep2DispatchedAt *metav1.Time `json:"cutoverStep2DispatchedAt,omitempty"`
+	// TerminalAt is when the SwiftMigration first reached a terminal phase
+	// (Completed/Failed/Cancelled). Stamped once on the non-terminal→terminal
+	// transition; the anchor for spec.ttl-driven deletion.
+	// +optional
+	TerminalAt *metav1.Time `json:"terminalAt,omitempty"`
 	// ResumingStartedAt is when the SwiftMigration first transitioned
 	// to the Resuming phase (cutover step 3 — the controller's
 	// observable boundary between StopAndCopy completion and Resuming
