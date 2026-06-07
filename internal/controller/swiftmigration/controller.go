@@ -218,13 +218,15 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// removeFinalizer call when the finalizer is already gone avoids
 	// an unnecessary API roundtrip on every spurious enqueue.
 	if isTerminalPhase(mig.Status.Phase) {
-		if !hasFinalizer(&mig) {
+		if hasFinalizer(&mig) {
+			if err := r.removeFinalizer(ctx, &mig); err != nil {
+				return ctrl.Result{}, err
+			}
+			// The removeFinalizer patch re-enqueues; ttl-GC runs on the next
+			// reconcile once the finalizer is gone (clean terminal state).
 			return ctrl.Result{}, nil
 		}
-		if err := r.removeFinalizer(ctx, &mig); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return r.handleTerminalRetention(ctx, &mig)
 	}
 
 	// Add finalizer on first reconcile so cancellation mid-flight
@@ -446,6 +448,11 @@ func (r *SwiftMigrationReconciler) persist(
 	// (the Reconcile terminal-phase short-circuit prevents re-entry, and we
 	// only emit after the status patch actually lands).
 	freshTerminal := isTerminalPhase(status.Phase) && !isTerminalPhase(mig.Status.Phase)
+	if freshTerminal && status.TerminalAt == nil {
+		// Anchor for spec.ttl-driven deletion (Phase 5 completion).
+		now := metav1.Now()
+		status.TerminalAt = &now
+	}
 	patch := client.MergeFrom(mig.DeepCopy())
 	mig.Status = *status
 	if err := r.Status().Patch(ctx, mig, patch); err != nil {
@@ -490,6 +497,34 @@ func recordMigrationTerminal(status *migrationv1alpha1.SwiftMigrationStatus) {
 	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && status.ObservedTransferDuration != nil {
 		metrics.MigrationTransferSeconds.WithLabelValues(mode).Observe(status.ObservedTransferDuration.Duration.Seconds())
 	}
+}
+
+// migrationRetentionMaxRequeue caps the wait until a terminal migration's ttl
+// expires, so a long ttl still re-checks periodically (restart/clock tolerance).
+const migrationRetentionMaxRequeue = time.Hour
+
+// handleTerminalRetention deletes a terminal SwiftMigration once spec.ttl has
+// elapsed since it reached a terminal phase (Phase 5 completion). A
+// SwiftMigration carries no backend artifacts, so deletion just removes the CR
+// — no purge, no reference-block. No-op when ttl is unset or the terminal
+// anchor is missing. Operator `kubectl delete` is unaffected.
+func (r *SwiftMigrationReconciler) handleTerminalRetention(ctx context.Context, mig *migrationv1alpha1.SwiftMigration) (ctrl.Result, error) {
+	if mig.Spec.TTL == nil || mig.Status.TerminalAt == nil {
+		return ctrl.Result{}, nil
+	}
+	expiry := mig.Status.TerminalAt.Add(mig.Spec.TTL.Duration)
+	now := time.Now()
+	if now.Before(expiry) {
+		wait := expiry.Sub(now)
+		if wait > migrationRetentionMaxRequeue {
+			wait = migrationRetentionMaxRequeue
+		}
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+	if err := r.Delete(ctx, mig); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers the reconciler. The watch on Pod is
