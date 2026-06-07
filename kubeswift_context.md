@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: June 7, 2026 — Snapshot Phase 6 (scheduling + keep-N) SHIPPED + cluster-validated (PRs #138–#143: design, SwiftSnapshotSchedule CRD, cron controller, keep-N GC, webhook, swiftctl+samples+runbook). `SwiftSnapshotSchedule` cron-creates SwiftSnapshots and prunes to `retention.keepLast` (count-based, composing with the per-snapshot age-based `ttl`), reusing the Phase 5 deletionPolicy purge + the exported reference-aware `ReferenceBlocker`. Clean cluster walkthrough (every-minute schedule, keepLast=2 sliding-window prune, suspend, webhook rejects, swiftctl). **All snapshot work (Phases 0–6 + cloneFromSnapshot) is now closed.** Also fixed the `includeMemory:false` no-op gap (backend-determined capture; PR #137). Prior: Snapshot Phase 5 (operational polish, PRs #129–#135); Snapshot Phase 4 (cloneFromSnapshot ergonomics, PRs #119–#126 + same-node download dedup #128); Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
+> Last updated: June 7, 2026 — Live Migration Phase 5 (operational polish) COMPLETE (PRs #145–#146): the phase was ~90% already shipped incrementally across Phases 3a/3b (metrics, Grafana dashboard, `phaseDetail`, the swiftletd progress emitter + `status.transferProgress`, `observedDowntime`/`observedTransferDuration` + printcolumns); the residual was the **transfer-duration metric** (`kubeswift_migration_transfer_seconds` + dashboard panel, #145) and **retention** (`SwiftMigration.spec.ttl` + `status.terminalAt` + terminal-GC, drain default 1h, webhook ttl>0, `swiftctl migrate --ttl`, #146). **All Live Migration phases (1–5) are now closed.** Next: **Windows guest support** (greenfield; design doc started — `docs/design/windows-guest-support.md`). Prior: Snapshot Phases 0–6 + cloneFromSnapshot ALL CLOSED (Phase 6 scheduling+keep-N PRs #138–#143; `includeMemory` fix #137; Phase 5 operational polish #129–#135; Phase 4 cloneFromSnapshot #119–#128; Phase 3 Tier C/S3 #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
 
 ---
 
@@ -2372,22 +2372,27 @@ Phase 2 deliverable surface complete: operators can manually demonstrate cross-n
 - Independent value: drain integration with offline migration alone dramatically improves operator UX
 - Could jump sequence if operator demand for safe drain dominates
 
-**6. Live Migration Phase 5 — operational polish**
-- Prometheus metrics, dashboards, retention
-- **swiftletd progress annotations (Phase 3a spike F2.5).** Phase 2
-  design §3 mentioned intermediate `migration-progress` annotation
-  values (`precopy` / `stopcopy` / `listening` / `transferring`)
-  but Phase 2 PR-B does NOT emit them — operators only see
-  `running` (accept) → terminal `complete` / `running` (post-resume).
-  Phase 3a spike confirmed this is a correctness-no-op for the
-  state machine, but operators watching a 38s SwiftMigration with
-  zero progress visibility will surface it as a usability gap
-  during Phase 3a's first production rollouts. Implementation:
-  swiftletd emits `kubeswift.io/migration-progress` annotation
-  during pre-copy iterations + stop-copy + listening states;
-  controller surfaces in SwiftMigration `status.phaseDetail`.
-  Tracked here so Phase 3a's spike doc is not the canonical
-  source.
+**6. Live Migration Phase 5 — operational polish — COMPLETE (PRs #145–#146).**
+Most of the phase shipped incrementally across Phases 3a/3b: Prometheus
+metrics (`kubeswift_migration_total`, `_downtime_seconds`), the Grafana
+dashboard (`config/grafana/kubeswift-migrations.json`), rich `status.phaseDetail`
+across all phases, the swiftletd progress emitter + `status.transferProgress`
+(F2.5 progress visibility — shipped, not the unimplemented annotation the old
+note below described), and the `observedDowntime`/`observedTransferDuration`
+status fields + printcolumns. The two residual gaps were closed in Phase 5:
+- **#145** — `kubeswift_migration_transfer_seconds{mode}` histogram (the
+  state-transfer window was a status field/printcolumn but not a metric) +
+  a "State-transfer duration quantiles" dashboard panel.
+- **#146** — retention: `SwiftMigration.spec.ttl` + `status.terminalAt`
+  (stamped on the terminal transition); the terminal short-circuit runs
+  `handleTerminalRetention` (delete once terminalAt+ttl elapses, RequeueAfter
+  capped 1h; no purge/reference-block — migrations carry no artifacts). Drain
+  default `ttl=1h`; webhook rejects ttl<=0; `swiftctl migrate --ttl`.
+
+(Historical note: the original Phase 5 plan below assumed `migration-progress`
+annotations were unimplemented; Phase 3b actually shipped a richer
+`status.transferProgress` percent estimate via the swiftletd progress emitter,
+so the annotation-based plan was superseded.)
 
 ### Snapshot Roadmap Continuation (deferred behind live migration)
 
@@ -2596,8 +2601,26 @@ Shipped across 6 PRs (design + 5 build):
 - **Tracked follow-up (documented, not blocking):** `spec.timeZone` (UTC-only
   today, OQ6); auto-GC of Failed scheduled snapshots (OQ1 — left for inspection).
 
+### In Progress
+- **Windows guest support** — design doc started
+  ([`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md)).
+  Greenfield: no `osType` concept exists; several runtime layers assume Linux.
+  **Design is CH-first** (principle-consistent): Cloud Hypervisor already
+  supports Windows, and a Windows guest reuses the existing CH disk-boot path
+  (`--kernel CLOUDHV.fd` EDK2 UEFI + virtio) — ~5 of the 6 layers are
+  hypervisor-agnostic. The real Windows-specific work: an `osType: linux|windows`
+  gate, skipping the Linux-only import steps (GRUB/serial patch, growpart), a
+  virtio-ready image for v1 (virtio drivers are needed on CH *and* QEMU alike),
+  and cloudbase-init over the existing NoCloud seed. The one genuine CH gap is
+  the **console** (CH is serial/headless) — v1 runs headless + RDP; **QEMU +
+  OVMF + VNC is the opt-in escape hatch** for graphical install / driver
+  injection / emulated-device stock images (the same "QEMU only when needed"
+  rule as the GPU tiers). OQ1 (hypervisor) resolved to CH-first; remaining open:
+  virtio strategy, provisioning, console-in-v1, validation-asset gap.
+  Spike-then-phased-PRs after. Validation constraint: the dev cluster has no
+  Windows image/license (may ship asset-gated like Tier 2/3 GPU).
+
 ### Other Roadmap Items Not Progressed
-- **Windows guest support** — no design doc, implementable
 - **Multi-NIC + SR-IOV hardware validation** — code shipped, hardware not available
 - **Tier 2 GPU validation** — needs HGX hardware
 - **GitOps documentation phases** — design exists; pure operator value, mostly docs
