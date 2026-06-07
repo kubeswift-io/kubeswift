@@ -78,5 +78,25 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	if spec.RunPolicy != "" && !validPolicies[spec.RunPolicy] {
 		return fmt.Errorf("spec.runPolicy must be Running, Stopped, RestartOnFailure, or Always, got %q", spec.RunPolicy)
 	}
+
+	// osType (Windows guest support). The enum is enforced by the CRD schema;
+	// re-check defensively (the webhook may run against objects the schema
+	// hasn't defaulted), then apply the v1 rules.
+	switch spec.OSType {
+	case "", swiftv1alpha1.OSTypeLinux, swiftv1alpha1.OSTypeWindows:
+	default:
+		return fmt.Errorf("spec.osType must be linux or windows, got %q", spec.OSType)
+	}
+	if spec.OSType == swiftv1alpha1.OSTypeWindows {
+		// Windows is disk-boot only — there is no Windows bzImage for kernel boot.
+		if hasKernel {
+			return fmt.Errorf("spec.osType: windows requires disk boot (spec.imageRef); kernel boot (spec.kernelRef) is Linux-only")
+		}
+		// GPU passthrough to Windows is out of scope for v1 (a non-goal in
+		// docs/design/windows-guest-support.md).
+		if spec.GPUProfileRef != nil {
+			return fmt.Errorf("spec.osType: windows with spec.gpuProfileRef is not supported in v1 (GPU passthrough to Windows is out of scope)")
+		}
+	}
 	return nil
 }

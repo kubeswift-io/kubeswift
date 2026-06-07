@@ -344,6 +344,19 @@ spec:
                   webhook enforces NodeName == status.GPU.NodeName. The pod builder
                   refuses to build with a Resolved=False condition if they disagree.
                 type: string
+              osType:
+                default: linux
+                description: |-
+                  OSType is the guest OS family: "linux" (default) or "windows". For a
+                  disk boot the referenced SwiftImage's osType is authoritative and this
+                  field, when set, must agree with it (the resolver cross-checks). windows
+                  requires disk boot (imageRef) — kernel boot is Linux-only — and is not
+                  supported with gpuProfileRef in v1. Default linux; existing guests are
+                  unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+                enum:
+                - linux
+                - windows
+                type: string
               runPolicy:
                 description: RunPolicy defines the desired run state of a guest.
                 enum:
