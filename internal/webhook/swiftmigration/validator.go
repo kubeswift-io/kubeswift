@@ -277,6 +277,11 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > MaxTimeout {
 		return fmt.Errorf("spec.timeout=%s exceeds maximum %s", mig.Spec.Timeout.Duration, MaxTimeout)
 	}
+	// Phase 5 retention: a non-positive ttl would delete the migration the
+	// instant it reached terminal (or has no meaning) — reject it.
+	if mig.Spec.TTL != nil && mig.Spec.TTL.Duration <= 0 {
+		return fmt.Errorf("spec.ttl must be > 0 when set (got %s)", mig.Spec.TTL.Duration)
+	}
 	// Live-mode minimum: see MinLiveTimeout doc. Only enforced for
 	// mode=live; mode=auto and mode=offline are unaffected. Phase 3a
 	// architect-discipline Q3.2 mitigation.

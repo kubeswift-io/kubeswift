@@ -31,6 +31,7 @@ var (
 	migrateName          string
 	migratePreferredMode string
 	migrateTimeout       time.Duration
+	migrateTTL           time.Duration
 	migrationListAllNS   bool
 )
 
@@ -115,6 +116,8 @@ func init() {
 		"Acknowledge that the guest IP will change cross-node on default node-local networking")
 	migrateCmd.Flags().StringVar(&migrateName, "name", "",
 		"Optional SwiftMigration resource name (default: <guest>-migrate-<rand>)")
+	migrateCmd.Flags().DurationVar(&migrateTTL, "ttl", 0,
+		"Auto-delete this migration record this long after it finishes (e.g. 1h); unset = keep")
 	migrateCmd.Flags().DurationVar(&migrateTimeout, "timeout", 0,
 		"Runaway backstop for the whole migration (e.g. 10m); 0 uses the CRD default of 30m")
 	migrateCmd.Flags().StringVar(&migratePreferredMode, "preferred-mode", "auto",
@@ -183,6 +186,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	// Only set spec.timeout when the operator passed --timeout; leaving it nil
 	// lets the apiserver apply the CRD default (30m).
 	mig.Spec.Timeout = migrationTimeoutPtr(migrateTimeout)
+	// --ttl (opt-in): auto-delete the migration record this long after it
+	// finishes. nil when unset (kept until deleted by hand).
+	mig.Spec.TTL = migrationTimeoutPtr(migrateTTL)
 	if name == "" {
 		mig.GenerateName = guestName + "-migrate-"
 	} else {

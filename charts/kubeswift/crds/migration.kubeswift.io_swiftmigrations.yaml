@@ -190,6 +190,15 @@ spec:
                 - cancel
                 - ignore
                 type: string
+              ttl:
+                description: |-
+                  TTL, when set, makes the controller delete this SwiftMigration once it has
+                  been in a terminal phase (Completed/Failed/Cancelled) for at least ttl —
+                  keeping `kubectl get swiftmigration` from accumulating finished records.
+                  A SwiftMigration carries no backend artifacts, so deletion just removes
+                  the CR (no purge). Unset = keep until deleted by hand. Drain-initiated
+                  migrations get a default ttl set by the drain controller.
+                type: string
             required:
             - guestRef
             - target
@@ -561,6 +570,13 @@ spec:
                   `kubectl get swiftmigration -o wide`. Live mode only; offline
                   mode populates SwiftGuest.status.network.primaryIP via the
                   existing first-boot lease poller path.
+                type: string
+              terminalAt:
+                description: |-
+                  TerminalAt is when the SwiftMigration first reached a terminal phase
+                  (Completed/Failed/Cancelled). Stamped once on the non-terminal→terminal
+                  transition; the anchor for spec.ttl-driven deletion.
+                format: date-time
                 type: string
               transferProgress:
                 description: |-
