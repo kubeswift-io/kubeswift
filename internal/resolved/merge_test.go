@@ -25,6 +25,31 @@ func TestMerge_GuestRunPolicyOverridesSystemDefault(t *testing.T) {
 	}
 }
 
+func TestMerge_OSType(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns", UID: "uid"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+	}
+	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}
+
+	// Windows image -> rg.OSType=windows (image is authoritative for disk boot).
+	winImage := &imagev1alpha1.SwiftImage{Spec: imagev1alpha1.SwiftImageSpec{OSType: imagev1alpha1.OSTypeWindows}, Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
+	if rg := Merge(guest, guestClass, winImage, nil); rg.GetOSType() != "windows" || !rg.IsWindows() {
+		t.Errorf("windows image: OSType=%q IsWindows=%v, want windows/true", rg.GetOSType(), rg.IsWindows())
+	}
+
+	// Image with osType unset -> linux (legacy, no behaviour change).
+	linImage := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}}}
+	if rg := Merge(guest, guestClass, linImage, nil); rg.GetOSType() != "linux" || rg.IsWindows() {
+		t.Errorf("unset image osType: OSType=%q, want linux", rg.GetOSType())
+	}
+
+	// Kernel boot (image == nil) -> always linux.
+	if rg := Merge(guest, guestClass, nil, nil); rg.GetOSType() != "linux" {
+		t.Errorf("kernel boot: OSType=%q, want linux", rg.GetOSType())
+	}
+}
+
 func TestMerge_ClassCPUUsedWhenGuestNoOverride(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}, Spec: swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}}}
 	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("4"), Memory: resource.MustParse("4Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("20Gi"), Format: swiftv1alpha1.DiskFormatRaw}}}

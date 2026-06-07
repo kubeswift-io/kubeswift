@@ -60,6 +60,16 @@ func Merge(
 	// Storage: per-field merge — guest > class > system defaults.
 	rg.Storage = MergeStorage(guest, guestClass)
 
+	// OSType: the SwiftImage defines the guest OS for a disk boot. Kernel boot
+	// (image == nil) is always Linux — there is no Windows bzImage. Default
+	// "linux" so legacy guests/images (osType unset) are unaffected. The
+	// guest's spec.osType, when set, is cross-checked against the image in the
+	// resolver (resolveDiskBoot).
+	rg.OSType = string(swiftv1alpha1.OSTypeLinux)
+	if image != nil && image.Spec.OSType != "" {
+		rg.OSType = string(image.Spec.OSType)
+	}
+
 	return rg
 }
 

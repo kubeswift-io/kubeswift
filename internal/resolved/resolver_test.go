@@ -3,6 +3,7 @@ package resolved
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
@@ -59,6 +60,39 @@ func TestResolve_FailsWhenSwiftImageDoesNotExist(t *testing.T) {
 	}
 	if re.AffectedResource != "missing" {
 		t.Errorf("AffectedResource = %q, want missing", re.AffectedResource)
+	}
+}
+
+func TestResolve_OSTypeMismatchRejected(t *testing.T) {
+	scheme := testScheme()
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	// Linux image, but the guest declares windows -> mismatch (the cross-check
+	// fires before the heavier existence/compat validation).
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Spec:       imagev1alpha1.SwiftImageSpec{OSType: imagev1alpha1.OSTypeLinux},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guestClass, image).Build()
+	resolver := NewResolver(client)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}, OSType: swiftv1alpha1.OSTypeWindows},
+	}
+
+	rg, err := resolver.Resolve(context.Background(), guest)
+	if rg != nil {
+		t.Fatal("expected nil ResolvedGuest on osType mismatch")
+	}
+	var re *ResolutionError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected ResolutionError, got %T: %v", err, err)
+	}
+	if !strings.Contains(re.Reason, "osType mismatch") {
+		t.Errorf("Reason = %q, want osType mismatch", re.Reason)
 	}
 }
 

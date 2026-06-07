@@ -2,6 +2,7 @@ package resolved
 
 import (
 	"context"
+	"fmt"
 
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
@@ -121,6 +122,20 @@ func (r *resolver) resolveDiskBoot(ctx context.Context, guest *swiftv1alpha1.Swi
 	image := &imagev1alpha1.SwiftImage{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.ImageRef.Name}, image); err != nil {
 		return nil, &ResolutionError{Reason: "SwiftImage not found: " + err.Error(), AffectedResource: guest.Spec.ImageRef.Name}
+	}
+
+	// osType cross-check: the image is authoritative (it defines the OS); the
+	// guest's spec.osType, when set, must agree. Legacy guests/images leave
+	// osType unset and skip the check (and inherit "linux" via Merge). A
+	// mismatch (e.g. a linux guest pointed at a windows image) surfaces as a
+	// Resolved=False condition rather than a confusing boot failure later.
+	if guest.Spec.OSType != "" && image.Spec.OSType != "" &&
+		string(guest.Spec.OSType) != string(image.Spec.OSType) {
+		return nil, &ResolutionError{
+			Reason: fmt.Sprintf("osType mismatch: guest declares %q but image %q is %q",
+				guest.Spec.OSType, image.Name, image.Spec.OSType),
+			AffectedResource: image.Name,
+		}
 	}
 
 	// Fetch SeedProfile if referenced

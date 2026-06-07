@@ -82,6 +82,12 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 	if img.Spec.Format == "" {
 		return fmt.Errorf("spec.format is required (raw or qcow2)")
 	}
+	// osType enum (defense-in-depth; the CRD schema also enforces it).
+	switch img.Spec.OSType {
+	case "", imagev1alpha1.OSTypeLinux, imagev1alpha1.OSTypeWindows:
+	default:
+		return fmt.Errorf("spec.osType must be linux or windows, got %q", img.Spec.OSType)
+	}
 	if err := validateCloneStrategy(img); err != nil {
 		return err
 	}
@@ -118,7 +124,11 @@ func validateSwiftImageUpdate(oldImg, img *imagev1alpha1.SwiftImage) error {
 		return err
 	}
 	if oldImg.Status.Phase == imagev1alpha1.SwiftImagePhaseReady {
-		if oldImg.Spec.Source != img.Spec.Source || oldImg.Spec.Format != img.Spec.Format {
+		// osType is a value (string) compare, so unlike Spec.Source it does not
+		// have the pointer-identity foot-gun (TFU-17/23) — a Ready image's OS is
+		// fixed by what was imported, so it is immutable.
+		if oldImg.Spec.Source != img.Spec.Source || oldImg.Spec.Format != img.Spec.Format ||
+			oldImg.Spec.OSType != img.Spec.OSType {
 			return fmt.Errorf("SwiftImage spec is immutable when status.phase is Ready")
 		}
 	}

@@ -67,6 +67,40 @@ func TestValidate_BootSourceExclusivity(t *testing.T) {
 	})), "exactly one of spec.imageRef")
 }
 
+func TestValidate_OSType(t *testing.T) {
+	// default (unset) osType + imageRef: OK (no behaviour change for existing guests).
+	if err := validateSwiftGuest(guest(nil)); err != nil {
+		t.Errorf("unset osType should be valid: %v", err)
+	}
+	// explicit linux + imageRef: OK.
+	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.OSType = swiftv1alpha1.OSTypeLinux
+	})); err != nil {
+		t.Errorf("linux + imageRef should be valid: %v", err)
+	}
+	// windows + imageRef (disk boot): OK.
+	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
+	})); err != nil {
+		t.Errorf("windows + imageRef should be valid: %v", err)
+	}
+	// windows + kernelRef: rejected (Windows is disk-boot only).
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.ImageRef = nil
+		g.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
+	})), "windows requires disk boot")
+	// windows + gpuProfileRef: rejected (GPU-to-Windows out of scope v1).
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
+		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
+	})), "gpuProfileRef is not supported")
+	// invalid enum value: rejected (defense-in-depth beyond the CRD schema).
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.OSType = swiftv1alpha1.OSType("bsd")
+	})), "spec.osType must be linux or windows")
+}
+
 func TestValidate_CloneFromSnapshotRules(t *testing.T) {
 	cloneGuest := func(mut func(*swiftv1alpha1.SwiftGuest)) *swiftv1alpha1.SwiftGuest {
 		return guest(func(g *swiftv1alpha1.SwiftGuest) {

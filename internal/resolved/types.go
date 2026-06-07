@@ -46,6 +46,12 @@ type ResolvedGuest struct {
 	// Interfaces from SwiftGuest spec, used for multi-NIC support.
 	// Nil or empty means single default NIC (backward compatible).
 	Interfaces []swiftv1alpha1.GuestInterface `json:"interfaces,omitempty"`
+	// OSType is the resolved guest OS family ("linux" or "windows"). For a
+	// disk boot it is taken from the SwiftImage (the image defines the OS);
+	// kernel boot is always "linux". Empty resolves to "linux" via GetOSType.
+	// Consumed by the runtime layer (PR 4: windows adds kvm_hyperv on the CH
+	// disk-boot path) and provisioning (PR 5: cloudbase-init vs cloud-init).
+	OSType string `json:"osType,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -229,6 +235,20 @@ func (r *ResolvedGuest) GetLifecycle() string {
 // GetHypervisor returns the hypervisor override, or empty string for default (Cloud Hypervisor).
 func (r *ResolvedGuest) GetHypervisor() string {
 	return r.Hypervisor
+}
+
+// GetOSType returns the resolved guest OS family ("linux" or "windows"),
+// defaulting to "linux" when unset (legacy guests / kernel boot).
+func (r *ResolvedGuest) GetOSType() string {
+	if r.OSType == "" {
+		return "linux"
+	}
+	return r.OSType
+}
+
+// IsWindows reports whether the resolved guest is a Windows guest.
+func (r *ResolvedGuest) IsWindows() bool {
+	return r.GetOSType() == string(swiftv1alpha1.OSTypeWindows)
 }
 
 // GetGuestID returns a unique ID for the guest (namespace/name).
