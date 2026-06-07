@@ -2604,14 +2604,21 @@ Shipped across 6 PRs (design + 5 build):
 ### In Progress
 - **Windows guest support** — design doc started
   ([`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md)).
-  Greenfield: no `osType` concept exists; every runtime layer assumes Linux.
-  Design recommends Windows ⇒ QEMU + OVMF (reuse the GPU QEMU path), an
-  `osType: linux|windows` gate, an operator-prepped virtio-ready image for v1
-  (with an `emulated` device-model escape hatch), cloudbase-init over the
-  existing NoCloud seed, and VNC console. Six open decisions (hypervisor,
-  virtio strategy, provisioning, console, validation-asset gap) for the kickoff
-  conversation; spike-then-phased-PRs after. Validation constraint: the dev
-  cluster has no Windows image/license (may ship asset-gated like Tier 2/3 GPU).
+  Greenfield: no `osType` concept exists; several runtime layers assume Linux.
+  **Design is CH-first** (principle-consistent): Cloud Hypervisor already
+  supports Windows, and a Windows guest reuses the existing CH disk-boot path
+  (`--kernel CLOUDHV.fd` EDK2 UEFI + virtio) — ~5 of the 6 layers are
+  hypervisor-agnostic. The real Windows-specific work: an `osType: linux|windows`
+  gate, skipping the Linux-only import steps (GRUB/serial patch, growpart), a
+  virtio-ready image for v1 (virtio drivers are needed on CH *and* QEMU alike),
+  and cloudbase-init over the existing NoCloud seed. The one genuine CH gap is
+  the **console** (CH is serial/headless) — v1 runs headless + RDP; **QEMU +
+  OVMF + VNC is the opt-in escape hatch** for graphical install / driver
+  injection / emulated-device stock images (the same "QEMU only when needed"
+  rule as the GPU tiers). OQ1 (hypervisor) resolved to CH-first; remaining open:
+  virtio strategy, provisioning, console-in-v1, validation-asset gap.
+  Spike-then-phased-PRs after. Validation constraint: the dev cluster has no
+  Windows image/license (may ship asset-gated like Tier 2/3 GPU).
 
 ### Other Roadmap Items Not Progressed
 - **Multi-NIC + SR-IOV hardware validation** — code shipped, hardware not available

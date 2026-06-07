@@ -2,7 +2,7 @@
 
 > Status: DESIGN (pre-spike). First scoping pass for running Windows VMs as
 > SwiftGuests. Greenfield — there is no `osType` concept in the codebase today;
-> every layer assumes a Linux guest. Last updated: 2026-06-07.
+> several runtime layers assume a Linux guest. Last updated: 2026-06-07.
 
 ## 1. Goal
 
@@ -12,120 +12,142 @@ the same way Linux guests are. Out of scope for v1: GPU passthrough to Windows,
 live migration of Windows guests, snapshots of Windows guests (they should work
 mechanically but are not the v1 validation target).
 
-## 2. Why this is not "just another image"
+## 2. Cloud Hypervisor runs Windows — this is mostly "gate the Linux-only steps"
 
-Six layers of the runtime assume a Linux guest. Each needs a Windows path:
+**Windows stays on Cloud Hypervisor** (the project default; QEMU only when a
+feature genuinely requires it). CH is a documented, supported Windows VMM
+(Server 2019/2022, Win10/11), and a Windows guest reuses **the same CH disk-boot
+path KubeSwift already has** — `--kernel CLOUDHV.fd` (EDK2 UEFI) + virtio-blk
+disk + tap/virtio-net. Most "Windows work" is *not* booting it; it's skipping the
+Linux-only steps and preparing the guest.
 
-| Layer | Linux today | Windows divergence |
+| Layer | Linux today | Windows |
 |---|---|---|
-| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | CH is virtio-only and Linux-cloud-focused; Windows needs broad device support + a graphical console. **QEMU + OVMF** is the proven Windows path (KubeSwift already runs QEMU for GPU tiers). |
-| **Firmware** | CLOUDHV.fd (EDK2 UEFI), or kernel boot | Windows is UEFI-only (modern) — needs OVMF (`OVMF_CODE.fd` + per-VM `OVMF_VARS.fd`), the QEMU GPU path's firmware. |
-| **virtio drivers** | in-tree (Linux ships virtio-blk/net) | Windows has **no** virtio drivers OOTB → a stock image sees neither the `--disk` (virtio-blk) nor the NIC (virtio-net), so it can't even boot. This is the central problem. |
-| **Provisioning** | cloud-init NoCloud seed.iso | Windows uses **cloudbase-init** (can read the same NoCloud/ConfigDrive seed) or an **autounattend.xml**. |
-| **Image import** | qcow2→raw + **GRUB serial patch** + cloud-init `growpart` | Windows images have no GRUB and no growpart — the import's `patch_grub` and the first-boot partition-grow must be **skipped**; disk resize is Windows-side (diskpart/unattend). |
-| **Console** | serial socket (`swiftctl console` over `--serial`) | Windows has no real serial console (SAC is minimal). Needs **VNC** (QEMU provides it; CH does not). |
+| **Hypervisor** | Cloud Hypervisor (CLOUDHV.fd via `--kernel`) | **Same — Cloud Hypervisor.** Windows is supported on CH; reuse the existing disk-boot path. QEMU is an opt-in escape hatch (see §4) only for graphical-console or emulated-device cases — the same "QEMU only when needed" rule the GPU tiers follow. |
+| **Firmware** | CLOUDHV.fd (EDK2 UEFI) for disk boot | **Same CLOUDHV.fd.** Windows is UEFI-only; the existing EDK2 UEFI firmware path already provides it. Not a divergence. |
+| **virtio drivers** | in-tree (Linux ships virtio-blk/net) | The real Windows problem — Windows has **no** virtio drivers OOTB, so a stock image sees neither the virtio-blk disk nor the virtio-net NIC. **This is hypervisor-agnostic** (identical for CH and QEMU; both present virtio devices). §3. |
+| **Provisioning** | cloud-init NoCloud seed.iso | **cloudbase-init** reads the same NoCloud/ConfigDrive seed the runtime already builds. Hypervisor-agnostic. |
+| **Image import** | qcow2→raw + **GRUB serial patch** + cloud-init `growpart` | Skip `patch_grub` and growpart (no GRUB, no cloud-init growpart on Windows); keep qcow2→raw + `qemu-img resize`. Disk extend is Windows-side (diskpart/unattend). Hypervisor-agnostic. |
+| **Console** | serial socket (`swiftctl console` over `--serial`) | **The one genuine CH gap.** CH is serial/headless — no VNC. A pre-prepared (virtio-ready) image runs headless on CH and is managed over **RDP/WinRM**; an in-cluster *graphical* install or troubleshooting a network-broken guest is where the QEMU+VNC escape hatch earns its place. |
 
-The throughline: **Windows wants the QEMU runtime** (OVMF + emulated/virtio device choice + VNC), which KubeSwift already has for GPU. Windows is largely "reuse the QEMU path + gate the Linux-only steps."
+The throughline: **CH already does Windows**; ~5 of the 6 layers are
+hypervisor-agnostic. The only thing CH can't give Windows is a graphical
+console, and that's only needed for graphical install / driver injection /
+no-network troubleshooting — exactly the narrow case the QEMU escape hatch
+covers.
 
-## 3. The central problem: virtio drivers
+## 3. The central problem: virtio drivers (hypervisor-agnostic)
 
-A stock Windows ISO/image cannot see virtio-blk or virtio-net. Three ways out:
+A stock Windows ISO/image cannot see virtio-blk or virtio-net — true on CH
+**and** QEMU, since both present virtio devices. Three ways out (none of which
+is a reason to abandon CH):
 
 - **(A) Operator brings a virtio-ready image** — the operator prepares a Windows
   disk image with the `virtio-win` drivers already installed (the standard
-  KubeVirt/OpenStack practice), imports it as a SwiftImage, and KubeSwift boots
-  it with virtio-blk/net. **Minimal KubeSwift work**; pushes image prep to the
-  operator (documented runbook). **Recommended for v1.**
+  KubeVirt/OpenStack practice), imports it as a SwiftImage, and **CH boots it
+  with virtio-blk/net, headless, managed over RDP.** Minimal KubeSwift work;
+  image prep is a documented runbook. **Recommended for v1.**
 - **(B) Emulated devices (no virtio)** — boot the disk on SATA/AHCI and the NIC
-  on e1000, which Windows drives OOTB. Works with a stock image but is slower and
-  **requires QEMU** (CH is virtio-only). A useful fallback / first-boot mode.
+  on e1000, which Windows drives OOTB. Works with a stock image but is slower
+  and **requires QEMU** (CH is virtio-only). A fallback for stock images.
 - **(C) Unattended driver injection** — attach the `virtio-win` ISO + an
-  `autounattend.xml` that installs drivers during Windows Setup. Most automated
-  but the most moving parts; a later phase.
+  `autounattend.xml` that installs drivers during Windows Setup. Most automated,
+  most moving parts; needs a graphical/console-capable run (QEMU+VNC) for the
+  install. A later phase.
 
-Recommendation: **v1 = (A)** (virtio-ready image, documented prep), with **(B)**
-as an explicit `deviceModel: emulated|virtio` escape hatch for booting a stock
-image. (C) is a future enhancement.
+Recommendation: **v1 = (A)** on Cloud Hypervisor (virtio-ready image,
+documented prep). (B)/(C) ride the QEMU escape hatch when an operator can't
+pre-prepare an image.
 
 ## 4. Proposed shape
 
 1. **`osType` on SwiftGuest (and SwiftImage)** — `linux` (default) | `windows`.
-   It gates: hypervisor selection, firmware, the import Linux-only steps, the
-   provisioning datasource, and the console mode. Mirrors how `gpuProfileRef.tier`
-   already drives CH-vs-QEMU.
-2. **Hypervisor** — `osType: windows` ⇒ **QEMU + OVMF** (reuse `swift-qemu-client`
-   + the GPU path's OVMF handling). No CH-Windows path in v1.
+   It gates the Linux-only import steps, the provisioning datasource, the
+   resize expectation, and (only when escape-hatch features are requested) the
+   hypervisor. The single decision point — mirrors how `gpuProfileRef.tier`
+   drives CH-vs-QEMU today.
+2. **Hypervisor — Cloud Hypervisor by default.** `osType: windows` runs on the
+   existing CH disk-boot path (CLOUDHV.fd + virtio). **QEMU + OVMF is the opt-in
+   escape hatch**, selected only when the operator requests a graphical/VNC
+   console or an emulated device model (stock non-virtio image). The selector is
+   explicit (e.g. a `windows.console: serial|vnc` and/or `deviceModel:
+   virtio|emulated` — `vnc`/`emulated` ⇒ QEMU), exactly like the GPU tier picks
+   the runtime. Default Windows is CH-first.
 3. **Image import** — skip `patch_grub` and the growpart expectation for
-   `osType: windows`; still do qcow2→raw + `qemu-img resize` (Windows extends the
-   partition via unattend/diskpart, not growpart). Likely an `osType` on
-   SwiftImage so the import Job branches.
+   `osType: windows`; still qcow2→raw + `qemu-img resize`. An `osType` on
+   SwiftImage branches the import Job.
 4. **Provisioning** — cloudbase-init reading the **existing NoCloud seed** (least
-   new mechanism; the runtime already builds seed.iso). The seed `userData`
-   becomes cloudbase-init userdata. autounattend.xml is a follow-on.
-5. **Console** — QEMU VNC (a `-vnc` unix/tcp socket) surfaced for `swiftctl
-   console` (or a new `swiftctl vnc`); serial stays best-effort.
-6. **Networking** — same tap0/br0 model; virtio-net (image (A)) or e1000 (B).
+   new mechanism; the runtime already builds seed.iso). autounattend.xml is a
+   follow-on for path (C).
+5. **Console** — v1 on CH is **headless** (manage via RDP/WinRM); `swiftctl
+   console` (serial) is best-effort. VNC arrives with the QEMU escape hatch.
+6. **Networking** — same tap0/br0 model; virtio-net (image A) or e1000 (B).
 
 ## 5. Open decisions (for the kickoff conversation)
 
-- **OQ1 — Hypervisor: QEMU-only for Windows (recommended), or also attempt CH?**
-  CH-Windows is an unknown and CH lacks VNC; QEMU is proven. Lean QEMU-only.
-- **OQ2 — virtio strategy for v1:** (A) operator-prepped virtio image
-  (recommended) vs starting with (B) emulated devices for stock images.
+- **OQ1 — Hypervisor: RESOLVED → Cloud Hypervisor default** (principle-
+  consistent; CH supports Windows). QEMU is the escape hatch for graphical-
+  console / emulated-device cases only. No CH-vs-QEMU default question remains.
+- **OQ2 — virtio strategy for v1:** (A) operator-prepped virtio image on CH
+  (recommended) vs (B) emulated devices on the QEMU escape hatch for stock
+  images.
 - **OQ3 — provisioning:** cloudbase-init over the existing NoCloud seed
-  (recommended) vs an autounattend.xml datasource (new SwiftSeedProfile
-  datasource type).
-- **OQ4 — console:** add VNC plumbing in v1, or ship headless-first (RDP/SSH into
-  the guest) and add VNC later?
-- **OQ5 — validation:** the dev cluster has **no Windows image/license**. Windows
-  Server eval ISOs (180-day, no key) are obtainable but large, and a virtio-ready
-  image must be prepared off-cluster first. Is cluster validation in scope now,
-  or do we ship behind the same "hardware/asset not available" caveat as Tier 2/3
-  GPU until a Windows image exists?
+  (recommended) vs an autounattend.xml datasource (new SwiftSeedProfile type).
+- **OQ4 — console for v1:** headless-on-CH + RDP (recommended; principle-first)
+  vs building the QEMU+VNC escape hatch in v1 for graphical install/troubleshoot.
+- **OQ5 — validation:** the dev cluster has **no Windows image/license**.
+  Windows Server eval ISOs (180-day, no key) are obtainable but large, and a
+  virtio-ready image must be prepared off-cluster first. Is cluster validation in
+  scope now, or do we ship behind the same "asset not available" caveat as Tier
+  2/3 GPU until a Windows image exists?
 
 ## 6. Spike (before committing to the full build)
 
-Once OQ1/OQ2 are settled, a spike answers the load-bearing unknowns:
+Once OQ2/OQ4/OQ5 are settled, a spike answers the load-bearing unknowns —
+notably **on Cloud Hypervisor**:
 
-1. Does a virtio-ready Windows Server eval guest **boot** under
-   `qemu-system-x86_64 -machine q35 -bios OVMF` with virtio-blk + virtio-net on
-   the cluster (the swift-qemu-client launch path)?
+1. Does a virtio-ready Windows Server eval guest **boot on Cloud Hypervisor**
+   via the existing `--kernel CLOUDHV.fd` + virtio-blk + virtio-net path, and
+   shut down cleanly (ACPI)?
 2. Does cloudbase-init read the existing NoCloud seed.iso and apply hostname /
    admin password / network?
-3. Does VNC over a unix socket give a usable console?
+3. (Escape hatch, only if doing graphical install in-cluster) does QEMU+OVMF+VNC
+   give a usable install console?
 
 If the spike can't run (no Windows image obtainable on this cluster), the design
-ships as "code-complete, hardware/asset-gated validation" — explicitly labelled,
-like Tier 2/3 GPU and multi-NIC.
+ships as "code-complete, asset-gated validation" — explicitly labelled, like
+Tier 2/3 GPU and multi-NIC.
 
 ## 7. Phased PR breakdown (provisional — refined after the spike)
 
 | PR | Scope |
 |---|---|
 | 1 | This design doc. |
-| 2 | `osType` field on SwiftGuest + SwiftImage (+ webhook: `windows` ⇒ QEMU; reject kernelRef/gpuProfileRef combos as needed) + resolver wiring. |
-| 3 | Image import: skip GRUB/serial patch + growpart for `osType: windows`. |
-| 4 | Runtime: route `osType: windows` to the QEMU launcher with OVMF + device-model selection (virtio vs emulated). |
+| 2 | `osType` field on SwiftGuest + SwiftImage (+ webhook rules) + resolver wiring. Default `linux` — no behavior change for existing guests. |
+| 3 | Image import: skip GRUB/serial patch + growpart for `osType: windows` (keep qcow2→raw + resize). |
+| 4 | Runtime: `osType: windows` boots on the **existing CH disk-boot path** (CLOUDHV.fd + virtio) with the Linux-only cmdline/console assumptions gated off. (Small — it's mostly reuse.) |
 | 5 | Provisioning: cloudbase-init userdata over the NoCloud seed. |
-| 6 | Console: QEMU VNC plumbing + `swiftctl`. |
+| 6 | QEMU+OVMF+VNC **escape hatch** (graphical console + emulated device model) for install/driver-injection/stock-image cases. |
 | 7 | Operator runbook (virtio-ready image prep) + samples; spike/cluster validation (asset permitting). |
 
 ## 8. Non-goals (v1)
 
 GPU passthrough to Windows; Windows live migration; Windows snapshots as a
-validation target; autounattend.xml driver injection (path C); CH-Windows.
+validation target; autounattend.xml driver injection (path C) as the default;
+VNC as the default console (it's the escape-hatch path).
 
 ## 9. Risks
 
 - **virtio dependency** is the make-or-break — a stock image won't boot on
-  virtio; v1 leans on operator image prep (documented) or the emulated escape
-  hatch.
+  virtio; v1 leans on operator image prep (documented) or the QEMU emulated
+  escape hatch.
+- **Console on CH** — Windows on CH is headless (manage via RDP/WinRM); the
+  graphical console for install/troubleshooting is the QEMU+VNC escape hatch.
+  v1 assumes a pre-prepared image so the headless path suffices.
 - **Validation asset gap** — no Windows image on the dev cluster; this may force
   an asset-gated ship.
-- **Console** — without VNC, Windows is effectively headless (manage via
-  RDP/WinRM/SSH); VNC is the operability piece.
-- **Scope creep** — Windows touches every layer; the `osType` gate must stay the
-  single decision point (mirror the GPU-tier pattern) to avoid Linux-path
+- **Scope creep** — Windows touches several layers; the `osType` gate must stay
+  the single decision point (mirror the GPU-tier pattern) to avoid Linux-path
   regressions.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
