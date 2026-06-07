@@ -1,7 +1,7 @@
 # KubeSwift Project Context
 > This document is the canonical context anchor for AI-assisted KubeSwift development.
 > It should be read at the start of every new session before any work begins.
-> Last updated: June 6, 2026 — Snapshot Phase 5 (operational polish) SHIPPED + cluster-validated (PRs #129–#135: design doc, metrics, byte gauges, Tier C S3 cleanup, deletionPolicy, ttl+reference-aware GC, dashboards). Prometheus metrics for the snapshot/restore/clone machinery, Tier C upload/download byte reporting via the container termination message, `deletionPolicy: Delete|Retain`, `spec.ttl` auto-expiry that won't delete a still-referenced snapshot, and a Grafana dashboard. Clean cluster walkthrough (no bugs). Also closed the long-standing "S3 objects leak on snapshot delete" follow-up. Prior: Snapshot Phase 4 (cloneFromSnapshot ergonomics, PRs #119–#126 + same-node download dedup #128); Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
+> Last updated: June 7, 2026 — Snapshot Phase 6 (scheduling + keep-N) SHIPPED + cluster-validated (PRs #138–#143: design, SwiftSnapshotSchedule CRD, cron controller, keep-N GC, webhook, swiftctl+samples+runbook). `SwiftSnapshotSchedule` cron-creates SwiftSnapshots and prunes to `retention.keepLast` (count-based, composing with the per-snapshot age-based `ttl`), reusing the Phase 5 deletionPolicy purge + the exported reference-aware `ReferenceBlocker`. Clean cluster walkthrough (every-minute schedule, keepLast=2 sliding-window prune, suspend, webhook rejects, swiftctl). **All snapshot work (Phases 0–6 + cloneFromSnapshot) is now closed.** Also fixed the `includeMemory:false` no-op gap (backend-determined capture; PR #137). Prior: Snapshot Phase 5 (operational polish, PRs #129–#135); Snapshot Phase 4 (cloneFromSnapshot ergonomics, PRs #119–#126 + same-node download dedup #128); Snapshot Phase 3 (Tier C / S3, PRs #111–#118); VFIO/GPU release-and-reallocate (TFU #27, PRs #96–#102); Live Migration Phase 3a/3b/3c + Phase 4 drain
 
 ---
 
@@ -2540,9 +2540,61 @@ Shipped across 7 PRs (design + 6 build PRs):
     `RetentionBlocked=True ("referenced by SwiftGuest … (cloneFromSnapshot)")`;
     deleting the clone-ref → TTL-deleted within ~10s and the Delete policy purged
     the objects.
-- **Tracked follow-up (deferred, documented in §5 design):** snapshot **scheduling**
-  (CronSnapshot) + **keep-N** retention — they only pay off with a scheduler, so
-  they're a coherent future phase; Phase 5 shipped TTL + deletionPolicy.
+- **Phase 5 deferred follow-up (CronSnapshot + keep-N): SHIPPED in Phase 6** (below).
+
+**Snapshot Phase 6 — scheduling (SwiftSnapshotSchedule) + keep-N retention — SHIPPED + cluster-validated 2026-06-07.**
+`SwiftSnapshotSchedule` cron-creates SwiftSnapshots of a SwiftGuest and prunes to
+`spec.retention.keepLast` (count-based, composing with the per-snapshot age-based
+`spec.ttl` from Phase 5). It adds no new capture mechanism — it instantiates the
+existing SwiftSnapshot machinery on a timer and GCs by count, reusing the Phase 5
+deletionPolicy purge + the exported reference-aware `ReferenceBlocker`. Design:
+[`docs/design/snapshot-phase-6-scheduling.md`](docs/design/snapshot-phase-6-scheduling.md);
+operator runbook: [`docs/snapshots/scheduled-snapshots.md`](docs/snapshots/scheduled-snapshots.md).
+Shipped across 6 PRs (design + 5 build):
+
+- **PR #138** — design/scoping doc; settled the six OQs (Failed-not-pruned,
+  concurrencyPolicy=Forbid default, robfig/cron/v3, export ReferenceBlocker,
+  per-schedule keep-N scope, UTC-only).
+- **PR #139** — `SwiftSnapshotSchedule` CRD + types (`spec.schedule`,
+  `suspend`, `concurrencyPolicy`, `startingDeadlineSeconds`, `retention.keepLast`,
+  `template` = `SnapshotTemplate{metadata, spec: SwiftSnapshotSpec}`); `ScheduleLabel`
+  the keep-N grouping key. (CI Generate caught a stale-base regen — the schedule
+  CRD embedded the pre-#137 includeMemory doc; fixed by regenerating on the right base.)
+- **PR #140** — cron controller (`internal/controller/swiftsnapshotschedule`):
+  `robfig/cron` ParseStandard; fires the most recent due tick (at most one,
+  coalescing a backlog after an outage); deterministic `<schedule>-<unix>` names
+  (idempotent re-reconcile); Forbid skip while a prior is in-flight;
+  startingDeadline skip; status lastScheduleTime/lastSuccessfulTime/active;
+  Owns(SwiftSnapshot).
+- **PR #141** — keep-N GC: exported `swiftsnapshot.ReferenceBlocker`
+  (`retentionBlocker` delegates to it); `pruneKeepN` deletes the oldest Ready
+  beyond keepLast, skips referenced ones, never deletes non-terminal/Failed,
+  honors deletionPolicy via the normal SwiftSnapshot delete;
+  `kubeswift_snapshot_schedule_pruned_total`.
+- **PR #142** — `vswiftsnapshotschedule` webhook: cron parse, `metadata.name<=40`
+  (derived-name length guard), keepLast>=1 / startingDeadline>=0, and template
+  shape via the exported `swiftsnapshot.ValidateShape`. Per-operation discipline.
+  Surfaced a **pre-existing config/webhook drift** (the kustomize VWC was missing
+  the swiftsnapshot/swiftrestore entries the chart has) — flagged as a separate task.
+- **PR #143** — `swiftctl schedule` create/list/describe/delete + samples
+  (`config/samples/snapshot-schedule/`) + runbook.
+- **Cluster walkthrough (2026-06-07, image sha-c303208, rocky9-cloud guest, CSI
+  backend)** — a clean walkthrough, no bugs:
+  - Webhook rejected bad cron, name>40, and a guestRef-less template.
+  - An every-minute CSI schedule (`keepLast: 2`) fired a snapshot each minute
+    (`wt-sched-<unix>`, deterministic), `lastScheduleTime` advanced each tick, and
+    the count held at 2 — the sliding window pruned the oldest as each new one
+    reached Ready (`kubeswift_snapshot_schedule_pruned_total` climbing).
+  - `suspend: true` froze ticks (lastScheduleTime stayed put across two
+    boundaries; count stable).
+  - `swiftctl schedule list/describe` worked against the live cluster.
+  - Cascade delete: deleting the schedule GC'd its SwiftSnapshots and their
+    VolumeSnapshots (0 leftover).
+- **keep-N reference-block** reuses the Phase-5-cluster-proven `ReferenceBlocker`
+  (unit-tested for the keep-N path); not separately re-validated on cluster
+  (cloneFromSnapshot needs a memory snapshot, not the CSI backend used here).
+- **Tracked follow-up (documented, not blocking):** `spec.timeZone` (UTC-only
+  today, OQ6); auto-GC of Failed scheduled snapshots (OQ1 — left for inspection).
 
 ### Other Roadmap Items Not Progressed
 - **Windows guest support** — no design doc, implementable
