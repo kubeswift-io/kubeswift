@@ -81,6 +81,20 @@ webhooks:
         apiGroups: ["snapshot.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftrestores"]
+  - name: vswiftsnapshotschedule.snapshot.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-snapshot-kubeswift-io-v1alpha1-swiftsnapshotschedule
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["snapshot.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftsnapshotschedules"]
   - name: vswiftmigration.migration.kubeswift.io
     admissionReviewVersions: ["v1"]
     sideEffects: None
