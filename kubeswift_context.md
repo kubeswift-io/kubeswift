@@ -2650,6 +2650,41 @@ Shipped across 6 PRs (design + 5 build):
     are the seed); PR 7 runbook+samples (validation asset-gated — no Windows license
     on the dev cluster).
 
+### CH v52.0-Unlocked Capabilities (roadmap)
+
+Net-new Cloud Hypervisor v52.0 features identified in the capabilities assessment
+([`docs/design/ch-v52-capabilities-assessment.md`](docs/design/ch-v52-capabilities-assessment.md)),
+queued as roadmap candidates (the bump itself shipped in PR #150; the workaround
+*removals* — `image_type=raw`, auto-resume-on-restore, downtime observability,
+sparse/userfaultfd snapshots — are tracked in the assessment doc §5, not here):
+
+- **SwiftConfidential — SEV-SNP confidential VMs (KVM).** CH v52.0 launches
+  AMD SEV-SNP confidential VMs on KVM (`guest_memfd` private memory, IGVM firmware,
+  measured boot + signed ID block for attestation). Potential **major
+  differentiator**: confidential VMs as a first-class workload (a `confidential`
+  SwiftGuestClass or SwiftConfidential CRD). **Blocked on AMD EPYC SEV-SNP
+  hardware** (none on the dev cluster). Architect/design-first when hardware exists.
+- **Modern VFIO (iommufd / vfio-cdev) + in-guest vIOMMU.** CH v52.0 supports the
+  Linux `iommufd` + per-device `vfio-cdev` access model (Linux ≥6.6) with
+  accelerated in-guest IOMMU. Modernizes our legacy container/group GPU passthrough;
+  enables nested/confidential GPU and some Tier 2/3 topologies. Needs GPU hardware.
+- **Large-BAR GPUs on CH via `host_mmap_bars`.** The CH-native equivalent of our
+  QEMU `x-no-mmap=true` large-BAR workaround (#7991) — could let some large-BAR
+  Tier 2/3 GPUs (e.g. B200) run on **Cloud Hypervisor** instead of QEMU, shrinking
+  the QEMU dependency. Evaluate with GPU hardware (pairs with sub-page BAR expansion
+  #7939 and lazy GSI #7940 for many-device guests).
+- **Generic `vhost-user` device.** Arbitrary vhost-user backends via CLI/API (#7221)
+  — underpins the future "vhost-user" SwiftKernel profile and high-perf net/blk/fs
+  backends.
+- **vCPU core-scheduling (SMT side-channel mitigation).** A candidate per-class
+  security option (#7747) for multi-tenant workloads — mitigate cross-thread side
+  channels without disabling SMT. security-engineer input.
+- **`--no-shutdown` + reset-in-place (runPolicy refinement).** v52.0 resets in place
+  on guest reboot (v51.1 exited — see the Windows spike) and `--no-shutdown` lets
+  the controller fully own the VMM on guest shutdown. Could simplify/clarify the
+  `runPolicy` (RestartOnFailure/Always) handling — validate the reboot-semantics
+  change in the v52 Linux regression, then consider simplifying.
+
 ### Other Roadmap Items Not Progressed
 - **Multi-NIC + SR-IOV hardware validation** — code shipped, hardware not available
 - **Tier 2 GPU validation** — needs HGX hardware
