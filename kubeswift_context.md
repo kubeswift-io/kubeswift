@@ -84,7 +84,13 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - Cloud Hypervisor: **v52.0** (bumped from v51.1 — the swiftletd image ships v52.0;
   v51.1's virtio-blk bugchecks Windows' viostor driver, fixed in v52.0. CLOUDHV.fd
   firmware unchanged: `ch-13b4963ec4`, the spike-validated pairing. Linux-guest
-  regression validation lands with the redeploy.)
+  regression validation lands with the redeploy.) **v52.0 capabilities assessment
+  (what the bump unlocks — workaround removals + roadmap):**
+  [`docs/design/ch-v52-capabilities-assessment.md`](docs/design/ch-v52-capabilities-assessment.md)
+  — notably `image_type=raw` (autodetection deprecation + likely W10 fix),
+  auto-resume-on-restore (removes Bug #73's `resumeCloneIfNeeded`), downtime
+  observability (W28/TFU #11), sparse snapshots + userfaultfd restore (PR #118 +
+  restore latency), and SEV-SNP confidential VMs (roadmap).
 - Seed format: NoCloud flat layout
 - DHCP range: 10.244.125.10–20 on br0 (10.244.125.1)
 - ORAS CLI: v1.3.1
