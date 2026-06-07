@@ -81,6 +81,20 @@ var (
 		[]string{"mode"},
 	)
 
+	// MigrationTransferSeconds observes status.observedTransferDuration for
+	// completed live migrations (the swiftletd-reported send-migration RPC:
+	// pre-copy iterations + final stop-and-copy + finalize), by mode. This is
+	// the data-movement window — distinct from the operator-visible downtime
+	// (MigrationDowntimeSeconds). Empirically ~38s for a 4Gi guest.
+	MigrationTransferSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kubeswift_migration_transfer_seconds",
+			Help:    "Observed state-transfer duration for completed SwiftMigrations, by mode",
+			Buckets: []float64{5, 10, 20, 30, 45, 60, 90, 120, 180, 300, 600},
+		},
+		[]string{"mode"},
+	)
+
 	// --- Snapshot / restore / clone metrics (Phase 5) ---
 	// Recorded once per resource on the non-terminal -> terminal transition,
 	// mirroring recordMigrationTerminal. Labels stay low-cardinality
@@ -224,6 +238,7 @@ func init() {
 		ImageImportSeconds,
 		MigrationTotal,
 		MigrationDowntimeSeconds,
+		MigrationTransferSeconds,
 		SnapshotTotal,
 		SnapshotCaptureSeconds,
 		SnapshotPauseWindowSeconds,

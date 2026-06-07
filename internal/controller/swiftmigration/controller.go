@@ -485,6 +485,11 @@ func recordMigrationTerminal(status *migrationv1alpha1.SwiftMigrationStatus) {
 	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && status.ObservedDowntime != nil {
 		metrics.MigrationDowntimeSeconds.WithLabelValues(mode).Observe(status.ObservedDowntime.Duration.Seconds())
 	}
+	// Phase 5 completion: the state-transfer window (distinct from downtime).
+	// Set for completed live migrations; offline has no transfer RPC.
+	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && status.ObservedTransferDuration != nil {
+		metrics.MigrationTransferSeconds.WithLabelValues(mode).Observe(status.ObservedTransferDuration.Duration.Seconds())
+	}
 }
 
 // SetupWithManager registers the reconciler. The watch on Pod is

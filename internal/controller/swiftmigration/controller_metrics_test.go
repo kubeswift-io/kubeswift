@@ -52,6 +52,31 @@ func TestRecordMigrationTerminal_DowntimeOnlyOnCompleted(t *testing.T) {
 	}
 }
 
+func TestRecordMigrationTerminal_TransferOnlyOnCompletedWithDuration(t *testing.T) {
+	before := testutil.CollectAndCount(metrics.MigrationTransferSeconds)
+	// Failed migration: no transfer observation even if a duration is set.
+	td := metav1.Duration{Duration: 38 * time.Second}
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:                     migrationv1alpha1.SwiftMigrationModeLive,
+		Phase:                    migrationv1alpha1.SwiftMigrationPhaseFailed,
+		ObservedTransferDuration: &td,
+	})
+	// Completed migration without a transfer duration (offline): no observation.
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:  migrationv1alpha1.SwiftMigrationModeOffline,
+		Phase: migrationv1alpha1.SwiftMigrationPhaseCompleted,
+	})
+	// Completed live migration with a transfer duration: observed.
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:                     migrationv1alpha1.SwiftMigrationModeLive,
+		Phase:                    migrationv1alpha1.SwiftMigrationPhaseCompleted,
+		ObservedTransferDuration: &td,
+	})
+	if after := testutil.CollectAndCount(metrics.MigrationTransferSeconds); after < 1 {
+		t.Errorf("transfer histogram should carry an observation after a completed live migration; series=%d (before=%d)", after, before)
+	}
+}
+
 // TestPersist_RecordsTerminalMetricOnce verifies the wiring: persist records the
 // terminal metric exactly once on the non-terminal -> terminal transition, and
 // a subsequent no-op persist (status unchanged) does not double-count.

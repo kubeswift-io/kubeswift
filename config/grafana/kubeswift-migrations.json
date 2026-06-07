@@ -115,6 +115,27 @@
           "format": "heatmap"
         }
       ]
+    },
+    {
+      "title": "State-transfer duration quantiles by mode",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(kubeswift_migration_transfer_seconds_bucket[1h])))",
+          "legendFormat": "p50 {{mode}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(kubeswift_migration_transfer_seconds_bucket[1h])))",
+          "legendFormat": "p95 {{mode}}"
+        }
+      ]
     }
   ]
 }
