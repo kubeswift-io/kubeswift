@@ -6,6 +6,20 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased] - 2026-04-05
 
+### Changed (Cloud Hypervisor v51.1 -> v52.0 — platform-wide)
+- Bumped the Cloud Hypervisor static binary in the `swiftletd` image from v51.1 to
+  v52.0 (`images/swiftletd/Containerfile` `CH_VERSION`). v51.1's virtio-blk has a
+  bug that bugchecks Windows' viostor driver (`0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL`)
+  in a reboot loop; v52.0 fixes it and boots Windows cleanly and stably (spike:
+  `docs/design/windows-guest-support-spike.md` §4.1). This unblocks the CH-first
+  path for upcoming Windows guest support.
+- The `CLOUDHV.fd` firmware is **unchanged** (`ch-13b4963ec4`) — the spike-validated
+  pairing with the v52.0 binary. `CurrentHypervisorVersion` is read from CH at
+  runtime (vm.info), so it tracks the new version automatically; no code constant
+  to change.
+- Platform-wide change (the VMM for Linux guests too): a Linux-guest regression pass
+  (smoke-test + the snapshot/migration suites) lands with the redeploy.
+
 ### Fixed (Phase 3a downtime metrics — W27 follow-up)
 - W27a: `status.observedDowntime` previously measured two adjacent `metav1.Now()` calls in the same reconcile invocation, producing sub-millisecond nonsense (34-114µs across all 17 PR #46 + E12 walkthrough runs). Now anchored on new `status.cutoverStep2DispatchedAt` (stamped by `cutoverStep2` on Delete dispatch); reflects the operator-visible cutover-to-resume window. Defensive nil-check leaves the field unset rather than reporting a wrong value if the timestamp is missing.
 - W27b: `status.observedPauseWindow` plumbing was half-implemented — swiftletd-on-src wrote the `kubeswift.io/migration-pause-window-ms` annotation correctly but the controller had zero readers, leaving the field permanently nil. Now stamped at `substateSrcCompleted` (W1 gate observation), mirroring the snapshot controller's parallel pattern. Defensive parse-failure handling.

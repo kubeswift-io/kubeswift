@@ -63,8 +63,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # qemu-system-x86 package provides /usr/bin/qemu-system-x86_64
 # Both paths are the defaults in swift-qemu-client/src/config.rs
 
-# Cloud Hypervisor static binary (v51.1)
-ARG CH_VERSION=51.1
+# Cloud Hypervisor static binary (v52.0)
+# Bumped v51.1 -> v52.0: v51.1's virtio-blk has a bug that bugchecks Windows'
+# viostor driver (0xD1); v52.0 fixes it and boots Windows cleanly. See
+# docs/design/windows-guest-support-spike.md sec 4.1. The CLOUDHV.fd firmware
+# below (ch-13b4963ec4) is the spike-validated pairing with the v52.0 binary.
+ARG CH_VERSION=52.0
 ARG TARGETARCH=amd64
 RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
     curl -sSL -o /usr/local/bin/cloud-hypervisor \
