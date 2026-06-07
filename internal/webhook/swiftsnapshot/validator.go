@@ -175,6 +175,14 @@ func (v *Validator) validateMemoryCaptureCompat(ctx context.Context, snap *snaps
 	return nil
 }
 
+// ValidateShape validates the SwiftSnapshot template a SwiftSnapshotSchedule
+// would instantiate (Phase 6): the same client-independent shape rules used at
+// SwiftSnapshot admission, so a bad template is rejected at schedule-create
+// rather than surfacing at the first tick. Exported wrapper over validateShape.
+func ValidateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	return validateShape(snap)
+}
+
 // validateShape covers the rules that depend only on the SwiftSnapshot
 // itself: required fields, backend allowlist, hostPath rules, carrier-
 // field exclusivity. Extracted so unit tests can exercise it without

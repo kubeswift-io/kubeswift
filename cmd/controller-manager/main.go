@@ -40,6 +40,7 @@ import (
 	swiftrestorewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftrestore"
 	swiftseedprofilewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftsnapshot"
+	swiftsnapshotschedulewebhook "github.com/projectbeskar/kubeswift/internal/webhook/swiftsnapshotschedule"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 )
@@ -282,6 +283,12 @@ func main() {
 			WithCustomValidator(&swiftrestorewebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftRestore webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &snapshotv1alpha1.SwiftSnapshotSchedule{}).
+			WithCustomValidator(&swiftsnapshotschedulewebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftSnapshotSchedule webhook")
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &migrationv1alpha1.SwiftMigration{}).
