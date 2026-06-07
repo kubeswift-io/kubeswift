@@ -2602,23 +2602,40 @@ Shipped across 6 PRs (design + 5 build):
   today, OQ6); auto-GC of Failed scheduled snapshots (OQ1 — left for inspection).
 
 ### In Progress
-- **Windows guest support** — design doc started
-  ([`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md)).
-  Greenfield: no `osType` concept exists; several runtime layers assume Linux.
-  **Design is CH-first** (principle-consistent): Cloud Hypervisor already
-  supports Windows, and a Windows guest reuses the existing CH disk-boot path
-  (`--kernel CLOUDHV.fd` EDK2 UEFI + virtio) — ~5 of the 6 layers are
-  hypervisor-agnostic. The real Windows-specific work: an `osType: linux|windows`
-  gate, skipping the Linux-only import steps (GRUB/serial patch, growpart), a
-  virtio-ready image for v1 (virtio drivers are needed on CH *and* QEMU alike),
-  and cloudbase-init over the existing NoCloud seed. The one genuine CH gap is
-  the **console** (CH is serial/headless) — v1 runs headless + RDP; **QEMU +
-  OVMF + VNC is the opt-in escape hatch** for graphical install / driver
-  injection / emulated-device stock images (the same "QEMU only when needed"
-  rule as the GPU tiers). OQ1 (hypervisor) resolved to CH-first; remaining open:
-  virtio strategy, provisioning, console-in-v1, validation-asset gap.
-  Spike-then-phased-PRs after. Validation constraint: the dev cluster has no
-  Windows image/license (may ship asset-gated like Tier 2/3 GPU).
+- **Windows guest support** — design doc + **boot spike COMPLETE** (2026-06-07):
+  [`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md),
+  [`docs/design/windows-guest-support-spike.md`](docs/design/windows-guest-support-spike.md).
+  Greenfield: no `osType` concept exists; several runtime layers assume Linux. The
+  spike ran entirely off-cluster with the **real CH v51.1 binary + `CLOUDHV.fd`**
+  from the `swiftletd` image and **flipped OQ1 (hypervisor)** away from CH-first:
+  - **Image-prep pipeline works** — automatable WS2022 unattended install under
+    QEMU/KVM with **viostor (virtio-blk) driver injection** → virtio-ready raw
+    image (~3.5 min, repeatable). Windows Setup creates the `\EFI\Boot\bootx64.efi`
+    firmware **fallback** (== bootmgfw; BCD present), so **no NVRAM seeding** is
+    needed. A **headless BCD prep** is mandatory: EMS/SAC on serial +
+    `recoveryenabled no` + `bootstatuspolicy ignoreallfailures` (without it a
+    fallback-path boot drops into graphical "Automatic Repair"/WinRE that hangs on
+    a console-less VMM).
+  - **QEMU+OVMF boots Windows cleanly & stably** (SAC up, no crash) — the design's
+    former "escape hatch" is the **validated v1 path**.
+  - **CH v51.1 is BLOCKED.** CH loads the boot manager and the kernel runs (needs
+    `--cpus kvm_hyperv=on`, else a silent early-MP/HAL hang), SAC initializes, then
+    Windows **bugchecks `0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`** and
+    reboot-loops. Confirmed from the CH-written `MEMORY.DMP` (bugcheck `0xD1`,
+    `\Driver\viostor`). **Reproduces at `num_queues=1` and single vCPU** → a
+    fundamental viostor↔CH-virtio-blk incompatibility, not a launch flag. (CH v51.1
+    also exits on guest warm-reset rather than resetting in place.)
+  - **Decision implication (user's call — flips the CH-first they previously
+    steered to):** v1 Windows = **QEMU+OVMF** via the `osType: windows` gate
+    (reuses the `swift-qemu-client` path already in swiftletd for GPU). CH-for-
+    Windows is a future track gated on a newer `virtio-win` viostor and/or newer
+    CH clearing the `0xD1`. The `osType` gate, import-step skipping, cloudbase-init,
+    and the virtio+BCD image-prep runbook are unchanged.
+  - **Phased PRs (refined):** PR 2 `osType` field+webhook; PR 3 import-skip; PR 4
+    runtime → **QEMU+OVMF** (was CH); PR 5 cloudbase-init; PR 6 image-prep
+    runbook/tooling (the spike's `autounattend.xml` + `run-install.sh` are the
+    seed); PR 7 runbook+samples (validation asset-gated — no Windows license on the
+    dev cluster).
 
 ### Other Roadmap Items Not Progressed
 - **Multi-NIC + SR-IOV hardware validation** — code shipped, hardware not available
