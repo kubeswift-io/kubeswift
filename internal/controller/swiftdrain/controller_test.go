@@ -240,6 +240,9 @@ func TestReconcile_CreatesMigration(t *testing.T) {
 	if !m.Spec.AllowIPChange {
 		t.Errorf("drain migration must set allowIPChange=true to avoid stalling on default networking")
 	}
+	if m.Spec.TTL == nil || m.Spec.TTL.Duration != drainMigrationTTL {
+		t.Errorf("drain migration must set ttl=%s for auto-cleanup; got %v", drainMigrationTTL, m.Spec.TTL)
+	}
 	if len(m.OwnerReferences) != 1 || m.OwnerReferences[0].Name != "g" {
 		t.Errorf("migration must be guest-owned; got %+v", m.OwnerReferences)
 	}
