@@ -20,6 +20,7 @@ type mockResolvedGuest struct {
 	initramfsPath  string
 	kernelCmdline  string
 	hypervisor     string
+	osType         string
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -36,7 +37,13 @@ func (m *mockResolvedGuest) GetKernelPath() string         { return m.kernelPath
 func (m *mockResolvedGuest) GetInitramfsPath() string      { return m.initramfsPath }
 func (m *mockResolvedGuest) GetKernelCmdline() string      { return m.kernelCmdline }
 func (m *mockResolvedGuest) GetHypervisor() string         { return m.hypervisor }
-func (m *mockResolvedGuest) GetNICs() []NICIntent          { return nil }
+func (m *mockResolvedGuest) GetOSType() string {
+	if m.osType == "" {
+		return "linux"
+	}
+	return m.osType
+}
+func (m *mockResolvedGuest) GetNICs() []NICIntent { return nil }
 
 // TestBuild_DiskBootBlockMode is the W9 contract test for the
 // runtimeintent producer side: a guest with Block-mode root storage
@@ -157,6 +164,25 @@ func TestBuild_WithHypervisorQEMU(t *testing.T) {
 	}
 	if intent.CPU != 16 || intent.Memory != 32768 {
 		t.Errorf("cpu=%d memory=%d, want 16 32768", intent.CPU, intent.Memory)
+	}
+}
+
+func TestBuild_OSType(t *testing.T) {
+	// windows -> intent.OSType=windows (swiftletd adds kvm_hyperv on --cpus).
+	win := Build(&mockResolvedGuest{
+		hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 4096,
+		lifecycle: "start", guestID: "default/win", osType: "windows",
+	})
+	if win.OSType != "windows" {
+		t.Errorf("OSType = %q, want windows", win.OSType)
+	}
+	// default (unset) -> linux (no behaviour change for existing guests).
+	lin := Build(&mockResolvedGuest{
+		hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 2048,
+		lifecycle: "start", guestID: "default/lin",
+	})
+	if lin.OSType != "linux" {
+		t.Errorf("OSType = %q, want linux", lin.OSType)
 	}
 }
 

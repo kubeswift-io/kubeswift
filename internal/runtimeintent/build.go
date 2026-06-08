@@ -23,6 +23,7 @@ type ResolvedGuest interface {
 	GetInitramfsPath() string
 	GetKernelCmdline() string
 	GetHypervisor() string
+	GetOSType() string
 	GetNICs() []NICIntent
 }
 
@@ -52,6 +53,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			GuestID:    rg.GetGuestID(),
 			Network:    rg.HasNetwork(),
 			Hypervisor: rg.GetHypervisor(),
+			OSType:     rg.GetOSType(),
 			DataDisk:   dataDisk,
 			NICs:       nics,
 			KernelBoot: &KernelBootSpec{
@@ -91,6 +93,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		GuestID:    rg.GetGuestID(),
 		Network:    rg.HasNetwork(),
 		Hypervisor: rg.GetHypervisor(),
+		OSType:     rg.GetOSType(),
 		DataDisk:   dataDisk,
 		NICs:       nics,
 	}
