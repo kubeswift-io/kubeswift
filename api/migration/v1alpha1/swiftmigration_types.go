@@ -267,10 +267,14 @@ type SwiftMigrationSpec struct {
 	// the webhook rejects live; auto resolves to offline.
 	// +kubebuilder:default=auto
 	Mode SwiftMigrationMode `json:"mode,omitempty"`
-	// DowntimeTarget is the Cloud Hypervisor downtime_ms target. Ignored in
-	// Phase 1 (offline migration's downtime is bounded by storage detach +
-	// VM boot, not by CH's downtime budget). Carried in the spec for forward
-	// compatibility with live mode.
+	// DowntimeTarget is the Cloud Hypervisor `downtime_ms` target for
+	// mode=live on CH >= v52: CH iterates pre-copy until the estimated final
+	// stop-and-copy (the vCPU-paused window) fits under this budget, then
+	// commits — classical dirty-rate convergence, superseding v51.1's
+	// hardcoded 5-iteration cap. Unset means CH keeps its native behaviour
+	// (the controller omits downtime_ms from the send). The webhook bounds it
+	// to [10ms, 10s] for mode=live. Ignored for mode=offline (offline
+	// downtime is bounded by storage detach + VM boot, not a CH budget).
 	// +optional
 	DowntimeTarget *metav1.Duration `json:"downtimeTarget,omitempty"`
 	// ParallelConnections is the number of TCP connections CH uses for the
