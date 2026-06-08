@@ -26,6 +26,11 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [SwiftKernel reference](swiftkernel.md) — Full reference: node setup, building profiles, OCI packaging, usage
 - [Kernel boot quickstart](kernel-boot-quickstart.md) — Boot a kernel VM in five steps
 
+### Windows Guests
+
+- [Running Windows guests](windows/overview.md) — Overview: `osType: windows`, the end-to-end lifecycle, RDP management, limitations
+- [Windows image prep](windows/image-prep.md) — Operator runbook: build a virtio-ready, CH-bootable Windows image
+
 ### Installation
 
 - [Local cluster](install/local-cluster.md) — kind, minikube, build and deploy

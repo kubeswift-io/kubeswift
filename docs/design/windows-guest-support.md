@@ -1,9 +1,13 @@
 # Windows Guest Support
 
-> Status: DESIGN — **spike complete, OQ1 RESOLVED → CH-first (on CH v52.0)**. First
-> scoping pass for running Windows VMs as SwiftGuests. Greenfield — there is no
-> `osType` concept in the codebase today; several runtime layers assume a Linux
-> guest. Last updated: 2026-06-07.
+> Status: **IMPLEMENTED — v1 code-complete (CH-first on CH v52.0), validation
+> asset-gated.** All phased PRs shipped (PR 0 CH bump → PR 2 `osType` → PR 3
+> import-skip → PR 4 runtime+`kvm_hyperv` → PR 5 cloudbase-init provisioning →
+> PR 6 image-prep tooling → PR 7 overview). Operator entry point:
+> [`docs/windows/overview.md`](../windows/overview.md). The boot path is
+> spike+locally-validated end-to-end (a virtio-ready image boots on CH v52.0);
+> only *in-cluster* cloudbase-init provisioning remains untested (no Windows
+> license on the dev cluster). Last updated: 2026-06-08.
 >
 > **Spike result (see [`windows-guest-support-spike.md`](windows-guest-support-spike.md)):**
 > the image-prep pipeline works, QEMU+OVMF boots Windows cleanly, and — the decisive
