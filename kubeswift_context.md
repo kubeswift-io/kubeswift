@@ -2614,10 +2614,12 @@ Shipped across 6 PRs (design + 5 build):
   today, OQ6); auto-GC of Failed scheduled snapshots (OQ1 — left for inspection).
 
 ### In Progress
-- **Windows guest support** — design doc + **boot spike COMPLETE** (2026-06-07):
+- **Windows guest support — v1 CODE-COMPLETE** (2026-06-08; design + boot spike
+  2026-06-07). Operator entry point:
+  [`docs/windows/overview.md`](docs/windows/overview.md). Design + spike:
   [`docs/design/windows-guest-support.md`](docs/design/windows-guest-support.md),
   [`docs/design/windows-guest-support-spike.md`](docs/design/windows-guest-support-spike.md).
-  Greenfield: no `osType` concept exists; several runtime layers assume Linux. The
+  Greenfield: no `osType` concept existed; several runtime layers assumed Linux. The
   spike ran entirely off-cluster with the **real CH binaries + `CLOUDHV.fd`** from
   the `swiftletd` image. **OQ1 RESOLVED → CH-first on CH v52.0** (the first pass
   appeared to block CH; a CH-version follow-up restored CH-first):
@@ -2646,12 +2648,19 @@ Shipped across 6 PRs (design + 5 build):
     v51.1 → v52.0** in the `swiftletd` image — a **platform-wide** change needing a
     Linux-guest regression pass (treat as its own PR). Reuses the existing CH
     disk-boot path; QEMU+OVMF reverts to the escape hatch.
-  - **Phased PRs (refined):** **PR 0 prereq = bump CH → v52.0** (+ matching
-    `CLOUDHV.fd`, Linux regression); PR 2 `osType` field+webhook; PR 3 import-skip;
-    PR 4 runtime → **CH disk-boot path + `kvm_hyperv=on`**; PR 5 cloudbase-init;
-    PR 6 image-prep runbook/tooling (the spike's `autounattend.xml` + `run-install.sh`
-    are the seed); PR 7 runbook+samples (validation asset-gated — no Windows license
-    on the dev cluster).
+  - **v1 CODE-COMPLETE 2026-06-08 — all PRs shipped:** PR 0 CH bump → v52.0
+    (#150, smoke-test-validated); PR 2 `osType` field+webhook+resolver (#153);
+    PR 3 import-skip + unprivileged Windows import Job (#155); PR 4 runtime →
+    CH disk-boot + `kvm_hyperv=on` (#156, Go intent + Rust swift-ch-client);
+    PR 5 cloudbase-init provisioning over the existing NoCloud `cidata` seed
+    (#157 — **no seed-mechanism change needed**; samples + load-bearing comments);
+    PR 6 image-prep tooling + runbook (#158 — `tools/windows-image-prep/`; the
+    productized installer was re-validated end-to-end: produces a virtio-ready
+    image that boots on CH v52.0 to SAC, no viostor crash); PR 7 operator overview
+    [`docs/windows/overview.md`](docs/windows/overview.md) + docs index.
+    **Validation asset-gated:** every layer is unit/spike/locally validated; only
+    *in-cluster* cloudbase-init-over-NoCloud provisioning is untested (no Windows
+    license on the dev cluster — same caveat as Tier 2/3 GPU).
 
 ### CH v52.0-Unlocked Capabilities (roadmap)
 
