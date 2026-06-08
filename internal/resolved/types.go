@@ -107,7 +107,12 @@ type Networks struct {
 	InterfaceModel string `json:"interfaceModel"`
 }
 
-// Seed holds materialization inputs for cloud-init.
+// Seed holds materialization inputs for the guest's first-boot provisioner.
+// The seed pipeline is OS-AGNOSTIC by design: it produces a NoCloud seed.iso
+// (volume label "cidata") with flat user-data/meta-data/network-config files,
+// read by cloud-init on Linux AND by cloudbase-init on Windows (osType: windows)
+// — the same mechanism, no Windows-specific branch. Do not inject OS-specific
+// content here; keep it operator-provided passthrough so both consumers work.
 // UserData, MetaData, NetworkData are inline strings. When *From is set, the renderer fetches from Secret/ConfigMap.
 type Seed struct {
 	Datasource      string                          `json:"datasource"`
