@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KubeSwift Windows image-prep autounattend.xml.
+
+  Drives a fully unattended, headless Windows Server 2022 install under QEMU/KVM
+  that produces a VIRTIO-READY, Cloud-Hypervisor-bootable image:
+    - viostor (virtio-blk) + NetKVM (virtio-net) drivers injected during WinPE
+    - UEFI/GPT layout (CH boots via CLOUDHV.fd -> \EFI\Boot\bootx64.efi fallback)
+    - headless BCD prep: EMS/SAC on serial + Automatic Repair DISABLED, so a
+      console-less VMM (CH) boots straight to the OS instead of a graphical
+      recovery screen that hangs.
+
+  Validated end-to-end in the boot spike (docs/design/windows-guest-support-spike.md):
+  the produced image boots cleanly on Cloud Hypervisor v52.0 (with the
+  `kvm_hyperv=on` CPU enlightenment, which the KubeSwift runtime adds for
+  osType: windows).
+
+  REVIEW BEFORE USE:
+    - AdministratorPassword / AutoLogon password below is a PLACEHOLDER — change it.
+    - /IMAGE/INDEX 1 = "Windows Server 2022 Standard (Core)". Use 2 for the
+      Desktop Experience edition (see the runbook for `wiminfo install.wim`).
+    - Install cloudbase-init afterward (runbook Part B) for NoCloud provisioning.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <!-- Auto-skip the language screen (else a headless install stalls on it). -->
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <!-- Inject virtio drivers in WinPE so Setup sees the virtio-blk target disk.
+         Drive letters D/E/F cover the virtio-win CD wherever WinPE mounts it. -->
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>D:\viostor\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\viostor\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>F:\viostor\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>D:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>F:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>D:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9"><Path>F:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+      </DriverPaths>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>260</Size></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>128</Size></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>3</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label></ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
+          <InstallFrom>
+            <MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>1</Value></MetaData>
+          </InstallFrom>
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <!-- Evaluation media is keyless: do NOT add a <ProductKey> element (even an
+             empty key makes Setup do a key-based edition lookup that fails ->
+             "cannot find the License Terms"). For licensed media, add your key. -->
+        <AcceptEula>true</AcceptEula>
+        <FullName>kubeswift</FullName>
+        <Organization>kubeswift</Organization>
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <ComputerName>*</ComputerName>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+      <UserAccounts>
+        <!-- PLACEHOLDER password — change it (and rotate after image prep). -->
+        <AdministratorPassword><Value>ChangeMe-Passw0rd!</Value><PlainText>true</PlainText></AdministratorPassword>
+      </UserAccounts>
+      <AutoLogon>
+        <Password><Value>ChangeMe-Passw0rd!</Value><PlainText>true</PlainText></Password>
+        <Enabled>true</Enabled>
+        <Username>Administrator</Username>
+        <LogonCount>1</LogonCount>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <!-- Enable RDP for headless management. -->
+        <SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>2</Order><CommandLine>netsh advfirewall firewall set rule group="remote desktop" new enable=Yes</CommandLine></SynchronousCommand>
+        <!-- Headless/serial-only (Cloud Hypervisor) BCD prep: EMS/SAC on serial for
+             both the boot manager and the OS, and DISABLE Automatic Repair (WinRE)
+             so a boot goes straight to the OS instead of a graphical recovery flow
+             that hangs on a console-less VMM. This block is the spike's key fix. -->
+        <SynchronousCommand wcm:action="add"><Order>3</Order><CommandLine>bcdedit /emssettings EMSPORT:1 EMSBAUDRATE:115200</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>4</Order><CommandLine>bcdedit /ems "{current}" on</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>5</Order><CommandLine>bcdedit /bootems "{bootmgr}" on</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>6</Order><CommandLine>bcdedit /set "{current}" bootstatuspolicy ignoreallfailures</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>7</Order><CommandLine>bcdedit /set "{current}" recoveryenabled no</CommandLine></SynchronousCommand>
+        <!-- Completion sentinel written to the serial port (COM1) so the headless
+             install driver can detect success, then power off cleanly. -->
+        <SynchronousCommand wcm:action="add"><Order>8</Order><CommandLine>cmd /c echo KUBESWIFT_PREP_OK&gt;COM1</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>9</Order><CommandLine>cmd /c shutdown /s /t 25 /c KUBESWIFT_PREP_DONE</CommandLine></SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
