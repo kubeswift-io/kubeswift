@@ -29,6 +29,12 @@ pub struct RuntimeIntent {
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
     pub hypervisor: Option<String>,
+    /// Guest OS family: "windows" or "linux"/absent (default). When "windows",
+    /// the CH disk-boot path adds `kvm_hyperv=on` to `--cpus` (the one runtime
+    /// setting the spike proved Windows needs — without it the kernel hangs in
+    /// early MP/HAL init). See docs/design/windows-guest-support-spike.md.
+    #[serde(default)]
+    pub os_type: Option<String>,
     /// Optional secondary data disk (appears as /dev/vdb in guest).
     #[serde(default)]
     pub data_disk: Option<RootDisk>,
@@ -314,6 +320,12 @@ impl RuntimeIntent {
         }
     }
 
+    /// Returns true when the guest OS is Windows (osType=windows). Drives
+    /// `kvm_hyperv=on` on the Cloud Hypervisor `--cpus` arg.
+    pub fn is_windows(&self) -> bool {
+        self.os_type.as_deref() == Some("windows")
+    }
+
     /// Returns the NIC list if present and non-empty, or None for legacy single-NIC mode.
     pub fn nics(&self) -> Option<&[NICIntent]> {
         match &self.nics {
@@ -355,6 +367,25 @@ pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_intent_os_type_windows() {
+        let win: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":4096,"lifecycle":"start","guestId":"default/w","osType":"windows"}"#,
+        )
+        .unwrap();
+        assert!(win.is_windows(), "osType=windows should be is_windows()");
+
+        // Absent osType (legacy) -> not Windows.
+        let lin: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/l"}"#,
+        )
+        .unwrap();
+        assert!(
+            !lin.is_windows(),
+            "absent osType should not be is_windows()"
+        );
+    }
 
     #[test]
     fn test_intent_no_nics() {
