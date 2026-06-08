@@ -1,0 +1,21 @@
+# A Windows SwiftGuest. `osType: windows` routes the guest to the Cloud
+# Hypervisor disk-boot path with `--cpus kvm_hyperv=on` (the one runtime setting
+# Windows needs on CH v52; see PR 4). Windows is disk-boot only -- kernelRef and
+# gpuProfileRef are rejected by the webhook for osType: windows in v1.
+#
+# guestClassRef sizing: Windows Server needs >= 2Gi RAM; the "default" class
+# (4Gi) is fine. The class's storage/CPU apply as usual.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: win-guest
+  namespace: default
+spec:
+  osType: windows
+  imageRef:
+    name: windows-server-2022 # the osType MUST match the image's osType
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: windows-seed # cloudbase-init reads this over the NoCloud seed
+  runPolicy: Running
