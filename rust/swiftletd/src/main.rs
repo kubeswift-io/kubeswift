@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 /// Creates NoCloud seed ISO from directory. CH expects disk image, not directory.
 /// Passes meta-data, user-data, network-config explicitly for correct root-level layout.
-/// -volid cidata: cloud-init identifies NoCloud datasource by this volume label.
+/// -volid cidata: the NoCloud datasource volume label. cloud-init (Linux) AND
+///   cloudbase-init (Windows, osType: windows) both discover the seed by this
+///   label — the seed is OS-agnostic, so keep "cidata" for both consumers.
 /// -rock: Rock Ridge extensions, preserves full lowercase filenames (meta-data not META_DAT.).
 /// -joliet: Joliet extensions, additional filename compatibility.
 fn create_seed_iso(seed_dir: &Path, output_iso: &Path) -> Result<(), String> {

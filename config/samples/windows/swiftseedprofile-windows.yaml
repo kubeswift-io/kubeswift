@@ -1,0 +1,28 @@
+# Windows provisioning reuses the SAME NoCloud seed.iso (volume label "cidata")
+# that cloud-init uses on Linux -- KubeSwift's seed pipeline is OS-agnostic
+# passthrough, so there is no new mechanism. cloudbase-init (in the
+# operator-prepped image) reads this seed.
+#
+# Requirements on the image (PR 6 image-prep runbook):
+#   - cloudbase-init installed and configured with the NoCloud "cidata"
+#     metadata service (config-drive/NoCloud), so it discovers this seed disk.
+#
+# cloudbase-init accepts a subset of cloud-config AND plain scripts. This sample
+# uses a PowerShell user-data (the `#ps1_sysnative` marker) to enable RDP on
+# first boot; the hostname comes from meta-data `local-hostname`
+# (cloudbase-init's SetHostNamePlugin).
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: windows-seed
+  namespace: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #ps1_sysnative
+    # cloudbase-init runs this PowerShell on first boot. Enable RDP + firewall.
+    Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+    Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+  metaData: |
+    instance-id: kubeswift-win-001
+    local-hostname: win-guest
