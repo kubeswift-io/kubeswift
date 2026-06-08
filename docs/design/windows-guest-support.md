@@ -160,7 +160,7 @@ provisioning, and image-prep PRs are hypervisor-independent.
 | 2 | `osType` field on SwiftGuest + SwiftImage (+ webhook rules) + resolver wiring. Default `linux` — no behavior change for existing guests. |
 | 3 | Image import: skip GRUB/serial patch + growpart for `osType: windows` (keep qcow2→raw + resize). |
 | 4 | Runtime: `osType: windows` boots on the **existing CH disk-boot path** (CLOUDHV.fd + virtio) via the `\EFI\Boot\bootx64.efi` fallback, adding `--cpus kvm_hyperv=on` and gating off Linux-only cmdline/console assumptions. (Mostly reuse; QEMU+OVMF remains the escape hatch / interim fallback.) |
-| 5 | Provisioning: cloudbase-init userdata over the NoCloud seed (the spike used `autounattend.xml`; cloudbase-init is the runtime path). |
+| 5 | Provisioning: cloudbase-init userdata over the NoCloud seed. **No seed-mechanism change needed** — the pipeline already builds a NoCloud `seed.iso` (volume label `cidata`) of OS-agnostic passthrough `user-data`/`meta-data`/`network-config`, which cloudbase-init reads identically to cloud-init. PR 5 = a Windows sample set (`config/samples/windows/`) + docs + load-bearing comments marking the seed's OS-agnosticism. Image-side cloudbase-init config is PR 6. |
 | 6 | Image-prep tooling/runbook: virtio (viostor/NetKVM) + the **headless BCD prep** (EMS/SAC, `recoveryenabled no`, `bootstatuspolicy ignoreallfailures`) the spike validated; the `autounattend.xml` + `run-install.sh` from the spike are the seed. |
 | 7 | Operator runbook + samples; cluster validation (asset-gated — no Windows license on the dev cluster). |
 
