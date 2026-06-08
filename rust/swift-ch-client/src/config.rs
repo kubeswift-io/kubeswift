@@ -42,6 +42,11 @@ pub struct VmConfig {
     pub memory_mib: u32,
     /// Number of CPUs.
     pub cpus: u32,
+    /// When true, append `,kvm_hyperv=on` to `--cpus`. Set for Windows guests:
+    /// the spike proved Windows hangs in early MP/HAL init on CH without the
+    /// KVM Hyper-V enlightenments (docs/design/windows-guest-support-spike.md).
+    /// Harmless/unused for Linux guests (default false).
+    pub kvm_hyperv: bool,
     /// Path for Cloud Hypervisor API socket.
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
@@ -87,7 +92,14 @@ impl VmConfig {
             "--memory".to_string(),
             format!("size={}M", self.memory_mib),
             "--cpus".to_string(),
-            format!("boot={}", self.cpus.max(1)),
+            {
+                let mut cpus = format!("boot={}", self.cpus.max(1));
+                if self.kvm_hyperv {
+                    // Windows: KVM Hyper-V enlightenments (required on CH).
+                    cpus.push_str(",kvm_hyperv=on");
+                }
+                cpus
+            },
         ];
 
         if let Some(ref kp) = self.kernel_path {
@@ -183,6 +195,7 @@ mod tests {
             disk_path: "/data/image.raw".to_string(),
             memory_mib: 2048,
             cpus: 2,
+            kvm_hyperv: false,
             api_socket: "/tmp/ch.sock".to_string(),
             seed_path: "/data/seed".to_string(),
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
@@ -195,6 +208,27 @@ mod tests {
             data_disk_path: String::new(),
             vfio_devices: vec![],
         }
+    }
+
+    #[test]
+    fn test_cpus_kvm_hyperv_for_windows() {
+        // Default (Linux): plain boot=N, no enlightenments.
+        let cfg = make_disk_boot_config();
+        let joined = cfg.to_args().join(" ");
+        assert!(
+            joined.contains("--cpus boot=2") && !joined.contains("kvm_hyperv"),
+            "linux --cpus should be plain boot=N: {}",
+            joined
+        );
+        // Windows: boot=N,kvm_hyperv=on.
+        let mut win = make_disk_boot_config();
+        win.kvm_hyperv = true;
+        let joined = win.to_args().join(" ");
+        assert!(
+            joined.contains("--cpus boot=2,kvm_hyperv=on"),
+            "windows --cpus should add kvm_hyperv=on: {}",
+            joined
+        );
     }
 
     #[test]
