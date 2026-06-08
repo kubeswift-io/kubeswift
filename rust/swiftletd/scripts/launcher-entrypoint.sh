@@ -6,37 +6,13 @@ set -e
 INTENT_PATH="${KUBESWIFT_INTENT_PATH:-/var/lib/kubeswift/intent/runtime-intent.json}"
 RUN_DIR="${KUBESWIFT_RUN_DIR:-/var/lib/kubeswift/run}"
 
-# Set cgroup v2 memory.high to ~85% of memory.max so the kernel proactively
-# reclaims reclaimable page cache (chiefly the guest root-disk read cache)
-# BEFORE the container hits the hard memory.max wall. cgroup v2 does no
-# proactive reclaim by default (only the hard limit), so a memory-snapshot
-# capture's page-cache write burst can OOMKill the launcher during Capturing
-# (cluster-diagnosed). memory.high gives the kernel a throttle-and-reclaim band
-# below the wall; combined with direct=on disk I/O (which stops the cache
-# building in the first place) it keeps the snapshot write within budget.
-#
-# Best-effort and MUST NEVER fail the launcher (set -e is on): no-op on
-# cgroup v1, when memory.max is unlimited, or when the cgroup files are not
-# writable (delegation varies by runtime/host -- the spike confirmed they are
-# writable on this cluster, but stay defensive).
-set_memory_high() {
-    cg=/sys/fs/cgroup
-    # cgroup v2 unified hierarchy only (memory.high is v2-only).
-    [ -f "$cg/cgroup.controllers" ] || return 0
-    [ -w "$cg/memory.high" ] || return 0
-    max=$(cat "$cg/memory.max" 2>/dev/null) || return 0
-    # "max" == unlimited -> nothing to throttle against.
-    [ "$max" = "max" ] && return 0
-    # Guard: only proceed if memory.max is a plain integer (bytes).
-    case "$max" in '' | *[!0-9]*) return 0 ;; esac
-    high=$((max * 85 / 100))
-    [ "$high" -gt 0 ] || return 0
-    if echo "$high" > "$cg/memory.high" 2>/dev/null; then
-        echo "launcher: set memory.high=$high (memory.max=$max) for proactive cache reclaim"
-    fi
-    return 0
-}
-set_memory_high || true
+# NOTE: an earlier attempt set cgroup-v2 memory.high here to dodge the
+# memory-snapshot launcher OOM. It was REMOVED -- cluster validation showed it
+# could not reclaim the unreclaimable guest-RAM footprint (memfd + CoW anon),
+# only throttled CH (70k+ breaches, cgroup stalls) and still OOM'd. The real
+# fix is `--memory ...,shared=on` (swift-ch-client config.rs), which halves the
+# footprint by mapping the guest-RAM memfd MAP_SHARED instead of MAP_PRIVATE.
+# Do NOT reintroduce a memory.high self-write here.
 
 network_enabled() {
     [ -f "$INTENT_PATH" ] || return 1
