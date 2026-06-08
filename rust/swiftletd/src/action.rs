@@ -711,6 +711,15 @@ struct MigrationSendArgs {
     /// demo callers set it directly in the action-args annotation.
     #[serde(default)]
     guest_ram_mib: Option<u32>,
+    /// Cloud Hypervisor `downtime_ms` target for vm.send-migration
+    /// (CH >= v52). CH iterates pre-copy until the estimated final
+    /// stop-and-copy fits under this vCPU-pause budget, then commits
+    /// (classical convergence, superseding v51.1's hardcoded 5-iter
+    /// cap). When absent, swiftletd omits it from the send body and CH
+    /// keeps its native behaviour. Set by the controller from
+    /// SwiftMigration.spec.downtimeTarget.
+    #[serde(default)]
+    downtime_ms: Option<u64>,
 }
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
@@ -931,7 +940,7 @@ async fn dispatch_migration_send(
     let _progress = spawn_progress_emitter(action.id.clone(), args.guest_ram_mib);
 
     let started = std::time::Instant::now();
-    if let Err(e) = client.send_migration(&args.target_url) {
+    if let Err(e) = client.send_migration(&args.target_url, args.downtime_ms) {
         return Err(format!(
             "send_migration: {}",
             sanitize_ch_error(&format!("{:?}", e))

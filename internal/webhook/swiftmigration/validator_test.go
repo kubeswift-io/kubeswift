@@ -301,6 +301,39 @@ func TestValidateShape_RejectParallelConnectionsOverMax(t *testing.T) {
 	}
 }
 
+func TestValidateShape_DowntimeTargetBounds(t *testing.T) {
+	cases := []struct {
+		name   string
+		dt     time.Duration
+		reject bool
+	}{
+		{"too-low", MinDowntimeTarget - time.Millisecond, true},
+		{"too-high", MaxDowntimeTarget + time.Second, true},
+		{"min-ok", MinDowntimeTarget, false},
+		{"max-ok", MaxDowntimeTarget, false},
+		{"typical-300ms", 300 * time.Millisecond, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mig := newSwiftMigration("m", "default")
+			mig.Spec.DowntimeTarget = &metav1.Duration{Duration: tc.dt}
+			err := validateShape(mig)
+			if tc.reject && (err == nil || !strings.Contains(err.Error(), "downtimeTarget")) {
+				t.Errorf("downtimeTarget=%s should reject; got %v", tc.dt, err)
+			}
+			if !tc.reject && err != nil {
+				t.Errorf("downtimeTarget=%s should be accepted; got %v", tc.dt, err)
+			}
+		})
+	}
+	// Unset is always fine (CH keeps native behaviour).
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.DowntimeTarget = nil
+	if err := validateShape(mig); err != nil {
+		t.Errorf("nil downtimeTarget must be accepted; got %v", err)
+	}
+}
+
 func TestValidateShape_RejectParallelConnectionsNegative(t *testing.T) {
 	mig := newSwiftMigration("m", "default")
 	mig.Spec.ParallelConnections = -1
