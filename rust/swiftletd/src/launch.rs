@@ -191,7 +191,7 @@ where
         api_socket.display(),
         source_url
     );
-    let mut child = spawn_ch_restore(&api_socket, &source_url)
+    let mut child = spawn_ch_restore(&api_socket, &source_url, intent.restore_auto_resume())
         .map_err(|e| format!("failed to spawn cloud-hypervisor (restore): {}", e))?;
     let pid = child.id();
 

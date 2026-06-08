@@ -105,6 +105,12 @@ const (
 	// to the source's saved value (cloud-hypervisor v51.1
 	// net_util/src/open_tap.rs sets the tap MAC when host_mac is Some).
 	AnnotationRestoreNullifyHostMAC = "snapshot.kubeswift.io/restore-nullify-host-mac"
+	// AnnotationRestoreAutoResume, when "true", makes swiftletd pass
+	// `resume=true` on the CH `--restore` (CH v52) so the guest comes up
+	// RUNNING. Set ONLY by the cloneFromSnapshot path (no SwiftRestore
+	// controller drives a Resuming phase there) — it replaces the
+	// resumeCloneIfNeeded action round-trip (Bug #73).
+	AnnotationRestoreAutoResume = "snapshot.kubeswift.io/restore-auto-resume"
 )
 
 // Restore mode values for AnnotationRestoreMode.
@@ -159,6 +165,10 @@ type RestoreParams struct {
 	// RuntimeDirToPrefix is the clone pod's runtime_dir prefix
 	// (must end in '/') that source paths are rewritten to.
 	RuntimeDirToPrefix string
+	// AutoResume makes swiftletd pass `resume=true` to CH `--restore` so the
+	// guest comes up running (cloneFromSnapshot only; replaces Bug #73's
+	// resumeCloneIfNeeded). SwiftRestore leaves it false and drives resume.
+	AutoResume bool
 	// NullifyHostMAC asks the stager to set net[].host_mac to null in
 	// config.json. Required for clones (see configjson.PatchOptions).
 	NullifyHostMAC bool
@@ -462,5 +472,6 @@ func RestoreParamsFromAnnotations(annotations map[string]string) (RestoreParams,
 		RuntimeDirFromPrefix: annotations[AnnotationRestoreRuntimeDirFromPrefix],
 		RuntimeDirToPrefix:   annotations[AnnotationRestoreRuntimeDirToPrefix],
 		NullifyHostMAC:       annotations[AnnotationRestoreNullifyHostMAC] == "true",
+		AutoResume:           annotations[AnnotationRestoreAutoResume] == "true",
 	}, true
 }
