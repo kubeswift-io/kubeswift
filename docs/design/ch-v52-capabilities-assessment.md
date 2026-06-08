@@ -98,14 +98,21 @@
   restore reads it all before resume (the "~2.8 s/GiB pause window"). This is the
   cost driver for S3 upload size (Tier C), local snapshot disk (Tier B), and
   restore/clone/cutover latency.
-- **PR #118 interaction:** our S3 dedup assumed "the memory-ranges file is **always
-  exactly guest RAM size**" and skipped re-upload on size+sha match. With **sparse**
-  snapshots the file is smaller/sparse — the premise changes (the sha256 check
-  still holds; the size heuristic and the bug's framing should be revisited).
-- **Disposition:** adopt `memory_restore_mode=userfaultfd` on restore (snapshot
-  restore, `cloneFromSnapshot`, and the live-migration receive path — it cuts
-  cutover downtime for large guests); verify sparse-snapshot output and update the
-  PR #118 dedup notes + Tier C size accounting. **High value, snapshot+migration.**
+- **SCOPED** in [`snapshot-ch-v52-efficiency.md`](snapshot-ch-v52-efficiency.md),
+  with two finding-corrections to the disposition below:
+  - **PR #118 dedup is UNAFFECTED (correction).** Sparseness does not change the
+    memory file's **logical** `st_size` (holes still count), and the sha256 is over
+    full content — so "size+sha match" stays correct. No dedup change needed; the
+    PR #118 guard remains necessary.
+  - **Tier C upload is NOT sparse on the wire (correction).** On-disk sparseness
+    cuts local disk (`du`), but the uploader reads holes as zeros → full-size
+    upload. The Tier C win is **compression** (zeros compress away), a separate
+    follow-up — not on-disk sparseness.
+- **Disposition:** sparse snapshots are **free** on v52 (automatic; a local-disk
+  win). The implementable win is `memory_restore_mode=ondemand` on `--restore`
+  (userfaultfd — cuts restore-to-resume latency), plumbed exactly like PR #161's
+  `resume=true`; **gated behind PR #161's cluster validation** (same restore
+  machinery). Tier C compression is a follow-up. See the scoping doc §5/§7.
 
 ### 1.5 Clock-on-restore correctness (#7932, #7933) — VALIDATE (free win)
 - **v52.0:** KVM clock restored **before** vCPUs resume (#7932); `notify_guest_clock_paused`
