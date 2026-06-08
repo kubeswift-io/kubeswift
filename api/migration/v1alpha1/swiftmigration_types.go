@@ -549,10 +549,9 @@ type SwiftMigrationStatus struct {
 	// Read from the kubeswift.io/migration-pause-window-ms annotation
 	// that swiftletd writes alongside migration-status=complete
 	// (rust/swiftletd/src/action.rs::write_migration_status). Stamped
-	// by stopandcopy_live's substateSrcCompleted handler per W27b;
-	// in Phase 3b PR 1 the same stamping path dual-writes both
-	// ObservedTransferDuration and the deprecated ObservedPauseWindow
-	// alias from a single source value.
+	// by stopandcopy_live's substateSrcCompleted handler per W27b.
+	// (The deprecated ObservedPauseWindow alias was removed in the
+	// CH-v52 observability work; this is the canonical field.)
 	//
 	// Empirical baseline from Phase 3b spike Q2 on Calico VXLAN pod
 	// networking: ~38s for a 4Gi RAM guest with no memory-dirtying
@@ -563,30 +562,24 @@ type SwiftMigrationStatus struct {
 	// (the 1.05 factor accounts for the ~5% CH orchestration overhead
 	// measured in spike Q4.)
 	//
-	// Replaces ObservedPauseWindow (deprecated alias, will be removed
-	// in Phase 3b+1).
-	//
 	// Not populated for status.mode=offline migrations; offline
 	// migration shuts down the source guest and restarts it on the
 	// destination, with no memory transfer RPC involved.
 	// +optional
 	ObservedTransferDuration *metav1.Duration `json:"observedTransferDuration,omitempty"`
-	// ObservedPauseWindow is a deprecated alias for
-	// ObservedTransferDuration. The original name misleadingly
-	// suggested "vCPU pause window" — see ObservedTransferDuration's
-	// docstring for the actual semantics (full vm.send-migration RPC
-	// duration, most of which is NOT vCPU-paused). Phase 3b PR 1
-	// dual-writes both fields from a single source value to give
-	// operator tooling one full release cycle to migrate.
-	//
-	// Not populated for status.mode=offline migrations; offline
-	// migration shuts down the source guest and restarts it on the
-	// destination, with no memory transfer RPC involved.
-	//
-	// Will be removed in Phase 3b+1. Operator tooling should migrate
-	// to ObservedTransferDuration.
+	// AppliedDowntimeMs is the Cloud Hypervisor `downtime_ms` ceiling the
+	// controller actually sent on vm.send-migration (from
+	// spec.downtimeTarget; CH >= v52). It is a BOUND, not a measurement:
+	// CH converges pre-copy so the final vCPU stop-and-copy fits under it,
+	// so the real "guest frozen" window is <= this value — but CH v52 does
+	// not report the achieved downtime (vm.send-migration returns 204 with
+	// no body, and CH logs no migration telemetry at its default level), so
+	// the achieved window is not directly measurable here. The only ground
+	// truth is an external observer (e.g. an L2 sibling pinging the guest;
+	// Tracked Follow-up #1). Nil when spec.downtimeTarget was unset (CH used
+	// its native behaviour) or for mode=offline.
 	// +optional
-	ObservedPauseWindow *metav1.Duration `json:"observedPauseWindow,omitempty"`
+	AppliedDowntimeMs *int64 `json:"appliedDowntimeMs,omitempty"`
 
 	// TransferProgress is the live-migration pre-copy progress estimate, an
 	// integer percentage 0-100, surfaced from the swiftletd-on-source
