@@ -161,11 +161,26 @@ impl ApiClient {
     ///
     /// See `docs/design/live-migration-phase-2.md` §4.1 for the full
     /// blocking-semantics rationale.
-    pub fn send_migration(&self, destination_url: &str) -> Result<(), ApiError> {
-        let body = serde_json::to_vec(&serde_json::json!({
+    /// `downtime_ms`, when `Some`, sets CH's `downtime_ms` target (CH >=
+    /// v52): CH runs pre-copy iterations until the estimated final
+    /// stop-and-copy fits under this vCPU-pause budget, then commits —
+    /// classical dirty-rate convergence, replacing v51.1's hardcoded
+    /// 5-iteration cap. `None` omits the field so CH keeps its native
+    /// behaviour (on v51.x the field is unknown and would be ignored/
+    /// rejected, so callers on older CH must pass `None`).
+    pub fn send_migration(
+        &self,
+        destination_url: &str,
+        downtime_ms: Option<u64>,
+    ) -> Result<(), ApiError> {
+        let mut body = serde_json::json!({
             "destination_url": destination_url,
-        }))
-        .map_err(|e| ApiError::Malformed(format!("send_migration body serialize: {}", e)))?;
+        });
+        if let Some(ms) = downtime_ms {
+            body["downtime_ms"] = serde_json::json!(ms);
+        }
+        let body = serde_json::to_vec(&body)
+            .map_err(|e| ApiError::Malformed(format!("send_migration body serialize: {}", e)))?;
         self.request_ok("PUT", "/api/v1/vm.send-migration", Some(&body))
             .map(drop)
     }
@@ -398,13 +413,30 @@ mod tests {
     fn send_migration_sends_destination_url_in_body() {
         let server = MockServer::spawn(no_content());
         let client = ApiClient::new(server.path.clone());
-        client.send_migration("tcp:10.0.0.5:6789").unwrap();
+        client.send_migration("tcp:10.0.0.5:6789", None).unwrap();
         let req = String::from_utf8(server.collect_request()).unwrap();
         assert!(req.starts_with("PUT /api/v1/vm.send-migration HTTP/1.1\r\n"));
         assert!(req.contains("Content-Type: application/json\r\n"));
         let (_, body) = req.split_once("\r\n\r\n").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(parsed["destination_url"], "tcp:10.0.0.5:6789");
+        // None -> downtime_ms omitted entirely (CH keeps native behaviour;
+        // v51.x would reject an unknown field).
+        assert!(parsed.get("downtime_ms").is_none());
+    }
+
+    #[test]
+    fn send_migration_includes_downtime_ms_when_set() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client
+            .send_migration("tcp:10.0.0.5:6789", Some(300))
+            .unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        let (_, body) = req.split_once("\r\n\r\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed["destination_url"], "tcp:10.0.0.5:6789");
+        assert_eq!(parsed["downtime_ms"], 300);
     }
 
     #[test]
@@ -419,7 +451,9 @@ mod tests {
                 .to_vec(),
         );
         let client = ApiClient::new(server.path.clone());
-        let err = client.send_migration("tcp:10.0.0.5:6789").unwrap_err();
+        let err = client
+            .send_migration("tcp:10.0.0.5:6789", None)
+            .unwrap_err();
         match err {
             ApiError::Status(resp) => {
                 assert_eq!(resp.status, 500);

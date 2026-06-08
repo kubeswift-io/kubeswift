@@ -71,6 +71,14 @@ const (
 	// realistic live-migration uses without leaving room for resource
 	// abuse via the Phase 3 controller when it lands.
 	MaxParallelConnections = 16
+	// MinDowntimeTarget / MaxDowntimeTarget bound spec.downtimeTarget,
+	// the CH `downtime_ms` vCPU-pause budget (CH >= v52). Below ~10ms a
+	// guest with any meaningful dirty rate can never converge under the
+	// target and the migration just runs to spec.timeout; above ~10s the
+	// "live" migration's frozen window stops being meaningfully live (use
+	// offline). Live-mode only; ignored for offline.
+	MinDowntimeTarget = 10 * time.Millisecond
+	MaxDowntimeTarget = 10 * time.Second
 	// MaxReasonLen bounds the free-form reason string. Long enough for
 	// a meaningful audit-trail entry, short enough that the field
 	// can't host a payload.
@@ -296,6 +304,16 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 	}
 	if mig.Spec.ParallelConnections < 0 {
 		return fmt.Errorf("spec.parallelConnections=%d must be non-negative", mig.Spec.ParallelConnections)
+	}
+	// downtimeTarget bound (CH downtime_ms, live mode). Only meaningful for
+	// live mode; offline migration's downtime is storage-detach + boot
+	// bound, not a CH vCPU-pause budget. Enforced whenever set so a stray
+	// value on an auto/offline migration is still caught.
+	if dt := mig.Spec.DowntimeTarget; dt != nil && dt.Duration != 0 {
+		if dt.Duration < MinDowntimeTarget || dt.Duration > MaxDowntimeTarget {
+			return fmt.Errorf("spec.downtimeTarget=%s is outside the allowed range [%s, %s]",
+				dt.Duration, MinDowntimeTarget, MaxDowntimeTarget)
+		}
 	}
 	if len(mig.Spec.Reason) > MaxReasonLen {
 		return fmt.Errorf("spec.reason length %d exceeds maximum %d characters", len(mig.Spec.Reason), MaxReasonLen)

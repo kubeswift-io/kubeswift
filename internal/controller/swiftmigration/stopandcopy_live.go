@@ -79,6 +79,31 @@ type migrationSendArgs struct {
 	// path — wired here. Best-effort: a nil value (memory unresolvable)
 	// just disables the estimate; it never fails the migration.
 	GuestRAMMiB *uint32 `json:"guest_ram_mib,omitempty"`
+	// DowntimeMs is the Cloud Hypervisor `downtime_ms` target for
+	// vm.send-migration (CH >= v52): CH iterates pre-copy until the
+	// estimated final stop-and-copy fits under this vCPU-pause budget,
+	// then commits (classical convergence, superseding v51.1's hardcoded
+	// 5-iteration cap). Derived from SwiftMigration.spec.downtimeTarget;
+	// nil (operator did not set downtimeTarget) omits the field so CH
+	// uses its native default. Maps to MigrationSendArgs.downtime_ms in
+	// rust/swiftletd/src/action.rs -> swift_ch_client::send_migration.
+	DowntimeMs *int64 `json:"downtime_ms,omitempty"`
+}
+
+// downtimeMs converts SwiftMigration.spec.downtimeTarget to a CH
+// `downtime_ms` value (milliseconds). Returns nil when unset or
+// non-positive so the send-args omit it and CH keeps its native
+// behaviour (operator opt-in; defaulting is deferred pending the
+// PR 1 convergence spike). Live-mode only.
+func downtimeMs(mig *migrationv1alpha1.SwiftMigration) *int64 {
+	if mig.Spec.DowntimeTarget == nil {
+		return nil
+	}
+	ms := mig.Spec.DowntimeTarget.Milliseconds()
+	if ms <= 0 {
+		return nil
+	}
+	return &ms
 }
 
 // guestRAMMiB returns the guest's RAM in MiB from its SwiftGuestClass,
@@ -412,6 +437,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			TargetURL:      targetURL,
 			TimeoutSeconds: migrationActionTimeoutSeconds,
 			GuestRAMMiB:    guestRAMMiB(ctx, r, &guest),
+			DowntimeMs:     downtimeMs(mig),
 		}
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
