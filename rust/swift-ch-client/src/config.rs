@@ -120,11 +120,11 @@ impl VmConfig {
 
             if !self.seed_path.is_empty() {
                 args.push("--disk".to_string());
-                args.push(format!("path={}", self.seed_path));
+                args.push(format!("path={},image_type=raw", self.seed_path));
             }
             if !self.data_disk_path.is_empty() {
                 args.push("--disk".to_string());
-                args.push(format!("path={}", self.data_disk_path));
+                args.push(format!("path={},image_type=raw", self.data_disk_path));
             }
         } else {
             // --kernel (CLOUDHV.fd UEFI firmware) required for disk boot.
@@ -133,16 +133,21 @@ impl VmConfig {
                 args.push(path.clone());
             }
 
-            // --disk accepts multiple values: --disk path=/foo path=/bar
+            // --disk accepts multiple values: --disk path=/foo path=/bar.
+            // image_type=raw is explicit: every KubeSwift runtime disk is raw
+            // (Design Principle #3 — root/seed.iso/data are all raw), and CH v52
+            // deprecates disk image-type autodetection (removed in a future
+            // release). Being explicit avoids the deprecation warning and the
+            // autodetection sector-0 probe (W10).
             args.push("--disk".to_string());
-            args.push(format!("path={}", self.disk_path));
+            args.push(format!("path={},image_type=raw", self.disk_path));
             if !self.seed_path.is_empty() {
                 // Cloud Hypervisor: second disk for cloud-init NoCloud.
                 // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
-                args.push(format!("path={}", self.seed_path));
+                args.push(format!("path={},image_type=raw", self.seed_path));
             }
             if !self.data_disk_path.is_empty() {
-                args.push(format!("path={}", self.data_disk_path));
+                args.push(format!("path={},image_type=raw", self.data_disk_path));
             }
         }
 
@@ -229,6 +234,34 @@ mod tests {
             "windows --cpus should add kvm_hyperv=on: {}",
             joined
         );
+    }
+
+    #[test]
+    fn test_disks_carry_image_type_raw() {
+        let mut cfg = make_disk_boot_config();
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let args = cfg.to_args();
+        // Every --disk value carries image_type=raw (CH v52 deprecates disk
+        // image-type autodetection; raw is the runtime invariant).
+        let disk_idx = args
+            .iter()
+            .position(|a| a == "--disk")
+            .expect("--disk missing");
+        for v in &args[disk_idx + 1..] {
+            if v.starts_with("--") {
+                break;
+            }
+            assert!(
+                v.contains(",image_type=raw"),
+                "disk value missing image_type=raw: {}",
+                v
+            );
+        }
+        let joined = args.join(" ");
+        assert!(joined.contains("path=/data/image.raw,image_type=raw"));
+        assert!(joined.contains("path=/data/seed,image_type=raw"));
+        assert!(joined.contains("path=/data/extra.raw,image_type=raw"));
+        // The VFIO --device path= (none here) must never get image_type.
     }
 
     #[test]
@@ -494,9 +527,9 @@ mod tests {
             .expect("--disk flag missing");
         assert!(
             args.get(disk_idx + 1)
-                .map(|v| v == "path=/dev/kubeswift-root")
+                .map(|v| v == "path=/dev/kubeswift-root,image_type=raw")
                 .unwrap_or(false),
-            "first --disk value should be the root device path; args: {:?}",
+            "first --disk value should be the root device path with image_type=raw; args: {:?}",
             args
         );
     }
