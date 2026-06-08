@@ -119,12 +119,18 @@ impl VmConfig {
             }
 
             if !self.seed_path.is_empty() {
+                // No direct=on: emptyDir/tmpfs-backed; tmpfs rejects O_DIRECT.
                 args.push("--disk".to_string());
                 args.push(format!("path={},image_type=raw", self.seed_path));
             }
             if !self.data_disk_path.is_empty() {
+                // direct=on: PVC-backed data disk, O_DIRECT-capable (see the
+                // disk-boot branch comment for why root/data bypass the cache).
                 args.push("--disk".to_string());
-                args.push(format!("path={},image_type=raw", self.data_disk_path));
+                args.push(format!(
+                    "path={},image_type=raw,direct=on",
+                    self.data_disk_path
+                ));
             }
         } else {
             // --kernel (CLOUDHV.fd UEFI firmware) required for disk boot.
@@ -139,15 +145,35 @@ impl VmConfig {
             // deprecates disk image-type autodetection (removed in a future
             // release). Being explicit avoids the deprecation warning and the
             // autodetection sector-0 probe (W10).
+            //
+            // direct=on (O_DIRECT, KubeVirt cache=none parity) on the ROOT and
+            // DATA disks bypasses the host page cache for guest disk I/O. The
+            // guest already caches its own blocks in guest RAM, so the host copy
+            // is a wasteful double-cache. Left buffered, the root-disk read cache
+            // grows to ~the disk working set and consumes the launcher's memory
+            // overhead, leaving no headroom for a memory-snapshot capture's
+            // page-cache write burst -> the launcher OOMKills during Capturing
+            // (cluster-diagnosed). Root and data disks are always PVC-backed
+            // (ext4 raw file on Filesystem, or a raw block device on Block); both
+            // support O_DIRECT. The SEED disk is deliberately left buffered: it
+            // is emptyDir-backed (often tmpfs), and tmpfs rejects O_DIRECT with
+            // EINVAL -- direct=on there would fail boot (it is a few hundred KB,
+            // not a cache concern). This is per-disk-ROLE, not path-shape
+            // inference -- the opacity contract holds (config.rs never parses the
+            // path string to decide behavior).
             args.push("--disk".to_string());
-            args.push(format!("path={},image_type=raw", self.disk_path));
+            args.push(format!("path={},image_type=raw,direct=on", self.disk_path));
             if !self.seed_path.is_empty() {
                 // Cloud Hypervisor: second disk for cloud-init NoCloud.
                 // CH expects ISO or vfat; we pass directory path (see swift-ch-client README).
+                // No direct=on: emptyDir/tmpfs-backed; tmpfs rejects O_DIRECT.
                 args.push(format!("path={},image_type=raw", self.seed_path));
             }
             if !self.data_disk_path.is_empty() {
-                args.push(format!("path={},image_type=raw", self.data_disk_path));
+                args.push(format!(
+                    "path={},image_type=raw,direct=on",
+                    self.data_disk_path
+                ));
             }
         }
 
@@ -262,6 +288,56 @@ mod tests {
         assert!(joined.contains("path=/data/seed,image_type=raw"));
         assert!(joined.contains("path=/data/extra.raw,image_type=raw"));
         // The VFIO --device path= (none here) must never get image_type.
+    }
+
+    /// O_DIRECT (cache=none) is applied per-disk-ROLE: the ROOT and DATA
+    /// disks (always PVC-backed, O_DIRECT-capable) carry `,direct=on` to
+    /// bypass the host page cache; the SEED disk (emptyDir/tmpfs-backed,
+    /// which rejects O_DIRECT with EINVAL) must NEVER carry it. A future
+    /// refactor that blanket-appends direct=on to every --disk would break
+    /// the seed mount on tmpfs and fail boot — this test pins that invariant.
+    #[test]
+    fn test_disks_direct_io_per_role() {
+        // Disk-boot: root + seed + data.
+        let mut cfg = make_disk_boot_config();
+        cfg.data_disk_path = "/data/extra.raw".to_string();
+        let joined = cfg.to_args().join(" ");
+        // Root (PVC) and data (PVC) bypass the cache.
+        assert!(
+            joined.contains("path=/data/image.raw,image_type=raw,direct=on"),
+            "root disk must carry direct=on: {}",
+            joined
+        );
+        assert!(
+            joined.contains("path=/data/extra.raw,image_type=raw,direct=on"),
+            "data disk must carry direct=on: {}",
+            joined
+        );
+        // Seed (emptyDir/tmpfs) stays buffered — direct=on would EINVAL.
+        assert!(
+            joined.contains("path=/data/seed,image_type=raw")
+                && !joined.contains("path=/data/seed,image_type=raw,direct=on"),
+            "seed disk must NOT carry direct=on (tmpfs rejects O_DIRECT): {}",
+            joined
+        );
+
+        // Kernel-boot: seed + data (no root --disk). Same per-role policy.
+        let mut kcfg = make_disk_boot_config();
+        kcfg.kernel_path = Some("/k/bzImage".to_string());
+        kcfg.firmware_path = None;
+        kcfg.data_disk_path = "/data/extra.raw".to_string();
+        let kjoined = kcfg.to_args().join(" ");
+        assert!(
+            kjoined.contains("path=/data/extra.raw,image_type=raw,direct=on"),
+            "kernel-boot data disk must carry direct=on: {}",
+            kjoined
+        );
+        assert!(
+            kjoined.contains("path=/data/seed,image_type=raw")
+                && !kjoined.contains("path=/data/seed,image_type=raw,direct=on"),
+            "kernel-boot seed disk must NOT carry direct=on: {}",
+            kjoined
+        );
     }
 
     #[test]
@@ -527,9 +603,9 @@ mod tests {
             .expect("--disk flag missing");
         assert!(
             args.get(disk_idx + 1)
-                .map(|v| v == "path=/dev/kubeswift-root,image_type=raw")
+                .map(|v| v == "path=/dev/kubeswift-root,image_type=raw,direct=on")
                 .unwrap_or(false),
-            "first --disk value should be the root device path with image_type=raw; args: {:?}",
+            "first --disk value should be the root device path with image_type=raw,direct=on; args: {:?}",
             args
         );
     }
