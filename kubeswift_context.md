@@ -83,8 +83,11 @@ Images: `ghcr.io/projectbeskar/kubeswift/` (public packages)
 - Firmware (disk boot): CLOUDHV.fd loaded via `--kernel` flag (NOT `--firmware`)
 - Cloud Hypervisor: **v52.0** (bumped from v51.1 — the swiftletd image ships v52.0;
   v51.1's virtio-blk bugchecks Windows' viostor driver, fixed in v52.0. CLOUDHV.fd
-  firmware unchanged: `ch-13b4963ec4`, the spike-validated pairing. Linux-guest
-  regression validation lands with the redeploy.) **v52.0 capabilities assessment
+  firmware unchanged: `ch-13b4963ec4`, the spike-validated pairing. **Linux-guest
+  regression PASSED 2026-06-07** — `make smoke-test` all 5 scenarios green on
+  `swiftletd:sha-e10ea6d` (disk-boot/kernel-boot/qemu-boot/gpu-alloc/multi-nic;
+  the disk-boot guest reached Running + DHCP IP on cloud-hypervisor). The bump is
+  clean for Linux guests.) **v52.0 capabilities assessment
   (what the bump unlocks — workaround removals + roadmap):**
   [`docs/design/ch-v52-capabilities-assessment.md`](docs/design/ch-v52-capabilities-assessment.md)
   — notably `image_type=raw` (autodetection deprecation + likely W10 fix),
@@ -2693,7 +2696,7 @@ sparse/userfaultfd snapshots — are tracked in the assessment doc §5, not here
 ---
 
 ## Hardware Available
-- 3-node k0s cluster (frida control-plane, miles + boba workers), Ubuntu 24.04, CH v52.0 (swiftletd image; bumped from v51.1 — verify with the redeploy), Longhorn 22d
+- 3-node k0s cluster (frida control-plane, miles + boba workers), Ubuntu 24.04, CH v52.0 (swiftletd image; bumped from v51.1, smoke-test-validated 2026-06-07), Longhorn 22d
 - boba has GeForce GTX 1080 (Tier 1 GPU validated)
 - No SR-IOV NICs, no HGX, no multi-NIC servers currently
 
