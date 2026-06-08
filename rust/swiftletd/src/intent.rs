@@ -76,6 +76,12 @@ pub struct RestoreIntent {
     /// here as readOnly. CH reads `config.json`, `state.json`, and
     /// `memory-ranges` from this directory.
     pub snapshot_path: String,
+    /// When true, swiftletd passes `resume=true` on the CH `--restore` (CH v52)
+    /// so the guest comes up RUNNING instead of paused. Set only for
+    /// cloneFromSnapshot (replaces the resumeCloneIfNeeded round-trip, Bug #73);
+    /// SwiftRestore leaves it false and drives resume via its Resuming phase.
+    #[serde(default)]
+    pub auto_resume: bool,
 }
 
 /// Live-migration role (Phase 2). When `role == "receiver"`, swiftletd
@@ -294,6 +300,16 @@ impl RuntimeIntent {
             Some(r) if !r.snapshot_path.is_empty() => &r.snapshot_path,
             _ => "",
         }
+    }
+
+    /// Returns true when the restore should pass `resume=true` to CH (CH v52)
+    /// so the guest comes up running (cloneFromSnapshot; replaces Bug #73's
+    /// resumeCloneIfNeeded). False for SwiftRestore-driven restores.
+    pub fn restore_auto_resume(&self) -> bool {
+        self.restore
+            .as_ref()
+            .map(|r| r.auto_resume)
+            .unwrap_or(false)
     }
 
     /// Returns the snapshot URL CH expects on `--restore source_url=`.
@@ -526,6 +542,18 @@ mod tests {
             intent.restore_source_url(),
             "file:///var/lib/kubeswift/snapshots/default-snap1/"
         );
+        // autoResume absent -> false (SwiftRestore path).
+        assert!(!intent.restore_auto_resume());
+    }
+
+    #[test]
+    fn test_intent_restore_auto_resume() {
+        // cloneFromSnapshot sets autoResume -> swiftletd passes resume=true.
+        let intent: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"","format":""},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/clone","restore":{"snapshotPath":"/snap/","autoResume":true}}"#,
+        )
+        .unwrap();
+        assert!(intent.restore_auto_resume());
     }
 
     #[test]
