@@ -39,6 +39,13 @@ type RestoreIntent struct {
 	// SnapshotPath is the absolute in-pod path of the snapshot directory
 	// (the dir CH reads config.json, state.json, and memory-ranges from).
 	SnapshotPath string `json:"snapshotPath"`
+	// AutoResume makes swiftletd pass `resume=true` on the CH `--restore`
+	// (CH v52) so the restored guest comes up RUNNING instead of paused.
+	// Set ONLY for cloneFromSnapshot (which has no SwiftRestore controller to
+	// drive a Resuming phase) — it replaces the resumeCloneIfNeeded action
+	// round-trip (Bug #73). SwiftRestore-driven restores leave it false and
+	// keep driving resume themselves.
+	AutoResume bool `json:"autoResume,omitempty"`
 }
 
 // NICIntent describes a single network interface for the VM.

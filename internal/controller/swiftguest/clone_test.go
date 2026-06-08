@@ -288,25 +288,22 @@ func TestCloneRegenIncludesNonMAC(t *testing.T) {
 	}
 }
 
-func TestResumeCloneIfNeeded(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "clone-a", Namespace: "ns"}}
-	r := poolCloneReconciler(t, pod)
-	g := cloneGuest()
-
-	// First call: stamps the resume action onto the pod.
-	if err := r.resumeCloneIfNeeded(context.Background(), pod, g); err != nil {
-		t.Fatal(err)
+func TestCloneRestoreAnnotations_SetsAutoResume(t *testing.T) {
+	annos := cloneRestoreAnnotations(
+		cloneGuest(),
+		&snapshotv1alpha1.SwiftSnapshot{ObjectMeta: metav1.ObjectMeta{Name: "snap", Namespace: "ns"}},
+		sourceGuest(),
+		"/var/lib/kubeswift/snapshots/ns-snap",
+		"node-a",
+	)
+	// CH v52 auto-resume replaces the resumeCloneIfNeeded action round-trip
+	// (Bug #73): the clone's restore-receive carries auto-resume so swiftletd
+	// passes resume=true to CH --restore and the clone comes up running.
+	if annos[AnnotationRestoreAutoResume] != "true" {
+		t.Errorf("clone restore annotations must set auto-resume=true; got %q", annos[AnnotationRestoreAutoResume])
 	}
-	if pod.Annotations[cloneActionKey] != cloneVerbResume || pod.Annotations[cloneActionIDKey] != "clone-a-clone-resume" {
-		t.Fatalf("resume action not stamped: %+v", pod.Annotations)
-	}
-	// Second call (action-id already set): no-op (idempotent).
-	before := pod.Annotations[cloneActionIDKey]
-	if err := r.resumeCloneIfNeeded(context.Background(), pod, g); err != nil {
-		t.Fatal(err)
-	}
-	if pod.Annotations[cloneActionIDKey] != before {
-		t.Errorf("resume should be idempotent once the action-id is set")
+	if annos[AnnotationRestoreMode] != RestoreModeClone {
+		t.Errorf("clone restore should be clone mode; got %q", annos[AnnotationRestoreMode])
 	}
 }
 

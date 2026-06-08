@@ -62,11 +62,15 @@ pub fn spawn_ch(config: &VmConfig) -> Result<Child, std::io::Error> {
 ///
 /// CH brings the VM up in **Paused** state — the action handler must
 /// issue a [`crate::ApiClient::resume`] to start CPUs.
-pub fn spawn_ch_restore(api_socket: &Path, source_url: &str) -> Result<Child, std::io::Error> {
+pub fn spawn_ch_restore(
+    api_socket: &Path,
+    source_url: &str,
+    auto_resume: bool,
+) -> Result<Child, std::io::Error> {
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
     rm_stale_api_socket(api_socket);
-    let args = restore_args(api_socket, source_url);
+    let args = restore_args(api_socket, source_url, auto_resume);
     std::process::Command::new(&binary).args(&args).spawn()
 }
 
@@ -111,13 +115,19 @@ fn receive_args(api_socket: &Path) -> Vec<String> {
 /// Build the argv for a restore-receive CH invocation. Split out from
 /// [`spawn_ch_restore`] so the argv shape is unit-testable without
 /// actually spawning CH.
-fn restore_args(api_socket: &Path, source_url: &str) -> Vec<String> {
+fn restore_args(api_socket: &Path, source_url: &str, auto_resume: bool) -> Vec<String> {
+    // CH expects --restore as a separate flag, with `source_url=...` as its
+    // single value (no equals after the flag itself). `resume=true` (CH v52)
+    // brings the guest up RUNNING instead of paused — set for cloneFromSnapshot
+    // so no controller-driven resume is needed (Bug #73).
+    let mut restore = format!("source_url={}", source_url);
+    if auto_resume {
+        restore.push_str(",resume=true");
+    }
     vec![
         format!("--api-socket={}", api_socket.display()),
-        // CH expects --restore as a separate flag, with `source_url=...`
-        // as its single value (no equals after the flag itself).
         "--restore".to_string(),
-        format!("source_url={}", source_url),
+        restore,
     ]
 }
 
@@ -182,10 +192,12 @@ mod tests {
         let args = restore_args(
             Path::new("/run/foo/ch.sock"),
             "file:///var/lib/kubeswift/snapshots/default-snap1/",
+            false,
         );
         assert_eq!(args.len(), 3);
         assert_eq!(args[0], "--api-socket=/run/foo/ch.sock");
         assert_eq!(args[1], "--restore");
+        // auto_resume=false (SwiftRestore): no resume= suffix.
         assert_eq!(
             args[2],
             "source_url=file:///var/lib/kubeswift/snapshots/default-snap1/"
@@ -193,8 +205,19 @@ mod tests {
     }
 
     #[test]
+    fn restore_args_auto_resume_adds_resume_true() {
+        // cloneFromSnapshot: resume=true so CH brings the guest up running
+        // (replaces the resumeCloneIfNeeded round-trip, Bug #73).
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", true);
+        assert_eq!(args[2], "source_url=file:///snap/,resume=true");
+        // and false omits it.
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", false);
+        assert!(!args[2].contains("resume="));
+    }
+
+    #[test]
     fn restore_args_relative_socket_path() {
-        let args = restore_args(Path::new("ch.sock"), "file:///snap");
+        let args = restore_args(Path::new("ch.sock"), "file:///snap", false);
         assert_eq!(args[0], "--api-socket=ch.sock");
     }
 
@@ -205,7 +228,7 @@ mod tests {
         // CLI flags. Asserting the absence here protects against a
         // future regression where someone tries to "helpfully" pass
         // disks or networks through.
-        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap");
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap", false);
         let joined = args.join(" ");
         assert!(!joined.contains("--disk"), "argv leaked --disk: {}", joined);
         assert!(!joined.contains("--net"), "argv leaked --net: {}", joined);
@@ -255,6 +278,7 @@ mod tests {
         let mut child = spawn_ch_restore(
             Path::new("/run/foo/ch.sock"),
             "file:///var/lib/kubeswift/snapshots/x/",
+            false,
         )
         .expect("spawn fake CH");
         let status = child.wait().expect("wait fake CH");

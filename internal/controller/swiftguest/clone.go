@@ -149,6 +149,10 @@ func cloneRestoreAnnotations(
 		AnnotationRestoreRuntimeDirFromPrefix: clonecommon.RuntimeDirPrefix(source.Namespace, source.Name),
 		AnnotationRestoreRuntimeDirToPrefix:   clonecommon.RuntimeDirPrefix(guest.Namespace, guest.Name),
 		AnnotationRestoreNullifyHostMAC:       "true",
+		// CH v52: resume the clone on restore (it loads paused otherwise) so we
+		// don't need the resumeCloneIfNeeded action round-trip (Bug #73). Only
+		// the cloneFromSnapshot path sets this; SwiftRestore drives resume itself.
+		AnnotationRestoreAutoResume: "true",
 	}
 	if cloneRegenIncludesNonMAC(guest.Spec.CloneFromSnapshot) {
 		annos[AnnotationRestoreAppendCmdlineMarker] = "true"
@@ -197,36 +201,6 @@ func cloneAnnotationsMatch(have, want map[string]string) bool {
 func cloneDownloadJobName(snap *snapshotv1alpha1.SwiftSnapshot, node string) string {
 	sum := sha256.Sum256([]byte(snap.Namespace + "/" + snap.Name + "@" + node))
 	return "clone-dl-" + hex.EncodeToString(sum[:8])
-}
-
-// swiftletd action-loop annotation surface (mirrors the snapshot/restore
-// controllers): the controller writes these onto the launcher pod and swiftletd
-// dedupes by action-id.
-const (
-	cloneActionKey     = "kubeswift.io/snapshot-action"
-	cloneActionIDKey   = "kubeswift.io/snapshot-action-id"
-	cloneActionArgsKey = "kubeswift.io/snapshot-action-args"
-	cloneVerbResume    = "resume"
-)
-
-// resumeCloneIfNeeded sends the one-shot resume action to a cloneFromSnapshot
-// clone's launcher pod. CH --restore loads the guest PAUSED; swiftletd's action
-// loop unpauses it when this annotation appears. Idempotent: a stable action-id
-// means swiftletd resumes exactly once (and we skip re-patching once it's set).
-// Without this the clone reports GuestRunning but its vCPUs never start.
-func (r *SwiftGuestReconciler) resumeCloneIfNeeded(ctx context.Context, pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) error {
-	id := guest.Name + "-clone-resume"
-	if pod.Annotations[cloneActionIDKey] == id {
-		return nil // already sent
-	}
-	patch := client.MergeFrom(pod.DeepCopy())
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[cloneActionKey] = cloneVerbResume
-	pod.Annotations[cloneActionIDKey] = id
-	pod.Annotations[cloneActionArgsKey] = "{}"
-	return r.Patch(ctx, pod, patch)
 }
 
 // ensureCloneDownloadJob creates (idempotently) a node-pinned download Job that

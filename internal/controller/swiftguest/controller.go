@@ -251,6 +251,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
 		intent.Restore = &runtimeintent.RestoreIntent{
 			SnapshotPath: params.InPodSnapshotPath(),
+			AutoResume:   params.AutoResume,
 		}
 	}
 	intentJSON, err := runtimeintent.Serialize(intent)
@@ -462,17 +463,11 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Pod exists; update status from pod
 		podForMetrics = &existingPod
 		MapPodToStatus(&existingPod, status)
-		// cloneFromSnapshot (Snapshot Phase 4): CH loaded the snapshot PAUSED
-		// (GuestRunning is reported once the API socket is up, but the vCPUs are
-		// stopped). Send the one-shot resume action so swiftletd unpauses the VM
-		// — a clone has no SwiftRestore controller to drive its Resuming phase.
-		if guest.UsesCloneFromSnapshot() &&
-			status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
-			rg.GetLifecycle() != "stop" {
-			if err := r.resumeCloneIfNeeded(ctx, &existingPod, &guest); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
+		// cloneFromSnapshot (Snapshot Phase 4): CH loads the snapshot PAUSED,
+		// but swiftletd now passes `resume=true` on `--restore` (CH v52) when the
+		// restore intent's AutoResume is set, so the clone comes up RUNNING with
+		// no controller-driven resume round-trip needed (replaces the former
+		// resumeCloneIfNeeded; Bug #73 / CH v52 capabilities assessment).
 		// If guest is running but IP not yet discovered, requeue to catch annotation update
 		if status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
 			(status.Network == nil || status.Network.PrimaryIP == "") {
