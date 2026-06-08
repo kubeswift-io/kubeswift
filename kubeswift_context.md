@@ -2670,12 +2670,33 @@ queued as roadmap candidates (the bump itself shipped in PR #150; the workaround
 *removals* — `image_type=raw`, auto-resume-on-restore, downtime observability,
 sparse/userfaultfd snapshots — are tracked in the assessment doc §5, not here):
 
-- **SwiftConfidential — SEV-SNP confidential VMs (KVM).** CH v52.0 launches
-  AMD SEV-SNP confidential VMs on KVM (`guest_memfd` private memory, IGVM firmware,
-  measured boot + signed ID block for attestation). Potential **major
-  differentiator**: confidential VMs as a first-class workload (a `confidential`
-  SwiftGuestClass or SwiftConfidential CRD). **Blocked on AMD EPYC SEV-SNP
-  hardware** (none on the dev cluster). Architect/design-first when hardware exists.
+- **SwiftConfidential — SEV-SNP confidential VMs (KVM). DESIGN-COMPLETE**
+  ([`docs/design/swiftconfidential-sev-snp.md`](docs/design/swiftconfidential-sev-snp.md)).
+  CH v52.0 launches AMD SEV-SNP confidential VMs on KVM (`guest_memfd` private
+  memory, IGVM firmware, measured boot + signed ID block for attestation).
+  Potential **major differentiator**: confidential VMs as a first-class workload
+  via a **`spec.confidential` block** on SwiftGuest (recommended over a separate
+  CRD; promote to a profile CRD only if the attestation-policy surface grows).
+  Key design findings: (1) **the shipped `cloud-hypervisor-static` has no SEV-SNP
+  CLI** — SEV-SNP is behind a `sev_snp` Cargo feature, so a SEV-SNP CH build is the
+  first spike prerequisite; (2) v1 confidential guests boot via **`kernelRef`**
+  (the measured kernel/initrd path — disk boot's bootloader chain isn't in the
+  launch measurement); (3) KubeSwift is **outside the guest TCB** (host/operator
+  untrusted), so controller status is advisory — the PSP-signed attestation the
+  guest produces is authoritative. **Blocked on AMD EPYC SEV-SNP hardware** (none
+  on the dev cluster); spike → phased PRs when hardware exists.
+- **HGX Tier 3 full passthrough — `hgx-full`. DESIGN-COMPLETE**
+  ([`docs/design/swiftgpu-hgx-tier3.md`](docs/design/swiftgpu-hgx-tier3.md)).
+  Passes an **entire HGX baseboard** (all GPUs + all NVSwitches) to ONE VM with
+  the NVSwitch fabric + Fabric Manager **in the guest** (no host FM partition).
+  The CRD surface already exists (SwiftGPUProfile `tier: hgx-full`,
+  `partitionMode: full`, `fabricManager.runInGuest`, `pcieTopology`) — Tier 3 is
+  **runtime + discovery + allocation**: a QEMU full-PCIe-hierarchy builder
+  (synthesize the switch tree + all-device VFIO; spike chooses emulated-switches
+  vs switch-passthrough), baseboard-grouping discovery on SwiftGPUNode,
+  whole-baseboard allocation (reusing the Phase 4 reserve/release primitives), and
+  `gpu-init` whole-baseboard VFIO bind. CH v52's `host_mmap_bars`/`iommufd` could
+  eventually move some of it off QEMU. **Blocked on HGX hardware.**
 - **Modern VFIO (iommufd / vfio-cdev) + in-guest vIOMMU.** CH v52.0 supports the
   Linux `iommufd` + per-device `vfio-cdev` access model (Linux ≥6.6) with
   accelerated in-guest IOMMU. Modernizes our legacy container/group GPU passthrough;
