@@ -173,4 +173,48 @@ func TestStartImport_HTTPSourceScriptPatchesGRUBForUEFI(t *testing.T) {
 			t.Errorf("import script missing %q", want)
 		}
 	}
+	// Linux import is privileged (the GRUB patch needs a loop-mount).
+	if sc := job.Spec.Template.Spec.Containers[0].SecurityContext; sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		t.Errorf("linux import Job should be privileged, got %+v", sc)
+	}
+}
+
+func TestStartImport_WindowsSkipsGRUBPatchAndPrivileged(t *testing.T) {
+	scheme := testScheme()
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftImageReconciler{Client: client, Scheme: scheme}
+	img := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "win", Namespace: "default"},
+		Spec: imagev1alpha1.SwiftImageSpec{
+			Format: imagev1alpha1.DiskFormatQcow2,
+			OSType: imagev1alpha1.OSTypeWindows,
+			Source: imagev1alpha1.ImageSource{
+				HTTP: &imagev1alpha1.HTTPSource{URL: "https://example.com/windows.qcow2"},
+			},
+		},
+	}
+	if _, err := r.StartImport(context.Background(), img); err != nil {
+		t.Fatalf("StartImport: %v", err)
+	}
+	var job batchv1.Job
+	if err := client.Get(context.Background(), types.NamespacedName{Name: importJobNamePrefix + "win", Namespace: "default"}, &job); err != nil {
+		t.Fatalf("Job not created: %v", err)
+	}
+	script := job.Spec.Template.Spec.Containers[0].Command[2]
+	// The Linux-only GRUB/serial patch and its loop-mount must be absent.
+	for _, unwanted := range []string{"patch_grub", "console=ttyS0", "mount -o loop"} {
+		if strings.Contains(script, unwanted) {
+			t.Errorf("windows import script should not contain %q", unwanted)
+		}
+	}
+	// OS-agnostic steps stay: qcow2->raw convert + size measurement.
+	for _, want := range []string{"qemu-img convert", ".size"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("windows import script should still contain %q", want)
+		}
+	}
+	// Privileged is dropped for windows (no loop-mount needed).
+	if sc := job.Spec.Template.Spec.Containers[0].SecurityContext; sc == nil || sc.Privileged == nil || *sc.Privileged {
+		t.Errorf("windows import Job should be non-privileged, got %+v", sc)
+	}
 }
