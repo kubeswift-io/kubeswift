@@ -30,7 +30,12 @@ const (
 // Per-guest disk sizing happens during the root disk clone step in the SwiftGuest controller.
 // Patches GRUB to add console=ttyS0 for serial console (firmware boot uses disk's cmdline).
 // Supports Ubuntu, Debian, Fedora, Rocky Linux, and common layouts.
-func importScript(sourceURL, sourceFormat string) string {
+//
+// osType gates the Linux-only GRUB/serial patch: "windows" skips it entirely
+// (Windows has no GRUB — it boots bootmgfw from the ESP and manages serial via
+// EMS/SAC in the operator-prepped image), keeping only the OS-agnostic
+// qcow2->raw convert + size measurement. (Windows guest support — PR 3.)
+func importScript(sourceURL, sourceFormat, osType string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
@@ -84,6 +89,11 @@ for offset in $GPT_OFFSETS $FALLBACK_OFFSETS; do
 done
 rmdir /mnt/disk 2>/dev/null || true
 `
+	// Windows: no GRUB to patch, and the loop-mount the patch needs is
+	// pointless on an NTFS/Windows layout. Skip the whole block.
+	if osType == string(imagev1alpha1.OSTypeWindows) {
+		grubPatch = ""
+	}
 	if sourceFormat == "qcow2" {
 		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, grubPatch)
 	}
@@ -146,7 +156,12 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 	// Per-guest disk sizing happens during the root disk clone step.
 	sourceURL := img.Spec.Source.HTTP.URL
 	sourceFormat := string(img.Spec.Format)
-	script := importScript(sourceURL, sourceFormat)
+	script := importScript(sourceURL, sourceFormat, string(img.Spec.OSType))
+	// The import Job needs privileged ONLY for the loop-mount the Linux GRUB
+	// serial-console patch performs. Windows skips that patch (no GRUB), so its
+	// import runs unprivileged (Design Principle: no privileged unless required).
+	// RunAsUser 0 is still needed either way for apt-get in the ubuntu image.
+	privileged := img.Spec.OSType != imagev1alpha1.OSTypeWindows
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
 		Spec: batchv1.JobSpec{
@@ -154,7 +169,7 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
-						// Required for mount -o loop when patching GRUB
+						// Root is needed for apt-get (and, on Linux, the loop-mount).
 						RunAsUser: ptr.To(int64(0)),
 					},
 					Containers: []corev1.Container{{
@@ -162,7 +177,9 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 						Image:   "ubuntu:22.04",
 						Command: []string{"sh", "-c", script},
 						SecurityContext: &corev1.SecurityContext{
-							Privileged: ptr.To(true),
+							// Privileged only for the Linux GRUB-patch loop-mount;
+							// false for Windows imports (no patch, no mount).
+							Privileged: ptr.To(privileged),
 						},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "data",
