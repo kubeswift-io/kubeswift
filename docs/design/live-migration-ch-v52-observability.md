@@ -132,8 +132,53 @@ Each PR validates on the dev cluster (miles + boba, kernel-boot + RWX/Block
 disk-boot live-migratable guests):
 - PR 1: downtime targets sweep + convergence + achieved-downtime feasibility.
 - PR 2: metric values match the spike measurements; deprecated alias gone;
-  `kubectl explain` clean; Grafana panel renders.
+  `kubectl explain` clean.
 - PR 3: throughput sweep (1/2/4 connections); regression that single-connection
   (default) is unchanged.
+
+## 8. PR 1 spike results (cluster-validated, 2026-06-08)
+
+Ran on the dev cluster (kernel-boot faas-minimal 2Gi guest, miles↔boba,
+CH v52.0, image `sha-d0b4ef1`). Migrations at `downtimeTarget` =
+100/300/1000ms + baseline:
+
+| downtimeTarget | result | observedDowntime | observedTransfer |
+|---|---|---|---|
+| 100ms | Completed | 2.36s | 19.39s |
+| 300ms | Completed | 2.32s | 19.38s |
+| 1000ms | Completed | 1.99s | 19.39s |
+| (unset) | Completed | 3.67s | 19.40s |
+| 5ms | **webhook-rejected** ("outside [10ms, 10s]") | — | — |
+
+**Resolved open questions:**
+1. **Does CH v52 report achieved downtime? → NO.** `vm.send-migration`
+   returns 204 (empty body) and CH runs at default WARN verbosity (no INFO
+   migration telemetry). **W28 is therefore BOUND-ONLY**: PR 2 echoes the
+   applied `downtime_ms` ceiling into `status.appliedDowntimeMs` and
+   documents that the achieved vCPU-stop is ≤ the ceiling but not directly
+   measurable here (an external L2 ping observer — TFU #1 — is the only
+   ground truth). No `stop_and_copy_seconds` histogram is added (no data
+   source; documented, not silently skipped).
+2. **`observedDowntime` is scheduling-dominated cluster-cutover time**
+   (1.99–3.67s of pod-swap noise across runs), confirmed NOT the vCPU-stop —
+   PR 2 does NOT relabel it "guest frozen."
+3. **Default `downtimeTarget`: stays unset (opt-in).** Defaulting to 300ms is
+   deferred — the convergence-under-load behaviour is unproven (below).
+
+**Unvalidated (asset-gated, TFU #13):** the faas-minimal kernel-boot guest
+does not dirty memory, so `observedTransfer` is a constant ~19.4s (one 2Gi
+pass) regardless of target — the `downtime_ms` *convergence* effect (does it
+shorten the frozen window for a dirtying guest, trading more pre-copy
+iterations for a smaller stop-and-copy?) could not be measured. Needs a
+`stress-ng` rand-set workload on a disk-boot guest. The mechanism is sound
+(CH iterates until estimate < target); the empirical proof waits on that
+setup.
+
+### PR 2 shape (revised by the spike)
+- Remove the deprecated `status.observedPauseWindow` alias (TFU #11 done).
+- Add `status.appliedDowntimeMs` (`*int64`) — the ceiling echo, stamped by the
+  controller when it sends `downtime_ms`; `swiftctl migration describe` shows
+  it as "Downtime cap".
+- NO new Prometheus histogram (W28 has no measured value to record).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

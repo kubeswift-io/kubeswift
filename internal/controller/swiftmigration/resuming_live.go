@@ -73,12 +73,10 @@ const (
 //     60s for mode=live (PR B1).
 //  8. Compute and stamp:
 //     - status.ObservedDowntime = now - status.ResumingStartedAt
-//     - status.ObservedPauseWindow: NOT computed by B2.3. The design
-//     (§6, ObservedPauseWindow doc) specifies it's parsed from src
-//     pod's migration-status-detail annotation by B3 during
-//     StopAndCopy-live; B2.3 leaves it as-is (B3's commit will
-//     populate it). If status.ObservedPauseWindow is already set
-//     (B3 has run), preserve.
+//     - status.ObservedTransferDuration: NOT computed here. It is
+//     parsed from the src pod's migration-pause-window-ms annotation
+//     by stopandcopy_live during StopAndCopy-live; the Resuming
+//     handler leaves it as-is (preserve whatever was already stamped).
 //  9. Set status.CompletedAt, transition to Completed.
 //
 // **shouldCheckSourcePodUID returns False here** — Resuming is
@@ -209,10 +207,10 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 			"observedDowntime not computed: status.CutoverStep2DispatchedAt is nil at Resuming completion (state-machine invariant violation; W27a)",
 			"migration", mig.Name)
 	}
-	// status.ObservedPauseWindow is stamped by stopandcopy_live's
+	// status.ObservedTransferDuration is stamped by stopandcopy_live's
 	// substateSendComplete handler (W27b fix) reading the src pod's
-	// kubeswift.io/migration-pause-window-ms annotation. B2.3 leaves
-	// it as-is — preserves whatever StopAndCopy wrote.
+	// kubeswift.io/migration-pause-window-ms annotation. The Resuming
+	// handler leaves it as-is — preserves whatever StopAndCopy wrote.
 
 	status.CompletedAt = &now
 	setPhase(status, migrationv1alpha1.SwiftMigrationPhaseCompleted)
