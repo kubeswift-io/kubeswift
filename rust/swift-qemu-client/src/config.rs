@@ -64,14 +64,31 @@ impl QemuConfig {
             "-name".to_string(),
             format!("guest={},debug-threads=on", self.guest_id),
             "-enable-kvm".to_string(),
+            // memory-backend=ram0 routes the machine's main RAM to a shared
+            // memfd backend (defined below) instead of QEMU's default private
+            // anonymous mmap. share=on makes guest RAM host-visible/shared --
+            // the QEMU analog of Cloud Hypervisor's `--memory shared=on`. It is
+            // required for clean VFIO/GPU passthrough (the IOMMU pins guest RAM
+            // for device DMA) and is the standard backing for snapshot/live-
+            // migration-capable guests. Tier-1 PCIe GPUs run on Cloud Hypervisor
+            // (already shared via #165); this covers the QEMU path used by
+            // Tier-2/3 HGX GPUs (and non-GPU QEMU via the hypervisor override).
             "-machine".to_string(),
-            "q35,accel=kvm".to_string(),
+            "q35,accel=kvm,memory-backend=ram0".to_string(),
             "-cpu".to_string(),
             "host".to_string(),
             "-smp".to_string(),
             self.cpus.max(1).to_string(),
             "-m".to_string(),
             format!("{}M", self.memory_mib.max(128)),
+            // Shared memfd backend for the main RAM (referenced by -machine
+            // above). size MUST match -m. No prealloc here: VFIO pins on device
+            // attach, and non-GPU guests keep lazy allocation.
+            "-object".to_string(),
+            format!(
+                "memory-backend-memfd,id=ram0,size={}M,share=on",
+                self.memory_mib.max(128)
+            ),
         ];
 
         // OVMF firmware: code (read-only) + vars (writable, per-VM copy)
@@ -200,6 +217,35 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("q35,accel=kvm"), "missing q35 machine type");
         assert!(joined.contains("-enable-kvm"), "missing -enable-kvm");
+    }
+
+    #[test]
+    fn test_to_args_memory_shared_memfd() {
+        // Guest RAM must be a shared memfd backend (share=on), the QEMU analog
+        // of CH's --memory shared=on: VFIO/GPU-DMA-friendly + migration/snapshot
+        // capable. The machine must route its main RAM to that backend, and the
+        // backend size must match -m.
+        let cfg = make_config();
+        let mem = cfg.memory_mib.max(128);
+        let joined = cfg.to_args().join(" ");
+        assert!(
+            joined.contains("q35,accel=kvm,memory-backend=ram0"),
+            "machine must reference the ram0 backend: {}",
+            joined
+        );
+        assert!(
+            joined.contains(&format!(
+                "memory-backend-memfd,id=ram0,size={}M,share=on",
+                mem
+            )),
+            "missing shared memfd backend matching -m: {}",
+            joined
+        );
+        assert!(
+            joined.contains(&format!("-m {}M", mem)),
+            "missing -m size: {}",
+            joined
+        );
     }
 
     #[test]
