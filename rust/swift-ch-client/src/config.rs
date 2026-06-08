@@ -90,7 +90,20 @@ impl VmConfig {
             "--api-socket".to_string(),
             format!("path={}", self.api_socket),
             "--memory".to_string(),
-            format!("size={}M", self.memory_mib),
+            // shared=on maps the guest-RAM memfd ("ch_ram") MAP_SHARED instead of
+            // CH's default MAP_PRIVATE. Under the default (shared=off), CH still
+            // backs guest RAM with a memfd but maps it copy-on-write, so the
+            // cgroup holds the guest pages TWICE -- once in the memfd (shmem) and
+            // once in CH's CoW-private pages (anon) -- ~2x the touched guest RAM,
+            // all unreclaimable. That left no room for a memory-snapshot capture's
+            // buffered write and OOMKilled the launcher (cluster-diagnosed
+            // 2026-06-08 via /proc/<ch>/smaps: the ch_ram mapping was rw-p with
+            // Private_Dirty == guest RAM). shared=on collapses the double to ~1x
+            // (writes land in the memfd; no CoW copy), which is also the standard
+            // backing for snapshot/live-migration-capable guests (mirrors QEMU's
+            // memory-backend-memfd,share=on) and what the sparse-snapshot /
+            // userfaultfd path (#163) wants.
+            format!("size={}M,shared=on", self.memory_mib),
             "--cpus".to_string(),
             {
                 let mut cpus = format!("boot={}", self.cpus.max(1));
@@ -149,13 +162,15 @@ impl VmConfig {
             // direct=on (O_DIRECT, KubeVirt cache=none parity) on the ROOT and
             // DATA disks bypasses the host page cache for guest disk I/O. The
             // guest already caches its own blocks in guest RAM, so the host copy
-            // is a wasteful double-cache. Left buffered, the root-disk read cache
-            // grows to ~the disk working set and consumes the launcher's memory
-            // overhead, leaving no headroom for a memory-snapshot capture's
-            // page-cache write burst -> the launcher OOMKills during Capturing
-            // (cluster-diagnosed). Root and data disks are always PVC-backed
-            // (ext4 raw file on Filesystem, or a raw block device on Block); both
-            // support O_DIRECT. The SEED disk is deliberately left buffered: it
+            // is a wasteful double-cache; bypassing it makes the launcher's memory
+            // footprint honest and predictable (no ~disk-working-set of reclaimable
+            // page cache silently consuming the overhead). NOTE: this is hygiene,
+            // NOT the memory-snapshot OOM fix -- that root cause was CH backing
+            // guest RAM with a MAP_PRIVATE memfd (~2x footprint), fixed by
+            // `--memory ...,shared=on` above. Root and data disks are always
+            // PVC-backed (ext4 raw file on Filesystem, or a raw block device on
+            // Block); both support O_DIRECT. The SEED disk is deliberately left
+            // buffered: it
             // is emptyDir-backed (often tmpfs), and tmpfs rejects O_DIRECT with
             // EINVAL -- direct=on there would fail boot (it is a few hundred KB,
             // not a cache concern). This is per-disk-ROLE, not path-shape
@@ -259,6 +274,31 @@ mod tests {
             joined.contains("--cpus boot=2,kvm_hyperv=on"),
             "windows --cpus should add kvm_hyperv=on: {}",
             joined
+        );
+    }
+
+    #[test]
+    fn test_memory_carries_shared_on() {
+        // Guest RAM must be memfd-MAP_SHARED (shared=on), not the default
+        // MAP_PRIVATE CoW which doubles the launcher's guest-memory footprint
+        // (~2x touched RAM) and OOMs memory-snapshot captures. Both boot paths.
+        let disk = make_disk_boot_config();
+        assert!(
+            disk.to_args()
+                .join(" ")
+                .contains("--memory size=2048M,shared=on"),
+            "disk-boot --memory must carry shared=on: {}",
+            disk.to_args().join(" ")
+        );
+        let mut kern = make_disk_boot_config();
+        kern.kernel_path = Some("/k/bzImage".to_string());
+        kern.firmware_path = None;
+        assert!(
+            kern.to_args()
+                .join(" ")
+                .contains("--memory size=2048M,shared=on"),
+            "kernel-boot --memory must carry shared=on: {}",
+            kern.to_args().join(" ")
         );
     }
 
