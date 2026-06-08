@@ -12,6 +12,7 @@ type RuntimeIntent struct {
 	Network    bool            `json:"network"`              // true when guest has network (TAP, DHCP)
 	KernelBoot *KernelBootSpec `json:"kernelBoot,omitempty"` // when set, boot via --kernel + --initramfs
 	Hypervisor string          `json:"hypervisor,omitempty"` // "cloud-hypervisor" (default) or "qemu"
+	OSType     string          `json:"osType,omitempty"`     // "linux" (default) or "windows" — windows adds kvm_hyperv on the CH --cpus arg
 	GPU        *GPUIntent      `json:"gpu,omitempty"`        // populated when gpuProfileRef is set
 	DataDisk   *RootDiskSpec   `json:"dataDisk,omitempty"`   // secondary data disk (appears as /dev/vdb)
 	// NICs is the list of network interfaces for the VM.
