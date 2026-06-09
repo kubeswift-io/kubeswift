@@ -26,6 +26,10 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [SwiftKernel reference](swiftkernel.md) — Full reference: node setup, building profiles, OCI packaging, usage
 - [Kernel boot quickstart](kernel-boot-quickstart.md) — Boot a kernel VM in five steps
 
+### vhost-user Devices
+
+- [virtiofs & vhost-user devices](virtiofs.md) — shared filesystems (virtiofs), vhost-user-net/blk/generic (operator backends)
+
 ### Windows Guests
 
 - [Running Windows guests](windows/overview.md) — Overview: `osType: windows`, the end-to-end lifecycle, RDP management, limitations
@@ -44,6 +48,7 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [Multi-NIC Support](multi-nic.md) -- CRD spec, MAC generation, architecture
 - [OVN-Kubernetes Integration](networking/ovn-kubernetes.md) -- Layer 2/3, localnet, UDN, CUDN
 - [SR-IOV NIC Passthrough](networking/sriov.md) -- VFIO passthrough for GPUDirect RDMA, DPDK
+- [Multi-node L2 (IP-preserving guests)](networking/multi-node-l2.md) -- primary-on-NAD, migration IP preservation (runtime experimental)
 
 ### Fleet Management
 
@@ -70,6 +75,10 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 ### Contributing
 
 - [Kernel profiles](contributing/kernel-profiles.md) — Guide for adding new kernel profiles
+
+### GitOps
+
+- [GitOps with FluxCD](gitops/README.md) — three-layer model, quickstart, secrets, troubleshooting; reference repo in `examples/gitops-flux/`
 
 ### Release
 
