@@ -662,3 +662,51 @@ func TestBuildPod_Filesystems(t *testing.T) {
 		t.Errorf("virtiofs-1 mount = %+v, want path=.../claim readOnly=true", m)
 	}
 }
+
+func TestBuildPod_VhostUserNet(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "vu", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
+				{Name: "fast1", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast1.sock"},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Meta:          resolved.Meta{Namespace: "default", Name: "vu"},
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
+		Network:       true,
+		Interfaces:    guest.Spec.Interfaces,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	// Both sockets share /var/run/vhost -> exactly one deduped hostPath volume.
+	var vols []corev1.Volume
+	for _, v := range pod.Spec.Volumes {
+		if v.HostPath != nil && v.HostPath.Path == "/var/run/vhost" {
+			vols = append(vols, v)
+		}
+	}
+	if len(vols) != 1 {
+		t.Fatalf("vhost dir volumes = %d, want 1 (deduped)", len(vols))
+	}
+	if vols[0].HostPath.Type == nil || *vols[0].HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("vhost volume type = %v, want DirectoryOrCreate", vols[0].HostPath.Type)
+	}
+	// Mounted at the same node path so CH (in-container) can reach the socket.
+	found := false
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == vols[0].Name && m.MountPath == "/var/run/vhost" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("launcher missing /var/run/vhost mount")
+	}
+}

@@ -6,10 +6,13 @@ pub const DEFAULT_CH_BINARY: &str = "cloud-hypervisor";
 /// Network interface configuration for multi-NIC mode.
 #[derive(Debug, Clone)]
 pub struct NICConfig {
-    /// Tap device name (tap0, tap1, etc.)
+    /// Tap device name (tap0, tap1, etc.). Empty for a vhost-user NIC.
     pub tap_name: String,
     /// MAC address for the interface.
     pub mac: String,
+    /// vhost-user-net backend socket path. When Some, this NIC is emitted as
+    /// `--net vhost_user=on,socket=<path>,mac=<mac>` instead of a tap NIC.
+    pub vhost_user_socket: Option<String>,
 }
 
 /// VFIO device for passthrough (GPU or SR-IOV NIC).
@@ -217,10 +220,15 @@ impl VmConfig {
         }
 
         if !self.nics.is_empty() {
-            // Multi-NIC mode: one --net per NIC with tap and mac.
+            // Multi-NIC mode: one --net per NIC with tap and mac, or a
+            // vhost-user backend socket when set.
             for nic in &self.nics {
                 args.push("--net".to_string());
-                args.push(format!("tap={},mac={}", nic.tap_name, nic.mac));
+                if let Some(ref socket) = nic.vhost_user_socket {
+                    args.push(format!("vhost_user=on,socket={},mac={}", socket, nic.mac));
+                } else {
+                    args.push(format!("tap={},mac={}", nic.tap_name, nic.mac));
+                }
             }
         } else if let Some(ref tap) = self.tap_name {
             // Legacy single-NIC mode.
@@ -506,12 +514,52 @@ mod tests {
         cfg.nics = vec![NICConfig {
             tap_name: "tap0".to_string(),
             mac: "52:54:00:aa:bb:cc".to_string(),
+            vhost_user_socket: None,
         }];
         let args = cfg.to_args();
         let joined = args.join(" ");
         assert!(
             joined.contains("tap=tap0,mac=52:54:00:aa:bb:cc"),
             "single NIC: {}",
+            joined
+        );
+    }
+
+    #[test]
+    fn test_ch_args_vhost_user_nic() {
+        let mut cfg = make_disk_boot_config();
+        cfg.tap_name = None;
+        cfg.nics = vec![
+            NICConfig {
+                tap_name: "tap0".to_string(),
+                mac: "52:54:00:aa:bb:01".to_string(),
+                vhost_user_socket: None,
+            },
+            NICConfig {
+                tap_name: String::new(),
+                mac: "52:54:00:aa:bb:fe".to_string(),
+                vhost_user_socket: Some("/var/run/vhost/fast0.sock".to_string()),
+            },
+        ];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert_eq!(args.iter().filter(|a| *a == "--net").count(), 2);
+        // Bridge NIC stays tap-based.
+        assert!(
+            joined.contains("tap=tap0,mac=52:54:00:aa:bb:01"),
+            "bridge NIC: {}",
+            joined
+        );
+        // vhost-user NIC emits vhost_user=on,socket=...
+        assert!(
+            joined.contains("vhost_user=on,socket=/var/run/vhost/fast0.sock,mac=52:54:00:aa:bb:fe"),
+            "vhost-user NIC: {}",
+            joined
+        );
+        // No tap= for the vhost-user NIC.
+        assert!(
+            !joined.contains("tap=,"),
+            "vhost-user NIC must not emit an empty tap: {}",
             joined
         );
     }
@@ -524,14 +572,17 @@ mod tests {
             NICConfig {
                 tap_name: "tap0".to_string(),
                 mac: "52:54:00:aa:bb:01".to_string(),
+                vhost_user_socket: None,
             },
             NICConfig {
                 tap_name: "tap1".to_string(),
                 mac: "52:54:00:aa:bb:02".to_string(),
+                vhost_user_socket: None,
             },
             NICConfig {
                 tap_name: "tap2".to_string(),
                 mac: "52:54:00:aa:bb:03".to_string(),
+                vhost_user_socket: None,
             },
         ];
         let args = cfg.to_args();
@@ -601,6 +652,7 @@ mod tests {
         cfg.nics = vec![NICConfig {
             tap_name: "tap0".to_string(),
             mac: "52:54:00:aa:bb:01".to_string(),
+            vhost_user_socket: None,
         }];
         cfg.vfio_devices = vec![VFIODeviceConfig {
             sysfs_path: "/sys/bus/pci/devices/0000:3b:0a.0/".to_string(),
