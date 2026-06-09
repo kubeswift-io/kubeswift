@@ -102,6 +102,37 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	if err := validateFilesystems(spec); err != nil {
 		return err
 	}
+	if err := validateInterfaces(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateInterfaces enforces the vhost-user-net constraints: a backend socket
+// is required, the bridge/sriov-only fields are not set, and the v1 scope limit
+// (Cloud Hypervisor only — a gpuProfileRef may select the QEMU runtime, which
+// v1 does not wire for vhost-user). bridge/sriov interfaces are unchanged.
+func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
+	hasVhostUser := false
+	for i := range spec.Interfaces {
+		iface := &spec.Interfaces[i]
+		if iface.Type != swiftv1alpha1.InterfaceTypeVhostUser {
+			continue
+		}
+		hasVhostUser = true
+		if iface.Socket == "" {
+			return fmt.Errorf("spec.interfaces[%d] (type vhost-user) requires a socket path", i)
+		}
+		if iface.NetworkRef != nil {
+			return fmt.Errorf("spec.interfaces[%d]: vhost-user does not use networkRef", i)
+		}
+		if iface.ResourceName != "" {
+			return fmt.Errorf("spec.interfaces[%d]: vhost-user does not use resourceName", i)
+		}
+	}
+	if hasVhostUser && spec.GPUProfileRef != nil {
+		return fmt.Errorf("spec.interfaces: vhost-user is not supported with spec.gpuProfileRef (Cloud Hypervisor only in v1)")
+	}
 	return nil
 }
 

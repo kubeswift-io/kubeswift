@@ -210,6 +210,10 @@ pub struct NICIntent {
     /// SR-IOV VF device info for VFIO passthrough. Only set when type=sriov.
     #[serde(default)]
     pub sriov_device: Option<SRIOVDeviceIntent>,
+    /// In-pod path of the operator's vhost-user-net backend listener socket.
+    /// Only set when type=vhost-user; passed to CH as `--net vhost_user=on,socket=`.
+    #[serde(default)]
+    pub vhost_user_socket: Option<String>,
 }
 
 /// SR-IOV VF device info for VFIO passthrough.
@@ -234,6 +238,11 @@ impl NICIntent {
     /// Returns true if this is an SR-IOV NIC (VFIO passthrough).
     pub fn is_sriov(&self) -> bool {
         self.r#type == "sriov"
+    }
+
+    /// Returns true if this is a vhost-user-net NIC (operator backend).
+    pub fn is_vhost_user(&self) -> bool {
+        self.r#type == "vhost-user"
     }
 }
 
