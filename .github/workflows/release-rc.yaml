@@ -6,7 +6,7 @@ on:
       - 'v*.*.*-rc.*'
 
 permissions:
-  contents: read
+  contents: write   # create the GitHub pre-release
   packages: write
 
 env:
@@ -128,3 +128,31 @@ jobs:
         run: |
           helm package charts/kubeswift --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
           helm push kubeswift-${{ steps.version.outputs.version }}.tgz ${{ env.CHART_OCI_PUSH }}
+
+      # Create the GitHub pre-release so RC tags are visible on the Releases
+      # page (previously only release-stable.yaml created releases; RC releases
+      # had to be created by hand — v0.3.0-rc.1 gap).
+      - name: Create GitHub pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: KubeSwift ${{ github.ref_name }}
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Release candidate — see the matching CHANGELOG.md section for
+            details and Known Limitations.
+
+            ## Install
+
+            ```bash
+            helm install kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ steps.version.outputs.version }} -n kubeswift-system --create-namespace
+            ```
+
+            ## Images
+
+            - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/gpu-discovery:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/snapshot-s3:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/projectbeskar/kubeswift/migration-stunnel:${{ steps.version.outputs.tag }}`
