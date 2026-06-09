@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write   # keyless cosign signing (Sigstore OIDC)
 
 env:
   REGISTRY: ghcr.io
@@ -49,11 +50,17 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push controller-manager
+        id: build-controller-manager
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/controller-manager/Containerfile
           push: true
+          # SLSA build provenance + SPDX SBOM, attached to the image in the
+          # registry by BuildKit (no GitHub attestation store dependency -- that
+          # requires Enterprise on private repos).
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/controller-manager:${{ steps.version.outputs.tag }}
           build-args: |
@@ -64,11 +71,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push gpu-discovery
+        id: build-gpu-discovery
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/gpu-discovery/Containerfile
           push: true
+          # SLSA build provenance + SPDX SBOM, attached to the image in the
+          # registry by BuildKit (no GitHub attestation store dependency -- that
+          # requires Enterprise on private repos).
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/gpu-discovery:${{ steps.version.outputs.tag }}
           build-args: |
@@ -79,11 +92,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push snapshot-s3
+        id: build-snapshot-s3
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/snapshot-s3/Containerfile
           push: true
+          # SLSA build provenance + SPDX SBOM, attached to the image in the
+          # registry by BuildKit (no GitHub attestation store dependency -- that
+          # requires Enterprise on private repos).
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/snapshot-s3:${{ steps.version.outputs.tag }}
           build-args: |
@@ -94,11 +113,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push swiftletd
+        id: build-swiftletd
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/swiftletd/Containerfile
           push: true
+          # SLSA build provenance + SPDX SBOM, attached to the image in the
+          # registry by BuildKit (no GitHub attestation store dependency -- that
+          # requires Enterprise on private repos).
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/swiftletd:${{ steps.version.outputs.tag }}
           build-args: |
@@ -109,11 +134,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build and push migration-stunnel
+        id: build-migration-stunnel
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./images/migration-stunnel/Containerfile
           push: true
+          # SLSA build provenance + SPDX SBOM, attached to the image in the
+          # registry by BuildKit (no GitHub attestation store dependency -- that
+          # requires Enterprise on private repos).
+          provenance: mode=max
+          sbom: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/migration-stunnel:${{ steps.version.outputs.tag }}
           build-args: |
@@ -121,6 +152,26 @@ jobs:
             GIT_COMMIT=${{ steps.version.outputs.git_commit }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing: the signing identity is THIS workflow run's GitHub
+      # OIDC identity (repo + workflow path + tag ref); the signature and
+      # certificate are stored alongside the image in GHCR and logged in the
+      # Rekor transparency log. Verify with:
+      #   cosign verify <image>@<digest> \
+      #     --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Sign images (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign "${{ env.IMAGE_PREFIX }}/controller-manager@${{ steps.build-controller-manager.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/gpu-discovery@${{ steps.build-gpu-discovery.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/snapshot-s3@${{ steps.build-snapshot-s3.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -143,9 +194,18 @@ jobs:
           cp config/crd/bases/*.yaml charts/kubeswift/crds/
 
       - name: Package and push chart
+        id: chart
         run: |
           helm package charts/kubeswift --version ${{ steps.version.outputs.version }} --app-version ${{ steps.version.outputs.version }}
-          helm push kubeswift-${{ steps.version.outputs.version }}.tgz ${{ env.CHART_OCI_PUSH }}
+          helm push kubeswift-${{ steps.version.outputs.version }}.tgz ${{ env.CHART_OCI_PUSH }} 2>&1 | tee chart-push.log
+          DIGEST=$(grep -o 'sha256:[a-f0-9]*' chart-push.log | head -1)
+          test -n "$DIGEST"   # fail loud if helm stops printing the digest
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Sign chart (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign "ghcr.io/projectbeskar/charts/kubeswift@${{ steps.chart.outputs.digest }}"
 
   github-release:
     if: "!contains(github.ref_name, '-rc')"
@@ -173,6 +233,23 @@ jobs:
           GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-darwin-amd64 ./cmd/swiftctl
           GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-darwin-arm64 ./cmd/swiftctl
 
+      - name: Checksums
+        run: cd dist && sha256sum swiftctl-* > SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless blob signing of the checksums file. Verifying SHA256SUMS via
+      # the .sig/.pem pair transitively authenticates every binary it lists.
+      - name: Sign checksums (cosign keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign-blob \
+            --output-signature dist/SHA256SUMS.sig \
+            --output-certificate dist/SHA256SUMS.pem \
+            dist/SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -197,5 +274,27 @@ jobs:
             ## swiftctl
 
             Download the `swiftctl` binary for your platform from the Assets below.
+
+            ## Supply chain
+
+            Images and the Helm chart are **cosign-signed** (keyless, GitHub OIDC)
+            and carry **SLSA build provenance + SPDX SBOM** attestations attached
+            in-registry by BuildKit. Verify an image:
+
+            ```bash
+            cosign verify ghcr.io/projectbeskar/kubeswift/controller-manager:${{ github.ref_name }} \
+              --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            docker buildx imagetools inspect ghcr.io/projectbeskar/kubeswift/controller-manager:${{ github.ref_name }} --format '{{ json .Provenance }}'
+            ```
+
+            Verify the binaries (SHA256SUMS is cosign-signed; the checksums then cover each binary):
+
+            ```bash
+            cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+              --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-stable.yaml@.*' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+            sha256sum -c SHA256SUMS
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
