@@ -758,3 +758,56 @@ func TestBuildPod_VhostUserSocketDedup(t *testing.T) {
 		t.Errorf("/run/spdk vol=%d mount=%d, want 1/1", dirs["/run/spdk"], mountPaths["/run/spdk"])
 	}
 }
+
+func TestBuildPod_NetworkInitHasIntentMount(t *testing.T) {
+	// Regression: the network-init init container MUST mount the runtime-intent
+	// ConfigMap, else network-init.sh's has_nics() can't read the intent and
+	// silently falls back to legacy single-NIC br0/tap0 — leaving multi-NIC
+	// Multus interfaces unbridged. Also mounts the shared "run" emptyDir.
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "ni", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "nad"}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc"},
+		Network:       true,
+		Interfaces:    guest.Spec.Interfaces,
+	}
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	var ni *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == "network-init" {
+			ni = &pod.Spec.InitContainers[i]
+		}
+	}
+	if ni == nil {
+		t.Fatal("no network-init container")
+	}
+	got := map[string]string{}
+	for _, m := range ni.VolumeMounts {
+		got[m.Name] = m.MountPath
+	}
+	if got["runtime-intent"] != IntentPath {
+		t.Errorf("network-init runtime-intent mount = %q, want %q", got["runtime-intent"], IntentPath)
+	}
+	if got["run"] != RunDirPath {
+		t.Errorf("network-init run mount = %q, want %q", got["run"], RunDirPath)
+	}
+	// The referenced volumes must exist in the pod (else the pod is invalid).
+	vols := map[string]bool{}
+	for _, v := range pod.Spec.Volumes {
+		vols[v.Name] = true
+	}
+	if !vols["runtime-intent"] || !vols["run"] {
+		t.Errorf("pod missing volumes for network-init mounts: %v", vols)
+	}
+}
