@@ -3,6 +3,7 @@ module github.com/projectbeskar/kubeswift
 go 1.25.0
 
 require (
+	github.com/klauspost/compress v1.18.6
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.2.0
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/prometheus/client_golang v1.23.2
@@ -39,7 +40,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
