@@ -23,6 +23,18 @@ func privilegedContext() *corev1.SecurityContext {
 }
 
 // networkInitContainer returns the network-init init container.
+//
+// It mounts the runtime-intent ConfigMap and the shared run emptyDir at the
+// SAME paths the launcher uses. Without the intent mount, network-init.sh's
+// has_nics() check fails and the script silently falls back to the legacy
+// single-NIC br0/tap0 path — meaning its multi-NIC / Multus secondary-bridging
+// path was unreachable and secondary NADs were never bridged into the guest.
+// The run mount lets network setup persist state the launcher reads (e.g. a
+// NAD-assigned primary IP for the multi-node-L2 datapath).
+//
+// All pod builders that add this init container (disk-boot, kernel-boot, GPU,
+// restore) define both the "runtime-intent" and "run" volumes, so referencing
+// them here is safe.
 func networkInitContainer() corev1.Container {
 	return corev1.Container{
 		Name:            "network-init",
@@ -30,6 +42,10 @@ func networkInitContainer() corev1.Container {
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{"/bin/sh", "/usr/local/bin/network-init.sh"},
 		SecurityContext: privilegedContext(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "runtime-intent", MountPath: IntentPath},
+			{Name: "run", MountPath: RunDirPath},
+		},
 	}
 }
 
