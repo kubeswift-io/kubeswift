@@ -4,7 +4,7 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [v0.3.0-rc.1] — 2026-06-09
+## [v0.3.0] — 2026-06-09
 
 Consolidates everything since v0.1.0 (the v0.2.0-rc.1 tag from April was never
 promoted and is superseded by this release). Roughly 500 commits across six
