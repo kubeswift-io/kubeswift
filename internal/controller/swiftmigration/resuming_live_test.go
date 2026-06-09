@@ -341,22 +341,16 @@ func TestResumingLive_SwiftGuestDeleted_FailsWithOther(t *testing.T) {
 	}
 }
 
-func TestResumingLive_PreservesObservedPauseWindow(t *testing.T) {
-	// B3's substateSrcCompleted handler dual-writes both
-	// status.ObservedTransferDuration (Phase 3b canonical) AND
-	// status.ObservedPauseWindow (deprecated alias) during StopAndCopy
-	// from the src pod's kubeswift.io/migration-pause-window-ms
-	// annotation. B2.3 must NOT overwrite or clear either value.
-	//
-	// Test name retained for now (not renamed in Phase 3b PR 1); will
-	// be more natural to rename when ObservedPauseWindow is dropped in
-	// Phase 3b+1.
+func TestResumingLive_PreservesObservedTransferDuration(t *testing.T) {
+	// B3's substateSrcCompleted handler stamps
+	// status.ObservedTransferDuration during StopAndCopy from the src
+	// pod's kubeswift.io/migration-pause-window-ms annotation. The
+	// Resuming handler must NOT overwrite or clear it.
 	scheme := testScheme(t)
 	mig, guest, dst := resumingLiveFixture(t)
 	setGuestRunningTrue(guest)
 	preset := metav1.Duration{Duration: 1500 * time.Millisecond}
 	mig.Status.ObservedTransferDuration = &preset
-	mig.Status.ObservedPauseWindow = &preset
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -372,9 +366,6 @@ func TestResumingLive_PreservesObservedPauseWindow(t *testing.T) {
 	}
 	if status.ObservedTransferDuration == nil || status.ObservedTransferDuration.Duration != preset.Duration {
 		t.Errorf("ObservedTransferDuration modified; want %v, got %+v", preset, status.ObservedTransferDuration)
-	}
-	if status.ObservedPauseWindow == nil || status.ObservedPauseWindow.Duration != preset.Duration {
-		t.Errorf("ObservedPauseWindow alias modified; want %v, got %+v", preset, status.ObservedPauseWindow)
 	}
 }
 

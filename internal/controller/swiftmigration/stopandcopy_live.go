@@ -433,12 +433,18 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		if r.MigrationMTLSEnabled {
 			targetURL = fmt.Sprintf("tcp:127.0.0.1:%d", migrationLocalPlaintextPort)
 		}
+		dtMs := downtimeMs(mig)
 		args := migrationSendArgs{
 			TargetURL:      targetURL,
 			TimeoutSeconds: migrationActionTimeoutSeconds,
 			GuestRAMMiB:    guestRAMMiB(ctx, r, &guest),
-			DowntimeMs:     downtimeMs(mig),
+			DowntimeMs:     dtMs,
 		}
+		// Echo the downtime_ms ceiling we actually sent into status so
+		// operators can see the bound that governed this migration.
+		// AppliedDowntimeMs is a BOUND, not a measurement — CH v52 does
+		// not report the achieved vCPU-stop (see the field docstring).
+		status.AppliedDowntimeMs = dtMs
 		argsJSON, err := json.Marshal(args)
 		if err != nil {
 			return phaseFailure(fmt.Sprintf("marshal send args: %v", err), migrationv1alpha1.FailureReasonOther)
@@ -625,10 +631,11 @@ const AnnotationMigrationActionArgs = "kubeswift.io/migration-action-args"
 
 // stampTransferDuration reads the swiftletd-on-src reported
 // vm.send-migration RPC duration from the src pod's
-// kubeswift.io/migration-pause-window-ms annotation and dual-writes
-// it into BOTH status.ObservedTransferDuration (Phase 3b canonical)
-// AND status.ObservedPauseWindow (deprecated alias, removed in
-// Phase 3b+1). swiftletd writes the annotation alongside
+// kubeswift.io/migration-pause-window-ms annotation and writes it into
+// status.ObservedTransferDuration. (The deprecated
+// status.ObservedPauseWindow alias was removed in the CH-v52
+// observability work — operator tooling reads ObservedTransferDuration.)
+// swiftletd writes the annotation alongside
 // migration-status=complete via write_migration_status
 // (rust/swiftletd/src/action.rs:1383-1407). The value reflects the
 // CH-internal pause-and-send window, NOT the controller-orchestration
@@ -675,12 +682,7 @@ func stampTransferDuration(
 		return
 	}
 	d := metav1.Duration{Duration: time.Duration(ms) * time.Millisecond}
-	// Phase 3b PR 1 Commit E: dual-write. Both fields land on the
-	// same status patch (caller already runs status patching after
-	// returning from this helper); operators reading either field
-	// see the same value.
 	status.ObservedTransferDuration = &d
-	status.ObservedPauseWindow = &d
 }
 
 // stampTransferProgress surfaces the swiftletd-on-src

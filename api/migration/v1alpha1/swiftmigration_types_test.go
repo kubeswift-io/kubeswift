@@ -2,23 +2,21 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TestObservedTransferDuration_RoundTrip verifies the new Phase 3b
-// status field can be set, marshaled to JSON, and unmarshaled back
-// without loss. Companion to W27b's pause-window stamping plumbing
-// in stopandcopy_live; the controller dual-writes both
-// ObservedTransferDuration (canonical) and ObservedPauseWindow
-// (deprecated alias) from a single source value.
+// TestObservedTransferDuration_RoundTrip verifies the status field can
+// be set, marshaled to JSON, and unmarshaled back without loss. (The
+// deprecated ObservedPauseWindow alias was removed in the CH-v52
+// observability work; ObservedTransferDuration is the canonical field.)
 func TestObservedTransferDuration_RoundTrip(t *testing.T) {
 	dur := metav1.Duration{Duration: 38200 * time.Millisecond}
 	status := SwiftMigrationStatus{
 		ObservedTransferDuration: &dur,
-		ObservedPauseWindow:      &dur,
 	}
 
 	data, err := json.Marshal(status)
@@ -38,12 +36,25 @@ func TestObservedTransferDuration_RoundTrip(t *testing.T) {
 		t.Errorf("ObservedTransferDuration = %v, want %v",
 			got.ObservedTransferDuration.Duration, dur.Duration)
 	}
-	if got.ObservedPauseWindow == nil {
-		t.Fatalf("ObservedPauseWindow (deprecated alias) nil after round-trip")
+}
+
+// TestAppliedDowntimeMs_RoundTrip verifies the downtime_ms bound echo
+// survives a JSON round-trip under its canonical key.
+func TestAppliedDowntimeMs_RoundTrip(t *testing.T) {
+	ms := int64(300)
+	data, err := json.Marshal(SwiftMigrationStatus{AppliedDowntimeMs: &ms})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if got.ObservedPauseWindow.Duration != dur.Duration {
-		t.Errorf("ObservedPauseWindow = %v, want %v",
-			got.ObservedPauseWindow.Duration, dur.Duration)
+	if !strings.Contains(string(data), `"appliedDowntimeMs":300`) {
+		t.Errorf("JSON %s missing appliedDowntimeMs:300", data)
+	}
+	var got SwiftMigrationStatus
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.AppliedDowntimeMs == nil || *got.AppliedDowntimeMs != ms {
+		t.Errorf("AppliedDowntimeMs = %v, want %d", got.AppliedDowntimeMs, ms)
 	}
 }
 
