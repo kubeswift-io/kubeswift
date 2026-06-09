@@ -428,3 +428,17 @@ func TestGetNICs_PrimaryOnNAD(t *testing.T) {
 		t.Errorf("nics[1] = %+v, want non-primary + net2", nics[1])
 	}
 }
+
+func TestGetCoreScheduling(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"off", ""},
+		{"vm", "vm"},
+		{"vcpu", "vcpu"},
+	} {
+		rg := &ResolvedGuest{CoreScheduling: tc.in}
+		if got := rg.GetCoreScheduling(); got != tc.want {
+			t.Errorf("GetCoreScheduling(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

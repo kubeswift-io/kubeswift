@@ -35,6 +35,10 @@ pub struct RuntimeIntent {
     /// early MP/HAL init). See docs/design/windows-guest-support-spike.md.
     #[serde(default)]
     pub os_type: Option<String>,
+    /// vCPU core-scheduling policy ("vm"/"vcpu"); absent/empty = off. When set,
+    /// swiftletd appends core_scheduling=<v> to the CH --cpus arg.
+    #[serde(default)]
+    pub core_scheduling: Option<String>,
     /// Optional secondary data disk (appears as /dev/vdb in guest).
     #[serde(default)]
     pub data_disk: Option<RootDisk>,
