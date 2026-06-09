@@ -277,8 +277,13 @@ type SwiftMigrationSpec struct {
 	// downtime is bounded by storage detach + VM boot, not a CH budget).
 	// +optional
 	DowntimeTarget *metav1.Duration `json:"downtimeTarget,omitempty"`
-	// ParallelConnections is the number of TCP connections CH uses for the
-	// migration stream in live mode. Ignored in Phase 1.
+	// ParallelConnections is the number of parallel TCP connections CH uses
+	// for the live-migration memory stream (CH >= v52) — higher throughput
+	// on fast interconnects. 0 or 1 uses a single connection (the default);
+	// values >= 2 are passed through as CH's `connections`. The webhook caps
+	// it (MaxParallelConnections). Below the NIC line rate parallel streams
+	// add little (the single stream already saturates), so this matters on
+	// 10GbE+ interconnects. Ignored for mode=offline (no memory stream).
 	// +optional
 	ParallelConnections int32 `json:"parallelConnections,omitempty"`
 	// Timeout bounds the entire migration operation (StartedAt -> terminal).

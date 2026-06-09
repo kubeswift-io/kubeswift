@@ -88,6 +88,13 @@ type migrationSendArgs struct {
 	// uses its native default. Maps to MigrationSendArgs.downtime_ms in
 	// rust/swiftletd/src/action.rs -> swift_ch_client::send_migration.
 	DowntimeMs *int64 `json:"downtime_ms,omitempty"`
+	// Connections is the Cloud Hypervisor `connections` count for
+	// vm.send-migration (CH >= v52): parallel TCP connections for the
+	// memory stream. Derived from SwiftMigration.spec.parallelConnections;
+	// nil (unset, or 1) omits the field so CH uses a single connection.
+	// Maps to MigrationSendArgs.connections in
+	// rust/swiftletd/src/action.rs -> swift_ch_client::send_migration.
+	Connections *int32 `json:"connections,omitempty"`
 }
 
 // downtimeMs converts SwiftMigration.spec.downtimeTarget to a CH
@@ -104,6 +111,19 @@ func downtimeMs(mig *migrationv1alpha1.SwiftMigration) *int64 {
 		return nil
 	}
 	return &ms
+}
+
+// parallelConnections returns the CH `connections` count from
+// SwiftMigration.spec.parallelConnections. Returns nil for 0 or 1 (a
+// single connection is CH's default and needs no field) so the send-args
+// omit it. Values >= 2 are passed through (the webhook caps at
+// MaxParallelConnections). Live-mode only.
+func parallelConnections(mig *migrationv1alpha1.SwiftMigration) *int32 {
+	if mig.Spec.ParallelConnections < 2 {
+		return nil
+	}
+	n := mig.Spec.ParallelConnections
+	return &n
 }
 
 // guestRAMMiB returns the guest's RAM in MiB from its SwiftGuestClass,
@@ -439,6 +459,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			TimeoutSeconds: migrationActionTimeoutSeconds,
 			GuestRAMMiB:    guestRAMMiB(ctx, r, &guest),
 			DowntimeMs:     dtMs,
+			Connections:    parallelConnections(mig),
 		}
 		// Echo the downtime_ms ceiling we actually sent into status so
 		// operators can see the bound that governed this migration.
