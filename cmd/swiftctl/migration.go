@@ -32,6 +32,7 @@ var (
 	migratePreferredMode string
 	migrateTimeout       time.Duration
 	migrateTTL           time.Duration
+	migrateCheck         bool
 	migrationListAllNS   bool
 )
 
@@ -68,6 +69,7 @@ across nodes. Pass --allow-ip-change to acknowledge and proceed,
 or attach the guest to a multi-node network (Multus + macvlan or
 OVN-K layer-2) for IP preservation.`,
 	Example: `  swiftctl migrate db --to worker-3
+  swiftctl migrate db --to worker-3 --check   # preflight only, creates nothing
   swiftctl migrate web --to worker-3 --preferred-mode live --allow-ip-change
   swiftctl migrate db --to worker-3 --preferred-mode offline
   swiftctl migrate db --to worker-3 --name db-rebalance-2026-04-28`,
@@ -112,6 +114,8 @@ var migrationCancelCmd = &cobra.Command{
 
 func init() {
 	migrateCmd.Flags().StringVar(&migrateTargetNode, "to", "", "Target node name (required)")
+	migrateCmd.Flags().BoolVar(&migrateCheck, "check", false,
+		"Preflight only: report node readiness/capacity, IP-preservation, mode, and CPU compatibility without creating the migration")
 	migrateCmd.Flags().BoolVar(&migrateAllowIPChange, "allow-ip-change", false,
 		"Acknowledge that the guest IP will change cross-node on default node-local networking")
 	migrateCmd.Flags().StringVar(&migrateName, "name", "",
@@ -164,6 +168,9 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	c, err := newMigrationClient()
 	if err != nil {
 		return err
+	}
+	if migrateCheck {
+		return runMigratePreflight(cmd, c, guestName, ns, mode)
 	}
 	name := migrateName
 	if name == "" {
