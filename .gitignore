@@ -25,3 +25,5 @@ vendor/
 # docs/design/<phase>-spike.md instead. Convention since
 # Phase 3a (2026-05).
 /spike/
+# Build artifacts (go build output in repo root)
+/snapshot-s3

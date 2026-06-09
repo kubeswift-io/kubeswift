@@ -10,6 +10,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // transferStats reports how many artifact bytes a transfer moved vs skipped
@@ -37,15 +39,21 @@ func runUpload(ctx context.Context, store objectStore, srcDir, keyPrefix, snapNa
 	log.Printf("snapshot-s3 upload: %d artifact(s), %d bytes total", len(m.Artifacts), m.TotalBytes)
 
 	stats := transferStats{TotalBytes: m.TotalBytes}
-	for _, a := range m.Artifacts {
-		key := path.Join(keyPrefix, a.Path)
-		// Resume only when the existing object matches BOTH size and content
-		// hash. Size alone is unsafe: a memory-ranges file is always exactly the
-		// guest's RAM size, so a stale object left at this key by a prior
-		// same-named snapshot would be silently kept while the manifest records
-		// the new hash — a permanent mismatch the restore then fails on.
-		if size, sha, ok, serr := store.stat(ctx, key); serr == nil && ok && size == a.Bytes && sha == a.SHA256 {
-			log.Printf("  skip %s (already uploaded, %d bytes, sha matches)", a.Path, size)
+	for i := range m.Artifacts {
+		// Mark every artifact zstd-compressed in the manifest we upload, so the
+		// download path knows to fetch the codec-suffixed object and decompress.
+		// (The memory image is mostly zeros — sparse holes read back as zeros —
+		// which zstd collapses; small JSON artifacts compress harmlessly.)
+		m.Artifacts[i].Compression = compressionZstd
+		a := m.Artifacts[i]
+		key := path.Join(keyPrefix, objectKeyFor(a))
+		// Resume on the ORIGINAL content hash (recorded as object metadata at
+		// upload time). sha256 is collision-safe, so hash-match alone is a safe
+		// skip — and unlike PR #118's size+sha check, it composes with
+		// compression: the stored object's size is the COMPRESSED size, not the
+		// artifact's original Bytes, so a size comparison can no longer be used.
+		if _, sha, ok, serr := store.stat(ctx, key); serr == nil && ok && sha == a.SHA256 {
+			log.Printf("  skip %s (already uploaded, sha matches)", a.Path)
 			stats.SkippedBytes += a.Bytes
 			continue
 		}
@@ -53,12 +61,20 @@ func runUpload(ctx context.Context, store objectStore, srcDir, keyPrefix, snapNa
 		if err != nil {
 			return transferStats{}, fmt.Errorf("open artifact %q: %w", a.Path, err)
 		}
-		log.Printf("  put %s (%d bytes)", a.Path, a.Bytes)
-		err = store.put(ctx, key, f, a.Bytes, a.SHA256)
+		log.Printf("  put %s (%d bytes -> zstd)", a.Path, a.Bytes)
+		// size=-1: the compressed length is unknown up front; minio-go streams
+		// and multiparts as needed. The sha256 metadata is the ORIGINAL hash
+		// (for resume + download verification), NOT the compressed object's.
+		cr := compressingReader(f)
+		err = store.put(ctx, key, cr, -1, a.SHA256)
+		cr.Close() // unblock the compress goroutine if put errored mid-stream
 		f.Close()
 		if err != nil {
 			return transferStats{}, fmt.Errorf("upload artifact %q: %w", a.Path, err)
 		}
+		// TransferredBytes/SkippedBytes track LOGICAL artifact bytes (preserving
+		// the transferred+skipped==total invariant the controller relies on);
+		// the compressed wire/storage saving is not surfaced in these counters.
 		stats.TransferredBytes += a.Bytes
 	}
 
@@ -104,7 +120,7 @@ func runDownload(ctx context.Context, store objectStore, dstDir, keyPrefix strin
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return transferStats{}, fmt.Errorf("mkdir for %q: %w", a.Path, err)
 		}
-		if err := downloadOne(ctx, store, path.Join(keyPrefix, a.Path), dst); err != nil {
+		if err := downloadOne(ctx, store, path.Join(keyPrefix, objectKeyFor(a)), dst, a.Compression); err != nil {
 			return transferStats{}, err
 		}
 		if err := verifyArtifact(dstDir, a); err != nil {
@@ -142,7 +158,10 @@ func runDelete(ctx context.Context, store objectStore, keyPrefix string) error {
 	return nil
 }
 
-func downloadOne(ctx context.Context, store objectStore, key, dst string) error {
+// downloadOne fetches key into dst, decompressing on the fly when the artifact
+// was stored with a codec. dst always receives the ORIGINAL (decompressed)
+// bytes, which the caller then verifies against the manifest's size + sha256.
+func downloadOne(ctx context.Context, store objectStore, key, dst, compression string) error {
 	rc, err := store.get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("get %q: %w", key, err)
@@ -152,7 +171,20 @@ func downloadOne(ctx context.Context, store objectStore, key, dst string) error 
 	if err != nil {
 		return fmt.Errorf("create %q: %w", dst, err)
 	}
-	_, err = io.Copy(f, rc)
+	var src io.Reader = rc
+	var dec *zstd.Decoder
+	if compression == compressionZstd {
+		dec, err = zstd.NewReader(rc)
+		if err != nil {
+			f.Close()
+			return fmt.Errorf("zstd reader for %q: %w", key, err)
+		}
+		src = dec
+	}
+	_, err = io.Copy(f, src)
+	if dec != nil {
+		dec.Close()
+	}
 	cerr := f.Close()
 	if err != nil {
 		return fmt.Errorf("write %q: %w", dst, err)

@@ -25,6 +25,13 @@ type Artifact struct {
 	Path   string `json:"path"`
 	Bytes  int64  `json:"bytes"`
 	SHA256 string `json:"sha256"`
+	// Compression names the codec the S3 object is stored with ("zstd"), or
+	// empty for an uncompressed object at the bare Path. Bytes + SHA256 always
+	// describe the ORIGINAL (decompressed) content the restore consumes and
+	// verifies; the stored object is the compressed stream at Path+suffix (see
+	// objectKeyFor). Additive/optional, so older manifests (no field) parse and
+	// download from the bare Path unchanged.
+	Compression string `json:"compression,omitempty"`
 }
 
 // Manifest is the source of truth for an s3-exported snapshot: the full set of
