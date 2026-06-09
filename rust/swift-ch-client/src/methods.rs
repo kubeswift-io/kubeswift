@@ -168,16 +168,27 @@ impl ApiClient {
     /// 5-iteration cap. `None` omits the field so CH keeps its native
     /// behaviour (on v51.x the field is unknown and would be ignored/
     /// rejected, so callers on older CH must pass `None`).
+    ///
+    /// `connections`, when `Some(n)`, opens `n` parallel TCP connections
+    /// for the memory stream (CH >= v52) — higher throughput on fast
+    /// interconnects. The destination's receive listener accepts the
+    /// extra connections (up to CH's internal cap). `None` (or `Some(1)`)
+    /// uses a single connection. Omitted from the body when `None` so CH
+    /// keeps its native single-connection behaviour.
     pub fn send_migration(
         &self,
         destination_url: &str,
         downtime_ms: Option<u64>,
+        connections: Option<u32>,
     ) -> Result<(), ApiError> {
         let mut body = serde_json::json!({
             "destination_url": destination_url,
         });
         if let Some(ms) = downtime_ms {
             body["downtime_ms"] = serde_json::json!(ms);
+        }
+        if let Some(n) = connections {
+            body["connections"] = serde_json::json!(n);
         }
         let body = serde_json::to_vec(&body)
             .map_err(|e| ApiError::Malformed(format!("send_migration body serialize: {}", e)))?;
@@ -413,16 +424,19 @@ mod tests {
     fn send_migration_sends_destination_url_in_body() {
         let server = MockServer::spawn(no_content());
         let client = ApiClient::new(server.path.clone());
-        client.send_migration("tcp:10.0.0.5:6789", None).unwrap();
+        client
+            .send_migration("tcp:10.0.0.5:6789", None, None)
+            .unwrap();
         let req = String::from_utf8(server.collect_request()).unwrap();
         assert!(req.starts_with("PUT /api/v1/vm.send-migration HTTP/1.1\r\n"));
         assert!(req.contains("Content-Type: application/json\r\n"));
         let (_, body) = req.split_once("\r\n\r\n").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(parsed["destination_url"], "tcp:10.0.0.5:6789");
-        // None -> downtime_ms omitted entirely (CH keeps native behaviour;
+        // None -> fields omitted entirely (CH keeps native behaviour;
         // v51.x would reject an unknown field).
         assert!(parsed.get("downtime_ms").is_none());
+        assert!(parsed.get("connections").is_none());
     }
 
     #[test]
@@ -430,13 +444,27 @@ mod tests {
         let server = MockServer::spawn(no_content());
         let client = ApiClient::new(server.path.clone());
         client
-            .send_migration("tcp:10.0.0.5:6789", Some(300))
+            .send_migration("tcp:10.0.0.5:6789", Some(300), None)
             .unwrap();
         let req = String::from_utf8(server.collect_request()).unwrap();
         let (_, body) = req.split_once("\r\n\r\n").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(parsed["destination_url"], "tcp:10.0.0.5:6789");
         assert_eq!(parsed["downtime_ms"], 300);
+    }
+
+    #[test]
+    fn send_migration_includes_connections_when_set() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client
+            .send_migration("tcp:10.0.0.5:6789", Some(300), Some(4))
+            .unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        let (_, body) = req.split_once("\r\n\r\n").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed["downtime_ms"], 300);
+        assert_eq!(parsed["connections"], 4);
     }
 
     #[test]
@@ -452,7 +480,7 @@ mod tests {
         );
         let client = ApiClient::new(server.path.clone());
         let err = client
-            .send_migration("tcp:10.0.0.5:6789", None)
+            .send_migration("tcp:10.0.0.5:6789", None, None)
             .unwrap_err();
         match err {
             ApiError::Status(resp) => {
