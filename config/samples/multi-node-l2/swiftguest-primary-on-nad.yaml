@@ -1,0 +1,17 @@
+# A guest whose PRIMARY IP rides a multi-node L2 NAD, so the IP is portable
+# across nodes (e.g. for IP-preserving live migration). Pair with the ovn-l2 NAD.
+#
+# NOTE: the runtime datapath for primary-on-NAD is landing in follow-up PRs; the
+# control-plane (admission + migration IP-preservation classification) is shipped.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: portable-ip-guest
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  interfaces:
+    - name: app
+      primary: true                  # the guest's primary IP
+      networkRef: { name: ovn-l2 }    # rides the multi-node NAD

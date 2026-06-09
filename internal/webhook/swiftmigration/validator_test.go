@@ -704,18 +704,36 @@ func TestValidateClusterState_SourceNotYetScheduled(t *testing.T) {
 }
 
 // TestValidateClusterState_MixedInterfaces_DefaultPlusMultus pins the
-// behavior of isDefaultNodeLocalNetworking on a mixed-interface guest:
-// any non-nil NetworkRef makes the helper return false (treats the
-// guest as multi-node-capable). The default-bridge interface's IP will
-// still change cross-node, but the operator presumably has reasons to
-// run mixed networking — silently accepting the cross-node migration
-// is the architect's call.
+// CORRECTED behavior (network-architecture-requirements.md §7): a guest with a
+// node-local PRIMARY plus a Multus SECONDARY is NOT IP-preserving — its primary
+// IP still changes cross-node — so it must require allowIPChange. (The earlier
+// "any networkRef => multi-node-capable" heuristic was the §7.2 gap; a secondary
+// NAD no longer flips the gate.)
 func TestValidateClusterState_MixedInterfaces_DefaultPlusMultus(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
-		{Name: "mgmt"}, // default bridge
+		{Name: "mgmt"}, // default node-local bridge = the primary IP
 		{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default") // allowIPChange=false
+	if _, err := v.validate(context.Background(), mig); err == nil {
+		t.Error("mixed default-primary + multus-secondary should REQUIRE allowIPChange (primary IP changes cross-node); got accept")
+	}
+}
+
+// TestValidateClusterState_PrimaryOnNAD: when the PRIMARY interface rides a
+// multi-node NAD (primary=true + networkRef), the primary IP is preserved
+// cross-node, so the migration is accepted without allowIPChange and emits no
+// IP-change warning.
+func TestValidateClusterState_PrimaryOnNAD(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+		{Name: "mgmt", Primary: true, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "ovn-l2", Namespace: "default"}},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
 	v := &Validator{Client: c}
@@ -723,13 +741,10 @@ func TestValidateClusterState_MixedInterfaces_DefaultPlusMultus(t *testing.T) {
 	mig := newSwiftMigration("m", "default") // allowIPChange=false
 	warnings, err := v.validate(context.Background(), mig)
 	if err != nil {
-		t.Errorf("validate mixed-interface guest cross-node should accept (multus interface treats as multi-node-capable); got %v", err)
+		t.Errorf("primary-on-NAD guest should accept without allowIPChange; got %v", err)
 	}
-	// No allowIPChange warning because the multus interface marks the
-	// guest as not-default. If a future refactor changes
-	// isDefaultNodeLocalNetworking to be stricter, this will fail.
 	if len(warnings) != 0 {
-		t.Errorf("mixed-interface accepted path should produce no warnings; got %v", warnings)
+		t.Errorf("primary-on-NAD guest should produce no IP-change warning; got %v", warnings)
 	}
 }
 
