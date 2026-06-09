@@ -710,3 +710,51 @@ func TestBuildPod_VhostUserNet(t *testing.T) {
 		t.Error("launcher missing /var/run/vhost mount")
 	}
 }
+
+func TestBuildPod_VhostUserSocketDedup(t *testing.T) {
+	// A vhost-user NIC and a vhost-user-blk device share /var/run/vhost ->
+	// exactly one deduped mount; a device in /run/spdk gets its own.
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "vud", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt"},
+				{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
+			},
+			VhostUserDevices: []swiftv1alpha1.VhostUserDevice{
+				{Name: "blk0", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/var/run/vhost/blk0.sock"},
+				{Name: "gen0", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/run/spdk/gen.sock", VirtioID: "block"},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Meta:          resolved.Meta{Namespace: "default", Name: "vud"},
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
+		Network:       true,
+		Interfaces:    guest.Spec.Interfaces,
+	}
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	dirs := map[string]int{}
+	mountPaths := map[string]int{}
+	for _, v := range pod.Spec.Volumes {
+		if v.HostPath != nil && (v.HostPath.Path == "/var/run/vhost" || v.HostPath.Path == "/run/spdk") {
+			dirs[v.HostPath.Path]++
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == "/var/run/vhost" || m.MountPath == "/run/spdk" {
+			mountPaths[m.MountPath]++
+		}
+	}
+	// /var/run/vhost mounted exactly once despite NIC + blk both under it.
+	if dirs["/var/run/vhost"] != 1 || mountPaths["/var/run/vhost"] != 1 {
+		t.Errorf("/var/run/vhost vol=%d mount=%d, want 1/1 (deduped across net+device)", dirs["/var/run/vhost"], mountPaths["/var/run/vhost"])
+	}
+	if dirs["/run/spdk"] != 1 || mountPaths["/run/spdk"] != 1 {
+		t.Errorf("/run/spdk vol=%d mount=%d, want 1/1", dirs["/run/spdk"], mountPaths["/run/spdk"])
+	}
+}

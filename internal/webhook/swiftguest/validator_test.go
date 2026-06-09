@@ -248,3 +248,58 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 	})
 	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
 }
+
+func TestValidate_VhostUserDevices(t *testing.T) {
+	// Valid: a blk + a generic with virtioId.
+	g := guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "disk0", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/run/spdk/0"},
+			{Name: "gen0", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/run/x/g", VirtioID: "block"},
+		}
+	})
+	if err := validateSwiftGuest(g); err != nil {
+		t.Fatalf("valid vhost-user devices rejected: %v", err)
+	}
+
+	// Missing socket.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "socket is required")
+
+	// Generic without virtioId.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/s"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "virtioId")
+
+	// Bad type.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "d", Type: "weird", Socket: "/s"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "must be blk or generic")
+
+	// Duplicate name.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/a"},
+			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/b"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "duplicated")
+
+	// Rejected with gpuProfileRef.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
+		g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/s"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+}

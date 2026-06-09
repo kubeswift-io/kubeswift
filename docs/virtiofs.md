@@ -146,3 +146,50 @@ unvalidated SR-IOV path.
 
 Example:
 [`config/samples/vhost-user-net/swiftguest-vhost-user-net.yaml`](../config/samples/vhost-user-net/swiftguest-vhost-user-net.yaml).
+
+---
+
+# vhost-user devices: blk & generic
+
+Beyond virtiofs and vhost-user-net, `spec.vhostUserDevices[]` attaches two more
+operator-backed vhost-user device kinds to a guest:
+
+- **`type: blk`** — a **vhost-user-blk** disk (e.g. an SPDK vhost target). It
+  appears as an ordinary virtio-blk disk in the guest; the IOPS come from the
+  userspace backend. Cloud Hypervisor `--disk vhost_user=on,socket=`.
+- **`type: generic`** — **any** vhost-user device by its virtio id, for backends
+  that aren't net/blk/fs. Cloud Hypervisor
+  `--generic-vhost-user virtio_id=,socket=,queue_sizes=`.
+
+As with vhost-user-net, **KubeSwift does not run the backend** — the operator's
+datapath exposes a node socket; KubeSwift mounts its directory into the launcher
+(deduped with the vhost-user-net socket mounts) and points CH at it.
+
+## Fields
+
+```yaml
+spec:
+  vhostUserDevices:
+    - name: fastdisk        # required; unique per guest
+      type: blk             # blk | generic
+      socket: /var/run/spdk/vhost.0   # required: operator backend listener
+    - name: custom0
+      type: generic
+      virtioId: "block"     # required for generic: number or symbolic name
+      socket: /var/run/vhost/custom0.sock
+      queueSizes: [1024, 1024]   # optional (generic only)
+```
+
+Webhook rules: unique `name`; `socket` required; `virtioId` required for
+`generic`; `type` must be `blk` or `generic`; not combinable with
+`gpuProfileRef` (CH-only in v1).
+
+## Validation status
+
+**Wiring only** — the CH args, webhook bounds, and socket-dir mount are
+unit-validated. The datapath is **asset-gated**: `blk` needs an SPDK (or other
+vhost-user-blk) target on the node; `generic` needs whatever backend the
+`virtioId` refers to. Same honest posture as SR-IOV and vhost-user-net.
+
+Examples:
+[`config/samples/vhost-user-devices/`](../config/samples/vhost-user-devices/).

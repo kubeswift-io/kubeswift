@@ -1,0 +1,24 @@
+# A guest with a vhost-user-blk disk backed by an operator-provided SPDK
+# vhost target. KubeSwift does NOT run the backend — the operator's SPDK
+# (or other vhost-user-blk) datapath exposes a listener socket on the node;
+# KubeSwift mounts its directory into the launcher and points Cloud Hypervisor
+# at it via --disk vhost_user=on,socket=. The guest sees an ordinary virtio-blk
+# disk (e.g. /dev/vdb) whose IOPS come from the userspace backend.
+#
+# Asset-gated: needs an SPDK vhost target on the node. Without one the wiring is
+# correct but the disk has no backend (same posture as SR-IOV / vhost-user-net).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: vhost-user-blk
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: default
+  vhostUserDevices:
+    - name: fastdisk
+      type: blk
+      socket: /var/run/spdk/vhost.0   # operator SPDK vhost-blk listener (node path)

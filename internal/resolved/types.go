@@ -49,6 +49,9 @@ type ResolvedGuest struct {
 	// Filesystems from SwiftGuest spec — virtiofs (vhost-user-fs) shares.
 	// Nil or empty means no virtiofs mounts. CH path only.
 	Filesystems []swiftv1alpha1.Filesystem `json:"filesystems,omitempty"`
+	// VhostUserDevices from SwiftGuest spec — operator-backed vhost-user-blk
+	// disks and generic vhost-user devices. CH path only.
+	VhostUserDevices []swiftv1alpha1.VhostUserDevice `json:"vhostUserDevices,omitempty"`
 	// OSType is the resolved guest OS family ("linux" or "windows"). For a
 	// disk boot it is taken from the SwiftImage (the image defines the OS);
 	// kernel boot is always "linux". Empty resolves to "linux" via GetOSType.
@@ -362,6 +365,26 @@ func (r *ResolvedGuest) GetFilesystems() []runtimeintent.FilesystemIntent {
 			Tag:        tag,
 			SourcePath: runtimeintent.VirtiofsBasePath + "/" + fs.Name,
 			ReadOnly:   fs.ReadOnly,
+		})
+	}
+	return out
+}
+
+// GetVhostUserDevices builds the VhostUserDeviceIntent list from
+// spec.vhostUserDevices. Socket is passed through as-is (the operator's
+// node path, mounted into the launcher at the same path by the pod builder).
+func (r *ResolvedGuest) GetVhostUserDevices() []runtimeintent.VhostUserDeviceIntent {
+	if len(r.VhostUserDevices) == 0 {
+		return nil
+	}
+	out := make([]runtimeintent.VhostUserDeviceIntent, 0, len(r.VhostUserDevices))
+	for _, d := range r.VhostUserDevices {
+		out = append(out, runtimeintent.VhostUserDeviceIntent{
+			Name:       d.Name,
+			Type:       d.Type,
+			Socket:     d.Socket,
+			VirtioID:   d.VirtioID,
+			QueueSizes: d.QueueSizes,
 		})
 	}
 	return out

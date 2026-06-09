@@ -1,0 +1,21 @@
+# A guest with a generic vhost-user device — any virtio device type exposed by
+# an operator backend, attached via --generic-vhost-user. Use this for backends
+# that aren't net/blk/fs (or for custom virtio devices). KubeSwift only mounts
+# the socket and passes the virtio_id + socket to Cloud Hypervisor.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: vhost-user-generic
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: default
+  vhostUserDevices:
+    - name: custom0
+      type: generic
+      virtioId: "block"               # virtio device-type id: number or symbolic name
+      socket: /var/run/vhost/custom0.sock
+      queueSizes: [1024, 1024]        # optional; omit for CH defaults

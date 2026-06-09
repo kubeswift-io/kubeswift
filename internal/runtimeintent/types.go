@@ -18,6 +18,11 @@ type RuntimeIntent struct {
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
+	// VhostUserDevices is the list of operator-backed vhost-user devices
+	// (vhost-user-blk disks and generic vhost-user devices). swiftletd hands
+	// each to Cloud Hypervisor via --disk vhost_user=on,socket= (blk) or
+	// --generic-vhost-user virtio_id=,socket= (generic). CH path only.
+	VhostUserDevices []VhostUserDeviceIntent `json:"vhostUserDevices,omitempty"`
 	// Filesystems is the list of virtiofs shares. For each, swiftletd spawns a
 	// virtiofsd backend (shared-dir = SourcePath, socket = SocketPath) before
 	// Cloud Hypervisor and passes CH `--fs tag=<Tag>,socket=<SocketPath>`.
@@ -74,6 +79,23 @@ type RestoreIntent struct {
 	// the field (CH default). cloneFromSnapshot sets "ondemand"; SwiftRestore
 	// from spec.memoryRestoreMode.
 	MemoryRestoreMode string `json:"memoryRestoreMode,omitempty"`
+}
+
+// VhostUserDeviceIntent is one operator-backed vhost-user device. swiftletd
+// hands it to Cloud Hypervisor opaquely; the socket is the operator's backend
+// listener, mounted into the launcher by the pod builder.
+type VhostUserDeviceIntent struct {
+	// Name is the per-guest identifier.
+	Name string `json:"name"`
+	// Type is "blk" (vhost-user-blk disk) or "generic" (any vhost-user device).
+	Type string `json:"type"`
+	// Socket is the in-pod path of the operator's vhost-user backend socket.
+	Socket string `json:"socket"`
+	// VirtioID is the virtio device-type id for a generic device (number or
+	// symbolic name). Empty for blk.
+	VirtioID string `json:"virtioId,omitempty"`
+	// QueueSizes optionally sets per-queue sizes for a generic device.
+	QueueSizes []int32 `json:"queueSizes,omitempty"`
 }
 
 // NICIntent describes a single network interface for the VM.

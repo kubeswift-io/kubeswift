@@ -105,6 +105,48 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	if err := validateInterfaces(spec); err != nil {
 		return err
 	}
+	if err := validateVhostUserDevices(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateVhostUserDevices enforces the vhost-user device constraints: unique
+// names, a socket per device, virtioId required for generic devices, and the
+// v1 scope limit (Cloud Hypervisor only — a gpuProfileRef may select the QEMU
+// runtime, which v1 does not wire for vhost-user).
+func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec) error {
+	if len(spec.VhostUserDevices) == 0 {
+		return nil
+	}
+	if spec.GPUProfileRef != nil {
+		return fmt.Errorf("spec.vhostUserDevices is not supported with spec.gpuProfileRef (Cloud Hypervisor only in v1)")
+	}
+	names := make(map[string]struct{}, len(spec.VhostUserDevices))
+	for i := range spec.VhostUserDevices {
+		d := &spec.VhostUserDevices[i]
+		if d.Name == "" {
+			return fmt.Errorf("spec.vhostUserDevices[%d].name is required", i)
+		}
+		if _, dup := names[d.Name]; dup {
+			return fmt.Errorf("spec.vhostUserDevices[%d].name %q is duplicated", i, d.Name)
+		}
+		names[d.Name] = struct{}{}
+
+		if d.Socket == "" {
+			return fmt.Errorf("spec.vhostUserDevices[%d].socket is required", i)
+		}
+		switch d.Type {
+		case swiftv1alpha1.VhostUserDeviceTypeBlk:
+			// nothing extra
+		case swiftv1alpha1.VhostUserDeviceTypeGeneric:
+			if d.VirtioID == "" {
+				return fmt.Errorf("spec.vhostUserDevices[%d] (type generic) requires virtioId", i)
+			}
+		default:
+			return fmt.Errorf("spec.vhostUserDevices[%d].type must be blk or generic, got %q", i, d.Type)
+		}
+	}
 	return nil
 }
 

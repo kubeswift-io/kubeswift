@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use swift_ch_client::{
-    spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, FsMount, NICConfig,
-    VFIODeviceConfig, VmConfig,
+    spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, FsMount, GenericVhostUser,
+    NICConfig, VFIODeviceConfig, VmConfig,
 };
 use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
@@ -342,6 +342,32 @@ where
         None
     };
 
+    // Operator-backed vhost-user devices (blk + generic). The sockets are
+    // operator backends mounted into the launcher by the pod builder; CH only
+    // connects. No swiftletd-spawned backend (unlike virtiofs).
+    let mut vhost_user_blk_sockets: Vec<String> = Vec::new();
+    let mut generic_vhost_user: Vec<GenericVhostUser> = Vec::new();
+    if let Some(ref devices) = intent.vhost_user_devices {
+        for d in devices {
+            if d.is_blk() {
+                log::info!("vhost-user-blk name={} socket={}", d.name, d.socket);
+                vhost_user_blk_sockets.push(d.socket.clone());
+            } else {
+                log::info!(
+                    "generic-vhost-user name={} virtio_id={:?} socket={}",
+                    d.name,
+                    d.virtio_id,
+                    d.socket
+                );
+                generic_vhost_user.push(GenericVhostUser {
+                    virtio_id: d.virtio_id.clone().unwrap_or_default(),
+                    socket: d.socket.clone(),
+                    queue_sizes: d.queue_sizes.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -361,6 +387,8 @@ where
             data_disk_path: data_disk_path.clone(),
             vfio_devices,
             fs_mounts,
+            vhost_user_blk_sockets,
+            generic_vhost_user,
         }
     } else {
         VmConfig {
@@ -380,6 +408,8 @@ where
             data_disk_path: data_disk_path.clone(),
             vfio_devices,
             fs_mounts,
+            vhost_user_blk_sockets,
+            generic_vhost_user,
         }
     };
 
