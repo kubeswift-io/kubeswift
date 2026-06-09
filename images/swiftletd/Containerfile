@@ -69,6 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     qemu-system-x86 \
     ovmf \
+    python3 \
     libseccomp2 \
     libcap-ng0 \
     && rm -rf /var/lib/apt/lists/*
