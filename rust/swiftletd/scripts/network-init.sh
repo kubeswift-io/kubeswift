@@ -145,6 +145,13 @@ for nic in nics:
             echo "Skipping SR-IOV interface $name -- VFIO passthrough handled by swiftletd"
             continue
         fi
+        if [ "$nic_type" = "vhost-user" ]; then
+            # vhost-user-net: the datapath is an operator backend socket; there
+            # is no in-pod tap/bridge to set up (and no multusInterface). Skip,
+            # like SR-IOV -- swiftletd hands CH --net vhost_user=on,socket=.
+            echo "Skipping vhost-user interface $name -- backend datapath handled by swiftletd"
+            continue
+        fi
         if [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"
         else
