@@ -1,0 +1,36 @@
+# Layer 1 — platform installation. Flux pulls the KubeSwift Helm chart from
+# the OCI registry and installs/upgrades it. CRDs ship with the chart, so the
+# infra layer (which creates KubeSwift CRs) depends on this release.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: kubeswift
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: oci://ghcr.io/projectbeskar/charts/kubeswift
+  ref:
+    semver: ">=0.1.0"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kubeswift
+  namespace: flux-system
+spec:
+  interval: 10m
+  targetNamespace: kubeswift-system
+  install:
+    createNamespace: true
+    crds: CreateReplace
+  upgrade:
+    crds: CreateReplace        # CRDs MUST be upgraded with the chart — the
+                               # apiserver silently drops fields the CRD
+                               # schema doesn't know (stale-CRD-silent-strip).
+  chartRef:
+    kind: OCIRepository
+    name: kubeswift
+    namespace: flux-system
+  values:
+    webhook:
+      enabled: true            # requires cert-manager on the cluster

@@ -1,0 +1,9 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: test-vm
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  runPolicy: Running

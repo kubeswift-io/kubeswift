@@ -1,0 +1,12 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: web
+spec:
+  replicas: 3
+  template:
+    spec:
+      imageRef: { name: ubuntu-noble }
+      guestClassRef: { name: default }
+      seedProfileRef: { name: default }
+      runPolicy: Running
