@@ -261,6 +261,57 @@ func (g *SwiftGuest) UsesCloneFromSnapshot() bool {
 	return g.Spec.CloneFromSnapshot != nil && g.Spec.CloneFromSnapshot.SnapshotRef.Name != ""
 }
 
+// PrimaryInterface returns the guest's primary network interface, or nil when
+// the guest has no interfaces (the default single node-local NIC) or none
+// qualifies. The primary is the interface with Primary=true; if none is marked,
+// it falls back to the first node-local (no networkRef) bridge interface — the
+// legacy rule, matching the resolver's GetNICs primary selection.
+func (g *SwiftGuest) PrimaryInterface() *GuestInterface {
+	isBridge := func(iface *GuestInterface) bool {
+		return iface.Type == "" || iface.Type == InterfaceTypeBridge
+	}
+	// 1. Explicit primary wins.
+	for i := range g.Spec.Interfaces {
+		if g.Spec.Interfaces[i].Primary {
+			return &g.Spec.Interfaces[i]
+		}
+	}
+	// 2. Legacy rule: the first node-local (no networkRef) bridge interface is
+	//    the primary (its IP comes from node-local dnsmasq).
+	for i := range g.Spec.Interfaces {
+		if isBridge(&g.Spec.Interfaces[i]) && g.Spec.Interfaces[i].NetworkRef == nil {
+			return &g.Spec.Interfaces[i]
+		}
+	}
+	// 3. No node-local bridge: the guest's only/main IP is on a NAD. The first
+	//    bridge interface (which therefore rides a networkRef) is the de-facto
+	//    primary. This keeps a single-NAD-interface guest correctly classified
+	//    as IP-preserving.
+	for i := range g.Spec.Interfaces {
+		if isBridge(&g.Spec.Interfaces[i]) {
+			return &g.Spec.Interfaces[i]
+		}
+	}
+	return nil
+}
+
+// PrimaryIPPreservedCrossNode reports whether the guest's primary IP rides a
+// multi-node Multus NAD (the primary interface has a networkRef) and therefore
+// survives a move to another node. Guests on the default node-local bridge
+// return false. The SwiftMigration webhook + controller use this to decide
+// whether cross-node migration changes the guest IP (and thus requires
+// spec.allowIPChange). SR-IOV guests are handled by the VFIO refusal before
+// this is consulted.
+//
+// This replaces the earlier "any interface with networkRef is multi-node"
+// heuristic (which let a node-local-primary + secondary-NAD guest skip
+// allowIPChange even though its primary IP changed). See
+// docs/design/network-architecture-requirements.md §7.
+func (g *SwiftGuest) PrimaryIPPreservedCrossNode() bool {
+	p := g.PrimaryInterface()
+	return p != nil && p.NetworkRef != nil
+}
+
 // CloneIdentityItem names a guest-identity attribute to regenerate on a
 // cloneFromSnapshot clone. Mirrors snapshot.IdentityRegenerationItem but is
 // defined locally to keep the swift and snapshot api groups decoupled.
@@ -407,10 +458,27 @@ type GuestInterface struct {
 	// +optional
 	Type string `json:"type,omitempty"`
 	// NetworkRef references a NetworkAttachmentDefinition for this interface.
-	// If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
+	// If nil, this is a node-local tap+bridge interface.
 	// If set, Multus attaches the pod to the referenced NAD.
 	// +optional
 	NetworkRef *NetworkReference `json:"networkRef,omitempty"`
+	// Primary marks this interface as the guest's primary NIC (its
+	// status.network.primaryIP and the DHCP/management interface). At most one
+	// interface may set primary=true; if none does, the first interface without
+	// a networkRef is the primary (backward compatible).
+	//
+	// When primary=true AND networkRef is set, the primary NIC rides a
+	// multi-node Multus NAD instead of the node-local bridge: KubeSwift skips
+	// tap0+br0 NAT + node-local dnsmasq for it, the guest's IP comes from the
+	// NAD's IPAM, and the IP is discovered by snooping the bridge neighbor
+	// table (there is no node-local DHCP lease). This is what makes the guest's
+	// primary IP portable across nodes (e.g. for IP-preserving live migration —
+	// see docs/design/network-architecture-requirements.md). The operator
+	// putting the primary on a NAD is also the attestation that the NAD is a
+	// genuine multi-node L2 (the SwiftMigration webhook treats such a guest as
+	// IP-preserving).
+	// +optional
+	Primary bool `json:"primary,omitempty"`
 	// ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").
 	// Required when type is "sriov". The device plugin allocates a VF and the controller
 	// adds this resource to the pod's resource limits.

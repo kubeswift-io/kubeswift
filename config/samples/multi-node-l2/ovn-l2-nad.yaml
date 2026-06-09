@@ -1,0 +1,18 @@
+# Reference OVN-Kubernetes layer-2 NAD: an overlay L2 segment spanning all
+# nodes. Requires OVN-K as the cluster CNI / secondary-network provider.
+# See docs/networking/multi-node-l2.md.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: ovn-l2
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "type": "ovn-k8s-cni-overlay",
+      "name": "ovn-l2",
+      "topology": "layer2",
+      "subnets": "10.20.0.0/16",
+      "netAttachDefName": "default/ovn-l2"
+    }

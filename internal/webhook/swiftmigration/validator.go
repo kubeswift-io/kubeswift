@@ -626,23 +626,12 @@ func (v *Validator) checkPerSourceNodeConcurrency(
 // interfaces hits the GPU refusal first; this check would not fire
 // because of the type check.
 func isDefaultNodeLocalNetworking(guest *swiftv1alpha1.SwiftGuest) bool {
-	if len(guest.Spec.Interfaces) == 0 {
-		return true
-	}
-	for _, iface := range guest.Spec.Interfaces {
-		if iface.NetworkRef != nil {
-			return false
-		}
-		// type == sriov is multi-node-capable in principle, but blocked
-		// by the GPU refusal above. We treat type==sriov as "not
-		// default" so this function returns false consistently with
-		// its name even when the migration is going to be rejected
-		// elsewhere.
-		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV {
-			return false
-		}
-	}
-	return true
+	// The guest's primary IP is node-local (and changes on migration) unless
+	// the PRIMARY interface rides a multi-node NAD. A secondary NAD does not
+	// preserve the primary IP, so it no longer flips this to false (the prior
+	// "any networkRef" heuristic was the §7.2 gap). SR-IOV guests are blocked
+	// by the VFIO refusal before this is consulted.
+	return !guest.PrimaryIPPreservedCrossNode()
 }
 
 func nodeReady(node *corev1.Node) bool {

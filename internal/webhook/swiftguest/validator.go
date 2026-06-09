@@ -175,6 +175,24 @@ func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
 	if hasVhostUser && spec.GPUProfileRef != nil {
 		return fmt.Errorf("spec.interfaces: vhost-user is not supported with spec.gpuProfileRef (Cloud Hypervisor only in v1)")
 	}
+
+	// At most one interface may be primary, and only a bridge-type interface
+	// (the default) can be primary — SR-IOV and vhost-user are never the
+	// guest's DHCP/management NIC.
+	primaries := 0
+	for i := range spec.Interfaces {
+		iface := &spec.Interfaces[i]
+		if !iface.Primary {
+			continue
+		}
+		primaries++
+		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV || iface.Type == swiftv1alpha1.InterfaceTypeVhostUser {
+			return fmt.Errorf("spec.interfaces[%d]: primary=true is only valid on a bridge interface, not %q", i, iface.Type)
+		}
+	}
+	if primaries > 1 {
+		return fmt.Errorf("spec.interfaces: at most one interface may set primary=true (got %d)", primaries)
+	}
 	return nil
 }
 

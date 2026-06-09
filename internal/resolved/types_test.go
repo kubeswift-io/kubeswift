@@ -406,3 +406,25 @@ func TestGetVhostUserDevices(t *testing.T) {
 		t.Errorf("out[1] = %+v", out[1])
 	}
 }
+
+func TestGetNICs_PrimaryOnNAD(t *testing.T) {
+	rg := &ResolvedGuest{
+		Meta: Meta{Namespace: "ns", Name: "g"},
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "app", Primary: true, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "ovn-l2"}},
+			{Name: "extra", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "other"}},
+		},
+	}
+	nics := rg.GetNICs()
+	if len(nics) != 2 {
+		t.Fatalf("len=%d want 2", len(nics))
+	}
+	// Primary rides the NAD: Primary=true AND MultusInterface set.
+	if !nics[0].Primary || nics[0].MultusInterface != "net1" {
+		t.Errorf("nics[0] = %+v, want Primary + MultusInterface=net1", nics[0])
+	}
+	// Secondary: not primary, MultusInterface=net2.
+	if nics[1].Primary || nics[1].MultusInterface != "net2" {
+		t.Errorf("nics[1] = %+v, want non-primary + net2", nics[1])
+	}
+}

@@ -280,6 +280,16 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 	tapIdx := 0
 	bridgeIdx := 0
 	multusIdx := 1 // Multus interfaces start at net1
+	// An operator may mark one interface primary=true. When unset, the legacy
+	// rule applies (every node-local bridge interface is primary) — preserved
+	// exactly for backward compatibility.
+	explicitPrimary := ""
+	for i := range r.Interfaces {
+		if r.Interfaces[i].Primary {
+			explicitPrimary = r.Interfaces[i].Name
+			break
+		}
+	}
 	for _, iface := range r.Interfaces {
 		ifaceType := iface.Type
 		if ifaceType == "" {
@@ -333,11 +343,20 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 			MAC:       mac,
 			Bridge:    fmt.Sprintf("br%d", bridgeIdx),
 		}
-		if iface.NetworkRef == nil {
-			nic.Primary = true
-		} else {
+		// MultusInterface is set whenever the interface rides a NAD —
+		// including when it is ALSO the primary (primary-on-NAD). swiftletd
+		// branches on MultusInterface != "" to choose the node-local bridge
+		// path vs the Multus-attach path.
+		if iface.NetworkRef != nil {
 			nic.MultusInterface = fmt.Sprintf("net%d", multusIdx)
 			multusIdx++
+		}
+		if explicitPrimary != "" {
+			// Operator picked the primary explicitly; it may ride a NAD.
+			nic.Primary = iface.Name == explicitPrimary
+		} else {
+			// Legacy rule (unchanged): node-local bridges are primary.
+			nic.Primary = iface.NetworkRef == nil
 		}
 		nics = append(nics, nic)
 		tapIdx++
