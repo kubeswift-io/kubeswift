@@ -319,10 +319,16 @@ func renderMigrationDescribe(out io.Writer, m *migrationv1alpha1.SwiftMigration,
 	if m.Status.ObservedDowntime != nil {
 		fmt.Fprintf(out, "Downtime:       %s\n", m.Status.ObservedDowntime.Duration.Truncate(1e9))
 	}
-	// Transfer duration (live mode only — offline leaves it nil). Renamed
-	// from the deprecated observedPauseWindow; see CRD docstring.
+	// Transfer duration: the full vm.send-migration RPC window (live mode
+	// only — offline leaves it nil).
 	if m.Status.ObservedTransferDuration != nil {
 		fmt.Fprintf(out, "Transfer:       %s\n", m.Status.ObservedTransferDuration.Duration.Truncate(1e9))
+	}
+	// Applied downtime ceiling (CH downtime_ms; live mode, when
+	// spec.downtimeTarget was set). A BOUND on the vCPU-stop window, not a
+	// measurement — CH v52 does not report the achieved value.
+	if m.Status.AppliedDowntimeMs != nil {
+		fmt.Fprintf(out, "Downtime cap:   %dms (target; achieved <= this, not measured)\n", *m.Status.AppliedDowntimeMs)
 	}
 	if m.Status.FailureMessage != "" {
 		fmt.Fprintf(out, "Failure:        %s\n", m.Status.FailureMessage)

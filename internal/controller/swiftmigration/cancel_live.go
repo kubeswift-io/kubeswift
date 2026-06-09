@@ -31,7 +31,7 @@ const (
 	// written alongside `migration-status=complete` at send-complete
 	// (rust/swiftletd/src/action.rs::write_migration_status). Read by
 	// stopandcopy_live's substateSendComplete handler and stamped into
-	// status.ObservedPauseWindow per W27b.
+	// status.ObservedTransferDuration per W27b.
 	AnnotationMigrationPauseWindowMs = "kubeswift.io/migration-pause-window-ms"
 	// AnnotationMigrationProgressEstimate is the swiftletd-on-src-emitted
 	// pre-copy progress estimate (an integer percentage 0-100, a bandwidth
