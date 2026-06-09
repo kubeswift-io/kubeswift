@@ -230,6 +230,70 @@ spec:
                           - name
                           type: object
                         type: array
+                      filesystems:
+                        description: |-
+                          Filesystems is a list of virtiofs (vhost-user-fs) shares mounted into the
+                          guest. Each entry shares a host directory or PVC into the guest, which
+                          mounts it with `mount -t virtiofs <tag> <mountpoint>`. Backed by a
+                          virtiofsd process the launcher runs alongside Cloud Hypervisor (CH path
+                          only in v1; the QEMU/GPU path rejects this). Works with disk-boot,
+                          kernel-boot, and clones. See docs/design/vhost-user-devices.md.
+                        items:
+                          description: Filesystem is a virtiofs (vhost-user-fs) share
+                            mounted into the guest.
+                          properties:
+                            name:
+                              description: |-
+                                Name uniquely identifies this filesystem within the guest. Drives the
+                                virtiofsd socket name and the in-pod source mount path. DNS-label-ish:
+                                lowercase alphanumeric + '-', <= 36 chars.
+                              maxLength: 36
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                              type: string
+                            readOnly:
+                              description: |-
+                                ReadOnly shares the source read-only (virtiofsd --readonly); the guest
+                                cannot mutate the backing content. Default false.
+                              type: boolean
+                            source:
+                              description: |-
+                                Source is the backing directory shared into the guest. Exactly one of
+                                hostPath or pvcRef.
+                              properties:
+                                hostPath:
+                                  description: |-
+                                    HostPath shares a node-local directory (created if absent,
+                                    DirectoryOrCreate). Node-pinned content; not portable across nodes.
+                                  type: string
+                                pvcRef:
+                                  description: |-
+                                    PVCRef shares a PersistentVolumeClaim. Use an RWX claim to share the same
+                                    content across guests/nodes; an RWO claim pins the guest to the claim.
+                                  properties:
+                                    name:
+                                      default: ""
+                                      description: |-
+                                        Name of the referent.
+                                        This field is effectively required, but due to backwards compatibility is
+                                        allowed to be empty. Instances of this type with an empty value here are
+                                        almost certainly wrong.
+                                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                      type: string
+                                  type: object
+                                  x-kubernetes-map-type: atomic
+                              type: object
+                            tag:
+                              description: |-
+                                Tag is the virtiofs mount tag the guest uses:
+                                `mount -t virtiofs <tag> <mountpoint>`. Unique per guest; defaults to
+                                Name when empty. The virtiofs protocol caps the tag at 36 bytes.
+                              maxLength: 36
+                              type: string
+                          required:
+                          - name
+                          - source
+                          type: object
+                        type: array
                       gpuProfileRef:
                         description: |-
                           GPUProfileRef references a SwiftGPUProfile for GPU passthrough.

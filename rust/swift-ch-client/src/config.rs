@@ -72,6 +72,20 @@ pub struct VmConfig {
     /// VFIO devices to pass through (SR-IOV VFs, GPUs).
     /// Each produces a --device path=<sysfs_path> argument.
     pub vfio_devices: Vec<VFIODeviceConfig>,
+    /// virtiofs shares. Each produces a
+    /// `--fs tag=<tag>,socket=<sock>,num_queues=1,queue_size=1024` argument.
+    /// The backend (virtiofsd) is spawned by swiftletd before CH; CH only
+    /// connects to the socket.
+    pub fs_mounts: Vec<FsMount>,
+}
+
+/// A virtiofs (vhost-user-fs) share for `--fs`.
+#[derive(Debug, Clone)]
+pub struct FsMount {
+    /// Mount tag the guest uses (`mount -t virtiofs <tag> ...`).
+    pub tag: String,
+    /// Unix socket virtiofsd binds and CH connects to.
+    pub socket: String,
 }
 
 impl VmConfig {
@@ -228,6 +242,17 @@ impl VmConfig {
             }
         }
 
+        // virtiofs shares (vhost-user-fs). The virtiofsd backend is already
+        // running on the socket (swiftletd spawned it before CH); CH attaches.
+        // num_queues=1,queue_size=1024 are sane defaults (tuned later if needed).
+        for fs in &self.fs_mounts {
+            args.push("--fs".to_string());
+            args.push(format!(
+                "tag={},socket={},num_queues=1,queue_size=1024",
+                fs.tag, fs.socket
+            ));
+        }
+
         args
     }
 }
@@ -253,6 +278,7 @@ mod tests {
             kernel_cmdline: None,
             data_disk_path: String::new(),
             vfio_devices: vec![],
+            fs_mounts: vec![],
         }
     }
 
@@ -274,6 +300,43 @@ mod tests {
             joined.contains("--cpus boot=2,kvm_hyperv=on"),
             "windows --cpus should add kvm_hyperv=on: {}",
             joined
+        );
+    }
+
+    #[test]
+    fn test_fs_mounts_emit_fs_args() {
+        let mut cfg = make_disk_boot_config();
+        cfg.fs_mounts = vec![
+            FsMount {
+                tag: "share".to_string(),
+                socket: "/run/x/share.fs.sock".to_string(),
+            },
+            FsMount {
+                tag: "data".to_string(),
+                socket: "/run/x/data.fs.sock".to_string(),
+            },
+        ];
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains(
+                "--fs tag=share,socket=/run/x/share.fs.sock,num_queues=1,queue_size=1024"
+            ),
+            "missing first --fs: {}",
+            joined
+        );
+        assert!(
+            joined
+                .contains("--fs tag=data,socket=/run/x/data.fs.sock,num_queues=1,queue_size=1024"),
+            "missing second --fs: {}",
+            joined
+        );
+        // No virtiofs shares -> no --fs at all.
+        let none = make_disk_boot_config().to_args().join(" ");
+        assert!(
+            !none.contains("--fs"),
+            "unexpected --fs without mounts: {}",
+            none
         );
     }
 

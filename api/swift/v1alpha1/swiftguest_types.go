@@ -94,6 +94,14 @@ type SwiftGuestSpec struct {
 	// Each entry references either a SwiftImage or a PVC directly.
 	// +optional
 	DataDiskRefs []DataDiskRef `json:"dataDiskRefs,omitempty"`
+	// Filesystems is a list of virtiofs (vhost-user-fs) shares mounted into the
+	// guest. Each entry shares a host directory or PVC into the guest, which
+	// mounts it with `mount -t virtiofs <tag> <mountpoint>`. Backed by a
+	// virtiofsd process the launcher runs alongside Cloud Hypervisor (CH path
+	// only in v1; the QEMU/GPU path rejects this). Works with disk-boot,
+	// kernel-boot, and clones. See docs/design/vhost-user-devices.md.
+	// +optional
+	Filesystems []Filesystem `json:"filesystems,omitempty"`
 	// NodeName pins the launcher pod to a specific Kubernetes node by
 	// setting pod.spec.nodeName directly (bypassing the scheduler).
 	// Set by the SwiftMigration controller during the StopAndCopy phase
@@ -287,6 +295,41 @@ type DataDiskRef struct {
 	// PVCRef references a PersistentVolumeClaim directly.
 	// Used by SwiftGuestPool for per-replica persistent storage.
 	// Mutually exclusive with ImageRef.
+	// +optional
+	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
+}
+
+// Filesystem is a virtiofs (vhost-user-fs) share mounted into the guest.
+type Filesystem struct {
+	// Name uniquely identifies this filesystem within the guest. Drives the
+	// virtiofsd socket name and the in-pod source mount path. DNS-label-ish:
+	// lowercase alphanumeric + '-', <= 36 chars.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// Tag is the virtiofs mount tag the guest uses:
+	// `mount -t virtiofs <tag> <mountpoint>`. Unique per guest; defaults to
+	// Name when empty. The virtiofs protocol caps the tag at 36 bytes.
+	// +kubebuilder:validation:MaxLength=36
+	// +optional
+	Tag string `json:"tag,omitempty"`
+	// Source is the backing directory shared into the guest. Exactly one of
+	// hostPath or pvcRef.
+	Source FilesystemSource `json:"source"`
+	// ReadOnly shares the source read-only (virtiofsd --readonly); the guest
+	// cannot mutate the backing content. Default false.
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
+}
+
+// FilesystemSource is the backing store for a Filesystem (exactly one set).
+type FilesystemSource struct {
+	// HostPath shares a node-local directory (created if absent,
+	// DirectoryOrCreate). Node-pinned content; not portable across nodes.
+	// +optional
+	HostPath *string `json:"hostPath,omitempty"`
+	// PVCRef shares a PersistentVolumeClaim. Use an RWX claim to share the same
+	// content across guests/nodes; an RWO claim pins the guest to the claim.
 	// +optional
 	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
 }

@@ -607,3 +607,58 @@ func TestBuildPod_NodeName_Empty(t *testing.T) {
 		t.Errorf("pod.Spec.NodeName = %q, want empty (scheduler-picked)", pod.Spec.NodeName)
 	}
 }
+
+func TestBuildPod_Filesystems(t *testing.T) {
+	hp := "/srv/share"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "fs", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
+			Filesystems: []swiftv1alpha1.Filesystem{
+				{Name: "host", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
+				{Name: "claim", ReadOnly: true, Source: swiftv1alpha1.FilesystemSource{
+					PVCRef: &corev1.LocalObjectReference{Name: "data-pvc"}}},
+			},
+		},
+	}
+	rg := &resolved.ResolvedGuest{
+		Resources:     resolved.Resources{CPU: 2, Memory: 2048},
+		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
+		Network:       true,
+	}
+
+	pod := BuildPod(guest, rg, "", "test-intent", nil)
+
+	// hostPath volume (DirectoryOrCreate) at virtiofs-0.
+	var v0, v1 *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		switch pod.Spec.Volumes[i].Name {
+		case "virtiofs-0":
+			v0 = &pod.Spec.Volumes[i]
+		case "virtiofs-1":
+			v1 = &pod.Spec.Volumes[i]
+		}
+	}
+	if v0 == nil || v0.HostPath == nil || v0.HostPath.Path != hp {
+		t.Fatalf("virtiofs-0 hostPath volume missing/wrong: %+v", v0)
+	}
+	if v0.HostPath.Type == nil || *v0.HostPath.Type != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("virtiofs-0 hostPath type = %v, want DirectoryOrCreate", v0.HostPath.Type)
+	}
+	if v1 == nil || v1.PersistentVolumeClaim == nil || v1.PersistentVolumeClaim.ClaimName != "data-pvc" {
+		t.Fatalf("virtiofs-1 PVC volume missing/wrong: %+v", v1)
+	}
+
+	// Mounts at /var/lib/kubeswift/virtiofs/<name>; readOnly honored on the PVC one.
+	mounts := map[string]corev1.VolumeMount{}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		mounts[m.Name] = m
+	}
+	if m := mounts["virtiofs-0"]; m.MountPath != "/var/lib/kubeswift/virtiofs/host" || m.ReadOnly {
+		t.Errorf("virtiofs-0 mount = %+v, want path=.../host readOnly=false", m)
+	}
+	if m := mounts["virtiofs-1"]; m.MountPath != "/var/lib/kubeswift/virtiofs/claim" || !m.ReadOnly {
+		t.Errorf("virtiofs-1 mount = %+v, want path=.../claim readOnly=true", m)
+	}
+}

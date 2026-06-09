@@ -98,5 +98,63 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 			return fmt.Errorf("spec.osType: windows with spec.gpuProfileRef is not supported in v1 (GPU passthrough to Windows is out of scope)")
 		}
 	}
+
+	if err := validateFilesystems(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateFilesystems enforces the virtiofs (vhost-user-fs) constraints:
+// unique name + tag per guest, exactly one source, and the v1 scope limits
+// (Cloud Hypervisor + Linux only — the QEMU path is a later phase and a
+// Windows virtio-fs driver is out of scope).
+func validateFilesystems(spec *swiftv1alpha1.SwiftGuestSpec) error {
+	if len(spec.Filesystems) == 0 {
+		return nil
+	}
+	// v1: virtiofs ships on the Cloud Hypervisor path only. A gpuProfileRef may
+	// select the QEMU runtime (tier hgx-shared/hgx-full), which v1 does not wire
+	// for vhost-user; reject the combination rather than silently dropping the
+	// shares at runtime.
+	if spec.GPUProfileRef != nil {
+		return fmt.Errorf("spec.filesystems is not supported with spec.gpuProfileRef (virtiofs is Cloud Hypervisor only in v1)")
+	}
+	if spec.OSType == swiftv1alpha1.OSTypeWindows {
+		return fmt.Errorf("spec.filesystems is not supported with spec.osType: windows (no virtio-fs guest driver in v1)")
+	}
+	names := make(map[string]struct{}, len(spec.Filesystems))
+	tags := make(map[string]struct{}, len(spec.Filesystems))
+	for i := range spec.Filesystems {
+		fs := &spec.Filesystems[i]
+		if fs.Name == "" {
+			return fmt.Errorf("spec.filesystems[%d].name is required", i)
+		}
+		if _, dup := names[fs.Name]; dup {
+			return fmt.Errorf("spec.filesystems[%d].name %q is duplicated", i, fs.Name)
+		}
+		names[fs.Name] = struct{}{}
+
+		tag := fs.Tag
+		if tag == "" {
+			tag = fs.Name
+		}
+		if _, dup := tags[tag]; dup {
+			return fmt.Errorf("spec.filesystems[%d] tag %q is duplicated (tag defaults to name when unset)", i, tag)
+		}
+		tags[tag] = struct{}{}
+
+		hasHostPath := fs.Source.HostPath != nil
+		hasPVC := fs.Source.PVCRef != nil && fs.Source.PVCRef.Name != ""
+		switch {
+		case hasHostPath && hasPVC:
+			return fmt.Errorf("spec.filesystems[%d].source: set exactly one of hostPath or pvcRef, not both", i)
+		case !hasHostPath && !hasPVC:
+			return fmt.Errorf("spec.filesystems[%d].source: exactly one of hostPath or pvcRef is required", i)
+		}
+		if hasHostPath && *fs.Source.HostPath == "" {
+			return fmt.Errorf("spec.filesystems[%d].source.hostPath must not be empty", i)
+		}
+	}
 	return nil
 }

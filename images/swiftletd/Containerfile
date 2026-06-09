@@ -22,6 +22,18 @@ COPY rust/swift-qemu-client ./swift-qemu-client
 RUN KUBESWIFT_VERSION=$VERSION KUBESWIFT_GIT_COMMIT=$GIT_COMMIT KUBESWIFT_BUILD_DATE=$BUILD_DATE \
     cargo build -p swiftletd --release
 
+# virtiofsd (rust-vmm) for the virtiofs (vhost-user-fs) path. It is NOT
+# packaged in debian:bookworm (only the deprecated C virtiofsd ships with
+# qemu, with a different CLI), and upstream publishes no prebuilt binary —
+# so build the rust crate from crates.io here, mirroring how the runtime
+# stage downloads the cloud-hypervisor-static binary. Needs the seccomp +
+# cap-ng dev headers to build; the runtime stage adds the matching .so.2/.so.0.
+ARG VIRTIOFSD_VERSION=1.13.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcap-ng-dev libseccomp-dev pkg-config \
+    && cargo install virtiofsd --version ${VIRTIOFSD_VERSION} --locked --root /usr/local \
+    && rm -rf /var/lib/apt/lists/*
+
 # Build snapshot-stager (Go init-container helper) from the same
 # repo-root context. snapshot-stager imports
 # internal/snapshot/configjson — the source-of-truth for the narrow
@@ -57,7 +69,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     qemu-system-x86 \
     ovmf \
+    libseccomp2 \
+    libcap-ng0 \
     && rm -rf /var/lib/apt/lists/*
+
+# libseccomp2 + libcap-ng0 are the runtime libs the rust virtiofsd links
+# (built in the builder stage and copied below).
+
+# virtiofsd (rust-vmm) for the virtiofs (vhost-user-fs) path — copied from the
+# builder stage to /usr/libexec/virtiofsd, the default in swiftletd/src/launch.rs
+# (KUBESWIFT_VIRTIOFSD_BINARY overrides). swiftletd spawns it per
+# spec.filesystems entry with --sandbox none (the launcher pod is the security
+# boundary; the default 'namespace' sandbox needs CAP_SYS_ADMIN which the
+# project forbids).
+COPY --from=builder /usr/local/bin/virtiofsd /usr/libexec/virtiofsd
 
 # ovmf package installs to /usr/share/OVMF/OVMF_CODE.fd and /usr/share/OVMF/OVMF_VARS.fd
 # qemu-system-x86 package provides /usr/bin/qemu-system-x86_64
