@@ -518,6 +518,13 @@ func (r *SwiftRestoreReconciler) restoreAnnotations(
 		swiftguestctrl.AnnotationRestoreNodeName:     nodeName,
 		swiftguestctrl.AnnotationRestoreMode:         mode,
 	}
+	// CH v52 memory_restore_mode (userfaultfd opt-in). Pass through when the
+	// operator set it; empty/"copy" omits the annotation so swiftletd uses
+	// CH's eager default. Only meaningful for memory backends (the restore-
+	// receive launcher this drives is local/s3 only).
+	if m := restore.Spec.MemoryRestoreMode; m != "" && m != "copy" {
+		annos[swiftguestctrl.AnnotationRestoreMemoryMode] = m
+	}
 	if !inPlace {
 		// Clone: append cmdline marker so cloud-init bootcmd
 		// regenerates machine-id / SSH keys / hostname on first wake.
@@ -714,6 +721,7 @@ func (r *SwiftRestoreReconciler) unstampGuestRestoreAnnotations(
 				swiftguestctrl.AnnotationRestoreRuntimeDirFromPrefix: nil,
 				swiftguestctrl.AnnotationRestoreRuntimeDirToPrefix:   nil,
 				swiftguestctrl.AnnotationRestoreNullifyHostMAC:       nil,
+				swiftguestctrl.AnnotationRestoreMemoryMode:           nil,
 			},
 		},
 	}

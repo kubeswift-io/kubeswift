@@ -82,6 +82,14 @@ pub struct RestoreIntent {
     /// SwiftRestore leaves it false and drives resume via its Resuming phase.
     #[serde(default)]
     pub auto_resume: bool,
+    /// Cloud Hypervisor `memory_restore_mode` (CH v52): "ondemand"
+    /// registers guest memory with userfaultfd so the VM resumes
+    /// immediately and pages fault in lazily (cuts restore-to-resume
+    /// latency for large guests); "copy" is the eager default. None
+    /// omits the field. Set by the controller — cloneFromSnapshot
+    /// defaults to "ondemand"; SwiftRestore from spec.memoryRestoreMode.
+    #[serde(default)]
+    pub memory_restore_mode: Option<String>,
 }
 
 /// Live-migration role (Phase 2). When `role == "receiver"`, swiftletd
@@ -310,6 +318,16 @@ impl RuntimeIntent {
             .as_ref()
             .map(|r| r.auto_resume)
             .unwrap_or(false)
+    }
+
+    /// Returns the CH `memory_restore_mode` ("ondemand"/"copy") when set,
+    /// else None (CH uses its native default). cloneFromSnapshot defaults
+    /// to "ondemand" (userfaultfd lazy paging); SwiftRestore is driven by
+    /// spec.memoryRestoreMode.
+    pub fn restore_memory_mode(&self) -> Option<&str> {
+        self.restore
+            .as_ref()
+            .and_then(|r| r.memory_restore_mode.as_deref())
     }
 
     /// Returns the snapshot URL CH expects on `--restore source_url=`.

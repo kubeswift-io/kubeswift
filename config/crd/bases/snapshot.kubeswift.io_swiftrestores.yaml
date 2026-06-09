@@ -76,6 +76,24 @@ spec:
                       type: string
                     type: array
                 type: object
+              memoryRestoreMode:
+                default: copy
+                description: |-
+                  MemoryRestoreMode selects Cloud Hypervisor's `memory_restore_mode`
+                  (CH >= v52) for the restore-receive launcher:
+                    copy     — eager: read the entire memory image before resuming
+                               (default; predictable, the conservative DR posture).
+                    ondemand — userfaultfd demand paging: resume immediately and fault
+                               pages in lazily, cutting restore-to-resume latency for
+                               large guests. Safe here because the snapshot memory file
+                               is local + mounted read-only for the pod's lifetime.
+                  cloneFromSnapshot always uses ondemand (fast pool scale-up); this field
+                  is the opt-in for SwiftRestore. Only meaningful for memory snapshots
+                  (local / s3 backends); ignored for csi-volume-snapshot (disk-only).
+                enum:
+                - copy
+                - ondemand
+                type: string
               resumeAfterRestore:
                 default: true
                 description: |-

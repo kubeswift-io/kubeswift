@@ -250,8 +250,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// CH/QEMU spawn. See rust/swiftletd/src/launch.rs run_ch_restore.
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
 		intent.Restore = &runtimeintent.RestoreIntent{
-			SnapshotPath: params.InPodSnapshotPath(),
-			AutoResume:   params.AutoResume,
+			SnapshotPath:      params.InPodSnapshotPath(),
+			AutoResume:        params.AutoResume,
+			MemoryRestoreMode: params.MemoryRestoreMode,
 		}
 	}
 	intentJSON, err := runtimeintent.Serialize(intent)

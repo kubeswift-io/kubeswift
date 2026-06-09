@@ -46,6 +46,13 @@ type RestoreIntent struct {
 	// round-trip (Bug #73). SwiftRestore-driven restores leave it false and
 	// keep driving resume themselves.
 	AutoResume bool `json:"autoResume,omitempty"`
+	// MemoryRestoreMode selects CH's `memory_restore_mode` (CH v52):
+	// "ondemand" registers guest memory with userfaultfd so the VM resumes
+	// immediately and pages fault in lazily (lower restore-to-resume
+	// latency for large guests); "copy" is the eager default. Empty omits
+	// the field (CH default). cloneFromSnapshot sets "ondemand"; SwiftRestore
+	// from spec.memoryRestoreMode.
+	MemoryRestoreMode string `json:"memoryRestoreMode,omitempty"`
 }
 
 // NICIntent describes a single network interface for the VM.
