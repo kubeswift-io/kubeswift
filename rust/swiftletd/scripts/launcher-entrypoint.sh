@@ -51,6 +51,29 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
+    # Primary-on-NAD (multi-node L2, EXPERIMENTAL): network-init persisted the
+    # NAD-assigned primary IP. Hand exactly that IP to the guest (matched by
+    # MAC) via a fixed dnsmasq lease, so the guest's primary IP is the NAD's
+    # portable IP. lease.rs then discovers it from the same lease file (no code
+    # change). DATAPATH UNVALIDATED -- see docs/networking/multi-node-l2.md.
+    nad_env="$lease_dir/primary-nad.env"
+    if [ -f "$nad_env" ]; then
+        # shellcheck disable=SC1090
+        . "$nad_env"   # NAD_IP, NAD_PREFIX, NAD_GW, NAD_MAC, NAD_BRIDGE
+        dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+        [ -z "$dns" ] && dns="10.96.0.10"
+        echo "Primary-on-NAD dnsmasq: handing $NAD_IP to $NAD_MAC on $NAD_BRIDGE (gw $NAD_GW)"
+        dnsmasq --no-daemon --bind-interfaces --interface="$NAD_BRIDGE" \
+            --dhcp-range="$NAD_IP,$NAD_IP" \
+            ${NAD_MAC:+--dhcp-host="$NAD_MAC,$NAD_IP"} \
+            ${NAD_GW:+--dhcp-option=option:router,"$NAD_GW"} \
+            --dhcp-option=option:dns-server,"$dns" \
+            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
+            --dhcp-authoritative &
+        sleep 1
+        exec /usr/local/bin/swiftletd "$@"
+    fi
+
     # Derive subnet from bridge (e.g. 10.244.125.1/24 -> 10.244.125.0/24)
     br_addr=$(ip -4 addr show "$BRIDGE" 2>/dev/null | grep 'inet ' | awk '{print $2}' | head -1)
     [ -z "$br_addr" ] && { echo "No IP on $BRIDGE"; exit 1; }

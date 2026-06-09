@@ -1,14 +1,24 @@
 # Multi-node L2 networking (IP-preserving guests)
 
-> **Status (2026-06):** the **control-plane** half is shipped — the
-> `spec.interfaces[].primary` field, the resolver wiring, and the corrected
-> SwiftMigration IP-preservation gate. The **runtime datapath** (attaching the
-> *primary* NIC to a NAD inside the launcher, and discovering its NAD-assigned
-> IP) is landing across follow-up PRs; until then, a `primary: true` + NAD
-> interface is admitted and classified correctly for migration but the in-guest
-> datapath is not yet wired. See
+> **Status (2026-06): control-plane shipped + runtime EXPERIMENTAL.** The
+> control-plane (the `spec.interfaces[].primary` field, the resolver wiring, and
+> the corrected SwiftMigration IP-preservation gate) is shipped and tested. The
+> launcher **runtime datapath** (attaching the *primary* NIC to a NAD and giving
+> the guest the NAD's IP) is now implemented but the **datapath is UNVALIDATED**
+> — the dev cluster has no working multi-node L2 (Multus secondary attach does
+> not produce an interface there). It will be validated and tuned on an
+> OVN-Kubernetes cluster. Treat primary-on-NAD as experimental until then. See
 > [`../design/network-architecture-requirements.md`](../design/network-architecture-requirements.md)
-> for the framework and the chosen approach.
+> for the framework.
+>
+> **Runtime model (KubeVirt-style bridge binding):** network-init reads the IP
+> the NAD's CNI assigned to the pod's Multus interface, flushes it off that
+> interface, bridges the interface to the guest's tap, and the launcher's
+> in-pod dnsmasq hands that exact IP to the guest (matched by MAC) — so the
+> guest's primary IP is the NAD's portable IP, and the existing lease-file IP
+> discovery works unchanged. The in-pod dnsmasq binds via a best-effort helper
+> IP (`<subnet>.254`) in the NAD subnet — a heuristic with a documented
+> collision risk, expected to be refined during real-cluster validation.
 
 By default a SwiftGuest's primary IP is **node-local** — it comes from a
 per-node dnsmasq on `br0` and is NAT-masqueraded out the pod's `eth0`. That IP
@@ -100,10 +110,14 @@ that makes the IP portable across a migration.
 
 ## Limitations / follow-ups
 
-- **Runtime datapath in progress** (see the status banner). The control-plane
-  classification is shipped; the launcher-side attach + IP discovery land next.
-- **A prerequisite multi-NIC fix** (the `network-init` container gaining the
-  RuntimeIntent mount so Multus interfaces are actually bridged) ships ahead of
-  the primary-on-NAD datapath.
+- **Runtime datapath is EXPERIMENTAL and unvalidated** (see the status banner) —
+  it needs an OVN-K / working-NAD cluster to validate and tune (the helper-IP /
+  dnsmasq binding in particular).
+- **Prerequisite multi-NIC fixes — shipped.** The `network-init` container now
+  mounts the RuntimeIntent + run dir, the launcher image carries `python3`, and
+  network-init skips vhost-user NICs, so multi-NIC bridging actually runs. (These
+  were latent bugs that meant multi-NIC never worked end-to-end before.)
+- **Helper-IP heuristic.** The in-pod dnsmasq binds to `<NAD-subnet>.254`; if
+  that host is taken on the segment it will collide. Refine during validation.
 - **SR-IOV** is a hardware-passthrough NIC, not a Tier-C overlay; it is rejected
   for cross-node migration regardless (Phase 4+).
