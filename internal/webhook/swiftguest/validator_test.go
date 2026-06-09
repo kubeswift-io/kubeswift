@@ -200,3 +200,51 @@ func TestValidate_Filesystems(t *testing.T) {
 	})
 	errContains(t, validateSwiftGuest(g), "windows")
 }
+
+func TestValidate_VhostUserInterfaces(t *testing.T) {
+	// Valid: a bridge primary + a vhost-user NIC with a socket.
+	g := guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"},
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
+		}
+	})
+	if err := validateSwiftGuest(g); err != nil {
+		t.Fatalf("valid vhost-user rejected: %v", err)
+	}
+
+	// Missing socket.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "requires a socket")
+
+	// networkRef not allowed.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser,
+				Socket: "/s.sock", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "nad"}},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "networkRef")
+
+	// resourceName not allowed.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser,
+				Socket: "/s.sock", ResourceName: "intel.com/sriov"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "resourceName")
+
+	// Rejected with gpuProfileRef (CH-only in v1).
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
+		g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/s.sock"},
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+}

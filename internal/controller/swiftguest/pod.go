@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	"fmt"
+	"path/filepath"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -40,7 +41,44 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	applyNodeName(pod, guest)
 	applyDataDiskRefs(pod, guest)
 	applyFilesystems(pod, guest)
+	applyVhostUserNetVolumes(pod, guest)
 	return pod
+}
+
+// applyVhostUserNetVolumes mounts the node directory holding each vhost-user
+// interface's backend socket into the launcher at the SAME path, so Cloud
+// Hypervisor (running in the launcher container) can connect to the
+// operator-provided listener. KubeSwift does not run the backend — the
+// directory is a hostPath the operator's DPDK/OVS datapath populates (the same
+// posture as SR-IOV expecting pre-provisioned VFs). Directories are deduped so
+// several sockets under one dir share a single mount.
+func applyVhostUserNetVolumes(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	hostPathType := corev1.HostPathDirectoryOrCreate
+	seen := map[string]string{} // dir -> volume name
+	for _, iface := range guest.Spec.Interfaces {
+		if iface.Type != swiftv1alpha1.InterfaceTypeVhostUser || iface.Socket == "" {
+			continue
+		}
+		dir := filepath.Dir(iface.Socket)
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		volName := fmt.Sprintf("vhost-net-%d", len(seen))
+		seen[dir] = volName
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{Path: dir, Type: &hostPathType},
+			},
+		})
+		pod.Spec.Containers[0].VolumeMounts = append(
+			pod.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: volName, MountPath: dir},
+		)
+	}
 }
 
 // applyFilesystems adds the source volume + mount for each virtiofs share in

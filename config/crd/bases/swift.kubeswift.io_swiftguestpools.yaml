@@ -353,6 +353,11 @@ spec:
                           description: GuestInterface defines a single network interface
                             for a SwiftGuest.
                           properties:
+                            mac:
+                              description: |-
+                                MAC optionally pins the interface MAC address. When empty a deterministic
+                                MAC is generated. Honored for vhost-user (and bridge) interfaces.
+                              type: string
                             name:
                               description: |-
                                 Name is a unique identifier for this interface.
@@ -381,15 +386,26 @@ spec:
                                 Required when type is "sriov". The device plugin allocates a VF and the controller
                                 adds this resource to the pod's resource limits.
                               type: string
+                            socket:
+                              description: |-
+                                Socket is the node-local path of the operator-provided vhost-user backend
+                                listener (e.g. /var/run/vhost/fast0.sock). Required when type is
+                                "vhost-user"; its parent directory is mounted into the launcher pod so
+                                Cloud Hypervisor can connect. Not used for bridge/sriov.
+                              type: string
                             type:
                               default: bridge
                               description: |-
                                 Type specifies the interface type.
-                                  bridge: (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
-                                  sriov:  SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+                                  bridge:     (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
+                                  sriov:      SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+                                  vhost-user: virtio-net whose datapath is an operator-provided vhost-user
+                                              backend (DPDK/OVS-DPDK) reached via Socket. Cloud Hypervisor
+                                              only (v1); KubeSwift does not run the backend.
                               enum:
                               - bridge
                               - sriov
+                              - vhost-user
                               type: string
                           required:
                           - name

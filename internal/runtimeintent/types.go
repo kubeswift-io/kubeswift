@@ -80,7 +80,8 @@ type RestoreIntent struct {
 type NICIntent struct {
 	// Name is the interface identifier (matches spec.interfaces[].name).
 	Name string `json:"name"`
-	// Type is "bridge" (tap+bridge+virtio-net) or "sriov" (VFIO passthrough).
+	// Type is "bridge" (tap+bridge+virtio-net), "sriov" (VFIO passthrough),
+	// or "vhost-user" (operator-provided vhost-user-net backend).
 	// Defaults to "bridge" if empty.
 	Type string `json:"type"`
 	// TapDevice is the tap device name inside the pod namespace (tap0, tap1, etc.)
@@ -100,6 +101,10 @@ type NICIntent struct {
 	// SRIOVDevice contains SR-IOV VF info for VFIO passthrough.
 	// Only populated when Type is "sriov".
 	SRIOVDevice *SRIOVDeviceIntent `json:"sriovDevice,omitempty"`
+	// VhostUserSocket is the in-pod path of the operator's vhost-user-net
+	// backend listener socket. Only populated when Type is "vhost-user";
+	// swiftletd hands it to CH as `--net vhost_user=on,socket=<path>`.
+	VhostUserSocket string `json:"vhostUserSocket,omitempty"`
 }
 
 // SRIOVDeviceIntent describes an SR-IOV VF to pass through via VFIO.

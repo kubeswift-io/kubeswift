@@ -1,9 +1,18 @@
+# vhost-user devices: virtiofs & vhost-user-net
+
+KubeSwift ships two [vhost-user](https://www.qemu.org/docs/master/interop/vhost-user.html)
+devices: **virtiofs** (shared filesystems) and **vhost-user-net** (operator
+DPDK fast-path networking). The architecture and roadmap live in
+[`docs/design/vhost-user-devices.md`](design/vhost-user-devices.md). Both rely on
+shared guest memory, which KubeSwift already maps by default (`--memory shared=on`).
+
+---
+
 # virtiofs shared filesystems (vhost-user-fs)
 
 Share a host directory or a PersistentVolumeClaim into a SwiftGuest as a
 [virtiofs](https://virtio-fs.gitlab.io/) mount. This is the first vhost-user
-device KubeSwift ships; the architecture and roadmap live in
-[`docs/design/vhost-user-devices.md`](design/vhost-user-devices.md).
+device KubeSwift ships.
 
 ## What it is
 
@@ -86,3 +95,54 @@ scratch /mnt/scratch virtiofs defaults,nofail 0 0
   `--sandbox none`; the pod (its mount namespace + the single shared source
   mount) is the boundary. The launcher uses no extra Linux capabilities for
   this — consistent with the project's no-privileged-containers rule.
+
+---
+
+# vhost-user-net (operator DPDK fast-path)
+
+A `vhost-user` interface gives a guest a virtio-net device whose datapath is an
+**operator-provided** vhost-user backend (DPDK / OVS-DPDK). It only beats the
+default tap/bridge path when paired with such a userspace fast-path — which is
+node-level operator infrastructure. **KubeSwift does not run the backend**; it
+mounts the backend's socket into the launcher and points Cloud Hypervisor at it,
+exactly as SR-IOV expects the VFs to be pre-provisioned.
+
+## Requirements
+
+- **Cloud Hypervisor path only** (v1). The webhook rejects a `vhost-user`
+  interface together with `spec.gpuProfileRef` (which may select QEMU).
+- An operator-run vhost-user-net backend on the node exposing a listener socket
+  (e.g. `/var/run/vhost/fast0.sock`). KubeSwift mounts the socket's parent
+  directory into the launcher (hostPath) so CH can connect.
+
+## Fields
+
+```yaml
+spec:
+  interfaces:
+    - name: mgmt          # keep a normal bridge NIC for DHCP/SSH
+      type: bridge
+    - name: fast0
+      type: vhost-user
+      socket: /var/run/vhost/fast0.sock   # required: operator backend listener
+      mac: "52:54:00:00:fa:00"            # optional; generated if unset
+```
+
+Webhook rules: `socket` is required; `networkRef` and `resourceName` are not
+used; not combinable with `gpuProfileRef`. Sockets that share a directory are
+mounted once (deduped). A `vhost-user` NIC is never the primary DHCP interface —
+pair it with a `bridge` NIC for normal pod networking.
+
+The guest sees an ordinary `virtio-net` device — no in-guest configuration
+beyond normal NIC setup. The line rate comes from the backend.
+
+## Validation status
+
+The **wiring** is validated (CH spawns `--net vhost_user=on,socket=...`; the
+webhook accepts/bounds it; the socket dir is mounted). The **line-rate datapath
+is asset-gated** — it needs a DPDK NIC + backend on the node, which the dev
+cluster lacks. This is the same honest posture as the shipped-but-hardware-
+unvalidated SR-IOV path.
+
+Example:
+[`config/samples/vhost-user-net/swiftguest-vhost-user-net.yaml`](../config/samples/vhost-user-net/swiftguest-vhost-user-net.yaml).

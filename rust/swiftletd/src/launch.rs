@@ -508,10 +508,25 @@ fn build_ch_nics(
                         );
                     }
                 }
+            } else if n.is_vhost_user() {
+                // vhost-user-net: no tap; CH connects to the operator backend
+                // socket. Skip (with a loud log) if the socket is missing — the
+                // controller/webhook should always populate it.
+                match &n.vhost_user_socket {
+                    Some(sock) => ch_nics.push(NICConfig {
+                        tap_name: String::new(),
+                        mac: n.mac.clone(),
+                        vhost_user_socket: Some(sock.clone()),
+                    }),
+                    None => {
+                        log::error!("vhost-user NIC {} has no backend socket; skipping", n.name)
+                    }
+                }
             } else {
                 ch_nics.push(NICConfig {
                     tap_name: n.tap_device.clone(),
                     mac: n.mac.clone(),
+                    vhost_user_socket: None,
                 });
             }
         }

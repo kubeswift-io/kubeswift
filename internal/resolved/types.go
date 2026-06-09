@@ -300,12 +300,34 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 			continue
 		}
 
+		if ifaceType == swiftv1alpha1.InterfaceTypeVhostUser {
+			// vhost-user-net: operator-provided backend reached via a node
+			// socket. No tap, no bridge, no Multus — just a virtio-net device
+			// whose datapath is the backend. MAC is pinned if set, else
+			// generated. Never the primary DHCP NIC (the backend owns L2).
+			mac := iface.MAC
+			if mac == "" {
+				mac = runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(r.Meta.Namespace, r.Meta.Name, iface.Name))
+			}
+			nics = append(nics, runtimeintent.NICIntent{
+				Name:            iface.Name,
+				Type:            swiftv1alpha1.InterfaceTypeVhostUser,
+				MAC:             mac,
+				VhostUserSocket: iface.Socket,
+			})
+			continue
+		}
+
 		// Bridge type: tap+bridge+virtio-net.
+		mac := iface.MAC
+		if mac == "" {
+			mac = runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(r.Meta.Namespace, r.Meta.Name, iface.Name))
+		}
 		nic := runtimeintent.NICIntent{
 			Name:      iface.Name,
 			Type:      swiftv1alpha1.InterfaceTypeBridge,
 			TapDevice: fmt.Sprintf("tap%d", tapIdx),
-			MAC:       runtimeintent.GenerateMAC(runtimeintent.InterfaceMACSeed(r.Meta.Namespace, r.Meta.Name, iface.Name)),
+			MAC:       mac,
 			Bridge:    fmt.Sprintf("br%d", bridgeIdx),
 		}
 		if iface.NetworkRef == nil {
