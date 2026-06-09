@@ -210,7 +210,7 @@ func failureDetail(mig *migrationv1alpha1.SwiftMigration) string {
 		return mig.Status.FailureMessage
 	}
 	if mig.Status.FailureReason != "" {
-		return mig.Status.FailureReason
+		return string(mig.Status.FailureReason)
 	}
 	return "no detail reported"
 }

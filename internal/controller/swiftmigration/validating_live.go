@@ -258,11 +258,13 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 // have been set to the destination pod name; this helper returns
 // that value.
 //
-// Mirrors the swiftguest controller's canonicalPodName helper. The
-// controller package is the canonical source; this duplicate exists
-// because importing the swiftguest package from swiftmigration would
-// create a cycle (swiftguest already imports swiftmigration types).
-// PR 2 will consolidate via a shared helper package.
+// Mirrors the swiftguest controller's canonicalPodName helper. This
+// duplicate exists because that helper is package-private (unexported),
+// NOT because of an import cycle (TFU #20): this package already imports
+// internal/controller/swiftguest (see the import block above), and the
+// swiftguest controller does not import the swiftmigration controller.
+// A future cleanup could export the swiftguest helper (or move it to a
+// shared package) and drop this copy.
 func canonicalPodNameForGuest(guest *swiftv1alpha1.SwiftGuest) string {
 	if guest.Status.PodRef != nil && guest.Status.PodRef.Name != "" {
 		return guest.Status.PodRef.Name
