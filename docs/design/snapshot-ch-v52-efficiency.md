@@ -127,7 +127,7 @@ A memory-snapshot round-trip on the dev cluster (the existing snapshot e2e):
 |---|---|---|
 | 1 | This scoping doc. | — |
 | 2 | **SHIPPED** — userfaultfd restore: `RestoreIntent.memoryRestoreMode` plumbing (Go+Rust); `spawn_ch_restore` appends `,memory_restore_mode=<mode>`; `cloneFromSnapshot` defaults `ondemand`; `SwiftRestore.spec.memoryRestoreMode` opt-in (enum `copy`/`ondemand`, default `copy`). | After PR #161 cluster-validated (done; the #165 `shared=on` fix unblocked the memory-snapshot path) |
-| 3 | (follow-up) Tier C upload compression (§3 option A) — `snapshot-s3` stream-compress + manifest suffix. | — |
+| 3 | **SHIPPED** — Tier C upload compression (§3 option A): `snapshot-s3` stream-compresses every artifact with **zstd** on upload (io.Pipe streaming, no buffering), stores it at a `.zst` object key, and records `compression` per-artifact in the manifest (Bytes+SHA256 stay ORIGINAL for download verification). Download decompresses on the fly; verify checks the decompressed content. Resume-skip switched from size+sha to **sha-only** (compressed object size ≠ the artifact's original size; sha256 is content-safe). Backward compatible: empty `compression` (older manifests) → bare-key uncompressed download. Mostly-zero memory images collapse to a tiny fraction on the wire. | — |
 | — | Sparse snapshots: **no PR** (automatic on v52); confirmed in the PR 2 validation round-trip. | — |
 
 > **PR 2 plumbing summary:** controller sets the

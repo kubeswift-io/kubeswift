@@ -200,9 +200,16 @@ func TestUpload_ReuploadsStaleSameSizeContent(t *testing.T) {
 		t.Fatalf("second upload: %v", err)
 	}
 
-	// memory.img must now hold the NEW content (re-uploaded), not the stale "M".
-	if got := store.objs["ns/snap/memory.img"]; !bytes.Equal(got, bytes.Repeat([]byte("X"), 4096)) {
-		t.Fatalf("memory.img kept stale content; size-only skip not fixed (len=%d, first byte=%q)", len(got), got[0])
+	// The compressed object (.zst key) must now carry the NEW content's hash
+	// (re-uploaded), not the stale "M". Compressed bytes aren't directly
+	// comparable, so assert via the recorded original-content sha256 metadata —
+	// the same signal the resume-skip keys off.
+	newSHA, _, err := fileSHA256(filepath.Join(src2, "memory.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.meta["ns/snap/memory.img.zst"]; got != newSHA {
+		t.Fatalf("memory.img kept stale content; sha-resume not fixed (stored sha %q != new %q)", got, newSHA)
 	}
 	// And a fresh download must verify cleanly against the new manifest.
 	dst := t.TempDir()
@@ -237,12 +244,19 @@ func TestDownload_DetectsCorruption(t *testing.T) {
 	store := newFakeStore()
 	_, _ = runUpload(ctx, store, src, "ns/snap", "ns/snap", false)
 
-	// Corrupt one artifact object (size preserved, content changed) so only the
-	// sha256 check can catch it.
-	store.objs["ns/snap/disks/root.raw"] = bytes.Repeat([]byte("X"), 8192)
+	// Corrupt one artifact object: replace the .zst object with a VALID zstd
+	// stream of DIFFERENT content. It decompresses cleanly to the wrong bytes,
+	// so only the sha256 verification (over the decompressed content) can catch
+	// it — exactly the post-compression corruption path.
+	cr := compressingReader(bytes.NewReader(bytes.Repeat([]byte("X"), 8192)))
+	corrupt, err := io.ReadAll(cr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.objs["ns/snap/disks/root.raw.zst"] = corrupt
 
 	dst := t.TempDir()
-	_, err := runDownload(ctx, store, dst, "ns/snap")
+	_, err = runDownload(ctx, store, dst, "ns/snap")
 	if err == nil {
 		t.Fatal("download must fail verification on a corrupt artifact")
 	}
@@ -305,5 +319,58 @@ func TestRunArgs_Validate(t *testing.T) {
 		if err := bad.validate(); err == nil {
 			t.Errorf("invalid args accepted: %+v", bad)
 		}
+	}
+}
+
+// TestUpload_CompressesArtifacts verifies Tier C upload compression: artifacts
+// are stored zstd-compressed at a .zst key, the manifest records the codec, a
+// mostly-zero memory image shrinks dramatically on the wire, and the round-trip
+// reproduces the original bytes (verified against the manifest's original hash).
+func TestUpload_CompressesArtifacts(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	// 1 MiB of zeros — the sparse-memory-image case: reads back as zeros, which
+	// zstd collapses to almost nothing.
+	zeros := make([]byte, 1<<20)
+	writeFile(t, dir, "memory.img", zeros)
+	writeFile(t, dir, "config.json", []byte(`{"cpus":2}`))
+	store := newFakeStore()
+
+	if _, err := runUpload(ctx, store, dir, "ns/snap", "ns/snap", true); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	// Stored at the .zst key, not the bare path.
+	comp, ok := store.objs["ns/snap/memory.img.zst"]
+	if !ok {
+		t.Fatal("compressed object ns/snap/memory.img.zst not found")
+	}
+	if _, bare := store.objs["ns/snap/memory.img"]; bare {
+		t.Error("bare (uncompressed) memory.img object should not exist")
+	}
+	// Zeros compress to a tiny fraction of the original 1 MiB.
+	if len(comp) >= (1<<20)/10 {
+		t.Errorf("compressed memory.img = %d bytes; expected << 1 MiB for all-zeros", len(comp))
+	}
+	// Manifest records the codec + the ORIGINAL size/hash (not the compressed).
+	m, err := parseManifest(store.objs["ns/snap/manifest.json"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range m.Artifacts {
+		if a.Compression != compressionZstd {
+			t.Errorf("artifact %s compression = %q, want zstd", a.Path, a.Compression)
+		}
+		if a.Path == "memory.img" && a.Bytes != 1<<20 {
+			t.Errorf("manifest memory.img bytes = %d, want original 1 MiB", a.Bytes)
+		}
+	}
+	// Round-trip reproduces the original bytes (download decompresses + verifies).
+	dst := t.TempDir()
+	if _, err := runDownload(ctx, store, dst, "ns/snap"); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "memory.img"))
+	if err != nil || !bytes.Equal(got, zeros) {
+		t.Fatalf("round-trip memory.img mismatch (err=%v, len=%d)", err, len(got))
 	}
 }
