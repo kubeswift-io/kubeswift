@@ -89,5 +89,24 @@ For a guest on default networking:
 swiftctl migrate web --to worker-3 --allow-ip-change
 ```
 
+### Preflight check
+
+`--check` runs a read-only preflight and creates nothing — handy before a
+real move:
+
+```bash
+swiftctl migrate db --to worker-3 --check
+```
+
+It reports the target node's readiness and capacity, whether the guest's
+primary IP is preserved (multi-node NAD) or will change, the mode the
+controller would pick (and whether VFIO/SR-IOV forces offline), any
+node-local virtiofs/vhost-user backends the target must also provide, and
+source-vs-target CPU/architecture compatibility (CPU-feature flags when
+node-feature-discovery labels are present, otherwise an advisory to compare
+`lscpu` — CPU-feature mismatch is the realistic live-migration failure mode).
+Hard blockers (missing guest/target, `--preferred-mode live` for a VFIO
+guest) exit non-zero; everything else is a warning.
+
 For full operational details and timing characteristics, see
 [offline-migration.md](offline-migration.md).
