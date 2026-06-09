@@ -111,6 +111,12 @@ const (
 	// controller drives a Resuming phase there) — it replaces the
 	// resumeCloneIfNeeded action round-trip (Bug #73).
 	AnnotationRestoreAutoResume = "snapshot.kubeswift.io/restore-auto-resume"
+	// AnnotationRestoreMemoryMode selects CH's `memory_restore_mode` (CH
+	// v52): "ondemand" (userfaultfd lazy paging — lower restore-to-resume
+	// latency) or "copy" (eager default). Empty/absent omits the field.
+	// cloneFromSnapshot sets "ondemand"; SwiftRestore from
+	// spec.memoryRestoreMode.
+	AnnotationRestoreMemoryMode = "snapshot.kubeswift.io/restore-memory-mode"
 )
 
 // Restore mode values for AnnotationRestoreMode.
@@ -169,6 +175,10 @@ type RestoreParams struct {
 	// guest comes up running (cloneFromSnapshot only; replaces Bug #73's
 	// resumeCloneIfNeeded). SwiftRestore leaves it false and drives resume.
 	AutoResume bool
+	// MemoryRestoreMode selects CH's `memory_restore_mode` ("ondemand" |
+	// "copy"). Empty omits the field (CH default copy). cloneFromSnapshot
+	// sets "ondemand"; SwiftRestore from spec.memoryRestoreMode.
+	MemoryRestoreMode string
 	// NullifyHostMAC asks the stager to set net[].host_mac to null in
 	// config.json. Required for clones (see configjson.PatchOptions).
 	NullifyHostMAC bool
@@ -473,5 +483,6 @@ func RestoreParamsFromAnnotations(annotations map[string]string) (RestoreParams,
 		RuntimeDirToPrefix:   annotations[AnnotationRestoreRuntimeDirToPrefix],
 		NullifyHostMAC:       annotations[AnnotationRestoreNullifyHostMAC] == "true",
 		AutoResume:           annotations[AnnotationRestoreAutoResume] == "true",
+		MemoryRestoreMode:    annotations[AnnotationRestoreMemoryMode],
 	}, true
 }
