@@ -249,6 +249,31 @@ func (g *SwiftGuest) HasVFIODevices() bool {
 	return g.HasSRIOVInterface()
 }
 
+// HasNodeLocalVirtioBackends reports whether the guest uses virtio devices
+// whose backend is a node-local process or socket that cannot follow a live
+// migration: virtiofs shares (spec.filesystems — the virtiofsd backend and its
+// hostPath/PVC source mount live in the source launcher pod) and vhost-user
+// devices (spec.vhostUserDevices and vhost-user NICs — the operator's
+// DPDK/SPDK backend socket is node-local). Live migration would resume the
+// guest on a destination with no equivalent backend, breaking the device
+// mid-flight — so such guests are OFFLINE-only, like VFIO: the offline path
+// recreates the launcher pod on the target, where the pod builder re-mounts
+// the sources and swiftletd respawns/reconnects the backends (for hostPath
+// sources and operator sockets, provisioning equivalent content on the target
+// is the operator's documented responsibility).
+// See docs/design/vhost-user-devices.md §7.
+func (g *SwiftGuest) HasNodeLocalVirtioBackends() bool {
+	if len(g.Spec.Filesystems) > 0 || len(g.Spec.VhostUserDevices) > 0 {
+		return true
+	}
+	for i := range g.Spec.Interfaces {
+		if g.Spec.Interfaces[i].Type == InterfaceTypeVhostUser {
+			return true
+		}
+	}
+	return false
+}
+
 // HasSRIOVInterface reports whether the guest has any SR-IOV (VFIO NIC)
 // interface. SR-IOV NIC passthrough cannot be migrated off a node by the GPU
 // release-and-reallocate path (that handles GPUs only; NIC reattach on the

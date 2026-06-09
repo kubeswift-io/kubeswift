@@ -113,11 +113,24 @@ hard-stops the VM. Once live migration ships, the upgrade workflow needs
 documentation that says "drain first, then upgrade" — or eventually,
 controller-driven automation that handles it.
 
-### Constraint 3 — virtio-fs is incompatible with live migration
+### Constraint 3 — virtio-fs / vhost-user devices are incompatible with live migration
 
-If KubeSwift adds virtio-fs file sharing in the future (it doesn't today),
-those VMs become non-live-migratable. This isn't a present blocker, just
-something to flag in the doc so it doesn't sneak in unnoticed.
+KubeSwift now ships virtiofs shares (`spec.filesystems`, 2026-06) and
+operator-backed vhost-user devices (`spec.vhostUserDevices` + `type:
+vhost-user` interfaces) — see
+[`vhost-user-devices.md`](vhost-user-devices.md). Their backends (the
+virtiofsd processes and their source mounts, the operator's DPDK/SPDK
+sockets) live in/on the **source** pod and node; CH live migration does
+not transfer them, so a live-migrated guest's devices would break
+mid-flight.
+
+**Enforced:** such guests are **offline-only**, exactly like VFIO — the
+SwiftMigration webhook rejects explicit `mode: live`
+(`SwiftGuest.HasNodeLocalVirtioBackends()`), and `mode: auto` resolves
+to offline. Offline recreates the launcher pod on the target, where the
+pod builder re-mounts the sources and swiftletd re-establishes the
+backends (provisioning equivalent hostPath content / operator sockets on
+the target is the operator's documented responsibility).
 
 ### Constraint 4 — Storage paths must match on both nodes
 

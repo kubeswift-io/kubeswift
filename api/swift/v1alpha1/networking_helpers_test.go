@@ -46,3 +46,26 @@ func TestPrimaryInterface_SkipsNonBridge(t *testing.T) {
 		t.Errorf("PrimaryInterface = %q, want nil (no bridge interface)", p.Name)
 	}
 }
+
+func TestHasNodeLocalVirtioBackends(t *testing.T) {
+	hp := "/srv/x"
+	cases := []struct {
+		name string
+		spec SwiftGuestSpec
+		want bool
+	}{
+		{"none", SwiftGuestSpec{}, false},
+		{"bridge-only interfaces", SwiftGuestSpec{Interfaces: []GuestInterface{{Name: "mgmt"}}}, false},
+		{"virtiofs", SwiftGuestSpec{Filesystems: []Filesystem{{Name: "d", Source: FilesystemSource{HostPath: &hp}}}}, true},
+		{"vhost-user device", SwiftGuestSpec{VhostUserDevices: []VhostUserDevice{{Name: "b", Type: VhostUserDeviceTypeBlk, Socket: "/s"}}}, true},
+		{"vhost-user NIC", SwiftGuestSpec{Interfaces: []GuestInterface{{Name: "f", Type: InterfaceTypeVhostUser, Socket: "/s"}}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &SwiftGuest{Spec: tc.spec}
+			if got := g.HasNodeLocalVirtioBackends(); got != tc.want {
+				t.Errorf("HasNodeLocalVirtioBackends = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

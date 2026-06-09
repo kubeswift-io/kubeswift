@@ -77,6 +77,17 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 		return nil
 	}
 
+	if guest.HasNodeLocalVirtioBackends() {
+		// virtiofs / vhost-user backends (virtiofsd processes, source
+		// mounts, operator backend sockets) live in/on the SOURCE pod
+		// and node; CH live migration does not transfer them, so the
+		// resumed guest's devices would break. Offline recreates the
+		// launcher pod on the target where the backends are
+		// re-established — mirror the VFIO rule. The webhook rejects
+		// explicit mode=live for these guests.
+		return nil
+	}
+
 	if isDefaultNodeLocalNetworking(&guest) && !mig.Spec.AllowIPChange {
 		// Default node-local networking produces a fresh IP on the
 		// destination. Without operator opt-in (allowIPChange=true),

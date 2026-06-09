@@ -115,3 +115,31 @@ func TestHasVFIODevices_None_False(t *testing.T) {
 		t.Errorf("no VFIO devices must yield false")
 	}
 }
+
+func TestResolveAutoMode_NodeLocalVirtioBackends_ResolvesToOffline(t *testing.T) {
+	// virtiofs / vhost-user backends are node-local; auto must resolve to
+	// offline (mirrors the VFIO rule). AllowIPChange=true so the networking
+	// branch cannot be what forces offline — the backend rule must.
+	scheme := testScheme(t)
+	hp := "/srv/share"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			Filesystems: []swiftv1alpha1.Filesystem{
+				{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
+			},
+		},
+	}
+	mig := newMigration("m", "default")
+	mig.Spec.AllowIPChange = true
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+
+	if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
+		t.Fatalf("expected nil result; got %+v", res)
+	}
+	if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeOffline {
+		t.Errorf("virtiofs guest must resolve auto→offline; got %q", mig.Status.Mode)
+	}
+}
