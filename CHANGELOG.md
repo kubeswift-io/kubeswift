@@ -4,143 +4,196 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased] - 2026-04-05
+## [v0.3.0-rc.1] — 2026-06-09
 
-### Changed (Cloud Hypervisor v51.1 -> v52.0 — platform-wide)
-- Bumped the Cloud Hypervisor static binary in the `swiftletd` image from v51.1 to
-  v52.0 (`images/swiftletd/Containerfile` `CH_VERSION`). v51.1's virtio-blk has a
-  bug that bugchecks Windows' viostor driver (`0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL`)
-  in a reboot loop; v52.0 fixes it and boots Windows cleanly and stably (spike:
-  `docs/design/windows-guest-support-spike.md` §4.1). This unblocks the CH-first
-  path for upcoming Windows guest support.
-- The `CLOUDHV.fd` firmware is **unchanged** (`ch-13b4963ec4`) — the spike-validated
-  pairing with the v52.0 binary. `CurrentHypervisorVersion` is read from CH at
-  runtime (vm.info), so it tracks the new version automatically; no code constant
-  to change.
-- Platform-wide change (the VMM for Linux guests too): a Linux-guest regression pass
-  (smoke-test + the snapshot/migration suites) lands with the redeploy.
+Consolidates everything since v0.1.0 (the v0.2.0-rc.1 tag from April was never
+promoted and is superseded by this release). Roughly 500 commits across six
+major feature arcs, each shipped with on-cluster validation walkthroughs.
 
-### Fixed (Phase 3a downtime metrics — W27 follow-up)
-- W27a: `status.observedDowntime` previously measured two adjacent `metav1.Now()` calls in the same reconcile invocation, producing sub-millisecond nonsense (34-114µs across all 17 PR #46 + E12 walkthrough runs). Now anchored on new `status.cutoverStep2DispatchedAt` (stamped by `cutoverStep2` on Delete dispatch); reflects the operator-visible cutover-to-resume window. Defensive nil-check leaves the field unset rather than reporting a wrong value if the timestamp is missing.
-- W27b: `status.observedPauseWindow` plumbing was half-implemented — swiftletd-on-src wrote the `kubeswift.io/migration-pause-window-ms` annotation correctly but the controller had zero readers, leaving the field permanently nil. Now stamped at `substateSrcCompleted` (W1 gate observation), mirroring the snapshot controller's parallel pattern. Defensive parse-failure handling.
-- New status field `cutoverStep2DispatchedAt *metav1.Time` on SwiftMigration: operator-visible audit data (`kubectl get smig -o wide`) and authoritative anchor for `observedDowntime`. Phase 1 offline mode does not populate this field.
-- Closes Tracked Follow-up #7 in kubeswift_context.md.
+### Highlights
+
+- **VM snapshots, end to end (Phases 0–6)** — disk-only CSI snapshots,
+  local memory snapshots, S3/object-storage export with zstd compression,
+  boot-as-clone (`spec.cloneFromSnapshot`), cron scheduling with keep-N
+  retention, Prometheus metrics + Grafana dashboard.
+- **Live migration, end to end (Phases 1–5)** — offline migration for any
+  guest, live migration with sub-3s observed downtime, mTLS-secured
+  migration transport, `kubectl drain` integration, offline GPU
+  evacuation, metrics + retention.
+- **Windows guest support v1** — `osType: windows` on Cloud Hypervisor.
+- **vhost-user devices** — virtiofs shared filesystems, vhost-user-net /
+  -blk / generic devices (operator-provided backends).
+- **Multi-node L2 networking foundation** — primary-on-NAD (experimental)
+  and a corrected migration IP-preservation gate; multi-NIC support
+  actually works now (three latent bugs fixed; smoke test passes 5/5).
+- **Cloud Hypervisor v51.1 → v52.0** — fixes the Windows viostor bugcheck,
+  resets guests in place on reboot, unlocks core-scheduling and
+  restore/snapshot improvements.
 
 ### Added
-- Comprehensive networking operations guide for physical networks, VLANs, bonds, and isolated networks
-- VMware ESXi and Proxmox VE concept mapping for platform migration
-- SwiftGuestPool CRD and controller for VM fleet management (ReplicaSet semantics)
-- kubectl scale support for SwiftGuestPool via scale subresource
-- Stable naming, failed VM replacement, cascade deletion
-- Rolling updates for SwiftGuestPool (RollingUpdate/Recreate strategy, maxUnavailable/maxSurge)
-- Topology spread for SwiftGuestPool (spreadPolicy shorthand, topologySpreadConstraints)
-- PVC per replica for SwiftGuestPool (volumeClaimTemplates, StatefulSet-like persistent storage)
-- dataDiskRefs on SwiftGuest for multiple data disk references (SwiftImage or PVC)
-- TopologySpreadConstraints on SwiftGuest (flows to launcher pod)
-- Multi-vendor GPU discovery (AMD, Intel, NVIDIA) -- class-based PCI detection
-- Tier 1 GPU passthrough validated on real hardware (GeForce GTX 1080)
-- GPU discovery DaemonSet validated on Hetzner bare-metal
-- IOMMU group peer auto-binding in gpu-init.sh (consumer NVIDIA GPUs)
-- Root disk resize pipeline: qemu-img resize + sgdisk -e during import
-- SwiftGuestClass default bumped to 4Gi RAM
-- GTX 1080 sample manifests (swiftgpuprofile-gtx1080.yaml, swiftguest-gpu-gtx1080.yaml)
+
+**Snapshots & restore (`snapshot.kubeswift.io`)**
+- SwiftSnapshot + SwiftRestore CRDs and controllers: Tier A CSI
+  VolumeSnapshot (disk-only), Tier B local hostPath memory snapshots
+  (CH pause/snapshot/resume), Tier C S3-compatible export/import
+  (MinIO/AWS/RGW) with checksummed manifests and zstd-compressed memory
+  ranges (`spec.backend.s3.compression`).
+- `SwiftGuest.spec.cloneFromSnapshot`: boot N guests as clones of one
+  memory snapshot (pool-templatable; per-clone hypervisor MAC; CH v52
+  auto-resume + on-demand/userfaultfd memory restore).
+- `SwiftImage.spec.cloneStrategy: copy|snapshot` for ≥3× faster pool scaling.
+- SwiftSnapshotSchedule CRD: cron-created snapshots with `keepLast` pruning,
+  reference-aware GC, `spec.ttl`, `spec.deletionPolicy: Delete|Retain` with
+  prefix-scoped S3 purge.
+- `swiftctl snapshot|restore|schedule` command groups; snapshot metrics,
+  byte gauges, Grafana dashboard (`config/grafana/kubeswift-snapshots.json`).
+
+**Live migration (`migration.kubeswift.io`)**
+- SwiftMigration CRD + controller: offline mode (direct PVC reuse,
+  ~25–70s downtime depending on CSI driver) and live mode (CH pre-copy,
+  ~2–3s observed downtime, kernel-boot and RWX+Block disk-boot).
+- mTLS migration transport: per-node cert-manager-issued identities,
+  SAN-pinned stunnel sidecars (~1% overhead); plaintext path requires an
+  explicit unsafe acknowledgement.
+- `kubectl drain` integration: eviction webhook + drain controller
+  auto-migrate guests per `spec.migration.drainPolicy`
+  (Migrate|LiveMigrate|Block); universal per-guest `maxUnavailable: 0`
+  PDB as the hard floor; VFIO/GPU guests evacuate offline via the GPU
+  release-and-reallocate primitive (reserve-before-stop atomicity).
+- Auto mode resolution (live when eligible, else offline), per-guest
+  `spec.migration.enabled` pinning, `spec.allowIPChange` opt-in,
+  `spec.timeout` (default 30m) and `spec.ttl` retention,
+  `status.observedDowntime` / `status.transferProgress` /
+  `status.observedTransferDuration`, typed `FailureReasonCode` taxonomy,
+  migration metrics + Grafana dashboard.
+- `swiftctl migrate` (with `--check` read-only preflight: target
+  readiness/capacity, IP preservation, mode resolution, NFD-based CPU
+  feature comparison) and `swiftctl migration list|describe|cancel`.
+
+**Windows guests**
+- `osType: windows` on SwiftImage/SwiftGuest: CH disk boot with
+  `kvm_hyperv=on`, unprivileged import path, cloudbase-init provisioning
+  over the existing NoCloud seed, image-prep tooling
+  (`tools/windows-image-prep/`) producing virtio-ready images with
+  headless BCD (EMS/SAC serial console).
+
+**vhost-user devices**
+- `SwiftGuest.spec.filesystems[]`: virtiofs shared filesystems (hostPath
+  or PVC source, readOnly enforcement); swiftletd spawns virtiofsd
+  (`--sandbox none`, no added capabilities) — full datapath
+  cluster-validated.
+- `GuestInterface.type: vhost-user` (+ `socket`, `mac`): virtio-net via an
+  operator-provided DPDK/OVS backend.
+- `SwiftGuest.spec.vhostUserDevices[]`: vhost-user-blk (SPDK-style) and
+  generic vhost-user devices (`--generic-vhost-user`).
+- Migration gate: guests with node-local virtio backends are offline-only
+  (mirrors VFIO; auto resolves to offline).
+
+**Networking**
+- Multi-NIC: secondary interfaces via Multus NADs, SR-IOV VFIO NIC
+  passthrough, mixed bridge+sriov guests.
+- Multi-node L2 foundation: `GuestInterface.primary` lets the primary NIC
+  ride a multi-node NAD (IP-preserving migration); corrected
+  IP-preservation gate keyed on the primary interface; primary-on-NAD
+  launcher runtime (EXPERIMENTAL — datapath pending validation on a
+  multi-node L2 cluster); design + operator docs
+  (`docs/design/network-architecture-requirements.md`,
+  `docs/networking/multi-node-l2.md`).
+- Networking operations guide, OVN-Kubernetes integration guide, ESXi/
+  Proxmox concept mapping.
+
+**Storage**
+- `spec.storage` on SwiftGuestClass/SwiftGuest: accessMode / volumeMode /
+  storageClassName selection with per-field merge; RWX+Block is the
+  live-migration-capable combination (RWX+Filesystem rejected at
+  admission); full Block-mode runtime path (volumeDevices end to end);
+  `cloneStrategy: snapshot` works across volume modes
+  (allow-volume-mode-change on the clone seed).
+
+**GPU**
+- SwiftGPU Phases 1–3: SwiftGPUProfile/SwiftGPUNode CRDs, allocation
+  controller (NUMA-aware, FM partitions, finalizer dealloc), QEMU path
+  (Q35/OVMF/QMP) for HGX tiers, GPU discovery DaemonSet (multi-vendor,
+  60s cycle), Tier 1 PCIe passthrough validated on hardware (GTX 1080),
+  IOMMU-group peer auto-binding, `vfioReady` + capacity pre-flights.
+
+**Fleet & lifecycle**
+- SwiftGuestPool: ReplicaSet-style fleets with rolling updates
+  (maxUnavailable/maxSurge), topology spread, PVC-per-replica, scale
+  subresource, node pre-assignment for snapshot clones.
+- `dataDiskRef`/`dataDiskRefs` secondary disks (/dev/vdb) on all boot paths.
+- Per-class vCPU core-scheduling (`SwiftGuestClass.spec.coreScheduling:
+  off|vm|vcpu`) — SMT side-channel mitigation without disabling SMT.
+
+**Operability & docs**
+- GitOps: FluxCD reference repository (`examples/gitops-flux/`, three-layer
+  model) + `docs/gitops/` operator docs.
+- `swiftctl` grew `ssh`, `describe`, `logs`, robust pod resolution across
+  migrations, and the command groups above.
+- Controller-driven per-namespace swiftletd RBAC (no manual RoleBinding);
+  `make deploy-with-webhook` / `deploy-with-webhook-and-mtls` targets;
+  e2e suites wired into CI on path-touch triggers; THREAT-MODEL.md.
+
+### Changed
+- **Cloud Hypervisor v51.1 → v52.0** (platform-wide; Linux regression
+  passed): fixes Windows viostor `0xD1` bugcheck; guests now **reset in
+  place on reboot** (the launcher pod and CH survive — reboots no longer
+  churn pods or trigger runPolicy); `CLOUDHV.fd` firmware unchanged
+  (`ch-13b4963ec4`). CLOUDHV.fd replaced rust-hypervisor-firmware
+  earlier in the cycle (all modern distros bootable; Ubuntu Noble is the
+  primary guest OS).
+- Guest RAM is now mapped `shared=on` (memfd MAP_SHARED): halves the
+  launcher's guest-memory footprint and fixes memory-snapshot OOMs; the
+  standard backing for snapshot/migration-capable guests.
+- SwiftGuestClass default memory raised to 4Gi; launcher memory limits
+  include a 512MiB overhead allowance.
+- Root-disk import pipeline: qemu-img resize + sgdisk -e (GPT fix);
+  cloud-init growpart expands on first boot.
+- `status.observedPauseWindow` renamed to `status.observedTransferDuration`
+  (it measures the full transfer RPC, not the vCPU pause).
 
 ### Fixed
-- gpu-init: mount host /sys at /host/sys to avoid container sysfs shadow (bug 35)
-- gpu-init: use DirectoryOrCreate for /dev/vfio hostPath (bug 36)
-- gpu-init: replace Unicode em dashes with ASCII (bug 37)
-- gpu-init: use readlink without -f for host sysfs symlinks (bug 40)
-- Containerfile: use explicit /bin/sh interpreter in ENTRYPOINT (bug 38)
-- Init containers: use explicit interpreter in command array (bug 39)
-- launch.rs: read intent.gpu.devices for CH --device and QEMU -device args (bug 41)
-- Pod builder: add 512MiB memory overhead to container limits (bug 42)
-- RBAC: add pods/log permission to controller-manager ClusterRole (bug 43)
-- Makefile: default IMAGE_TAG to sha-$(git rev-parse --short HEAD) (bug 44)
-- Import pipeline: resize image.raw to rootDisk.size (bug 45)
-- Import pipeline: fix GPT backup header with sgdisk -e after resize (bug 46)
+- **Multi-NIC was silently broken end to end** (three stacked latent bugs):
+  the network-init container had no runtime-intent mount (its multi-NIC
+  path was unreachable), the launcher image lacked python3 (the intent
+  parser), and vhost-user NICs tripped the NIC loop. All fixed; the
+  long-flaky multi-nic smoke scenario now passes (smoke suite 5/5).
+- **Tier A restore data loss** (silent fresh-boot instead of restored
+  disk): `EnsureRootDiskClone` ordering fixed; regression-tested.
+- Migration terminal-state handling: per-operation webhook discipline
+  (finalizer traps, reconcile storms), chain-migration source-pod
+  identity (`status.sourcePodRef`), offline-after-live pod-name trap,
+  false-success on destination boot failure, downtime metrics anchored
+  on real cutover timestamps.
+- vswiftimage webhook: finalizer-removal trap on deletion AND
+  pointer-identity spec comparison (metadata-only edits on Ready images
+  were falsely rejected) — both fixed with content equality.
+- swiftletd: lease poller survives transient RBAC/API failures; stale
+  socket cleanup before CH spawn; receiver-mode GuestRunning reporting.
+- S3 snapshot upload resume verifies sha256 (not just size); upload Job
+  runs with the permissions the root-owned capture artifacts require.
+- GPU walkthrough fixes: allocation re-stamp race, premature
+  scheduling-atomicity check, reservation leak on guest-delete-mid-migration.
+- `swiftctl debug` /proc scan anchors on argv[0] (no self-match);
+  numerous gpu-init/container hardening fixes (sysfs shadowing, explicit
+  interpreters, ASCII-only scripts).
 
----
-
-## [Unreleased] — April 3, 2026
-
-### Added
-
-**Firmware migration: CLOUDHV.fd replaces rust-hypervisor-firmware**
-- Replaced rust-hypervisor-firmware with CLOUDHV.fd (Cloud Hypervisor EDK2/OVMF UEFI firmware)
-- All modern Linux distributions now supported: Ubuntu 22.04+, Rocky 9, Fedora, Debian 12
-- Ubuntu Focal 20.04 is no longer required — Ubuntu Noble 24.04 is the primary guest OS
-- CLOUDHV.fd is pinned to release ch-13b4963ec4 with SHA256 verification
-- GPU Tier 1 (CH path) firmware changed from "hypervisor-fw" to "cloudhv"
-- QEMU path firmware (OVMF_CODE.fd / OVMF_VARS.fd) unchanged
-
-**dataDiskRef on SwiftGuest**
-- New optional field `spec.dataDiskRef` on SwiftGuest: references a SwiftImage as a secondary data disk
-- Data disk appears as /dev/vdb inside the guest (both Cloud Hypervisor and QEMU paths)
-- Works with all three boot paths: disk boot, kernel boot, GPU boot
-- Resolver validates the referenced SwiftImage exists and is in Ready state
-- Pod builders (disk, kernel, GPU) add PVC volume + mount at `/var/lib/kubeswift/disks/data/`
-- RuntimeIntent carries `dataDisk` field; swiftletd passes as additional `--disk` (CH) or `-drive` (QEMU)
-- Sample manifests: `swiftimage-datadisk.yaml`, `swiftguest-datadisk.yaml`
-- Tests: resolver (success, missing, not ready, backward compat), runtime intent (disk boot, kernel boot, roundtrip), pod builder (disk boot, GPU boot, no data disk), CH args, QEMU args
-
-**GPU Discovery DaemonSet**
-- Discovery binary at `cmd/gpu-discovery/` auto-discovers GPUs, NUMA topology, NVSwitches, Fabric Manager
-- DaemonSet runs on nodes labeled `kubeswift.io/gpu-node=true` with 60s re-discovery cycle
-- Merge logic preserves controller-owned allocation fields during SwiftGPUNode status patches
-- Separate container image with pciutils for lspci
-- Helm chart: `gpuDiscovery.enabled` gate for DaemonSet + RBAC templates
-- Validation report template at `docs/validation/discovery-daemonset-validation.md`
-
-**Roadmap update**
-- Comprehensive roadmap through 13 priority items including GPU hardware validation, Windows guests, multi-NIC, SwiftGuestPool, live migration, vGPU
-
----
-
-## [Unreleased] — SwiftGPU Phases 1-3 Complete (April 2, 2026)
-
-### Added
-
-**SwiftGPU Phase 1: QEMU Hypervisor Abstraction**
-- New Rust crate `swift-qemu-client` (`rust/swift-qemu-client/`) with QemuProcess, QemuConfig, and QmpClient
-- QEMU disk boot via Q35 machine type, OVMF firmware, KVM acceleration
-- QMP lifecycle management: capabilities negotiation, system_powerdown, quit, SIGKILL fallback
-- `hypervisor` field on RuntimeIntent: selects "cloud-hypervisor" (default) or "qemu"
-- `kubeswift.io/hypervisor-override` annotation on SwiftGuest for testing QEMU path without GPU hardware
-- swiftletd Containerfile updated to include `qemu-system-x86`, `ovmf`, and `gpu-init.sh`
-
-**SwiftGPU Phase 2: GPU CRDs and Resource Model**
-- SwiftGPUProfile CRD (`api/gpu/v1alpha1/types_gpuprofile.go`): tier, count, model, pcieTopology, numaTopology, hugepages, vcpuPinning, fabricManager
-- SwiftGPUNode CRD (`api/gpu/v1alpha1/types_gpunode.go`): cluster-scoped, status-only GPU inventory with host topology, NVSwitch, and Fabric Manager state
-- SwiftGuest extended with `spec.gpuProfileRef` and `status.gpu` (GPUStatus with devices, partitionId, numaNodes, hypervisor, nodeName)
-- `ConditionGPUAllocated` condition on SwiftGuest
-- RuntimeIntent GPU extensions: devices[], firmware, numa, vcpuPinning, hugepages, fabricManagerPartitionId, nvSwitches
-- Scheme registration for `gpu.kubeswift.io` API group in `internal/scheme/scheme.go`
-- RBAC rules for `gpu.kubeswift.io` in `config/manager/controller-manager-rbac.yaml`
-- Sample manifests: `swiftgpuprofile-pcie.yaml`, `swiftgpuprofile-hgx.yaml`, `swiftguest-gpu.yaml`, `swiftgpunode-sample.yaml`
-
-**SwiftGPU Phase 3: Controller, Allocation, and GPU Pod Building**
-- SwiftGPU controller (`internal/controller/swiftgpu/`): reconciles SwiftGuest objects with gpuProfileRef
-- Controller registered with explicit `.Named("swiftgpu")` to avoid collision with SwiftGuest controller
-- NUMA-aware GPU selection: prefers single NUMA node, falls back to cross-NUMA allocation
-- Fabric Manager partition selection for shared NVSwitch mode (Tier 2)
-- Tier-based hypervisor resolution: `pcie` -> cloud-hypervisor, `hgx-shared`/`hgx-full` -> qemu
-- Idempotent allocation: detects existing `allocatedTo` on GPUs before re-allocating
-- Finalizer-based deallocation (`kubeswift.io/gpu-allocation`): frees GPUs and FM partitions on SwiftGuest deletion
-- Graceful deallocation when SwiftGPUNode has been deleted
-- GPU pod builder (`internal/controller/swiftguest/gpu.go`): BuildGPUDiskBootPod with gpu-init container, /dev/vfio volume, hugepage volume, node pinning
-- GPU intent builder: resolves PCIe topology flags, NUMA layout, vCPU pinning map from SwiftGPUNode host topology
-- `gpu-init.sh` init container script: unbinds GPUs from current driver, binds to vfio-pci, verifies binding, activates FM partition via `fmpm`
-- SwiftGPUNode watch: re-enqueues unallocated GPU guests when node capacity changes
-- Documentation: `docs/gpu-passthrough.md` with prerequisites, tier reference, workflow, examples, troubleshooting
-
-**Stabilization**
-- Comprehensive unit tests for GPU allocation logic: selectGPUs (single, same-NUMA, cross-NUMA, insufficient, model filter), findFMPartition, countFreeGPUs, numaSetToSlice
-- Controller integration tests: allocate success, no capacity, profile not found, already allocated, idempotent recovery, deallocation, node gone, finalizer lifecycle, hypervisor selection (PCIe vs HGX)
-- Security audit notes in `docs/security-audit.md`
-
-### Fixed
-
-- Controller name collision: SwiftGPU and SwiftGuest controllers both watch SwiftGuest; resolved with explicit `.Named("swiftgpu")` (Bug 31)
+### Known limitations (v0.3.0-rc.1)
+- **Primary-on-NAD runtime is EXPERIMENTAL**: the launcher datapath is
+  implemented but unvalidated (the dev cluster has no working multi-node
+  L2); validate on an OVN-Kubernetes cluster before relying on
+  IP-preserving migration.
+- **vhost-user-net/-blk/generic datapaths are asset-gated**: CH wiring is
+  cluster-validated, but line-rate operation needs operator-provided
+  DPDK/SPDK backends (none on dev infra). virtiofs is fully validated.
+- **SR-IOV NIC passthrough and Tier 2/3 HGX GPU support** are code-complete
+  but hardware-unvalidated (no SR-IOV NICs / HGX systems available).
+- **Cross-node GPU migration destination boot** is not hardware-validated
+  (single GPU node); the release/reserve choreography is.
+- **Windows in-cluster cloudbase-init provisioning** is untested (no
+  Windows license on the dev cluster); every other Windows layer is
+  validated.
+- All API groups remain **v1alpha1**.
 
 ---
 
