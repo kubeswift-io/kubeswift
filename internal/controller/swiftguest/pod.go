@@ -10,6 +10,7 @@ import (
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/resolved"
+	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
 )
 
 // IntentConfigMapSuffix is the suffix for the runtime intent ConfigMap name.
@@ -38,7 +39,56 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	applyTopologyConstraints(pod, guest)
 	applyNodeName(pod, guest)
 	applyDataDiskRefs(pod, guest)
+	applyFilesystems(pod, guest)
 	return pod
+}
+
+// applyFilesystems adds the source volume + mount for each virtiofs share in
+// spec.filesystems. The source (node-local hostPath or a PVC) is mounted into
+// the launcher container at runtimeintent.VirtiofsBasePath/<name>, which
+// swiftletd hands virtiofsd as --shared-dir. ReadOnly on the share becomes a
+// read-only mount — that is the enforcement (virtiofsd cannot widen a
+// read-only mount). The virtiofsd socket is NOT a volume; swiftletd binds it
+// in the runtime dir (an existing emptyDir already mounted in the container).
+func applyFilesystems(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	hostPathType := corev1.HostPathDirectoryOrCreate
+	for i, fs := range guest.Spec.Filesystems {
+		volName := fmt.Sprintf("virtiofs-%d", i)
+		mountPath := runtimeintent.VirtiofsBasePath + "/" + fs.Name
+
+		var src corev1.VolumeSource
+		switch {
+		case fs.Source.HostPath != nil:
+			src = corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: *fs.Source.HostPath,
+					Type: &hostPathType,
+				},
+			}
+		case fs.Source.PVCRef != nil:
+			src = corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: fs.Source.PVCRef.Name,
+					ReadOnly:  fs.ReadOnly,
+				},
+			}
+		default:
+			// Webhook rejects this; skip defensively rather than panic.
+			continue
+		}
+
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name:         volName,
+			VolumeSource: src,
+		})
+		pod.Spec.Containers[0].VolumeMounts = append(
+			pod.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: volName, MountPath: mountPath, ReadOnly: fs.ReadOnly},
+		)
+	}
 }
 
 // applyTopologyConstraints copies topology spread constraints from the SwiftGuest

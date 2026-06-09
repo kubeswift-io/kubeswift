@@ -21,6 +21,7 @@ type mockResolvedGuest struct {
 	kernelCmdline  string
 	hypervisor     string
 	osType         string
+	filesystems    []FilesystemIntent
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -43,7 +44,8 @@ func (m *mockResolvedGuest) GetOSType() string {
 	}
 	return m.osType
 }
-func (m *mockResolvedGuest) GetNICs() []NICIntent { return nil }
+func (m *mockResolvedGuest) GetNICs() []NICIntent               { return nil }
+func (m *mockResolvedGuest) GetFilesystems() []FilesystemIntent { return m.filesystems }
 
 // TestBuild_DiskBootBlockMode is the W9 contract test for the
 // runtimeintent producer side: a guest with Block-mode root storage
@@ -183,6 +185,40 @@ func TestBuild_OSType(t *testing.T) {
 	})
 	if lin.OSType != "linux" {
 		t.Errorf("OSType = %q, want linux", lin.OSType)
+	}
+}
+
+func TestBuild_Filesystems(t *testing.T) {
+	// Filesystems flow through to the intent unchanged on the disk-boot path.
+	fs := []FilesystemIntent{
+		{Name: "data", Tag: "data", SourcePath: VirtiofsBasePath + "/data"},
+		{Name: "ro", Tag: "shared", SourcePath: VirtiofsBasePath + "/ro", ReadOnly: true},
+	}
+	disk := Build(&mockResolvedGuest{
+		hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 2048,
+		lifecycle: "start", guestID: "default/fs", filesystems: fs,
+	})
+	if len(disk.Filesystems) != 2 {
+		t.Fatalf("disk-boot Filesystems len = %d, want 2", len(disk.Filesystems))
+	}
+	if disk.Filesystems[1].Tag != "shared" || !disk.Filesystems[1].ReadOnly {
+		t.Errorf("Filesystems[1] = %+v, want tag=shared readOnly=true", disk.Filesystems[1])
+	}
+	// And on the kernel-boot path.
+	kern := Build(&mockResolvedGuest{
+		hasKernel: true, hasNetwork: true, cpu: 1, memory: 1024,
+		lifecycle: "start", guestID: "default/fs-kern", filesystems: fs,
+	})
+	if len(kern.Filesystems) != 2 {
+		t.Fatalf("kernel-boot Filesystems len = %d, want 2", len(kern.Filesystems))
+	}
+	// None set -> nil (no virtiofs).
+	none := Build(&mockResolvedGuest{
+		hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 2048,
+		lifecycle: "start", guestID: "default/no-fs",
+	})
+	if none.Filesystems != nil {
+		t.Errorf("Filesystems = %v, want nil when none set", none.Filesystems)
 	}
 }
 

@@ -1,0 +1,24 @@
+# A virtiofs share backed by a PersistentVolumeClaim, mounted read-only.
+# Use an RWX claim to share the same content across several guests (and nodes);
+# an RWO claim pins the guest to wherever the claim is attached.
+#
+# readOnly: true makes the launcher pod mount the source read-only — the guest
+# cannot mutate the backing content (enforced at the pod volumeMount layer).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: virtiofs-models
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: default
+  filesystems:
+    - name: models
+      tag: models
+      readOnly: true
+      source:
+        pvcRef:
+          name: shared-models   # an existing RWX PVC (e.g. Longhorn RWX, NFS)

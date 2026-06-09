@@ -57,6 +57,9 @@ func Merge(
 	// Copy interfaces from SwiftGuest spec for multi-NIC support.
 	rg.Interfaces = guest.Spec.Interfaces
 
+	// Copy virtiofs shares from SwiftGuest spec (vhost-user-fs).
+	rg.Filesystems = guest.Spec.Filesystems
+
 	// Storage: per-field merge — guest > class > system defaults.
 	rg.Storage = MergeStorage(guest, guestClass)
 

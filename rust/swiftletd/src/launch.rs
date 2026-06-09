@@ -1,16 +1,56 @@
 //! Hypervisor launch dispatch — Cloud Hypervisor or QEMU based on RuntimeIntent.hypervisor.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use swift_ch_client::{
-    spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, NICConfig, VFIODeviceConfig,
-    VmConfig,
+    spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, FsMount, NICConfig,
+    VFIODeviceConfig, VmConfig,
 };
 use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
 
-use crate::intent::RuntimeIntent;
+use crate::intent::{FilesystemIntent, RuntimeIntent};
+
+/// Default virtiofsd binary path (Debian bookworm `virtiofsd` package).
+/// Override with KUBESWIFT_VIRTIOFSD_BINARY.
+const DEFAULT_VIRTIOFSD_BINARY: &str = "/usr/libexec/virtiofsd";
+
+/// Spawn a virtiofsd backend for one virtiofs share. Uses `--sandbox none`:
+/// the launcher pod IS the security boundary (the default `namespace` sandbox
+/// needs CAP_SYS_ADMIN, which KubeSwift containers do not have), and the
+/// `--shared-dir` mount bounds what the guest can reach. Read-only enforcement
+/// is at the source volumeMount (the pod builder sets it readOnly), so no
+/// virtiofsd readonly flag is needed.
+fn spawn_virtiofsd(
+    fs: &FilesystemIntent,
+    socket_path: &str,
+) -> Result<std::process::Child, String> {
+    let binary = std::env::var("KUBESWIFT_VIRTIOFSD_BINARY")
+        .unwrap_or_else(|_| DEFAULT_VIRTIOFSD_BINARY.to_string());
+    // virtiofsd refuses to bind an existing socket file; remove any stale one
+    // (a prior SIGKILL leaves it behind — same hazard as the CH api-socket).
+    let _ = std::fs::remove_file(socket_path);
+    std::process::Command::new(&binary)
+        .arg(format!("--socket-path={}", socket_path))
+        .arg(format!("--shared-dir={}", fs.source_path))
+        .arg("--sandbox")
+        .arg("none")
+        .spawn()
+        .map_err(|e| format!("spawn virtiofsd ({}) for {}: {}", binary, fs.name, e))
+}
+
+/// Kills the virtiofsd backends on drop so a backend never outlives its VM.
+struct VirtiofsdGuard(Vec<std::process::Child>);
+
+impl Drop for VirtiofsdGuard {
+    fn drop(&mut self) {
+        for c in &mut self.0 {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
 
 /// Remove stale socket files before hypervisor bind.
 /// Neither CH nor QEMU clean up on crash; restart fails with "Address in use".
@@ -266,6 +306,42 @@ where
         }
     }
 
+    // virtiofs: spawn a virtiofsd backend per share BEFORE Cloud Hypervisor
+    // (CH connects to the sockets at boot). The guard kills the virtiofsd
+    // children when this function returns — i.e. when CH exits at child.wait()
+    // below — so a backend never outlives its VM.
+    let mut fs_mounts: Vec<FsMount> = Vec::new();
+    let _virtiofsd = if let Some(ref filesystems) = intent.filesystems {
+        let mut children = Vec::new();
+        for fs in filesystems {
+            // Derive the socket in the runtime dir (shared with CH), like the
+            // serial/api sockets — the controller doesn't carry it.
+            let socket_path = runtime_dir
+                .root()
+                .join(format!("{}.fs.sock", fs.name))
+                .to_string_lossy()
+                .to_string();
+            log::info!(
+                "spawning virtiofsd name={} tag={} source={} socket={} read_only={}",
+                fs.name,
+                fs.tag,
+                fs.source_path,
+                socket_path,
+                fs.read_only
+            );
+            children.push(spawn_virtiofsd(fs, &socket_path)?);
+            wait_for_socket(Path::new(&socket_path), Duration::from_secs(15))
+                .map_err(|e| format!("virtiofsd socket for {} not ready: {}", fs.name, e))?;
+            fs_mounts.push(FsMount {
+                tag: fs.tag.clone(),
+                socket: socket_path,
+            });
+        }
+        Some(VirtiofsdGuard(children))
+    } else {
+        None
+    };
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -284,6 +360,7 @@ where
             kernel_cmdline: Some(kb.cmdline.clone()),
             data_disk_path: data_disk_path.clone(),
             vfio_devices,
+            fs_mounts,
         }
     } else {
         VmConfig {
@@ -302,6 +379,7 @@ where
             kernel_cmdline: None,
             data_disk_path: data_disk_path.clone(),
             vfio_devices,
+            fs_mounts,
         }
     };
 

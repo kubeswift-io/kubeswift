@@ -17,4 +17,11 @@ const (
 	// imports runtimeintent, not the other way around). When updating
 	// either constant, update both.
 	DiskRootDevicePath = "/dev/kubeswift-root"
+
+	// VirtiofsBasePath is the in-pod parent directory under which the pod
+	// builder mounts each virtiofs share's source (hostPath or PVC) at
+	// VirtiofsBasePath/<name>. swiftletd's spawned virtiofsd uses this as
+	// --shared-dir. The unix socket virtiofsd binds is derived separately
+	// by swiftletd from the runtime dir (not under this path).
+	VirtiofsBasePath = "/var/lib/kubeswift/virtiofs"
 )

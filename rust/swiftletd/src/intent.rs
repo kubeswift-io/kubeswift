@@ -42,6 +42,11 @@ pub struct RuntimeIntent {
     /// If empty/absent and network=true, a single default NIC is used (backward compat).
     #[serde(default)]
     pub nics: Option<Vec<NICIntent>>,
+    /// virtiofs shares. For each, swiftletd spawns a virtiofsd backend
+    /// (shared-dir = source_path, listening on socket_path) before Cloud
+    /// Hypervisor, then passes CH `--fs tag=<tag>,socket=<socket_path>`.
+    #[serde(default)]
+    pub filesystems: Option<Vec<FilesystemIntent>>,
     /// GPU passthrough configuration. Populated when gpuProfileRef is set.
     #[serde(default)]
     pub gpu: Option<GPUIntent>,
@@ -153,6 +158,27 @@ pub struct GPUDeviceIntent {
     /// Add x-no-mmap=true (QEMU, large BARs).
     #[serde(default)]
     pub no_mmap: bool,
+}
+
+/// Describes a single virtiofs share (vhost-user-fs). swiftletd runs a
+/// virtiofsd backend on `source_path` listening at `socket_path`, then
+/// hands Cloud Hypervisor `--fs tag=<tag>,socket=<socket_path>`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesystemIntent {
+    /// Per-guest identifier.
+    pub name: String,
+    /// virtiofs mount tag the guest uses.
+    pub tag: String,
+    /// In-pod directory virtiofsd shares (--shared-dir). Set by the controller
+    /// (the source volume mount path). The unix socket is derived by swiftletd
+    /// from the runtime dir (`<run>/<name>.fs.sock`), like the serial/api
+    /// sockets — the controller doesn't need to know the run-dir layout.
+    pub source_path: String,
+    /// Informational: the source volume is mounted read-only by the pod builder
+    /// when set (that is the enforcement); swiftletd just logs it.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// Describes a single network interface for the VM.

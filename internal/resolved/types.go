@@ -46,6 +46,9 @@ type ResolvedGuest struct {
 	// Interfaces from SwiftGuest spec, used for multi-NIC support.
 	// Nil or empty means single default NIC (backward compatible).
 	Interfaces []swiftv1alpha1.GuestInterface `json:"interfaces,omitempty"`
+	// Filesystems from SwiftGuest spec — virtiofs (vhost-user-fs) shares.
+	// Nil or empty means no virtiofs mounts. CH path only.
+	Filesystems []swiftv1alpha1.Filesystem `json:"filesystems,omitempty"`
 	// OSType is the resolved guest OS family ("linux" or "windows"). For a
 	// disk boot it is taken from the SwiftImage (the image defines the OS);
 	// kernel boot is always "linux". Empty resolves to "linux" via GetOSType.
@@ -316,6 +319,30 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 		bridgeIdx++
 	}
 	return nics
+}
+
+// GetFilesystems builds the FilesystemIntent list from spec.filesystems.
+// SourcePath is the canonical in-pod share directory the pod builder mounts
+// the hostPath/PVC source into; swiftletd derives the virtiofsd socket from
+// the runtime dir. Tag defaults to Name when unset.
+func (r *ResolvedGuest) GetFilesystems() []runtimeintent.FilesystemIntent {
+	if len(r.Filesystems) == 0 {
+		return nil
+	}
+	out := make([]runtimeintent.FilesystemIntent, 0, len(r.Filesystems))
+	for _, fs := range r.Filesystems {
+		tag := fs.Tag
+		if tag == "" {
+			tag = fs.Name
+		}
+		out = append(out, runtimeintent.FilesystemIntent{
+			Name:       fs.Name,
+			Tag:        tag,
+			SourcePath: runtimeintent.VirtiofsBasePath + "/" + fs.Name,
+			ReadOnly:   fs.ReadOnly,
+		})
+	}
+	return out
 }
 
 // ResolutionError is returned when resolution fails.
