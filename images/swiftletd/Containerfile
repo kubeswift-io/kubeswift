@@ -57,7 +57,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dnsutils \
     qemu-system-x86 \
     ovmf \
+    virtiofsd \
     && rm -rf /var/lib/apt/lists/*
+
+# virtiofsd (rust-vmm) installs to /usr/libexec/virtiofsd — the default in
+# swiftletd/src/launch.rs (KUBESWIFT_VIRTIOFSD_BINARY overrides). swiftletd
+# spawns it per spec.filesystems entry with --sandbox none (the launcher pod
+# is the security boundary; the default 'namespace' sandbox needs CAP_SYS_ADMIN
+# which the project forbids).
 
 # ovmf package installs to /usr/share/OVMF/OVMF_CODE.fd and /usr/share/OVMF/OVMF_VARS.fd
 # qemu-system-x86 package provides /usr/bin/qemu-system-x86_64
