@@ -104,13 +104,21 @@ func runMigratePreflight(cmd *cobra.Command, c client.Client, guestName, ns stri
 
 	// 4. Mode / VFIO.
 	vfio := guest.HasVFIODevices() || guest.HasSRIOVInterface()
-	nodeLocalBackend := len(guest.Spec.Filesystems) > 0 || len(guest.Spec.VhostUserDevices) > 0
+	nodeLocalBackend := guest.HasNodeLocalVirtioBackends()
 	switch {
 	case mode == migrationv1alpha1.SwiftMigrationModeLive && vfio:
 		line(fail, "live migration requested but the guest has VFIO/SR-IOV devices — not supported; use --preferred-mode offline")
 		blockers++
+	case mode == migrationv1alpha1.SwiftMigrationModeLive && nodeLocalBackend:
+		// Mirrors the webhook's node-local virtio backend gate: virtiofs /
+		// vhost-user backends live on the source node and cannot follow a
+		// live migration.
+		line(fail, "live migration requested but the guest has virtiofs/vhost-user devices (node-local backends) — not supported; use --preferred-mode offline")
+		blockers++
 	case vfio:
 		line(info, "guest has VFIO/SR-IOV devices — only offline migration is possible (mode will resolve to offline)")
+	case nodeLocalBackend:
+		line(info, "guest has virtiofs/vhost-user devices — only offline migration is possible (mode will resolve to offline)")
 	case mode == migrationv1alpha1.SwiftMigrationModeLive:
 		line(info, "mode: live (requested)")
 	case mode == migrationv1alpha1.SwiftMigrationModeOffline:
@@ -119,7 +127,7 @@ func runMigratePreflight(cmd *cobra.Command, c client.Client, guestName, ns stri
 		line(info, "mode: auto — the controller live-migrates when eligible, else offline")
 	}
 	if nodeLocalBackend {
-		line(warn, "guest has virtiofs/vhost-user devices backed by node-local state — the target node must provide the same backends (sockets/shares); these do not move with the guest")
+		line(warn, "virtiofs/vhost-user backends are node-local state — the target node must provide the same backends (sockets/shares); these do not move with the guest")
 	}
 
 	// 5. Architecture + CPU features (source vs target).

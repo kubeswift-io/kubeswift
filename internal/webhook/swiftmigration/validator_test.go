@@ -1298,3 +1298,82 @@ func TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk(t *testing.T) {
 		t.Errorf("offline peer must not block live; got %v", err)
 	}
 }
+
+// Node-local virtio backend gate (virtiofs / vhost-user → offline-only, like
+// VFIO). See docs/design/vhost-user-devices.md §7 and live-migration.md
+// Constraint 3.
+
+func TestValidateClusterState_VirtiofsLiveRejected(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	hp := "/srv/share"
+	guest.Spec.Filesystems = []swiftv1alpha1.Filesystem{
+		{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	_, err := v.validate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "node-local virtio backends") {
+		t.Errorf("live + virtiofs must be rejected by the node-local-backend gate; got %v", err)
+	}
+}
+
+func TestValidateClusterState_VhostUserDeviceLiveRejected(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
+		{Name: "blk0", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/run/spdk/0"},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	_, err := v.validate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "node-local virtio backends") {
+		t.Errorf("live + vhost-user device must be rejected; got %v", err)
+	}
+}
+
+func TestValidateClusterState_VhostUserNICLiveRejected(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
+		{Name: "mgmt"},
+		{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	_, err := v.validate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "node-local virtio backends") {
+		t.Errorf("live + vhost-user NIC must be rejected; got %v", err)
+	}
+}
+
+func TestValidateClusterState_VirtiofsOfflineNotRejected(t *testing.T) {
+	// Offline migration of a virtiofs guest must NOT hit the node-local-backend
+	// gate (offline recreates the launcher pod on the target where the backends
+	// are re-established).
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "default")
+	hp := "/srv/share"
+	guest.Spec.Filesystems = []swiftv1alpha1.Filesystem{
+		{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
+	mig.Spec.AllowIPChange = true
+	_, err := v.validate(context.Background(), mig)
+	if err != nil && strings.Contains(err.Error(), "node-local virtio backends") {
+		t.Errorf("offline virtiofs migration must not hit the node-local-backend gate; got %v", err)
+	}
+}
