@@ -366,7 +366,7 @@ spec:
                             networkRef:
                               description: |-
                                 NetworkRef references a NetworkAttachmentDefinition for this interface.
-                                If nil, this is the primary interface using KubeSwift's default tap+bridge networking.
+                                If nil, this is a node-local tap+bridge interface.
                                 If set, Multus attaches the pod to the referenced NAD.
                               properties:
                                 name:
@@ -380,6 +380,24 @@ spec:
                               required:
                               - name
                               type: object
+                            primary:
+                              description: |-
+                                Primary marks this interface as the guest's primary NIC (its
+                                status.network.primaryIP and the DHCP/management interface). At most one
+                                interface may set primary=true; if none does, the first interface without
+                                a networkRef is the primary (backward compatible).
+
+                                When primary=true AND networkRef is set, the primary NIC rides a
+                                multi-node Multus NAD instead of the node-local bridge: KubeSwift skips
+                                tap0+br0 NAT + node-local dnsmasq for it, the guest's IP comes from the
+                                NAD's IPAM, and the IP is discovered by snooping the bridge neighbor
+                                table (there is no node-local DHCP lease). This is what makes the guest's
+                                primary IP portable across nodes (e.g. for IP-preserving live migration —
+                                see docs/design/network-architecture-requirements.md). The operator
+                                putting the primary on a NAD is also the attestation that the NAD is a
+                                genuine multi-node L2 (the SwiftMigration webhook treats such a guest as
+                                IP-preserving).
+                              type: boolean
                             resourceName:
                               description: |-
                                 ResourceName is the SR-IOV device plugin resource name (e.g., "intel.com/sriov_netdevice").

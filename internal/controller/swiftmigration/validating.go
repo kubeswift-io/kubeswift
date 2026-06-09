@@ -264,18 +264,10 @@ func NodeHasCapacity(
 // scheme registration). Keep this textually identical to
 // internal/webhook/swiftmigration/validator.go's copy.
 func isDefaultNodeLocalNetworking(guest *swiftv1alpha1.SwiftGuest) bool {
-	if len(guest.Spec.Interfaces) == 0 {
-		return true
-	}
-	for _, iface := range guest.Spec.Interfaces {
-		if iface.NetworkRef != nil {
-			return false
-		}
-		if iface.Type == swiftv1alpha1.InterfaceTypeSRIOV {
-			return false
-		}
-	}
-	return true
+	// See the webhook copy: the guest's primary IP is node-local unless the
+	// PRIMARY interface rides a multi-node NAD. Both call the shared api helper
+	// (PrimaryIPPreservedCrossNode) so the two paths can no longer drift.
+	return !guest.PrimaryIPPreservedCrossNode()
 }
 
 // nodeReady mirrors the webhook helper.
