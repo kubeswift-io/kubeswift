@@ -61,7 +61,7 @@ import (
 // EligibilityMismatch / ImageTagMismatch / DstPodConflict outside
 // this classifier — they are controller-side stamps, not swiftletd-
 // reported failures.
-func classifyFailureFromDetail(detail string) string {
+func classifyFailureFromDetail(detail string) migrationv1alpha1.FailureReasonCode {
 	d := strings.ToLower(strings.TrimSpace(detail))
 	if d == "" {
 		return migrationv1alpha1.FailureReasonOther
