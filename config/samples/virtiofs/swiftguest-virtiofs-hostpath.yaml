@@ -1,0 +1,28 @@
+# A disk-boot guest with a virtiofs (vhost-user-fs) share backed by a
+# node-local directory. swiftletd spawns a virtiofsd backend for the share
+# and Cloud Hypervisor connects to it over a unix socket; the guest mounts it
+# with `mount -t virtiofs <tag> <mountpoint>`.
+#
+# Prereqs: the swiftletd image ships virtiofsd, and the guest kernel has
+# CONFIG_VIRTIO_FS (Ubuntu Noble / Rocky 9 cloud images do).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: virtiofs-hostpath
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: default
+  filesystems:
+    - name: scratch          # per-guest id; drives the socket name
+      tag: scratch           # guest: mount -t virtiofs scratch /mnt/scratch
+      source:
+        hostPath: /srv/kubeswift/scratch   # created on the node if absent
+  # In-guest, after boot:
+  #   sudo mkdir -p /mnt/scratch
+  #   sudo mount -t virtiofs scratch /mnt/scratch
+  # Persist via /etc/fstab:
+  #   scratch /mnt/scratch virtiofs defaults,nofail 0 0

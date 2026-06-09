@@ -5,6 +5,7 @@ import (
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -309,5 +310,41 @@ func TestGetNICs_MACUniqueness(t *testing.T) {
 			t.Errorf("MAC collision between interfaces %q and %q: %s", prev, nic.Name, nic.MAC)
 		}
 		seen[nic.MAC] = nic.Name
+	}
+}
+
+func TestGetFilesystems_Nil(t *testing.T) {
+	rg := &ResolvedGuest{}
+	if got := rg.GetFilesystems(); got != nil {
+		t.Errorf("GetFilesystems() = %v, want nil", got)
+	}
+}
+
+func TestGetFilesystems_TagDefaultsAndSourcePath(t *testing.T) {
+	hp := "/srv/share"
+	rg := &ResolvedGuest{
+		Filesystems: []swiftv1alpha1.Filesystem{
+			{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
+			{Name: "ro", Tag: "shared", ReadOnly: true,
+				Source: swiftv1alpha1.FilesystemSource{
+					PVCRef: &corev1.LocalObjectReference{Name: "claim"},
+				}},
+		},
+	}
+	got := rg.GetFilesystems()
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	// Tag defaults to Name when unset.
+	if got[0].Tag != "data" {
+		t.Errorf("[0].Tag = %q, want data (defaulted from name)", got[0].Tag)
+	}
+	// SourcePath is the canonical in-pod share dir.
+	if got[0].SourcePath != runtimeintent.VirtiofsBasePath+"/data" {
+		t.Errorf("[0].SourcePath = %q, want %s/data", got[0].SourcePath, runtimeintent.VirtiofsBasePath)
+	}
+	// Explicit tag + readOnly preserved.
+	if got[1].Tag != "shared" || !got[1].ReadOnly {
+		t.Errorf("[1] = %+v, want tag=shared readOnly=true", got[1])
 	}
 }

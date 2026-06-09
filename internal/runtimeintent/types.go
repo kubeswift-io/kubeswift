@@ -18,6 +18,11 @@ type RuntimeIntent struct {
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
+	// Filesystems is the list of virtiofs shares. For each, swiftletd spawns a
+	// virtiofsd backend (shared-dir = SourcePath, socket = SocketPath) before
+	// Cloud Hypervisor and passes CH `--fs tag=<Tag>,socket=<SocketPath>`.
+	// CH path only.
+	Filesystems []FilesystemIntent `json:"filesystems,omitempty"`
 	// Restore is set when this launcher pod is meant to bring up the VM
 	// from a Tier B local snapshot via Cloud Hypervisor's --restore.
 	// When non-nil, swiftletd skips seed.iso construction and the normal
@@ -26,6 +31,22 @@ type RuntimeIntent struct {
 	// The VM comes up Paused; the SwiftRestore controller drives the
 	// resume separately via the snapshot-action annotation surface.
 	Restore *RestoreIntent `json:"restore,omitempty"`
+}
+
+// FilesystemIntent is one virtiofs share. swiftletd runs a virtiofsd
+// backend on SourcePath listening at SocketPath, then hands CH
+// `--fs tag=<Tag>,socket=<SocketPath>`.
+type FilesystemIntent struct {
+	// Name is the per-guest identifier (drives socket/source naming).
+	Name string `json:"name"`
+	// Tag is the virtiofs mount tag the guest uses.
+	Tag string `json:"tag"`
+	// SourcePath is the in-pod directory virtiofsd shares (--shared-dir).
+	// swiftletd derives the unix socket from the runtime dir.
+	SourcePath string `json:"sourcePath"`
+	// ReadOnly is informational; the pod builder mounts the source read-only
+	// when set (that is the enforcement).
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // RestoreIntent points swiftletd at a snapshot directory for a

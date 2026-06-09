@@ -129,3 +129,74 @@ func TestValidate_GuestClassRequiredForImageBoot(t *testing.T) {
 		g.Spec.GuestClassRef = corev1.LocalObjectReference{}
 	})), "spec.guestClassRef.name is required")
 }
+
+func hostPathFS(name string, mut func(*swiftv1alpha1.Filesystem)) swiftv1alpha1.Filesystem {
+	hp := "/srv/" + name
+	fs := swiftv1alpha1.Filesystem{
+		Name:   name,
+		Source: swiftv1alpha1.FilesystemSource{HostPath: &hp},
+	}
+	if mut != nil {
+		mut(&fs)
+	}
+	return fs
+}
+
+func TestValidate_Filesystems(t *testing.T) {
+	// Valid: two distinct shares, one hostPath one PVC.
+	g := guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{
+			hostPathFS("data", nil),
+			{Name: "pvc", Source: swiftv1alpha1.FilesystemSource{
+				PVCRef: &corev1.LocalObjectReference{Name: "claim"}}},
+		}
+	})
+	if err := validateSwiftGuest(g); err != nil {
+		t.Fatalf("valid filesystems rejected: %v", err)
+	}
+
+	// Duplicate name.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("dup", nil), hostPathFS("dup", nil)}
+	})
+	errContains(t, validateSwiftGuest(g), "is duplicated")
+
+	// Duplicate effective tag (one explicit, one defaulted from name).
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{
+			hostPathFS("a", func(f *swiftv1alpha1.Filesystem) { f.Tag = "shared" }),
+			hostPathFS("shared", nil),
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "tag")
+
+	// Both sources set.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{
+			hostPathFS("both", func(f *swiftv1alpha1.Filesystem) {
+				f.Source.PVCRef = &corev1.LocalObjectReference{Name: "claim"}
+			}),
+		}
+	})
+	errContains(t, validateSwiftGuest(g), "not both")
+
+	// No source set.
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{{Name: "empty"}}
+	})
+	errContains(t, validateSwiftGuest(g), "exactly one of hostPath or pvcRef")
+
+	// Rejected with gpuProfileRef (CH-only in v1).
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("data", nil)}
+	})
+	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+
+	// Rejected with Windows (no virtio-fs guest driver in v1).
+	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
+		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("data", nil)}
+	})
+	errContains(t, validateSwiftGuest(g), "windows")
+}

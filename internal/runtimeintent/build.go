@@ -25,6 +25,7 @@ type ResolvedGuest interface {
 	GetHypervisor() string
 	GetOSType() string
 	GetNICs() []NICIntent
+	GetFilesystems() []FilesystemIntent
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -38,6 +39,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	}
 
 	nics := rg.GetNICs()
+	filesystems := rg.GetFilesystems()
 
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
@@ -45,17 +47,18 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			lifecycle = "start"
 		}
 		return &RuntimeIntent{
-			RootDisk:   RootDiskSpec{Path: "", Format: ""},
-			SeedPath:   "",
-			CPU:        rg.GetCPU(),
-			Memory:     rg.GetMemoryMiB(),
-			Lifecycle:  lifecycle,
-			GuestID:    rg.GetGuestID(),
-			Network:    rg.HasNetwork(),
-			Hypervisor: rg.GetHypervisor(),
-			OSType:     rg.GetOSType(),
-			DataDisk:   dataDisk,
-			NICs:       nics,
+			RootDisk:    RootDiskSpec{Path: "", Format: ""},
+			SeedPath:    "",
+			CPU:         rg.GetCPU(),
+			Memory:      rg.GetMemoryMiB(),
+			Lifecycle:   lifecycle,
+			GuestID:     rg.GetGuestID(),
+			Network:     rg.HasNetwork(),
+			Hypervisor:  rg.GetHypervisor(),
+			OSType:      rg.GetOSType(),
+			DataDisk:    dataDisk,
+			NICs:        nics,
+			Filesystems: filesystems,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -86,15 +89,16 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Path:   rootDiskPath,
 			Format: rg.GetRootDiskFormat(),
 		},
-		SeedPath:   seedPath,
-		CPU:        rg.GetCPU(),
-		Memory:     rg.GetMemoryMiB(),
-		Lifecycle:  lifecycle,
-		GuestID:    rg.GetGuestID(),
-		Network:    rg.HasNetwork(),
-		Hypervisor: rg.GetHypervisor(),
-		OSType:     rg.GetOSType(),
-		DataDisk:   dataDisk,
-		NICs:       nics,
+		SeedPath:    seedPath,
+		CPU:         rg.GetCPU(),
+		Memory:      rg.GetMemoryMiB(),
+		Lifecycle:   lifecycle,
+		GuestID:     rg.GetGuestID(),
+		Network:     rg.HasNetwork(),
+		Hypervisor:  rg.GetHypervisor(),
+		OSType:      rg.GetOSType(),
+		DataDisk:    dataDisk,
+		NICs:        nics,
+		Filesystems: filesystems,
 	}
 }
