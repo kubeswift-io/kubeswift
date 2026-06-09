@@ -142,3 +142,22 @@ func TestValidateUpdate_SpecMutationOnReadyImage_StillRejected(t *testing.T) {
 		t.Errorf("spec mutation on a Ready image (not being deleted) must still be rejected, got: %v", err)
 	}
 }
+
+// TestValidateUpdate_MetadataEditOnReadyImage_Allowed is the TFU #23 contract:
+// a metadata-only edit (e.g. adding a label) on a Ready image that is NOT being
+// deleted must be ALLOWED. old and new come from separate makeImage calls, so
+// their Spec.Source pointers differ while the content is identical — the old
+// `!=` pointer compare falsely rejected this; the DeepEqual fix allows it.
+func TestValidateUpdate_MetadataEditOnReadyImage_Allowed(t *testing.T) {
+	old := makeImage("img", imagev1alpha1.CloneStrategyCopy, "")
+	old.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+
+	new := makeImage("img", imagev1alpha1.CloneStrategyCopy, "")
+	new.Status.Phase = imagev1alpha1.SwiftImagePhaseReady
+	new.Labels = map[string]string{"team": "platform"} // metadata-only change
+
+	v := &Validator{}
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+		t.Errorf("metadata-only edit on a Ready image must be allowed (TFU #23); got: %v", err)
+	}
+}
