@@ -107,8 +107,15 @@ has_nics() {
 }
 
 if has_nics; then
-    # Multi-NIC mode: parse NIC list from intent JSON
-    # Uses lightweight JSON parsing with grep/sed -- no jq dependency
+    # Multi-NIC mode: parse NIC list from intent JSON with python3.
+    # FAIL LOUD if python3 is missing — otherwise the python3 pipe below
+    # produces no output, the per-NIC loop runs zero times, and the script
+    # would falsely report success while configuring NO interfaces (the guest
+    # then fails later at "No IP on br0"). python3 ships in the launcher image.
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 not found but multi-NIC intent present; cannot configure interfaces" >&2
+        exit 1
+    fi
     # Extract the nics array content
     NIC_COUNT=$(grep -o '"tapDevice"' "$INTENT_PATH" | wc -l)
 
