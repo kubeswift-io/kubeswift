@@ -23,6 +23,7 @@ type mockResolvedGuest struct {
 	osType           string
 	filesystems      []FilesystemIntent
 	vhostUserDevices []VhostUserDeviceIntent
+	coreScheduling   string
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -50,6 +51,7 @@ func (m *mockResolvedGuest) GetFilesystems() []FilesystemIntent { return m.files
 func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 	return m.vhostUserDevices
 }
+func (m *mockResolvedGuest) GetCoreScheduling() string { return m.coreScheduling }
 
 // TestBuild_DiskBootBlockMode is the W9 contract test for the
 // runtimeintent producer side: a guest with Block-mode root storage
@@ -383,5 +385,26 @@ func TestBuild_VhostUserDevices(t *testing.T) {
 	none := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "x"})
 	if none.VhostUserDevices != nil {
 		t.Errorf("want nil when none set")
+	}
+}
+
+func TestBuild_CoreScheduling(t *testing.T) {
+	disk := Build(&mockResolvedGuest{
+		hasSeed: true, format: "raw", cpu: 2, memory: 2048, lifecycle: "start",
+		guestID: "default/cs", coreScheduling: "vm",
+	})
+	if disk.CoreScheduling != "vm" {
+		t.Errorf("disk-boot CoreScheduling = %q, want vm", disk.CoreScheduling)
+	}
+	kern := Build(&mockResolvedGuest{
+		hasKernel: true, cpu: 1, memory: 1024, lifecycle: "start",
+		guestID: "default/cs-k", coreScheduling: "vcpu",
+	})
+	if kern.CoreScheduling != "vcpu" {
+		t.Errorf("kernel-boot CoreScheduling = %q, want vcpu", kern.CoreScheduling)
+	}
+	none := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "x"})
+	if none.CoreScheduling != "" {
+		t.Errorf("CoreScheduling = %q, want empty", none.CoreScheduling)
 	}
 }

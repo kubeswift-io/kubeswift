@@ -137,3 +137,20 @@ setting. Test empirically on HGX hardware before implementing.
 | 33 | `/dev/net/tun` not mounted — `ip tuntap add` fails | Add dev-net-tun hostPath CharDevice volume |
 | 34 | `/proc/sys` read-only in non-privileged containers | Pod-level sysctl `net.ipv4.ip_forward=1` |
 | — | Helm chart missing `gpu.kubeswift.io` RBAC rules | Added to chart ClusterRole |
+
+## vCPU core-scheduling (SMT side-channel mitigation)
+
+`SwiftGuestClass.spec.coreScheduling` enables Cloud Hypervisor's vCPU
+core-scheduling (CH v52, `--cpus core_scheduling=`), which mitigates
+cross-thread SMT (hyper-threading) side channels **without disabling SMT
+host-wide**:
+
+- `off` (default) — no core-scheduling.
+- `vm` — all of the guest's vCPUs share one core-scheduling group, so a
+  physical core's sibling threads only ever run **this guest's** vCPUs, never
+  another tenant's. This is the multi-tenant isolation setting.
+- `vcpu` — each vCPU is its own group (strongest; siblings never co-run even
+  within the guest, at a throughput cost).
+
+Set it on the class so a "secure" tier opts whole fleets in. Sample:
+[`config/samples/security/swiftguestclass-core-scheduling.yaml`](../config/samples/security/swiftguestclass-core-scheduling.yaml).

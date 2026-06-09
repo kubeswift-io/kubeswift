@@ -20,6 +20,26 @@ type RootDiskSpec struct {
 	Format DiskFormat        `json:"format"`
 }
 
+// CoreScheduling selects the Cloud Hypervisor vCPU core-scheduling policy
+// (CH v52 `--cpus core_scheduling=`), a defense against cross-thread SMT
+// (hyper-threading) side channels without disabling SMT host-wide.
+//
+//	off  (default) no core-scheduling.
+//	vm   all of the guest's vCPUs share one core-scheduling group, so a
+//	     physical core's sibling threads run only this guest's vCPUs (never
+//	     another tenant's) — the multi-tenant isolation setting.
+//	vcpu each vCPU is its own group (strongest; siblings never co-run even
+//	     within the guest).
+//
+// +kubebuilder:validation:Enum=off;vm;vcpu
+type CoreScheduling string
+
+const (
+	CoreSchedulingOff  CoreScheduling = "off"
+	CoreSchedulingVM   CoreScheduling = "vm"
+	CoreSchedulingVCPU CoreScheduling = "vcpu"
+)
+
 // SwiftGuestClassSpec defines the desired state of SwiftGuestClass.
 type SwiftGuestClassSpec struct {
 	CPU      resource.Quantity `json:"cpu"`
@@ -32,6 +52,12 @@ type SwiftGuestClassSpec struct {
 	// StorageClassName inherited from the source SwiftImage's PVC.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
+	// CoreScheduling sets the vCPU core-scheduling policy for guests of this
+	// class (SMT side-channel mitigation). Default off; use vm for multi-tenant
+	// isolation. Empty is treated as off (no change to the CH --cpus args).
+	// +kubebuilder:default=off
+	// +optional
+	CoreScheduling CoreScheduling `json:"coreScheduling,omitempty"`
 }
 
 // SwiftGuestClass is the Schema for the swiftguestclasses API.

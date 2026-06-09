@@ -58,6 +58,9 @@ type ResolvedGuest struct {
 	// Consumed by the runtime layer (PR 4: windows adds kvm_hyperv on the CH
 	// disk-boot path) and provisioning (PR 5: cloudbase-init vs cloud-init).
 	OSType string `json:"osType,omitempty"`
+	// CoreScheduling is the vCPU core-scheduling policy from the SwiftGuestClass
+	// ("off"/"vm"/"vcpu"). Empty/"off" omits the CH --cpus core_scheduling param.
+	CoreScheduling string `json:"coreScheduling,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -255,6 +258,15 @@ func (r *ResolvedGuest) GetOSType() string {
 		return "linux"
 	}
 	return r.OSType
+}
+
+// GetCoreScheduling returns the vCPU core-scheduling policy ("vm"/"vcpu"), or
+// "" when off/unset (no CH core_scheduling param).
+func (r *ResolvedGuest) GetCoreScheduling() string {
+	if r.CoreScheduling == "" || r.CoreScheduling == string(swiftv1alpha1.CoreSchedulingOff) {
+		return ""
+	}
+	return r.CoreScheduling
 }
 
 // IsWindows reports whether the resolved guest is a Windows guest.
