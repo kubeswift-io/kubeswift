@@ -66,11 +66,12 @@ pub fn spawn_ch_restore(
     api_socket: &Path,
     source_url: &str,
     auto_resume: bool,
+    memory_restore_mode: Option<&str>,
 ) -> Result<Child, std::io::Error> {
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
     rm_stale_api_socket(api_socket);
-    let args = restore_args(api_socket, source_url, auto_resume);
+    let args = restore_args(api_socket, source_url, auto_resume, memory_restore_mode);
     std::process::Command::new(&binary).args(&args).spawn()
 }
 
@@ -115,7 +116,12 @@ fn receive_args(api_socket: &Path) -> Vec<String> {
 /// Build the argv for a restore-receive CH invocation. Split out from
 /// [`spawn_ch_restore`] so the argv shape is unit-testable without
 /// actually spawning CH.
-fn restore_args(api_socket: &Path, source_url: &str, auto_resume: bool) -> Vec<String> {
+fn restore_args(
+    api_socket: &Path,
+    source_url: &str,
+    auto_resume: bool,
+    memory_restore_mode: Option<&str>,
+) -> Vec<String> {
     // CH expects --restore as a separate flag, with `source_url=...` as its
     // single value (no equals after the flag itself). `resume=true` (CH v52)
     // brings the guest up RUNNING instead of paused — set for cloneFromSnapshot
@@ -123,6 +129,16 @@ fn restore_args(api_socket: &Path, source_url: &str, auto_resume: bool) -> Vec<S
     let mut restore = format!("source_url={}", source_url);
     if auto_resume {
         restore.push_str(",resume=true");
+    }
+    // memory_restore_mode (CH v52): `ondemand` registers guest memory with
+    // userfaultfd so the VM resumes immediately and pages fault in lazily —
+    // cutting restore-to-resume latency for large guests vs the default
+    // eager `copy`. Safe because every KubeSwift restore keeps the snapshot
+    // memory file local + mounted read-only for the pod's lifetime. None
+    // omits the field so CH uses its native default (copy); on v51.x the
+    // field is unknown, so callers on older CH must pass None.
+    if let Some(mode) = memory_restore_mode {
+        restore.push_str(&format!(",memory_restore_mode={}", mode));
     }
     vec![
         format!("--api-socket={}", api_socket.display()),
@@ -193,11 +209,12 @@ mod tests {
             Path::new("/run/foo/ch.sock"),
             "file:///var/lib/kubeswift/snapshots/default-snap1/",
             false,
+            None,
         );
         assert_eq!(args.len(), 3);
         assert_eq!(args[0], "--api-socket=/run/foo/ch.sock");
         assert_eq!(args[1], "--restore");
-        // auto_resume=false (SwiftRestore): no resume= suffix.
+        // auto_resume=false (SwiftRestore), no memory mode: bare source_url.
         assert_eq!(
             args[2],
             "source_url=file:///var/lib/kubeswift/snapshots/default-snap1/"
@@ -208,16 +225,41 @@ mod tests {
     fn restore_args_auto_resume_adds_resume_true() {
         // cloneFromSnapshot: resume=true so CH brings the guest up running
         // (replaces the resumeCloneIfNeeded round-trip, Bug #73).
-        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", true);
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", true, None);
         assert_eq!(args[2], "source_url=file:///snap/,resume=true");
         // and false omits it.
-        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", false);
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", false, None);
         assert!(!args[2].contains("resume="));
     }
 
     #[test]
+    fn restore_args_memory_restore_mode() {
+        // ondemand (cloneFromSnapshot default): userfaultfd lazy paging.
+        let args = restore_args(
+            Path::new("/run/ch.sock"),
+            "file:///snap/",
+            true,
+            Some("ondemand"),
+        );
+        assert_eq!(
+            args[2],
+            "source_url=file:///snap/,resume=true,memory_restore_mode=ondemand"
+        );
+        // None omits it (CH default copy); explicit copy is also honored.
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap/", false, None);
+        assert!(!args[2].contains("memory_restore_mode"));
+        let args = restore_args(
+            Path::new("/run/ch.sock"),
+            "file:///snap/",
+            false,
+            Some("copy"),
+        );
+        assert_eq!(args[2], "source_url=file:///snap/,memory_restore_mode=copy");
+    }
+
+    #[test]
     fn restore_args_relative_socket_path() {
-        let args = restore_args(Path::new("ch.sock"), "file:///snap", false);
+        let args = restore_args(Path::new("ch.sock"), "file:///snap", false, None);
         assert_eq!(args[0], "--api-socket=ch.sock");
     }
 
@@ -228,7 +270,7 @@ mod tests {
         // CLI flags. Asserting the absence here protects against a
         // future regression where someone tries to "helpfully" pass
         // disks or networks through.
-        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap", false);
+        let args = restore_args(Path::new("/run/ch.sock"), "file:///snap", false, None);
         let joined = args.join(" ");
         assert!(!joined.contains("--disk"), "argv leaked --disk: {}", joined);
         assert!(!joined.contains("--net"), "argv leaked --net: {}", joined);
@@ -279,6 +321,7 @@ mod tests {
             Path::new("/run/foo/ch.sock"),
             "file:///var/lib/kubeswift/snapshots/x/",
             false,
+            None,
         )
         .expect("spawn fake CH");
         let status = child.wait().expect("wait fake CH");

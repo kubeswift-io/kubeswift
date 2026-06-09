@@ -302,6 +302,11 @@ func TestCloneRestoreAnnotations_SetsAutoResume(t *testing.T) {
 	if annos[AnnotationRestoreAutoResume] != "true" {
 		t.Errorf("clone restore annotations must set auto-resume=true; got %q", annos[AnnotationRestoreAutoResume])
 	}
+	// CH v52 userfaultfd: cloneFromSnapshot defaults to ondemand (fast pool
+	// scale-up; snapshot file is local + RO, so lazy paging is safe).
+	if annos[AnnotationRestoreMemoryMode] != "ondemand" {
+		t.Errorf("clone restore must set memory-mode=ondemand; got %q", annos[AnnotationRestoreMemoryMode])
+	}
 	if annos[AnnotationRestoreMode] != RestoreModeClone {
 		t.Errorf("clone restore should be clone mode; got %q", annos[AnnotationRestoreMode])
 	}

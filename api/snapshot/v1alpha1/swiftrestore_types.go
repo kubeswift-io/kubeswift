@@ -87,6 +87,21 @@ type SwiftRestoreSpec struct {
 	// node).
 	// +optional
 	TargetNode string `json:"targetNode,omitempty"`
+	// MemoryRestoreMode selects Cloud Hypervisor's `memory_restore_mode`
+	// (CH >= v52) for the restore-receive launcher:
+	//   copy     — eager: read the entire memory image before resuming
+	//              (default; predictable, the conservative DR posture).
+	//   ondemand — userfaultfd demand paging: resume immediately and fault
+	//              pages in lazily, cutting restore-to-resume latency for
+	//              large guests. Safe here because the snapshot memory file
+	//              is local + mounted read-only for the pod's lifetime.
+	// cloneFromSnapshot always uses ondemand (fast pool scale-up); this field
+	// is the opt-in for SwiftRestore. Only meaningful for memory snapshots
+	// (local / s3 backends); ignored for csi-volume-snapshot (disk-only).
+	// +kubebuilder:validation:Enum=copy;ondemand
+	// +kubebuilder:default=copy
+	// +optional
+	MemoryRestoreMode string `json:"memoryRestoreMode,omitempty"`
 }
 
 // SwiftRestoreGuestRef is the SwiftGuest the SwiftRestore produced (or

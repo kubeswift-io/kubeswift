@@ -126,8 +126,17 @@ A memory-snapshot round-trip on the dev cluster (the existing snapshot e2e):
 | PR | Scope | Gate |
 |---|---|---|
 | 1 | This scoping doc. | — |
-| 2 | userfaultfd restore: `RestoreIntent.memoryRestoreMode` plumbing (Go+Rust); `cloneFromSnapshot` defaults `ondemand`; `SwiftRestore.spec.memoryRestoreMode` opt-in (default `copy`). | After PR #161 cluster-validated |
+| 2 | **SHIPPED** — userfaultfd restore: `RestoreIntent.memoryRestoreMode` plumbing (Go+Rust); `spawn_ch_restore` appends `,memory_restore_mode=<mode>`; `cloneFromSnapshot` defaults `ondemand`; `SwiftRestore.spec.memoryRestoreMode` opt-in (enum `copy`/`ondemand`, default `copy`). | After PR #161 cluster-validated (done; the #165 `shared=on` fix unblocked the memory-snapshot path) |
 | 3 | (follow-up) Tier C upload compression (§3 option A) — `snapshot-s3` stream-compress + manifest suffix. | — |
 | — | Sparse snapshots: **no PR** (automatic on v52); confirmed in the PR 2 validation round-trip. | — |
+
+> **PR 2 plumbing summary:** controller sets the
+> `snapshot.kubeswift.io/restore-memory-mode` annotation (cloneFromSnapshot →
+> `ondemand` in `cloneRestoreAnnotations`; SwiftRestore → `restore.Spec.MemoryRestoreMode`
+> when non-default in `restoreAnnotations`) → `RestoreParamsFromAnnotations` →
+> `RuntimeIntent.Restore.MemoryRestoreMode` → swiftletd `RestoreIntent.memory_restore_mode`
+> → `spawn_ch_restore(..., memory_restore_mode)` → `,memory_restore_mode=<mode>` on
+> `--restore`. Empty/`copy` omits the suffix (CH eager default). The CRD enum
+> rejects bad values at admission (no webhook rule needed).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

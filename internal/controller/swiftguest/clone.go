@@ -153,6 +153,11 @@ func cloneRestoreAnnotations(
 		// don't need the resumeCloneIfNeeded action round-trip (Bug #73). Only
 		// the cloneFromSnapshot path sets this; SwiftRestore drives resume itself.
 		AnnotationRestoreAutoResume: "true",
+		// CH v52: userfaultfd demand-paged restore. cloneFromSnapshot defaults
+		// to ondemand — fast pool scale-up is the goal and the latency win is
+		// the point; the snapshot file is local + mounted read-only for the
+		// pod's lifetime, so lazy paging is safe (snapshot-ch-v52-efficiency.md).
+		AnnotationRestoreMemoryMode: "ondemand",
 	}
 	if cloneRegenIncludesNonMAC(guest.Spec.CloneFromSnapshot) {
 		annos[AnnotationRestoreAppendCmdlineMarker] = "true"
