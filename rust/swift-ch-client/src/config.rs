@@ -80,6 +80,24 @@ pub struct VmConfig {
     /// The backend (virtiofsd) is spawned by swiftletd before CH; CH only
     /// connects to the socket.
     pub fs_mounts: Vec<FsMount>,
+    /// vhost-user-blk disks (operator backend, e.g. SPDK). Each socket
+    /// produces a `--disk vhost_user=on,socket=<sock>` argument. The disk
+    /// appears as a virtio-blk device after the root/data disks.
+    pub vhost_user_blk_sockets: Vec<String>,
+    /// Generic vhost-user devices. Each produces a
+    /// `--generic-vhost-user virtio_id=<id>,socket=<sock>[,queue_sizes=[...]]`.
+    pub generic_vhost_user: Vec<GenericVhostUser>,
+}
+
+/// A generic vhost-user device for `--generic-vhost-user`.
+#[derive(Debug, Clone)]
+pub struct GenericVhostUser {
+    /// virtio device-type id: a number or symbolic name ("block", "fs", ...).
+    pub virtio_id: String,
+    /// Operator backend socket path (mounted into the launcher).
+    pub socket: String,
+    /// Optional per-queue sizes; empty omits the param (CH defaults apply).
+    pub queue_sizes: Vec<u32>,
 }
 
 /// A virtiofs (vhost-user-fs) share for `--fs`.
@@ -261,6 +279,28 @@ impl VmConfig {
             ));
         }
 
+        // vhost-user-blk disks: operator backend, no path — just the socket.
+        for sock in &self.vhost_user_blk_sockets {
+            args.push("--disk".to_string());
+            args.push(format!("vhost_user=on,socket={}", sock));
+        }
+
+        // Generic vhost-user devices.
+        for dev in &self.generic_vhost_user {
+            args.push("--generic-vhost-user".to_string());
+            let mut arg = format!("virtio_id={},socket={}", dev.virtio_id, dev.socket);
+            if !dev.queue_sizes.is_empty() {
+                let list = dev
+                    .queue_sizes
+                    .iter()
+                    .map(|q| q.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                arg.push_str(&format!(",queue_sizes=[{}]", list));
+            }
+            args.push(arg);
+        }
+
         args
     }
 }
@@ -287,6 +327,8 @@ mod tests {
             data_disk_path: String::new(),
             vfio_devices: vec![],
             fs_mounts: vec![],
+            vhost_user_blk_sockets: vec![],
+            generic_vhost_user: vec![],
         }
     }
 
@@ -344,6 +386,54 @@ mod tests {
         assert!(
             !none.contains("--fs"),
             "unexpected --fs without mounts: {}",
+            none
+        );
+    }
+
+    #[test]
+    fn test_vhost_user_blk_and_generic_emit_args() {
+        let mut cfg = make_disk_boot_config();
+        cfg.vhost_user_blk_sockets = vec!["/run/spdk/vhost.0".to_string()];
+        cfg.generic_vhost_user = vec![
+            GenericVhostUser {
+                virtio_id: "block".to_string(),
+                socket: "/run/x/gen.sock".to_string(),
+                queue_sizes: vec![1024, 1024],
+            },
+            GenericVhostUser {
+                virtio_id: "fs".to_string(),
+                socket: "/run/x/gen2.sock".to_string(),
+                queue_sizes: vec![],
+            },
+        ];
+        let joined = cfg.to_args().join(" ");
+        // vhost-user-blk: a --disk with vhost_user=on,socket= and NO path=.
+        assert!(
+            joined.contains("--disk vhost_user=on,socket=/run/spdk/vhost.0"),
+            "missing vhost-user-blk --disk: {}",
+            joined
+        );
+        // generic with queue_sizes -> bracketed list.
+        assert!(
+            joined.contains(
+                "--generic-vhost-user virtio_id=block,socket=/run/x/gen.sock,queue_sizes=[1024,1024]"
+            ),
+            "missing generic w/ queue_sizes: {}",
+            joined
+        );
+        // generic without queue_sizes -> no queue_sizes param.
+        assert!(
+            joined.contains("--generic-vhost-user virtio_id=fs,socket=/run/x/gen2.sock")
+                && !joined.contains("virtio_id=fs,socket=/run/x/gen2.sock,queue_sizes"),
+            "generic w/o queue_sizes wrong: {}",
+            joined
+        );
+        // None set -> no vhost-user-blk / generic args.
+        let none = make_disk_boot_config().to_args().join(" ");
+        assert!(!none.contains("vhost_user=on"), "unexpected blk: {}", none);
+        assert!(
+            !none.contains("--generic-vhost-user"),
+            "unexpected generic: {}",
             none
         );
     }

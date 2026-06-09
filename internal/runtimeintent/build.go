@@ -26,6 +26,7 @@ type ResolvedGuest interface {
 	GetOSType() string
 	GetNICs() []NICIntent
 	GetFilesystems() []FilesystemIntent
+	GetVhostUserDevices() []VhostUserDeviceIntent
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -40,6 +41,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 
 	nics := rg.GetNICs()
 	filesystems := rg.GetFilesystems()
+	vhostUserDevices := rg.GetVhostUserDevices()
 
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
@@ -56,9 +58,10 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Network:     rg.HasNetwork(),
 			Hypervisor:  rg.GetHypervisor(),
 			OSType:      rg.GetOSType(),
-			DataDisk:    dataDisk,
-			NICs:        nics,
-			Filesystems: filesystems,
+			DataDisk:         dataDisk,
+			NICs:             nics,
+			Filesystems:      filesystems,
+			VhostUserDevices: vhostUserDevices,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -96,9 +99,10 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		GuestID:     rg.GetGuestID(),
 		Network:     rg.HasNetwork(),
 		Hypervisor:  rg.GetHypervisor(),
-		OSType:      rg.GetOSType(),
-		DataDisk:    dataDisk,
-		NICs:        nics,
-		Filesystems: filesystems,
+		OSType:           rg.GetOSType(),
+		DataDisk:         dataDisk,
+		NICs:             nics,
+		Filesystems:      filesystems,
+		VhostUserDevices: vhostUserDevices,
 	}
 }
