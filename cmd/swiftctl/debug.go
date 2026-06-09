@@ -191,9 +191,14 @@ func runDebug(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	// 3. CH command line (from /proc - no ps/pgrep needed)
+	// 3. CH command line (from /proc — no ps/pgrep needed; cmdline is NOT
+	// truncated to 15 chars like /proc/<pid>/comm, so it reliably matches the
+	// 16-char "cloud-hypervisor" name, TFU #8). Anchor on argv[0]'s basename so
+	// the scan does not match unrelated processes whose args merely MENTION
+	// cloud-hypervisor — including this very `sh -c` scan command (which contains
+	// the literal string in its case pattern and would otherwise list itself).
 	fmt.Println("--- Cloud Hypervisor command line (from /proc) ---")
-	out, err = execInPod([]string{"sh", "-c", `for d in /proc/[0-9]*; do pid=${d#/proc/}; [ -r /proc/$pid/cmdline ] 2>/dev/null || continue; cmd=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\0' ' '); case "$cmd" in *cloud-hypervisor*) echo "PID $pid: $cmd";; esac; done`})
+	out, err = execInPod([]string{"sh", "-c", `for d in /proc/[0-9]*; do pid=${d#/proc/}; [ -r "/proc/$pid/cmdline" ] || continue; argv0=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | head -1); [ "${argv0##*/}" = "cloud-hypervisor" ] || continue; echo "PID $pid: $(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"; done`})
 	if err != nil {
 		fmt.Printf("  (failed: %v)\n", err)
 	} else if len(bytes.TrimSpace([]byte(out))) == 0 {
