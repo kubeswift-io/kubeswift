@@ -440,6 +440,18 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 		return nil, fmt.Errorf("SwiftGuest %q has an SR-IOV interface; cross-node migration of SR-IOV NIC passthrough is not supported",
 			guest.Name)
 	}
+	// Node-local virtio backend gate (virtiofs / vhost-user — design doc
+	// vhost-user-devices.md §7). The virtiofsd processes, their source mounts,
+	// and the operator's vhost-user backend sockets live in/on the SOURCE pod
+	// and node; CH live migration does not transfer them, so the resumed guest's
+	// virtiofs mounts / vhost-user devices would break mid-flight. Offline
+	// migration is fine: the launcher pod is recreated on the target, where the
+	// backends are re-established (auto mode resolves these guests to offline,
+	// mirroring VFIO).
+	if guest.HasNodeLocalVirtioBackends() && mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		return nil, fmt.Errorf("SwiftGuest %q has node-local virtio backends (spec.filesystems, spec.vhostUserDevices, or a vhost-user interface); they cannot live-migrate — use mode=offline (or auto, which resolves to offline for such guests)",
+			guest.Name)
+	}
 
 	// Live-mode storage gate (W6 follow-up; Phase 3a kernel-boot
 	// adjustment).
