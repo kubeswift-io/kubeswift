@@ -27,6 +27,7 @@ type ResolvedGuest interface {
 	GetNICs() []NICIntent
 	GetFilesystems() []FilesystemIntent
 	GetVhostUserDevices() []VhostUserDeviceIntent
+	GetCoreScheduling() string
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -42,6 +43,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	nics := rg.GetNICs()
 	filesystems := rg.GetFilesystems()
 	vhostUserDevices := rg.GetVhostUserDevices()
+	coreScheduling := rg.GetCoreScheduling()
 
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
@@ -62,6 +64,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			NICs:             nics,
 			Filesystems:      filesystems,
 			VhostUserDevices: vhostUserDevices,
+			CoreScheduling:   coreScheduling,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -104,5 +107,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		NICs:             nics,
 		Filesystems:      filesystems,
 		VhostUserDevices: vhostUserDevices,
+		CoreScheduling:   coreScheduling,
 	}
 }

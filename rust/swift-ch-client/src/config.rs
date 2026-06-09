@@ -50,6 +50,9 @@ pub struct VmConfig {
     /// KVM Hyper-V enlightenments (docs/design/windows-guest-support-spike.md).
     /// Harmless/unused for Linux guests (default false).
     pub kvm_hyperv: bool,
+    /// vCPU core-scheduling policy ("vm"/"vcpu"), appended to --cpus as
+    /// core_scheduling=<v>. None = off (param omitted). SMT side-channel mitigation.
+    pub core_scheduling: Option<String>,
     /// Path for Cloud Hypervisor API socket.
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
@@ -145,6 +148,11 @@ impl VmConfig {
                 if self.kvm_hyperv {
                     // Windows: KVM Hyper-V enlightenments (required on CH).
                     cpus.push_str(",kvm_hyperv=on");
+                }
+                if let Some(ref cs) = self.core_scheduling {
+                    // vCPU core-scheduling (SMT side-channel mitigation): "vm"
+                    // or "vcpu". Omitted when off.
+                    cpus.push_str(&format!(",core_scheduling={}", cs));
                 }
                 cpus
             },
@@ -315,6 +323,7 @@ mod tests {
             memory_mib: 2048,
             cpus: 2,
             kvm_hyperv: false,
+            core_scheduling: None,
             api_socket: "/tmp/ch.sock".to_string(),
             seed_path: "/data/seed".to_string(),
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
@@ -434,6 +443,25 @@ mod tests {
         assert!(
             !none.contains("--generic-vhost-user"),
             "unexpected generic: {}",
+            none
+        );
+    }
+
+    #[test]
+    fn test_core_scheduling_emits_on_cpus() {
+        let mut cfg = make_disk_boot_config();
+        cfg.core_scheduling = Some("vm".to_string());
+        let joined = cfg.to_args().join(" ");
+        assert!(
+            joined.contains("--cpus boot=") && joined.contains(",core_scheduling=vm"),
+            "missing core_scheduling on --cpus: {}",
+            joined
+        );
+        // None -> no core_scheduling param.
+        let none = make_disk_boot_config().to_args().join(" ");
+        assert!(
+            !none.contains("core_scheduling"),
+            "unexpected core_scheduling: {}",
             none
         );
     }
