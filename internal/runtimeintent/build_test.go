@@ -6,22 +6,23 @@ import (
 )
 
 type mockResolvedGuest struct {
-	hasSeed        bool
-	hasKernel      bool
-	hasNetwork     bool
-	hasDataDisk    bool
-	format         string
-	rootVolumeMode string // W9: "Filesystem" (default) or "Block"
-	cpu            int
-	memory         int
-	lifecycle      string
-	guestID        string
-	kernelPath     string
-	initramfsPath  string
-	kernelCmdline  string
-	hypervisor     string
-	osType         string
-	filesystems    []FilesystemIntent
+	hasSeed          bool
+	hasKernel        bool
+	hasNetwork       bool
+	hasDataDisk      bool
+	format           string
+	rootVolumeMode   string // W9: "Filesystem" (default) or "Block"
+	cpu              int
+	memory           int
+	lifecycle        string
+	guestID          string
+	kernelPath       string
+	initramfsPath    string
+	kernelCmdline    string
+	hypervisor       string
+	osType           string
+	filesystems      []FilesystemIntent
+	vhostUserDevices []VhostUserDeviceIntent
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -46,6 +47,9 @@ func (m *mockResolvedGuest) GetOSType() string {
 }
 func (m *mockResolvedGuest) GetNICs() []NICIntent               { return nil }
 func (m *mockResolvedGuest) GetFilesystems() []FilesystemIntent { return m.filesystems }
+func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
+	return m.vhostUserDevices
+}
 
 // TestBuild_DiskBootBlockMode is the W9 contract test for the
 // runtimeintent producer side: a guest with Block-mode root storage
@@ -354,5 +358,30 @@ func TestSerializeParseRoundtrip_WithDataDisk(t *testing.T) {
 	}
 	if parsed.DataDisk.Path != intent.DataDisk.Path {
 		t.Errorf("parsed dataDisk.path = %q, want %q", parsed.DataDisk.Path, intent.DataDisk.Path)
+	}
+}
+
+func TestBuild_VhostUserDevices(t *testing.T) {
+	devs := []VhostUserDeviceIntent{
+		{Name: "d0", Type: "blk", Socket: "/run/spdk/0"},
+		{Name: "g0", Type: "generic", Socket: "/run/x/g", VirtioID: "fs", QueueSizes: []int32{1024}},
+	}
+	disk := Build(&mockResolvedGuest{
+		hasSeed: true, format: "raw", cpu: 2, memory: 2048, lifecycle: "start",
+		guestID: "default/vu", vhostUserDevices: devs,
+	})
+	if len(disk.VhostUserDevices) != 2 {
+		t.Fatalf("disk-boot len = %d, want 2", len(disk.VhostUserDevices))
+	}
+	kern := Build(&mockResolvedGuest{
+		hasKernel: true, cpu: 1, memory: 1024, lifecycle: "start",
+		guestID: "default/vu-k", vhostUserDevices: devs,
+	})
+	if len(kern.VhostUserDevices) != 2 {
+		t.Fatalf("kernel-boot len = %d, want 2", len(kern.VhostUserDevices))
+	}
+	none := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "x"})
+	if none.VhostUserDevices != nil {
+		t.Errorf("want nil when none set")
 	}
 }

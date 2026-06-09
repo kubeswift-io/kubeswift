@@ -60,6 +60,9 @@ func Merge(
 	// Copy virtiofs shares from SwiftGuest spec (vhost-user-fs).
 	rg.Filesystems = guest.Spec.Filesystems
 
+	// Copy operator-backed vhost-user devices (blk + generic).
+	rg.VhostUserDevices = guest.Spec.VhostUserDevices
+
 	// Storage: per-field merge — guest > class > system defaults.
 	rg.Storage = MergeStorage(guest, guestClass)
 

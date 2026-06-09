@@ -47,6 +47,11 @@ pub struct RuntimeIntent {
     /// Hypervisor, then passes CH `--fs tag=<tag>,socket=<socket_path>`.
     #[serde(default)]
     pub filesystems: Option<Vec<FilesystemIntent>>,
+    /// Operator-backed vhost-user devices: vhost-user-blk disks and generic
+    /// vhost-user devices. swiftletd hands each to CH (--disk vhost_user=on
+    /// for blk; --generic-vhost-user for generic). CH path only.
+    #[serde(default)]
+    pub vhost_user_devices: Option<Vec<VhostUserDeviceIntent>>,
     /// GPU passthrough configuration. Populated when gpuProfileRef is set.
     #[serde(default)]
     pub gpu: Option<GPUIntent>,
@@ -179,6 +184,32 @@ pub struct FilesystemIntent {
     /// when set (that is the enforcement); swiftletd just logs it.
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// An operator-backed vhost-user device (blk or generic). swiftletd hands the
+/// socket opaquely to Cloud Hypervisor; the operator runs the backend.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VhostUserDeviceIntent {
+    /// Per-guest identifier.
+    pub name: String,
+    /// "blk" (vhost-user-blk disk) or "generic" (any vhost-user device).
+    pub r#type: String,
+    /// Operator backend socket path (mounted into the launcher).
+    pub socket: String,
+    /// virtio device-type id for a generic device (number or symbolic name).
+    #[serde(default)]
+    pub virtio_id: Option<String>,
+    /// Optional per-queue sizes for a generic device.
+    #[serde(default)]
+    pub queue_sizes: Option<Vec<u32>>,
+}
+
+impl VhostUserDeviceIntent {
+    /// True if this is a vhost-user-blk disk.
+    pub fn is_blk(&self) -> bool {
+        self.r#type == "blk"
+    }
 }
 
 /// Describes a single network interface for the VM.

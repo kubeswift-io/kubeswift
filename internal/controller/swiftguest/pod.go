@@ -41,33 +41,48 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	applyNodeName(pod, guest)
 	applyDataDiskRefs(pod, guest)
 	applyFilesystems(pod, guest)
-	applyVhostUserNetVolumes(pod, guest)
+	applyVhostUserSocketVolumes(pod, guest)
 	return pod
 }
 
-// applyVhostUserNetVolumes mounts the node directory holding each vhost-user
-// interface's backend socket into the launcher at the SAME path, so Cloud
-// Hypervisor (running in the launcher container) can connect to the
-// operator-provided listener. KubeSwift does not run the backend — the
-// directory is a hostPath the operator's DPDK/OVS datapath populates (the same
-// posture as SR-IOV expecting pre-provisioned VFs). Directories are deduped so
-// several sockets under one dir share a single mount.
-func applyVhostUserNetVolumes(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+// applyVhostUserSocketVolumes mounts the node directory holding each
+// operator-provided vhost-user backend socket into the launcher at the SAME
+// path, so Cloud Hypervisor (running in the launcher container) can connect to
+// the listener. This covers BOTH vhost-user-net interfaces (type: vhost-user)
+// and vhost-user devices (spec.vhostUserDevices — blk and generic). KubeSwift
+// does not run the backend — the directory is a hostPath the operator's
+// datapath (DPDK/OVS/SPDK) populates, the same posture as SR-IOV expecting
+// pre-provisioned VFs.
+//
+// Directories are deduped across BOTH sources in a single pass: a vhost-user
+// NIC socket and a vhost-user-blk socket under the same directory must mount
+// that directory exactly once (two mounts at the same path would be rejected
+// at pod admission).
+func applyVhostUserSocketVolumes(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	if len(pod.Spec.Containers) == 0 {
 		return
 	}
-	hostPathType := corev1.HostPathDirectoryOrCreate
-	seen := map[string]string{} // dir -> volume name
+	sockets := make([]string, 0, len(guest.Spec.Interfaces)+len(guest.Spec.VhostUserDevices))
 	for _, iface := range guest.Spec.Interfaces {
-		if iface.Type != swiftv1alpha1.InterfaceTypeVhostUser || iface.Socket == "" {
-			continue
+		if iface.Type == swiftv1alpha1.InterfaceTypeVhostUser && iface.Socket != "" {
+			sockets = append(sockets, iface.Socket)
 		}
-		dir := filepath.Dir(iface.Socket)
+	}
+	for _, d := range guest.Spec.VhostUserDevices {
+		if d.Socket != "" {
+			sockets = append(sockets, d.Socket)
+		}
+	}
+
+	hostPathType := corev1.HostPathDirectoryOrCreate
+	seen := map[string]struct{}{}
+	for _, sock := range sockets {
+		dir := filepath.Dir(sock)
 		if _, ok := seen[dir]; ok {
 			continue
 		}
-		volName := fmt.Sprintf("vhost-net-%d", len(seen))
-		seen[dir] = volName
+		volName := fmt.Sprintf("vhost-sock-%d", len(seen))
+		seen[dir] = struct{}{}
 		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 			Name: volName,
 			VolumeSource: corev1.VolumeSource{

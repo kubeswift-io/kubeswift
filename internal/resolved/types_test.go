@@ -382,3 +382,27 @@ func TestGetNICs_VhostUser(t *testing.T) {
 		t.Errorf("nics[2].MAC = %q, want pinned 52:54:00:00:00:fe", nics[2].MAC)
 	}
 }
+
+func TestGetVhostUserDevices(t *testing.T) {
+	rg := &ResolvedGuest{}
+	if rg.GetVhostUserDevices() != nil {
+		t.Errorf("nil when none set")
+	}
+	rg = &ResolvedGuest{
+		VhostUserDevices: []swiftv1alpha1.VhostUserDevice{
+			{Name: "disk0", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/run/spdk/vhost.0"},
+			{Name: "gen0", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/run/x/g.sock",
+				VirtioID: "block", QueueSizes: []int32{1024}},
+		},
+	}
+	out := rg.GetVhostUserDevices()
+	if len(out) != 2 {
+		t.Fatalf("len = %d, want 2", len(out))
+	}
+	if out[0].Type != "blk" || out[0].Socket != "/run/spdk/vhost.0" {
+		t.Errorf("out[0] = %+v", out[0])
+	}
+	if out[1].VirtioID != "block" || len(out[1].QueueSizes) != 1 || out[1].QueueSizes[0] != 1024 {
+		t.Errorf("out[1] = %+v", out[1])
+	}
+}
