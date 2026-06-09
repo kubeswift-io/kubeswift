@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -124,10 +125,15 @@ func validateSwiftImageUpdate(oldImg, img *imagev1alpha1.SwiftImage) error {
 		return err
 	}
 	if oldImg.Status.Phase == imagev1alpha1.SwiftImagePhaseReady {
-		// osType is a value (string) compare, so unlike Spec.Source it does not
-		// have the pointer-identity foot-gun (TFU-17/23) — a Ready image's OS is
-		// fixed by what was imported, so it is immutable.
-		if oldImg.Spec.Source != img.Spec.Source || oldImg.Spec.Format != img.Spec.Format ||
+		// Source is compared by CONTENT, not pointer identity (TFU #23). The old
+		// (etcd) and new (admission request) objects are independent decodes, so
+		// their Source pointers always differ; a `!=` pointer compare fired on
+		// EVERY update of a Ready image — including innocuous metadata edits
+		// (label/annotation) where the spec content is unchanged. DeepEqual
+		// compares the dereferenced HTTP/Upload/PVCClone content. Format/OSType
+		// are strings (value compare, no foot-gun).
+		if !apiequality.Semantic.DeepEqual(oldImg.Spec.Source, img.Spec.Source) ||
+			oldImg.Spec.Format != img.Spec.Format ||
 			oldImg.Spec.OSType != img.Spec.OSType {
 			return fmt.Errorf("SwiftImage spec is immutable when status.phase is Ready")
 		}
