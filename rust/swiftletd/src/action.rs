@@ -720,6 +720,12 @@ struct MigrationSendArgs {
     /// SwiftMigration.spec.downtimeTarget.
     #[serde(default)]
     downtime_ms: Option<u64>,
+    /// Cloud Hypervisor `connections` count for vm.send-migration
+    /// (CH >= v52): parallel TCP connections for the memory stream.
+    /// Absent -> single connection. Set by the controller from
+    /// SwiftMigration.spec.parallelConnections (only when >= 2).
+    #[serde(default)]
+    connections: Option<u32>,
 }
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
@@ -940,7 +946,7 @@ async fn dispatch_migration_send(
     let _progress = spawn_progress_emitter(action.id.clone(), args.guest_ram_mib);
 
     let started = std::time::Instant::now();
-    if let Err(e) = client.send_migration(&args.target_url, args.downtime_ms) {
+    if let Err(e) = client.send_migration(&args.target_url, args.downtime_ms, args.connections) {
         return Err(format!(
             "send_migration: {}",
             sanitize_ch_error(&format!("{:?}", e))

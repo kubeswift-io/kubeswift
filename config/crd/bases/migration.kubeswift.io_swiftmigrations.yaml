@@ -146,8 +146,13 @@ spec:
                 type: string
               parallelConnections:
                 description: |-
-                  ParallelConnections is the number of TCP connections CH uses for the
-                  migration stream in live mode. Ignored in Phase 1.
+                  ParallelConnections is the number of parallel TCP connections CH uses
+                  for the live-migration memory stream (CH >= v52) — higher throughput
+                  on fast interconnects. 0 or 1 uses a single connection (the default);
+                  values >= 2 are passed through as CH's `connections`. The webhook caps
+                  it (MaxParallelConnections). Below the NIC line rate parallel streams
+                  add little (the single stream already saturates), so this matters on
+                  10GbE+ interconnects. Ignored for mode=offline (no memory stream).
                 format: int32
                 type: integer
               reason:
