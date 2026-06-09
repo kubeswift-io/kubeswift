@@ -375,6 +375,10 @@ where
             memory_mib: intent.memory.max(128),
             cpus: intent.cpu.max(1),
             kvm_hyperv: intent.is_windows(),
+            core_scheduling: intent
+                .core_scheduling
+                .clone()
+                .filter(|s| !s.is_empty() && s != "off"),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path: String::new(),
             serial_socket_path: Some(serial_socket_path.clone()),
@@ -396,6 +400,10 @@ where
             memory_mib: intent.memory.max(128),
             cpus: intent.cpu.max(1),
             kvm_hyperv: intent.is_windows(),
+            core_scheduling: intent
+                .core_scheduling
+                .clone()
+                .filter(|s| !s.is_empty() && s != "off"),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path,
             serial_socket_path: Some(serial_socket_path.clone()),

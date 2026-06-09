@@ -54,6 +54,17 @@ spec:
           spec:
             description: SwiftGuestClassSpec defines the desired state of SwiftGuestClass.
             properties:
+              coreScheduling:
+                default: "off"
+                description: |-
+                  CoreScheduling sets the vCPU core-scheduling policy for guests of this
+                  class (SMT side-channel mitigation). Default off; use vm for multi-tenant
+                  isolation. Empty is treated as off (no change to the CH --cpus args).
+                enum:
+                - "off"
+                - vm
+                - vcpu
+                type: string
               cpu:
                 anyOf:
                 - type: integer

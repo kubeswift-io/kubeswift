@@ -1,0 +1,13 @@
+# A guest class that enables vCPU core-scheduling (SMT side-channel mitigation).
+# `vm` keeps a physical core's sibling threads running only THIS guest's vCPUs,
+# never another tenant's — the multi-tenant isolation setting. Use `vcpu` for the
+# strongest isolation, or omit/off for none (the default).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: secure-multitenant
+spec:
+  cpu: 2
+  memory: 4Gi
+  rootDisk: { format: raw, size: 20Gi }
+  coreScheduling: vm

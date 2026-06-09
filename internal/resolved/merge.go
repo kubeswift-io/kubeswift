@@ -30,6 +30,12 @@ func Merge(
 	// Resources: from GuestClass (guest has no override in MVP)
 	rg.Resources = mergeResources(guestClass)
 
+	// CoreScheduling: from GuestClass (SMT side-channel mitigation). Empty/off
+	// means no core_scheduling on the CH --cpus args.
+	if guestClass != nil {
+		rg.CoreScheduling = string(guestClass.Spec.CoreScheduling)
+	}
+
 	// RootDisk: from GuestClass
 	rg.RootDisk = mergeRootDisk(guestClass)
 

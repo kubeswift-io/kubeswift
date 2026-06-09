@@ -13,8 +13,11 @@ type RuntimeIntent struct {
 	KernelBoot *KernelBootSpec `json:"kernelBoot,omitempty"` // when set, boot via --kernel + --initramfs
 	Hypervisor string          `json:"hypervisor,omitempty"` // "cloud-hypervisor" (default) or "qemu"
 	OSType     string          `json:"osType,omitempty"`     // "linux" (default) or "windows" — windows adds kvm_hyperv on the CH --cpus arg
-	GPU        *GPUIntent      `json:"gpu,omitempty"`        // populated when gpuProfileRef is set
-	DataDisk   *RootDiskSpec   `json:"dataDisk,omitempty"`   // secondary data disk (appears as /dev/vdb)
+	// CoreScheduling is the CH vCPU core-scheduling policy ("vm"/"vcpu"), empty
+	// when off. When set, swiftletd appends core_scheduling=<v> to --cpus.
+	CoreScheduling string        `json:"coreScheduling,omitempty"`
+	GPU            *GPUIntent    `json:"gpu,omitempty"`      // populated when gpuProfileRef is set
+	DataDisk       *RootDiskSpec `json:"dataDisk,omitempty"` // secondary data disk (appears as /dev/vdb)
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
