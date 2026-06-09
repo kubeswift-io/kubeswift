@@ -1,0 +1,9 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: db
+spec:
+  imageRef: { name: rocky9-cloud }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  runPolicy: Running

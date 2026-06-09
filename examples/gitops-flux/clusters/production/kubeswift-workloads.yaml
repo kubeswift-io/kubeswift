@@ -1,0 +1,15 @@
+# Layer 3 — workloads (guests + pools), production fleet.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kubeswift-workloads
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./workloads/production
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: kubeswift-infra

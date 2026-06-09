@@ -1,0 +1,14 @@
+# Class for Tier 1 PCIe GPU guests. Pair with a SwiftGPUProfile via the
+# guest's gpuProfileRef. coreScheduling=vm mitigates cross-tenant SMT side
+# channels for multi-tenant GPU nodes.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: gpu-pcie
+spec:
+  cpu: 8
+  memory: 32Gi
+  rootDisk:
+    format: raw
+    size: 80Gi
+  coreScheduling: vm

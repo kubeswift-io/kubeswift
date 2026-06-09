@@ -1,0 +1,15 @@
+# Staging runs the same pool at reduced scale. workloads/<env> directories are
+# environment-specific by design (see docs/gitops/workloads.md); shared bases +
+# overlays are equally valid if your fleets converge.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: web
+spec:
+  replicas: 1
+  template:
+    spec:
+      imageRef: { name: ubuntu-noble }
+      guestClassRef: { name: default }
+      seedProfileRef: { name: default }
+      runPolicy: Running

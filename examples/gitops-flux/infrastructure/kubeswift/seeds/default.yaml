@@ -1,0 +1,19 @@
+# Cloud-init seed for all guests. DO NOT inline real credentials here — for
+# secrets (passwords, tokens, private keys in user-data) use userDataFrom with
+# a SOPS-encrypted Secret instead; see docs/gitops/secrets.md.
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    users:
+      - name: kubeswift
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAA...replace-with-your-key
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service

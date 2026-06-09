@@ -1,0 +1,20 @@
+# Layer 2 — infrastructure resources (classes, images, seeds, GPU profiles).
+# dependsOn the platform HelmRelease so the CRDs exist before these apply.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kubeswift-infra
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./infrastructure/kubeswift
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  dependsOn:
+    - name: kubeswift          # the HelmRelease's Kustomization wrapper, or
+                               # use spec.healthChecks on the HelmRelease
+  wait: false                  # SwiftImages take minutes to import; don't
+                               # block the workload layer on image readiness —
+                               # SwiftGuests wait gracefully in Pending.
