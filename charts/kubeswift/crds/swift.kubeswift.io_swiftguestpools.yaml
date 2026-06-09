@@ -524,8 +524,22 @@ spec:
                         - windows
                         type: string
                       runPolicy:
-                        description: RunPolicy defines the desired run state of a
-                          guest.
+                        description: "RunPolicy defines the desired run state of a
+                          guest.\n\nRunPolicy governs what the controller does when
+                          the launcher POD reaches a\nterminal state (Succeeded/Failed)
+                          — i.e. when Cloud Hypervisor itself exits.\nA guest *reboot*
+                          is NOT such an event: on Cloud Hypervisor v52 a guest reboot\nRESETS
+                          THE VM IN PLACE (the CH process and the launcher pod survive,
+                          the\nguest restarts), so reboots never trigger RunPolicy.
+                          CH exits only on guest\nshutdown/poweroff or a crash; those
+                          are what Stopped/RestartOnFailure/Always\nact on. (v51 exited
+                          on reboot too, churning the pod — v52 reset-in-place is\nthe
+                          cleaner behavior; KubeSwift passes no --no-reboot, keeping
+                          the default.)\n\n\tRunning          run; do not auto-restart
+                          if CH exits (guest stops).\n\tStopped          keep the
+                          guest stopped (no pod).\n\tRestartOnFailure recreate the
+                          pod if CH exits abnormally (pod Failed).\n\tAlways           recreate
+                          the pod whenever CH exits (Failed or Succeeded)."
                         enum:
                         - Running
                         - Stopped
