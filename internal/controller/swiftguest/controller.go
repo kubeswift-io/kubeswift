@@ -313,6 +313,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// This block fires on launcher-pod TERMINAL states (Failed/Succeeded), i.e.
+	// when Cloud Hypervisor exits. A guest reboot is NOT terminal on CH v52 (it
+	// resets the VM in place — the pod stays Running, validated 2026-06-09), so
+	// reboots never reach here. CH exits only on guest shutdown/poweroff (pod
+	// Succeeded) or a crash (pod Failed); those are what RestartOnFailure/Always
+	// act on.
 	if guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyRestartOnFailure ||
 		guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyAlways {
 
