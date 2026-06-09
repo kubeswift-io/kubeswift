@@ -36,6 +36,15 @@ and the pod has failed (or succeeded for Always), the controller:
    sets `status.lastRestartTime`, and returns — the next reconcile
    creates a fresh pod
 
+Both guards key on the launcher **pod's terminal state** (Succeeded/Failed),
+which means Cloud Hypervisor exited. A guest **reboot is not such an event on
+CH v52**: the VM resets in place, so the CH process and the pod survive and the
+guest restarts without any controller action (validated 2026-06-09 — the pod
+stayed Running with the same CH PID across an in-guest `reboot`, only the
+guest's `boot_id` changed). CH exits — and these guards fire — only on guest
+shutdown/poweroff or a crash. (KubeSwift passes no `--no-reboot` to keep this
+reset-in-place default; CH v51 exited on reboot, churning the pod.)
+
 ## Conditions
 
 - **Resolved** – True when resolution succeeded; False with reason when resolution failed.
