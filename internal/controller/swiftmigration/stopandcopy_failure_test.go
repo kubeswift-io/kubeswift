@@ -24,7 +24,7 @@ func TestClassifyFailureFromDetail_Table(t *testing.T) {
 	cases := []struct {
 		name   string
 		detail string
-		want   string
+		want   migrationv1alpha1.FailureReasonCode
 	}{
 		// Empty / unrecognised → Other.
 		{"empty", "", migrationv1alpha1.FailureReasonOther},

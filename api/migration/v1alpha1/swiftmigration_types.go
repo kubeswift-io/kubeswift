@@ -105,27 +105,32 @@ const (
 // Phase 3b PR 2 extends the taxonomy with seven additional codes that
 // classify live-mode failures more precisely; see the per-code docstrings
 // for fire conditions and the swiftletd-side / controller-side origin.
+// FailureReasonCode is the typed code stored in status.failureReason.
+// Typing it (vs a bare string) makes typos compile-fail. The string VALUES are
+// unchanged, so this is wire/CRD-compatible. (TFU #21.)
+type FailureReasonCode string
+
 const (
 	// FailureReasonCancelled — set when the operator cancels the
 	// migration via spec.cancelRequested in a pre-cutover phase (the W21
 	// CancelIgnored gate suppresses this for post-cutover cancels). Also
 	// set when swiftletd reports cancellation propagating from the dst
 	// pod's cancel handshake.
-	FailureReasonCancelled = "Cancelled"
+	FailureReasonCancelled FailureReasonCode = "Cancelled"
 	// FailureReasonPodTerminated — set when the dst pod terminates
 	// mid-migration (drain, graceful delete, OOM, etc.) or when the
 	// PreparingLive budget expires without the dst pod reaching Running.
-	FailureReasonPodTerminated = "PodTerminated"
+	FailureReasonPodTerminated FailureReasonCode = "PodTerminated"
 	// FailureReasonSourcePodReplaced — set when the src pod's UID
 	// changes mid-migration (K8s-terminated and recreated). Detected via
 	// status.sourcePodUID lock-in per F4.2.
-	FailureReasonSourcePodReplaced = "SourcePodReplaced"
+	FailureReasonSourcePodReplaced FailureReasonCode = "SourcePodReplaced"
 	// FailureReasonTimeout — set when spec.timeout (default 30m,
 	// minimum 60s for live mode) expires.
-	FailureReasonTimeout = "Timeout"
+	FailureReasonTimeout FailureReasonCode = "Timeout"
 	// FailureReasonOther — catch-all for migration-internal errors
 	// that don't fit any specific code. Detail in FailureMessage.
-	FailureReasonOther = "Other"
+	FailureReasonOther FailureReasonCode = "Other"
 
 	// Phase 3b PR 2 additions — see Phase 3b design doc §4.7.
 
@@ -135,11 +140,11 @@ const (
 	// Defensive twin of the webhook's admission-time gate; fires for the
 	// rare case where eligibility changed after admission (e.g., guest's
 	// storage spec mutated between SwiftMigration creation and reconcile).
-	FailureReasonEligibilityMismatch = "EligibilityMismatch"
+	FailureReasonEligibilityMismatch FailureReasonCode = "EligibilityMismatch"
 	// FailureReasonDstScheduleFailed — set when the dst pod cannot be
 	// scheduled onto the target node (insufficient capacity, taints,
 	// affinity rules, etc.) within the PreparingLive budget.
-	FailureReasonDstScheduleFailed = "DstScheduleFailed"
+	FailureReasonDstScheduleFailed FailureReasonCode = "DstScheduleFailed"
 	// FailureReasonDstNeverReady — set when the dst pod is created but
 	// does not reach Ready within the PreparingLive budget (default
 	// 60s). Distinguishes a stuck-but-alive dst pod from one that
@@ -157,7 +162,7 @@ const (
 	// the "could not be scheduled onto target node" case from
 	// DstNeverReady. Until then, scheduling-failure scenarios fall into
 	// DstNeverReady (the budget-timeout site catches both).
-	FailureReasonDstNeverReady = "DstNeverReady"
+	FailureReasonDstNeverReady FailureReasonCode = "DstNeverReady"
 	// FailureReasonReceiveDisconnect — set when CH's migration RPC
 	// reports a peer/network disconnect (transport_error or
 	// connection_refused category from sanitize_ch_error). The name
@@ -167,13 +172,13 @@ const (
 	// peer drop) detail strings classify to this code. Operator-
 	// visible naming asymmetry intentional: the underlying failure is
 	// the same network event regardless of which end reported it.
-	FailureReasonReceiveDisconnect = "ReceiveDisconnect"
+	FailureReasonReceiveDisconnect FailureReasonCode = "ReceiveDisconnect"
 	// FailureReasonRpcError — set when CH's vm.send-migration or
 	// vm.receive-migration HTTP RPC returns an error that doesn't map to
 	// a more specific code (CPU incompatibility, version skew at the
 	// wire level, protocol error). Classified from swiftletd's
 	// failure-reason-code annotation; detail in FailureMessage.
-	FailureReasonRpcError = "RpcError"
+	FailureReasonRpcError FailureReasonCode = "RpcError"
 	// FailureReasonImageTagMismatch — set when the Validating phase's
 	// defensive image-tag-match check (LBA-1 trip-wire) detects that the
 	// destination pod would not inherit the source pod's launcher
@@ -181,14 +186,14 @@ const (
 	// srcPod.DeepCopy() which clones the source image atomically; if
 	// this code surfaces, a refactor has regressed the clone-src
 	// guarantee. See docs/design/live-migration-phase-3b.md LBA-1.
-	FailureReasonImageTagMismatch = "ImageTagMismatch"
+	FailureReasonImageTagMismatch FailureReasonCode = "ImageTagMismatch"
 	// FailureReasonDstPodConflict — set when the controller observes a
 	// dst pod with the deterministic dst-pod name already present at
 	// PreparingLive entry but its shape does not match what newDstPod
 	// would produce (wrong nodeName, wrong receiver-mode env, wrong
 	// owner ref, etc.). Distinguishes a clean leader-handover idempotent
 	// re-entry from a name collision with foreign state.
-	FailureReasonDstPodConflict = "DstPodConflict"
+	FailureReasonDstPodConflict FailureReasonCode = "DstPodConflict"
 	// FailureReasonMigrationIdentityNotReady — set by the Validating-live
 	// precondition (Phase 3c, Option B) when live-migration mTLS is
 	// enabled but a participating node's per-node identity Secret is not
@@ -198,7 +203,7 @@ const (
 	// a missing/expired node identity from ever reaching the cutover
 	// window. Untyped string (TFU #21) for consistency with the rest of
 	// this enum.
-	FailureReasonMigrationIdentityNotReady = "MigrationIdentityNotReady"
+	FailureReasonMigrationIdentityNotReady FailureReasonCode = "MigrationIdentityNotReady"
 	// FailureReasonSourceSidecarNotReady — set by Validating-live (Phase
 	// 3c, Option B) when live-migration mTLS is enabled but the source pod
 	// lacks a client-role migration-stunnel sidecar. Happens when the
@@ -207,7 +212,7 @@ const (
 	// from a prior migration (server-role sidecar; chain migrations under
 	// mTLS need a pod recycle). Operators recycle the guest's pod and
 	// retry. Untyped string (TFU #21).
-	FailureReasonSourceSidecarNotReady = "SourceSidecarNotReady"
+	FailureReasonSourceSidecarNotReady FailureReasonCode = "SourceSidecarNotReady"
 )
 
 // Phase 3a phaseDetail vocabulary additions (live mode only). These
@@ -516,7 +521,7 @@ type SwiftMigrationStatus struct {
 	// for `kubectl get swiftmigration` output and dashboard alerting.
 	// +kubebuilder:validation:Enum=Cancelled;PodTerminated;SourcePodReplaced;Timeout;Other;EligibilityMismatch;DstScheduleFailed;DstNeverReady;ReceiveDisconnect;RpcError;ImageTagMismatch;DstPodConflict;MigrationIdentityNotReady;SourceSidecarNotReady
 	// +optional
-	FailureReason string `json:"failureReason,omitempty"`
+	FailureReason FailureReasonCode `json:"failureReason,omitempty"`
 	// SourcePodUID is the source launcher pod's UID at Validating-phase
 	// entry. Used by F4.2's UID-change failure detection: at every
 	// reconcile in pre-cutover phases, the controller compares the

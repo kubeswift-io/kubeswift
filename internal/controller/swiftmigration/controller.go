@@ -152,7 +152,7 @@ type phaseResult struct {
 	// Timeout, Other). Empty for offline-mode failures and for
 	// non-failure paths. See api/migration/v1alpha1's
 	// FailureReason* constants.
-	FailureReason string
+	FailureReason migrationv1alpha1.FailureReasonCode
 }
 
 // phaseAdvance returns a phaseResult that signals "phase advanced;
@@ -172,7 +172,7 @@ func phaseRequeue(d time.Duration) *phaseResult {
 // phase. The msg is human-readable; reason is the §6 enum (use one of
 // the FailureReason* constants in api/migration/v1alpha1; pass "" for
 // offline-mode where the enum is not populated).
-func phaseFailure(msg, reason string) *phaseResult {
+func phaseFailure(msg string, reason migrationv1alpha1.FailureReasonCode) *phaseResult {
 	return &phaseResult{FailureMsg: msg, FailureReason: reason}
 }
 
