@@ -165,6 +165,13 @@ is a future enhancement, not v1.
 
 ### Constraint 6 — Network must converge after migration
 
+> The broader framework for this constraint — the node-local vs
+> multi-node-L2 spectrum, the three Tier-C options (Multus+macvlan,
+> OVN-K layer-2, OVN-K UDN), the recommendation, and the code gaps —
+> lives in
+> [`network-architecture-requirements.md`](network-architecture-requirements.md).
+> The statement below is the migration-local form.
+
 The VM keeps the same MAC and the same IP across the migration. On
 KubeSwift's tap+bridge networking model, the destination launcher pod's
 network-init must produce a tap with the same MAC as the source, and the
