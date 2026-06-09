@@ -348,3 +348,37 @@ func TestGetFilesystems_TagDefaultsAndSourcePath(t *testing.T) {
 		t.Errorf("[1] = %+v, want tag=shared readOnly=true", got[1])
 	}
 }
+
+func TestGetNICs_VhostUser(t *testing.T) {
+	rg := &ResolvedGuest{
+		Meta: Meta{Namespace: "ns", Name: "g"},
+		Interfaces: []swiftv1alpha1.GuestInterface{
+			{Name: "mgmt"}, // bridge (default) -> primary
+			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
+			{Name: "fast1", Type: swiftv1alpha1.InterfaceTypeVhostUser,
+				Socket: "/var/run/vhost/fast1.sock", MAC: "52:54:00:00:00:fe"},
+		},
+	}
+	nics := rg.GetNICs()
+	if len(nics) != 3 {
+		t.Fatalf("len = %d, want 3", len(nics))
+	}
+	if !nics[0].Primary || nics[0].Type != swiftv1alpha1.InterfaceTypeBridge {
+		t.Errorf("nics[0] = %+v, want primary bridge", nics[0])
+	}
+	// vhost-user: carries socket, never primary, no tap/bridge, generated MAC.
+	fu := nics[1]
+	if fu.Type != swiftv1alpha1.InterfaceTypeVhostUser || fu.VhostUserSocket != "/var/run/vhost/fast0.sock" {
+		t.Errorf("nics[1] = %+v, want vhost-user w/ socket", fu)
+	}
+	if fu.Primary || fu.TapDevice != "" || fu.Bridge != "" {
+		t.Errorf("nics[1] = %+v, want non-primary, no tap/bridge", fu)
+	}
+	if fu.MAC == "" {
+		t.Error("nics[1] MAC should be generated when unset")
+	}
+	// Explicit MAC is honored.
+	if nics[2].MAC != "52:54:00:00:00:fe" {
+		t.Errorf("nics[2].MAC = %q, want pinned 52:54:00:00:00:fe", nics[2].MAC)
+	}
+}

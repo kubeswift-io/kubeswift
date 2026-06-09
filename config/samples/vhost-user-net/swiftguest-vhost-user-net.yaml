@@ -1,0 +1,28 @@
+# A guest with a standard bridge NIC plus a vhost-user-net interface whose
+# datapath is an operator-provided DPDK/OVS-DPDK backend. KubeSwift does NOT
+# run the backend — the operator's node-level fast-path exposes a vhost-user
+# listener socket; KubeSwift mounts its directory into the launcher and points
+# Cloud Hypervisor at it. The guest sees an ordinary virtio-net device; the
+# line rate comes from the backend.
+#
+# Asset-gated: the line-rate datapath needs a DPDK NIC + backend on the node.
+# Without one, the wiring is correct but the interface has no traffic source
+# (same posture as SR-IOV: shipped, hardware validation deferred).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: vhost-user-net
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: default
+  interfaces:
+    - name: mgmt            # primary bridge NIC (DHCP, SSH, normal pod networking)
+      type: bridge
+    - name: fast0           # high-throughput vhost-user-net interface
+      type: vhost-user
+      socket: /var/run/vhost/fast0.sock   # operator backend listener (node path)
+      # mac: "52:54:00:00:fa:00"          # optional; generated if unset

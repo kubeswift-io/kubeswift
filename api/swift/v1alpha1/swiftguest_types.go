@@ -336,8 +336,9 @@ type FilesystemSource struct {
 
 // InterfaceType constants for GuestInterface.Type.
 const (
-	InterfaceTypeBridge = "bridge"
-	InterfaceTypeSRIOV  = "sriov"
+	InterfaceTypeBridge    = "bridge"
+	InterfaceTypeSRIOV     = "sriov"
+	InterfaceTypeVhostUser = "vhost-user"
 )
 
 // GuestInterface defines a single network interface for a SwiftGuest.
@@ -346,9 +347,12 @@ type GuestInterface struct {
 	// Used in status reporting and logging.
 	Name string `json:"name"`
 	// Type specifies the interface type.
-	//   bridge: (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
-	//   sriov:  SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
-	// +kubebuilder:validation:Enum=bridge;sriov
+	//   bridge:     (default) tap+bridge, virtio-net in guest. Used for overlay and standard networks.
+	//   sriov:      SR-IOV VF passthrough via VFIO. Guest sees hardware NIC. Requires SR-IOV NAD.
+	//   vhost-user: virtio-net whose datapath is an operator-provided vhost-user
+	//               backend (DPDK/OVS-DPDK) reached via Socket. Cloud Hypervisor
+	//               only (v1); KubeSwift does not run the backend.
+	// +kubebuilder:validation:Enum=bridge;sriov;vhost-user
 	// +kubebuilder:default=bridge
 	// +optional
 	Type string `json:"type,omitempty"`
@@ -362,6 +366,16 @@ type GuestInterface struct {
 	// adds this resource to the pod's resource limits.
 	// +optional
 	ResourceName string `json:"resourceName,omitempty"`
+	// Socket is the node-local path of the operator-provided vhost-user backend
+	// listener (e.g. /var/run/vhost/fast0.sock). Required when type is
+	// "vhost-user"; its parent directory is mounted into the launcher pod so
+	// Cloud Hypervisor can connect. Not used for bridge/sriov.
+	// +optional
+	Socket string `json:"socket,omitempty"`
+	// MAC optionally pins the interface MAC address. When empty a deterministic
+	// MAC is generated. Honored for vhost-user (and bridge) interfaces.
+	// +optional
+	MAC string `json:"mac,omitempty"`
 }
 
 // NetworkReference references a Multus NetworkAttachmentDefinition.
