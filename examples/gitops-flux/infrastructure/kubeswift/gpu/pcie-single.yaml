@@ -1,0 +1,13 @@
+# Tier 1: single PCIe GPU on Cloud Hypervisor (no NVSwitch/Fabric Manager).
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: pcie-single
+spec:
+  count: 1
+  tier: pcie
+  partitionMode: isolated
+  pcieTopology:
+    rootPortPerDevice: false
+    gpuDirectClique: 0
+  hugepages: "1Gi"

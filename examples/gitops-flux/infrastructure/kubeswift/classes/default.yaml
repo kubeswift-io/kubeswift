@@ -1,0 +1,10 @@
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: default
+spec:
+  cpu: 2
+  memory: 4Gi
+  rootDisk:
+    format: raw
+    size: 40Gi
