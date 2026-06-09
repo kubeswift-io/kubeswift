@@ -102,6 +102,15 @@ type SwiftGuestSpec struct {
 	// kernel-boot, and clones. See docs/design/vhost-user-devices.md.
 	// +optional
 	Filesystems []Filesystem `json:"filesystems,omitempty"`
+	// VhostUserDevices is a list of operator-backed vhost-user devices attached
+	// to the guest: a vhost-user-blk disk (type: blk) or a generic vhost-user
+	// device (type: generic). KubeSwift does not run the backend — it mounts the
+	// backend's node socket into the launcher and points Cloud Hypervisor at it
+	// (the same operator-provides-the-datapath model as SR-IOV and
+	// vhost-user-net). Cloud Hypervisor path only in v1; the QEMU/GPU path
+	// rejects this. See docs/design/vhost-user-devices.md.
+	// +optional
+	VhostUserDevices []VhostUserDevice `json:"vhostUserDevices,omitempty"`
 	// NodeName pins the launcher pod to a specific Kubernetes node by
 	// setting pod.spec.nodeName directly (bypassing the scheduler).
 	// Set by the SwiftMigration controller during the StopAndCopy phase
@@ -340,6 +349,47 @@ const (
 	InterfaceTypeSRIOV     = "sriov"
 	InterfaceTypeVhostUser = "vhost-user"
 )
+
+// VhostUserDeviceType constants for VhostUserDevice.Type.
+const (
+	// VhostUserDeviceTypeBlk is a vhost-user-blk disk (CH --disk vhost_user=on).
+	VhostUserDeviceTypeBlk = "blk"
+	// VhostUserDeviceTypeGeneric is a generic vhost-user device
+	// (CH --generic-vhost-user virtio_id=...).
+	VhostUserDeviceTypeGeneric = "generic"
+)
+
+// VhostUserDevice is an operator-backed vhost-user device. The operator runs
+// the backend (e.g. SPDK for blk) exposing a vhost-user listener socket on the
+// node; KubeSwift mounts the socket's directory into the launcher and points
+// Cloud Hypervisor at it. KubeSwift does not run the backend.
+type VhostUserDevice struct {
+	// Name uniquely identifies this device within the guest.
+	// Lowercase alphanumeric + '-', <= 36 chars.
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// Type selects the device kind:
+	//   blk:     a vhost-user block device (appears as a virtio-blk disk in the
+	//            guest) — Cloud Hypervisor `--disk vhost_user=on,socket=`.
+	//   generic: any vhost-user device by virtio id — Cloud Hypervisor
+	//            `--generic-vhost-user virtio_id=,socket=,queue_sizes=`.
+	// +kubebuilder:validation:Enum=blk;generic
+	Type string `json:"type"`
+	// Socket is the node-local path of the operator's vhost-user backend
+	// listener (e.g. /var/run/spdk/vhost.0). Required. Its parent directory is
+	// mounted into the launcher pod so Cloud Hypervisor can connect.
+	Socket string `json:"socket"`
+	// VirtioID is the virtio device-type id for a generic device: a number or a
+	// symbolic name (e.g. "block", "fs", "net"). Required when type is generic;
+	// ignored for blk.
+	// +optional
+	VirtioID string `json:"virtioId,omitempty"`
+	// QueueSizes optionally sets per-queue sizes for a generic device. Ignored
+	// for blk. When empty, Cloud Hypervisor's defaults apply.
+	// +optional
+	QueueSizes []int32 `json:"queueSizes,omitempty"`
+}
 
 // GuestInterface defines a single network interface for a SwiftGuest.
 type GuestInterface struct {
