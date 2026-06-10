@@ -31,6 +31,7 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftrestore"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshotschedule"
+	kubeswiftmetrics "github.com/projectbeskar/kubeswift/internal/metrics"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 	"github.com/projectbeskar/kubeswift/internal/version"
 	evictionwebhook "github.com/projectbeskar/kubeswift/internal/webhook/eviction"
@@ -128,6 +129,11 @@ func main() {
 		klog.ErrorS(err, "unable to create kubernetes clientset")
 		os.Exit(1)
 	}
+
+	// CR-state gauges (kubeswift_guests, kubeswift_pool_replicas, ...) are
+	// computed from the informer cache at scrape time — every listed type
+	// already has a controller-driven informer, so scrapes are in-memory.
+	kubeswiftmetrics.RegisterStateCollector(mgr.GetClient())
 
 	if err = (&swiftimage.SwiftImageReconciler{
 		Client:    mgr.GetClient(),

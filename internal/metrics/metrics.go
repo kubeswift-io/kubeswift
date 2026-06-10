@@ -21,15 +21,13 @@ func UnmarkVMBootObserved(key string) {
 	vmBootObserved.Delete(key)
 }
 
-var (
-	GuestRunningTotal = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "kubeswift_guest_running_total",
-			Help: "Number of SwiftGuest instances currently in Running phase",
-		},
-		[]string{"namespace"},
-	)
+// kubeswift_guest_running_total moved to the StateCollector
+// (state_collector.go): as an event-accumulated Inc/Dec gauge it silently
+// drifted to 0 (or negative) across controller restarts. It is now emitted
+// from cluster state at scrape time, DEPRECATED in favor of
+// kubeswift_guests{phase="Running"}, and removed after one release.
 
+var (
 	VMBootSeconds = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "kubeswift_vm_boot_seconds",
@@ -39,10 +37,14 @@ var (
 		[]string{"namespace"},
 	)
 
+	// VMFailuresTotal counts transitions into Failed by condition Reason.
+	// The reason label MUST carry the bounded machine token (condition
+	// .Reason), never the free-text .Message — messages embed pod/node
+	// names and error strings, which is unbounded series cardinality.
 	VMFailuresTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kubeswift_vm_failures_total",
-			Help: "Total number of SwiftGuest VM failures",
+			Help: "Total number of SwiftGuest VM failures, by condition reason",
 		},
 		[]string{"namespace", "reason"},
 	)
@@ -232,7 +234,6 @@ func MarkCloneDownloadObserved(key string) bool {
 
 func init() {
 	metrics.Registry.MustRegister(
-		GuestRunningTotal,
 		VMBootSeconds,
 		VMFailuresTotal,
 		ImageImportSeconds,
