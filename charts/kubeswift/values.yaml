@@ -49,6 +49,16 @@ snapshotS3:
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
 
+# migration-stunnel: the mTLS sidecar image for cross-node live migration
+# (Phase 3c). The controller injects it into launcher pods when
+# migration.mtls.enabled=true, reading KUBESWIFT_MIGRATION_STUNNEL_IMAGE.
+# No separate workload is deployed; this only sets the image reference.
+migrationStunnel:
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    # Same as controllerManager; use tag: latest for local build+load.
+    tag: latest
+
 # GPU discovery DaemonSet: auto-discovers GPU hardware on nodes labeled kubeswift.io/gpu-node=true.
 # Populates SwiftGPUNode status with GPU inventory, NUMA topology, and Fabric Manager state.
 gpuDiscovery:
