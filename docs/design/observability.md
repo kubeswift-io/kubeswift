@@ -2,7 +2,28 @@
 
 > Staff-architect gap analysis and phased plan for a complete operator
 > observability experience across every shipped feature arc.
-> Reviewed at v0.3.1 (main @ 581f936). Status: **DESIGN** — phases O1–O4 below.
+> Reviewed at v0.3.1 (main @ 581f936).
+> Status: **SHIPPED** — phases O1–O4 complete + cluster-validated (PRs
+> #199, #200, #201, #202, #203, #204, #205, #206). O5 deferred to v2.
+> Operator entry point: [`docs/observability/README.md`](../observability/README.md).
+
+## Shipped summary (O1–O4)
+
+| Phase | PRs | What landed |
+|---|---|---|
+| O1 | #199, #200 | Provisioning-native dashboards + `make verify-dashboards` lint; Helm `monitoring.*` gate (ServiceMonitor + dashboard ConfigMaps) |
+| O2 | #201 | Cache-backed `StateCollector` (11 gauge families); fixed `guest_running_total` restart-drift + `vm_failures_total` cardinality |
+| O3 | #202, #203 | GPU alloc/release + drain counters; image-import outcome counter + migration failure-reason breakdown |
+| O4 | #204, #205, #206 | Six-dashboard taxonomy (Fleet, VM Lifecycle, GPU, Snapshots, Migration, Control Plane); 12-rule PrometheusRule pack; observability runbook |
+
+Cluster-validated on the lab kube-prometheus-stack throughout: the O2
+restart-drift repro (gauges re-converge after `rollout restart`), the O3
+counters on a real GTX 1080 alloc/release cycle, and the O4 alert pipeline
+(`KubeSwiftImageImportStuck` → pending on a real stuck import). Operator
+finding captured in the runbook: kube-prometheus-stack selects
+PrometheusRules by the `release` label (not relaxed by
+`serviceMonitorSelectorNilUsesHelmValues=false`) — set
+`monitoring.prometheusRule.additionalLabels.release`.
 
 ## Goal
 

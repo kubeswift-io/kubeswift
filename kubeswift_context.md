@@ -2306,6 +2306,56 @@ See dedicated sections above. Three PRs from walkthrough: #21 Tier A fix, #22 CI
 ### Completed (Live Migration Phase 1)
 See dedicated section above. Three PRs: #24 initial implementation, #25 terminal-state fixes, #26 per-operation discipline refactor.
 
+### Completed (Observability program — O1–O4, 2026-06-10)
+Staff-architect-led gap analysis → phased build for a complete operator
+observability experience across every shipped feature arc. Design:
+[`docs/design/observability.md`](docs/design/observability.md); operator entry
+point: [`docs/observability/README.md`](docs/observability/README.md). Shipped
+across 8 PRs (+1 design doc #198), all cluster-validated on the lab
+kube-prometheus-stack:
+
+- **O1** (#199, #200) — provisioning-native dashboards (the two existing ones
+  carried import-style `__inputs`/`${DS_PROMETHEUS}` that silently break under
+  sidecar provisioning) + `make verify-dashboards` lint in CI; Helm
+  `monitoring.*` gate (default off) shipping ServiceMonitor + dashboard
+  ConfigMaps (`.Files.Get` from `charts/kubeswift/dashboards/`, synced from
+  `config/grafana/` by `make dashboards-sync`).
+- **O2** (#201) — `internal/metrics/state_collector.go`: a cache-backed
+  `prometheus.Collector` exporting 11 CR-state gauge families
+  (`kubeswift_guests{namespace,phase}`, `_by_node`, `_pool_replicas`, `_images`,
+  `_kernels`, `_snapshots`, `_migrations_active`, `_gpu_node_gpus`/`_info`/
+  `_last_discovery`, `_snapshot_schedule_last_success`). Fixed two latent
+  defects: `kubeswift_guest_running_total` was an Inc/Dec transition gauge that
+  drifted to 0/negative across controller restarts (now emitted from cluster
+  state, DEPRECATED → `kubeswift_guests{phase="Running"}`); `vm_failures_total`
+  used the free-text condition Message as a label (now the bounded Reason).
+- **O3** (#202, #203) — gap-fill counters for the previously metric-less arcs:
+  `kubeswift_gpu_allocations_total{result}` (transition-gated no_capacity) +
+  `_gpu_releases_total` (only counts releases that freed something) +
+  `_drain_migrations_total{policy,result}`; `kubeswift_image_import_total`
+  (a failed import was previously invisible) + `kubeswift_migration_failures_total{mode,reason}`
+  (bounded failureReason enum).
+- **O4** (#204, #205, #206) — the six-dashboard taxonomy (Fleet Overview, VM
+  Lifecycle & Images, GPU, Snapshots & Restore, Live Migration, Control Plane —
+  the last built on the free controller-runtime reconcile/workqueue/webhook
+  surface, no code) + a 12-rule warning-biased starter PrometheusRule pack +
+  the observability runbook (`docs/observability/{README,alerts}.md`) + the
+  optional kube-state-metrics CustomResourceStateMetrics sample.
+
+Cluster validation highlights: the O2 restart-drift repro (gauges re-converge
+after `kubectl rollout restart`, where the old code provably reported 0); O3
+counters on a real GTX 1080 alloc/release cycle (`gpu_allocations_total=2`,
+`gpu_releases_total=1`); the O4 alert pipeline (`KubeSwiftImageImportStuck`
+→ `state=pending` on a real stuck import). **Decision D2: no swiftletd
+metrics endpoint in v1** — per-VM CPU/mem/net comes from cAdvisor on the
+launcher pods (CH runs in the launcher cgroup), joined on the
+`swift.kubeswift.io/guest` label, NEVER pod name (post-live-migration pods are
+`<guest>-mig-<uid>`). **O5 (swiftletd `vm.counters` + PodMonitor) deferred to
+v2.** Operator finding documented: kube-prometheus-stack selects PrometheusRules
+by the `release` label (NOT relaxed by
+`serviceMonitorSelectorNilUsesHelmValues=false`) → set
+`monitoring.prometheusRule.additionalLabels.release`.
+
 ### Next Priorities (in order)
 
 **1. Live Migration Phase 2 — swiftletd live migration plumbing — SHIPPED across 3 PRs**
