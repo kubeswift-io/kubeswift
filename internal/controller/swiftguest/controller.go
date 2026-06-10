@@ -515,12 +515,11 @@ func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *s
 		newPhase = newStatus.Phase
 	}
 
-	// GuestRunningTotal: increment on transition to Running, decrement on transition away
-	if newPhase == swiftv1alpha1.SwiftGuestPhaseRunning && oldPhase != swiftv1alpha1.SwiftGuestPhaseRunning {
-		metrics.GuestRunningTotal.WithLabelValues(ns).Inc()
-	}
+	// Running-count gauges live in metrics.StateCollector (computed from
+	// cluster state at scrape time). Never re-add an Inc/Dec transition
+	// gauge here: it silently drifts to 0/negative across controller
+	// restarts (already-Running guests produce no transition to re-count).
 	if oldPhase == swiftv1alpha1.SwiftGuestPhaseRunning && newPhase != swiftv1alpha1.SwiftGuestPhaseRunning {
-		metrics.GuestRunningTotal.WithLabelValues(ns).Dec()
 		metrics.UnmarkVMBootObserved(ns + "/" + guest.Name)
 	}
 
@@ -536,15 +535,20 @@ func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *s
 		}
 	}
 
-	// VMFailuresTotal: increment on transition to Failed
+	// VMFailuresTotal: increment on transition to Failed. The label carries
+	// the bounded condition .Reason token, NOT the free-text .Message —
+	// messages embed pod/node names and error strings, i.e. unbounded
+	// series cardinality (observability design doc §1.5). Prefer the first
+	// non-True condition so a healthy condition's Reason can't shadow the
+	// failing one.
 	if newPhase == swiftv1alpha1.SwiftGuestPhaseFailed && oldPhase != swiftv1alpha1.SwiftGuestPhaseFailed {
-		reason := "unknown"
-		if c := findCondition(newStatus, "PodScheduled"); c != nil && c.Message != "" {
-			reason = c.Message
-		} else if c := findCondition(newStatus, "GuestRunning"); c != nil && c.Message != "" {
-			reason = c.Message
-		} else if c := findCondition(newStatus, "Resolved"); c != nil && c.Message != "" {
-			reason = c.Message
+		reason := "Unknown"
+		if c := findCondition(newStatus, "PodScheduled"); c != nil && c.Status != metav1.ConditionTrue && c.Reason != "" {
+			reason = c.Reason
+		} else if c := findCondition(newStatus, "GuestRunning"); c != nil && c.Status != metav1.ConditionTrue && c.Reason != "" {
+			reason = c.Reason
+		} else if c := findCondition(newStatus, "Resolved"); c != nil && c.Status != metav1.ConditionTrue && c.Reason != "" {
+			reason = c.Reason
 		}
 		metrics.VMFailuresTotal.WithLabelValues(ns, reason).Inc()
 	}
