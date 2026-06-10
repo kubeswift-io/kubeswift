@@ -489,6 +489,15 @@ func recordMigrationTerminal(status *migrationv1alpha1.SwiftMigrationStatus) {
 		return
 	}
 	metrics.MigrationTotal.WithLabelValues(mode, result).Inc()
+	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseFailed {
+		// Break failures down by the bounded failureReason enum. Offline
+		// mode does not populate it -> "Unknown".
+		reason := string(status.FailureReason)
+		if reason == "" {
+			reason = "Unknown"
+		}
+		metrics.MigrationFailuresTotal.WithLabelValues(mode, reason).Inc()
+	}
 	if status.Phase == migrationv1alpha1.SwiftMigrationPhaseCompleted && status.ObservedDowntime != nil {
 		metrics.MigrationDowntimeSeconds.WithLabelValues(mode).Observe(status.ObservedDowntime.Duration.Seconds())
 	}
