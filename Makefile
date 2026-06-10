@@ -338,5 +338,12 @@ verify-e2e-scripts:
 	done; \
 	echo "  all e2e scripts parse"
 
+# Provisioning-native hygiene checks for the Grafana dashboards under
+# config/grafana/ (no __inputs, no ${DS_*} placeholders, stable uids).
+# Import-style JSON silently breaks sidecar/ConfigMap provisioning —
+# see docs/design/observability.md D6. Designed to run on every PR.
+verify-dashboards:
+	@./tools/lint-dashboards.sh
+
 preflight:
 	@./scripts/kubeswift-preflight.sh
