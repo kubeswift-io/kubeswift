@@ -19,6 +19,8 @@ on:
       - 'go.sum'
       - 'test/**'
       - 'Makefile'
+      - 'config/grafana/**'
+      - 'tools/lint-dashboards.sh'
       - '.github/workflows/**'
   pull_request:
     branches: [main]
@@ -34,6 +36,8 @@ on:
       - 'go.sum'
       - 'test/**'
       - 'Makefile'
+      - 'config/grafana/**'
+      - 'tools/lint-dashboards.sh'
       - '.github/workflows/**'
 
 jobs:
@@ -120,6 +124,21 @@ jobs:
       # bash -n on every PR keeps the suite from rotting silently.
       - name: bash -n every test script
         run: make verify-e2e-scripts
+
+  dashboards:
+    name: Dashboard lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Provisioning-native hygiene for config/grafana/*.json: no
+      # __inputs blocks, no ${DS_*} import placeholders, stable uids,
+      # a defaulted `datasource` templating variable. Import-style JSON
+      # renders on manual import but silently shows "no data" under
+      # sidecar/ConfigMap provisioning (the Helm monitoring.dashboards
+      # path) — see docs/design/observability.md D6.
+      - name: Lint Grafana dashboards
+        run: make verify-dashboards
 
   swiftletd-image:
     name: swiftletd image
