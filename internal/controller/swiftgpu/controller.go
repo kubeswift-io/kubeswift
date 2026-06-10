@@ -17,6 +17,7 @@ import (
 
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 const (
@@ -102,6 +103,11 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err == errNoCapacity {
 			logger.Info("no GPU capacity available, will retry", "guest", req.NamespacedName,
 				"count", profile.Spec.Count, "model", profile.Spec.Model)
+			// Transition-gated: count entering the NoCapacity state once, not
+			// every 30s retry tick while capacity stays exhausted.
+			if !hasGPUAllocatedReason(&guest, "NoCapacity") {
+				metrics.GPUAllocationsTotal.WithLabelValues("no_capacity").Inc()
+			}
 			status := guest.Status.DeepCopy()
 			setGPUAllocatedCondition(status, false, "NoCapacity",
 				"no SwiftGPUNode has sufficient free GPUs matching the profile")
@@ -136,6 +142,10 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	setGPUAllocatedCondition(status, true, "Allocated",
 		fmt.Sprintf("allocated %d GPU(s) on node %s", len(devices), gpuNode.Name))
+	// At most once per successful allocation: the isGPUAllocated early return
+	// above means this path only runs while the condition is not yet True (a
+	// status-patch-failure retry may rarely re-count — acceptable).
+	metrics.GPUAllocationsTotal.WithLabelValues("allocated").Inc()
 	if err := r.patchStatus(ctx, &guest, status); err != nil {
 		// GPUs are already marked on the node. The finalizer ensures deallocation
 		// will be attempted. On the next reconcile, findAndAllocate will detect the
