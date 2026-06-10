@@ -4,6 +4,26 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.3.1] — 2026-06-10
+
+Patch release. Content is identical to v0.3.0 (images rebuilt as `v0.3.1`);
+the fix is in the Helm chart.
+
+### Fixed
+- **Helm chart: `migration.mtls.enabled=true` installs were broken** — the
+  chart never set `KUBESWIFT_MIGRATION_STUNNEL_IMAGE`, so the controller's
+  mTLS sidecar injection fell back to the code default `:latest`, a tag that
+  does not exist in the registry. Every launcher pod stuck `1/2
+  ImagePullBackOff` (the VM ran, but the guest never reached
+  `phase=Running`). The chart now sets the env via a new
+  `migrationStunnel.image` values block, mirroring the `snapshotS3` pattern
+  (tag defaults to `v<appVersion>`). Found dogfooding the released 0.3.0
+  chart — the first helm-path install with mTLS enabled; the kustomize dev
+  deploy sets the env via the Makefile, which masked the gap. Installs with
+  `migration.mtls.enabled=false` (the default) were unaffected.
+
+---
+
 ## [v0.3.0] — 2026-06-09
 
 Consolidates everything since v0.1.0 (the v0.2.0-rc.1 tag from April was never
