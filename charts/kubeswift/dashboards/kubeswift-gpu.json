@@ -1,20 +1,13 @@
 {
-  "annotations": {
-    "list": []
-  },
-  "editable": true,
-  "graphTooltip": 1,
-  "schemaVersion": 39,
+  "uid": "kubeswift-gpu",
+  "title": "KubeSwift \u2014 GPU",
   "tags": [
     "kubeswift",
-    "migration"
+    "gpu"
   ],
-  "title": "KubeSwift \u2014 Live Migration",
-  "uid": "kubeswift-migrations",
-  "time": {
-    "from": "now-24h",
-    "to": "now"
-  },
+  "editable": true,
+  "schemaVersion": 39,
+  "graphTooltip": 1,
   "templating": {
     "list": [
       {
@@ -32,83 +25,140 @@
       }
     ]
   },
+  "annotations": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
   "panels": [
     {
-      "title": "Migrations by result (range)",
+      "title": "GPUs total",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 6,
-        "w": 8,
+        "h": 4,
+        "w": 5,
         "x": 0,
         "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(kubeswift_gpu_node_gpus{state=\"total\"})"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "GPUs free",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 5,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(kubeswift_gpu_node_gpus{state=\"free\"})"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "title": "GPU utilization",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 10,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "1 - (sum(kubeswift_gpu_node_gpus{state=\"free\"}) / clamp_min(sum(kubeswift_gpu_node_gpus{state=\"total\"}), 1))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
       },
       "options": {
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "background"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (result) (increase(kubeswift_migration_total[$__range]))",
-          "legendFormat": "{{result}}"
-        }
-      ]
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
     },
     {
-      "title": "Migration success ratio (range)",
-      "type": "gauge",
+      "title": "GPUs allocated",
+      "type": "stat",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 8,
-        "y": 0
-      },
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 1,
-          "unit": "percentunit"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(increase(kubeswift_migration_total{result=\"completed\"}[$__range])) / clamp_min(sum(increase(kubeswift_migration_total[$__range])), 1)",
-          "legendFormat": "success"
-        }
-      ]
-    },
-    {
-      "title": "Migrations by mode + result (total)",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 8,
-        "x": 16,
+        "h": 4,
+        "w": 4,
+        "x": 15,
         "y": 0
       },
       "targets": [
@@ -118,108 +168,34 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (mode, result) (kubeswift_migration_total)",
-          "legendFormat": "{{mode}}/{{result}}"
+          "expr": "sum(kubeswift_gpu_node_gpus{state=\"total\"}) - sum(kubeswift_gpu_node_gpus{state=\"free\"})"
         }
-      ]
-    },
-    {
-      "title": "Observed downtime quantiles by mode",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 6
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(kubeswift_migration_downtime_seconds_bucket[1h])))",
-          "legendFormat": "p50 {{mode}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(kubeswift_migration_downtime_seconds_bucket[1h])))",
-          "legendFormat": "p95 {{mode}}"
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.99, sum by (le, mode) (rate(kubeswift_migration_downtime_seconds_bucket[1h])))",
-          "legendFormat": "p99 {{mode}}"
-        }
-      ]
-    },
-    {
-      "title": "Downtime distribution (heatmap)",
-      "type": "heatmap",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 6
-      },
+      ],
       "options": {
-        "calculate": false,
-        "yAxis": {
-          "unit": "s"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (le) (increase(kubeswift_migration_downtime_seconds_bucket[$__interval]))",
-          "legendFormat": "{{le}}",
-          "format": "heatmap"
-        }
-      ]
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
     },
     {
-      "title": "State-transfer duration quantiles by mode",
-      "type": "timeseries",
+      "title": "vfio-ready nodes",
+      "type": "stat",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
+        "h": 4,
+        "w": 5,
+        "x": 19,
+        "y": 0
       },
       "targets": [
         {
@@ -228,22 +204,24 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(kubeswift_migration_transfer_seconds_bucket[1h])))",
-          "legendFormat": "p50 {{mode}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(kubeswift_migration_transfer_seconds_bucket[1h])))",
-          "legendFormat": "p95 {{mode}}"
+          "expr": "sum(kubeswift_gpu_node_info{vfio_ready=\"true\"})"
         }
-      ]
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
     },
     {
-      "title": "Active migrations by mode",
+      "title": "GPUs free vs total by node",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -251,9 +229,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
+        "w": 12,
         "x": 0,
-        "y": 22
+        "y": 4
       },
       "targets": [
         {
@@ -262,8 +240,17 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "kubeswift_migrations_active",
-          "legendFormat": "{{mode}}"
+          "expr": "kubeswift_gpu_node_gpus{state=\"total\"}",
+          "legendFormat": "{{node}} total"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "kubeswift_gpu_node_gpus{state=\"free\"}",
+          "legendFormat": "{{node}} free"
         }
       ],
       "fieldConfig": {
@@ -289,7 +276,7 @@
       }
     },
     {
-      "title": "Failures by reason /s",
+      "title": "Allocation / release rate",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -297,9 +284,9 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 8,
-        "y": 22
+        "w": 12,
+        "x": 12,
+        "y": 4
       },
       "targets": [
         {
@@ -308,18 +295,27 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (reason) (rate(kubeswift_migration_failures_total[$__rate_interval]))",
-          "legendFormat": "{{reason}}"
+          "expr": "sum by (result) (rate(kubeswift_gpu_allocations_total[$__rate_interval]))",
+          "legendFormat": "alloc {{result}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(kubeswift_gpu_releases_total[$__rate_interval]))",
+          "legendFormat": "releases"
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "ops",
           "custom": {
             "fillOpacity": 10,
             "showPoints": "never",
             "lineWidth": 1
-          },
-          "unit": "ops"
+          }
         },
         "overrides": []
       },
@@ -336,17 +332,17 @@
       }
     },
     {
-      "title": "Drain evacuations /s",
-      "type": "timeseries",
+      "title": "GPU node inventory",
+      "type": "table",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 16,
-        "y": 22
+        "w": 12,
+        "x": 0,
+        "y": 11
       },
       "targets": [
         {
@@ -355,27 +351,47 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (policy, result) (rate(kubeswift_drain_migrations_total[$__rate_interval]))",
-          "legendFormat": "{{policy}}/{{result}}"
-        },
+          "expr": "kubeswift_gpu_node_info",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "title": "GPU discovery age (s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "targets": [
         {
-          "refId": "B",
+          "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(controller_runtime_webhook_requests_total{webhook=~\".*eviction.*\", code=\"429\"}[$__rate_interval]))",
-          "legendFormat": "eviction 429s"
+          "expr": "time() - kubeswift_gpu_node_last_discovery_timestamp_seconds",
+          "legendFormat": "{{node}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "s",
           "custom": {
             "fillOpacity": 10,
             "showPoints": "never",
             "lineWidth": 1
-          },
-          "unit": "ops"
+          }
         },
         "overrides": []
       },
