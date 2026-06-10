@@ -1,0 +1,37 @@
+{{- /*
+Nil-safe access (see servicemonitor.yaml): every nested key may be absent
+under `--reuse-values --set monitoring.enabled=true`; explicit
+`enabled: false` must still win (hence ternary/hasKey, not `default`).
+*/ -}}
+{{- $mon := .Values.monitoring | default dict }}
+{{- $db := $mon.dashboards | default dict }}
+{{- if and $mon.enabled (ternary $db.enabled true (hasKey $db "enabled")) }}
+{{- $ns := $db.namespace | default .Values.namespace }}
+{{- $label := $db.label | default "grafana_dashboard" }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+# Grafana dashboard, discovered by the grafana sidecar via the
+# {{ $label }} label. The JSONs under dashboards/ are synced verbatim
+# from config/grafana/ by `make dashboards-sync` (drift fails
+# `make verify-dashboards` in CI). Set monitoring.dashboards.namespace
+# to your Grafana namespace if the sidecar does not watch all
+# namespaces (its default is its own).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: dashboards
+    {{ $label }}: "1"
+  {{- with $db.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}
