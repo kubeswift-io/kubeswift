@@ -196,10 +196,9 @@ status:
 ```yaml
 apiVersion: snapshot.kubeswift.io/v1alpha1
 spec:
-  source:
-    swiftGuestRef: {name: my-guest}
+  guestRef: {name: my-guest}
   backend:
-    type: csi-volume-snapshot | local
+    type: csi-volume-snapshot | local | s3
     csiVolumeSnapshot:
       volumeSnapshotClassName: longhorn-snapshot
     local:
@@ -216,8 +215,7 @@ status:
 ```yaml
 apiVersion: snapshot.kubeswift.io/v1alpha1
 spec:
-  source:
-    swiftSnapshotRef: {name: my-snapshot}
+  snapshotRef: {name: my-snapshot}
   targetGuest:
     name: my-guest                  # same as source = in-place; different = clone
     overwriteExisting: true         # required for in-place
@@ -231,8 +229,7 @@ status:
 ```yaml
 apiVersion: migration.kubeswift.io/v1alpha1
 spec:
-  source:
-    swiftGuestRef: {name: my-guest}
+  guestRef: {name: my-guest}
   target:
     nodeName: target-node           # exclusive with nodeSelector (Phase 4+)
   mode: auto | live | offline       # Phase 1: auto picks offline; live is webhook-rejected
