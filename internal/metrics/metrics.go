@@ -217,6 +217,45 @@ var (
 			Help: "Snapshots deleted by SwiftSnapshotSchedule keep-N retention",
 		},
 	)
+
+	// --- GPU + drain counters (observability Phase O3) ---
+
+	// GPUAllocationsTotal counts GPU allocation outcomes per guest:
+	// "allocated" fires once when the allocation is stamped into guest
+	// status; "no_capacity" fires once per entry into the NoCapacity state
+	// (transition-gated — the 30s retry loop while capacity stays exhausted
+	// does not re-count).
+	GPUAllocationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_gpu_allocations_total",
+			Help: "GPU allocation outcomes (allocated | no_capacity), once per guest state entry",
+		},
+		[]string{"result"},
+	)
+
+	// GPUReleasesTotal counts release operations that actually freed at
+	// least one GPU device or FM partition on a SwiftGPUNode (idempotent
+	// no-op releases are not counted). Fires for guest deletion, failed
+	// allocations cleaned up by the finalizer, and migration
+	// release-and-reallocate.
+	GPUReleasesTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kubeswift_gpu_releases_total",
+			Help: "GPU release operations that freed devices or FM partitions on a node",
+		},
+	)
+
+	// DrainMigrationsTotal counts SwiftMigrations created by the drain
+	// controller to evacuate guests from draining nodes, by the guest's
+	// drainPolicy and the creation result. Migration outcomes land in
+	// kubeswift_migration_total (drain migrations carry reason=node-drain).
+	DrainMigrationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_drain_migrations_total",
+			Help: "SwiftMigrations created by node-drain evacuation, by drainPolicy and result (created | error)",
+		},
+		[]string{"policy", "result"},
+	)
 )
 
 // cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
@@ -251,5 +290,8 @@ func init() {
 		SnapshotUploadBytesTotal,
 		RestoreDownloadBytesTotal,
 		SnapshotSchedulePrunedTotal,
+		GPUAllocationsTotal,
+		GPUReleasesTotal,
+		DrainMigrationsTotal,
 	)
 }

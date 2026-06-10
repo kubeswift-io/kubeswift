@@ -34,6 +34,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // drainMigrationTTL is the spec.ttl set on drain-created SwiftMigrations so a
@@ -178,8 +179,13 @@ func (r *Reconciler) createDrainMigration(ctx context.Context, guest *swiftv1alp
 		if apierrors.IsAlreadyExists(err) {
 			return nil // raced with another reconcile; next loop observes it
 		}
+		// Webhook rejections land here too — a sustained error rate means
+		// drains are stalling. Migration OUTCOMES are not counted here;
+		// they land in kubeswift_migration_total (reason=node-drain).
+		metrics.DrainMigrationsTotal.WithLabelValues(drainPolicyOf(guest), "error").Inc()
 		return fmt.Errorf("create drain migration %q: %w", migName, err)
 	}
+	metrics.DrainMigrationsTotal.WithLabelValues(drainPolicyOf(guest), "created").Inc()
 	r.event(guest, corev1.EventTypeNormal, "DrainMigrationCreated",
 		fmt.Sprintf("created migration %q (mode %s) to evacuate %q from %q to %q", migName, mode, guest.Name, drainingNode, target))
 	return nil

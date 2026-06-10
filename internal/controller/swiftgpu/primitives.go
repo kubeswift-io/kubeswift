@@ -10,6 +10,7 @@ import (
 
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
 // ReserveOnNode reserves profile.Count GPUs (+ an FM partition for shared
@@ -145,5 +146,11 @@ func ReleaseFromNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.
 		return nil
 	}
 	node.Status.FreeGPUs = countFreeGPUs(node.Status.GPUs)
-	return c.Status().Update(ctx, &node)
+	if err := c.Status().Update(ctx, &node); err != nil {
+		return err
+	}
+	// Count only releases that actually freed something (the !changed
+	// early-return above keeps idempotent no-op releases out).
+	metrics.GPUReleasesTotal.Inc()
+	return nil
 }
