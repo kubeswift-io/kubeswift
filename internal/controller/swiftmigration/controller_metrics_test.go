@@ -33,6 +33,39 @@ func TestRecordMigrationTerminal_CounterByModeAndResult(t *testing.T) {
 	}
 }
 
+func TestRecordMigrationTerminal_FailuresByReason(t *testing.T) {
+	// A failed migration breaks down by the bounded failureReason enum.
+	before := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("live", "DstNeverReady"))
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:          migrationv1alpha1.SwiftMigrationModeLive,
+		Phase:         migrationv1alpha1.SwiftMigrationPhaseFailed,
+		FailureReason: migrationv1alpha1.FailureReasonDstNeverReady,
+	})
+	if got := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("live", "DstNeverReady")); got != before+1 {
+		t.Errorf("MigrationFailuresTotal{live,DstNeverReady} = %v, want %v", got, before+1)
+	}
+
+	// Offline mode does not populate failureReason -> "Unknown".
+	ub := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("offline", "Unknown"))
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:  migrationv1alpha1.SwiftMigrationModeOffline,
+		Phase: migrationv1alpha1.SwiftMigrationPhaseFailed,
+	})
+	if got := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("offline", "Unknown")); got != ub+1 {
+		t.Errorf("MigrationFailuresTotal{offline,Unknown} = %v, want %v", got, ub+1)
+	}
+
+	// A completed migration must NOT touch the failures counter.
+	cb := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("live", "Unknown"))
+	recordMigrationTerminal(&migrationv1alpha1.SwiftMigrationStatus{
+		Mode:  migrationv1alpha1.SwiftMigrationModeLive,
+		Phase: migrationv1alpha1.SwiftMigrationPhaseCompleted,
+	})
+	if got := testutil.ToFloat64(metrics.MigrationFailuresTotal.WithLabelValues("live", "Unknown")); got != cb {
+		t.Errorf("a completed migration must not increment failures; %v -> %v", cb, got)
+	}
+}
+
 func TestRecordMigrationTerminal_DowntimeOnlyOnCompleted(t *testing.T) {
 	before := testutil.CollectAndCount(metrics.MigrationDowntimeSeconds)
 	// A failed migration must NOT observe downtime.

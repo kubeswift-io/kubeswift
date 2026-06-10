@@ -58,6 +58,19 @@ var (
 		[]string{"namespace"},
 	)
 
+	// ImageImportTotal counts SwiftImage imports by terminal result
+	// (ready|failed), once per image on the transition into Ready or Failed.
+	// Before O3 a failed import was invisible — only the success-latency
+	// histogram existed. Recorded behind a transition guard so a re-reconcile
+	// of a terminal image does not re-count.
+	ImageImportTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_image_import_total",
+			Help: "SwiftImage imports that reached a terminal phase, by result (ready|failed)",
+		},
+		[]string{"namespace", "result"},
+	)
+
 	// MigrationTotal counts SwiftMigrations that reached a terminal phase,
 	// labelled by resolved mode (live/offline) and result
 	// (completed/failed/cancelled). Recorded once per migration on the
@@ -68,6 +81,20 @@ var (
 			Help: "Total SwiftMigrations that reached a terminal phase, by mode and result",
 		},
 		[]string{"mode", "result"},
+	)
+
+	// MigrationFailuresTotal counts failed SwiftMigrations by mode and the
+	// bounded status.failureReason enum (Cancelled/PodTerminated/Timeout/
+	// DstScheduleFailed/...). A sibling of MigrationTotal{result="failed"}:
+	// that series stays for the overall failed rate; this one breaks the
+	// failures down by cause without widening MigrationTotal's labels.
+	// reason="" maps to "Unknown" (offline mode does not populate the enum).
+	MigrationFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_migration_failures_total",
+			Help: "Failed SwiftMigrations by mode and failureReason",
+		},
+		[]string{"mode", "reason"},
 	)
 
 	// MigrationDowntimeSeconds observes status.observedDowntime for completed
@@ -277,6 +304,7 @@ func init() {
 		VMFailuresTotal,
 		ImageImportSeconds,
 		MigrationTotal,
+		MigrationFailuresTotal,
 		MigrationDowntimeSeconds,
 		MigrationTransferSeconds,
 		SnapshotTotal,
@@ -293,5 +321,6 @@ func init() {
 		GPUAllocationsTotal,
 		GPUReleasesTotal,
 		DrainMigrationsTotal,
+		ImageImportTotal,
 	)
 }
