@@ -1,8 +1,10 @@
 # Prometheus Operator ServiceMonitor for the KubeSwift controller-manager
 # /metrics endpoint. Apply ONLY if your cluster runs the Prometheus Operator
-# (the monitoring.coreos.com CRDs must exist) — it is intentionally NOT part of
-# `make deploy` / the Helm chart, since most clusters scrape via their own
-# Prometheus config instead.
+# (the monitoring.coreos.com CRDs must exist). It is intentionally NOT part
+# of `make deploy` (kustomize installs stay monitoring-CRD-free). Helm users
+# should prefer `--set monitoring.enabled=true`, which renders the chart's
+# equivalent (templates/monitoring/servicemonitor.yaml) plus the dashboard
+# ConfigMaps — this sample exists for non-Helm installs.
 #
 #   kubectl apply -f config/grafana/servicemonitor.yaml
 #

@@ -75,8 +75,22 @@ print(f"  ok {path}")
 PY
 done
 
+# Drift check: the Helm chart embeds verbatim copies under
+# charts/kubeswift/dashboards/ (via .Files.Get). The canonical source is
+# config/grafana/; `make dashboards-sync` copies. Same lesson as the CRD
+# copy step — drift between the two ships stale dashboards silently.
+if [ -d charts/kubeswift/dashboards ]; then
+    for f in config/grafana/*.json; do
+        chart="charts/kubeswift/dashboards/$(basename "$f")"
+        if ! cmp -s "$f" "$chart"; then
+            echo "FAIL $chart: out of sync with $f — run 'make dashboards-sync'"
+            fail=1
+        fi
+    done
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "dashboard lint FAILED"
     exit 1
 fi
-echo "  all dashboards provisioning-native"
+echo "  all dashboards provisioning-native and chart-synced"
