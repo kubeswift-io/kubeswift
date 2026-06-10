@@ -16,6 +16,18 @@ func isGPUAllocated(guest *swiftv1alpha1.SwiftGuest) bool {
 	return false
 }
 
+// hasGPUAllocatedReason returns true when the guest's GPUAllocated condition
+// already carries the given reason — the transition gate for state-entry
+// counters (count once per entry, not per retry tick).
+func hasGPUAllocatedReason(guest *swiftv1alpha1.SwiftGuest, reason string) bool {
+	for _, c := range guest.Status.Conditions {
+		if c.Type == swiftv1alpha1.ConditionGPUAllocated {
+			return c.Reason == reason
+		}
+	}
+	return false
+}
+
 // setGPUAllocatedCondition upserts the GPUAllocated condition on status.
 func setGPUAllocatedCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason, message string) {
 	s := metav1.ConditionFalse
