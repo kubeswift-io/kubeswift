@@ -104,6 +104,12 @@ monitoring:
     namespace: ""
     # Extra annotations, e.g. grafana_folder: KubeSwift
     annotations: {}
+  # Starter PrometheusRule alert pack (warning-biased; see
+  # docs/observability/alerts.md).
+  prometheusRule:
+    enabled: true
+    # Extra labels for Prometheus instances that select rules by label.
+    additionalLabels: {}
 
 # Live migration settings.
 migration:
