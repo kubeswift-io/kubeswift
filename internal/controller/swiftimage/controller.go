@@ -192,6 +192,17 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// ImageImportTotal (observability O3): count the import's terminal
+	// outcome. The Ready/Failed starting-phase cases return early above, so
+	// reaching here with a terminal status.Phase is always a fresh
+	// non-terminal -> terminal transition — no separate guard needed.
+	switch status.Phase {
+	case imagev1alpha1.SwiftImagePhaseReady:
+		metrics.ImageImportTotal.WithLabelValues(img.Namespace, "ready").Inc()
+	case imagev1alpha1.SwiftImagePhaseFailed:
+		metrics.ImageImportTotal.WithLabelValues(img.Namespace, "failed").Inc()
+	}
+
 	return ctrl.Result{}, nil
 }
 
