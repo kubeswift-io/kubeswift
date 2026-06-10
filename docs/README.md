@@ -14,6 +14,7 @@ KubeSwift is a Kubernetes-native VM runtime built on Cloud Hypervisor (default) 
 | Set up GPU passthrough | [gpu-passthrough.md](gpu-passthrough.md) |
 | Manage VM fleets | [swiftguestpool-guide.md](swiftguestpool-guide.md) |
 | Use the swiftctl CLI | [swiftctl.md](swiftctl.md) |
+| Monitor with Prometheus & Grafana | [observability/README.md](observability/README.md) |
 | Build and contribute | [development.md](development.md) |
 
 ---

@@ -1,0 +1,62 @@
+# kube-state-metrics CustomResourceStateMetrics — OPTIONAL per-CR-name series.
+#
+# KubeSwift's controller-manager already exports aggregate state gauges
+# (kubeswift_guests{namespace,phase}, kubeswift_pool_replicas{...}, ...) with
+# bounded labels. If you also want PER-CR-NAME series (one time series per
+# individual SwiftGuest/SwiftImage/...), layer this CustomResourceStateMetrics
+# config onto YOUR kube-state-metrics deployment. This is a zero-code add-on —
+# nothing in KubeSwift depends on it, and the shipped dashboards/alerts do NOT
+# require it.
+#
+# It is NOT part of the KubeSwift Helm chart because kube-state-metrics is a
+# separate release you own. With kube-prometheus-stack, merge the config below
+# into its values:
+#
+#   kube-state-metrics:
+#     rbac:
+#       extraRules:
+#         - apiGroups: ["swift.kubeswift.io","image.kubeswift.io","kernel.kubeswift.io",
+#                       "gpu.kubeswift.io","snapshot.kubeswift.io","migration.kubeswift.io"]
+#           resources: ["*"]
+#           verbs: ["list","watch"]
+#     extraArgs:
+#       - --custom-resource-state-config-file=/etc/ksm/crs.yaml
+#     # ...plus a volume mounting the ConfigMap below at /etc/ksm/crs.yaml
+#
+# See the kube-state-metrics CustomResourceState docs for the volume wiring;
+# the metric spec is:
+kind: CustomResourceStateMetrics
+spec:
+  resources:
+    - groupVersionKind:
+        group: swift.kubeswift.io
+        version: v1alpha1
+        kind: SwiftGuest
+      metricNamePrefix: kubeswift_ksm
+      labelsFromPath:
+        name: [metadata, name]
+        namespace: [metadata, namespace]
+      metrics:
+        - name: guest_phase
+          help: "SwiftGuest phase per object (info-style, value 1)"
+          each:
+            type: StateSet
+            stateSet:
+              path: [status, phase]
+              labelName: phase
+              list: [Pending, Scheduling, Running, Stopped, Failed]
+    - groupVersionKind:
+        group: swift.kubeswift.io
+        version: v1alpha1
+        kind: SwiftGuestPool
+      metricNamePrefix: kubeswift_ksm
+      labelsFromPath:
+        name: [metadata, name]
+        namespace: [metadata, namespace]
+      metrics:
+        - name: pool_ready_replicas
+          help: "SwiftGuestPool ready replicas per object"
+          each:
+            type: Gauge
+            gauge:
+              path: [status, readyReplicas]
