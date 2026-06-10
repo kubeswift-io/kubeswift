@@ -79,6 +79,32 @@ gpuDiscovery:
 webhook:
   enabled: false
 
+# Observability (optional). Requires the Prometheus Operator CRDs
+# (monitoring.coreos.com — e.g. kube-prometheus-stack) when enabled; the
+# dashboards additionally need a Grafana with the dashboard sidecar (the
+# kube-prometheus-stack default). Off by default — default installs incur
+# no monitoring CRD dependency. See docs/design/observability.md.
+monitoring:
+  enabled: false
+  # ServiceMonitor scraping the controller-manager /metrics endpoint.
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    # Extra labels for Prometheus instances that select ServiceMonitors by
+    # label (e.g. release: kube-prometheus-stack).
+    additionalLabels: {}
+  # Grafana dashboards as sidecar-discovered ConfigMaps.
+  dashboards:
+    enabled: true
+    # The sidecar discovery label (kube-prometheus-stack default shown).
+    label: grafana_dashboard
+    # Namespace for the dashboard ConfigMaps. Empty = the KubeSwift
+    # namespace; set this to your Grafana namespace if the sidecar only
+    # watches its own namespace (its default).
+    namespace: ""
+    # Extra annotations, e.g. grafana_folder: KubeSwift
+    annotations: {}
+
 # Live migration settings.
 migration:
   # mTLS transport for cross-node live migration (Phase 3c, Option B per-node

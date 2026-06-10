@@ -339,11 +339,20 @@ verify-e2e-scripts:
 	echo "  all e2e scripts parse"
 
 # Provisioning-native hygiene checks for the Grafana dashboards under
-# config/grafana/ (no __inputs, no ${DS_*} placeholders, stable uids).
-# Import-style JSON silently breaks sidecar/ConfigMap provisioning —
-# see docs/design/observability.md D6. Designed to run on every PR.
+# config/grafana/ (no __inputs, no ${DS_*} placeholders, stable uids),
+# plus a drift check against the Helm chart copies. Import-style JSON
+# silently breaks sidecar/ConfigMap provisioning — see
+# docs/design/observability.md D6. Designed to run on every PR.
 verify-dashboards:
 	@./tools/lint-dashboards.sh
+
+# Sync the canonical dashboards (config/grafana/) into the Helm chart
+# (charts/kubeswift/dashboards/), where templates/monitoring/dashboards.yaml
+# embeds them via .Files.Get. Same pattern as the CRD copy step — the
+# chart copies are build artifacts, never edited directly.
+dashboards-sync:
+	@cp config/grafana/*.json charts/kubeswift/dashboards/
+	@echo "  dashboards synced to charts/kubeswift/dashboards/"
 
 preflight:
 	@./scripts/kubeswift-preflight.sh

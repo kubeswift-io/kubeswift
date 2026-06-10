@@ -1,0 +1,37 @@
+{{- /*
+Nil-safe access: with `helm upgrade --reuse-values --set monitoring.enabled=true`
+the monitoring subtree from values.yaml is NOT merged, so every nested key may
+be absent. `ternary ... (hasKey ...)` keeps an explicit `enabled: false`
+working (sprig's `default` would swallow false).
+*/ -}}
+{{- $mon := .Values.monitoring | default dict }}
+{{- $sm := $mon.serviceMonitor | default dict }}
+{{- if and $mon.enabled (ternary $sm.enabled true (hasKey $sm "enabled")) }}
+# Scrapes the controller-manager /metrics endpoint (kubeswift_* feature
+# metrics + the controller-runtime reconcile/workqueue/webhook series).
+# Requires the Prometheus Operator CRDs (monitoring.coreos.com) — the
+# monitoring.enabled gate keeps default installs free of that dependency.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubeswift-controller-manager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: controller-manager
+    {{- with $sm.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: controller-manager
+  endpoints:
+    - port: metrics
+      interval: {{ $sm.interval | default "30s" }}
+      path: /metrics
+{{- end }}
