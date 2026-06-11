@@ -183,6 +183,11 @@ type SwiftImageStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=swiftimages,scope=Namespaced,shortName=si
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Size",type=string,JSONPath=`.status.preparedArtifact.size`
+// +kubebuilder:printcolumn:name="Format",type=string,JSONPath=`.status.preparedFormat`,priority=1
+// +kubebuilder:printcolumn:name="Strategy",type=string,JSONPath=`.spec.cloneStrategy`,priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftImage struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
