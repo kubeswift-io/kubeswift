@@ -35,15 +35,15 @@
          Drive letters D/E/F cover the virtio-win CD wherever WinPE mounts it. -->
     <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <DriverPaths>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>D:\viostor\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\viostor\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>F:\viostor\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>D:\vioscsi\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\vioscsi\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>F:\vioscsi\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>D:\NetKVM\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\NetKVM\2k22\amd64</Path></PathAndCredentials>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="9"><Path>F:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>D:\viostor\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>E:\viostor\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>F:\viostor\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>D:\vioscsi\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>E:\vioscsi\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>F:\vioscsi\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>D:\NetKVM\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>E:\NetKVM\__VIRTIOVER__\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9"><Path>F:\NetKVM\__VIRTIOVER__\amd64</Path></PathAndCredentials>
       </DriverPaths>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
@@ -120,10 +120,17 @@
         <SynchronousCommand wcm:action="add"><Order>5</Order><CommandLine>bcdedit /bootems "{bootmgr}" on</CommandLine></SynchronousCommand>
         <SynchronousCommand wcm:action="add"><Order>6</Order><CommandLine>bcdedit /set "{current}" bootstatuspolicy ignoreallfailures</CommandLine></SynchronousCommand>
         <SynchronousCommand wcm:action="add"><Order>7</Order><CommandLine>bcdedit /set "{current}" recoveryenabled no</CommandLine></SynchronousCommand>
+        <!-- Optional: install cloudbase-init from the seed CD (offline, no
+             internet needed) and drop in the NoCloud config, so Part A alone
+             produces a provisioning-ready image. No-op unless run-install.sh
+             staged CloudbaseInitSetup.msi onto the seed (CLOUDBASE_MSI=...).
+             The seed CD letter varies; probe D..H for the payload. -->
+        <SynchronousCommand wcm:action="add"><Order>8</Order><CommandLine>cmd /c for %d in (D E F G H) do if exist %d:\CloudbaseInitSetup.msi msiexec /i %d:\CloudbaseInitSetup.msi /qn /norestart RUN_SERVICE_AS_LOCAL_SYSTEM=1</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>9</Order><CommandLine>cmd /c for %d in (D E F G H) do if exist %d:\cloudbase-init.conf copy /Y %d:\cloudbase-init.conf "C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\cloudbase-init.conf"</CommandLine></SynchronousCommand>
         <!-- Completion sentinel written to the serial port (COM1) so the headless
              install driver can detect success, then power off cleanly. -->
-        <SynchronousCommand wcm:action="add"><Order>8</Order><CommandLine>cmd /c echo KUBESWIFT_PREP_OK&gt;COM1</CommandLine></SynchronousCommand>
-        <SynchronousCommand wcm:action="add"><Order>9</Order><CommandLine>cmd /c shutdown /s /t 25 /c KUBESWIFT_PREP_DONE</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>10</Order><CommandLine>cmd /c echo KUBESWIFT_PREP_OK&gt;COM1</CommandLine></SynchronousCommand>
+        <SynchronousCommand wcm:action="add"><Order>11</Order><CommandLine>cmd /c shutdown /s /t 25 /c KUBESWIFT_PREP_DONE</CommandLine></SynchronousCommand>
       </FirstLogonCommands>
     </component>
   </settings>
