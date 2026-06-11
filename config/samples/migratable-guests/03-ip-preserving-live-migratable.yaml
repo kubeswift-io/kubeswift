@@ -1,0 +1,52 @@
+# Disk-boot SwiftGuest — live-migratable AND IP-preserving.
+#
+# Two things make this guest migrate without changing its IP:
+#   1. RWX + Block storage (per-guest spec.storage override here, instead of
+#      a dedicated class) — the live-migration storage requirement.
+#   2. The PRIMARY interface rides a multi-node L2 NAD (primary: true +
+#      networkRef), so the guest's IP is portable across nodes. With this,
+#      the SwiftMigration does NOT need spec.allowIPChange — the IP follows
+#      the guest.
+#
+# Contrast with 01/02, which use default node-local-bridge networking and so
+# take a fresh IP on the destination (requiring --allow-ip-change).
+#
+# Prerequisites:
+#   kubectl apply -f ../shared/                          # minimal seed + default class
+#   kubectl apply -f ../storage/swiftguestclass-rwx-migratable.yaml   # for the StorageClass
+#   kubectl apply -f ../multi-node-l2/ovn-l2-nad.yaml    # the `ovn-l2` NAD
+#   a Ready SwiftImage `ubuntu-noble`.
+#
+# NOTE: the primary-on-NAD runtime datapath is experimental (control-plane —
+# admission + migration IP-preservation classification — is shipped; the
+# datapath validates on an OVN-Kubernetes cluster). See ../multi-node-l2/.
+#
+# Migrate it:  swiftctl migrate ip-stable-vm --to <node>
+# (no --allow-ip-change needed — the primary IP is preserved.)
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: ip-stable-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default          # default RWO+Filesystem class...
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+  # ...overridden per-guest to the live-migration storage combination.
+  storage:
+    accessMode: ReadWriteMany
+    volumeMode: Block
+    storageClassName: longhorn-migratable
+  interfaces:
+    - name: app
+      primary: true                 # the guest's primary IP...
+      networkRef:
+        name: ovn-l2                 # ...rides the multi-node NAD → portable
+  migration:
+    enabled: true
+    preferredMode: live
+    drainPolicy: Migrate

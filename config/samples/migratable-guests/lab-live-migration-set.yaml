@@ -1,0 +1,48 @@
+# A small set of LIVE-MIGRATABLE guests of different boot types / OSes for
+# exercising live migration. All are eligible for `mode: live`:
+#   - no VFIO/GPU, no virtiofs/vhost-user (those are offline-only)
+#   - disk-boot guests use the live-migratable class (RWX + Block storage)
+#   - kernel-boot has no PVC, so it's live-migratable on default storage
+#
+# Spread across the two worker nodes (frida is tainted control-plane).
+# Migrate one with:  swiftctl migrate <name> --to <worker> --allow-ip-change
+# (default node-local networking changes the IP cross-node).
+---
+# 1. Kernel-boot microVM — the lightest live-migration case (no root PVC).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: lm-kernel
+  namespace: default
+spec:
+  kernelRef: { name: faas-minimal }
+  guestClassRef: { name: default }
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  runPolicy: Running
+  migration: { enabled: true, preferredMode: live }
+---
+# 2. Ubuntu Noble 24.04 disk VM — RWX+Block live-migratable storage.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: lm-ubuntu
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: live-migratable }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  migration: { enabled: true, preferredMode: live }
+---
+# 3. Rocky Linux 9 disk VM — different OS, same live-migratable storage.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: lm-rocky
+  namespace: default
+spec:
+  imageRef: { name: rocky9-cloud }
+  guestClassRef: { name: live-migratable }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  migration: { enabled: true, preferredMode: live }
