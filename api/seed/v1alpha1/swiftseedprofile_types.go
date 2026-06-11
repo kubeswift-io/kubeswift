@@ -39,6 +39,8 @@ type SwiftSeedProfileSpec struct {
 // SwiftSeedProfile is the Schema for the swiftseedprofiles API.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=swiftseedprofiles,scope=Namespaced,shortName=ssp
+// +kubebuilder:printcolumn:name="Datasource",type=string,JSONPath=`.spec.datasource`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftSeedProfile struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

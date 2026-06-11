@@ -619,6 +619,12 @@ type SwiftGuestStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=swiftguests,scope=Namespaced,shortName=sg
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Hypervisor",type=string,JSONPath=`.status.runtime.hypervisor`,priority=1
+// +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.osType`,priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftGuest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
