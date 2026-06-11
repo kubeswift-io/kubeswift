@@ -2660,6 +2660,38 @@ Shipped across 6 PRs (design + 5 build):
 - **Tracked follow-up (documented, not blocking):** `spec.timeZone` (UTC-only
   today, OQ6); auto-GC of Failed scheduled snapshots (OQ1 — left for inspection).
 
+### Paused (roadmap — resume when hardware lands)
+
+- **DRA / NVIDIA-ecosystem GPU integration — Phase 1 SHIPPED (PR #211,
+  2026-06-12); Phases 2–5 PAUSED, hardware-gated.** RFC:
+  [`docs/design/dra-gpu-integration.md`](docs/design/dra-gpu-integration.md).
+  Decision: **hybrid/pluggable** — DRA is an opt-in allocation backend; the
+  native SwiftGPU model stays the default (right tool for heterogeneous estates
+  and NVIDIA-stack-free clusters). Phase 1 shipped the seam: KubeSwift's GPU
+  subsystem is two layers coupled by `SwiftGuest.Status.GPU` (allocation vs
+  VM-passthrough runtime); a two-phase `gpualloc.Backend` (Prepare/Resolve/
+  Release) models the control-flow inversion (native decides controller-time,
+  DRA at scheduler-time via ResourceClaim read-back). Includes
+  `spec.gpuResourceClaim` (XOR gpuProfileRef), webhook `usesGPU` rules,
+  `resource.k8s.io/v1` scheme+RBAC, the DRA read-back proven by a
+  synthetic-ResourceClaim unit test, and the native backend refactor
+  (behavior-preserving — existing swiftgpu tests unchanged). A DRA guest is
+  held Pending (`GPUDRARuntimePending`) so it never boots GPU-less.
+  **Paused at the P1/P2 boundary** (operator decision 2026-06-12):
+  - **P2 — DRA-cluster spike** (needs a datacenter NVIDIA GPU + k8s-dra-driver-gpu):
+    pin the driver's `AllocatedDeviceStatus.Data` schema (isolated in
+    `gpualloc.extractDeviceBDFs` — the one P1 guess), resolve gpu-init-vs-driver
+    vfio binding ownership, wire the claim-bearing unpinned launcher pod +
+    buildGPUIntent feed, boot one VM end-to-end.
+  - **P3 — ComputeDomains/IMEX** (multi-node NVLink, GB200) — DRA-only.
+  - **P4 — MIG/fractional** — a MIG instance is NOT a PCI BDF; needs a
+    mediated-device `runtimeintent` variant + CH/QEMU args.
+  - **P5 — NFD/GPU-Operator vfio-manager** — retire parts of `cmd/gpu-discovery`
+    for DRA-only clusters.
+  Key constraint carried in the RFC: `OfflineGPUMigratable()` stays native-only
+  (the reserve-before-stop choreography has no DRA equivalent); DRA-aware
+  offline migration is its own later design.
+
 ### In Progress
 - **Windows guest support — v1 CODE-COMPLETE** (2026-06-08; design + boot spike
   2026-06-07). Operator entry point:

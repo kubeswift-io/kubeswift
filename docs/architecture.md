@@ -4,6 +4,8 @@ KubeSwift is a Kubernetes-native VM runtime. Virtual machines are first-class Ku
 
 This document covers the full system architecture: control plane, runtime, boot paths, networking, status reporting, and GPU support.
 
+> **Visual reference:** [architecture/diagrams.md](architecture/diagrams.md) renders the same architecture as diagrams — system overview, CRD relationship map, launcher pod anatomy & boot data path, status reporting, the live-migration sequence, and the snapshot/clone flows.
+
 ## System diagram
 
 ```
