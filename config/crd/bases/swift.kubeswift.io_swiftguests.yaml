@@ -249,9 +249,11 @@ spec:
                 type: array
               gpuProfileRef:
                 description: |-
-                  GPUProfileRef references a SwiftGPUProfile for GPU passthrough.
-                  When set, the SwiftGPU controller allocates GPUs before the pod is created.
-                  Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
+                  GPUProfileRef references a SwiftGPUProfile for GPU passthrough via the
+                  NATIVE allocation backend: the SwiftGPU controller picks node+devices
+                  (findAndAllocate) before the pod is created. Mutually exclusive with
+                  kernelRef (GPU boot requires disk boot with UEFI) and with
+                  gpuResourceClaim (pick exactly one GPU allocation backend).
                 properties:
                   name:
                     default: ""
@@ -264,6 +266,49 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              gpuResourceClaim:
+                description: |-
+                  GPUResourceClaim opts this guest into the DRA (Dynamic Resource Allocation)
+                  GPU backend instead of the native SwiftGPU model: the launcher pod carries
+                  a ResourceClaim and the scheduler + a DRA driver (e.g. the NVIDIA DRA
+                  driver in VFIO/IOMMUFD mode) allocate the device at pod-schedule time; the
+                  controller reads the allocated device back and VFIO-passes it into the VM.
+                  Mutually exclusive with gpuProfileRef, kernelRef, cloneFromSnapshot, and
+                  osType: windows (same constraints as gpuProfileRef — GPU is disk-boot
+                  passthrough). (DRA Phase 1: whole-GPU passthrough; MIG/fractional and
+                  multi-node NVLink/IMEX are later phases.)
+                properties:
+                  hugepages:
+                    description: Hugepages sizes the GPU memory hugepage backing ("1Gi",
+                      "2Mi", or "").
+                    type: string
+                  requestName:
+                    description: |-
+                      RequestName is the device-request name within the claim to read the
+                      allocation result back from. Defaults to "gpu" when empty.
+                    type: string
+                  resourceClaimName:
+                    description: |-
+                      ResourceClaimName references a pre-created, shared ResourceClaim.
+                      Mutually exclusive with ResourceClaimTemplateName.
+                    type: string
+                  resourceClaimTemplateName:
+                    description: |-
+                      ResourceClaimTemplateName references a ResourceClaimTemplate; the
+                      controller stamps it into pod.spec.resourceClaims so the scheduler mints
+                      a per-pod ResourceClaim. Mutually exclusive with ResourceClaimName.
+                    type: string
+                  tier:
+                    default: pcie
+                    description: |-
+                      Tier selects the hypervisor/firmware exactly as SwiftGPUProfile.Tier does:
+                      pcie -> Cloud Hypervisor (default), hgx-shared/hgx-full -> QEMU.
+                    enum:
+                    - pcie
+                    - hgx-shared
+                    - hgx-full
+                    type: string
+                type: object
               guestClassRef:
                 description: |-
                   LocalObjectReference contains enough information to let you locate the

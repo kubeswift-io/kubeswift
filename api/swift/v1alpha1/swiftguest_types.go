@@ -47,6 +47,14 @@ const (
 // allocated GPU devices and the guest is ready to be scheduled.
 const ConditionGPUAllocated = "GPUAllocated"
 
+// ConditionGPUClaimPending is set on a DRA-backed GPU guest (spec.gpuResourceClaim)
+// after the launcher pod has been created with a ResourceClaim but the scheduler
+// + DRA driver have not yet allocated a device. Unlike the native backend (which
+// decides allocation in the controller before the pod exists), the DRA backend
+// defers allocation to pod-schedule time; the controller flips GPUAllocated=True
+// only once the claim's allocation result is read back. (DRA Phase 1.)
+const ConditionGPUClaimPending = "GPUClaimPending"
+
 // SwiftGuestPhase is the phase of a SwiftGuest.
 // +kubebuilder:validation:Enum=Pending;Scheduling;Running;Stopped;Failed
 type SwiftGuestPhase string
@@ -75,11 +83,24 @@ type SwiftGuestSpec struct {
 	// +optional
 	SeedProfileRef *corev1.LocalObjectReference `json:"seedProfileRef,omitempty"`
 	RunPolicy      RunPolicy                    `json:"runPolicy,omitempty"`
-	// GPUProfileRef references a SwiftGPUProfile for GPU passthrough.
-	// When set, the SwiftGPU controller allocates GPUs before the pod is created.
-	// Mutually exclusive with kernelRef (GPU boot requires disk boot with UEFI).
+	// GPUProfileRef references a SwiftGPUProfile for GPU passthrough via the
+	// NATIVE allocation backend: the SwiftGPU controller picks node+devices
+	// (findAndAllocate) before the pod is created. Mutually exclusive with
+	// kernelRef (GPU boot requires disk boot with UEFI) and with
+	// gpuResourceClaim (pick exactly one GPU allocation backend).
 	// +optional
 	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
+	// GPUResourceClaim opts this guest into the DRA (Dynamic Resource Allocation)
+	// GPU backend instead of the native SwiftGPU model: the launcher pod carries
+	// a ResourceClaim and the scheduler + a DRA driver (e.g. the NVIDIA DRA
+	// driver in VFIO/IOMMUFD mode) allocate the device at pod-schedule time; the
+	// controller reads the allocated device back and VFIO-passes it into the VM.
+	// Mutually exclusive with gpuProfileRef, kernelRef, cloneFromSnapshot, and
+	// osType: windows (same constraints as gpuProfileRef — GPU is disk-boot
+	// passthrough). (DRA Phase 1: whole-GPU passthrough; MIG/fractional and
+	// multi-node NVLink/IMEX are later phases.)
+	// +optional
+	GPUResourceClaim *GPUResourceClaimSpec `json:"gpuResourceClaim,omitempty"`
 	// CloneFromSnapshot boots this guest as a clone of a SwiftSnapshot (Tier B
 	// local or Tier C s3) instead of imageRef/kernelRef — the guest resumes the
 	// captured state byte-for-byte (CH --restore) with per-clone identity
@@ -243,11 +264,32 @@ const AnnotationDrainRequested = "kubeswift.io/drain-requested"
 // (auto_mode.go) and validation webhook (validator.go) carry the same check
 // inline (a package-cycle workaround that predates this method).
 func (g *SwiftGuest) HasVFIODevices() bool {
-	if g.Spec.GPUProfileRef != nil {
+	if g.Spec.GPUProfileRef != nil || g.Spec.GPUResourceClaim != nil {
 		return true
 	}
 	return g.HasSRIOVInterface()
 }
+
+// GPUBackend returns which GPU allocation backend this guest selects:
+// "native" (spec.gpuProfileRef), "dra" (spec.gpuResourceClaim), or "" (no GPU).
+// The webhook enforces that at most one of the two is set, so the order here is
+// not load-bearing.
+func (g *SwiftGuest) GPUBackend() string {
+	switch {
+	case g.Spec.GPUProfileRef != nil:
+		return GPUBackendNative
+	case g.Spec.GPUResourceClaim != nil:
+		return GPUBackendDRA
+	default:
+		return ""
+	}
+}
+
+// GPU allocation backend identifiers (see GPUBackend).
+const (
+	GPUBackendNative = "native"
+	GPUBackendDRA    = "dra"
+)
 
 // HasNodeLocalVirtioBackends reports whether the guest uses virtio devices
 // whose backend is a node-local process or socket that cannot follow a live
@@ -572,8 +614,44 @@ type GuestNetworkStatus struct {
 	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
 }
 
+// GPUResourceClaimSpec selects the DRA GPU allocation backend (see
+// SwiftGuestSpec.GPUResourceClaim). Exactly one of ResourceClaimName /
+// ResourceClaimTemplateName must be set (the webhook enforces this).
+//
+// Because there is no SwiftGPUProfile in DRA mode, the few VM-shape knobs the
+// passthrough runtime still needs — which the profile otherwise carries — live
+// here: Tier selects the hypervisor/firmware (pcie -> Cloud Hypervisor, hgx-* ->
+// QEMU), and Hugepages sizes the GPU memory backing. DRA decides the device;
+// KubeSwift still owns the VM. (DRA Phase 1 targets whole-GPU pcie passthrough;
+// the hgx NUMA/pinning surface is a later, hardware-gated phase.)
+type GPUResourceClaimSpec struct {
+	// ResourceClaimName references a pre-created, shared ResourceClaim.
+	// Mutually exclusive with ResourceClaimTemplateName.
+	// +optional
+	ResourceClaimName string `json:"resourceClaimName,omitempty"`
+	// ResourceClaimTemplateName references a ResourceClaimTemplate; the
+	// controller stamps it into pod.spec.resourceClaims so the scheduler mints
+	// a per-pod ResourceClaim. Mutually exclusive with ResourceClaimName.
+	// +optional
+	ResourceClaimTemplateName string `json:"resourceClaimTemplateName,omitempty"`
+	// RequestName is the device-request name within the claim to read the
+	// allocation result back from. Defaults to "gpu" when empty.
+	// +optional
+	RequestName string `json:"requestName,omitempty"`
+	// Tier selects the hypervisor/firmware exactly as SwiftGPUProfile.Tier does:
+	// pcie -> Cloud Hypervisor (default), hgx-shared/hgx-full -> QEMU.
+	// +kubebuilder:validation:Enum=pcie;hgx-shared;hgx-full
+	// +kubebuilder:default=pcie
+	// +optional
+	Tier string `json:"tier,omitempty"`
+	// Hugepages sizes the GPU memory hugepage backing ("1Gi", "2Mi", or "").
+	// +optional
+	Hugepages string `json:"hugepages,omitempty"`
+}
+
 // GPUStatus holds GPU allocation and runtime information for a SwiftGuest.
-// Populated when spec.gpuProfileRef is set.
+// Populated by the GPU allocation backend (native: spec.gpuProfileRef; dra:
+// spec.gpuResourceClaim).
 type GPUStatus struct {
 	// Devices lists the PCI addresses of allocated GPUs (e.g. "0000:41:00.0").
 	Devices []string `json:"devices,omitempty"`

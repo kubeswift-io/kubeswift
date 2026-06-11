@@ -381,9 +381,10 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// GPU gate: if gpuProfileRef is set, wait for GPUAllocated=True before creating
-	// the launcher pod. The SwiftGPU controller runs independently and sets this
-	// condition once devices are reserved on a SwiftGPUNode.
+	// GPU gate (native backend): if gpuProfileRef is set, wait for
+	// GPUAllocated=True before creating the launcher pod. The SwiftGPU controller
+	// runs independently and sets this condition once devices are reserved on a
+	// SwiftGPUNode.
 	if guest.Spec.GPUProfileRef != nil && !isGPUAllocated(&guest) {
 		logger.Info("waiting for GPU allocation", "guest", req.NamespacedName)
 		status.Phase = swiftv1alpha1.SwiftGuestPhasePending
@@ -391,6 +392,28 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// GPU gate (DRA backend): the scheduler-time runtime — building a
+	// ResourceClaim-bearing, unpinned launcher pod and consuming the
+	// driver-allocated device (CDI / gpu-init) into the VM — lands in DRA Phase
+	// 2 (it needs a real DRA driver to validate the device schema and binding
+	// ownership). Phase 1 ships the allocation backend + API + webhook; until
+	// the runtime is wired, hold a DRA guest in Pending so it never boots
+	// GPU-less. See docs/design/dra-gpu-integration.md.
+	if guest.Spec.GPUResourceClaim != nil {
+		logger.Info("DRA GPU runtime is Phase 2; holding guest Pending", "guest", req.NamespacedName)
+		status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+		setCondition(status, metav1.Condition{
+			Type:    "GPUDRARuntimePending",
+			Status:  metav1.ConditionTrue,
+			Reason:  "Phase2",
+			Message: "DRA GPU allocation is wired; the passthrough runtime (ResourceClaim-bearing pod + device wiring) lands in DRA Phase 2",
+		})
+		if err := r.patchStatus(ctx, &guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.

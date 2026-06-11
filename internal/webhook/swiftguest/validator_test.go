@@ -94,7 +94,7 @@ func TestValidate_OSType(t *testing.T) {
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
-	})), "gpuProfileRef is not supported")
+	})), "GPU passthrough")
 	// invalid enum value: rejected (defense-in-depth beyond the CRD schema).
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSType("bsd")
@@ -121,7 +121,7 @@ func TestValidate_CloneFromSnapshotRules(t *testing.T) {
 	// gpuProfileRef + cloneFromSnapshot: rejected.
 	errContains(t, validateSwiftGuest(cloneGuest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
-	})), "mutually exclusive with spec.gpuProfileRef")
+	})), "mutually exclusive with GPU passthrough")
 }
 
 func TestValidate_GuestClassRequiredForImageBoot(t *testing.T) {
