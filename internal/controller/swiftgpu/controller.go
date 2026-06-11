@@ -2,10 +2,13 @@ package swiftgpu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -17,6 +20,7 @@ import (
 
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/gpualloc"
 	"github.com/projectbeskar/kubeswift/internal/metrics"
 )
 
@@ -48,23 +52,26 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Only handle guests with a GPU profile reference.
-	if guest.Spec.GPUProfileRef == nil {
+	// Select the GPU allocation backend (native: gpuProfileRef; dra:
+	// gpuResourceClaim). No GPU request -> nothing to do.
+	backendName := guest.GPUBackend()
+	if backendName == "" {
 		return ctrl.Result{}, nil
 	}
+	backend := r.backend(backendName)
 
-	// Handle deletion: release GPU allocation and remove finalizer.
+	// Handle deletion: release the allocation and remove the finalizer.
 	if !guest.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&guest, GPUFinalizerName) {
-			if err := r.deallocateGPUs(ctx, &guest); err != nil {
-				logger.Error(err, "GPU deallocation failed")
+			if err := backend.Release(ctx, &guest); err != nil {
+				logger.Error(err, "GPU release failed", "backend", backendName)
 				return ctrl.Result{}, err
 			}
 			controllerutil.RemoveFinalizer(&guest, GPUFinalizerName)
 			if err := r.Update(ctx, &guest); err != nil {
 				return ctrl.Result{}, err
 			}
-			logger.Info("GPU deallocation complete", "guest", req.NamespacedName)
+			logger.Info("GPU release complete", "guest", req.NamespacedName, "backend", backendName)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -82,85 +89,113 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	// Resolve the SwiftGPUProfile.
-	var profile gpuv1alpha1.SwiftGPUProfile
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: guest.Namespace,
-		Name:      guest.Spec.GPUProfileRef.Name,
-	}, &profile); err != nil {
+	// Phase 1: Prepare. native resolves here (decides node+devices); dra defers
+	// to the scheduler and returns Resolved=false.
+	pr, err := backend.Prepare(ctx, &guest)
+	if err != nil {
+		return r.handlePrepareError(ctx, &guest, err)
+	}
+	if pr.Resolved {
+		return r.commitAllocation(ctx, &guest, pr.Status, logger)
+	}
+
+	// Phase 2 (dra): the launcher pod carries a ResourceClaim; mark
+	// GPUClaimPending so the SwiftGuest controller builds it, then Resolve once
+	// the scheduler/DRA driver has allocated a device.
+	return r.reconcileDeferred(ctx, &guest, backend, logger)
+}
+
+// backend returns the gpualloc.Backend for the given backend name.
+func (r *SwiftGPUReconciler) backend(name string) gpualloc.Backend {
+	if name == swiftv1alpha1.GPUBackendDRA {
+		return gpualloc.NewDRABackend(r.Client)
+	}
+	return &nativeBackend{r: r}
+}
+
+// handlePrepareError maps the typed allocation errors to the same conditions /
+// requeue / metrics the native path produced before the refactor.
+func (r *SwiftGPUReconciler) handlePrepareError(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, err error) (ctrl.Result, error) {
+	var pnf *ProfileNotFoundError
+	switch {
+	case errors.As(err, &pnf):
 		status := guest.Status.DeepCopy()
-		setGPUAllocatedCondition(status, false, "ProfileNotFound",
-			fmt.Sprintf("SwiftGPUProfile %q not found", guest.Spec.GPUProfileRef.Name))
-		if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+		setGPUAllocatedCondition(status, false, "ProfileNotFound", pnf.Error())
+		if patchErr := r.patchStatus(ctx, guest, status); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	// Find a suitable SwiftGPUNode and allocate GPUs.
-	gpuNode, selectedGPUs, numaNodes, partitionID, err := r.findAndAllocate(ctx, &guest, &profile)
-	if err != nil {
-		if err == errNoCapacity {
-			logger.Info("no GPU capacity available, will retry", "guest", req.NamespacedName,
-				"count", profile.Spec.Count, "model", profile.Spec.Model)
-			// Transition-gated: count entering the NoCapacity state once, not
-			// every 30s retry tick while capacity stays exhausted.
-			if !hasGPUAllocatedReason(&guest, "NoCapacity") {
-				metrics.GPUAllocationsTotal.WithLabelValues("no_capacity").Inc()
-			}
-			status := guest.Status.DeepCopy()
-			setGPUAllocatedCondition(status, false, "NoCapacity",
-				"no SwiftGPUNode has sufficient free GPUs matching the profile")
-			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
-				return ctrl.Result{}, patchErr
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	case errors.Is(err, errNoCapacity):
+		// Transition-gated: count entering the NoCapacity state once, not every
+		// 30s retry tick while capacity stays exhausted.
+		if !hasGPUAllocatedReason(guest, "NoCapacity") {
+			metrics.GPUAllocationsTotal.WithLabelValues("no_capacity").Inc()
 		}
+		status := guest.Status.DeepCopy()
+		setGPUAllocatedCondition(status, false, "NoCapacity",
+			"no SwiftGPUNode has sufficient free GPUs matching the profile")
+		if patchErr := r.patchStatus(ctx, guest, status); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	default:
 		return ctrl.Result{}, err
 	}
+}
 
-	// Determine hypervisor from the GPU tier.
-	hypervisor := "cloud-hypervisor"
-	if profile.Spec.Tier == "hgx-shared" || profile.Spec.Tier == "hgx-full" {
-		hypervisor = "qemu"
-	}
-
-	// Build the PCI address list from the selected GPU devices.
-	devices := make([]string, len(selectedGPUs))
-	for i, g := range selectedGPUs {
-		devices[i] = g.PCIAddress
-	}
-
-	// Record allocation in SwiftGuest status and set GPUAllocated=True.
+// commitAllocation stamps the resolved GPUStatus and sets GPUAllocated=True.
+func (r *SwiftGPUReconciler) commitAllocation(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, gpuStatus *swiftv1alpha1.GPUStatus, logger logr.Logger) (ctrl.Result, error) {
 	status := guest.Status.DeepCopy()
-	status.GPU = &swiftv1alpha1.GPUStatus{
-		Devices:     devices,
-		PartitionID: partitionID,
-		NUMANodes:   numaNodes,
-		Hypervisor:  hypervisor,
-		NodeName:    gpuNode.Name,
-	}
+	status.GPU = gpuStatus
 	setGPUAllocatedCondition(status, true, "Allocated",
-		fmt.Sprintf("allocated %d GPU(s) on node %s", len(devices), gpuNode.Name))
+		fmt.Sprintf("allocated %d GPU(s) on node %s", len(gpuStatus.Devices), gpuStatus.NodeName))
+	// Clear any GPUClaimPending left over from the DRA deferred path.
+	apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
+		Type: swiftv1alpha1.ConditionGPUClaimPending, Status: metav1.ConditionFalse,
+		Reason: "Allocated", Message: "device allocated",
+	})
 	// At most once per successful allocation: the isGPUAllocated early return
-	// above means this path only runs while the condition is not yet True (a
+	// means this path only runs while the condition is not yet True (a
 	// status-patch-failure retry may rarely re-count — acceptable).
 	metrics.GPUAllocationsTotal.WithLabelValues("allocated").Inc()
-	if err := r.patchStatus(ctx, &guest, status); err != nil {
-		// GPUs are already marked on the node. The finalizer ensures deallocation
-		// will be attempted. On the next reconcile, findAndAllocate will detect the
-		// existing allocation (AllocatedTo == namespace/name) and return it.
+	if err := r.patchStatus(ctx, guest, status); err != nil {
+		// GPUs are already marked (native) / the claim is allocated (dra). The
+		// finalizer ensures release will be attempted; the next reconcile
+		// re-detects the existing allocation.
 		return ctrl.Result{}, err
 	}
-
 	logger.Info("GPU allocation complete",
-		"guest", req.NamespacedName,
-		"node", gpuNode.Name,
-		"devices", devices,
-		"hypervisor", hypervisor,
-		"partitionID", partitionID)
-
+		"guest", client.ObjectKeyFromObject(guest),
+		"node", gpuStatus.NodeName,
+		"devices", gpuStatus.Devices,
+		"hypervisor", gpuStatus.Hypervisor)
 	return ctrl.Result{}, nil
+}
+
+// reconcileDeferred drives the DRA (scheduler-time) allocation: mark
+// GPUClaimPending (so the SwiftGuest controller builds the claim-bearing pod),
+// then poll Resolve until the scheduler/DRA driver has allocated a device.
+func (r *SwiftGPUReconciler) reconcileDeferred(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, backend gpualloc.Backend, logger logr.Logger) (ctrl.Result, error) {
+	if !apimeta.IsStatusConditionTrue(guest.Status.Conditions, swiftv1alpha1.ConditionGPUClaimPending) {
+		status := guest.Status.DeepCopy()
+		apimeta.SetStatusCondition(&status.Conditions, metav1.Condition{
+			Type: swiftv1alpha1.ConditionGPUClaimPending, Status: metav1.ConditionTrue,
+			Reason:  "AwaitingScheduler",
+			Message: "launcher pod created with a ResourceClaim; awaiting scheduler/DRA device allocation",
+		})
+		if err := r.patchStatus(ctx, guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	res, err := backend.Resolve(ctx, guest)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !res.Ready {
+		// Pod not scheduled / claim not allocated yet — poll.
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	return r.commitAllocation(ctx, guest, res.Status, logger)
 }
 
 func (r *SwiftGPUReconciler) patchStatus(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, status *swiftv1alpha1.SwiftGuestStatus) error {
