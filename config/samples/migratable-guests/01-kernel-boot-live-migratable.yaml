@@ -1,0 +1,29 @@
+# Kernel-boot SwiftGuest — live-migratable (the lightest case).
+#
+# A kernel-boot guest holds NO root-disk PVC, so it has no storage
+# constraint for live migration — it live-migrates on default storage and
+# default networking. This is exactly the workload class the project
+# validated cross-node live migration on (sub-3s downtime).
+#
+# Prerequisites: `kubectl apply -f ../shared/` (default class + minimal seed),
+# a Ready SwiftKernel `faas-minimal`, and a node labeled
+# kubeswift.io/kernel-node=true.
+#
+# Migrate it:  swiftctl migrate live-kernel-vm --to <node> --allow-ip-change
+# (default networking changes the IP cross-node; see 03 to preserve it.)
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: live-kernel-vm
+  namespace: default
+spec:
+  kernelRef:
+    name: faas-minimal
+  guestClassRef:
+    name: default
+  kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
+  runPolicy: Running
+  migration:
+    enabled: true          # default; shown for clarity
+    preferredMode: live    # auto would also pick live for this guest
+    drainPolicy: Migrate   # kubectl drain auto-evacuates it (default)
