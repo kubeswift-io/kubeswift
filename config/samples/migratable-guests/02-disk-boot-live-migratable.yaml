@@ -1,0 +1,35 @@
+# Disk-boot SwiftGuest — live-migratable via RWX + Block storage.
+#
+# A disk-boot (imageRef) guest holds a per-guest root-disk PVC. Live
+# migration needs that PVC attachable on BOTH nodes during cutover, which
+# requires ReadWriteMany + volumeMode: Block on a live-migration-capable
+# StorageClass (Longhorn `migratable: "true"`). The RWX+Block storage here
+# comes from the `live-migratable` SwiftGuestClass; the default RWO+Filesystem
+# class would make this guest OFFLINE-only.
+#
+# Prerequisites:
+#   kubectl apply -f ../shared/                          # minimal seed
+#   kubectl apply -f ../storage/swiftguestclass-rwx-migratable.yaml
+#     (defines the `live-migratable` class AND the longhorn-migratable
+#      StorageClass — a cluster admin applies the StorageClass once)
+#   a Ready SwiftImage `ubuntu-noble`.
+#
+# Migrate it:  swiftctl migrate live-disk-vm --to <node> --allow-ip-change
+# (default networking changes the IP cross-node; see 03 to preserve it.)
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: live-disk-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: live-migratable   # RWX + Block + longhorn-migratable
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+  migration:
+    enabled: true
+    preferredMode: live
+    drainPolicy: Migrate

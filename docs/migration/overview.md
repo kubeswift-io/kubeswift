@@ -13,6 +13,11 @@
 
 ## What you can do today
 
+> **New to this?** Start with [migratable-guests.md](migratable-guests.md) —
+> what makes a guest live-migratable, a ready-to-use multi-OS guest set, and the
+> operational gotchas (target capacity, mTLS worker-only certs, offline
+> fallback).
+
 - Move any non-VFIO SwiftGuest from one Kubernetes node to another
   with the disk content preserved.
 - Use `swiftctl migrate <guest> --to <node>` or apply a
