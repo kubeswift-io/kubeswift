@@ -9,6 +9,7 @@ import (
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -42,4 +43,7 @@ func init() {
 	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
 	metav1.AddToGroupVersion(Scheme, gvMigration)
 	utilruntime.Must(volumesnapshotv1.AddToScheme(Scheme))
+	// resource.k8s.io/v1 (DRA): the DRA GPU allocation backend reads
+	// ResourceClaims back to discover the allocated device.
+	utilruntime.Must(resourcev1.AddToScheme(Scheme))
 }

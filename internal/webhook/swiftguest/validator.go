@@ -56,8 +56,21 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 		}
 		// VFIO/GPU state cannot be CH-restored (Phase 0 Constraint #1), the same
 		// rule the includeMemory+VFIO snapshot path enforces.
-		if spec.GPUProfileRef != nil {
-			return fmt.Errorf("spec.cloneFromSnapshot is mutually exclusive with spec.gpuProfileRef (VFIO state cannot be restored)")
+		if usesGPU(spec) {
+			return fmt.Errorf("spec.cloneFromSnapshot is mutually exclusive with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim — VFIO state cannot be restored)")
+		}
+	}
+
+	// GPU allocation backend: at most one of the native (gpuProfileRef) or DRA
+	// (gpuResourceClaim) backend, and a well-formed DRA claim reference.
+	if spec.GPUProfileRef != nil && spec.GPUResourceClaim != nil {
+		return fmt.Errorf("spec.gpuProfileRef and spec.gpuResourceClaim are mutually exclusive (pick exactly one GPU allocation backend)")
+	}
+	if rc := spec.GPUResourceClaim; rc != nil {
+		hasName := rc.ResourceClaimName != ""
+		hasTemplate := rc.ResourceClaimTemplateName != ""
+		if hasName == hasTemplate {
+			return fmt.Errorf("spec.gpuResourceClaim requires exactly one of resourceClaimName or resourceClaimTemplateName")
 		}
 	}
 
@@ -94,8 +107,8 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 		}
 		// GPU passthrough to Windows is out of scope for v1 (a non-goal in
 		// docs/design/windows-guest-support.md).
-		if spec.GPUProfileRef != nil {
-			return fmt.Errorf("spec.osType: windows with spec.gpuProfileRef is not supported in v1 (GPU passthrough to Windows is out of scope)")
+		if usesGPU(spec) {
+			return fmt.Errorf("spec.osType: windows with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim) is not supported in v1 (GPU passthrough to Windows is out of scope)")
 		}
 	}
 
@@ -111,6 +124,14 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	return nil
 }
 
+// usesGPU reports whether the guest requests GPU passthrough via either
+// backend — the native model (spec.gpuProfileRef) or DRA (spec.gpuResourceClaim).
+// The v1 GPU constraints (no clone, no Windows, no virtiofs/vhost-user) apply to
+// both because both ultimately VFIO-pass a device and may select the QEMU runtime.
+func usesGPU(spec *swiftv1alpha1.SwiftGuestSpec) bool {
+	return spec.GPUProfileRef != nil || spec.GPUResourceClaim != nil
+}
+
 // validateVhostUserDevices enforces the vhost-user device constraints: unique
 // names, a socket per device, virtioId required for generic devices, and the
 // v1 scope limit (Cloud Hypervisor only — a gpuProfileRef may select the QEMU
@@ -119,8 +140,8 @@ func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec) error {
 	if len(spec.VhostUserDevices) == 0 {
 		return nil
 	}
-	if spec.GPUProfileRef != nil {
-		return fmt.Errorf("spec.vhostUserDevices is not supported with spec.gpuProfileRef (Cloud Hypervisor only in v1)")
+	if usesGPU(spec) {
+		return fmt.Errorf("spec.vhostUserDevices is not supported with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim — Cloud Hypervisor only in v1)")
 	}
 	names := make(map[string]struct{}, len(spec.VhostUserDevices))
 	for i := range spec.VhostUserDevices {
@@ -172,8 +193,8 @@ func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
 			return fmt.Errorf("spec.interfaces[%d]: vhost-user does not use resourceName", i)
 		}
 	}
-	if hasVhostUser && spec.GPUProfileRef != nil {
-		return fmt.Errorf("spec.interfaces: vhost-user is not supported with spec.gpuProfileRef (Cloud Hypervisor only in v1)")
+	if hasVhostUser && usesGPU(spec) {
+		return fmt.Errorf("spec.interfaces: vhost-user is not supported with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim — Cloud Hypervisor only in v1)")
 	}
 
 	// At most one interface may be primary, and only a bridge-type interface
@@ -208,8 +229,8 @@ func validateFilesystems(spec *swiftv1alpha1.SwiftGuestSpec) error {
 	// select the QEMU runtime (tier hgx-shared/hgx-full), which v1 does not wire
 	// for vhost-user; reject the combination rather than silently dropping the
 	// shares at runtime.
-	if spec.GPUProfileRef != nil {
-		return fmt.Errorf("spec.filesystems is not supported with spec.gpuProfileRef (virtiofs is Cloud Hypervisor only in v1)")
+	if usesGPU(spec) {
+		return fmt.Errorf("spec.filesystems is not supported with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim — virtiofs is Cloud Hypervisor only in v1)")
 	}
 	if spec.OSType == swiftv1alpha1.OSTypeWindows {
 		return fmt.Errorf("spec.filesystems is not supported with spec.osType: windows (no virtio-fs guest driver in v1)")
