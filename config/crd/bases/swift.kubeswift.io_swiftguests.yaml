@@ -16,7 +16,28 @@ spec:
     singular: swiftguest
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.nodeName
+      name: Node
+      type: string
+    - jsonPath: .status.network.primaryIP
+      name: IP
+      type: string
+    - jsonPath: .status.runtime.hypervisor
+      name: Hypervisor
+      priority: 1
+      type: string
+    - jsonPath: .spec.osType
+      name: OS
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: SwiftGuest is the Schema for the swiftguests API.
