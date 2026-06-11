@@ -28,25 +28,46 @@ Tooling: [`tools/windows-image-prep/`](../../tools/windows-image-prep/).
 
 ## 1. Part A — automated virtio install (validated)
 
-Review `tools/windows-image-prep/autounattend.xml` first and change:
-- the **AdministratorPassword / AutoLogon password** (placeholder `ChangeMe-Passw0rd!`);
-- the **`/IMAGE/INDEX`** if you want a different edition. Index `1` is *Standard
-  (Server Core)*. Check your media: `wiminfo /mnt/iso/sources/install.wim`
-  (`apt install wimtools`); use `2` for *Standard (Desktop Experience)*.
+Review `tools/windows-image-prep/autounattend.xml` first and change the
+**`/IMAGE/INDEX`** if you want a different edition. Index `1` is *Standard
+(Server Core)*. Check your media: `wiminfo /mnt/iso/sources/install.wim`
+(`apt install wimtools`); use `2` for *Standard (Desktop Experience)*.
 
-Then run:
+The Administrator password and the virtio driver version are passed in via env
+(no need to hand-edit the answer file):
 
 ```sh
 cd tools/windows-image-prep
-WIN_ISO=/path/Windows2022.iso VIRTIO_ISO=/path/virtio-win.iso ./run-install.sh
+# Windows Server 2022:
+WIN_ISO=/path/Windows2022.iso VIRTIO_ISO=/path/virtio-win.iso \
+  ADMIN_PASSWORD='Str0ng-Passw0rd!' ./run-install.sh
+# Windows Server 2025 (WIN_VER selects the virtio-win driver folder; the ISO
+# ships per-OS folders \viostor\2k25\..., \NetKVM\2k25\..., etc.):
+WIN_ISO=/path/Windows2025.iso VIRTIO_ISO=/path/virtio-win.iso \
+  WIN_VER=2k25 ADMIN_PASSWORD='Str0ng-Passw0rd!' \
+  CLOUDBASE_MSI=/path/CloudbaseInitSetup_Stable_x64.msi \
+  OUT_QCOW2=./windows2025.qcow2 ./run-install.sh
 ```
 
-What it does (fully headless, ~15–40 min): builds the answer-file seed ISO, boots
+Key env (see the script header for all): `WIN_VER` (default `2k22`; `2k25` for
+Server 2025, `2k19` for 2019, …) selects the virtio-win driver folder;
+`ADMIN_PASSWORD` bakes a real password in; **`CLOUDBASE_MSI`** stages
+cloudbase-init onto the seed so it installs **offline during the same run** —
+folding Part B into Part A (skip Part B entirely if you pass it).
+
+What it does (fully headless, ~10–40 min): builds the answer-file seed ISO, boots
 QEMU/KVM, **defeats the "Press any key to boot from CD" prompt** via QMP
 `send-key`, injects **viostor/NetKVM** in WinPE so Setup sees the virtio-blk disk,
-installs onto a UEFI/GPT layout, runs the **headless BCD prep**, writes a
-`KUBESWIFT_PREP_OK` sentinel to the serial port, and powers off. Output:
-`windows.qcow2`. (Connect a VNC client to `127.0.0.1:9` to watch.)
+installs onto a UEFI/GPT layout, runs the **headless BCD prep**, optionally
+installs cloudbase-init from the seed, writes a `KUBESWIFT_PREP_OK` sentinel to
+the serial port, and powers off. Output: `windows.qcow2` (or `OUT_QCOW2`). It
+auto-picks a free VNC display + RDP-forward port and prints them — connect a VNC
+client there to watch.
+
+> **Validated on Windows Server 2025** (build 26100, Standard Core, `virtio-win`
+> stable `2k25` drivers): the produced image boots from the virtio disk and
+> brings up the **SAC serial console** headlessly — viostor injection + the
+> EMS/SAC BCD prep both confirmed.
 
 The result is a **virtio-ready, headless-bootable** image. The headless BCD prep
 it applies (the spike's key fix) is:
