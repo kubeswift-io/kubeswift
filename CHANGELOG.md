@@ -235,4 +235,5 @@ major feature arcs, each shipped with on-cluster validation walkthroughs.
 
 ### Known Issues
 
-See the Bugs Fixed table in [kubeswift_context.md](kubeswift_context.md) for the full history of bugs 1-30.
+See the per-release notes below and the design docs under `docs/design/` for
+known issues and their resolutions.

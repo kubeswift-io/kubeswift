@@ -473,17 +473,17 @@ type SwiftMigrationStatus struct {
 	//     pause begins inside CH on src) to GuestRunning=True
 	//     observation on destination (vCPU pause ends on dst).
 	//     Typically low single-digit seconds for default node-local
-	//     networking. Pre-W27a this measured two adjacent
-	//     metav1.Now() calls in the same reconcile, producing
-	//     sub-millisecond nonsense; see Tracked Follow-up #7 close-out
-	//     in kubeswift_context.md.
+	//     networking. (This anchors on a dedicated dispatch timestamp;
+	//     an earlier implementation measured two adjacent metav1.Now()
+	//     calls in the same reconcile and reported sub-millisecond
+	//     values.)
 	//
 	// **Live-mode caveat**: this is the cutover-orchestration window,
 	// NOT the "guest stopped-the-world" window from inside the guest.
 	// The actual vCPU-paused sub-phase inside Cloud Hypervisor's
 	// vm.send-migration RPC is internal to CH and not separately
-	// surfaced today (W28 candidate per Tracked Follow-up #7
-	// close-out — capture per-phase timing from CH internals).
+	// surfaced today (a future enhancement could capture per-phase
+	// timing from CH internals).
 	// +optional
 	ObservedDowntime *metav1.Duration `json:"observedDowntime,omitempty"`
 	// FailureMessage is a structured human-readable failure description.
