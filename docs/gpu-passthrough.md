@@ -2,6 +2,8 @@
 
 KubeSwift supports GPU passthrough using VFIO. GPUs appear as PCI devices inside the VM. The approach differs based on GPU hardware class — the `tier` field in SwiftGPUProfile is the single selection point.
 
+> This page covers the **native** allocation backend (`spec.gpuProfileRef`), where the SwiftGPU controller picks node + devices from its own inventory. KubeSwift can alternatively let the **kube-scheduler** allocate GPUs through standard Kubernetes ResourceClaims — see [GPU allocation via DRA](gpu/dra-allocation.md) (`spec.gpuResourceClaim`). The runtime passthrough path is identical for both.
+
 ## Prerequisites
 
 ### Host requirements

@@ -1,0 +1,37 @@
+# SwiftGuest with GPU passthrough via the DRA allocation backend.
+#
+# Instead of a SwiftGPUProfile (native backend), this guest carries a
+# gpuResourceClaim: the launcher pod references a ResourceClaimTemplate, the
+# kube-scheduler allocates a GPU from the ResourceSlices published by the
+# kubeswift-dra-driver, and the driver's CDI spec hands the PCI address to
+# gpu-init. No nodeName pinning — the scheduler picks the node.
+#
+# This exact shape is cluster-validated (design doc dra-gpu-integration.md §A8).
+#
+# Prerequisites (see config/samples/dra-gpu/README.md):
+#   1. Kubernetes >= 1.34 (resource.k8s.io/v1) with CDI enabled in containerd
+#   2. kubeswift-dra-driver DaemonSet + DeviceClass (config/dra-driver/)
+#   3. ResourceClaimTemplate single-vfio-gpu (this directory)
+#   4. SwiftImage ubuntu-noble Ready, SwiftGuestClass default, SwiftSeedProfile minimal
+#
+# Verify:
+#   kubectl get swiftguest dra-gpu-vm -w          # Pending -> Running with IP
+#   kubectl get resourceclaim                     # dra-gpu-vm-gpu-* allocated,reserved
+#   kubectl get swiftguest dra-gpu-vm -o jsonpath='{.status.gpu}'
+#   swiftctl ssh dra-gpu-vm -- lspci | grep -i nvidia
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: dra-gpu-vm
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  gpuResourceClaim:
+    resourceClaimTemplateName: single-vfio-gpu
+    tier: pcie # pcie -> Cloud Hypervisor (default); hgx-shared/hgx-full -> QEMU
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running

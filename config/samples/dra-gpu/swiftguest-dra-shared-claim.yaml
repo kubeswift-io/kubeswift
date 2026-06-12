@@ -1,0 +1,22 @@
+# SwiftGuest using a PRE-CREATED shared ResourceClaim (resourceClaimName)
+# instead of a per-pod template. The device reservation is held by the claim,
+# not the pod — stop/start of the guest reuses the same GPU.
+#
+# Apply resourceclaim-shared.yaml first. Only one SwiftGuest may reference the
+# claim at a time (VFIO passthrough is exclusive — see the claim's comments).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: dra-gpu-vm-reserved
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  gpuResourceClaim:
+    resourceClaimName: reserved-vfio-gpu
+    tier: pcie
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
