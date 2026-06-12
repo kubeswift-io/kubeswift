@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -62,6 +63,16 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The kubeletplugin helper binds its gRPC socket under
+	// /var/lib/kubelet/plugins/<driver>/ but does NOT create the directory —
+	// without it the bind fails "no such file or directory" (cluster-e2e
+	// finding, 2026-06-12).
+	pluginDir := filepath.Join("/var/lib/kubelet/plugins", driverName)
+	if err := os.MkdirAll(pluginDir, 0o750); err != nil {
+		logger.Error(err, "create plugin data dir", "dir", pluginDir)
+		os.Exit(1)
+	}
 
 	driver := &draDriver{nodeName: *nodeName, cdiDir: *cdiDir, kube: kube}
 	helper, err := kubeletplugin.Start(ctx, driver,

@@ -136,12 +136,27 @@ impl MigrationIntent {
     }
 }
 
+/// Deserialize an explicitly-null field to the type's default. serde's
+/// #[serde(default)] only applies when the field is ABSENT; Go marshals nil
+/// slices as `null`, which otherwise fails with "invalid type: null".
+fn null_to_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    let opt = Option::<T>::deserialize(d)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// GPU passthrough configuration from the controller.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GPUIntent {
-    /// VFIO GPU devices to pass through.
-    #[serde(default)]
+    /// VFIO GPU devices to pass through. null-tolerant: a Go writer can emit
+    /// `"devices": null` for a nil slice, and plain #[serde(default)] only
+    /// covers a MISSING field, not an explicit null (cluster-e2e finding,
+    /// 2026-06-12).
+    #[serde(default, deserialize_with = "null_to_default")]
     pub devices: Vec<GPUDeviceIntent>,
     /// Where the device list comes from:
     ///   ""    — `devices` above (native backend; controller-time allocation).
@@ -821,5 +836,19 @@ mod tests {
         assert_eq!(devs[0].gpu_direct_clique, -1);
         assert!(!devs[0].pcie_root_port);
         assert_eq!(devs[1].pci_address, "0000:02:00.0");
+    }
+
+    /// Regression (cluster-e2e 2026-06-12): the Go controller can emit
+    /// `"devices": null` (nil slice); deserialization must treat it as empty,
+    /// not fail with "invalid type: null".
+    #[test]
+    fn gpu_intent_null_devices() {
+        let dra: GPUIntent = serde_json::from_str(
+            r#"{"devices":null,"deviceSource":"env","firmware":"cloudhv",
+                "fabricManagerPartitionId":-1}"#,
+        )
+        .unwrap();
+        assert!(dra.devices.is_empty());
+        assert_eq!(dra.device_source, "env");
     }
 }
