@@ -6,6 +6,7 @@ IMAGE_TAG ?= sha-$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown
 CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
 SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
 GPU_DISCOVERY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/gpu-discovery:$(IMAGE_TAG)
+DRA_DRIVER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:$(IMAGE_TAG)
 MIGRATION_STUNNEL_IMAGE ?= ghcr.io/projectbeskar/kubeswift/migration-stunnel:$(IMAGE_TAG)
 SNAPSHOT_S3_IMAGE ?= ghcr.io/projectbeskar/kubeswift/snapshot-s3:$(IMAGE_TAG)
 IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
@@ -30,7 +31,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-dra-driver-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test e2e-tests \
 	verify-e2e-scripts \
@@ -79,7 +80,7 @@ build-go:
 build-rust:
 	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build
 
-build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image
+build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-dra-driver-image
 
 build-controller-image:
 	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE) \
@@ -97,6 +98,10 @@ build-gpu-discovery-image:
 	docker build -f images/gpu-discovery/Containerfile . -t $(GPU_DISCOVERY_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
+build-dra-driver-image:
+	docker build -f images/kubeswift-dra-driver/Containerfile . -t $(DRA_DRIVER_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
+
 build-migration-stunnel-image:
 	docker build -f images/migration-stunnel/Containerfile . -t $(MIGRATION_STUNNEL_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT)
@@ -107,6 +112,7 @@ push-images: build-images
 	docker push $(GPU_DISCOVERY_IMAGE)
 	docker push $(MIGRATION_STUNNEL_IMAGE)
 	docker push $(SNAPSHOT_S3_IMAGE)
+	docker push $(DRA_DRIVER_IMAGE)
 
 package-chart:
 	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \

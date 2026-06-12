@@ -153,3 +153,140 @@ clean split is allocation now, runtime when a GPU lands.
 The native model remains the right tool for **heterogeneous estates and clusters
 without the NVIDIA stack**; DRA is the path for the GPU-cloud/AI-inference
 profile. Hybrid keeps both.
+
+---
+
+# Addendum (2026-06-12): P2 without datacenter hardware — the reference driver plan
+
+> Status: **APPROVED — in implementation.** Supersedes the original "P2 is
+> hardware-gated" framing: most of P2 is buildable and **cluster-validatable
+> today**. Two facts changed the calculus: the dev cluster runs **k8s
+> v1.34.3+k0s with `resource.k8s.io/v1` served** (real DRA scheduling, no
+> upgrade), and the hardware gate was really an *NVIDIA-driver* gate — boba's
+> VFIO-proven GTX 1080 is sufficient for the whole passthrough path if
+> **KubeSwift ships its own minimal reference DRA driver**.
+
+## A1. What stays gated vs. what un-gates
+
+| Was "P2, hardware-gated" | Now |
+|---|---|
+| Claim-bearing unpinned launcher pod | **Buildable now** (Workstream A) |
+| Post-schedule device identity → gpu-init/swiftletd | **Buildable now** (A — the CDI-env design below) |
+| Pin the `AllocatedDeviceStatus.Data` schema | **We pin our own reference schema now** (B); the NVIDIA driver becomes a later schema *adapter*, not an architecture unknown |
+| gpu-init-vs-driver binding ownership | **Decided for the reference driver** (driver does NOT bind; gpu-init keeps the proven two-pass bind). NVIDIA-mode ownership remains a later question |
+| Boot one VM end-to-end via DRA | **Cluster-validatable now** on the GTX 1080 (C) |
+| ComputeDomains/IMEX (P3), MIG (P4), QEMU/HGX tiers under DRA | Still hardware-gated |
+
+## A2. The device hand-off — CDI-injected env (the load-bearing decision)
+
+The inversion's hard runtime problem: in the native flow devices are known
+*before* the pod exists (env + intent CM at build time); in DRA the pod exists
+*first*. Env is immutable and init containers run before any controller
+round-trip can be trusted (a `Resolve`→annotation→downward-API loop would race
+`gpu-init`).
+
+**Decision: the kubelet/CDI layer carries the device identity.** Our reference
+driver's `NodePrepareResources` returns a CDI device whose `containerEdits`
+inject **`GPU_PCI_ADDRESSES=<bdf>[,<bdf>…]`** (and `GPU_PARTITION_ID=-1`) into
+every container that references the claim. Properties:
+
+- **`gpu-init.sh` runs unchanged** — it already consumes exactly these envs.
+- **No race**: CDI edits are applied by the container runtime at
+  container-create, atomically before the init container starts.
+- **`Resolve` becomes status-only**: it stamps `status.GPU` for the control
+  plane (observability, `kubectl get sg`, capacity views) but is NOT
+  load-bearing for the pod runtime — eliminating risk-class "controller
+  round-trip vs init container" entirely.
+- The CDI device is **env-only** (no `deviceNodes` edits): the launcher pod
+  already hostPath-mounts `/dev/vfio` and `gpu-init` performs the proven
+  idempotent two-pass vfio-pci bind. The driver advertises + allocates +
+  hands identity over; binding stays where it is hardened. (Driver-side
+  binding — NVIDIA VFIO-mode parity — is a follow-up, noted in A6.)
+
+swiftletd side: in DRA mode the controller writes the intent with
+`gpu.deviceSource: "env"` and an empty device list (plus firmware/hugepages
+from `GPUResourceClaimSpec`); swiftletd synthesizes the `VFIODeviceIntent`s
+from `GPU_PCI_ADDRESSES` (clique −1, NUMA 0 in v1 — explicit marker, no silent
+magic).
+
+## A3. Device naming pins the read-back — independent of beta features
+
+`extractDeviceBDFs` (the P1 isolation point) gets a **two-tier contract**:
+
+1. **Preferred:** `AllocatedDeviceStatus.Data: {"pciAddress": "<bdf>"}` —
+   written by our driver; the same field an external driver's adapter would
+   populate. Requires the `DRAResourceClaimDeviceStatus` feature (beta) —
+   verified on-cluster in Workstream C.
+2. **Fallback (always works):** the ResourceSlice **device name encodes the
+   BDF** — `gpu-0000-01-00-0` ⇄ `0000:01:00.0` (DNS-label-safe). The
+   allocation result's `Driver/Pool/Device` triple is GA API; if the status
+   write is unavailable, `Resolve` decodes the name. Our naming scheme is part
+   of the reference-driver contract.
+
+## A4. Workstream B — `cmd/kubeswift-dra-driver` (reference driver)
+
+A DaemonSet on `kubeswift.io/gpu-node=true` nodes (same opt-in as
+gpu-discovery), driver name **`gpu.kubeswift.io`**:
+
+- **Inventory → ResourceSlice**: reuses the gpu-discovery sysfs logic
+  (BDF/NUMA/IOMMU group/vfioReady) to publish one ResourceSlice per node;
+  device attributes: `pciAddress`, `model`, `numaNode`, `iommuGroup`,
+  `vfioReady`. With **structured parameters the SCHEDULER allocates** — the
+  driver has no allocation controller at all.
+- **Kubelet plugin** via `k8s.io/dynamic-resource-allocation/kubeletplugin`
+  (v0.35.x, matches our deps): registration socket under
+  `/var/lib/kubelet/plugins_registry` (verified: k0s uses the **standard**
+  kubelet root `/var/lib/kubelet`), `NodePrepareResources` writes the CDI spec
+  (env-only, §A2) to `/var/run/cdi` and returns the CDI device IDs;
+  `NodeUnprepareResources` removes it.
+- **Claim device status**: best-effort write of
+  `status.devices[].data{pciAddress}` (§A3 tier 1).
+- **DeviceClass sample**: `kubeswift-vfio-gpu` selecting
+  `device.driver == "gpu.kubeswift.io"`.
+- Strategic note: KubeVirt's DRA driver is a POC — this is a working
+  VM-passthrough reference driver; pioneering, deliberately minimal.
+
+## A5. Cluster prerequisites (Workstream C node prep)
+
+Verified on the dev cluster (k0s 1.34.3, containerd 1.7.30):
+
+- **CDI is OFF by default** in containerd 1.7 (`enable_cdi = false` in the
+  k0s-generated `/run/k0s/containerd-cri.toml`). Enable via a k0s containerd
+  import drop-in (`/etc/k0s/containerd.d/99-cdi.toml` →
+  `[plugins."io.containerd.grpc.v1.cri"] enable_cdi = true` +
+  `cdi_spec_dirs`) and restart `k0sworker`. One-time per GPU node — same
+  class of host prerequisite as persistent `vfio-pci` loading.
+- kubelet plugin dirs are the standard `/var/lib/kubelet/{plugins,plugins_registry}`.
+- `vfio-pci` module persistence on GPU nodes (pre-existing requirement).
+
+## A6. Phasing (this arc) and the residual gate
+
+- **A — runtime plumbing (Go+Rust, unit/envtest):** unpinned claim-bearing
+  GPU pod (`pod.spec.resourceClaims` + `resources.claims` on gpu-init +
+  launcher, no GPU env at build, no nodeSelector); DRA branch of
+  `buildGPUIntent` (from `GPUResourceClaimSpec`, no profile/SwiftGPUNode);
+  `gpu.deviceSource: env` intent marker + swiftletd env synthesis; lift the
+  `GPUDRARuntimePending` hold; `Resolve` reads name-encoded BDFs as fallback.
+- **B — the reference driver** (§A4) + image + manifests.
+- **C — cluster e2e:** node prep (§A5), deploy driver, DeviceClass +
+  ResourceClaimTemplate samples, a SwiftGuest with `gpuResourceClaim` gets the
+  **GTX 1080 via a real scheduler allocation**, VM boots, `status.GPU`
+  read-back validated; walkthrough doc.
+
+**Residual hardware gate after this arc:** the NVIDIA `k8s-dra-driver-gpu`'s
+actual `Data`/CDI schema (an adapter in `extractDeviceBDFs` + possibly a
+binding-ownership switch in gpu-init), ComputeDomains/IMEX (P3), MIG (P4),
+QEMU/HGX tiers under DRA. Everything else moves to "validated".
+
+## A7. Addendum risks
+
+1. **CDI enablement is a node-config change** (containerd restart) — staged on
+   boba first, documented as a GPU-node prerequisite.
+2. **`DRAResourceClaimDeviceStatus` may be unavailable** — covered by the
+   name-encoding fallback (§A3); the walkthrough records which tier ran.
+3. **kubeletplugin helper API churn** between k8s minors — pin v0.35.x; the
+   driver is small enough to track.
+4. **Driver crash during NodePrepareResources** blocks pod start — kubelet
+   retries; DaemonSet restart recovers; document the failure surface.
+5. **The reference schema is ours, not NVIDIA's** — explicitly a *reference*;
+   `extractDeviceBDFs` stays the single adapter point (P1 risk #2 unchanged).

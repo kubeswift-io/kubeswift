@@ -1,0 +1,22 @@
+# Sample ResourceClaimTemplate: one whole VFIO GPU per guest, allocated by the
+# scheduler at pod-schedule time. Reference it from a SwiftGuest:
+#
+#   spec:
+#     gpuResourceClaim:
+#       resourceClaimTemplateName: single-vfio-gpu
+#       tier: pcie
+#
+# The request name "gpu" matches GPUResourceClaimSpec's default requestName.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: single-vfio-gpu
+  namespace: default
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: kubeswift-vfio-gpu
+            count: 1

@@ -153,10 +153,19 @@ type KernelBootSpec struct {
 }
 
 // GPUIntent describes GPU passthrough configuration passed to swiftletd.
-// Populated when the SwiftGPU controller has allocated devices.
+// Populated when the SwiftGPU controller has allocated devices (native) or when
+// the guest opts into the DRA backend (deviceSource: env).
 type GPUIntent struct {
 	// Devices lists VFIO GPU devices to pass through to the guest.
 	Devices []VFIODeviceIntent `json:"devices"`
+	// DeviceSource selects where swiftletd obtains the device list:
+	//   ""    — Devices above (native backend; controller-time allocation).
+	//   "env" — synthesize from the GPU_PCI_ADDRESSES env var, injected by the
+	//           DRA reference driver's CDI containerEdits at container create
+	//           (scheduler-time allocation: the controller cannot know the
+	//           devices when it writes this intent). Clique -1, NUMA 0 in v1.
+	// Explicit marker — no silent empty-devices magic. (DRA Workstream A.)
+	DeviceSource string `json:"deviceSource,omitempty"`
 	// Firmware is the guest firmware type: "cloudhv" (CH) or "ovmf" (QEMU).
 	Firmware string `json:"firmware"`
 	// NUMA describes the virtual NUMA layout. Nil = flat single-node topology.

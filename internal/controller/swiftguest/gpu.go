@@ -28,6 +28,35 @@ func isGPUAllocated(guest *swiftv1alpha1.SwiftGuest) bool {
 	return false
 }
 
+// buildDRAGPUIntent constructs the GPUIntent for a DRA-backed guest
+// (spec.gpuResourceClaim). Unlike the native path there is no SwiftGPUProfile
+// and possibly no SwiftGPUNode, and the controller CANNOT know the devices when
+// it writes the intent — the scheduler + DRA driver allocate at pod-schedule
+// time and the reference driver's CDI containerEdits inject GPU_PCI_ADDRESSES
+// into the containers. deviceSource: "env" tells swiftletd to synthesize the
+// device list from that env var (clique -1, NUMA 0 in v1). See
+// docs/design/dra-gpu-integration.md §A2.
+func buildDRAGPUIntent(rc *swiftv1alpha1.GPUResourceClaimSpec) *runtimeintent.GPUIntent {
+	firmware := "cloudhv"
+	if rc.Tier == "hgx-shared" || rc.Tier == "hgx-full" {
+		firmware = "ovmf"
+	}
+	hugepages := ""
+	switch rc.Hugepages {
+	case "1Gi":
+		hugepages = "1G"
+	case "2Mi":
+		hugepages = "2M"
+	}
+	return &runtimeintent.GPUIntent{
+		Devices:                  nil,
+		DeviceSource:             "env",
+		Firmware:                 firmware,
+		Hugepages:                hugepages,
+		FabricManagerPartitionID: -1,
+	}
+}
+
 // buildGPUIntent constructs a GPUIntent for the RuntimeIntent by combining the
 // guest's GPU allocation status, SwiftGPUProfile config, and SwiftGPUNode topology.
 func (r *SwiftGuestReconciler) buildGPUIntent(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*runtimeintent.GPUIntent, error) {
@@ -340,6 +369,14 @@ func (r *SwiftGuestReconciler) buildBasePod(
 		// pinned node is the same either way.
 		return BuildGPUDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, profile.Spec.Hugepages, rootDiskClone), nil
 	}
+	if guest.Spec.GPUResourceClaim != nil {
+		// DRA backend: the pod is built BEFORE allocation (no status.GPU, no
+		// SwiftGPUProfile) — claim-bearing and unpinned; the scheduler + DRA
+		// driver pick node+device and the driver's CDI containerEdits inject
+		// the device identity. applyDRAClaim (inside the builder) handles the
+		// DRA mutations. Hugepages come from the claim spec.
+		return BuildGPUDiskBootPod(guest, rg, seedConfigMapName, intentConfigMapName, guest.Spec.GPUResourceClaim.Hugepages, rootDiskClone), nil
+	}
 	return BuildPod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone), nil
 }
 
@@ -519,7 +556,7 @@ func BuildGPUDiskBootPod(
 		nodeName = guest.Status.GPU.NodeName
 	}
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        guest.Name,
 			Namespace:   guest.Namespace,
@@ -562,5 +599,62 @@ func BuildGPUDiskBootPod(
 			},
 			Volumes: volumes,
 		},
+	}
+
+	if guest.Spec.GPUResourceClaim != nil {
+		applyDRAClaim(pod, guest.Spec.GPUResourceClaim)
+	}
+	return pod
+}
+
+// draClaimPodName is the pod-local name under which the guest's GPU
+// ResourceClaim is referenced (pod.spec.resourceClaims[].name and the
+// containers' resources.claims[].name).
+const draClaimPodName = "gpu"
+
+// applyDRAClaim mutates a GPU launcher pod for the DRA backend (DRA Workstream
+// A; design doc §A2/§A6):
+//
+//   - UNPIN it: the scheduler + DRA driver pick the node at schedule time, so
+//     the native kubernetes.io/hostname pin (built from status.GPU.NodeName,
+//     which is empty pre-schedule) must go.
+//   - Carry the ResourceClaim: pod.spec.resourceClaims + resources.claims on
+//     the gpu-init and launcher containers — referencing the claim is what
+//     makes kubelet apply the driver's CDI containerEdits to them.
+//   - Drop the GPU_PCI_ADDRESSES / GPU_PARTITION_ID envs from gpu-init: the
+//     controller cannot know the devices at build time; the reference driver's
+//     CDI spec injects both envs at container create. Setting them here (empty)
+//     would shadow the CDI-injected values.
+func applyDRAClaim(pod *corev1.Pod, rc *swiftv1alpha1.GPUResourceClaimSpec) {
+	pod.Spec.NodeSelector = nil
+
+	claim := corev1.PodResourceClaim{Name: draClaimPodName}
+	if rc.ResourceClaimTemplateName != "" {
+		claim.ResourceClaimTemplateName = &rc.ResourceClaimTemplateName
+	} else {
+		claim.ResourceClaimName = &rc.ResourceClaimName
+	}
+	pod.Spec.ResourceClaims = []corev1.PodResourceClaim{claim}
+
+	ref := corev1.ResourceClaim{Name: draClaimPodName, Request: rc.RequestName}
+	for i := range pod.Spec.InitContainers {
+		c := &pod.Spec.InitContainers[i]
+		if c.Name != "gpu-init" {
+			continue
+		}
+		var env []corev1.EnvVar
+		for _, e := range c.Env {
+			if e.Name == "GPU_PCI_ADDRESSES" || e.Name == "GPU_PARTITION_ID" {
+				continue
+			}
+			env = append(env, e)
+		}
+		c.Env = env
+		c.Resources.Claims = append(c.Resources.Claims, ref)
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == "launcher" {
+			pod.Spec.Containers[i].Resources.Claims = append(pod.Spec.Containers[i].Resources.Claims, ref)
+		}
 	}
 }

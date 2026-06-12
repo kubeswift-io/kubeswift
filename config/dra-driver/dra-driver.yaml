@@ -1,0 +1,133 @@
+# KubeSwift reference DRA GPU driver (gpu.kubeswift.io) — design doc
+# docs/design/dra-gpu-integration.md §A4. Runs on kubeswift.io/gpu-node=true
+# nodes; publishes the node's GPUs as ResourceSlices and serves the kubelet DRA
+# plugin (per-claim CDI specs injecting GPU_PCI_ADDRESSES).
+#
+# Node prerequisites (§A5): CDI enabled in containerd (k0s 1.7.x:
+# /etc/k0s/containerd.d/99-cdi.toml with enable_cdi=true + restart k0sworker)
+# and the vfio-pci module loaded (the same prerequisite as native GPU nodes).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-dra-driver
+  namespace: kubeswift-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-dra-driver
+rules:
+  # ResourceSlice publishing (managed by the kubeletplugin helper).
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceslices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read claims at prepare time + best-effort device-status write (§A3 tier 1).
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/status"]
+    verbs: ["update", "patch"]
+  # The helper resolves the node UID for ResourceSlice ownership.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-dra-driver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-dra-driver
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-dra-driver
+    namespace: kubeswift-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kubeswift-dra-driver
+  namespace: kubeswift-system
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: dra-driver
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: dra-driver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: dra-driver
+    spec:
+      serviceAccountName: kubeswift-dra-driver
+      nodeSelector:
+        kubeswift.io/gpu-node: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: dra-driver
+          image: ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:latest
+          args:
+            - --v=2
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            # Root user (kubelet plugin sockets + /var/run/cdi are root-owned
+            # host paths) but NOT privileged: pure sysfs reads, unix sockets,
+            # and CDI file writes — all capabilities dropped.
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            # Kubelet DRA plugin socket dir (the helper creates
+            # plugins/gpu.kubeswift.io/ under it).
+            - name: plugins
+              mountPath: /var/lib/kubelet/plugins
+            # Kubelet plugin-watcher registration socket dir.
+            - name: plugins-registry
+              mountPath: /var/lib/kubelet/plugins_registry
+            # Per-claim CDI specs the container runtime reads.
+            - name: cdi
+              mountPath: /var/run/cdi
+            # GPU discovery (read-only sysfs scan).
+            - name: sysfs
+              mountPath: /sys
+              readOnly: true
+      volumes:
+        - name: plugins
+          hostPath:
+            path: /var/lib/kubelet/plugins
+            type: Directory
+        - name: plugins-registry
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: cdi
+          hostPath:
+            path: /var/run/cdi
+            type: DirectoryOrCreate
+        - name: sysfs
+          hostPath:
+            path: /sys
+            type: Directory
