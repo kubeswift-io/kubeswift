@@ -290,3 +290,45 @@ QEMU/HGX tiers under DRA. Everything else moves to "validated".
    retries; DaemonSet restart recovers; document the failure surface.
 5. **The reference schema is ours, not NVIDIA's** — explicitly a *reference*;
    `extractDeviceBDFs` stays the single adapter point (P1 risk #2 unchanged).
+
+## A8. Workstream C results — CLUSTER-VALIDATED (2026-06-12)
+
+The full `ResourceClaim → scheduler allocation → CDI → vfio → VM` chain is
+validated end-to-end on the dev cluster (k0s 1.34.3, containerd 1.7.30 with the
+§A5 CDI drop-in, boba's GTX 1080):
+
+| Step | Evidence |
+|---|---|
+| ResourceSlice published | device `gpu-0000-01-00-0` (§A3 naming), attrs `pciAddress/vendorDevice(10de:1b80)/numaNode/iommuGroup/vfioReady:true` |
+| Real scheduler allocation | SwiftGuest `gpuResourceClaim` → minted claim `dra-gpu-vm-gpu-*` → kube-scheduler bound the pod to boba AND allocated `gpu-0000-01-00-0` |
+| CDI env injection (§A2) | `gpu-init` logged `GPU_PCI_ADDRESSES=0000:01:00.0` — an env the pod spec deliberately does NOT set; only the driver's CDI containerEdits can produce it. gpu-init ran UNCHANGED (idempotent vfio bind) |
+| Tier-1 read-back (§A3) | the driver's `status.devices[].data{pciAddress}` write LANDED (`DRAResourceClaimDeviceStatus` is enabled on k8s 1.34) → `Resolve` → `status.GPU` + `GPUAllocated=True` |
+| The VM | swiftletd `gpu_device … source=env`; the CH process cmdline carries `--device path=/sys/bus/pci/devices/0000:01:00.0/`; guest Running with a DHCP IP |
+
+**Three findings (fixed same-day, PR #214 — the W5 pattern again):**
+1. `"devices": null` in the intent broke swiftletd — Go marshals nil slices as
+   JSON null and Rust's `#[serde(default)]` covers *missing*, not explicit
+   null. The VM silently never spawned behind a Running pod. Fixed both sides
+   (`omitempty` + a `null_to_default` deserializer + regression test).
+2. The kubeletplugin helper does not create its socket dir
+   (`/var/lib/kubelet/plugins/<driver>/`) → bind failure → CrashLoopBackOff.
+   The driver now `MkdirAll`s it before `Start`.
+3. The new ghcr package was born private (TFU #26) — one-time manual
+   publicize by the maintainer.
+
+**Operator quickstart** (GPU node prepped per §A5):
+
+```sh
+kubectl apply -f config/dra-driver/dra-driver.yaml        # driver DaemonSet (+RBAC)
+kubectl apply -f config/dra-driver/deviceclass.yaml       # kubeswift-vfio-gpu
+kubectl apply -f config/dra-driver/resourceclaimtemplate-sample.yaml
+# then on the SwiftGuest:
+#   spec:
+#     gpuResourceClaim:
+#       resourceClaimTemplateName: single-vfio-gpu
+#       tier: pcie
+```
+
+**Residual hardware gate after this arc** (unchanged from §A6): the NVIDIA
+`k8s-dra-driver-gpu` schema adapter (one function), ComputeDomains/IMEX (P3),
+MIG (P4), QEMU/HGX tiers under DRA.
