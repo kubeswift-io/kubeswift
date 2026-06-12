@@ -2662,8 +2662,24 @@ Shipped across 6 PRs (design + 5 build):
 
 ### Paused (roadmap — resume when hardware lands)
 
-- **DRA / NVIDIA-ecosystem GPU integration — Phase 1 SHIPPED (PR #211,
-  2026-06-12); Phases 2–5 PAUSED, hardware-gated.** RFC:
+- **DRA / NVIDIA-ecosystem GPU integration — Phases 1+2 SHIPPED + CLUSTER-VALIDATED
+  (PRs #211, #213, #214, 2026-06-12); P3–P5 hardware-gated.** The "P2 needs
+  datacenter hardware" framing was overturned (RFC Addendum §A1): the dev
+  cluster speaks DRA (k8s 1.34.3, resource.k8s.io/v1) and a **KubeSwift
+  reference DRA driver** (`cmd/kubeswift-dra-driver`, driver `gpu.kubeswift.io`)
+  made boba's GTX 1080 sufficient for the whole passthrough path. **The full
+  chain is cluster-validated** (§A8): ResourceSlice (BDF-encoding device names)
+  → real kube-scheduler allocation of a SwiftGuest's minted ResourceClaim →
+  the driver's CDI containerEdits injecting GPU_PCI_ADDRESSES (gpu-init runs
+  UNCHANGED; no controller/init-container race) → swiftletd deviceSource=env
+  synthesis → CH `--device .../0000:01:00.0` → guest Running with an IP +
+  `status.GPU` read back tier-1 (`status.devices[].data` — the device-status
+  feature is on). Cluster prep: k0s containerd `enable_cdi` drop-in
+  (`/etc/k0s/containerd.d/99-kubeswift-cdi.toml`) + k0sworker restart (guests
+  survive). Walkthrough findings (all fixed in #214, the W5 pattern): intent
+  `devices: null` broke swiftletd serde (omitempty + null_to_default both
+  sides); kubeletplugin helper doesn't create its socket dir (driver MkdirAll);
+  ghcr package born private (TFU #26, publicized). RFC:
   [`docs/design/dra-gpu-integration.md`](docs/design/dra-gpu-integration.md).
   Decision: **hybrid/pluggable** — DRA is an opt-in allocation backend; the
   native SwiftGPU model stays the default (right tool for heterogeneous estates
@@ -2677,12 +2693,12 @@ Shipped across 6 PRs (design + 5 build):
   synthetic-ResourceClaim unit test, and the native backend refactor
   (behavior-preserving — existing swiftgpu tests unchanged). A DRA guest is
   held Pending (`GPUDRARuntimePending`) so it never boots GPU-less.
-  **Paused at the P1/P2 boundary** (operator decision 2026-06-12):
-  - **P2 — DRA-cluster spike** (needs a datacenter NVIDIA GPU + k8s-dra-driver-gpu):
-    pin the driver's `AllocatedDeviceStatus.Data` schema (isolated in
-    `gpualloc.extractDeviceBDFs` — the one P1 guess), resolve gpu-init-vs-driver
-    vfio binding ownership, wire the claim-bearing unpinned launcher pod +
-    buildGPUIntent feed, boot one VM end-to-end.
+  **Remaining (hardware-gated):**
+  - **NVIDIA k8s-dra-driver-gpu adapter** (needs a datacenter NVIDIA GPU): pin
+    that driver's `AllocatedDeviceStatus.Data`/CDI schema — now a one-function
+    adapter in `gpualloc.extractDeviceBDFs` (the reference schema
+    `{"pciAddress"}` + BDF-encoded device names are validated), plus its
+    binding-ownership mode (the reference driver leaves binding to gpu-init).
   - **P3 — ComputeDomains/IMEX** (multi-node NVLink, GB200) — DRA-only.
   - **P4 — MIG/fractional** — a MIG instance is NOT a PCI BDF; needs a
     mediated-device `runtimeintent` variant + CH/QEMU args.
