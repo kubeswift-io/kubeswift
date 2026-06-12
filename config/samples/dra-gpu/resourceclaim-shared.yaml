@@ -1,0 +1,23 @@
+# Pre-created (shared) ResourceClaim: the GPU allocation outlives any single
+# launcher pod. Reference it from a SwiftGuest via
+# spec.gpuResourceClaim.resourceClaimName instead of resourceClaimTemplateName.
+#
+# Use this when you want a STABLE device reservation that survives guest
+# stop/start and pod recreation — the claim stays allocated to the same device
+# until the claim itself is deleted.
+#
+# IMPORTANT — VFIO is exclusive: DRA allows many pods to reference a shared
+# claim, but a VFIO-passed GPU can only back ONE running VM. Ensure at most one
+# SwiftGuest references this claim at a time (e.g. one claim per guest name).
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: reserved-vfio-gpu
+  namespace: default
+spec:
+  devices:
+    requests:
+      - name: gpu
+        exactly:
+          deviceClassName: kubeswift-vfio-gpu
+          count: 1

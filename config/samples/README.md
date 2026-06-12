@@ -23,6 +23,7 @@ kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 | [qemu-boot/](qemu-boot/) | Ubuntu Noble via QEMU/OVMF | QEMU | No |
 | [gpu-pcie/](gpu-pcie/) | Tier 1 PCIe GPU passthrough | Cloud Hypervisor | Yes |
 | [gpu-hgx/](gpu-hgx/) | Tier 2 HGX SXM shared NVSwitch | QEMU | Yes |
+| [dra-gpu/](dra-gpu/) | GPU passthrough via DRA ResourceClaims (scheduler-allocated) | Cloud Hypervisor | Yes |
 | [datadisk/](datadisk/) | Secondary data disk attachment | Cloud Hypervisor | No |
 | [rocky/](rocky/) | Rocky Linux 9 alternative distro | Cloud Hypervisor | No |
 

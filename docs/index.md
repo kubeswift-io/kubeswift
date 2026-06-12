@@ -35,6 +35,11 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 - [Running Windows guests](windows/overview.md) — Overview: `osType: windows`, the end-to-end lifecycle, RDP management, limitations
 - [Windows image prep](windows/image-prep.md) — Operator runbook: build a virtio-ready, CH-bootable Windows image
 
+### GPU Passthrough
+
+- [GPU Passthrough](gpu-passthrough.md) — VFIO passthrough, compatibility tiers, GPU Discovery DaemonSet, SwiftGPUProfile reference, Fabric Manager
+- [GPU allocation via DRA](gpu/dra-allocation.md) — Scheduler-allocated GPUs through ResourceClaims (`spec.gpuResourceClaim`), the reference DRA driver, CDI node prep
+
 ### Installation
 
 - [Local cluster](install/local-cluster.md) — kind, minikube, build and deploy
@@ -102,6 +107,7 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 | Run smoke test | [Smoke verification](operator/smoke-verification.md) |
 | Validate worker node | [Worker-node preflight](operator/worker-node-preflight.md) |
 | Connect VMs to physical networks | [Networking Operations Guide](networking/operations-guide.md) |
+| Pass a GPU through to a VM | [GPU Passthrough](gpu-passthrough.md) / [via DRA](gpu/dra-allocation.md) |
 | Migrate from VMware/Proxmox | [Virtualization Comparison](networking/virtualization-comparison.md) |
 | Build locally | [Build](developer/build.md) |
 | Understand CRDs | [API overview](api/overview.md) |

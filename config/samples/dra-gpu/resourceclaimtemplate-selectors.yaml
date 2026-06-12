@@ -1,0 +1,33 @@
+# ResourceClaimTemplate with CEL device selectors: constrain WHICH GPUs the
+# scheduler may allocate, using the attributes the kubeswift-dra-driver
+# publishes on its ResourceSlices:
+#
+#   pciAddress   (string)  e.g. "0000:01:00.0"
+#   vendorDevice (string)  PCI vendor:device, e.g. "10de:1b80" (GTX 1080)
+#   numaNode     (int)     NUMA node the GPU is attached to (-1 if unknown)
+#   iommuGroup   (int)     IOMMU group number
+#   vfioReady    (bool)    true when the node has the vfio-pci driver loaded
+#
+# Attributes are accessed in CEL via the driver-qualified map:
+#   device.attributes["gpu.kubeswift.io"].<name>
+#
+# This example only allocates a specific GPU model AND only on nodes where
+# vfio-pci is already loaded (so gpu-init's bind cannot fail on a module gap).
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: gtx1080-vfio-ready
+  namespace: default
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: kubeswift-vfio-gpu
+            count: 1
+            selectors:
+              - cel:
+                  expression: >-
+                    device.attributes["gpu.kubeswift.io"].vendorDevice == "10de:1b80" &&
+                    device.attributes["gpu.kubeswift.io"].vfioReady == true
