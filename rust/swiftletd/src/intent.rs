@@ -141,13 +141,63 @@ impl MigrationIntent {
 #[serde(rename_all = "camelCase")]
 pub struct GPUIntent {
     /// VFIO GPU devices to pass through.
+    #[serde(default)]
     pub devices: Vec<GPUDeviceIntent>,
+    /// Where the device list comes from:
+    ///   ""    — `devices` above (native backend; controller-time allocation).
+    ///   "env" — synthesize from the GPU_PCI_ADDRESSES env var, injected by the
+    ///           DRA reference driver's CDI containerEdits at container create
+    ///           (the controller cannot know the devices when it writes this
+    ///           intent). Clique -1, flat topology in v1. Explicit marker — no
+    ///           silent empty-devices magic. (DRA Workstream A, design §A2.)
+    #[serde(default)]
+    pub device_source: String,
     /// Firmware type: "cloudhv" or "ovmf".
     #[serde(default)]
     pub firmware: String,
     /// Fabric Manager partition ID (-1 = none).
     #[serde(default)]
     pub fabric_manager_partition_id: i32,
+}
+
+impl GPUIntent {
+    /// Resolve the effective device list: the intent's `devices` (native), or —
+    /// when `device_source == "env"` — devices synthesized from the
+    /// GPU_PCI_ADDRESSES env var (comma-separated BDFs) that the DRA driver's
+    /// CDI containerEdits injected. Fails loudly when the env source is
+    /// selected but the variable is missing/empty: a DRA pod without CDI
+    /// injection is a node/claim misconfiguration (enable_cdi off, or the
+    /// container does not reference the claim), and booting GPU-less would be
+    /// a silent failure.
+    pub fn resolved_devices(&self) -> Result<Vec<GPUDeviceIntent>, String> {
+        if self.device_source != "env" {
+            return Ok(self.devices.clone());
+        }
+        let raw = std::env::var("GPU_PCI_ADDRESSES").unwrap_or_default();
+        let bdfs: Vec<&str> = raw
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if bdfs.is_empty() {
+            return Err(
+                "gpu.deviceSource=env but GPU_PCI_ADDRESSES is empty — CDI injection \
+                 from the DRA driver did not happen (is enable_cdi on, and does the \
+                 container reference the claim?)"
+                    .to_string(),
+            );
+        }
+        Ok(bdfs
+            .into_iter()
+            .map(|bdf| GPUDeviceIntent {
+                host_path: format!("/sys/bus/pci/devices/{}/", bdf),
+                pci_address: bdf.to_string(),
+                pcie_root_port: false,
+                gpu_direct_clique: -1,
+                no_mmap: false,
+            })
+            .collect())
+    }
 }
 
 /// A single GPU VFIO device.
@@ -731,5 +781,45 @@ mod tests {
             intent.disk_path(),
             "/var/lib/kubeswift/disks/root/image.raw"
         );
+    }
+
+    /// DRA Workstream A: resolved_devices() — native passthrough, env synthesis,
+    /// and the fail-loud missing-CDI-injection case. One test (not three): the
+    /// GPU_PCI_ADDRESSES env var is process-global and cargo runs tests in
+    /// parallel threads, so all phases run sequentially here.
+    #[test]
+    fn gpu_intent_resolved_devices() {
+        // Native (deviceSource empty): pass the intent's list through.
+        let native: GPUIntent = serde_json::from_str(
+            r#"{"devices":[{"hostPath":"/sys/bus/pci/devices/0000:41:00.0/",
+                "pciAddress":"0000:41:00.0","gpuDirectClique":0}],
+                "firmware":"cloudhv","fabricManagerPartitionId":-1}"#,
+        )
+        .unwrap();
+        let devs = native.resolved_devices().unwrap();
+        assert_eq!(devs.len(), 1);
+        assert_eq!(devs[0].pci_address, "0000:41:00.0");
+        assert_eq!(devs[0].gpu_direct_clique, 0);
+
+        // DRA (deviceSource=env) with no env: fail loudly, never boot GPU-less.
+        let dra: GPUIntent = serde_json::from_str(
+            r#"{"devices":[],"deviceSource":"env","firmware":"cloudhv",
+                "fabricManagerPartitionId":-1}"#,
+        )
+        .unwrap();
+        std::env::remove_var("GPU_PCI_ADDRESSES");
+        let err = dra.resolved_devices().unwrap_err();
+        assert!(err.contains("GPU_PCI_ADDRESSES is empty"), "got: {err}");
+
+        // DRA with the CDI-injected env: synthesize devices (clique -1).
+        std::env::set_var("GPU_PCI_ADDRESSES", "0000:01:00.0, 0000:02:00.0");
+        let devs = dra.resolved_devices().unwrap();
+        std::env::remove_var("GPU_PCI_ADDRESSES");
+        assert_eq!(devs.len(), 2);
+        assert_eq!(devs[0].pci_address, "0000:01:00.0");
+        assert_eq!(devs[0].host_path, "/sys/bus/pci/devices/0000:01:00.0/");
+        assert_eq!(devs[0].gpu_direct_clique, -1);
+        assert!(!devs[0].pcie_root_port);
+        assert_eq!(devs[1].pci_address, "0000:02:00.0");
     }
 }

@@ -19,6 +19,10 @@ vendor/
 /bin/swiftctl
 /controller-manager
 /gpu-discovery
+/kubeswift-dra-driver
+/webhook-server
+/snapshot-stager
+/snapshot-s3
 
 # Spike scratch directories (per-spike scripts + JSONL run logs).
 # Spike scripts are scratch; their findings are committed under

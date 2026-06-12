@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
@@ -178,7 +179,16 @@ type draDeviceData struct {
 // extractDeviceBDFs pulls the PCI BDF(s) of the allocated VFIO device(s) out of
 // a ResourceClaim's allocation status. ISOLATED on purpose (risk #2 in the
 // design doc): the driver-specific AllocatedDeviceStatus.Data schema is the one
-// thing the P1 skeleton must assume; only this function changes when P2 pins it.
+// thing the skeleton must assume; only this function changes when an external
+// driver's schema is pinned.
+//
+// Two-tier contract (design doc §A3):
+//  1. Preferred: AllocatedDeviceStatus.Data {"pciAddress": "<bdf>"} — written
+//     by the KubeSwift reference driver (and what an external driver's adapter
+//     would populate). Requires the DRAResourceClaimDeviceStatus feature.
+//  2. Fallback (GA API only): the allocation result's device NAME encodes the
+//     BDF per the reference driver's naming scheme (gpu-0000-01-00-0 ⇄
+//     0000:01:00.0) — decoded from Status.Allocation.Devices.Results.
 func extractDeviceBDFs(claim *resourcev1.ResourceClaim) ([]string, error) {
 	var bdfs []string
 	for i := range claim.Status.Devices {
@@ -197,7 +207,47 @@ func extractDeviceBDFs(claim *resourcev1.ResourceClaim) ([]string, error) {
 			bdfs = append(bdfs, d.PCIBusID)
 		}
 	}
+	if len(bdfs) > 0 {
+		return bdfs, nil
+	}
+	// Tier 2: decode the reference driver's name encoding from the GA
+	// allocation result (works without the device-status feature).
+	if claim.Status.Allocation != nil {
+		for _, res := range claim.Status.Allocation.Devices.Results {
+			if bdf, ok := DecodeDeviceName(res.Device); ok {
+				bdfs = append(bdfs, bdf)
+			}
+		}
+	}
 	return bdfs, nil
+}
+
+// EncodeDeviceName converts a PCI BDF to the DNS-label-safe ResourceSlice
+// device name the KubeSwift reference DRA driver publishes:
+// "0000:01:00.0" -> "gpu-0000-01-00-0". Part of the reference-driver contract
+// (design doc §A3) — DecodeDeviceName must invert it exactly.
+func EncodeDeviceName(bdf string) string {
+	s := strings.NewReplacer(":", "-", ".", "-").Replace(bdf)
+	return "gpu-" + s
+}
+
+// DecodeDeviceName inverts EncodeDeviceName: "gpu-0000-01-00-0" ->
+// ("0000:01:00.0", true). Returns ok=false for names not using the scheme.
+func DecodeDeviceName(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "gpu-")
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(rest, "-")
+	if len(parts) != 4 {
+		return "", false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("%s:%s:%s.%s", parts[0], parts[1], parts[2], parts[3]), true
 }
 
 // hypervisorForTier mirrors the native tier->hypervisor mapping: pcie ->

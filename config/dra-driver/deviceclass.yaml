@@ -1,0 +1,11 @@
+# DeviceClass for KubeSwift VFIO GPU passthrough via the reference DRA driver.
+# A ResourceClaim(Template) requests devices of this class; the scheduler
+# allocates from the ResourceSlices the driver publishes.
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: kubeswift-vfio-gpu
+spec:
+  selectors:
+    - cel:
+        expression: device.driver == "gpu.kubeswift.io"

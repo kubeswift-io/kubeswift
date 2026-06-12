@@ -1,0 +1,27 @@
+# Multi-stage build for kubeswift-dra-driver (the reference DRA GPU driver).
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -o kubeswift-dra-driver ./cmd/kubeswift-dra-driver
+
+FROM debian:bookworm-slim
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+COPY --from=builder /build/kubeswift-dra-driver /kubeswift-dra-driver
+# Runs as root: the kubelet plugin sockets (/var/lib/kubelet/plugins*) and the
+# CDI dir (/var/run/cdi) are root-owned host paths. Capabilities are dropped in
+# the DaemonSet securityContext; no privileged mode is needed (pure sysfs reads
+# + unix sockets + file writes).
+ENTRYPOINT ["/kubeswift-dra-driver"]
