@@ -156,8 +156,11 @@ type KernelBootSpec struct {
 // Populated when the SwiftGPU controller has allocated devices (native) or when
 // the guest opts into the DRA backend (deviceSource: env).
 type GPUIntent struct {
-	// Devices lists VFIO GPU devices to pass through to the guest.
-	Devices []VFIODeviceIntent `json:"devices"`
+	// Devices lists VFIO GPU devices to pass through to the guest. omitempty:
+	// the DRA backend writes a nil list (devices come from CDI env at runtime),
+	// and a literal "devices": null breaks swiftletd's serde (null != absent
+	// for #[serde(default)]) — cluster-e2e finding, 2026-06-12.
+	Devices []VFIODeviceIntent `json:"devices,omitempty"`
 	// DeviceSource selects where swiftletd obtains the device list:
 	//   ""    — Devices above (native backend; controller-time allocation).
 	//   "env" — synthesize from the GPU_PCI_ADDRESSES env var, injected by the
