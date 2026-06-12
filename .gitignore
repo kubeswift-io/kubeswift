@@ -24,10 +24,19 @@ vendor/
 /snapshot-stager
 /snapshot-s3
 
-# Spike scratch directories (per-spike scripts + JSONL run logs).
-# Spike scripts are scratch; their findings are committed under
-# docs/design/<phase>-spike.md instead. Convention since
-# Phase 3a (2026-05).
+# --- Kept local, never published ---------------------------------------------
+# AI-assisted-development tooling and the internal working/context docs. These
+# drive local development but are not part of the published project.
+.claude/
+.cursor/
+CLAUDE.md
+/kubeswift_context.md
+/swiftgpu_design_sketch.md
+/kubeswift_architecture.rtf
+
+# Spike scratch (scripts, run logs, throwaway manifests) and the spike notes.
+# Spikes are exploratory; what matters is folded into the committed design docs
+# and code. (Does not match build/.../board/spike — a buildroot board dir.)
 /spike/
-# Build artifacts (go build output in repo root)
-/snapshot-s3
+/hack/snapshot-spike/
+docs/design/*spike*.md
