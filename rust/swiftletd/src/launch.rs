@@ -291,13 +291,20 @@ where
     // Build NIC config from intent (SR-IOV NICs produce VFIO devices).
     let (tap_name, ch_nics, mut vfio_devices) = build_ch_nics(intent);
 
-    // Add GPU VFIO devices from the GPU intent.
+    // Add GPU VFIO devices from the GPU intent. resolved_devices() returns the
+    // intent's device list (native backend) or synthesizes it from the
+    // CDI-injected GPU_PCI_ADDRESSES env (DRA backend, deviceSource=env).
     if let Some(ref gpu) = intent.gpu {
-        for dev in &gpu.devices {
+        for dev in &gpu.resolved_devices()? {
             log::info!(
-                "gpu_device host_path={} clique={}",
+                "gpu_device host_path={} clique={} source={}",
                 dev.host_path,
-                dev.gpu_direct_clique
+                dev.gpu_direct_clique,
+                if gpu.device_source.is_empty() {
+                    "intent"
+                } else {
+                    &gpu.device_source
+                }
             );
             vfio_devices.push(VFIODeviceConfig {
                 sysfs_path: dev.host_path.clone(),
@@ -470,9 +477,10 @@ where
     // Build NIC config from intent (SR-IOV NICs produce VFIO devices).
     let (tap_name, mac, qemu_nics, mut vfio_devices) = build_qemu_nics(intent);
 
-    // Add GPU VFIO devices from the GPU intent.
+    // Add GPU VFIO devices from the GPU intent (resolved_devices: intent list
+    // for native, CDI-injected GPU_PCI_ADDRESSES env for DRA).
     if let Some(ref gpu) = intent.gpu {
-        for dev in &gpu.devices {
+        for dev in &gpu.resolved_devices()? {
             log::info!(
                 "gpu_device host={} root_port={}",
                 dev.pci_address,

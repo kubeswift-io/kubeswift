@@ -132,6 +132,46 @@ func TestDRABackend_Resolve_NotReady(t *testing.T) {
 	}
 }
 
+// TestDeviceNameEncoding covers the §A3 tier-2 contract: the reference
+// driver's device names encode the BDF, and DecodeDeviceName inverts
+// EncodeDeviceName exactly.
+func TestDeviceNameEncoding(t *testing.T) {
+	for _, bdf := range []string{"0000:01:00.0", "0000:41:00.0", "0001:af:1f.7"} {
+		name := EncodeDeviceName(bdf)
+		got, ok := DecodeDeviceName(name)
+		if !ok || got != bdf {
+			t.Errorf("roundtrip %q -> %q -> (%q, %v)", bdf, name, got, ok)
+		}
+	}
+	for _, bad := range []string{"gpu-0000-01-00", "nic-0000-01-00-0", "gpu---", "gpu-a-b-c-d-e"} {
+		if _, ok := DecodeDeviceName(bad); ok {
+			t.Errorf("DecodeDeviceName(%q) must not match the scheme", bad)
+		}
+	}
+}
+
+// TestDRABackend_Resolve_NameFallback proves the GA-API-only path: when the
+// device-status feature is unavailable (no AllocatedDeviceStatus.Data), the
+// BDF is decoded from the allocation result's device name.
+func TestDRABackend_Resolve_NameFallback(t *testing.T) {
+	guest := draGuest()
+	pod, claim := allocatedClaimPod("ignored")
+	claim.Status.Devices = nil // no device-status feature
+	claim.Status.Allocation.Devices.Results[0].Device = EncodeDeviceName("0000:01:00.0")
+
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(guest, pod, claim).Build()
+	res, err := NewDRABackend(c).Resolve(context.Background(), guest)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !res.Ready {
+		t.Fatal("expected Ready via the name-encoding fallback")
+	}
+	if got := res.Status.Devices; len(got) != 1 || got[0] != "0000:01:00.0" {
+		t.Errorf("Devices = %v, want [0000:01:00.0] (decoded from the device name)", got)
+	}
+}
+
 // TestDRABackend_Prepare returns a PodBinding (no allocation decided yet).
 func TestDRABackend_Prepare(t *testing.T) {
 	guest := draGuest()

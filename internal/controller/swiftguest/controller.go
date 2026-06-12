@@ -225,6 +225,14 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
 		rg.Hypervisor = guest.Status.GPU.Hypervisor
 	}
+	// DRA backend: status.GPU is not populated until after scheduling, so the
+	// hypervisor comes straight from the claim spec's tier (same mapping).
+	if rc := guest.Spec.GPUResourceClaim; rc != nil {
+		rg.Hypervisor = "cloud-hypervisor"
+		if rc.Tier == "hgx-shared" || rc.Tier == "hgx-full" {
+			rg.Hypervisor = "qemu"
+		}
+	}
 	if override, ok := guest.Annotations[gpuHypervisorAnnotation]; ok && override != "" {
 		rg.Hypervisor = override
 	}
@@ -241,6 +249,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 		intent.GPU = gpuIntent
+	}
+	// DRA backend: the intent is written BEFORE allocation, so it carries no
+	// devices — deviceSource: "env" tells swiftletd to synthesize them from
+	// the CDI-injected GPU_PCI_ADDRESSES env (design doc §A2).
+	if rc := guest.Spec.GPUResourceClaim; rc != nil {
+		intent.GPU = buildDRAGPUIntent(rc)
 	}
 	// Tier B restore: when the SwiftGuest is marked as the target of
 	// an active SwiftRestore, the intent points swiftletd at the
@@ -394,27 +408,13 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// GPU gate (DRA backend): the scheduler-time runtime — building a
-	// ResourceClaim-bearing, unpinned launcher pod and consuming the
-	// driver-allocated device (CDI / gpu-init) into the VM — lands in DRA Phase
-	// 2 (it needs a real DRA driver to validate the device schema and binding
-	// ownership). Phase 1 ships the allocation backend + API + webhook; until
-	// the runtime is wired, hold a DRA guest in Pending so it never boots
-	// GPU-less. See docs/design/dra-gpu-integration.md.
-	if guest.Spec.GPUResourceClaim != nil {
-		logger.Info("DRA GPU runtime is Phase 2; holding guest Pending", "guest", req.NamespacedName)
-		status.Phase = swiftv1alpha1.SwiftGuestPhasePending
-		setCondition(status, metav1.Condition{
-			Type:    "GPUDRARuntimePending",
-			Status:  metav1.ConditionTrue,
-			Reason:  "Phase2",
-			Message: "DRA GPU allocation is wired; the passthrough runtime (ResourceClaim-bearing pod + device wiring) lands in DRA Phase 2",
-		})
-		if err := r.patchStatus(ctx, &guest, status); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
-	}
+	// GPU (DRA backend): unlike the native gate above, a DRA guest does NOT
+	// wait for GPUAllocated — allocation happens AT pod-schedule time (the pod
+	// carries the ResourceClaim; the scheduler + DRA driver decide). The pod is
+	// built immediately, claim-bearing and unpinned; the device identity
+	// reaches gpu-init/swiftletd via the driver's CDI containerEdits, and the
+	// SwiftGPU controller's Resolve stamps status.GPU after scheduling
+	// (status-only, not load-bearing for the runtime). Design doc §A2/§A6.
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
 	var rootDiskClone *RootDiskCloneResult
