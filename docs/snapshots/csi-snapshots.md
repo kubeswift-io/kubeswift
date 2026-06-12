@@ -17,7 +17,7 @@ KubeSwift Phase 1 ships disk-only, crash-consistent VM snapshots backed by `snap
 - **`SwiftSnapshot`** captures a SwiftGuest's per-guest root disk PVC at a point in time.
 - **`SwiftRestore`** materialises a SwiftSnapshot as a new SwiftGuest, copying the source guest's spec.
 
-The VM is **not paused** during snapshot. The capture is crash-consistent — equivalent to a hard reboot at restore time. Memory snapshots are out of scope for Phase 1; the Phase 0 spike showed Cloud Hypervisor's snapshot/restore is incompatible with VFIO and unsuitable as a Phase 1 baseline (see [snapshots-spike-results.md](../design/snapshots-spike-results.md) §2/§3).
+The VM is **not paused** during snapshot. The capture is crash-consistent — equivalent to a hard reboot at restore time. Memory snapshots are out of scope for Phase 1; an early spike showed Cloud Hypervisor's snapshot/restore is incompatible with VFIO and unsuitable as a Phase 1 baseline.
 
 ## Prerequisites
 
@@ -127,5 +127,4 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 ## Reference
 
 - Source design: [`docs/design/snapshots.md`](../design/snapshots.md)
-- Phase 0 spike findings: [`docs/design/snapshots-spike-results.md`](../design/snapshots-spike-results.md)
 - Clone-strategy bundling (uses the same VolumeSnapshot machinery internally): [`docs/images/clone-strategies.md`](../images/clone-strategies.md)

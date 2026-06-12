@@ -42,7 +42,6 @@ display + RDP-forward port are auto-picked and printed.
 > Standard Core, virtio-win stable `2k25`) boots from the virtio disk to the
 > **SAC serial console** headlessly — viostor + EMS/SAC prep confirmed. It is
 > not *cluster*-validated (no Windows license on the dev cluster); the CH path is
-> spike-proven
-> ([`docs/design/windows-guest-support-spike.md`](../../docs/design/windows-guest-support-spike.md)):
+> validated:
 > Windows boots on Cloud Hypervisor v52.0 with `--cpus kvm_hyperv=on` (which the
 > KubeSwift runtime adds automatically for `osType: windows`).

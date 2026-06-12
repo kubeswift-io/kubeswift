@@ -351,7 +351,7 @@ kubectl get sgn      # SwiftGPUNode
 
 | Topic | Document |
 |-------|----------|
-| Multi-NIC networking | [docs/multi-nic.md](../multi-nic.md) |
+| Multi-NIC networking | [docs/multi-nic.md](multi-nic.md) |
 | Networking operations | [docs/networking/operations-guide.md](networking/operations-guide.md) |
 | SR-IOV passthrough | [docs/networking/sriov.md](networking/sriov.md) |
 | OVN-Kubernetes | [docs/networking/ovn-kubernetes.md](networking/ovn-kubernetes.md) |

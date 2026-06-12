@@ -44,8 +44,7 @@ NOT a SwiftGuest CR), and the action-trigger annotations are patched
 manually by `trigger-migration.sh` — the same hand-driven flow Phase 2
 PR-C established.
 
-The companion walkthrough doc captures the 8-test matrix:
-[`docs/migration/phase-3b-pr1-walkthrough.md`](../../../docs/migration/phase-3b-pr1-walkthrough.md).
+The companion walkthrough captured the 8-test matrix.
 
 ## Prerequisites
 
@@ -161,10 +160,9 @@ SwiftMigration CR:**
 
 ## Walkthrough log
 
-After running each test in
-[`docs/migration/phase-3b-pr1-walkthrough.md`](../../../docs/migration/phase-3b-pr1-walkthrough.md),
-fill in the actual observed values. The walkthrough doc has expected
-columns from the spike Q2 baseline (no-stress 4Gi: ~38s transfer,
+After running each test,
+fill in the actual observed values. The expected
+columns come from the spike Q2 baseline (no-stress 4Gi: ~38s transfer,
 MED workload: ~68s) and structured "Observed" columns the operator
 fills in. Findings categorization (LOW → tracked follow-up, MEDIUM →
 fix in-PR, HIGH → block merge) per Phase 3b implementation gate 5.

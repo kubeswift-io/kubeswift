@@ -178,9 +178,7 @@ annotation-only and not persisted to status.
 ## 7. Validation history
 
 - PR 1 (#61) — swiftletd send/receive + progress emitter + CRD rename;
-  manual-demo walkthrough
-  [`phase-3b-pr1-walkthrough.md`](phase-3b-pr1-walkthrough.md).
-- PR 2 (#64/#65) — controller live-mode integration; walkthrough
-  [`phase-3b-pr2-walkthrough.md`](phase-3b-pr2-walkthrough.md).
+  manual-demo walkthrough.
+- PR 2 (#64/#65) — controller live-mode integration.
 - PR 3 — this UX surface (`--preferred-mode`, `describe` Transfer +
   progress, `Transfer` printer column, this runbook).

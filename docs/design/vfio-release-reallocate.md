@@ -6,8 +6,7 @@
 >
 > Decisions resolved: **migration controller orchestrates** (SwiftGPU exposes
 > reserve/release primitives); validated **spike-first** on the real GTX 1080
-> ([`vfio-release-reallocate-spike.md`](vfio-release-reallocate-spike.md) —
-> the dealloc->realloc choreography PASSES same-node).
+> (the dealloc->realloc choreography passed same-node).
 
 ## 1. Goal & non-goals
 

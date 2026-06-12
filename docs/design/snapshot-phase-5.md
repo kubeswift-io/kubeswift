@@ -1,7 +1,6 @@
 # Snapshot Phase 5 — operational polish (metrics, dashboards, retention)
 
 > Status: DESIGN. Anchors on the Phase 5 roadmap line
-> ([`kubeswift_context.md` §Snapshot Roadmap Continuation](../../kubeswift_context.md))
 > and the deferred byte-gauges + S3-object-lifecycle tracked follow-ups.
 > Last updated: 2026-06-05.
 

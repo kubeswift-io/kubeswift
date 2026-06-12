@@ -15,9 +15,7 @@ two pods to move a running guest's CPU + memory state between nodes
 without a cold-boot.
 
 This document is the contract for Phase 3a implementation. A reader of
-this doc plus the spike doc
-([`live-migration-phase-3a-spike.md`](live-migration-phase-3a-spike.md))
-should be able to begin implementation without rediscovering any spike
+this doc should be able to begin implementation without rediscovering any spike
 finding or making any architectural decision the design has committed
 to.
 

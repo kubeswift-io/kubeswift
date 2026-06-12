@@ -1831,21 +1831,10 @@ MB/s = **0.951** (95% efficiency).
 
 ## Appendix B — References
 
-- Spike findings: summarized in
-  [`kubeswift_context.md`](../../kubeswift_context.md) ("Phase 3b
-  Spike — COMPLETE" section); full findings on the
-  `spike/phase-3b-q1-q4` reference branch (not merged per spike
-  contract)
 - Phase 3a design:
   [`docs/design/live-migration-phase-3a.md`](live-migration-phase-3a.md)
 - Phase 2 design:
   [`docs/design/live-migration-phase-2.md`](live-migration-phase-2.md)
-- Phase 1 design:
-  [`docs/design/live-migration-phase-1.md`](live-migration-phase-1.md)
-- Project context:
-  [`kubeswift_context.md`](../../kubeswift_context.md)
-- Phase 3a cluster validation:
-  [`docs/migration/phase-3a-cluster-validation.md`](../migration/phase-3a-cluster-validation.md)
 - Phase 3a operator runbook:
   [`docs/migration/phase-3a.md`](../migration/phase-3a.md)
 - Threat model:

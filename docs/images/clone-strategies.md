@@ -97,5 +97,4 @@ If your driver isn't listed and you validate it, please send a PR adding a row.
 ## Reference
 
 - Source design and decision history: [`docs/design/snapshots.md`](../design/snapshots.md) (search for "SwiftImage Clone Strategy")
-- Phase 0 driver findings: [`docs/design/snapshots-spike-results.md`](../design/snapshots-spike-results.md) §5–§6
 - CSI snapshot/restore for end users: [`docs/snapshots/csi-snapshots.md`](../snapshots/csi-snapshots.md)

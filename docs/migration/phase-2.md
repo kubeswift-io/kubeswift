@@ -167,7 +167,6 @@ See [`docs/design/live-migration-phase-2.md`](../design/live-migration-phase-2.m
 ## Reference docs
 
 - [`docs/design/live-migration-phase-2.md`](../design/live-migration-phase-2.md) — Phase 2 design contract
-- [`docs/design/live-migration-phase-2-spike.md`](../design/live-migration-phase-2-spike.md) — empirical spike findings
 - [`docs/design/THREAT-MODEL.md`](../design/THREAT-MODEL.md) — threat model + Phase 3 must-have-before-production checklist
 - [`test/migration/manual/README.md`](../../test/migration/manual/README.md) — manual demo script-level details
 - [`docs/migration/overview.md`](overview.md) — overall migration concepts (covers Phase 1 offline + Phase 2 live + Phase 3 plans)

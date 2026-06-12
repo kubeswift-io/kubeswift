@@ -20,7 +20,7 @@ through Phases 0/1/2 of the [snapshots design](../design/snapshots.md):
 
 Each scenario uses both `kubectl` (for CRs) and `swiftctl` (for
 VM-aware operations like SSH and snapshot inspection). Install
-`swiftctl` per [the CLI guide](../cli.md) before starting; everything
+`swiftctl` per [the CLI guide](../swiftctl.md) before starting; everything
 else is plain `kubectl`.
 
 The accompanying sample manifests live in
@@ -72,8 +72,7 @@ kubectl create namespace $NS
 ```
 
 History: prior to 2026-04-29 this required a `kubectl apply -k
-config/rbac -n $NS` plus a manual `subjects[0].namespace` patch (see
-[walkthrough-findings.md F2](walkthrough-findings.md#f2-doc-gap-important--rbac-rolebinding-subject-namespace-must-be-patched--fixed-2026-04-29)).
+config/rbac -n $NS` plus a manual `subjects[0].namespace` patch.
 The Phase 2 live-migration walkthrough re-surfaced the same gap as
 finding W3 — second post-hoc validation in 6 days — which finally
 prompted the architectural fix.
@@ -132,7 +131,7 @@ with an IP:
 > **Heads up.** The SwiftGuest briefly shows `phase=Failed` while
 > the SwiftImage is still importing. This is cosmetic — once the
 > image is Ready, the guest moves through `Scheduling → Running`
-> normally. ([Why](walkthrough-findings.md#f4))
+> normally.
 
 On this cluster the SwiftImage import took ~95 s and the SwiftGuest
 reached Running with an IP at ~200 s.
@@ -195,7 +194,7 @@ Conditions:
 
 > **Polish gap.** `swiftctl snapshot describe` shows `size` in raw
 > bytes (`42949672960` = 40 GiB). The Tier B Pause Window (relevant
-> in Scenario 5) also doesn't surface here. ([F5](walkthrough-findings.md#f5))
+> in Scenario 5) also doesn't surface here.
 
 The SwiftSnapshot's status field `disks[0].handle` references an
 underlying Kubernetes `VolumeSnapshot` object. Operators can inspect
@@ -304,9 +303,8 @@ If any of those three signals is wrong — no `dataSource`, missing
 `restore-seeded` label, or a Copy Job present for the restored
 guest — the SwiftGuest controller has fallen back to seeding a
 fresh disk from the SwiftImage instead of from the snapshot, and
-the "restore" is producing a fresh boot. See
-[walkthrough-findings.md F1](walkthrough-findings.md#f1) for the
-failure mode and how it was caught.
+the "restore" is producing a fresh boot. This failure mode has since
+been fixed (the Tier A restore-seeded-PVC ordering bug).
 
 ### What you just did
 
@@ -430,7 +428,7 @@ On this cluster the copy strategy reached Running with an IP at
 > implies the snapshot strategy is faster on snapshot-capable
 > drivers. At **single-guest scale on Longhorn with a significant
 > resize delta** (10 GiB SwiftImage → 40 GiB SwiftGuestClass), the
-> opposite is true. ([F7](walkthrough-findings.md#f7))
+> opposite is true.
 
 ### Step 3 — Inspect what each path actually did
 
@@ -568,7 +566,7 @@ victims found for incoming pod.
 Each SwiftGuestClass `default` requests 2 vCPU; 9 running replicas
 × 2 = 18 vCPU committed, plus controller-manager + Longhorn
 instance-managers + system workloads, fills 24 vCPU across three
-8-CPU nodes. ([F8](walkthrough-findings.md#f8))
+8-CPU nodes.
 
 > **Operator finding.** When sizing pools, account for system
 > overhead per node. On this cluster, three 8-CPU nodes can host
@@ -1140,7 +1138,6 @@ status:
 
 The feedback loop is one reconcile pass slower than webhook
 rejection but the message is correct and actionable.
-([F9](walkthrough-findings.md#f9))
 
 ### Test C — Memory clone without macAddresses regen
 
@@ -1212,8 +1209,6 @@ needed.
 
 ## After the walkthrough — where to read next
 
-- Per-scenario findings (bugs, doc gaps, UX issues, design gaps)
-  surfaced during this exercise: [walkthrough-findings.md](walkthrough-findings.md)
 - The CSI snapshot operator guide: [csi-snapshots.md](csi-snapshots.md)
 - The Tier B memory snapshot operator guide: [local-snapshots.md](local-snapshots.md)
 - The identity regeneration design and resume-vs-boot constraint:

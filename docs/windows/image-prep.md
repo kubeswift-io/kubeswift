@@ -9,7 +9,7 @@
 > virtio-blk/net drivers), and a console-less VMM (Cloud Hypervisor is
 > serial/headless) needs the boot configured so Windows doesn't drop into a
 > graphical recovery screen. The tooling here bakes in both. The boot path is
-> spike-validated: [`../design/windows-guest-support-spike.md`](../design/windows-guest-support-spike.md).
+> validated end-to-end on Cloud Hypervisor v52.0.
 
 Tooling: [`tools/windows-image-prep/`](../../tools/windows-image-prep/).
 

@@ -10,7 +10,6 @@ This page is the operator entry point; the deep dives are linked inline.
 > image/license the dev cluster doesn't have — the same "asset not available"
 > caveat as Tier 2/3 GPU. The boot path itself is proven end-to-end: a virtio-ready
 > Windows Server 2022 image boots cleanly on **Cloud Hypervisor v52.0**. See the
-> [boot spike](../design/windows-guest-support-spike.md) and the
 > [design doc](../design/windows-guest-support.md).
 
 ## How it works — `osType: windows`
@@ -78,4 +77,4 @@ kubectl get swiftguest win-guest -o wide    # watch phase + primaryIP
 
 - [Windows image prep runbook](image-prep.md)
 - [Windows samples](../../config/samples/windows/)
-- [Design doc](../design/windows-guest-support.md) · [boot spike](../design/windows-guest-support-spike.md)
+- [Design doc](../design/windows-guest-support.md)

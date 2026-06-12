@@ -13,10 +13,6 @@
 > 2026-05-30). The remaining open items are implementation-level
 > (§3.B provisioning mechanism, §10).
 >
-> Spike findings (the empirical basis for this doc):
-> [`live-migration-phase-3c-mtls-spike.md`](live-migration-phase-3c-mtls-spike.md).
-> Spike planning + trust-model framing:
-> [`live-migration-phase-3c-spike-prep.md`](live-migration-phase-3c-spike-prep.md).
 > Phase 3a controller design (offline + state machine):
 > [`live-migration-phase-3a.md`](live-migration-phase-3a.md).
 > Phase 3b live-mode design:
@@ -512,8 +508,6 @@ guest running and recoverable. mTLS adds handshake-rejection as a new
 
 ## 11. References
 
-- Spike findings: [`live-migration-phase-3c-mtls-spike.md`](live-migration-phase-3c-mtls-spike.md)
-- Spike prep + trust framing: [`live-migration-phase-3c-spike-prep.md`](live-migration-phase-3c-spike-prep.md)
 - Phase 3a design: [`live-migration-phase-3a.md`](live-migration-phase-3a.md)
 - Phase 3b design: [`live-migration-phase-3b.md`](live-migration-phase-3b.md)
 - Threat model: [`THREAT-MODEL.md`](THREAT-MODEL.md)

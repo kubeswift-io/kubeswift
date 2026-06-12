@@ -6,8 +6,8 @@ the single decision point.
 
 > **Asset-gated / illustrative.** These manifests are not cluster-validated (no
 > Windows image/license on the dev cluster), the same caveat as Tier 2/3 GPU. The
-> boot path itself is spike-proven: see
-> [`docs/design/windows-guest-support-spike.md`](../../../docs/design/windows-guest-support-spike.md).
+> boot path itself is validated end-to-end on Cloud Hypervisor v52.0; see
+> [`docs/windows/overview.md`](../../../docs/windows/overview.md).
 > The image URL is a placeholder — point it at your own virtio-ready image.
 
 ## The three pieces

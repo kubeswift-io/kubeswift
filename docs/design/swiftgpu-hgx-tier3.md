@@ -19,7 +19,7 @@ Tiers 1 (Hetzner GTX 1080, validated) and the Tier 2 model shipped in
 SwiftGPU Phases 1–3. The CRD fields for Tier 3 already exist
 (`api/gpu/v1alpha1`): `tier: hgx-full`, `partitionMode: full`,
 `fabricManager.runInGuest: true`, `pcieTopology.{rootPortPerDevice,noMmap}`,
-`numaTopology`, `vcpuPinning`. See [`swiftgpu_design_sketch.md`](../../swiftgpu_design_sketch.md).
+`numaTopology`, `vcpuPinning`.
 
 ## 2. What Tier 3 adds over Tier 2
 
