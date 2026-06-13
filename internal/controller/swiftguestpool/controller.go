@@ -241,6 +241,17 @@ func (r *SwiftGuestPoolReconciler) createSwiftGuest(ctx context.Context, pool *s
 
 	spec := pool.Spec.Template.Spec.DeepCopy()
 
+	// Service exposure §6: a pool Service injects its ports into every replica so
+	// each installs the in-pod DNAT + readiness probe (nat binding, no per-replica
+	// Service — the pool owns the single load-balanced Service). Skipped for a
+	// bridge-bound template (reconcilePoolService surfaces that via ServiceReady).
+	if pool.Spec.Service != nil && poolPrimaryBinding(pool) != "bridge" {
+		if spec.Network == nil {
+			spec.Network = &swiftv1alpha1.GuestNetworkSpec{Binding: "nat"}
+		}
+		spec.Network.Ports = poolReplicaPorts(pool.Spec.Service.Ports)
+	}
+
 	// cloneFromSnapshot (Snapshot Phase 4): pre-assign each replica's targetNode
 	// (round-robin across schedulable worker nodes) so a Tier C clone's download
 	// + restore-receive land on a decided node. No-op for non-clone templates;
@@ -397,6 +408,14 @@ func (r *SwiftGuestPoolReconciler) updateStatus(ctx context.Context, pool *swift
 	total := int32(len(owned))
 	desired := pool.Spec.Replicas
 
+	// Service exposure §6: mint/update/GC the pool's load-balanced Service every
+	// reconcile (keeps it in sync on scale + spec change). Does not mutate pool;
+	// returns the facts for status.serviceRef + the ServiceReady condition.
+	svcRes, err := r.reconcilePoolService(ctx, pool, ready)
+	if err != nil {
+		return err
+	}
+
 	patch := client.MergeFrom(pool.DeepCopy())
 	pool.Status.Replicas = total
 	pool.Status.ReadyReplicas = ready
@@ -404,6 +423,7 @@ func (r *SwiftGuestPoolReconciler) updateStatus(ctx context.Context, pool *swift
 	pool.Status.FailedReplicas = failed
 	pool.Status.UpdatedReplicas = updated
 	pool.Status.CurrentTemplateHash = currentHash
+	pool.Status.ServiceRef = svcRes.name
 
 	now := metav1.Now()
 	setCondition(&pool.Status.Conditions, metav1.Condition{
@@ -427,6 +447,15 @@ func (r *SwiftGuestPoolReconciler) updateStatus(ctx context.Context, pool *swift
 		Reason:             updatedReason(updated, desired),
 		Message:            fmt.Sprintf("%d/%d replicas updated", updated, desired),
 	})
+	if pool.Spec.Service != nil {
+		setCondition(&pool.Status.Conditions, metav1.Condition{
+			Type:               swiftv1alpha1.PoolConditionServiceReady,
+			Status:             condBool(svcRes.ready),
+			LastTransitionTime: now,
+			Reason:             svcRes.reason,
+			Message:            svcRes.message,
+		})
+	}
 
 	return r.Status().Patch(ctx, pool, patch)
 }
@@ -484,5 +513,6 @@ func (r *SwiftGuestPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&swiftv1alpha1.SwiftGuestPool{}).
 		Owns(&swiftv1alpha1.SwiftGuest{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&corev1.Service{}).
 		Complete(r)
 }

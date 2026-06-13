@@ -1,0 +1,47 @@
+# SwiftGuestPool fronted by ONE load-balanced Service across all replicas
+# (service exposure §6). Each replica installs an in-pod DNAT podIP:22 -> vmIP:22
+# and a launcher readiness probe; the controller mints a selector Service on the
+# pool label, so kube-proxy load-balances across the replicas and an endpoint
+# becomes Ready only once that VM's sshd answers. No EndpointSlice bookkeeping.
+#
+# Prerequisites:
+#   1. SwiftImage ubuntu-noble in Ready state
+#   2. SwiftGuestClass default created
+#   3. SwiftSeedProfile minimal created
+#
+# Reach it from any pod:   ssh user@lb-pool-svc.default.svc.cluster.local
+# Watch endpoints follow readiness: kubectl get endpointslices -l kubernetes.io/service-name=lb-pool-svc
+# Scale (endpoints follow automatically; the HPA seam):
+#                          kubectl scale sgpool lb-pool --replicas=5
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+metadata:
+  name: lb-pool
+  namespace: default
+spec:
+  replicas: 3
+  # One Service load-balanced across every replica. spec.service.ports are
+  # injected into each replica's spec.network.ports (nat binding, no per-replica
+  # Service). status.serviceRef names the Service; the ServiceReady condition
+  # reports backing replicas.
+  service:
+    type: ClusterIP            # or NodePort / LoadBalancer (needs MetalLB/Cilium LB-IPAM)
+    # headless: true           # clusterIP: None — one A record per ready replica
+    #                          # (client-side LB / sharded inference)
+    ports:
+    - name: ssh
+      port: 22
+      targetPort: 22           # in-guest port; defaults to port when omitted
+      protocol: TCP
+  template:
+    metadata:
+      labels:
+        app: lb-pool
+    spec:
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+      seedProfileRef:
+        name: minimal
+      runPolicy: Running
