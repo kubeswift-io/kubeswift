@@ -90,6 +90,16 @@ spec:
                   set automatically. Requires the template's primary binding to be nat
                   (the default); a bridge-bound template is rejected at admission.
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are copied onto the load-balanced Service. The ecosystem seam
+                      (same as SwiftGuest.spec.network.serviceAnnotations): MetalLB address-pool,
+                      Tailscale (tailscale.com/expose), cloud LB tuning, external-dns, etc. The
+                      pool Service is a normal Service, so the whole north-south stack composes.
+                      See docs/networking/ecosystem-integrations.md.
+                    type: object
                   headless:
                     description: |-
                       Headless makes the Service headless (clusterIP: None): DNS returns one
@@ -97,6 +107,12 @@ spec:
                       client-side load balancing or sharded workloads (e.g. per-shard
                       inference). Mutually exclusive with NodePort/LoadBalancer Type.
                     type: boolean
+                  loadBalancerClass:
+                    description: |-
+                      LoadBalancerClass selects a specific load-balancer implementation for a
+                      Type=LoadBalancer pool Service (e.g. "tailscale", "metallb.universe.tf/metallb").
+                      Only meaningful with Type=LoadBalancer; the apiserver rejects it otherwise.
+                    type: string
                   ports:
                     description: |-
                       Ports are the service ports load-balanced across replicas. Each port is
@@ -649,6 +665,13 @@ spec:
                             - nat
                             - bridge
                             type: string
+                          loadBalancerClass:
+                            description: |-
+                              LoadBalancerClass selects a specific load-balancer implementation for an
+                              Expose=LoadBalancer Service (e.g. "tailscale", "io.cilium/bgp-control-plane",
+                              "metallb.universe.tf/metallb"). Only meaningful with Expose=LoadBalancer; the
+                              apiserver rejects it otherwise.
+                            type: string
                           ports:
                             description: |-
                               Ports declares guest service ports. On a nat-bound guest each port installs
@@ -701,6 +724,17 @@ spec:
                               - port
                               type: object
                             type: array
+                          serviceAnnotations:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              ServiceAnnotations are copied onto the exposed Service (the one minted when
+                              a port sets Expose). This is the ecosystem seam: MetalLB address-pool
+                              selection (metallb.universe.tf/address-pool), Tailscale (tailscale.com/expose),
+                              cloud LB tuning, external-dns hostnames, etc. — the VM Service is a normal
+                              Service, so it composes with the whole north-south stack. Ignored when no
+                              port is exposed. See docs/networking/ecosystem-integrations.md.
+                            type: object
                         type: object
                       nodeName:
                         description: |-

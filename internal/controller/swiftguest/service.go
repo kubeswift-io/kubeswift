@@ -96,12 +96,18 @@ func (r *SwiftGuestReconciler) ensureExposedService(ctx context.Context, guest *
 				"app.kubernetes.io/managed-by": "kubeswift-controller-manager",
 				guestPodLabelKey:               guest.Name,
 			},
+			Annotations: serviceAnnotations(guest.Spec.Network),
 		},
 		Spec: corev1.ServiceSpec{
 			Type:     svcType,
 			Selector: map[string]string{guestPodLabelKey: guest.Name},
 			Ports:    svcPorts,
 		},
+	}
+	// LoadBalancerClass selects the LB implementation (Tailscale, MetalLB, ...).
+	// Only valid with type=LoadBalancer; the apiserver rejects it otherwise.
+	if svcType == corev1.ServiceTypeLoadBalancer && guest.Spec.Network != nil {
+		desired.Spec.LoadBalancerClass = guest.Spec.Network.LoadBalancerClass
 	}
 	if err := controllerutil.SetControllerReference(guest, desired, r.Scheme); err != nil {
 		return "", fmt.Errorf("set ownerRef on Service %q: %w", name, err)
@@ -119,20 +125,65 @@ func (r *SwiftGuestReconciler) ensureExposedService(ctx context.Context, guest *
 		return "", fmt.Errorf("get Service %q: %w", name, err)
 	}
 
-	// Update in place if the controller-owned fields drifted (ports/type/selector).
-	// Preserve apiserver-assigned fields (clusterIP, nodePorts) by only patching
-	// our spec fields.
+	// Update in place if the controller-owned fields drifted (ports/type/selector/
+	// our annotations). Preserve apiserver-assigned fields (clusterIP, nodePorts)
+	// and foreign annotations (MetalLB/cloud-LB status) by overlaying, not
+	// replacing. loadBalancerClass is immutable post-create, so it is set only on
+	// Create — a change requires recreating the Service (documented).
 	if existing.Spec.Type != desired.Spec.Type ||
 		!equality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) ||
-		!servicePortsEqual(existing.Spec.Ports, desired.Spec.Ports) {
+		!servicePortsEqual(existing.Spec.Ports, desired.Spec.Ports) ||
+		annotationsNeedOverlay(existing.Annotations, desired.Annotations) {
 		existing.Spec.Type = desired.Spec.Type
 		existing.Spec.Selector = desired.Spec.Selector
 		existing.Spec.Ports = desired.Spec.Ports
+		existing.Annotations = overlayAnnotations(existing.Annotations, desired.Annotations)
 		if err := r.Update(ctx, &existing); err != nil {
 			return "", fmt.Errorf("update Service %q: %w", name, err)
 		}
 	}
 	return name, nil
+}
+
+// serviceAnnotations returns the operator-provided annotations to stamp on the
+// exposed Service (nil-safe copy).
+func serviceAnnotations(net *swiftv1alpha1.GuestNetworkSpec) map[string]string {
+	if net == nil || len(net.ServiceAnnotations) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(net.ServiceAnnotations))
+	for k, v := range net.ServiceAnnotations {
+		out[k] = v
+	}
+	return out
+}
+
+// annotationsNeedOverlay reports whether any desired annotation is missing or
+// differs in existing (we overlay rather than replace, so foreign annotations
+// added by other controllers are never clobbered; removing a key from spec
+// therefore needs a manual cleanup — documented).
+func annotationsNeedOverlay(existing, desired map[string]string) bool {
+	for k, v := range desired {
+		if existing[k] != v {
+			return true
+		}
+	}
+	return false
+}
+
+// overlayAnnotations returns existing with desired keys overlaid (preserving
+// foreign keys).
+func overlayAnnotations(existing, desired map[string]string) map[string]string {
+	if len(desired) == 0 {
+		return existing
+	}
+	if existing == nil {
+		existing = make(map[string]string, len(desired))
+	}
+	for k, v := range desired {
+		existing[k] = v
+	}
+	return existing
 }
 
 // isLauncherReady reports whether the launcher pod's Ready condition is true.

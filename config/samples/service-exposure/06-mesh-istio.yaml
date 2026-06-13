@@ -1,0 +1,51 @@
+# Istio: the VM as a mesh BACKEND (the supported pattern). A meshed client routes
+# to the VM Service through the mesh with mTLS + traffic policy; the VM Service is
+# a normal mesh destination. Requires Istio installed.
+#
+# NOTE: this meshes traffic TO the VM. Injecting an Istio sidecar INTO the
+# launcher pod is a separate, advanced topic with iptables-interaction caveats —
+# see docs/networking/ecosystem-integrations.md "B. The VM pod itself in the mesh".
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: legacy
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      expose: ClusterIP
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: legacy-vm
+  namespace: default
+spec:
+  hosts:
+  - legacy-svc.default.svc.cluster.local   # the SwiftGuest's <guest>-svc
+  http:
+  - route:
+    - destination:
+        host: legacy-svc.default.svc.cluster.local
+        port: { number: 8080 }
+    timeout: 5s
+    retries: { attempts: 3, perTryTimeout: 2s }
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: legacy-vm
+  namespace: default
+spec:
+  host: legacy-svc.default.svc.cluster.local
+  trafficPolicy:
+    tls: { mode: ISTIO_MUTUAL }            # client-side mesh mTLS to the VM Service

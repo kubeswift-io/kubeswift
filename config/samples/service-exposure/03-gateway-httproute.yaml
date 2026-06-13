@@ -1,0 +1,39 @@
+# Gateway API: L7 host/path routing (and TLS, if your Gateway terminates it) to a
+# VM. The VM's ClusterIP Service is a normal backendRef. Requires a Gateway API
+# controller (Envoy Gateway, Cilium, Istio, NGINX Gateway Fabric) and a Gateway
+# named "my-gateway".
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: app
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      expose: ClusterIP   # the Gateway is the only external entry point
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: app-vm
+  namespace: default
+spec:
+  parentRefs:
+  - name: my-gateway        # your installed Gateway
+  hostnames:
+  - app.example.com
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: app-svc         # the SwiftGuest's <guest>-svc
+      port: 80

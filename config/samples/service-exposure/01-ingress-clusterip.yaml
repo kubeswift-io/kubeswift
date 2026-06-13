@@ -1,0 +1,25 @@
+# Foundational ingress: declare ports on a nat guest -> the controller mints ONE
+# ClusterIP Service (<guest>-svc) carrying all exposed ports. The in-pod DNAT
+# makes podIP:80 a live endpoint (forwarded to the VM's :8080), and a launcher
+# readiness probe makes the endpoint Ready only once the in-guest service answers.
+#
+# Reach it:  kubectl run probe --rm -it --image=nicolaka/netshoot -- \
+#              curl http://web-svc.default.svc.cluster.local
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: web
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+      expose: ClusterIP

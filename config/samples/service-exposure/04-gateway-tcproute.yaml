@@ -1,0 +1,35 @@
+# Gateway API TCPRoute: raw L4 to a VM (here, SSH). For non-HTTP protocols the
+# VM Service is still a normal backendRef. Requires a Gateway API controller that
+# supports TCPRoute (experimental channel) and a Gateway with a TCP listener.
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: bastion
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      expose: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: bastion-ssh
+  namespace: default
+spec:
+  parentRefs:
+  - name: my-gateway
+    sectionName: ssh        # a TCP listener on the Gateway
+  rules:
+  - backendRefs:
+    - name: bastion-svc     # the SwiftGuest's <guest>-svc
+      port: 22
