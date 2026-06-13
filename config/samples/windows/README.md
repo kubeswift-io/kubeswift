@@ -4,11 +4,12 @@ Running a Windows guest as a SwiftGuest. **Windows runs on Cloud Hypervisor**
 (v52.0+) via the same disk-boot path Linux uses — the `osType: windows` gate is
 the single decision point.
 
-> **Asset-gated / illustrative.** These manifests are not cluster-validated (no
-> Windows image/license on the dev cluster), the same caveat as Tier 2/3 GPU. The
-> boot path itself is validated end-to-end on Cloud Hypervisor v52.0; see
+> The full in-cluster Windows path is **cluster-validated** (Cloud Hypervisor
+> v52.0; boot → NetKVM/DHCP → cloudbase-init over NoCloud → Running+IP); see
 > [`docs/windows/overview.md`](../../../docs/windows/overview.md).
-> The image URL is a placeholder — point it at your own virtio-ready image.
+> These manifests are still **illustrative**: the image URL is a placeholder —
+> point `source.http.url` at your own operator-prepped, virtio-ready image
+> (build one with [`tools/windows-image-prep/`](../../../tools/windows-image-prep/)).
 
 ## The three pieces
 
