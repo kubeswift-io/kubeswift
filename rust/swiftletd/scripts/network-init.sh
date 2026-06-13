@@ -72,6 +72,48 @@ setup_primary_nic() {
     echo "Primary NIC: $bridge ($bridge_ip, net $bridge_net) with $tap"
 }
 
+# setup_exposed_ports installs the service-exposure DNAT for the primary
+# (nat-bound) NIC. For each intent.ports[] entry it adds
+#   PREROUTING -p <proto> --dport <port> -j DNAT --to <vmIP>:<targetPort>
+# where <vmIP> is the pinned primary VM IP (.10 of the bridge subnet, matching
+# the launcher entrypoint's dnsmasq range_start). It hands that pinned IP to the
+# entrypoint via expose.env so dnsmasq serves a single-address lease (the IP is
+# then deterministic, so the DNAT target is correct -- no silent failure).
+# See docs/design/service-exposure.md. No-op when intent has no ports.
+setup_exposed_ports() {
+    bridge="$1"
+    command -v python3 >/dev/null 2>&1 || return 0
+    ports=$(python3 -c "
+import json
+try:
+    with open('$INTENT_PATH') as f: intent = json.load(f)
+except Exception:
+    raise SystemExit
+for p in intent.get('ports', []):
+    proto = (p.get('protocol') or 'tcp').lower()
+    print(f\"{proto} {p['port']} {p.get('targetPort') or p['port']}\")
+" 2>/dev/null)
+    [ -z "$ports" ] && return 0
+
+    br_addr=$(ip -4 addr show "$bridge" 2>/dev/null | awk '/inet /{print $2; exit}')
+    if [ -z "$br_addr" ]; then
+        echo "WARN: no IPv4 on $bridge; skipping service-port DNAT" >&2
+        return 0
+    fi
+    base=$(echo "$br_addr" | cut -d/ -f1 | sed 's/\.[0-9]*$/.0/')
+    vm_ip=$(echo "$base" | sed 's/\.0$/.10/')
+
+    rd=$(guest_run_dir); mkdir -p "$rd"
+    echo "EXPOSE_VM_IP=$vm_ip" > "$rd/expose.env"
+
+    echo "$ports" | while read -r proto port tport; do
+        [ -z "$port" ] && continue
+        iptables -t nat -A PREROUTING -p "$proto" --dport "$port" \
+            -j DNAT --to-destination "$vm_ip:$tport"
+        echo "Exposed port DNAT: $proto/$port -> $vm_ip:$tport"
+    done
+}
+
 setup_secondary_nic() {
     local bridge="$1" tap="$2" multus_iface="$3"
 
@@ -206,6 +248,7 @@ if has_nics; then
     if [ "$NIC_COUNT" -eq 0 ]; then
         echo "nics array is empty, falling back to legacy mode"
         setup_primary_nic "br0" "tap0"
+        setup_exposed_ports "br0"
         echo "Network init done: br0 (internal) with tap0"
         exit 0
     fi
@@ -243,6 +286,7 @@ for nic in nics:
             setup_primary_nad_nic "$bridge" "$tap" "$multus" "$mac"
         elif [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"
+            setup_exposed_ports "$bridge"
         else
             setup_secondary_nic "$bridge" "$tap" "$multus"
         fi
@@ -254,5 +298,6 @@ else
     BRIDGE="${BRIDGE_NAME:-br0}"
     TAP="${TAP_NAME:-tap0}"
     setup_primary_nic "$BRIDGE" "$TAP"
+    setup_exposed_ports "$BRIDGE"
     echo "Network init done: $BRIDGE (internal) with $TAP"
 fi

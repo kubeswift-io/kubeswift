@@ -2,6 +2,7 @@ package resolved
 
 import (
 	"fmt"
+	"strings"
 
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -46,6 +47,10 @@ type ResolvedGuest struct {
 	// Interfaces from SwiftGuest spec, used for multi-NIC support.
 	// Nil or empty means single default NIC (backward compatible).
 	Interfaces []swiftv1alpha1.GuestInterface `json:"interfaces,omitempty"`
+	// NetworkSpec is the SwiftGuest spec.network block (binding + declarative
+	// service ports). Nil preserves today's behavior (nat, no exposure).
+	// See docs/design/service-exposure.md.
+	NetworkSpec *swiftv1alpha1.GuestNetworkSpec `json:"networkSpec,omitempty"`
 	// Filesystems from SwiftGuest spec — virtiofs (vhost-user-fs) shares.
 	// Nil or empty means no virtiofs mounts. CH path only.
 	Filesystems []swiftv1alpha1.Filesystem `json:"filesystems,omitempty"`
@@ -375,6 +380,37 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 		bridgeIdx++
 	}
 	return nics
+}
+
+// GetExposedPorts builds the PortIntent list from spec.network.ports for a
+// nat-bound guest (the in-pod DNAT targets). Returns nil for a bridge-bound
+// guest (its ports reach the NAD IP, not via in-pod DNAT) and when no ports
+// are declared. See docs/design/service-exposure.md.
+func (r *ResolvedGuest) GetExposedPorts() []runtimeintent.PortIntent {
+	if r.NetworkSpec == nil || len(r.NetworkSpec.Ports) == 0 {
+		return nil
+	}
+	if r.NetworkSpec.Binding == "bridge" {
+		return nil
+	}
+	out := make([]runtimeintent.PortIntent, 0, len(r.NetworkSpec.Ports))
+	for _, p := range r.NetworkSpec.Ports {
+		target := p.TargetPort
+		if target == 0 {
+			target = p.Port
+		}
+		proto := "tcp"
+		if p.Protocol != "" {
+			proto = strings.ToLower(string(p.Protocol))
+		}
+		out = append(out, runtimeintent.PortIntent{
+			Name:       p.Name,
+			Port:       p.Port,
+			TargetPort: target,
+			Protocol:   proto,
+		})
+	}
+	return out
 }
 
 // GetFilesystems builds the FilesystemIntent list from spec.filesystems.

@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -121,7 +122,91 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	if err := validateVhostUserDevices(spec); err != nil {
 		return err
 	}
+	if err := validateNetworkPorts(spec); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateNetworkPorts enforces the service-exposure rules (per-operation
+// discipline — these are shape rules on the spec). See docs/design/service-exposure.md.
+//   - name is required when more than one port is declared (Service port naming),
+//   - port names and protocol/port pairs must be unique,
+//   - expose is rejected for a bridge-bound guest (a NAD-bound VM is not
+//     pod-IP-selectable) and for an sriov primary (no tap to DNAT to),
+//   - all ports that set expose must use the SAME value (one Service, one type).
+//
+// ports WITHOUT expose are allowed on any binding (DNAT-only / NetworkPolicy
+// targeting).
+func validateNetworkPorts(spec *swiftv1alpha1.SwiftGuestSpec) error {
+	if spec.Network == nil || len(spec.Network.Ports) == 0 {
+		return nil
+	}
+	ports := spec.Network.Ports
+	bridge := spec.Network.Binding == "bridge"
+	sriovPrimary := primaryIsSRIOV(spec)
+	seenPort := map[string]struct{}{}
+	seenName := map[string]struct{}{}
+	exposeVal := ""
+	for i := range ports {
+		p := &ports[i]
+		if len(ports) > 1 && p.Name == "" {
+			return fmt.Errorf("spec.network.ports[%d].name is required when more than one port is declared", i)
+		}
+		if p.Name != "" {
+			if _, dup := seenName[p.Name]; dup {
+				return fmt.Errorf("spec.network.ports: duplicate name %q", p.Name)
+			}
+			seenName[p.Name] = struct{}{}
+		}
+		proto := string(p.Protocol)
+		if proto == "" {
+			proto = "TCP"
+		}
+		key := proto + "/" + strconv.Itoa(int(p.Port))
+		if _, dup := seenPort[key]; dup {
+			return fmt.Errorf("spec.network.ports: duplicate %s port %d", proto, p.Port)
+		}
+		seenPort[key] = struct{}{}
+		if p.Expose != "" {
+			if bridge {
+				return fmt.Errorf("spec.network.ports[%d].expose is not allowed when spec.network.binding is bridge (expose requires nat binding)", i)
+			}
+			if sriovPrimary {
+				return fmt.Errorf("spec.network.ports[%d].expose requires a nat (tap) primary NIC; the primary interface is sriov", i)
+			}
+			if exposeVal == "" {
+				exposeVal = p.Expose
+			} else if p.Expose != exposeVal {
+				return fmt.Errorf("spec.network.ports: all exposed ports must use the same expose value (got %q and %q); one Service carries all exposed ports", exposeVal, p.Expose)
+			}
+		}
+	}
+	return nil
+}
+
+// primaryIsSRIOV reports whether the guest's primary interface is SR-IOV. The
+// primary is the interface with primary=true, else the first without a NetworkRef.
+func primaryIsSRIOV(spec *swiftv1alpha1.SwiftGuestSpec) bool {
+	if len(spec.Interfaces) == 0 {
+		return false
+	}
+	idx := -1
+	for i := range spec.Interfaces {
+		if spec.Interfaces[i].Primary {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		for i := range spec.Interfaces {
+			if spec.Interfaces[i].NetworkRef == nil {
+				idx = i
+				break
+			}
+		}
+	}
+	return idx >= 0 && spec.Interfaces[idx].Type == swiftv1alpha1.InterfaceTypeSRIOV
 }
 
 // usesGPU reports whether the guest requests GPU passthrough via either
