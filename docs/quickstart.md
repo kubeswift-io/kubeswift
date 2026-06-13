@@ -1,6 +1,6 @@
 # Quickstart
 
-This guide gets you from zero to a running VM in the shortest path. It covers disk boot (cloud image), kernel boot (microVM), and connecting to the guest.
+This guide gets you from zero to a running VM in the shortest path. It covers disk boot (cloud image), kernel boot (microVM), and connecting to the guest. Windows guests follow the disk-boot flow with `osType: windows` — see the [Windows overview](windows/overview.md).
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ ls -la /dev/kvm
 
 ```bash
 helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
-  --version 0.1.0 \
+  --version 0.3.1 \
   -n kubeswift-system \
   --create-namespace
 ```
@@ -57,7 +57,11 @@ Verify CRDs are installed:
 
 ```bash
 kubectl get crd | grep kubeswift.io
-# Expected: swiftguests, swiftimages, swiftkernels, swiftseedprofiles, swiftguestclasses, swiftgpuprofiles, swiftgpunodes
+# Expected (12 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
+#   swiftimages, swiftseedprofiles, swiftkernels,
+#   swiftgpuprofiles, swiftgpunodes,
+#   swiftsnapshots, swiftrestores, swiftsnapshotschedules,
+#   swiftmigrations
 ```
 
 ## Step 2: Boot a disk-boot VM (Ubuntu Noble)
@@ -323,28 +327,37 @@ Success criteria:
 
 ## Status
 
-**Working:** disk boot (CLOUDHV.fd), kernel boot, QEMU boot (OVMF), networking (tap+bridge+dnsmasq),
-multi-NIC (Multus integration), SR-IOV NIC passthrough (VFIO), SwiftGuestPool (scaling, rolling updates,
-topology spread, PVC per replica), per-guest root disk cloning (class-based sizing), swiftctl CLI,
-cloud-init, Prometheus metrics, GPU passthrough (Phases 1-3), multi-vendor GPU discovery (NVIDIA/AMD/Intel),
-GPU Discovery DaemonSet, dataDiskRef/dataDiskRefs, security-hardened containers, OVN-Kubernetes
-integration guide, VMware/Proxmox comparison guide.
+**Working and cluster-validated:** Linux disk boot (CLOUDHV.fd) and kernel boot; Windows guests
+(`osType: windows`, Cloud Hypervisor v52.0 — see [Windows overview](windows/overview.md)); networking
+(tap+bridge+dnsmasq) and [service exposure](networking/service-exposure.md); SR-IOV NIC passthrough;
+SwiftGuestPool (scaling, rolling updates, topology spread, PVC per replica); per-guest root disk cloning;
+[snapshots and clones](snapshots/csi-snapshots.md) (CSI, local/S3 memory, scheduled, cloneFromSnapshot);
+[offline and live migration](migration/overview.md) (optional mTLS, `kubectl drain` integration);
+Tier-1 PCIe GPU passthrough on Cloud Hypervisor — native or [via DRA](gpu/dra-allocation.md);
+swiftctl CLI; cloud-init; vhost-user/virtiofs; Prometheus metrics and Grafana dashboards across every
+feature; security-hardened containers.
 
-**Next:** Tier 2 GPU validation (HGX SXM), Multi-NIC hardware validation (Multus + macvlan),
-SR-IOV hardware validation (ConnectX NIC), additional kernel profiles (gpu-workload, vhost-user),
-Windows guest support, HPA auto-scaling for pools, GPU Phase 4 (full HGX passthrough).
+Cloud Hypervisor runs every workload above. QEMU is the secondary runtime reserved for HGX SXM (Tier 2/3)
+GPU topologies. See the [roadmap](architecture.md#design-principles) and feature docs for detail.
+
+**Hardware-gated (implemented or designed, awaiting hardware):** HGX Tier 2/3 GPU validation,
+multi-NIC + SR-IOV hardware validation, SEV-SNP confidential VMs.
 
 ## CRD short names
 
 ```bash
 kubectl get sg       # SwiftGuest
 kubectl get sgc      # SwiftGuestClass
+kubectl get sgpool   # SwiftGuestPool
 kubectl get si       # SwiftImage
 kubectl get ssp      # SwiftSeedProfile
 kubectl get sk       # SwiftKernel
-kubectl get sgpool   # SwiftGuestPool
 kubectl get sgp      # SwiftGPUProfile
 kubectl get sgn      # SwiftGPUNode
+kubectl get swiftsnapshots          # SwiftSnapshot
+kubectl get swiftrestores           # SwiftRestore
+kubectl get swiftsnapshotschedules  # SwiftSnapshotSchedule
+kubectl get swiftmigrations         # SwiftMigration
 ```
 
 ## Documentation

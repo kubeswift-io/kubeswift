@@ -23,7 +23,7 @@ For step-by-step setup instructions, see the
 | NIC teaming | Linux bond (802.3ad LACP or active-backup) | See [Section 8](operations-guide.md#section-8-host-preparation-reference) |
 | Private VLAN | OVN-K UDN with namespace isolation | See [OVN-K guide](ovn-kubernetes.md) Section 4 |
 | Host-only network | bridge CNI NAD with no physical NIC | See [Section 3](operations-guide.md#section-3-isolated-virtual-networks-no-physical-nic) |
-| vMotion network | Not applicable -- live migration not yet implemented | |
+| vMotion | SwiftMigration (live and offline migration) | KubeSwift supports live migration (sub-second downtime, optional mTLS, `kubectl drain` integration) and offline migration. See [Migration overview](../migration/overview.md). Cross-node IP preservation needs multi-node L2 (see [multi-node L2](multi-node-l2.md)) |
 | Storage vSwitch | macvlan NAD on dedicated storage NIC | See [Section 1](operations-guide.md#section-1-vms-on-a-dedicated-physical-network) |
 
 ### Common VMware migration scenarios
@@ -125,7 +125,7 @@ For step-by-step setup instructions, see the
 | NIC team / bond | Linux bond | Link aggregation (LACP, active-backup) |
 | VM NIC | `spec.interfaces[]` entry | Virtual network interface |
 | Physical NIC | Host NIC (eno1, eno2, bond0) | Physical network adapter |
-| Hypervisor | Cloud Hypervisor (default) or QEMU (GPU) | VM runtime |
+| Hypervisor | Cloud Hypervisor (primary) or QEMU (HGX SXM GPU only) | VM runtime |
 | Guest agent | cloud-init + dnsmasq DHCP | Guest provisioning and IP discovery |
 | Datastore | PersistentVolumeClaim (PVC) | VM disk storage |
 | VM template | SwiftImage + SwiftGuestClass | Disk image + resource profile |
