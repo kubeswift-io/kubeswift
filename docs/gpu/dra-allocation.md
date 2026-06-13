@@ -94,6 +94,22 @@ init container, and `kubectl get` status is purely observational.
 
 ## Install the reference driver
 
+**Helm (recommended).** Enable the `dra` toggle (independent of `gpuDiscovery` —
+the DRA driver does its own discovery, so a DRA-only cluster keeps
+`gpuDiscovery.enabled=false`):
+
+```bash
+helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+  --version 0.4.1 -n kubeswift-system --create-namespace \
+  --set dra.enabled=true
+```
+
+This deploys the DaemonSet + RBAC and creates the `kubeswift-vfio-gpu`
+DeviceClass (set `--set dra.deviceClass.create=false` if you manage it
+out-of-band).
+
+**Kustomize / manual.** Apply the standalone manifests:
+
 ```bash
 kubectl apply -f config/dra-driver/dra-driver.yaml    # DaemonSet + RBAC (kubeswift-system)
 kubectl apply -f config/dra-driver/deviceclass.yaml   # DeviceClass: kubeswift-vfio-gpu
