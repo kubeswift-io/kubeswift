@@ -1,6 +1,6 @@
 # KubeSwift
 
-KubeSwift runs virtual machines as first-class Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. The default hypervisor is [Cloud Hypervisor](https://www.cloud-hypervisor.org/); QEMU is used automatically for GPU workloads that need a specific PCIe topology.
+KubeSwift runs virtual machines as first-class Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the hypervisor for nearly every workload — Linux and Windows guests, disk and kernel boot, PCIe GPU passthrough, snapshots, and live migration. QEMU is a secondary runtime used only for HGX SXM (multi-GPU NVSwitch) topologies, where CUDA requires a full PCIe hierarchy that Cloud Hypervisor's flat model does not provide.
 
 It is **not** a container sandbox (not Kata Containers) — each guest is a real VM, one per pod.
 
@@ -8,7 +8,7 @@ It is **not** a container sandbox (not Kata Containers) — each guest is a real
 
 - **Boot paths** — disk boot from cloud images (Ubuntu, Rocky, Debian, Fedora) and direct kernel boot from OCI artifacts (sub-second microVMs). Windows guests via `osType: windows`.
 - **GPU passthrough** — whole-GPU VFIO passthrough with two allocation backends: the native SwiftGPU model (discovery DaemonSet + profiles) or Kubernetes [DRA](docs/gpu/dra-allocation.md) ResourceClaims. PCIe GPUs on Cloud Hypervisor; HGX SXM on QEMU.
-- **Networking** — tap + bridge + DHCP with the guest IP surfaced in status; multi-NIC via Multus; SR-IOV NIC passthrough; OVN-Kubernetes and multi-node L2.
+- **Networking** — tap + bridge + DHCP with the guest IP surfaced in status; multi-NIC via Multus; SR-IOV NIC passthrough; OVN-Kubernetes and multi-node L2. Expose guest ports as Kubernetes Services with `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
 - **Storage** — per-guest root-disk cloning sized from a class; optional data disks; RWX+Block for live-migration-capable volumes.
 - **Snapshots & clones** — disk-only (CSI) and memory+disk (local/S3) snapshots, scheduled snapshots, and `cloneFromSnapshot` for fast VM fan-out.
 - **Migration** — offline migration on any storage, and live migration (sub-second downtime) with optional mTLS transport and `kubectl drain` integration.
@@ -59,7 +59,7 @@ cargo test          # Rust tests (from rust/)
 
 ## Status
 
-Pre-1.0 and Linux x86_64 only; the `v1alpha1` API may change between releases. The disk/kernel/QEMU boot paths, networking, snapshots, offline and live migration, SwiftGuestPool, and Tier-1 PCIe GPU passthrough are validated on a live cluster. Hardware-gated items (HGX/Tier-2 GPU, SR-IOV NICs, SEV-SNP confidential VMs) are implemented or designed but await hardware.
+Pre-1.0; the `v1alpha1` API may change between releases. **Host requirement:** x86_64 Linux nodes with `/dev/kvm` (KVM). **Guest OS:** Linux (Ubuntu 22.04+, Rocky 9, Debian 12, Fedora) and Windows (Server 2022/2025, via `osType: windows`). Disk and kernel boot, Windows boot, networking, snapshots, offline and live migration, SwiftGuestPool, and Tier-1 PCIe GPU passthrough are validated on a live cluster. Hardware-gated items (HGX Tier-2/3 GPU, SR-IOV NICs, SEV-SNP confidential VMs) are implemented or designed but await hardware.
 
 ## License
 

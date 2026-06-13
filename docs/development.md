@@ -273,7 +273,7 @@ kubectl describe swiftimage <name>
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Cloud Hypervisor | v51.1 | Current production version |
+| Cloud Hypervisor | v52.0 | Current production version |
 | CLOUDHV.fd | ch-13b4963ec4 | UEFI firmware via `--kernel`, not `--firmware` |
 | faas-minimal kernel tag | `6.6.1` | Use this. `6.6.0` has broken networking |
 | ORAS | v1.3.1 | Used in SwiftKernel pull jobs |

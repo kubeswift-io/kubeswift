@@ -1,12 +1,28 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. This document covers every field, default value, and validation rule for each CRD.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **12 CRDs across 7 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, and pool CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+
+| CRD | Short | API group | Scope | Reference |
+|-----|-------|-----------|-------|-----------|
+| SwiftGuest | `sg` | `swift.kubeswift.io` | Namespaced | [below](#swiftguest) |
+| SwiftGuestClass | `sgc` | `swift.kubeswift.io` | Cluster | [below](#swiftguestclass) |
+| SwiftGuestPool | `sgpool` | `swift.kubeswift.io` | Namespaced | [below](#swiftguestpool) |
+| SwiftImage | `si` | `image.kubeswift.io` | Namespaced | [below](#swiftimage) |
+| SwiftSeedProfile | `ssp` | `seed.kubeswift.io` | Namespaced | [below](#swiftseedprofile) |
+| SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | [below](#swiftkernel) |
+| SwiftGPUProfile | `sgp` | `gpu.kubeswift.io` | Namespaced | [below](#swiftgpuprofile) |
+| SwiftGPUNode | `sgn` | `gpu.kubeswift.io` | Cluster | [below](#swiftgpunode) |
+| SwiftSnapshot | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshot) |
+| SwiftRestore | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftrestore) |
+| SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshotschedule) |
+| SwiftMigration | — | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
 
 ## Mutual exclusivity rules
 
 - `spec.imageRef` and `spec.kernelRef` on SwiftGuest are mutually exclusive.
 - `spec.gpuProfileRef` and `spec.kernelRef` on SwiftGuest are mutually exclusive (GPU boot requires disk boot with UEFI).
 - `spec.gpuProfileRef` can combine with `spec.imageRef`.
+- `spec.osType: windows` requires the disk-boot path (`imageRef`); it is incompatible with `kernelRef`. Windows boots on Cloud Hypervisor v52.0 via the disk path — see [Windows overview](windows/overview.md).
 
 ---
 
@@ -23,8 +39,9 @@ Represents a running virtual machine instance.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `osType` | enum | No | `linux` | Guest OS family: `linux` or `windows`. `windows` requires `imageRef` (disk boot); it selects the Cloud Hypervisor v52.0 Windows path (`--cpus boot=N,kvm_hyperv=on`, `--disk image_type=raw`) and cloudbase-init provisioning. See [Windows overview](windows/overview.md). |
 | `imageRef.name` | string | No | — | SwiftImage to boot from (disk boot). Mutually exclusive with `kernelRef`. |
-| `kernelRef.name` | string | No | — | SwiftKernel to boot from (kernel boot). Mutually exclusive with `imageRef` and `gpuProfileRef`. |
+| `kernelRef.name` | string | No | — | SwiftKernel to boot from (kernel boot). Mutually exclusive with `imageRef` and `gpuProfileRef`. Incompatible with `osType: windows`. |
 | `kernelCmdline` | string | No | — | Per-guest kernel command line override (kernel boot only). Overrides SwiftKernel's default cmdline. |
 | `guestClassRef.name` | string | Yes | — | SwiftGuestClass providing CPU, memory, and disk size. |
 | `seedProfileRef.name` | string | No | — | SwiftSeedProfile for cloud-init (disk boot only). Optional. |
@@ -392,3 +409,109 @@ SwiftGPUNode objects are named after their nodes. The discovery DaemonSet only r
 ```bash
 kubectl label node <node-name> kubeswift.io/gpu-node=true
 ```
+
+---
+
+## SwiftGuestPool
+
+**Group:** `swift.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sgpool`
+**Subresource:** status, scale
+
+Manages a fleet of identical VMs with ReplicaSet-style semantics: rolling updates, topology spread, and a PVC per replica. The `scale` subresource is the seam for HPA.
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `replicas` | int32 | Desired number of VM replicas. |
+| `template` | SwiftGuestTemplateSpec | The per-replica SwiftGuest spec (boot source, class, seed, etc.). |
+| `updateStrategy` | UpdateStrategy | Rolling-update parameters (e.g. `maxUnavailable`, `maxSurge`). |
+| `spreadPolicy` / `topologySpreadConstraints` | string / []TopologySpreadConstraint | How replicas are spread across nodes/zones. |
+| `volumeClaimTemplates` | []PersistentVolumeClaimTemplate | Per-replica PVCs (owned by the pool, not the individual SwiftGuests). |
+| `service` | PoolServiceSpec | One load-balanced Service across all replicas (`ports`, `type`, `headless`). See [Service exposure](networking/service-exposure.md). |
+
+Full reference: [SwiftGuestPool API](api/swiftguestpool.md) · [SwiftGuestPool guide](swiftguestpool-guide.md).
+
+---
+
+## SwiftSnapshot
+
+**Group:** `snapshot.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Subresource:** status
+
+Captures a VM snapshot: disk-only (CSI VolumeSnapshot) or memory+disk (local hostPath or S3 object storage).
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `guestRef` | SwiftSnapshotGuestRef | The SwiftGuest to snapshot. |
+| `backend` | SwiftSnapshotBackend | `csi-volume-snapshot`, `local`, or `s3` (with backend-specific sub-config). |
+| `includeMemory` | bool | Capture guest RAM (local/S3 backends only; rejected for VFIO guests — CH cannot restore VFIO state). |
+| `deletionPolicy` | enum | `Delete` (default) or `Retain` — whether to purge artifacts on deletion. |
+| `ttl` | Duration | Age-based retention; the snapshot self-deletes after `ttl` unless still referenced. |
+
+Full reference: [CSI snapshots](snapshots/csi-snapshots.md).
+
+---
+
+## SwiftRestore
+
+**Group:** `snapshot.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Subresource:** status
+
+Restores a VM from a SwiftSnapshot — in-place (same target guest) or as a clone (different target).
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `snapshotRef` | SwiftRestoreSnapshotRef | The Ready SwiftSnapshot to restore from. |
+| `targetGuest` | SwiftRestoreTarget | Target SwiftGuest name; `overwriteExisting: true` is required for in-place restore. |
+| `targetNode` | string | Required for S3 (Tier C) restores; pins the download Job to a node. |
+| `identity` | IdentityRegeneration | Optional regeneration of `hostname`, `machineId`, `sshHostKeys`, `macAddresses`. |
+
+> **Note:** a memory-snapshot clone resumes captured guest state byte-for-byte — cloud-init does not re-run, so identity fields are inherited from the source unless regenerated or the clone is rebooted. See [clone-from-snapshot](snapshots/clone-from-snapshot.md).
+
+Full reference: [CSI snapshots](snapshots/csi-snapshots.md).
+
+---
+
+## SwiftSnapshotSchedule
+
+**Group:** `snapshot.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Subresource:** status
+
+Cron-creates SwiftSnapshots of a guest and prunes to a kept count (composes with the per-snapshot age-based `ttl`).
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `schedule` | string | Standard cron expression (UTC). |
+| `suspend` | bool | Pause the schedule without deleting it. |
+| `concurrencyPolicy` | enum | `Forbid` (default) skips a tick while a prior snapshot is in-flight. |
+| `startingDeadlineSeconds` | int64 | Skip a missed tick older than this. |
+| `retention.keepLast` | int | Keep the N most recent Ready snapshots; prune the rest. |
+| `template` | SnapshotTemplate | The SwiftSnapshot spec instantiated on each tick. |
+
+Full reference: [Scheduled snapshots](snapshots/scheduled-snapshots.md).
+
+---
+
+## SwiftMigration
+
+**Group:** `migration.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Subresource:** status
+
+Moves a SwiftGuest between nodes — offline (any storage) or live (sub-second downtime, optional mTLS).
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `guestRef` | SwiftMigrationGuestRef | The SwiftGuest to migrate. |
+| `target.nodeName` | string | Destination node (exclusive with `target.nodeSelector`). |
+| `mode` | enum | `auto`, `live`, or `offline`. `auto` picks `offline` for VFIO/SR-IOV guests (which cannot live-migrate). |
+| `allowIPChange` | bool | Required for cross-node moves on default networking (the guest IP changes). |
+| `timeout` | Duration | Total-migration cap (default `30m0s`). |
+| `ttl` | Duration | Retention after the migration reaches a terminal state. |
+| `reason` | string | Free-text operator note (e.g. `"node maintenance"`). |
+
+Full reference: [Migration overview](migration/overview.md).

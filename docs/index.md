@@ -1,12 +1,12 @@
 # KubeSwift Documentation
 
-KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.cloud-hypervisor.org/) as the sole hypervisor. Define guests with CRDs; the control plane reconciles them into pods; swiftletd launches Cloud Hypervisor. Two boot paths are supported: disk boot (cloud images with firmware) and kernel boot (direct bzImage + initramfs).
+KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the primary hypervisor — disk boot, kernel boot, Windows guests, PCIe GPU passthrough, snapshots, and migration all run on it. QEMU is a secondary runtime used only for HGX SXM multi-GPU topologies, where CUDA requires a full PCIe hierarchy. Define guests with CRDs; the control plane reconciles them into pods; swiftletd launches the hypervisor. Two boot sources are supported: disk boot (cloud images with firmware) and kernel boot (direct bzImage + initramfs); Windows guests use `osType: windows`, a disk-boot variant.
 
 ## Documentation Index
 
 ### Architecture
 
-- [Architecture overview](architecture.md) — Cloud-Hypervisor-native design, components, boot paths
+- [Architecture overview](architecture.md) — Cloud-Hypervisor-first design, components, boot paths
 - [Control plane](architecture/control-plane.md) — Controllers, reconciliation, admission webhooks
 - [Node runtime](architecture/node-runtime.md) — swiftletd, Cloud Hypervisor, runtime intent
 - [Lifecycle](architecture/lifecycle.md) — Guest lifecycle, status mapping, conditions
@@ -49,6 +49,7 @@ KubeSwift runs Linux VMs on Kubernetes using [Cloud Hypervisor](https://www.clou
 ### Networking
 
 - [Networking Operations Guide](networking/operations-guide.md) -- Physical networks, VLANs, bonds, isolated networks
+- [Service exposure](networking/service-exposure.md) -- Expose guest ports as Kubernetes Services (`spec.network.ports`), pool-balanced Services, egress reachability
 - [Virtualization Platform Comparison](networking/virtualization-comparison.md) -- VMware ESXi and Proxmox VE concept mapping
 - [Multi-NIC Support](multi-nic.md) -- CRD spec, MAC generation, architecture
 - [OVN-Kubernetes Integration](networking/ovn-kubernetes.md) -- Layer 2/3, localnet, UDN, CUDN

@@ -13,13 +13,18 @@ User (kubectl / swiftctl / helm)
         |
         v
 Kubernetes API Server
-  |-- SwiftGuest        (swift.kubeswift.io/v1alpha1)
-  |-- SwiftGuestClass   (swift.kubeswift.io/v1alpha1)
-  |-- SwiftImage        (image.kubeswift.io/v1alpha1)
-  |-- SwiftSeedProfile  (seed.kubeswift.io/v1alpha1)
-  |-- SwiftKernel       (kernel.kubeswift.io/v1alpha1)
-  |-- SwiftGPUProfile   (gpu.kubeswift.io/v1alpha1)
-  |-- SwiftGPUNode      (gpu.kubeswift.io/v1alpha1)
+  |-- SwiftGuest          (swift.kubeswift.io/v1alpha1)
+  |-- SwiftGuestClass     (swift.kubeswift.io/v1alpha1)
+  |-- SwiftGuestPool      (swift.kubeswift.io/v1alpha1)
+  |-- SwiftImage          (image.kubeswift.io/v1alpha1)
+  |-- SwiftSeedProfile    (seed.kubeswift.io/v1alpha1)
+  |-- SwiftKernel         (kernel.kubeswift.io/v1alpha1)
+  |-- SwiftGPUProfile     (gpu.kubeswift.io/v1alpha1)
+  |-- SwiftGPUNode        (gpu.kubeswift.io/v1alpha1)
+  |-- SwiftSnapshot       (snapshot.kubeswift.io/v1alpha1)
+  |-- SwiftRestore        (snapshot.kubeswift.io/v1alpha1)
+  |-- SwiftSnapshotSchedule (snapshot.kubeswift.io/v1alpha1)
+  |-- SwiftMigration      (migration.kubeswift.io/v1alpha1)
         |
         v
 KubeSwift Controller Manager (Go, controller-runtime)
@@ -35,8 +40,8 @@ SwiftGuest Pod (one per SwiftGuest)
   |-- launcher container: swiftletd  (Rust)
         |
         v
-  Cloud Hypervisor v51.1   (default: disk boot and kernel boot, Tier 1 GPU)
-  QEMU                     (Tier 2 and Tier 3 GPU workloads)
+  Cloud Hypervisor v52.0   (primary: Linux + Windows disk boot, kernel boot, Tier 1 PCIe GPU)
+  QEMU                     (secondary: HGX SXM Tier 2/3 GPU workloads only)
         |
         v
   Guest VM
@@ -207,6 +212,29 @@ cloud-hypervisor \
 
 No root disk PVC, no seed ConfigMap, no cloud-init. The kernel artifact path is deterministic: `/var/lib/kubeswift/kernels/<namespace>-<name>/`.
 
+### Windows boot (osType: windows)
+
+Windows guests are a variant of the disk-boot path, not a third boot source. Set `spec.osType: windows` on the SwiftGuest (default is `linux`); the guest boots on the **Cloud Hypervisor disk path** with two Windows-specific runtime flags.
+
+```
+cloud-hypervisor \
+  --kernel /usr/share/kubeswift-firmware/CLOUDHV.fd \
+  --cpus boot=2,kvm_hyperv=on \
+  --disk path=image.raw,image_type=raw path=seed.iso \
+  --net tap=tap0 \
+  --serial socket=serial.sock
+```
+
+Key differences from the Linux disk path:
+
+- `--cpus boot=N,kvm_hyperv=on` — Windows needs the KVM Hyper-V enlightenments enabled, or it silently hangs in early multiprocessor/HAL bring-up.
+- `--disk image_type=raw` — Windows' viostor (virtio-blk) driver requires the explicit raw disk type (a Cloud Hypervisor v52.0 capability).
+- The qcow2→raw import **skips** the Linux GRUB serial-console patch — Windows has no GRUB. The import otherwise runs unprivileged like the Linux path.
+- Provisioning is **cloudbase-init over the same NoCloud `cidata` seed** (no seed-mechanism change) — the seed ISO carries `meta-data`/`user-data` that cloudbase-init reads on first boot.
+- The guest image must be **virtio-ready**: viostor (virtio-blk) and NetKVM (virtio-net) drivers injected during image prep.
+
+See [docs/windows/overview.md](windows/overview.md) for the authoritative operator runbook (image prep, RDP, provisioning notes, limitations).
+
 ### GPU boot (gpuProfileRef)
 
 GPU boot always combines `imageRef` with `gpuProfileRef`. The hypervisor is selected automatically based on the GPU tier.
@@ -271,19 +299,25 @@ Key facts:
 - swiftletd polls `/var/lib/kubeswift/run/<guestId>/dnsmasq.leases` to discover the guest IP.
 - The QEMU path uses the same tap0/br0 model via `-netdev tap,ifname=tap0`.
 
+**Service exposure.** `spec.network.ports` programs an in-pod DNAT (`podIP:port → vmIP:targetPort` in `network-init.sh`) so a guest port becomes a normal Kubernetes Endpoint — the controller mints a ClusterIP/NodePort/LoadBalancer Service, `SwiftGuestPool.spec.service` load-balances one Service across replicas, and a VM→cluster egress reachability probe surfaces as the `EgressReady` condition. See [docs/networking/service-exposure.md](networking/service-exposure.md).
+
 ## API groups
 
 | Group | CRDs | Notes |
 |-------|------|-------|
-| `swift.kubeswift.io/v1alpha1` | SwiftGuest, SwiftGuestClass | Core VM types |
+| `swift.kubeswift.io/v1alpha1` | SwiftGuest, SwiftGuestClass, SwiftGuestPool | Core VM types + fleet management |
 | `image.kubeswift.io/v1alpha1` | SwiftImage | Disk image lifecycle |
 | `seed.kubeswift.io/v1alpha1` | SwiftSeedProfile | cloud-init NoCloud |
 | `kernel.kubeswift.io/v1alpha1` | SwiftKernel | Direct kernel boot artifacts |
 | `gpu.kubeswift.io/v1alpha1` | SwiftGPUProfile, SwiftGPUNode | GPU passthrough |
+| `snapshot.kubeswift.io/v1alpha1` | SwiftSnapshot, SwiftRestore, SwiftSnapshotSchedule | Snapshot, restore, scheduled snapshots |
+| `migration.kubeswift.io/v1alpha1` | SwiftMigration | Offline + live migration between nodes |
+
+12 CRDs across 7 API groups, all `v1alpha1`.
 
 ## Design principles
 
-1. **Cloud Hypervisor first** — CH is the default. QEMU is only used when GPU hardware requires it.
+1. **Cloud Hypervisor first** — CH is the default. QEMU is only used for HGX SXM (Tier 2/3) GPUs that require a full PCIe hierarchy.
 2. **Minimal changes** — One fix at a time, verified with real cluster output. No speculative patches.
 3. **No silent failures** — Status fields must reflect real system state. Never drop errors silently.
 4. **Kubernetes-native** — Everything observable via kubectl. Status fields must be accurate.
