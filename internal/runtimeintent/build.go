@@ -25,6 +25,7 @@ type ResolvedGuest interface {
 	GetHypervisor() string
 	GetOSType() string
 	GetNICs() []NICIntent
+	GetExposedPorts() []PortIntent
 	GetFilesystems() []FilesystemIntent
 	GetVhostUserDevices() []VhostUserDeviceIntent
 	GetCoreScheduling() string
@@ -41,6 +42,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	}
 
 	nics := rg.GetNICs()
+	ports := rg.GetExposedPorts()
 	filesystems := rg.GetFilesystems()
 	vhostUserDevices := rg.GetVhostUserDevices()
 	coreScheduling := rg.GetCoreScheduling()
@@ -62,6 +64,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			OSType:           rg.GetOSType(),
 			DataDisk:         dataDisk,
 			NICs:             nics,
+			Ports:            ports,
 			Filesystems:      filesystems,
 			VhostUserDevices: vhostUserDevices,
 			CoreScheduling:   coreScheduling,
@@ -105,6 +108,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		OSType:           rg.GetOSType(),
 		DataDisk:         dataDisk,
 		NICs:             nics,
+		Ports:            ports,
 		Filesystems:      filesystems,
 		VhostUserDevices: vhostUserDevices,
 		CoreScheduling:   coreScheduling,

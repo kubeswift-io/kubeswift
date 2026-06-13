@@ -510,6 +510,14 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// TODO: consider updating pod spec if resolved changed (e.g., resources)
 	}
 
+	// Service exposure (S1): mint/GC the per-guest Service and echo it in status
+	// before the patch. See docs/design/service-exposure.md.
+	svcName, err := r.ensureExposedService(ctx, &guest)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	setExposedPortsStatus(&guest, status, svcName, isLauncherReady(podForMetrics))
+
 	recordGuestMetrics(&guest, &guest.Status, status, podForMetrics)
 	if err := r.patchStatus(ctx, &guest, status); err != nil {
 		return ctrl.Result{}, err
@@ -637,6 +645,7 @@ func (r *SwiftGuestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&batchv1.Job{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&corev1.Service{}).
 		Watches(&imagev1alpha1.SwiftImage{}, handler.EnqueueRequestsFromMapFunc(r.swiftImageToSwiftGuests)).
 		Complete(r)
 }

@@ -47,6 +47,7 @@ func (m *mockResolvedGuest) GetOSType() string {
 	return m.osType
 }
 func (m *mockResolvedGuest) GetNICs() []NICIntent               { return nil }
+func (m *mockResolvedGuest) GetExposedPorts() []PortIntent      { return nil }
 func (m *mockResolvedGuest) GetFilesystems() []FilesystemIntent { return m.filesystems }
 func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 	return m.vhostUserDevices

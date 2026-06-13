@@ -83,6 +83,16 @@ if network_enabled; then
     range_end=$(echo "$base" | sed 's/\.0$/.20/')
     range="$range_start,$range_end"
 
+    # Service exposure: network-init pinned the primary VM IP and installed the
+    # in-pod DNAT against it. Narrow the DHCP range to that single address so the
+    # VM deterministically gets the DNAT target IP (no silent failure).
+    # See docs/design/service-exposure.md.
+    if [ -f "$lease_dir/expose.env" ]; then
+        # shellcheck disable=SC1090
+        . "$lease_dir/expose.env"   # EXPOSE_VM_IP
+        [ -n "$EXPOSE_VM_IP" ] && range="$EXPOSE_VM_IP,$EXPOSE_VM_IP"
+    fi
+
     # DNS: use cluster DNS from resolv.conf, fallback to 10.96.0.10
     dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
     [ -z "$dns" ] && dns="10.96.0.10"

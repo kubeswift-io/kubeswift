@@ -34,6 +34,10 @@ spec:
       name: OS
       priority: 1
       type: string
+    - jsonPath: .status.network.serviceRef.name
+      name: Service
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -489,6 +493,78 @@ spec:
                     - live
                     - offline
                     type: string
+                type: object
+              network:
+                description: |-
+                  Network configures pod-network binding and declarative service ports
+                  (service exposure — see docs/design/service-exposure.md). nil preserves
+                  today's behavior (nat binding, no Service). The binding/ports here apply
+                  to the guest's PRIMARY interface.
+                properties:
+                  binding:
+                    default: nat
+                    description: |-
+                      Binding selects the primary interface's relationship to the pod network:
+                        nat    (default) — VM behind the pod IP; ports are Service-exposable via
+                                           an in-pod DNAT (KubeVirt masquerade model).
+                        bridge          — primary rides a multi-node-L2 NAD (portable IP); ports
+                                           are NOT in-pod-DNAT'd (they reach the NAD IP). expose
+                                           is rejected for bridge; ports without expose are
+                                           allowed (for NetworkPolicy port targeting).
+                    enum:
+                    - nat
+                    - bridge
+                    type: string
+                  ports:
+                    description: |-
+                      Ports declares guest service ports. On a nat-bound guest each port installs
+                      an in-pod DNAT podIP:port -> vmIP:targetPort and a launcher containerPort;
+                      set Expose on a port to mint a Service. Empty = no exposure (today).
+                    items:
+                      description: GuestPort declares one exposed guest service port.
+                      properties:
+                        expose:
+                          description: |-
+                            Expose, when set, makes the controller mint ONE per-guest Service of this
+                            type targeting the launcher pod (all exposed ports share that one Service).
+                            Omitted = DNAT only (reachable pod->VM by the pod IP; no Service object).
+                            Rejected when Binding is bridge.
+                          enum:
+                          - ClusterIP
+                          - NodePort
+                          - LoadBalancer
+                          type: string
+                        name:
+                          description: |-
+                            Name is a DNS-label identifier; REQUIRED when more than one port is
+                            declared (it becomes the Service port name).
+                          type: string
+                        port:
+                          description: Port is the port reachable on the pod IP (and
+                            the Service port).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        protocol:
+                          default: TCP
+                          description: Protocol is TCP (default), UDP, or SCTP.
+                          enum:
+                          - TCP
+                          - UDP
+                          - SCTP
+                          type: string
+                        targetPort:
+                          description: TargetPort is the in-guest listening port.
+                            Defaults to Port when zero.
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                      required:
+                      - port
+                      type: object
+                    type: array
                 type: object
               nodeName:
                 description: |-
@@ -951,6 +1027,35 @@ spec:
               network:
                 description: GuestNetworkStatus holds discovered guest network information.
                 properties:
+                  egress:
+                    description: |-
+                      Egress reports verified VM->cluster-service reachability (populated by a
+                      later phase; "" until probed). See docs/design/service-exposure.md §4.
+                    type: string
+                  exposedPorts:
+                    description: ExposedPorts echoes the service ports programmed
+                      for this guest.
+                    items:
+                      description: ExposedPortStatus echoes one programmed service
+                        port.
+                      properties:
+                        name:
+                          type: string
+                        port:
+                          format: int32
+                          type: integer
+                        protocol:
+                          description: Protocol defines network protocols supported
+                            for things like container ports.
+                          type: string
+                        targetPort:
+                          format: int32
+                          type: integer
+                      required:
+                      - port
+                      - targetPort
+                      type: object
+                    type: array
                   interface:
                     type: string
                   interfaces:
@@ -970,6 +1075,21 @@ spec:
                     type: string
                   ready:
                     type: boolean
+                  serviceRef:
+                    description: ServiceRef names the per-guest Service the controller
+                      created, if any.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
                 type: object
               nodeName:
                 type: string

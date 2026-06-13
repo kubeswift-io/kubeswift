@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -42,7 +43,57 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	applyDataDiskRefs(pod, guest)
 	applyFilesystems(pod, guest)
 	applyVhostUserSocketVolumes(pod, guest)
+	applyExposedPorts(pod, guest)
 	return pod
+}
+
+// applyExposedPorts declares launcher containerPorts for each spec.network.ports
+// entry and sets a readiness probe on the first TCP port. The kubelet probes the
+// pod IP:port, which the in-pod DNAT (network-init.sh) forwards to the VM, so the
+// launcher pod is Ready — and thus the per-guest Service endpoint is Ready — only
+// once the in-guest service is actually listening. nat binding only; no-op
+// otherwise. See docs/design/service-exposure.md.
+func applyExposedPorts(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if guest.Spec.Network == nil || len(guest.Spec.Network.Ports) == 0 {
+		return
+	}
+	if guest.Spec.Network.Binding == "bridge" {
+		return
+	}
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	c := &pod.Spec.Containers[0]
+	var firstTCP *swiftv1alpha1.GuestPort
+	for i := range guest.Spec.Network.Ports {
+		p := &guest.Spec.Network.Ports[i]
+		proto := p.Protocol
+		if proto == "" {
+			proto = corev1.ProtocolTCP
+		}
+		c.Ports = append(c.Ports, corev1.ContainerPort{
+			Name:          p.Name,
+			ContainerPort: p.Port,
+			Protocol:      proto,
+		})
+		if firstTCP == nil && proto == corev1.ProtocolTCP {
+			firstTCP = p
+		}
+	}
+	// Honest endpoint readiness: probe the first TCP port. It succeeds only once
+	// the in-guest service is up (the DNAT forwards to the VM). Readiness-only —
+	// a failing probe never restarts the launcher (no liveness change).
+	if firstTCP != nil && c.ReadinessProbe == nil {
+		c.ReadinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(firstTCP.Port)},
+			},
+			InitialDelaySeconds: 15,
+			PeriodSeconds:       10,
+			TimeoutSeconds:      3,
+			FailureThreshold:    3,
+		}
+	}
 }
 
 // applyVhostUserSocketVolumes mounts the node directory holding each

@@ -55,6 +55,14 @@ const ConditionGPUAllocated = "GPUAllocated"
 // only once the claim's allocation result is read back. (DRA Phase 1.)
 const ConditionGPUClaimPending = "GPUClaimPending"
 
+// ConditionPortsProgrammed reports whether swiftletd installed the in-pod DNAT
+// rules for spec.network.ports (service exposure — docs/design/service-exposure.md).
+const ConditionPortsProgrammed = "PortsProgrammed"
+
+// ConditionServiceReady reports whether the per-guest Service and its endpoint
+// exist and reference a Ready endpoint.
+const ConditionServiceReady = "ServiceReady"
+
 // SwiftGuestPhase is the phase of a SwiftGuest.
 // +kubebuilder:validation:Enum=Pending;Scheduling;Running;Stopped;Failed
 type SwiftGuestPhase string
@@ -122,6 +130,12 @@ type SwiftGuestSpec struct {
 	// Interfaces with NetworkRef are secondary interfaces backed by Multus/NADs.
 	// +optional
 	Interfaces []GuestInterface `json:"interfaces,omitempty"`
+	// Network configures pod-network binding and declarative service ports
+	// (service exposure — see docs/design/service-exposure.md). nil preserves
+	// today's behavior (nat binding, no Service). The binding/ports here apply
+	// to the guest's PRIMARY interface.
+	// +optional
+	Network *GuestNetworkSpec `json:"network,omitempty"`
 	// TopologySpreadConstraints applied to the launcher pod.
 	// Typically set by SwiftGuestPool controller for fleet spread.
 	// +optional
@@ -606,12 +620,81 @@ type GuestNetworkInterface struct {
 	IP   string `json:"ip,omitempty"`
 }
 
+// GuestNetworkSpec configures the primary interface's pod-network binding and
+// the declarative service ports exposed from the guest.
+// See docs/design/service-exposure.md.
+type GuestNetworkSpec struct {
+	// Binding selects the primary interface's relationship to the pod network:
+	//   nat    (default) — VM behind the pod IP; ports are Service-exposable via
+	//                      an in-pod DNAT (KubeVirt masquerade model).
+	//   bridge          — primary rides a multi-node-L2 NAD (portable IP); ports
+	//                      are NOT in-pod-DNAT'd (they reach the NAD IP). expose
+	//                      is rejected for bridge; ports without expose are
+	//                      allowed (for NetworkPolicy port targeting).
+	// +kubebuilder:validation:Enum=nat;bridge
+	// +kubebuilder:default=nat
+	// +optional
+	Binding string `json:"binding,omitempty"`
+	// Ports declares guest service ports. On a nat-bound guest each port installs
+	// an in-pod DNAT podIP:port -> vmIP:targetPort and a launcher containerPort;
+	// set Expose on a port to mint a Service. Empty = no exposure (today).
+	// +optional
+	Ports []GuestPort `json:"ports,omitempty"`
+}
+
+// GuestPort declares one exposed guest service port.
+type GuestPort struct {
+	// Name is a DNS-label identifier; REQUIRED when more than one port is
+	// declared (it becomes the Service port name).
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Port is the port reachable on the pod IP (and the Service port).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+	// TargetPort is the in-guest listening port. Defaults to Port when zero.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	TargetPort int32 `json:"targetPort,omitempty"`
+	// Protocol is TCP (default), UDP, or SCTP.
+	// +kubebuilder:validation:Enum=TCP;UDP;SCTP
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+	// Expose, when set, makes the controller mint ONE per-guest Service of this
+	// type targeting the launcher pod (all exposed ports share that one Service).
+	// Omitted = DNAT only (reachable pod->VM by the pod IP; no Service object).
+	// Rejected when Binding is bridge.
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +optional
+	Expose string `json:"expose,omitempty"`
+}
+
 // GuestNetworkStatus holds discovered guest network information.
 type GuestNetworkStatus struct {
 	PrimaryIP  string                  `json:"primaryIP,omitempty"`
 	Interface  string                  `json:"interface,omitempty"`
 	Ready      bool                    `json:"ready,omitempty"`
 	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
+	// Egress reports verified VM->cluster-service reachability (populated by a
+	// later phase; "" until probed). See docs/design/service-exposure.md §4.
+	// +optional
+	Egress string `json:"egress,omitempty"`
+	// ExposedPorts echoes the service ports programmed for this guest.
+	// +optional
+	ExposedPorts []ExposedPortStatus `json:"exposedPorts,omitempty"`
+	// ServiceRef names the per-guest Service the controller created, if any.
+	// +optional
+	ServiceRef *corev1.LocalObjectReference `json:"serviceRef,omitempty"`
+}
+
+// ExposedPortStatus echoes one programmed service port.
+type ExposedPortStatus struct {
+	Name       string          `json:"name,omitempty"`
+	Port       int32           `json:"port"`
+	TargetPort int32           `json:"targetPort"`
+	Protocol   corev1.Protocol `json:"protocol,omitempty"`
 }
 
 // GPUResourceClaimSpec selects the DRA GPU allocation backend (see
@@ -702,6 +785,7 @@ type SwiftGuestStatus struct {
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.network.primaryIP`
 // +kubebuilder:printcolumn:name="Hypervisor",type=string,JSONPath=`.status.runtime.hypervisor`,priority=1
 // +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.osType`,priority=1
+// +kubebuilder:printcolumn:name="Service",type=string,JSONPath=`.status.network.serviceRef.name`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftGuest struct {
 	metav1.TypeMeta   `json:",inline"`

@@ -21,6 +21,11 @@ type RuntimeIntent struct {
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
+	// Ports declares service ports to expose from the guest's primary NIC
+	// (service exposure — docs/design/service-exposure.md). When non-empty,
+	// network-init.sh pins the primary VM IP and installs an in-pod DNAT
+	// podIP:port -> vmIP:targetPort for each entry. nat binding only.
+	Ports []PortIntent `json:"ports,omitempty"`
 	// VhostUserDevices is the list of operator-backed vhost-user devices
 	// (vhost-user-blk disks and generic vhost-user devices). swiftletd hands
 	// each to Cloud Hypervisor via --disk vhost_user=on,socket= (blk) or
@@ -130,6 +135,20 @@ type NICIntent struct {
 	// backend listener socket. Only populated when Type is "vhost-user";
 	// swiftletd hands it to CH as `--net vhost_user=on,socket=<path>`.
 	VhostUserSocket string `json:"vhostUserSocket,omitempty"`
+}
+
+// PortIntent is one exposed service port. network-init.sh installs
+// `iptables -t nat -A PREROUTING -p <protocol> --dport <port>
+// -j DNAT --to-destination <vmIP>:<targetPort>` for each entry.
+type PortIntent struct {
+	// Name is the port identifier (matches spec.network.ports[].name).
+	Name string `json:"name,omitempty"`
+	// Port is the port arriving on the pod IP.
+	Port int32 `json:"port"`
+	// TargetPort is the in-guest listening port.
+	TargetPort int32 `json:"targetPort"`
+	// Protocol is "tcp" (default), "udp", or "sctp" (lowercase for iptables -p).
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // SRIOVDeviceIntent describes an SR-IOV VF to pass through via VFIO.
