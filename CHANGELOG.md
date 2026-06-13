@@ -4,6 +4,28 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.4.1] — 2026-06-13
+
+Chart-only patch. Identical code and images to v0.4.0 (rebuilt as `v0.4.1`); the
+fix is in the Helm chart.
+
+### Fixed
+- **The DRA GPU driver is now packaged in the Helm chart.** v0.4.0 shipped the
+  DRA GPU allocation backend (`SwiftGuest.spec.gpuResourceClaim`) but its
+  reference driver (`kubeswift-dra-driver`) was only available as standalone
+  manifests under `config/dra-driver/` — a Helm install could not deploy it, so
+  the DRA backend was unreachable on chart-based installs. The chart now ships
+  the DRA driver behind a new **`dra.enabled`** toggle (default `false`): the
+  DaemonSet on `kubeswift.io/gpu-node=true` nodes, its RBAC, and the
+  `kubeswift-vfio-gpu` DeviceClass (`dra.deviceClass.create`, default `true`).
+  `dra` is **independent of `gpuDiscovery`** — the DRA driver does its own GPU
+  discovery (it publishes ResourceSlices), so a DRA-only cluster runs
+  `dra.enabled=true` with `gpuDiscovery.enabled=false`. Enable with
+  `--set dra.enabled=true`. The standalone `config/dra-driver/` manifests remain
+  for kustomize installs.
+
+---
+
 ## [v0.4.0] — 2026-06-13
 
 Everything since v0.3.1 (PRs #198–#223): three feature arcs — **service

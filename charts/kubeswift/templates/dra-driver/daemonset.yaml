@@ -1,0 +1,92 @@
+{{- if .Values.dra.enabled }}
+# KubeSwift reference DRA GPU driver (gpu.kubeswift.io). Runs on
+# kubeswift.io/gpu-node=true nodes; publishes the node's GPUs as ResourceSlices
+# and serves the kubelet DRA plugin (per-claim CDI specs injecting
+# GPU_PCI_ADDRESSES). Independent of gpuDiscovery — it does its OWN GPU
+# discovery, so it does NOT require the native gpu-discovery DaemonSet.
+#
+# Node prerequisites: CDI enabled in the container runtime (e.g. k0s:
+# /etc/k0s/containerd.d/99-cdi.toml with enable_cdi=true + restart) and the
+# vfio-pci module loaded (same prerequisite as native GPU nodes).
+# See docs/gpu/dra-allocation.md and docs/design/dra-gpu-integration.md.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kubeswift-dra-driver
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: dra-driver
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: dra-driver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: dra-driver
+    spec:
+      serviceAccountName: kubeswift-dra-driver
+      nodeSelector:
+        kubeswift.io/gpu-node: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: dra-driver
+          image: {{ .Values.dra.image.registry }}/kubeswift-dra-driver:{{ include "kubeswift.imageTag" (dict "tag" .Values.dra.image.tag "appVersion" .Chart.AppVersion) }}
+          args:
+            - --v=2
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            # Root user (kubelet plugin sockets + /var/run/cdi are root-owned
+            # host paths) but NOT privileged: pure sysfs reads, unix sockets,
+            # and CDI file writes — all capabilities dropped.
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          resources:
+            {{- toYaml .Values.dra.resources | nindent 12 }}
+          volumeMounts:
+            # Kubelet DRA plugin socket dir (the helper creates
+            # plugins/gpu.kubeswift.io/ under it).
+            - name: plugins
+              mountPath: /var/lib/kubelet/plugins
+            # Kubelet plugin-watcher registration socket dir.
+            - name: plugins-registry
+              mountPath: /var/lib/kubelet/plugins_registry
+            # Per-claim CDI specs the container runtime reads.
+            - name: cdi
+              mountPath: /var/run/cdi
+            # GPU discovery (read-only sysfs scan).
+            - name: sysfs
+              mountPath: /sys
+              readOnly: true
+      volumes:
+        - name: plugins
+          hostPath:
+            path: /var/lib/kubelet/plugins
+            type: Directory
+        - name: plugins-registry
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: cdi
+          hostPath:
+            path: /var/run/cdi
+            type: DirectoryOrCreate
+        - name: sysfs
+          hostPath:
+            path: /sys
+            type: Directory
+{{- end }}

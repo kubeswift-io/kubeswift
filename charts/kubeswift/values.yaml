@@ -61,12 +61,39 @@ migrationStunnel:
 
 # GPU discovery DaemonSet: auto-discovers GPU hardware on nodes labeled kubeswift.io/gpu-node=true.
 # Populates SwiftGPUNode status with GPU inventory, NUMA topology, and Fabric Manager state.
+# This is the NATIVE GPU backend's discovery (SwiftGPUProfile / SwiftGPUNode). It is
+# INDEPENDENT of the DRA backend below — leave it off for DRA-only clusters.
 gpuDiscovery:
   enabled: false
   image:
     registry: ghcr.io/projectbeskar/kubeswift
     tag: latest
   interval: "60s"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# DRA GPU driver DaemonSet: the reference Dynamic Resource Allocation driver
+# (driver name gpu.kubeswift.io) for the DRA GPU backend (SwiftGuest
+# spec.gpuResourceClaim). Runs on nodes labeled kubeswift.io/gpu-node=true; it
+# does its OWN GPU discovery (publishes ResourceSlices), so it is INDEPENDENT of
+# gpuDiscovery above — a DRA-only cluster runs dra.enabled=true with
+# gpuDiscovery.enabled=false. Node prerequisites: CDI enabled in the container
+# runtime + the vfio-pci module loaded. See docs/gpu/dra-allocation.md.
+dra:
+  enabled: false
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    tag: latest
+  # The cluster-scoped DeviceClass a ResourceClaim references. Set create=false
+  # if you manage the DeviceClass out-of-band (e.g. shared across installs).
+  deviceClass:
+    create: true
+    name: kubeswift-vfio-gpu
   resources:
     requests:
       cpu: 10m
