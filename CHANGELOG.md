@@ -4,6 +4,91 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.4.0] — 2026-06-13
+
+Everything since v0.3.1 (PRs #198–#223): three feature arcs — **service
+exposure**, **DRA GPU allocation**, and an **observability program** — plus the
+in-cluster validation of Windows guests and the project's relicensing for
+open source. All additive and backward-compatible (`v1alpha1`); no breaking
+changes. Each arc shipped with on-cluster validation walkthroughs.
+
+### Highlights
+
+- **Service exposure — VMs as first-class Kubernetes Services (S0–S4).** One
+  CNI-agnostic primitive (an in-pod DNAT `podIP:port → vmIP:targetPort`) makes a
+  guest port a normal Kubernetes Endpoint, so the whole north-south ecosystem
+  composes on top.
+  - `SwiftGuest.spec.network.ports[]` exposes guest ports; `expose:
+    ClusterIP|NodePort|LoadBalancer` mints one Service per guest with honest
+    readiness (the endpoint joins only once the in-guest service answers).
+  - `SwiftGuestPool.spec.service` fronts all replicas with **one load-balanced
+    Service**; endpoints follow readiness and scale churn (the pool's `scale`
+    subresource is the HPA seam). Optional headless variant for sharded serving.
+  - A **VM→cluster egress reachability probe** surfaces as `status.network.egress`
+    + the `EgressReady` condition — a notorious silent failure made
+    `kubectl`-visible.
+  - `serviceAnnotations` + `loadBalancerClass` passthrough drive the ecosystem
+    (MetalLB, Gateway API, Tailscale, Istio, Linkerd) — recipes in
+    `docs/networking/ecosystem-integrations.md`.
+- **DRA GPU allocation (Phases 1–2).** GPU passthrough now has **two allocation
+  backends** behind one runtime: the native SwiftGPU model (default) and
+  Kubernetes **Dynamic Resource Allocation** via `spec.gpuResourceClaim`
+  (XOR `gpuProfileRef`). Ships a pluggable two-phase `gpualloc.Backend`, a
+  KubeSwift reference DRA driver (`gpu.kubeswift.io`), and the full
+  ResourceSlice → scheduler → CDI-env hand-off → CH `--device` chain —
+  cluster-validated end-to-end on a real GPU. NVIDIA `k8s-dra-driver-gpu` adapter
+  and IMEX/MIG remain hardware-gated.
+- **Observability program (O1–O4).** A complete operator observability surface:
+  provisioning-native **Grafana dashboards** (six-dashboard taxonomy) gated behind
+  a Helm `monitoring.*` block (ServiceMonitor + dashboards), a cache-backed
+  **CR-state metrics collector** (11 gauge families), gap-fill counters
+  (GPU alloc/release, drain evacuation, image-import outcome, migration
+  failure-reason), and a warning-biased **PrometheusRule** starter pack + alerts
+  runbook. Fixed two latent metric defects (restart-drift gauge, unbounded label).
+- **Windows guests — cluster-validated.** `osType: windows` (introduced in
+  v0.3.0) is now validated in-cluster end-to-end: import → CH v52 disk boot
+  (`kvm_hyperv=on`, `image_type=raw`) → cloudbase-init over the NoCloud seed →
+  Running with DHCP + RDP. Version-aware image-prep tooling for Windows Server
+  2022/2025.
+
+### Added
+
+- `SwiftGuest.spec.network` (binding `nat`/`bridge`, `ports[]`,
+  `serviceAnnotations`, `loadBalancerClass`); `SwiftGuestPool.spec.service`;
+  `status.network.{egress,exposedPorts,serviceRef}` + `PortsProgrammed` /
+  `ServiceReady` / `EgressReady` conditions; `SERVICE` / `EGRESS` printcolumns.
+- `SwiftGuest.spec.gpuResourceClaim` (DRA backend) + the `kubeswift-dra-driver`
+  image.
+- Rich `kubectl get` printcolumns for SwiftGuest / SwiftImage / SwiftSeedProfile.
+- Helm `monitoring.*` values (ServiceMonitor + dashboard ConfigMaps), shipped
+  Grafana dashboards under `config/grafana/`, and a starter `PrometheusRule` pack.
+- Operator docs: service exposure + ecosystem integrations, DRA GPU guide,
+  fast-VM snapshots/clones guide, live-migratable guests guide, a visual
+  architecture reference (Mermaid), and apply-ready samples for all of the above.
+
+### Changed
+
+- **Relicensed to AGPL-3.0** and prepared the repository for open source
+  (README rewrite, CRD hygiene, internal development-process docs pruned, dead
+  links scrubbed, AI-dev tooling kept local).
+- Documentation accuracy pass: corrected the Cloud-Hypervisor-vs-QEMU framing
+  (CH is the hypervisor for nearly every workload — Linux **and Windows**, disk
+  and kernel boot, PCIe GPU, snapshots, live migration; QEMU is the secondary
+  runtime only for HGX SXM multi-GPU topologies), resolved the "Linux only"
+  self-contradiction (host x86_64+KVM vs the Linux+Windows guest matrix), and
+  brought the CRD reference to all 12 CRDs incl. `spec.osType`. The shipped
+  Cloud Hypervisor is **v52.0**.
+
+### Fixed
+
+- DRA cluster-e2e: intent `devices: null` serde, the kubeletplugin socket
+  directory, and a hotfix-removal regression.
+- Observability: `kubeswift_guest_running_total` restart-drift (now emitted from
+  cluster state) and the `vm_failures_total` free-text label (now a bounded
+  reason).
+
+---
+
 ## [v0.3.1] — 2026-06-10
 
 Patch release. Content is identical to v0.3.0 (images rebuilt as `v0.3.1`);
