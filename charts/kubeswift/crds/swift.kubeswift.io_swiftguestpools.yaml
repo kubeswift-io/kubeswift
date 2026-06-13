@@ -32,6 +32,10 @@ spec:
     - jsonPath: .status.failedReplicas
       name: Failed
       type: integer
+    - jsonPath: .status.serviceRef
+      name: Service
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -71,6 +75,93 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              service:
+                description: |-
+                  Service, when set, exposes ONE load-balanced Service across all replicas
+                  (service exposure §6). The controller mints a selector Service on the
+                  pool label and injects spec.service.ports into every replica's
+                  spec.network.ports (nat binding, no per-replica Service), so each
+                  replica installs the in-pod DNAT podIP:port -> vmIP:targetPort and a
+                  readiness probe on the first TCP port. Kubernetes endpoint management
+                  then load-balances across the replica pods, and an endpoint becomes
+                  Ready only once the in-guest service answers — honest readiness, no
+                  EndpointSlice bookkeeping in the controller. The pool's existing scale
+                  subresource is the HPA seam: scaling the pool grows/shrinks the backend
+                  set automatically. Requires the template's primary binding to be nat
+                  (the default); a bridge-bound template is rejected at admission.
+                properties:
+                  headless:
+                    description: |-
+                      Headless makes the Service headless (clusterIP: None): DNS returns one
+                      A record per ready replica pod instead of a single virtual IP. Use for
+                      client-side load balancing or sharded workloads (e.g. per-shard
+                      inference). Mutually exclusive with NodePort/LoadBalancer Type.
+                    type: boolean
+                  ports:
+                    description: |-
+                      Ports are the service ports load-balanced across replicas. Each port is
+                      injected into every replica's spec.network.ports (Expose is ignored here —
+                      the pool's Type governs the single Service). Name is REQUIRED when more
+                      than one port is declared.
+                    items:
+                      description: GuestPort declares one exposed guest service port.
+                      properties:
+                        expose:
+                          description: |-
+                            Expose, when set, makes the controller mint ONE per-guest Service of this
+                            type targeting the launcher pod (all exposed ports share that one Service).
+                            Omitted = DNAT only (reachable pod->VM by the pod IP; no Service object).
+                            Rejected when Binding is bridge.
+                          enum:
+                          - ClusterIP
+                          - NodePort
+                          - LoadBalancer
+                          type: string
+                        name:
+                          description: |-
+                            Name is a DNS-label identifier; REQUIRED when more than one port is
+                            declared (it becomes the Service port name).
+                          type: string
+                        port:
+                          description: Port is the port reachable on the pod IP (and
+                            the Service port).
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        protocol:
+                          default: TCP
+                          description: Protocol is TCP (default), UDP, or SCTP.
+                          enum:
+                          - TCP
+                          - UDP
+                          - SCTP
+                          type: string
+                        targetPort:
+                          description: TargetPort is the in-guest listening port.
+                            Defaults to Port when zero.
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                      required:
+                      - port
+                      type: object
+                    minItems: 1
+                    type: array
+                  type:
+                    default: ClusterIP
+                    description: |-
+                      Type is the Service type. ClusterIP (default) load-balances inside the
+                      cluster; NodePort and LoadBalancer additionally publish externally.
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                required:
+                - ports
+                type: object
               spreadPolicy:
                 default: Pack
                 description: |-
@@ -1502,6 +1593,11 @@ spec:
                   this pool.
                 format: int32
                 type: integer
+              serviceRef:
+                description: |-
+                  ServiceRef is the name of the load-balanced Service the controller mints
+                  when spec.service is set (empty otherwise). See service exposure §6.
+                type: string
               updatedReplicas:
                 description: UpdatedReplicas is the number of SwiftGuests matching
                   the current template hash.

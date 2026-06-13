@@ -202,6 +202,7 @@ targeting — DECISION §12.4). `ValidateUpdate` is shape-only.
 Service *PoolServiceSpec `json:"service,omitempty"`
 
 type PoolServiceSpec struct {
+    // +kubebuilder:validation:MinItems=1
     Ports []GuestPort `json:"ports"`        // per-port Expose ignored; type is set once below
     // +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
     // +kubebuilder:default=ClusterIP
@@ -211,20 +212,22 @@ type PoolServiceSpec struct {
     // (StatefulSet-style — useful for sharded AI/ML inference). DECISION §12.3.
     // +optional
     Headless bool `json:"headless,omitempty"`
-    // ReadinessGate: GuestRunning (default; VM booted + has IP) or ServiceReady
-    // (an in-guest TCP/HTTP probe passes — don't route until the app is up).
-    // +kubebuilder:validation:Enum=GuestRunning;ServiceReady
-    // +kubebuilder:default=GuestRunning
-    // +optional
-    ReadinessGate string `json:"readinessGate,omitempty"`
-    // +optional
-    ReadinessProbe *PoolReadinessProbe `json:"readinessProbe,omitempty"`
 }
 ```
 
 The pool propagates `Service.Ports` into each replica's `spec.network.ports`
-(each replica installs its DNAT) and the **pool controller** owns the single
-Service + its EndpointSlices (§6).
+(each replica installs its DNAT + the S1 launcher readiness probe) and the
+**pool controller** owns the single selector Service (§6).
+
+> **SHIPPED (S3) deviation — no `readinessGate` / `readinessProbe` field.** The
+> implementation uses a **selector Service** (not controller-managed
+> EndpointSlices — see §6), so endpoint readiness IS pod readiness, which the S1
+> launcher readiness probe already pins to in-guest-app-up. That collapses the
+> `GuestRunning`/`ServiceReady` distinction into the single honest behaviour the
+> design wanted as `ServiceReady` (the "production-correct mode", §6.2). The gate
+> field is therefore omitted rather than shipped half-implemented; a future
+> managed-EndpointSlice mode could reintroduce an explicit `GuestRunning` gate if
+> a use case for routing to booted-but-not-app-ready VMs appears.
 
 ## 4. Egress to cluster services
 
@@ -293,12 +296,42 @@ it composes upward (§7): a `LoadBalancer` Service gets its IP from MetalLB /
 Cilium LB-IPAM; a ClusterIP Service is a normal `backendRef` for a Gateway API
 `HTTPRoute`/`TCPRoute`.
 
-## 6. Pool-balanced service
+## 6. Pool-balanced service — SHIPPED (S3)
 
 One Service, endpoints = the pool's VMs, updated as the pool scales and during
 rolling updates. The **pool controller** owns it.
 
-### 6.1 EndpointSlice lifecycle
+> **SHIPPED via a selector Service, not managed EndpointSlices.** The original
+> design (§6.1 below) called for the pool controller to manage `EndpointSlice`
+> objects directly so it could implement a custom readiness gate. Implementation
+> found a strictly simpler path that delivers the *production-correct* readiness
+> for free: a **plain selector Service on the pool label**, with the same S1
+> launcher readiness probe on every replica. This is the §5.3 single-guest
+> insight ("pod-Readiness == VM-service-Readiness → zero endpoint code") applied
+> to the pool. No `discovery.k8s.io` code; the endpoint controller manages the
+> slices; scale churn and rolling-update membership are handled by Kubernetes,
+> not by KubeSwift. The mechanics that shipped:
+>
+> - **Pool label on the pod.** `pod.go::podLabels` propagates the replica's
+>   `swift.kubeswift.io/pool` label onto the launcher pod, so a selector Service
+>   on that label fans out across all replicas. Migration dst pods inherit it via
+>   the existing `DeepCopy`, so the pool Service survives a replica's live
+>   migration the same way the single-guest S1 Service does.
+> - **Port injection.** `createSwiftGuest` copies `spec.service.ports` into every
+>   replica's `spec.network.ports` with `expose` cleared — each replica installs
+>   the in-pod DNAT + the readiness probe, but mints **no** per-replica Service.
+> - **One Service.** `reconcilePoolService` mints/updates/GCs `<pool>-svc`
+>   (`type`, `headless`→`clusterIP: None`), owner-ref'd → GC'd on pool delete.
+> - **Honest readiness.** Endpoint readiness is pod readiness, which the S1 probe
+>   pins to in-guest-app-up. `status.serviceRef` + a `ServiceReady` pool
+>   condition (True when ≥1 GuestRunning replica backs it) surface it; the
+>   precise per-endpoint readiness lives in the Service's own EndpointSlice.
+> - **No silent failure on bridge.** A `bridge`-bound template has no in-pod
+>   DNAT, so a selector Service would route `podIP:port` to a dead end. The
+>   controller mints no Service and sets `ServiceReady=False,
+>   reason=BridgeBindingUnsupported`.
+
+### 6.1 EndpointSlice lifecycle (original design — superseded by the selector Service above)
 - The pool controller creates **one Service** (`<pool>-svc`) with **no selector**
   and **manages `EndpointSlice` objects directly** (`discovery.k8s.io/v1`,
   labeled `kubernetes.io/service-name` + a `managed-by` label).
@@ -307,11 +340,12 @@ rolling updates. The **pool controller** owns it.
   being replaced is removed before its pod is deleted, added when its successor
   is ready) — analogous to the existing `readyCount`/`unavailable` accounting.
 
-### 6.2 Readiness gating — booted vs app-up
-`readinessGate: GuestRunning` (default) uses today's signal. `ServiceReady`
-runs an **in-guest readiness probe** (swiftletd reports via a new
-`kubeswift.io/service-ready` annotation); only `service-ready` replicas enter
-the EndpointSlice — the production-correct mode.
+### 6.2 Readiness gating — booted vs app-up (folded into the readiness probe)
+The original plan exposed `readinessGate: GuestRunning|ServiceReady`. The shipped
+selector Service uses pod readiness, which the S1 launcher readiness probe pins to
+in-guest-app-up — i.e. it always behaves as the `ServiceReady` "production-correct
+mode". The gate field is therefore omitted (§3.2 deviation note) rather than
+shipped half-working; the original two-mode text is retained here for the record.
 
 ### 6.3 The HPA / metrics seam (anticipated, not built)
 The pool already exposes a **scale subresource**

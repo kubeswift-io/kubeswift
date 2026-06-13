@@ -19,6 +19,7 @@ import (
 // +kubebuilder:printcolumn:name="Updated",type=integer,JSONPath=`.status.updatedReplicas`
 // +kubebuilder:printcolumn:name="Available",type=integer,JSONPath=`.status.availableReplicas`
 // +kubebuilder:printcolumn:name="Failed",type=integer,JSONPath=`.status.failedReplicas`
+// +kubebuilder:printcolumn:name="Service",type=string,JSONPath=`.status.serviceRef`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftGuestPool struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -60,6 +61,45 @@ type SwiftGuestPoolSpec struct {
 	// PVCs survive VM replacement and are deleted when the pool is deleted.
 	// +optional
 	VolumeClaimTemplates []PersistentVolumeClaimTemplate `json:"volumeClaimTemplates,omitempty"`
+
+	// Service, when set, exposes ONE load-balanced Service across all replicas
+	// (service exposure §6). The controller mints a selector Service on the
+	// pool label and injects spec.service.ports into every replica's
+	// spec.network.ports (nat binding, no per-replica Service), so each
+	// replica installs the in-pod DNAT podIP:port -> vmIP:targetPort and a
+	// readiness probe on the first TCP port. Kubernetes endpoint management
+	// then load-balances across the replica pods, and an endpoint becomes
+	// Ready only once the in-guest service answers — honest readiness, no
+	// EndpointSlice bookkeeping in the controller. The pool's existing scale
+	// subresource is the HPA seam: scaling the pool grows/shrinks the backend
+	// set automatically. Requires the template's primary binding to be nat
+	// (the default); a bridge-bound template is rejected at admission.
+	// +optional
+	Service *PoolServiceSpec `json:"service,omitempty"`
+}
+
+// PoolServiceSpec describes the load-balanced Service fronting a pool's replicas.
+type PoolServiceSpec struct {
+	// Ports are the service ports load-balanced across replicas. Each port is
+	// injected into every replica's spec.network.ports (Expose is ignored here —
+	// the pool's Type governs the single Service). Name is REQUIRED when more
+	// than one port is declared.
+	// +kubebuilder:validation:MinItems=1
+	Ports []GuestPort `json:"ports"`
+
+	// Type is the Service type. ClusterIP (default) load-balances inside the
+	// cluster; NodePort and LoadBalancer additionally publish externally.
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// Headless makes the Service headless (clusterIP: None): DNS returns one
+	// A record per ready replica pod instead of a single virtual IP. Use for
+	// client-side load balancing or sharded workloads (e.g. per-shard
+	// inference). Mutually exclusive with NodePort/LoadBalancer Type.
+	// +optional
+	Headless bool `json:"headless,omitempty"`
 }
 
 // UpdateStrategy controls how VMs are replaced during template changes.
@@ -144,6 +184,11 @@ type SwiftGuestPoolStatus struct {
 	// CurrentTemplateHash is the hash of the current template spec.
 	CurrentTemplateHash string `json:"currentTemplateHash,omitempty"`
 
+	// ServiceRef is the name of the load-balanced Service the controller mints
+	// when spec.service is set (empty otherwise). See service exposure §6.
+	// +optional
+	ServiceRef string `json:"serviceRef,omitempty"`
+
 	// Conditions represent the latest observations of the pool's state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -154,6 +199,9 @@ const (
 	PoolConditionAvailable   = "Available"
 	PoolConditionProgressing = "Progressing"
 	PoolConditionUpdated     = "Updated"
+	// PoolConditionServiceReady is True when spec.service is set and its
+	// load-balanced Service exists with at least one ready endpoint.
+	PoolConditionServiceReady = "ServiceReady"
 )
 
 // Update strategy types.

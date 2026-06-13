@@ -272,6 +272,21 @@ func podAnnotations(guest *swiftv1alpha1.SwiftGuest) map[string]string {
 	}
 }
 
+// podLabels builds the launcher pod's labels. Every pod carries the per-guest
+// label; a pool replica additionally carries the pool label so the pool's
+// load-balanced Service (service exposure §6) selects all replica pods. The
+// pool label lives on the replica SwiftGuest (set by the pool controller); we
+// propagate it onto the pod rather than have the pool reach into pods directly.
+func podLabels(guest *swiftv1alpha1.SwiftGuest) map[string]string {
+	labels := map[string]string{
+		"swift.kubeswift.io/guest": guest.Name,
+	}
+	if pool, ok := guest.Labels[swiftv1alpha1.LabelPoolName]; ok && pool != "" {
+		labels[swiftv1alpha1.LabelPoolName] = pool
+	}
+	return labels
+}
+
 func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, intentConfigMapName string) *corev1.Pod {
 	volumes := []corev1.Volume{
 		{
@@ -368,9 +383,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 			Name:        guest.Name,
 			Namespace:   guest.Namespace,
 			Annotations: podAnnotations(guest),
-			Labels: map[string]string{
-				"swift.kubeswift.io/guest": guest.Name,
-			},
+			Labels:      podLabels(guest),
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:  corev1.RestartPolicyNever,
@@ -505,9 +518,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 			Name:        guest.Name,
 			Namespace:   guest.Namespace,
 			Annotations: podAnnotations(guest),
-			Labels: map[string]string{
-				"swift.kubeswift.io/guest": guest.Name,
-			},
+			Labels:      podLabels(guest),
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:  corev1.RestartPolicyNever,
