@@ -4,12 +4,14 @@ KubeSwift runs **Windows** VMs as first-class SwiftGuests on **Cloud Hypervisor*
 (the same default runtime as Linux), gated by a single field: `osType: windows`.
 This page is the operator entry point; the deep dives are linked inline.
 
-> **Status: v1 code-complete, validation asset-gated.** Every layer is implemented
-> and individually validated (unit tests + a local boot spike); the only untested
-> piece is *in-cluster* cloudbase-init provisioning, which needs a Windows
-> image/license the dev cluster doesn't have — the same "asset not available"
-> caveat as Tier 2/3 GPU. The boot path itself is proven end-to-end: a virtio-ready
-> Windows Server 2022 image boots cleanly on **Cloud Hypervisor v52.0**. See the
+> **Status: v1 cluster-validated (2026-06-13).** The full in-cluster chain runs
+> end-to-end on the dev cluster: a virtio-ready Windows Server image imports
+> (qcow2→raw, osType-gated), clones its root disk, and boots on **Cloud
+> Hypervisor v52.0** (`--kernel CLOUDHV.fd`, `--cpus boot=N,kvm_hyperv=on`);
+> NetKVM brings up the NIC and the guest gets a DHCP IP; and **cloudbase-init
+> reads the NoCloud `cidata` seed and runs the first-boot user-data** (RDP
+> enabled), reaching `Running` with an IP — the last previously-untested piece
+> (in-cluster cloudbase-init provisioning) is now closed. See the
 > [design doc](../design/windows-guest-support.md).
 
 ## How it works — `osType: windows`
@@ -64,6 +66,18 @@ kubectl get swiftguest win-guest -o wide    # watch phase + primaryIP
 - An **operator-prepared, virtio-ready** image (viostor/NetKVM + headless BCD prep
   + cloudbase-init). The runbook automates this.
 - Sizing: Windows Server needs ≥ 2 GiB RAM (the default SwiftGuestClass is 4 GiB).
+
+## Provisioning notes
+
+- **Hostname from `local-hostname` applies on the first reboot.** The shipped
+  cloudbase-init config sets `allow_reboot = false` (KubeSwift owns guest
+  reboots), so `SetHostNamePlugin` *stages* the computer name from the seed's
+  `meta-data: local-hostname` but it only takes effect after the guest's next
+  reboot — until then Windows keeps its generated `WIN-…` name. The user-data
+  (RDP enable, scripts) and user/password plugins apply on first boot without a
+  reboot. If you need the name applied immediately, reboot the guest once, or
+  set `allow_reboot = true` in the image's `cloudbase-init.conf` so cloudbase-init
+  reboots itself on first boot.
 
 ## Limitations (v1 non-goals)
 
