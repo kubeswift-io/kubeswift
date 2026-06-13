@@ -31,6 +31,11 @@ const PodAnnotationGuestSerialSocket = "kubeswift.io/guest-serial-socket"
 // PodAnnotationGuestHypervisor is the annotation key for the hypervisor type (set by swiftletd on socket ready).
 const PodAnnotationGuestHypervisor = "kubeswift.io/guest-hypervisor"
 
+// PodAnnotationEgress is the annotation key ("true"/"false") for VM->cluster-DNS
+// ClusterIP reachability, set by the launcher entrypoint's egress probe (service
+// exposure §4). Mapped to status.network.egress + the EgressReady condition.
+const PodAnnotationEgress = "kubeswift.io/egress-cluster-reachable"
+
 // Mount path constants. Must match internal/runtimeintent and rust/swiftletd.
 const (
 	DisksRootPath = "/var/lib/kubeswift/disks/root"

@@ -97,10 +97,30 @@ if network_enabled; then
     dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
     [ -z "$dns" ] && dns="10.96.0.10"
 
+    # Egress observability (service exposure §4): probe whether the pod netns can
+    # reach the cluster DNS ClusterIP (TCP 53; CoreDNS serves it). swiftletd
+    # reports the result as kubeswift.io/egress-cluster-reachable, which the
+    # controller maps to status.network.egress + the EgressReady condition.
+    # On kube-proxy clusters this reflects the VM's egress (same host kube-proxy
+    # path); on eBPF kube-proxy-free clusters the VM's FORWARDED traffic can
+    # bypass the eth0 ClusterIP hook (the Track-2b roadmap item), so treat this
+    # as the pod-netns signal there. See docs/design/service-exposure.md.
+    if timeout 3 bash -c "echo > /dev/tcp/$dns/53" 2>/dev/null; then
+        echo "EGRESS_CLUSTER_REACHABLE=true" > "$lease_dir/egress.env"
+    else
+        echo "EGRESS_CLUSTER_REACHABLE=false" > "$lease_dir/egress.env"
+    fi
+
+    # Short cluster-name resolution: hand the guest the pod's DNS search list
+    # (e.g. <ns>.svc.cluster.local svc.cluster.local cluster.local) via the
+    # DHCP domain-search option, so the guest resolves bare service names.
+    search=$(grep '^search ' /etc/resolv.conf 2>/dev/null | head -1 | cut -d' ' -f2- | tr ' ' ',')
+
     dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" \
         --dhcp-range="$range" \
         --dhcp-option=option:router,"$gateway" \
         --dhcp-option=option:dns-server,"$dns" \
+        ${search:+--dhcp-option=option:domain-search,"$search"} \
         --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
         --dhcp-authoritative &
     sleep 1
