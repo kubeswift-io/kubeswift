@@ -42,6 +42,26 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		}
 	}
 
+	// Egress reachability (service exposure §4): swiftletd reports whether the
+	// pod netns can reach the cluster DNS ClusterIP. No silent failure — surface
+	// it in status.network.egress + the EgressReady condition.
+	if raw, ok := pod.Annotations[PodAnnotationEgress]; ok && raw != "" {
+		if status.Network == nil {
+			status.Network = &swiftv1alpha1.GuestNetworkStatus{}
+		}
+		reachable := raw == "true"
+		if reachable {
+			status.Network.Egress = "ClusterServices"
+			setNetworkCondition(status, swiftv1alpha1.ConditionEgressReady, true,
+				"ClusterServicesReachable", "cluster DNS ClusterIP reachable from the pod netns")
+		} else {
+			status.Network.Egress = "DirectOnly"
+			setNetworkCondition(status, swiftv1alpha1.ConditionEgressReady, false,
+				"ClusterIPUnreachableInPodNetns",
+				"cluster DNS ClusterIP not reachable from the pod netns; on eBPF kube-proxy-free clusters the VM needs egressMode: clusterServices (roadmap)")
+		}
+	}
+
 	// Set runtime from pod annotation (set by swiftletd on socket ready)
 	if pidStr, ok := pod.Annotations[PodAnnotationGuestRuntimePID]; ok && pidStr != "" {
 		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {

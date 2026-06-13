@@ -38,6 +38,10 @@ spec:
       name: Service
       priority: 1
       type: string
+    - jsonPath: .status.network.egress
+      name: Egress
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date

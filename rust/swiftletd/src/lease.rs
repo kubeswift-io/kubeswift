@@ -9,6 +9,28 @@ use std::time::Duration;
 
 pub const ANNOTATION_GUEST_IP: &str = "kubeswift.io/guest-ip";
 pub const ANNOTATION_GUEST_INTERFACES: &str = "kubeswift.io/guest-interfaces";
+/// Egress reachability: "true"/"false" written by the launcher entrypoint's
+/// cluster-DNS-ClusterIP probe (service exposure §4 — egress observability).
+/// The controller maps it to status.network.egress + the EgressReady condition.
+pub const ANNOTATION_EGRESS: &str = "kubeswift.io/egress-cluster-reachable";
+
+/// read_egress_marker reads EGRESS_CLUSTER_REACHABLE=true|false from the
+/// `egress.env` file the launcher entrypoint writes next to the lease file
+/// (same per-guest run dir). Returns None when absent/unparseable (the probe
+/// did not run, e.g. no network), leaving the controller's egress status unset.
+fn read_egress_marker(lease_path: &Path) -> Option<String> {
+    let dir = lease_path.parent()?;
+    let contents = std::fs::read_to_string(dir.join("egress.env")).ok()?;
+    for line in contents.lines() {
+        if let Some(v) = line.trim().strip_prefix("EGRESS_CLUSTER_REACHABLE=") {
+            let v = v.trim();
+            if v == "true" || v == "false" {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
 
 /// dnsmasq lease file format: timestamp mac ip hostname client_id (space-separated).
 /// Returns the first IP found, or None if no valid lease.
@@ -81,6 +103,7 @@ pub fn spawn_lease_poller(
                 return;
             };
             let nics_ref = nics.as_deref();
+            let egress = read_egress_marker(&path);
             // patched is true iff patch_pod_annotation returned Ok.
             // We continue polling on transient errors (kube-client
             // unavailable, 403 RBAC gap during initial namespace
@@ -94,7 +117,16 @@ pub fn spawn_lease_poller(
                         return false;
                     }
                 };
-                match patch_pod_annotation(&client, &namespace, &pod_name, &ip, nics_ref).await {
+                match patch_pod_annotation(
+                    &client,
+                    &namespace,
+                    &pod_name,
+                    &ip,
+                    nics_ref,
+                    egress.as_deref(),
+                )
+                .await
+                {
                     Err(e) => {
                         log::warn!("patch_pod_annotation_failed (will retry): {}", e);
                         false
@@ -148,6 +180,7 @@ async fn patch_pod_annotation(
     name: &str,
     ip: &str,
     nics: Option<&[crate::intent::NICIntent]>,
+    egress: Option<&str>,
 ) -> Result<(), kube::Error> {
     let interfaces_json = build_interfaces_json(ip, nics);
 
@@ -155,6 +188,9 @@ async fn patch_pod_annotation(
     let mut annotations = std::collections::BTreeMap::new();
     annotations.insert(ANNOTATION_GUEST_IP.to_string(), ip.to_string());
     annotations.insert(ANNOTATION_GUEST_INTERFACES.to_string(), interfaces_json);
+    if let Some(e) = egress {
+        annotations.insert(ANNOTATION_EGRESS.to_string(), e.to_string());
+    }
     let patch = json!({
         "metadata": {
             "annotations": annotations

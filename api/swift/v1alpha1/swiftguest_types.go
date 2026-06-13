@@ -63,6 +63,12 @@ const ConditionPortsProgrammed = "PortsProgrammed"
 // exist and reference a Ready endpoint.
 const ConditionServiceReady = "ServiceReady"
 
+// ConditionEgressReady reports whether the guest's pod netns can reach the
+// cluster DNS ClusterIP (the egress observability probe — §4). On kube-proxy
+// clusters this reflects the VM's egress; on eBPF kube-proxy-free clusters it is
+// the pod-netns signal (the VM's forwarded traffic can bypass the eth0 hook).
+const ConditionEgressReady = "EgressReady"
+
 // SwiftGuestPhase is the phase of a SwiftGuest.
 // +kubebuilder:validation:Enum=Pending;Scheduling;Running;Stopped;Failed
 type SwiftGuestPhase string
@@ -786,6 +792,7 @@ type SwiftGuestStatus struct {
 // +kubebuilder:printcolumn:name="Hypervisor",type=string,JSONPath=`.status.runtime.hypervisor`,priority=1
 // +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.osType`,priority=1
 // +kubebuilder:printcolumn:name="Service",type=string,JSONPath=`.status.network.serviceRef.name`,priority=1
+// +kubebuilder:printcolumn:name="Egress",type=string,JSONPath=`.status.network.egress`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftGuest struct {
 	metav1.TypeMeta   `json:",inline"`
