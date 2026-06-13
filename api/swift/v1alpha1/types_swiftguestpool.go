@@ -100,6 +100,20 @@ type PoolServiceSpec struct {
 	// inference). Mutually exclusive with NodePort/LoadBalancer Type.
 	// +optional
 	Headless bool `json:"headless,omitempty"`
+
+	// Annotations are copied onto the load-balanced Service. The ecosystem seam
+	// (same as SwiftGuest.spec.network.serviceAnnotations): MetalLB address-pool,
+	// Tailscale (tailscale.com/expose), cloud LB tuning, external-dns, etc. The
+	// pool Service is a normal Service, so the whole north-south stack composes.
+	// See docs/networking/ecosystem-integrations.md.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// LoadBalancerClass selects a specific load-balancer implementation for a
+	// Type=LoadBalancer pool Service (e.g. "tailscale", "metallb.universe.tf/metallb").
+	// Only meaningful with Type=LoadBalancer; the apiserver rejects it otherwise.
+	// +optional
+	LoadBalancerClass *string `json:"loadBalancerClass,omitempty"`
 }
 
 // UpdateStrategy controls how VMs are replaced during template changes.

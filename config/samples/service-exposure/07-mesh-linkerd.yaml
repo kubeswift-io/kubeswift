@@ -1,0 +1,43 @@
+# Linkerd: the VM as a mesh BACKEND (the supported pattern). Linkerd discovers the
+# VM Service automatically; a meshed client gets mTLS + load-balancing to the VM
+# endpoints with no extra config. The HTTPRoute below adds retries/timeouts and
+# per-route metrics against the VM Service. Requires Linkerd installed.
+#
+# NOTE: this meshes traffic TO the VM. Injecting a linkerd sidecar INTO the
+# launcher pod is a separate, advanced topic with iptables-interaction caveats —
+# see docs/networking/ecosystem-integrations.md "B. The VM pod itself in the mesh".
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: api
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      expose: ClusterIP
+---
+# Linkerd consumes the upstream Gateway API HTTPRoute for per-route policy.
+apiVersion: policy.linkerd.io/v1beta3
+kind: HTTPRoute
+metadata:
+  name: api-vm
+  namespace: default
+spec:
+  parentRefs:
+  - name: api-svc           # the SwiftGuest's <guest>-svc
+    kind: Service
+    group: core
+    port: 8080
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    timeouts: { request: 5s }

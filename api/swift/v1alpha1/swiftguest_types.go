@@ -646,6 +646,20 @@ type GuestNetworkSpec struct {
 	// set Expose on a port to mint a Service. Empty = no exposure (today).
 	// +optional
 	Ports []GuestPort `json:"ports,omitempty"`
+	// ServiceAnnotations are copied onto the exposed Service (the one minted when
+	// a port sets Expose). This is the ecosystem seam: MetalLB address-pool
+	// selection (metallb.universe.tf/address-pool), Tailscale (tailscale.com/expose),
+	// cloud LB tuning, external-dns hostnames, etc. — the VM Service is a normal
+	// Service, so it composes with the whole north-south stack. Ignored when no
+	// port is exposed. See docs/networking/ecosystem-integrations.md.
+	// +optional
+	ServiceAnnotations map[string]string `json:"serviceAnnotations,omitempty"`
+	// LoadBalancerClass selects a specific load-balancer implementation for an
+	// Expose=LoadBalancer Service (e.g. "tailscale", "io.cilium/bgp-control-plane",
+	// "metallb.universe.tf/metallb"). Only meaningful with Expose=LoadBalancer; the
+	// apiserver rejects it otherwise.
+	// +optional
+	LoadBalancerClass *string `json:"loadBalancerClass,omitempty"`
 }
 
 // GuestPort declares one exposed guest service port.

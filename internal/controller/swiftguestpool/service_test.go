@@ -143,6 +143,53 @@ func TestReconcilePoolService_BridgeUnsupported(t *testing.T) {
 	}
 }
 
+func TestReconcilePoolService_AnnotationsAndLBClass(t *testing.T) {
+	ctx := context.Background()
+	lbClass := "tailscale"
+	pool := poolWithService(&swiftv1alpha1.PoolServiceSpec{
+		Ports:             []swiftv1alpha1.GuestPort{{Port: 8080}},
+		Type:              "LoadBalancer",
+		Annotations:       map[string]string{"tailscale.com/hostname": "infer", "metallb.universe.tf/address-pool": "prod"},
+		LoadBalancerClass: &lbClass,
+	}, "")
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pool).Build()
+	r := &SwiftGuestPoolReconciler{Client: c}
+
+	if _, err := r.reconcilePoolService(ctx, pool, 1); err != nil {
+		t.Fatal(err)
+	}
+	var svc corev1.Service
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "infer-svc"}, &svc); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Annotations["tailscale.com/hostname"] != "infer" || svc.Annotations["metallb.universe.tf/address-pool"] != "prod" {
+		t.Fatalf("operator annotations must land on the Service, got %v", svc.Annotations)
+	}
+	if svc.Spec.LoadBalancerClass == nil || *svc.Spec.LoadBalancerClass != "tailscale" {
+		t.Fatalf("loadBalancerClass must be set for a LoadBalancer Service, got %v", svc.Spec.LoadBalancerClass)
+	}
+
+	// A foreign annotation written by another controller must survive an update.
+	svc.Annotations["metallb.universe.tf/ip-allocated-from-pool"] = "prod"
+	if err := c.Update(ctx, &svc); err != nil {
+		t.Fatal(err)
+	}
+	// Operator changes one of their annotations -> overlay, foreign preserved.
+	pool.Spec.Service.Annotations["tailscale.com/hostname"] = "infer2"
+	if _, err := r.reconcilePoolService(ctx, pool, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "infer-svc"}, &svc); err != nil {
+		t.Fatal(err)
+	}
+	if svc.Annotations["tailscale.com/hostname"] != "infer2" {
+		t.Fatalf("operator annotation change must apply, got %q", svc.Annotations["tailscale.com/hostname"])
+	}
+	if svc.Annotations["metallb.universe.tf/ip-allocated-from-pool"] != "prod" {
+		t.Fatalf("foreign annotation must be preserved across update, got %v", svc.Annotations)
+	}
+}
+
 func TestReconcilePoolService_Headless(t *testing.T) {
 	ctx := context.Background()
 	pool := poolWithService(&swiftv1alpha1.PoolServiceSpec{

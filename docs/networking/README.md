@@ -12,6 +12,8 @@ The operator chooses their network stack; KubeSwift just references NADs.
 
 | Guide | Description |
 |-------|-------------|
+| [Service Exposure](service-exposure.md) | Expose services to/from VMs — ports, Services, egress observability, pool-balanced Services |
+| [Ecosystem Integrations](ecosystem-integrations.md) | MetalLB, Gateway API, Tailscale, Istio, Linkerd recipes |
 | [Operations Guide](operations-guide.md) | Physical networks, VLANs, bonds -- how to give VMs access to real networks |
 | [Virtualization Comparison](virtualization-comparison.md) | VMware ESXi and Proxmox VE concept mapping for migration |
 | [Multi-NIC Support](../multi-nic.md) | CRD spec reference, MAC generation, status reporting, architecture |

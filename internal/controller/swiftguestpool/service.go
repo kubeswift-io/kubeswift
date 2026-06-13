@@ -79,6 +79,7 @@ func (r *SwiftGuestPoolReconciler) reconcilePoolService(ctx context.Context, poo
 				"app.kubernetes.io/managed-by": "kubeswift-controller-manager",
 				swiftv1alpha1.LabelPoolName:    pool.Name,
 			},
+			Annotations: copyAnnotations(pool.Spec.Service.Annotations),
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{swiftv1alpha1.LabelPoolName: pool.Name},
@@ -97,6 +98,12 @@ func (r *SwiftGuestPoolReconciler) reconcilePoolService(ctx context.Context, poo
 			t = string(corev1.ServiceTypeClusterIP)
 		}
 		desired.Spec.Type = corev1.ServiceType(t)
+		// LoadBalancerClass (Tailscale/MetalLB/...) is immutable post-create, so
+		// set it only on the desired object; the apiserver rejects it on a
+		// non-LoadBalancer Service.
+		if desired.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			desired.Spec.LoadBalancerClass = pool.Spec.Service.LoadBalancerClass
+		}
 	}
 	if err := controllerutil.SetControllerReference(pool, desired, r.Client.Scheme()); err != nil {
 		return poolServiceResult{}, fmt.Errorf("set ownerRef on Service %q: %w", name, err)
@@ -114,19 +121,61 @@ func (r *SwiftGuestPoolReconciler) reconcilePoolService(ctx context.Context, poo
 		return poolServiceResult{}, fmt.Errorf("get Service %q: %w", name, err)
 	}
 
-	// Update in place if controller-owned fields drifted (ports/type/selector).
-	// Preserve apiserver-assigned fields (clusterIP, nodePorts).
+	// Update in place if controller-owned fields drifted (ports/type/selector/
+	// our annotations). Preserve apiserver-assigned fields (clusterIP, nodePorts)
+	// and foreign annotations (overlay, not replace). loadBalancerClass is
+	// immutable post-create (set only on Create).
 	if existing.Spec.Type != desired.Spec.Type ||
 		!equality.Semantic.DeepEqual(existing.Spec.Selector, desired.Spec.Selector) ||
-		!poolServicePortsEqual(existing.Spec.Ports, desired.Spec.Ports) {
+		!poolServicePortsEqual(existing.Spec.Ports, desired.Spec.Ports) ||
+		annotationsNeedOverlay(existing.Annotations, desired.Annotations) {
 		existing.Spec.Type = desired.Spec.Type
 		existing.Spec.Selector = desired.Spec.Selector
 		existing.Spec.Ports = desired.Spec.Ports
+		existing.Annotations = overlayAnnotations(existing.Annotations, desired.Annotations)
 		if err := r.Update(ctx, &existing); err != nil {
 			return poolServiceResult{}, fmt.Errorf("update Service %q: %w", name, err)
 		}
 	}
 	return poolServiceReadyResult(name, readyReplicas), nil
+}
+
+// copyAnnotations returns a nil-safe copy of the operator-provided annotations.
+func copyAnnotations(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// annotationsNeedOverlay reports whether any desired annotation is missing or
+// differs in existing (overlay semantics — foreign annotations are preserved).
+func annotationsNeedOverlay(existing, desired map[string]string) bool {
+	for k, v := range desired {
+		if existing[k] != v {
+			return true
+		}
+	}
+	return false
+}
+
+// overlayAnnotations returns existing with desired keys overlaid (preserving
+// foreign keys; removing a key from spec needs manual cleanup — documented).
+func overlayAnnotations(existing, desired map[string]string) map[string]string {
+	if len(desired) == 0 {
+		return existing
+	}
+	if existing == nil {
+		existing = make(map[string]string, len(desired))
+	}
+	for k, v := range desired {
+		existing[k] = v
+	}
+	return existing
 }
 
 // poolServiceReadyResult reports ServiceReady from the GuestRunning replica

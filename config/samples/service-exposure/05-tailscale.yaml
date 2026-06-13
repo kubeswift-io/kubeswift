@@ -1,0 +1,30 @@
+# Tailscale: reach a VM from anywhere on your tailnet (no public IP, no VPN
+# gateway). Requires the Tailscale Kubernetes operator installed.
+#
+# This example exposes a Windows guest's RDP over the tailnet — rdp://win-vm.<your
+# -tailnet>.ts.net works from a laptop that isn't on the cluster network. Swap the
+# port for 22 (SSH) on a Linux guest, etc.
+#
+# Two mechanisms (this uses the expose annotation on a ClusterIP Service; the
+# alternative is loadBalancerClass: tailscale on an expose: LoadBalancer port).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: win-vm
+  namespace: default
+spec:
+  imageRef: { name: windows2025 }     # an osType: windows image
+  osType: windows
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    serviceAnnotations:
+      tailscale.com/expose: "true"
+      tailscale.com/hostname: win-vm  # the MagicDNS name on your tailnet
+    ports:
+    - name: rdp
+      port: 3389
+      targetPort: 3389
+      expose: ClusterIP

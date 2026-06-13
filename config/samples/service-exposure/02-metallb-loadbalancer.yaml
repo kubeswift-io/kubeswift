@@ -1,0 +1,35 @@
+# MetalLB: give a VM a routable LoadBalancer IP on bare metal.
+# Requires MetalLB installed with an IPAddressPool named "production" (or edit the
+# annotation). The controller mints web-lb-svc as type=LoadBalancer; MetalLB then
+# assigns it an EXTERNAL-IP from the pool.
+#
+#   kubectl get svc web-lb-svc          # EXTERNAL-IP populated by MetalLB
+#
+# (Reference MetalLB pool — install MetalLB first; this is its config, not KubeSwift's)
+# apiVersion: metallb.io/v1beta1
+# kind: IPAddressPool
+# metadata: { name: production, namespace: metallb-system }
+# spec: { addresses: ["192.168.1.240-192.168.1.250"] }
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: web-lb
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: minimal }
+  runPolicy: Running
+  network:
+    binding: nat
+    # Decorate the minted Service so MetalLB picks the pool (and optionally pin
+    # MetalLB as the LB implementation if several LB controllers run).
+    serviceAnnotations:
+      metallb.universe.tf/address-pool: production
+    loadBalancerClass: metallb.universe.tf/metallb
+    ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      expose: LoadBalancer
