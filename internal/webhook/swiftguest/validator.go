@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -124,6 +125,75 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 	}
 	if err := validateNetworkPorts(spec); err != nil {
 		return err
+	}
+	if err := validateDataDisks(spec); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateDataDisks enforces the secondary-data-disk shape rules
+// (per-operation discipline — pure spec shape). This closes a pre-existing
+// gap: spec.dataDiskRefs was previously not validated at all. See
+// docs/design/blank-vm-data-disks.md.
+//   - exactly one of imageRef/pvcRef/blank per entry,
+//   - blank.size must be > 0; blank.volumeMode (if set) Block or Filesystem,
+//   - attachAsDisk is only valid with pvcRef (imageRef/blank are always VM disks),
+//   - names are required (CRD pattern enforces the label shape) and unique
+//     across dataDiskRefs, and not "data" when the singular dataDiskRef is set
+//     (that name is reserved for the singular shorthand — it would collide on
+//     the data-disk-<name> volume),
+//   - at most 8 entries in dataDiskRefs.
+//
+// Data disks compose with GPU — there is deliberately no usesGPU rejection.
+func validateDataDisks(spec *swiftv1alpha1.SwiftGuestSpec) error {
+	const maxDataDisks = 8
+	if len(spec.DataDiskRefs) > maxDataDisks {
+		return fmt.Errorf("spec.dataDiskRefs: at most %d data disks are allowed, got %d", maxDataDisks, len(spec.DataDiskRefs))
+	}
+	singularReservesData := spec.DataDiskRef != nil && spec.DataDiskRef.Name != ""
+	seen := map[string]struct{}{}
+	for i := range spec.DataDiskRefs {
+		d := &spec.DataDiskRefs[i]
+		if d.Name == "" {
+			return fmt.Errorf("spec.dataDiskRefs[%d].name is required", i)
+		}
+		if _, dup := seen[d.Name]; dup {
+			return fmt.Errorf("spec.dataDiskRefs[%d].name %q is duplicated", i, d.Name)
+		}
+		seen[d.Name] = struct{}{}
+		if singularReservesData && d.Name == "data" {
+			return fmt.Errorf("spec.dataDiskRefs[%d].name %q collides with the implicit name of spec.dataDiskRef; rename it", i, d.Name)
+		}
+
+		kinds := 0
+		if d.ImageRef != nil {
+			kinds++
+		}
+		if d.PVCRef != nil {
+			kinds++
+		}
+		if d.Blank != nil {
+			kinds++
+		}
+		if kinds != 1 {
+			return fmt.Errorf("spec.dataDiskRefs[%d] (%q): exactly one of imageRef, pvcRef, or blank must be set", i, d.Name)
+		}
+
+		if d.AttachAsDisk && d.PVCRef == nil {
+			return fmt.Errorf("spec.dataDiskRefs[%d] (%q): attachAsDisk is only valid with pvcRef", i, d.Name)
+		}
+
+		if d.Blank != nil {
+			if d.Blank.Size.Sign() <= 0 {
+				return fmt.Errorf("spec.dataDiskRefs[%d] (%q): blank.size must be greater than 0", i, d.Name)
+			}
+			switch d.Blank.VolumeMode {
+			case "", corev1.PersistentVolumeBlock, corev1.PersistentVolumeFilesystem:
+			default:
+				return fmt.Errorf("spec.dataDiskRefs[%d] (%q): blank.volumeMode must be Block or Filesystem, got %q", i, d.Name, d.Blank.VolumeMode)
+			}
+		}
 	}
 	return nil
 }

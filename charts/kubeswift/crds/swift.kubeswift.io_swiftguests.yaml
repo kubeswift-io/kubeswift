@@ -147,13 +147,57 @@ spec:
                   DataDiskRefs is a list of additional data disks.
                   Each entry references either a SwiftImage or a PVC directly.
                 items:
-                  description: DataDiskRef references either a SwiftImage or a PVC
-                    for a data disk.
+                  description: |-
+                    DataDiskRef is one secondary data disk: image-backed, an attached PVC,
+                    or a blank (image-less, sized) disk. Exactly one of imageRef/pvcRef/blank.
                   properties:
+                    attachAsDisk:
+                      description: |-
+                        AttachAsDisk, when true, attaches a PVCRef as a raw VM block disk
+                        (volumeDevices) instead of the default filesystem-directory mount.
+                        Only valid with PVCRef (imageRef/blank are always VM disks). Default
+                        false preserves the SwiftGuestPool filesystem-mount behaviour.
+                      type: boolean
+                    blank:
+                      description: |-
+                        Blank requests a new, empty, sized data disk with no backing image —
+                        the "give me a blank 100Gi volume for my database" case. The
+                        controller creates a guest-owned PVC (Block by default) and attaches
+                        it as a raw VM disk; the guest partitions and formats it (mkfs).
+                        Exactly one of imageRef/pvcRef/blank.
+                      properties:
+                        size:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: Size is the requested disk size (e.g. "100Gi").
+                            Required, must be > 0.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        storageClassName:
+                          description: |-
+                            StorageClassName selects the StorageClass for the PVC. Empty uses the
+                            cluster default class.
+                          type: string
+                        volumeMode:
+                          default: Block
+                          description: |-
+                            VolumeMode is Block (default) or Filesystem. Block attaches the raw
+                            device to the guest (the guest runs mkfs). Filesystem is an escape
+                            hatch for Block-incapable clusters — a blank image.raw is created in a
+                            Filesystem PVC and attached as a VM disk.
+                          enum:
+                          - Block
+                          - Filesystem
+                          type: string
+                      required:
+                      - size
+                      type: object
                     imageRef:
                       description: |-
-                        ImageRef references a SwiftImage for this data disk.
-                        Mutually exclusive with PVCRef.
+                        ImageRef references a Ready SwiftImage. The image is cloned into a
+                        guest-owned PVC and attached as a raw VM disk.
+                        Exactly one of imageRef/pvcRef/blank.
                       properties:
                         name:
                           default: ""
@@ -167,14 +211,20 @@ spec:
                       type: object
                       x-kubernetes-map-type: atomic
                     name:
-                      description: Name identifies this data disk (used for volume
-                        naming).
+                      description: |-
+                        Name identifies this data disk. DNS-label, unique within the guest,
+                        drives the per-disk volume name and the host device path for Block
+                        disks (/dev/kubeswift-data-<name>).
+                      maxLength: 36
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     pvcRef:
                       description: |-
-                        PVCRef references a PersistentVolumeClaim directly.
-                        Used by SwiftGuestPool for per-replica persistent storage.
-                        Mutually exclusive with ImageRef.
+                        PVCRef references an existing PersistentVolumeClaim. By DEFAULT it is
+                        mounted as a filesystem directory inside the launcher pod (the
+                        SwiftGuestPool per-replica-storage path) — NOT a VM-visible disk. Set
+                        attachAsDisk:true to attach it as a raw VM block disk instead.
+                        Exactly one of imageRef/pvcRef/blank.
                       properties:
                         name:
                           default: ""
@@ -1013,6 +1063,41 @@ spec:
                   serialSocket:
                     type: string
                 type: object
+              dataDisks:
+                description: |-
+                  DataDisks echoes the secondary data disks the controller resolved /
+                  provisioned for this guest (image-backed, attached PVC, or blank), in
+                  declaration order. Informational — confirms what was attached and its
+                  bind state. A blank/image disk that can't bind drives DataDisksReady=False
+                  and the guest stays Pending (no silent boot with a missing disk).
+                items:
+                  description: DataDiskStatus is the observed state of one secondary
+                    data disk.
+                  properties:
+                    bound:
+                      description: Bound is true once the backing PVC is Bound.
+                      type: boolean
+                    devicePath:
+                      description: |-
+                        DevicePath is the in-pod host device path for a Block VM disk
+                        (/dev/kubeswift-data-<name>); empty for a Filesystem-mounted disk.
+                      type: string
+                    name:
+                      description: Name is the data disk's spec name.
+                      type: string
+                    pvcName:
+                      description: |-
+                        PVCName is the PersistentVolumeClaim backing this disk (the
+                        guest-owned blank/image PVC, or the referenced PVCRef).
+                      type: string
+                    volumeMode:
+                      description: VolumeMode is Block or Filesystem as actually provisioned.
+                      type: string
+                  required:
+                  - bound
+                  - name
+                  type: object
+                type: array
               gpu:
                 description: |-
                   GPU contains GPU allocation and runtime status.

@@ -1,10 +1,12 @@
 package swiftguest
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
@@ -302,4 +304,90 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 		}
 	})
 	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+}
+
+func TestValidate_DataDisks(t *testing.T) {
+	gi := func(refs ...swiftv1alpha1.DataDiskRef) *swiftv1alpha1.SwiftGuest {
+		return guest(func(g *swiftv1alpha1.SwiftGuest) { g.Spec.DataDiskRefs = refs })
+	}
+
+	// Valid: a blank Block disk (default mode).
+	if err := validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
+		Name:  "db",
+		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("100Gi")},
+	})); err != nil {
+		t.Errorf("blank Block disk should be valid: %v", err)
+	}
+
+	// Valid: blank with explicit Filesystem mode.
+	if err := validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
+		Name:  "fs",
+		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("10Gi"), VolumeMode: corev1.PersistentVolumeFilesystem},
+	})); err != nil {
+		t.Errorf("blank Filesystem disk should be valid: %v", err)
+	}
+
+	// Valid: image-backed and an attached-as-disk PVC and a plain fs PVC.
+	if err := validateSwiftGuest(gi(
+		swiftv1alpha1.DataDiskRef{Name: "img", ImageRef: &corev1.LocalObjectReference{Name: "i"}},
+		swiftv1alpha1.DataDiskRef{Name: "vmpvc", PVCRef: &corev1.LocalObjectReference{Name: "p"}, AttachAsDisk: true},
+		swiftv1alpha1.DataDiskRef{Name: "fspvc", PVCRef: &corev1.LocalObjectReference{Name: "q"}},
+	)); err != nil {
+		t.Errorf("mixed image/pvc disks should be valid: %v", err)
+	}
+
+	// Invalid: no source kind.
+	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{Name: "empty"})),
+		"exactly one of imageRef, pvcRef, or blank")
+
+	// Invalid: two source kinds.
+	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
+		Name:     "two",
+		ImageRef: &corev1.LocalObjectReference{Name: "i"},
+		Blank:    &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")},
+	})), "exactly one of imageRef, pvcRef, or blank")
+
+	// Invalid: blank size 0.
+	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
+		Name:  "zero",
+		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("0")},
+	})), "blank.size must be greater than 0")
+
+	// Invalid: attachAsDisk without pvcRef.
+	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
+		Name:         "bad",
+		Blank:        &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")},
+		AttachAsDisk: true,
+	})), "attachAsDisk is only valid with pvcRef")
+
+	// Invalid: duplicate names.
+	errContains(t, validateSwiftGuest(gi(
+		swiftv1alpha1.DataDiskRef{Name: "dup", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}},
+		swiftv1alpha1.DataDiskRef{Name: "dup", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("2Gi")}},
+	)), "duplicated")
+
+	// Invalid: a plural entry named "data" collides with the singular shorthand.
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.DataDiskRef = &corev1.LocalObjectReference{Name: "data-img"}
+		g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
+			{Name: "data", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}},
+		}
+	})), "collides with the implicit name of spec.dataDiskRef")
+
+	// Invalid: more than 8 data disks.
+	many := make([]swiftv1alpha1.DataDiskRef, 9)
+	for i := range many {
+		many[i] = swiftv1alpha1.DataDiskRef{Name: "d" + strconv.Itoa(i), Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}}
+	}
+	errContains(t, validateSwiftGuest(gi(many...)), "at most 8 data disks")
+
+	// Valid: data disks compose with GPU (no usesGPU rejection).
+	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
+		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
+		g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
+			{Name: "db", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("50Gi")}},
+		}
+	})); err != nil {
+		t.Errorf("data disk + GPU should be valid: %v", err)
+	}
 }
