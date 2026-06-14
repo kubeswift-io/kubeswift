@@ -61,3 +61,5 @@ Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 5. Update `template.spec` to trigger a rolling update.
 
 [SwiftGuest](swiftguest.md) · [SwiftGuestPool](swiftguestpool.md) · [SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [SwiftKernel](swiftkernel.md) · [SwiftGPUProfile](swiftgpuprofile.md) · [SwiftGPUNode](swiftgpunode.md)
+
+Topics: [Data disks](data-disks.md) — blank / image-backed / attached-PVC secondary disks.

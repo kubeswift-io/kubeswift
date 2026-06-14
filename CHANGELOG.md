@@ -4,6 +4,76 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.4.2] — 2026-06-14
+
+Code + chart release. Headline: **blank / raw VM data disks** — the
+"give me a sized empty volume for my database" case that previously had no
+first-class option — plus five fixes surfaced dogfooding the demo flows.
+
+### Added
+
+- **Blank / raw VM data disks (`spec.dataDiskRefs[]`).** A guest can now attach
+  sized, image-less block disks that the guest formats itself — the previously
+  missing empty-volume primitive.
+  - `dataDiskRefs[].blank: {size, storageClassName, volumeMode}` provisions a
+    guest-owned PVC (Block by default), attached to the VM as a raw `--disk`
+    (CH `--disk path=/dev/...`); the guest formats and mounts it.
+  - `dataDiskRefs[].attachAsDisk` attaches an **existing** Block PVC as a raw VM
+    disk (vs the default filesystem-directory mount).
+  - The plural `dataDiskRefs[]` is now fully real for VM disks across all three
+    kinds — blank, image-backed (`imageRef`), and attached-PVC — and the
+    previously dead-code `dataDiskRefs[].imageRef` now works.
+  - New `status.dataDisks[]` echo (PVC / volumeMode / devicePath / bound) and a
+    **`DataDisksReady`** condition: a guest never boots with a missing data disk
+    — it holds in `Scheduling` and names the blocker (Principle #6).
+  - Admission validation for `dataDiskRefs[]`: exactly one of
+    `imageRef`/`pvcRef`/`blank` per entry, `blank.size > 0`, unique DNS-label
+    names, max 8 disks, `attachAsDisk` only with `pvcRef`. Data disks compose
+    with GPU.
+  - Cluster-validated end to end (blank Block 20Gi: controller → Block PVC → pod
+    `volumeDevice` → CH `--disk path=/dev/...` → guest `vdc 20G`; PVC GC'd with
+    the guest).
+  - Operator guide `docs/api/data-disks.md` + blank-disk sample. **Mount data
+    disks by UUID/LABEL** — the in-guest `/dev/vdX` letter is not stable.
+
+### Fixed
+
+- **Snapshot Tier A could capture an empty disk (unbootable restore).** The
+  CSI VolumeSnapshot (Tier A) path snapshotted the source guest's root PVC as
+  soon as it was `Bound`, but the per-guest rootclone Job writes `image.raw`
+  into the PVC *after* it binds — a snapshot taken alongside a fresh source
+  guest captured an empty disk, and the restore cloned that empty snapshot.
+  The snapshot now gates on the source guest being `Running` or `Stopped`
+  (disk populated); Tier B/S3 were unaffected.
+- **`swiftctl ssh <guest> -- <command>` now runs a remote command
+  non-interactively.** `ssh` was interactive-only and rejected extra args
+  (`accepts 1 arg(s)`); it now mirrors `ssh host <cmd>` / `kubectl exec pod --
+  <cmd>` — no TTY required, streams stdout/stderr, propagates the remote exit
+  code. The bare interactive form is unchanged.
+- **The standalone `config/dra-driver/` manifest pinned `:latest`** (a tag the
+  registry never publishes), so `kubectl apply` always `ImagePullBackOff`'d —
+  and applying it over a Helm install with `dra.enabled=true` clobbered the
+  chart's working version-managed image, leaving the DRA driver down and GPU
+  ResourceClaims unallocatable. The manifest image is now release-pinned
+  (`:v0.4.2`); prefer the chart's `dra.enabled`, which manages the version.
+
+### Changed
+
+- **Performance: the rootclone Job is co-located with the launcher's node.** For
+  a node-pinned guest (cloneFromSnapshot with a node-local snapshot,
+  `spec.nodeName`, GPU, or migration), an unpinned rootclone Job could populate
+  the RWO root PVC on a different node, forcing a ~26s Longhorn detach/reattach
+  bounce onto the launcher's node. The Job now carries the launcher's
+  `kubernetes.io/hostname` nodeSelector when the target node is known; unpinned
+  guests are unchanged.
+- Docs: warned against pointing an image-backed data disk at a bootable OS image
+  (its partition/FS UUIDs collide with the root disk and corrupt the boot) — now
+  superseded by blank disks for the empty-volume case — and corrected the
+  data-disk device letter (`/dev/vdc` on disk boot, `/dev/vdb` only on kernel
+  boot).
+
+---
+
 ## [v0.4.1] — 2026-06-13
 
 Chart-only patch. Identical code and images to v0.4.0 (rebuilt as `v0.4.1`); the
