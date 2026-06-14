@@ -235,9 +235,15 @@ func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 
 // applyDataDiskRefs adds PVC volumes and mounts for dataDiskRefs with pvcRef.
 // ImageRef-backed dataDiskRefs are resolved by the resolver, not here.
+// applyDataDiskRefs mounts plain pvcRef data disks (no attachAsDisk) as
+// filesystem directories in the launcher pod — the SwiftGuestPool per-replica
+// storage path, NOT a VM-visible disk. Entries that ARE VM disks (imageRef,
+// blank, or pvcRef WITH attachAsDisk) are resolved into rg.DataDisks and
+// attached by the dataDisk{Volumes,Mounts,Devices} helpers instead; skipping
+// them here avoids attaching the same PVC twice.
 func applyDataDiskRefs(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	for i, ref := range guest.Spec.DataDiskRefs {
-		if ref.PVCRef == nil {
+		if ref.PVCRef == nil || ref.AttachAsDisk {
 			continue
 		}
 		volName := fmt.Sprintf("data-disk-pvc-%d", i)

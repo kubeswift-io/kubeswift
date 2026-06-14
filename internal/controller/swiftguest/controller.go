@@ -432,6 +432,25 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Override the PVC name to use the clone instead of the shared image PVC.
 		rg.PreparedImage.PVCName = res.PVCName
 	}
+
+	// Blank data disks: provision the guest-owned PVCs (and fill Filesystem
+	// ones) and gate the pod on them, the same way the root disk gates. A
+	// guest must never boot with a missing data disk (Principle #6) — hold it
+	// in Scheduling, with DataDisksReady=False naming the blocker, until ready.
+	// Works on every boot path (disk, kernel, GPU), so it runs unconditionally.
+	if err := r.EnsureBlankDataDisks(ctx, &guest, rg); err != nil {
+		status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+		SetDataDisksReadyCondition(status, false, "DataDisksProvisioning", err.Error())
+		if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if rg.HasDataDisks() {
+		SetDataDisksReadyCondition(status, true, "", "")
+		status.DataDisks = r.dataDiskStatuses(ctx, &guest, rg)
+	}
+
 	// Phase 3c (Option B): when mTLS is enabled, the launcher pod for a
 	// migration-eligible guest mounts the stunnel-config ConfigMap and a
 	// per-guest identity Secret (see applyMigrationSourceSidecar). Ensure
