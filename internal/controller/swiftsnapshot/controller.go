@@ -186,6 +186,25 @@ func (r *SwiftSnapshotReconciler) handlePending(
 		return false, 10 * time.Second, nil
 	}
 
+	// Gate on the source guest's root disk being populated. The PVC being Bound
+	// (checked below) is necessary but NOT sufficient: the per-guest rootclone
+	// Job copies image.raw INTO the PVC *after* it binds, so a snapshot taken
+	// while the guest is still provisioning captures an empty disk — an
+	// unbootable restore. (Cluster-observed: a SwiftSnapshot applied alongside a
+	// fresh source guest snapshotted the PVC ~64s before rootclone wrote
+	// image.raw.) Require the guest to have finished provisioning: Running
+	// (rootclone complete + booted) or Stopped (ran before). This mirrors the
+	// Tier B pod-Running gate (local.go), but at the guest-phase level — a
+	// disk-only snapshot does not need a live launcher pod, so a Stopped guest's
+	// disk remains valid to back up. Pending/Scheduling/Failed requeue.
+	if !guestRootDiskPopulated(&guest) {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhasePending)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonGuestNotReady,
+			"source SwiftGuest "+guest.Name+" has not finished provisioning (phase="+
+				string(guest.Status.Phase)+"); waiting until its root disk is populated before snapshotting")
+		return false, 5 * time.Second, nil
+	}
+
 	// Locate the per-guest root-disk clone PVC. The shared SwiftImage PVC
 	// is read-only across guests; snapshotting it would be incorrect.
 	pvc, err := r.guestRootPVC(ctx, snap.Namespace, guest.Name)
@@ -267,6 +286,22 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseReady)
 	setReadyCondition(status, metav1.ConditionTrue, ReasonSnapshotReady, "VolumeSnapshot is readyToUse")
 	return true, "", nil
+}
+
+// guestRootDiskPopulated reports whether the source guest's root disk is
+// guaranteed populated by the rootclone Job, so a CSI snapshot of its PVC will
+// capture a bootable image. Running means the launcher booted from the disk
+// (rootclone complete); Stopped means it ran before and was stopped. In
+// Pending/Scheduling the rootclone may still be in flight (the PVC binds before
+// image.raw is written), and Failed is an uncertain disk state — all three
+// requeue rather than snapshot an empty/partial disk.
+func guestRootDiskPopulated(guest *swiftv1alpha1.SwiftGuest) bool {
+	switch guest.Status.Phase {
+	case swiftv1alpha1.SwiftGuestPhaseRunning, swiftv1alpha1.SwiftGuestPhaseStopped:
+		return true
+	default:
+		return false
+	}
 }
 
 // capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs.

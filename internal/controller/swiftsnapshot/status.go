@@ -12,6 +12,7 @@ const (
 	ReasonCapturing          = "Capturing"
 	ReasonSnapshotReady      = "SnapshotReady"
 	ReasonGuestNotFound      = "GuestNotFound"
+	ReasonGuestNotReady      = "GuestNotReady"
 	ReasonRootPVCNotFound    = "RootPVCNotFound"
 	ReasonUnsupportedBackend = "UnsupportedBackend"
 	ReasonSnapshotFailed     = "SnapshotFailed"

@@ -85,6 +85,9 @@ func makeGuest(ns, name string) *swiftv1alpha1.SwiftGuest {
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			ImageRef: &corev1.LocalObjectReference{Name: "ubuntu-noble"},
 		},
+		// Running = root disk populated (rootclone complete); required for the
+		// CSI snapshot to advance past the guestRootDiskPopulated gate.
+		Status: swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning},
 	}
 }
 
@@ -136,6 +139,62 @@ func TestPending_GuestNotFound_StaysPending(t *testing.T) {
 	}
 	if cond := findReady(got); cond == nil || cond.Reason != ReasonGuestNotFound {
 		t.Errorf("Ready condition reason = %q, want GuestNotFound", reasonOrEmpty(cond))
+	}
+}
+
+func TestPending_GuestNotRunning_StaysPending(t *testing.T) {
+	// A SwiftSnapshot applied alongside a fresh source guest must NOT snapshot
+	// until the guest's root disk is populated — otherwise it captures an empty
+	// disk (the rootclone Job writes image.raw after the PVC binds). Even with a
+	// Bound PVC present, a non-Running/Stopped guest stays Pending.
+	for _, phase := range []swiftv1alpha1.SwiftGuestPhase{
+		swiftv1alpha1.SwiftGuestPhasePending,
+		swiftv1alpha1.SwiftGuestPhaseScheduling,
+		swiftv1alpha1.SwiftGuestPhaseFailed,
+		"", // unset (brand-new guest)
+	} {
+		t.Run(string(phase)+"_or_empty", func(t *testing.T) {
+			snap := makeSwiftSnapshot("snap1", "default", "g1", "csi-hostpath-snapclass")
+			guest := makeGuest("default", "g1")
+			guest.Status.Phase = phase
+			pvc := makeBoundClonePVC("default", "g1") // Bound but not yet populated
+			r, c := newReconciler(t, snap, guest, pvc)
+
+			reconcile(t, r, "snap1", "default")
+
+			got := get(t, c, "snap1", "default")
+			if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhasePending {
+				t.Errorf("phase = %s, want Pending (source guest not Running/Stopped)", got.Status.Phase)
+			}
+			if cond := findReady(got); cond == nil || cond.Reason != ReasonGuestNotReady {
+				t.Errorf("Ready condition reason = %q, want GuestNotReady", reasonOrEmpty(cond))
+			}
+			// No VolumeSnapshot must have been created while the disk is unpopulated.
+			var vsl volumesnapshotv1.VolumeSnapshotList
+			if err := c.List(context.Background(), &vsl); err != nil {
+				t.Fatalf("list VolumeSnapshots: %v", err)
+			}
+			if len(vsl.Items) != 0 {
+				t.Errorf("created %d VolumeSnapshot(s) for a non-Running guest; want 0", len(vsl.Items))
+			}
+		})
+	}
+}
+
+func TestPending_StoppedGuest_AdvancesToCapturing(t *testing.T) {
+	// A Stopped guest's disk is populated (it ran before) — a disk-only snapshot
+	// is valid, so it must still advance (unlike Tier B memory snapshots).
+	snap := makeSwiftSnapshot("snap1", "default", "g1", "csi-hostpath-snapclass")
+	guest := makeGuest("default", "g1")
+	guest.Status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
+	pvc := makeBoundClonePVC("default", "g1")
+	r, c := newReconciler(t, snap, guest, pvc)
+
+	reconcile(t, r, "snap1", "default")
+
+	got := get(t, c, "snap1", "default")
+	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
+		t.Errorf("phase = %s, want Capturing (Stopped guest disk is populated)", got.Status.Phase)
 	}
 }
 
