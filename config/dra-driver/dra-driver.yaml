@@ -6,6 +6,13 @@
 # Node prerequisites (§A5): CDI enabled in containerd (k0s 1.7.x:
 # /etc/k0s/containerd.d/99-cdi.toml with enable_cdi=true + restart k0sworker)
 # and the vfio-pci module loaded (the same prerequisite as native GPU nodes).
+#
+# RECOMMENDED: install the DRA driver via the Helm chart instead of this
+# manifest — `helm ... --set dra.enabled=true` manages the image version for you.
+# This standalone manifest is the kustomize / non-Helm path; its image tag is
+# PINNED to the release (the registry publishes vX.Y.Z tags only — there is no
+# :latest tag). Do NOT `kubectl apply` this over a chart install: it would
+# overwrite the chart's version-managed image. Bump this tag on each release.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -74,7 +81,9 @@ spec:
           effect: NoSchedule
       containers:
         - name: dra-driver
-          image: ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:latest
+          # Pinned to the release (no :latest tag is published). Bump on release;
+          # or use the Helm chart (dra.enabled=true), which manages this version.
+          image: ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:v0.4.2
           args:
             - --v=2
           env:
