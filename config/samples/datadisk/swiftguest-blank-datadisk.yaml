@@ -1,0 +1,30 @@
+# SwiftGuest with a BLANK (image-less, sized) data disk — the v0.4.2 feature.
+#
+# The controller provisions a guest-owned, RWO, Block PVC of the requested size
+# (nothing is copied — there is no source image), attaches it to the VM as a raw
+# device (/dev/vdc on a disk-boot guest), and gates boot on DataDisksReady. The
+# guest partitions and formats it (mkfs). Mount data disks by UUID/LABEL — the
+# in-guest /dev/vdX letter is not stable across reboots/reorders.
+#
+# Requires only the ubuntu-noble (imageRef) SwiftImage to be Ready.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: blank-datadisk-test
+  namespace: default
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  runPolicy: Running
+  dataDiskRefs:
+    - name: scratch
+      blank:
+        size: 50Gi
+        # volumeMode defaults to Block (the live-migration-capable, mkfs-in-guest
+        # path). storageClassName empty = cluster default class (must be
+        # Block-capable, e.g. longhorn). Set Filesystem only for Block-incapable
+        # clusters (a blank image.raw is created in a Filesystem PVC instead).

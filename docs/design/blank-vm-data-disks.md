@@ -1,7 +1,19 @@
 # Blank / raw VM data disks (data disks without an image)
 
-> Status: DESIGN (staff-architect, 2026-06-14). Target: v0.4.2.
-> Implementation: one PR on the v0.4.2 branch, Block-blank first.
+> Status: SHIPPED + cluster-validated (2026-06-14), v0.4.2. Operator guide:
+> [`docs/api/data-disks.md`](../api/data-disks.md).
+> Implemented across 5 commits (C1 resolver/intent slice refactor → C2 Rust
+> per-disk `--disk` loop → C3 CRD `blank`/`attachAsDisk` + webhook → C4
+> controller `EnsureBlankDataDisks` + pod Block `volumeDevices` + status → C5
+> samples/runbook/demo). All five plural kinds (blank Block, blank Filesystem,
+> image-backed, pvcRef+attachAsDisk Block, plain pvcRef fs-mount) are
+> implemented; **blank Block is cluster-validated end-to-end** (image
+> `sha-d122d1e`, field-testing/blankdisk-test): controller minted a guest-owned
+> 20Gi Block PVC → `DataDisksReady` False→True → pod `volumeDevices`
+> `/dev/kubeswift-data-scratch` → CH `--disk path=/dev/kubeswift-data-scratch` →
+> guest `lsblk` showed `vdc 20G disk`. `status.dataDisks` echoed
+> `{volumeMode: Block, devicePath, bound: true}`; the blank PVC is guest-owned
+> (GC on delete).
 
 ## Problem
 

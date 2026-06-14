@@ -36,21 +36,20 @@ A SwiftGuest is **one VM instance**. It boots via one of two paths: disk boot (u
 | `guestClassRef.name` | Yes | SwiftGuestClass name (cluster-scoped) |
 | `seedProfileRef.name` | No | SwiftSeedProfile for cloud-init (disk boot only) |
 | `gpuProfileRef.name` | No | SwiftGPUProfile for GPU passthrough. Valid with `imageRef` only (not `kernelRef`). |
-| `dataDiskRef.name` | No | SwiftImage to attach as a secondary VM disk. Works with all boot paths. (Device letter depends on disk order — typically `/dev/vdc` on a disk-boot guest, where `vdb` is the cloud-init seed; `/dev/vdb` on kernel boot, which has no seed.) |
+| `dataDiskRef.name` | No | Singular shorthand: one SwiftImage attached as a secondary VM disk. Equivalent to a single `dataDiskRefs[]` `imageRef` entry named `data`. |
+| `dataDiskRefs[]` | No | Secondary data disks (blank, image-backed, or attached PVC). See **[Data disks](data-disks.md)**. |
 | `runPolicy` | No | `Running` (default), `Stopped`, `RestartOnFailure`, `Always` |
 
-*Exactly one of `imageRef` or `kernelRef` must be set. `gpuProfileRef` can combine with `imageRef` but not `kernelRef`. `dataDiskRef` is independent and works with any boot path.
+*Exactly one of `imageRef` or `kernelRef` must be set. `gpuProfileRef` can combine with `imageRef` but not `kernelRef`. Data disks are independent and work with any boot path.
 
-> **A data disk must NOT be a bootable OS image.** `dataDiskRef` clones the
-> referenced SwiftImage as a *second* disk. If that image is a bootable OS
-> (e.g. an Ubuntu/Rocky cloud image — the same kind you use for `imageRef`), its
-> partition and filesystem UUIDs are **identical** to the root disk's. The guest
-> mounts root by UUID and will then mount a mix of partitions from both disks
-> (e.g. `/` from the data disk, `/boot` from the root) — corrupting the boot in
-> a hard-to-debug way. Use a blank/raw volume or a non-OS data image: attach a
-> blank `PersistentVolumeClaim` via `dataDiskRefs[].pvcRef`, then partition and
-> format it in the guest (`mkfs`), or reference a SwiftImage built from a
-> genuine data volume, not a cloud OS image.
+> **For an empty volume, use a blank data disk — not an OS image.** The #1
+> data-disk case ("give me a blank 100Gi volume for my database") is a
+> `dataDiskRefs[].blank` entry: the controller provisions a guest-owned, sized,
+> Block PVC and the guest formats it. Do **not** point an *image-backed* data
+> disk (`dataDiskRef` / `dataDiskRefs[].imageRef`) at a bootable OS image: its
+> partition/filesystem UUIDs collide with the root disk's and the guest mounts a
+> mix of partitions from both, corrupting the boot. Full reference (blank,
+> image-backed, attached-PVC, device-letter caveat): **[Data disks](data-disks.md)**.
 
 ### Disk boot example
 
