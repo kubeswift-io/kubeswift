@@ -36,10 +36,20 @@ A SwiftGuest is **one VM instance**. It boots via one of two paths: disk boot (u
 | `guestClassRef.name` | Yes | SwiftGuestClass name (cluster-scoped) |
 | `seedProfileRef.name` | No | SwiftSeedProfile for cloud-init (disk boot only) |
 | `gpuProfileRef.name` | No | SwiftGPUProfile for GPU passthrough. Valid with `imageRef` only (not `kernelRef`). |
-| `dataDiskRef.name` | No | SwiftImage to attach as secondary data disk (`/dev/vdb`). Works with all boot paths. |
+| `dataDiskRef.name` | No | Singular shorthand: one SwiftImage attached as a secondary VM disk. Equivalent to a single `dataDiskRefs[]` `imageRef` entry named `data`. |
+| `dataDiskRefs[]` | No | Secondary data disks (blank, image-backed, or attached PVC). See **[Data disks](data-disks.md)**. |
 | `runPolicy` | No | `Running` (default), `Stopped`, `RestartOnFailure`, `Always` |
 
-*Exactly one of `imageRef` or `kernelRef` must be set. `gpuProfileRef` can combine with `imageRef` but not `kernelRef`. `dataDiskRef` is independent and works with any boot path.
+*Exactly one of `imageRef` or `kernelRef` must be set. `gpuProfileRef` can combine with `imageRef` but not `kernelRef`. Data disks are independent and work with any boot path.
+
+> **For an empty volume, use a blank data disk — not an OS image.** The #1
+> data-disk case ("give me a blank 100Gi volume for my database") is a
+> `dataDiskRefs[].blank` entry: the controller provisions a guest-owned, sized,
+> Block PVC and the guest formats it. Do **not** point an *image-backed* data
+> disk (`dataDiskRef` / `dataDiskRefs[].imageRef`) at a bootable OS image: its
+> partition/filesystem UUIDs collide with the root disk's and the guest mounts a
+> mix of partitions from both, corrupting the boot. Full reference (blank,
+> image-backed, attached-PVC, device-letter caveat): **[Data disks](data-disks.md)**.
 
 ### Disk boot example
 

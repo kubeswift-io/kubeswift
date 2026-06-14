@@ -9,7 +9,7 @@ type mockResolvedGuest struct {
 	hasSeed          bool
 	hasKernel        bool
 	hasNetwork       bool
-	hasDataDisk      bool
+	dataDisks        []DataDiskSpec
 	format           string
 	rootVolumeMode   string // W9: "Filesystem" (default) or "Block"
 	cpu              int
@@ -29,7 +29,7 @@ type mockResolvedGuest struct {
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
 func (m *mockResolvedGuest) HasKernel() bool               { return m.hasKernel }
 func (m *mockResolvedGuest) HasNetwork() bool              { return m.hasNetwork }
-func (m *mockResolvedGuest) HasDataDisk() bool             { return m.hasDataDisk }
+func (m *mockResolvedGuest) GetDataDisks() []DataDiskSpec  { return m.dataDisks }
 func (m *mockResolvedGuest) GetRootDiskFormat() string     { return m.format }
 func (m *mockResolvedGuest) GetRootDiskVolumeMode() string { return m.rootVolumeMode }
 func (m *mockResolvedGuest) GetCPU() int                   { return m.cpu }
@@ -273,34 +273,35 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 }
 
 func TestBuild_WithDataDisk_DiskBoot(t *testing.T) {
+	wantPath := DisksDataPath + "/" + DataDiskImageFile
 	rg := &mockResolvedGuest{
-		hasSeed:     true,
-		hasNetwork:  true,
-		hasDataDisk: true,
-		format:      "raw",
-		cpu:         2,
-		memory:      2048,
-		lifecycle:   "start",
-		guestID:     "default/data-test",
+		hasSeed:    true,
+		hasNetwork: true,
+		dataDisks:  []DataDiskSpec{{Name: "data", Path: wantPath, Format: "raw"}},
+		format:     "raw",
+		cpu:        2,
+		memory:     2048,
+		lifecycle:  "start",
+		guestID:    "default/data-test",
 	}
 	intent := Build(rg)
-	if intent.DataDisk == nil {
-		t.Fatal("dataDisk should be set when HasDataDisk is true")
+	if len(intent.DataDisks) != 1 {
+		t.Fatalf("want 1 data disk, got %d", len(intent.DataDisks))
 	}
-	wantPath := DisksDataPath + "/" + DataDiskImageFile
-	if intent.DataDisk.Path != wantPath {
-		t.Errorf("dataDisk.path = %q, want %q", intent.DataDisk.Path, wantPath)
+	if intent.DataDisks[0].Path != wantPath {
+		t.Errorf("dataDisks[0].path = %q, want %q", intent.DataDisks[0].Path, wantPath)
 	}
-	if intent.DataDisk.Format != "raw" {
-		t.Errorf("dataDisk.format = %q, want raw", intent.DataDisk.Format)
+	if intent.DataDisks[0].Format != "raw" {
+		t.Errorf("dataDisks[0].format = %q, want raw", intent.DataDisks[0].Format)
 	}
 }
 
 func TestBuild_WithDataDisk_KernelBoot(t *testing.T) {
+	wantPath := DisksDataPath + "/" + DataDiskImageFile
 	rg := &mockResolvedGuest{
 		hasKernel:     true,
 		hasNetwork:    true,
-		hasDataDisk:   true,
+		dataDisks:     []DataDiskSpec{{Name: "data", Path: wantPath, Format: "raw"}},
 		cpu:           1,
 		memory:        512,
 		guestID:       "default/kernel-data",
@@ -309,12 +310,11 @@ func TestBuild_WithDataDisk_KernelBoot(t *testing.T) {
 		kernelCmdline: "console=ttyS0",
 	}
 	intent := Build(rg)
-	if intent.DataDisk == nil {
-		t.Fatal("dataDisk should be set for kernel boot with HasDataDisk")
+	if len(intent.DataDisks) != 1 {
+		t.Fatalf("want 1 data disk for kernel boot, got %d", len(intent.DataDisks))
 	}
-	wantPath := DisksDataPath + "/" + DataDiskImageFile
-	if intent.DataDisk.Path != wantPath {
-		t.Errorf("dataDisk.path = %q, want %q", intent.DataDisk.Path, wantPath)
+	if intent.DataDisks[0].Path != wantPath {
+		t.Errorf("dataDisks[0].path = %q, want %q", intent.DataDisks[0].Path, wantPath)
 	}
 	if intent.KernelBoot == nil {
 		t.Fatal("kernelBoot should also be set")
@@ -332,8 +332,8 @@ func TestBuild_WithoutDataDisk(t *testing.T) {
 		guestID:    "default/no-data",
 	}
 	intent := Build(rg)
-	if intent.DataDisk != nil {
-		t.Error("dataDisk should be nil when HasDataDisk is false")
+	if len(intent.DataDisks) != 0 {
+		t.Errorf("dataDisks should be empty when no data disk; got %d", len(intent.DataDisks))
 	}
 }
 
@@ -346,7 +346,7 @@ func TestSerializeParseRoundtrip_WithDataDisk(t *testing.T) {
 		Lifecycle: "start",
 		GuestID:   "test-dd",
 		Network:   true,
-		DataDisk:  &RootDiskSpec{Path: DisksDataPath + "/" + DataDiskImageFile, Format: "raw"},
+		DataDisks: []DataDiskSpec{{Name: "data", Path: DisksDataPath + "/" + DataDiskImageFile, Format: "raw"}},
 	}
 	data, err := Serialize(intent)
 	if err != nil {
@@ -356,11 +356,11 @@ func TestSerializeParseRoundtrip_WithDataDisk(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed.DataDisk == nil {
-		t.Fatal("parsed dataDisk should not be nil")
+	if len(parsed.DataDisks) != 1 {
+		t.Fatalf("parsed dataDisks should have 1 entry, got %d", len(parsed.DataDisks))
 	}
-	if parsed.DataDisk.Path != intent.DataDisk.Path {
-		t.Errorf("parsed dataDisk.path = %q, want %q", parsed.DataDisk.Path, intent.DataDisk.Path)
+	if parsed.DataDisks[0].Path != intent.DataDisks[0].Path {
+		t.Errorf("parsed dataDisks[0].path = %q, want %q", parsed.DataDisks[0].Path, intent.DataDisks[0].Path)
 	}
 }
 

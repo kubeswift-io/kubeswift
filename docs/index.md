@@ -20,6 +20,7 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 - [SwiftSeedProfile](api/swiftseedprofile.md) — Cloud-init datasource (NoCloud)
 - [SwiftKernel](api/swiftkernel.md) — Kernel + initramfs OCI artifact
 - [SwiftGuestPool](api/swiftguestpool.md) — VM fleet management
+- [Data disks](api/data-disks.md) — blank / image-backed / attached-PVC secondary disks
 
 ### Kernel Boot
 

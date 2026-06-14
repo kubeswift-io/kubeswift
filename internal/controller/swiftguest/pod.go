@@ -235,9 +235,15 @@ func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 
 // applyDataDiskRefs adds PVC volumes and mounts for dataDiskRefs with pvcRef.
 // ImageRef-backed dataDiskRefs are resolved by the resolver, not here.
+// applyDataDiskRefs mounts plain pvcRef data disks (no attachAsDisk) as
+// filesystem directories in the launcher pod — the SwiftGuestPool per-replica
+// storage path, NOT a VM-visible disk. Entries that ARE VM disks (imageRef,
+// blank, or pvcRef WITH attachAsDisk) are resolved into rg.DataDisks and
+// attached by the dataDisk{Volumes,Mounts,Devices} helpers instead; skipping
+// them here avoids attaching the same PVC twice.
 func applyDataDiskRefs(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	for i, ref := range guest.Spec.DataDiskRefs {
-		if ref.PVCRef == nil {
+		if ref.PVCRef == nil || ref.AttachAsDisk {
 			continue
 		}
 		volName := fmt.Sprintf("data-disk-pvc-%d", i)
@@ -258,6 +264,49 @@ func applyDataDiskRefs(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 			)
 		}
 	}
+}
+
+// dataDiskVolumeName is the pod volume/device name for a resolved VM data disk.
+func dataDiskVolumeName(diskName string) string { return "data-disk-" + diskName }
+
+// dataDiskVolumes returns one PVC-backed pod Volume per resolved VM data disk
+// (image-backed, blank, or attached). Used at every boot path's pod builder.
+func dataDiskVolumes(rg *resolved.ResolvedGuest) []corev1.Volume {
+	var vols []corev1.Volume
+	for _, d := range rg.DataDisks {
+		vols = append(vols, corev1.Volume{
+			Name: dataDiskVolumeName(d.Name),
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: d.PVCName},
+			},
+		})
+	}
+	return vols
+}
+
+// dataDiskMounts returns the volumeMounts for Filesystem-backed data disks (the
+// disk's image.raw lives under the mount dir). Block disks attach via
+// volumeDevices instead — see dataDiskDevices.
+func dataDiskMounts(rg *resolved.ResolvedGuest) []corev1.VolumeMount {
+	var mounts []corev1.VolumeMount
+	for _, d := range rg.DataDisks {
+		if !d.Block {
+			mounts = append(mounts, corev1.VolumeMount{Name: dataDiskVolumeName(d.Name), MountPath: d.MountPath})
+		}
+	}
+	return mounts
+}
+
+// dataDiskDevices returns the volumeDevices for Block-backed (raw) data disks,
+// presented to the launcher as the disk's host device path.
+func dataDiskDevices(rg *resolved.ResolvedGuest) []corev1.VolumeDevice {
+	var devs []corev1.VolumeDevice
+	for _, d := range rg.DataDisks {
+		if d.Block {
+			devs = append(devs, corev1.VolumeDevice{Name: dataDiskVolumeName(d.Name), DevicePath: d.HostPath})
+		}
+	}
+	return devs
 }
 
 // podAnnotations returns the base annotations for a launcher pod,
@@ -323,16 +372,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		},
 	}
 
-	if rg.HasDataDisk() {
-		volumes = append(volumes, corev1.Volume{
-			Name: "data-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: rg.GetDataDiskPVCName(),
-				},
-			},
-		})
-	}
+	volumes = append(volumes, dataDiskVolumes(rg)...)
 
 	mounts := []corev1.VolumeMount{
 		{Name: "run", MountPath: RunDirPath},
@@ -340,9 +380,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 		{Name: "dev-kvm", MountPath: "/dev/kvm"},
 		{Name: "kernel-artifacts", MountPath: rg.KernelBoot.LocalPath},
 	}
-	if rg.HasDataDisk() {
-		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
-	}
+	mounts = append(mounts, dataDiskMounts(rg)...)
 
 	// /var/lib/kubeswift/snapshots/ — writable hostPath so the launcher's
 	// CH process can write Tier B snapshot directories when the
@@ -458,23 +496,13 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 	if rg.HasSeed() {
 		AddSeedVolume(&volumes, seedConfigMapName)
 	}
-	if rg.HasDataDisk() {
-		volumes = append(volumes, corev1.Volume{
-			Name: "data-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: rg.GetDataDiskPVCName(),
-				},
-			},
-		})
-	}
+	volumes = append(volumes, dataDiskVolumes(rg)...)
 
 	var mounts []corev1.VolumeMount
 	var volumeDevices []corev1.VolumeDevice
 	AddVolumeMounts(&mounts, &volumeDevices, rg, rg.HasSeed())
-	if rg.HasDataDisk() {
-		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
-	}
+	mounts = append(mounts, dataDiskMounts(rg)...)
+	volumeDevices = append(volumeDevices, dataDiskDevices(rg)...)
 
 	// /var/lib/kubeswift/snapshots/ — writable hostPath so the launcher's
 	// CH process can write Tier B snapshot directories when the

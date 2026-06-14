@@ -61,6 +61,7 @@ The `docs/` directory also contains these focused reference documents:
 
 - [api/overview.md](api/overview.md) — API groups, versioning
 - [api/swiftguest.md](api/swiftguest.md) — SwiftGuest deep-dive
+- [api/data-disks.md](api/data-disks.md) — Data disks (blank / image-backed / attached-PVC)
 - [api/swiftimage.md](api/swiftimage.md) — SwiftImage deep-dive
 - [api/swiftkernel.md](api/swiftkernel.md) — SwiftKernel deep-dive
 

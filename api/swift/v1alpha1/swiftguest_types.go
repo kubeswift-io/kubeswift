@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -446,19 +447,60 @@ type CloneFromSnapshotSource struct {
 	Regenerate []CloneIdentityItem `json:"regenerate,omitempty"`
 }
 
-// DataDiskRef references either a SwiftImage or a PVC for a data disk.
+// DataDiskRef is one secondary data disk: image-backed, an attached PVC,
+// or a blank (image-less, sized) disk. Exactly one of imageRef/pvcRef/blank.
 type DataDiskRef struct {
-	// Name identifies this data disk (used for volume naming).
+	// Name identifies this data disk. DNS-label, unique within the guest,
+	// drives the per-disk volume name and the host device path for Block
+	// disks (/dev/kubeswift-data-<name>).
+	// +kubebuilder:validation:MaxLength=36
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
-	// ImageRef references a SwiftImage for this data disk.
-	// Mutually exclusive with PVCRef.
+	// ImageRef references a Ready SwiftImage. The image is cloned into a
+	// guest-owned PVC and attached as a raw VM disk.
+	// Exactly one of imageRef/pvcRef/blank.
 	// +optional
 	ImageRef *corev1.LocalObjectReference `json:"imageRef,omitempty"`
-	// PVCRef references a PersistentVolumeClaim directly.
-	// Used by SwiftGuestPool for per-replica persistent storage.
-	// Mutually exclusive with ImageRef.
+	// PVCRef references an existing PersistentVolumeClaim. By DEFAULT it is
+	// mounted as a filesystem directory inside the launcher pod (the
+	// SwiftGuestPool per-replica-storage path) — NOT a VM-visible disk. Set
+	// attachAsDisk:true to attach it as a raw VM block disk instead.
+	// Exactly one of imageRef/pvcRef/blank.
 	// +optional
 	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
+	// Blank requests a new, empty, sized data disk with no backing image —
+	// the "give me a blank 100Gi volume for my database" case. The
+	// controller creates a guest-owned PVC (Block by default) and attaches
+	// it as a raw VM disk; the guest partitions and formats it (mkfs).
+	// Exactly one of imageRef/pvcRef/blank.
+	// +optional
+	Blank *BlankDiskSpec `json:"blank,omitempty"`
+	// AttachAsDisk, when true, attaches a PVCRef as a raw VM block disk
+	// (volumeDevices) instead of the default filesystem-directory mount.
+	// Only valid with PVCRef (imageRef/blank are always VM disks). Default
+	// false preserves the SwiftGuestPool filesystem-mount behaviour.
+	// +optional
+	AttachAsDisk bool `json:"attachAsDisk,omitempty"`
+}
+
+// BlankDiskSpec describes a blank (image-less), sized data disk. The
+// controller provisions a guest-owned PVC of the given size; nothing is
+// copied into it (there is no source image).
+type BlankDiskSpec struct {
+	// Size is the requested disk size (e.g. "100Gi"). Required, must be > 0.
+	Size resource.Quantity `json:"size"`
+	// StorageClassName selects the StorageClass for the PVC. Empty uses the
+	// cluster default class.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+	// VolumeMode is Block (default) or Filesystem. Block attaches the raw
+	// device to the guest (the guest runs mkfs). Filesystem is an escape
+	// hatch for Block-incapable clusters — a blank image.raw is created in a
+	// Filesystem PVC and attached as a VM disk.
+	// +kubebuilder:validation:Enum=Block;Filesystem
+	// +kubebuilder:default=Block
+	// +optional
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
 }
 
 // Filesystem is a virtiofs (vhost-user-fs) share mounted into the guest.
@@ -794,6 +836,32 @@ type SwiftGuestStatus struct {
 	// rationale. Use IsLiveMigrationCapable on the resolved spec.
 	// +optional
 	Storage *ResolvedStorageStatus `json:"storage,omitempty"`
+	// DataDisks echoes the secondary data disks the controller resolved /
+	// provisioned for this guest (image-backed, attached PVC, or blank), in
+	// declaration order. Informational — confirms what was attached and its
+	// bind state. A blank/image disk that can't bind drives DataDisksReady=False
+	// and the guest stays Pending (no silent boot with a missing disk).
+	// +optional
+	DataDisks []DataDiskStatus `json:"dataDisks,omitempty"`
+}
+
+// DataDiskStatus is the observed state of one secondary data disk.
+type DataDiskStatus struct {
+	// Name is the data disk's spec name.
+	Name string `json:"name"`
+	// PVCName is the PersistentVolumeClaim backing this disk (the
+	// guest-owned blank/image PVC, or the referenced PVCRef).
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
+	// VolumeMode is Block or Filesystem as actually provisioned.
+	// +optional
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode,omitempty"`
+	// DevicePath is the in-pod host device path for a Block VM disk
+	// (/dev/kubeswift-data-<name>); empty for a Filesystem-mounted disk.
+	// +optional
+	DevicePath string `json:"devicePath,omitempty"`
+	// Bound is true once the backing PVC is Bound.
+	Bound bool `json:"bound"`
 }
 
 // SwiftGuest is the Schema for the swiftguests API.

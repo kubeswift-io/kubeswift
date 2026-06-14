@@ -30,6 +30,72 @@ func rootdiskScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+func TestLauncherTargetNode(t *testing.T) {
+	cases := []struct {
+		name  string
+		guest *swiftv1alpha1.SwiftGuest
+		want  string
+	}{
+		{"spec.nodeName (pinned/GPU/migration)", &swiftv1alpha1.SwiftGuest{
+			Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "node-a"}}, "node-a"},
+		{"clone/restore annotation", &swiftv1alpha1.SwiftGuest{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{AnnotationRestoreNodeName: "node-b"}}}, "node-b"},
+		{"spec.nodeName wins over annotation", &swiftv1alpha1.SwiftGuest{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{AnnotationRestoreNodeName: "node-b"}},
+			Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "node-a"}}, "node-a"},
+		{"unpinned", &swiftv1alpha1.SwiftGuest{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := launcherTargetNode(tc.guest); got != tc.want {
+				t.Errorf("launcherTargetNode = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCreateCloneJob_PinsToLauncherNode verifies the clone Job co-locates with
+// the launcher when the launcher's node is known — so the RWO root PVC is
+// populated on that node and doesn't detach+reattach across nodes (the ~26s
+// Multi-Attach delay observed on node-pinned clones).
+func TestCreateCloneJob_PinsToLauncherNode(t *testing.T) {
+	scheme := rootdiskScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+	rg := &resolved.ResolvedGuest{} // Filesystem (VolumeMode "")
+
+	// Clone pinned (via the restore-node annotation) to "miles".
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "clone-a", Namespace: "default",
+			Annotations: map[string]string{AnnotationRestoreNodeName: "miles"},
+		},
+	}
+	if err := r.createCloneJob(context.Background(), guest, rg, "job-clone-a", "src", "dst", resource.MustParse("10Gi")); err != nil {
+		t.Fatal(err)
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "job-clone-a", Namespace: "default"}, &job); err != nil {
+		t.Fatal(err)
+	}
+	if got := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]; got != "miles" {
+		t.Errorf("clone Job nodeSelector hostname = %q, want miles (must co-locate with the launcher)", got)
+	}
+
+	// Unpinned guest -> no nodeSelector (the scheduler places it freely).
+	guest2 := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "free", Namespace: "default"}}
+	if err := r.createCloneJob(context.Background(), guest2, rg, "job-free", "src", "dst", resource.MustParse("10Gi")); err != nil {
+		t.Fatal(err)
+	}
+	var job2 batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "job-free", Namespace: "default"}, &job2); err != nil {
+		t.Fatal(err)
+	}
+	if len(job2.Spec.Template.Spec.NodeSelector) != 0 {
+		t.Errorf("unpinned guest Job must have no nodeSelector, got %v", job2.Spec.Template.Spec.NodeSelector)
+	}
+}
+
 // TestEnsureRootDiskClone_RestoreSeededOwnedByRestoreNotDeleted is the
 // regression test for the Tier A restore data-loss bug fixed in this
 // commit. SwiftRestore creates the per-guest PVC with controller-ref =

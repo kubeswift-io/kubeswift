@@ -475,16 +475,7 @@ func BuildGPUDiskBootPod(
 		})
 	}
 
-	if rg.HasDataDisk() {
-		volumes = append(volumes, corev1.Volume{
-			Name: "data-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: rg.GetDataDiskPVCName(),
-				},
-			},
-		})
-	}
+	volumes = append(volumes, dataDiskVolumes(rg)...)
 
 	// Standard launcher mounts.
 	var mounts []corev1.VolumeMount
@@ -494,9 +485,8 @@ func BuildGPUDiskBootPod(
 	if hugepages != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "hugepages", MountPath: "/dev/hugepages"})
 	}
-	if rg.HasDataDisk() {
-		mounts = append(mounts, corev1.VolumeMount{Name: "data-disk", MountPath: DisksDataPath})
-	}
+	mounts = append(mounts, dataDiskMounts(rg)...)
+	volumeDevices = append(volumeDevices, dataDiskDevices(rg)...)
 	// /var/lib/kubeswift/snapshots/ — writable hostPath. Tier B
 	// captures on GPU guests are rejected by the webhook (Phase 0
 	// Constraint #1: VFIO + memory snapshot fails on restore), but

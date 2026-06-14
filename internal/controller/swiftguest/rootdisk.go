@@ -405,6 +405,24 @@ const CloneJobBlockDevicePath = "/dev/dst-block"
 // both branches — SwiftImage import PVCs stay on Filesystem per W9
 // scoping question (a)'s default. SwiftImage.spec.storage for direct
 // Block imports is deferred.
+// launcherTargetNode returns the node the guest's launcher pod will run on, when
+// it is deterministically known: an explicitly pinned guest (spec.nodeName —
+// also set for GPU and migration guests), or a clone/restore whose root disk
+// must live on the node where its snapshot resides (AnnotationRestoreNodeName,
+// stamped before EnsureRootDiskClone runs). It returns "" for an unpinned guest,
+// whose launcher node is not decided until the scheduler places the pod.
+//
+// Used to co-locate the rootclone Job with the launcher: the RWO root PVC is
+// then populated on the launcher's node and never has to detach + reattach
+// across nodes (a ~26s Multi-Attach delay, cluster-observed on node-pinned
+// clones whose unpinned Job landed on a different node than the pinned launcher).
+func launcherTargetNode(guest *swiftv1alpha1.SwiftGuest) string {
+	if guest.Spec.NodeName != "" {
+		return guest.Spec.NodeName
+	}
+	return guest.Annotations[AnnotationRestoreNodeName]
+}
+
 func (r *SwiftGuestReconciler) createCloneJob(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
@@ -510,6 +528,13 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
 				},
 			},
 		},
+	}
+
+	// Co-locate the clone Job with the launcher when its node is known, so the
+	// RWO root PVC is populated on the launcher's node and doesn't bounce across
+	// nodes (matches the launcher's kubernetes.io/hostname nodeSelector).
+	if node := launcherTargetNode(guest); node != "" {
+		job.Spec.Template.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": node}
 	}
 
 	if err := r.Create(ctx, job); err != nil {

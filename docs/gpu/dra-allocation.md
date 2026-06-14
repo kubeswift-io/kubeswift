@@ -100,7 +100,7 @@ the DRA driver does its own discovery, so a DRA-only cluster keeps
 
 ```bash
 helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
-  --version 0.4.1 -n kubeswift-system --create-namespace \
+  --version 0.4.2 -n kubeswift-system --create-namespace \
   --set dra.enabled=true
 ```
 
@@ -108,12 +108,19 @@ This deploys the DaemonSet + RBAC and creates the `kubeswift-vfio-gpu`
 DeviceClass (set `--set dra.deviceClass.create=false` if you manage it
 out-of-band).
 
-**Kustomize / manual.** Apply the standalone manifests:
+**Kustomize / manual.** Only for non-Helm installs. The standalone manifest's
+image is **pinned to the release** (the registry publishes `vX.Y.Z` tags only —
+there is no `:latest`), so check out the matching release tag before applying.
 
 ```bash
 kubectl apply -f config/dra-driver/dra-driver.yaml    # DaemonSet + RBAC (kubeswift-system)
 kubectl apply -f config/dra-driver/deviceclass.yaml   # DeviceClass: kubeswift-vfio-gpu
 ```
+
+> **Do NOT apply these over a Helm install with `dra.enabled=true`** — the chart
+> already deploys the driver with a version-managed image, and re-applying the
+> standalone manifest would overwrite that image with the manifest's pinned tag.
+> Use one path or the other, not both.
 
 The driver runs on `kubeswift.io/gpu-node=true` nodes, discovers GPUs from
 sysfs (no NVIDIA userspace needed), and publishes one `ResourceSlice` per node:

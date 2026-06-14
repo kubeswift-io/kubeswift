@@ -8,6 +8,8 @@ import (
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -60,14 +62,13 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 		return nil, err
 	}
 
-	// Resolve optional data disk (works with all boot paths).
-	if guest.Spec.DataDiskRef != nil {
-		dataDisk, err := r.resolveDataDisk(ctx, guest)
-		if err != nil {
-			return nil, err
-		}
-		rg.DataDisk = dataDisk
+	// Resolve secondary data disks (work with all boot paths), in declaration
+	// order: the legacy singular spec.dataDiskRef first, then spec.dataDiskRefs[].
+	dataDisks, err := r.resolveDataDisks(ctx, guest)
+	if err != nil {
+		return nil, err
 	}
+	rg.DataDisks = dataDisks
 
 	return rg, nil
 }
@@ -105,13 +106,129 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 	return rg, nil
 }
 
-func (r *resolver) resolveDataDisk(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*PreparedImage, error) {
+// resolveDataDisks builds the ordered secondary VM-disk list, the single
+// source of truth for both the pod builder and the runtime intent (device-
+// letter order = this order). The legacy singular spec.dataDiskRef is first
+// (image-backed, Filesystem, at the historical /disks/data/image.raw path);
+// the plural spec.dataDiskRefs[] follow in declaration order.
+//
+// A plural entry becomes a VM disk when it is image-backed, blank, or a
+// pvcRef WITH attachAsDisk. A plain pvcRef (no attachAsDisk) is the
+// SwiftGuestPool per-replica filesystem mount — NOT a VM disk — and is
+// handled separately by the pod builder (applyDataDiskRefs); it is
+// intentionally skipped here.
+func (r *resolver) resolveDataDisks(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) ([]ResolvedDataDisk, error) {
+	var out []ResolvedDataDisk
+
+	if guest.Spec.DataDiskRef != nil {
+		pi, err := r.resolveDataDiskImage(ctx, guest.Namespace, guest.Spec.DataDiskRef.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ResolvedDataDisk{
+			Name:      "data",
+			PVCName:   pi.PVCName,
+			Block:     false,
+			HostPath:  runtimeintent.DisksDataPath + "/" + runtimeintent.DataDiskImageFile,
+			MountPath: runtimeintent.DisksDataPath,
+			Format:    "raw",
+			Ready:     pi.Ready,
+		})
+	}
+
+	for i := range guest.Spec.DataDiskRefs {
+		d := &guest.Spec.DataDiskRefs[i]
+		switch {
+		case d.Blank != nil:
+			block := d.Blank.VolumeMode != corev1.PersistentVolumeFilesystem
+			rd := ResolvedDataDisk{
+				Name:    d.Name,
+				PVCName: BlankDataDiskPVCName(guest.Name, d.Name),
+				Block:   block,
+				Format:  "raw",
+				Ready:   true, // PVC binding is gated by EnsureBlankDataDisks.
+			}
+			if block {
+				rd.HostPath = runtimeintent.DataDiskDevicePath(d.Name)
+			} else {
+				rd.MountPath = runtimeintent.DataDiskDir(d.Name)
+				rd.HostPath = rd.MountPath + "/" + runtimeintent.DataDiskImageFile
+			}
+			out = append(out, rd)
+
+		case d.ImageRef != nil:
+			pi, err := r.resolveDataDiskImage(ctx, guest.Namespace, d.ImageRef.Name)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ResolvedDataDisk{
+				Name:      d.Name,
+				PVCName:   pi.PVCName,
+				Block:     false,
+				HostPath:  runtimeintent.DataDiskDir(d.Name) + "/" + runtimeintent.DataDiskImageFile,
+				MountPath: runtimeintent.DataDiskDir(d.Name),
+				Format:    "raw",
+				Ready:     pi.Ready,
+			})
+
+		case d.PVCRef != nil && d.AttachAsDisk:
+			// Attach an operator-supplied PVC as a raw VM disk. Block PVCs
+			// pass through as a device; a Filesystem PVC has no image.raw
+			// convention to attach, so reject it honestly (Principle #6)
+			// rather than silently mounting it as a directory.
+			block, err := r.pvcIsBlock(ctx, guest.Namespace, d.PVCRef.Name)
+			if err != nil {
+				return nil, err
+			}
+			if !block {
+				return nil, &ResolutionError{
+					Reason:           "dataDiskRefs[" + d.Name + "]: attachAsDisk requires a Block-mode PVC (a Filesystem PVC has no raw device to attach)",
+					AffectedResource: d.PVCRef.Name,
+				}
+			}
+			out = append(out, ResolvedDataDisk{
+				Name:     d.Name,
+				PVCName:  d.PVCRef.Name,
+				Block:    true,
+				HostPath: runtimeintent.DataDiskDevicePath(d.Name),
+				Format:   "raw",
+				Ready:    true,
+			})
+
+			// case d.PVCRef != nil (no attachAsDisk): a filesystem-mounted pool
+			// PVC, not a VM disk — handled by pod.go::applyDataDiskRefs.
+		}
+	}
+
+	return out, nil
+}
+
+// BlankDataDiskPVCName is the deterministic name of the guest-owned PVC
+// backing a blank data disk. Shared by the resolver (which records it on the
+// ResolvedDataDisk) and the SwiftGuest controller (which creates it).
+func BlankDataDiskPVCName(guestName, diskName string) string {
+	return guestName + "-data-" + diskName
+}
+
+// pvcIsBlock reports whether the named PVC has VolumeMode=Block. A missing
+// volumeMode (the Kubernetes default) is Filesystem.
+func (r *resolver) pvcIsBlock(ctx context.Context, namespace, name string) (bool, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pvc); err != nil {
+		return false, &ResolutionError{Reason: "dataDiskRefs attachAsDisk PVC not found: " + err.Error(), AffectedResource: name}
+	}
+	return pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock, nil
+}
+
+// resolveDataDiskImage resolves an image-backed data disk's SwiftImage to its
+// prepared (Ready) PVC.
+func (r *resolver) resolveDataDiskImage(ctx context.Context, namespace, name string) (*PreparedImage, error) {
 	image := &imagev1alpha1.SwiftImage{}
-	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.DataDiskRef.Name}, image); err != nil {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: guest.Spec.DataDiskRef.Name}
+	if err := r.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, image); err != nil {
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: name}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: guest.Spec.DataDiskRef.Name}
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: name}
 	}
 	pi := mergePreparedImage(image)
 	return &pi, nil

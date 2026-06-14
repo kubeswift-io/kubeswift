@@ -193,6 +193,33 @@ func SetStorageReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, r
 	setCondition(status, cond)
 }
 
+// ConditionDataDisksReady is True once every secondary VM data disk
+// (image-backed, blank, or attached) the guest declares is provisioned and
+// its backing PVC is Bound. Unlike StorageReady, this DOES gate pod creation:
+// a guest must not boot with a missing data disk (no silent failures), so the
+// reconcile holds the guest in Scheduling until all data disks are ready.
+const ConditionDataDisksReady = "DataDisksReady"
+
+// SetDataDisksReadyCondition sets the DataDisksReady condition. When ok is
+// false, reason+message names the not-yet-ready data disk (e.g. a blank PVC
+// still binding, or a Filesystem PVC requested for an attachAsDisk disk).
+func SetDataDisksReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason, message string) {
+	cond := metav1.Condition{Type: ConditionDataDisksReady}
+	if ok {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "DataDisksReady"
+		cond.Message = message
+		if cond.Message == "" {
+			cond.Message = "All secondary data disks are ready"
+		}
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = reason
+		cond.Message = message
+	}
+	setCondition(status, cond)
+}
+
 // SetResolvedCondition sets the Resolved condition.
 func SetResolvedCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason string) {
 	cond := metav1.Condition{

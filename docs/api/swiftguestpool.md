@@ -20,7 +20,7 @@ SwiftGuestPool manages a **fleet of identical SwiftGuest replicas**. It maintain
 | `replicas` | Yes | Desired number of SwiftGuest replicas. Minimum 0. |
 | `template.metadata.labels` | No | Labels applied to each created SwiftGuest. |
 | `template.metadata.annotations` | No | Annotations applied to each created SwiftGuest. |
-| `template.spec` | Yes | SwiftGuestSpec used to create each replica. Supports all SwiftGuest fields (`imageRef`, `kernelRef`, `guestClassRef`, `seedProfileRef`, `gpuProfileRef`, `dataDiskRef`, `runPolicy`, `interfaces`). |
+| `template.spec` | Yes | SwiftGuestSpec used to create each replica. Supports all SwiftGuest fields (`imageRef`, `kernelRef`, `guestClassRef`, `seedProfileRef`, `gpuProfileRef`, `dataDiskRef`, `dataDiskRefs` (incl. blank disks), `runPolicy`, `interfaces`). |
 | `updateStrategy.type` | No | `RollingUpdate` (default) or `Recreate`. |
 | `updateStrategy.rollingUpdate.maxUnavailable` | No | Max replicas unavailable during rolling update. Integer or percentage. Default `1`. |
 | `updateStrategy.rollingUpdate.maxSurge` | No | Max replicas above desired count during rolling update. Integer or percentage. Default `0`. |

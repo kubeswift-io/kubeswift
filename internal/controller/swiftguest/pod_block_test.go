@@ -247,7 +247,7 @@ func TestBuildPod_BlockRootWithFilesystemDataDisk(t *testing.T) {
 		AccessMode: "ReadWriteMany",
 		VolumeMode: "Block",
 	})
-	rg.DataDisk = &resolved.PreparedImage{Path: "/var/lib/kubeswift/disks/data/image.raw", PVCName: "data-pvc", Ready: true}
+	rg.DataDisks = []resolved.ResolvedDataDisk{{Name: "data", PVCName: "data-pvc", HostPath: "/var/lib/kubeswift/disks/data/image.raw", MountPath: "/var/lib/kubeswift/disks/data", Format: "raw", Ready: true}}
 	pod := BuildPod(guest, rg, "mixed-vm-seed", "mixed-vm-runtime-intent", nil)
 	launcher := pod.Spec.Containers[0]
 
@@ -268,7 +268,7 @@ func TestBuildPod_BlockRootWithFilesystemDataDisk(t *testing.T) {
 	// with their own volumeMode set elsewhere).
 	hasDataMount := false
 	for _, m := range launcher.VolumeMounts {
-		if m.Name == "data-disk" && m.MountPath == DisksDataPath {
+		if m.Name == "data-disk-data" && m.MountPath == DisksDataPath {
 			hasDataMount = true
 		}
 	}
