@@ -1,6 +1,7 @@
 package swiftguest
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -53,7 +54,7 @@ func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
 		PreparedImage: resolved.PreparedImage{PVCName: "pvc-root"},
 		Seed:          nil,
 		Network:       true,
-		DataDisk:      &resolved.PreparedImage{PVCName: "pvc-data", Ready: true, Format: "raw"},
+		DataDisks:     []resolved.ResolvedDataDisk{{Name: "data", PVCName: "pvc-data", HostPath: "/var/lib/kubeswift/disks/data/image.raw", MountPath: "/var/lib/kubeswift/disks/data", Format: "raw", Ready: true}},
 	}
 
 	pod := BuildPod(guest, rg, "", "test-intent", nil)
@@ -61,7 +62,7 @@ func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
 	// Check volume exists.
 	foundVol := false
 	for _, v := range pod.Spec.Volumes {
-		if v.Name == "data-disk" {
+		if v.Name == "data-disk-data" {
 			foundVol = true
 			if v.VolumeSource.PersistentVolumeClaim == nil {
 				t.Fatal("data-disk volume should be a PVC")
@@ -72,14 +73,14 @@ func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
 		}
 	}
 	if !foundVol {
-		t.Error("missing data-disk volume")
+		t.Error("missing data-disk-data volume")
 	}
 
 	// Check mount exists on launcher.
 	launcher := pod.Spec.Containers[0]
 	foundMount := false
 	for _, m := range launcher.VolumeMounts {
-		if m.Name == "data-disk" {
+		if m.Name == "data-disk-data" {
 			foundMount = true
 			if m.MountPath != DisksDataPath {
 				t.Errorf("data-disk mountPath = %q, want %q", m.MountPath, DisksDataPath)
@@ -87,7 +88,7 @@ func TestBuildPod_DataDiskVolume_DiskBoot(t *testing.T) {
 		}
 	}
 	if !foundMount {
-		t.Error("launcher missing data-disk mount")
+		t.Error("launcher missing data-disk-data mount")
 	}
 }
 
@@ -109,14 +110,14 @@ func TestBuildPod_NoDataDisk_BackwardCompat(t *testing.T) {
 	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
 	for _, v := range pod.Spec.Volumes {
-		if v.Name == "data-disk" {
-			t.Error("data-disk volume should not be present when DataDisk is nil")
+		if strings.HasPrefix(v.Name, "data-disk-") {
+			t.Error("data-disk volume should not be present when DataDisks is empty")
 		}
 	}
 	launcher := pod.Spec.Containers[0]
 	for _, m := range launcher.VolumeMounts {
-		if m.Name == "data-disk" {
-			t.Error("data-disk mount should not be present when DataDisk is nil")
+		if strings.HasPrefix(m.Name, "data-disk-") {
+			t.Error("data-disk mount should not be present when DataDisks is empty")
 		}
 	}
 }

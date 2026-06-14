@@ -15,9 +15,14 @@ type RuntimeIntent struct {
 	OSType     string          `json:"osType,omitempty"`     // "linux" (default) or "windows" — windows adds kvm_hyperv on the CH --cpus arg
 	// CoreScheduling is the CH vCPU core-scheduling policy ("vm"/"vcpu"), empty
 	// when off. When set, swiftletd appends core_scheduling=<v> to --cpus.
-	CoreScheduling string        `json:"coreScheduling,omitempty"`
-	GPU            *GPUIntent    `json:"gpu,omitempty"`      // populated when gpuProfileRef is set
-	DataDisk       *RootDiskSpec `json:"dataDisk,omitempty"` // secondary data disk (appears as /dev/vdb)
+	CoreScheduling string     `json:"coreScheduling,omitempty"`
+	GPU            *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
+	// DataDisks are the secondary VM disks, in deterministic order. Each becomes
+	// one CH --disk and enumerates in the guest as /dev/vdc, /dev/vdd, ... in
+	// this order. Path is opaque to swiftletd (a file for Filesystem disks, a
+	// /dev/... device for Block disks — the W9 contract). Replaces the legacy
+	// singular `dataDisk` field; swiftletd keeps a compat reader for old intents.
+	DataDisks []DataDiskSpec `json:"dataDisks,omitempty"`
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
@@ -162,6 +167,15 @@ type SRIOVDeviceIntent struct {
 type RootDiskSpec struct {
 	Path   string `json:"path"`
 	Format string `json:"format"` // "raw" or "qcow2"
+}
+
+// DataDiskSpec specifies one secondary VM disk for swiftletd. Path is opaque
+// (a filesystem image.raw or a /dev/... block device); Name is for logging/
+// status correlation.
+type DataDiskSpec struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Format string `json:"format"` // "raw"
 }
 
 // KernelBootSpec specifies kernel boot parameters for direct kernel boot.

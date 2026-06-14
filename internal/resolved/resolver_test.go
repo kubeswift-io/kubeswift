@@ -261,14 +261,14 @@ func TestResolve_DataDiskRef_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if rg.DataDisk == nil {
-		t.Fatal("DataDisk should be populated")
+	if len(rg.DataDisks) != 1 {
+		t.Fatalf("DataDisks should have 1 entry, got %d", len(rg.DataDisks))
 	}
-	if !rg.DataDisk.Ready {
-		t.Error("DataDisk.Ready should be true")
+	if !rg.DataDisks[0].Ready {
+		t.Error("DataDisks[0].Ready should be true")
 	}
-	if rg.DataDisk.PVCName != "pvc-data" {
-		t.Errorf("DataDisk.PVCName = %q, want pvc-data", rg.DataDisk.PVCName)
+	if rg.DataDisks[0].PVCName != "pvc-data" {
+		t.Errorf("DataDisks[0].PVCName = %q, want pvc-data", rg.DataDisks[0].PVCName)
 	}
 }
 
@@ -365,8 +365,8 @@ func TestResolve_NoDataDiskRef_BackwardCompat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if rg.DataDisk != nil {
-		t.Error("DataDisk should be nil when dataDiskRef is not set")
+	if len(rg.DataDisks) != 0 {
+		t.Error("DataDisks should be empty when dataDiskRef is not set")
 	}
 }
 

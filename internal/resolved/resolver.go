@@ -8,6 +8,7 @@ import (
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -60,14 +61,13 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 		return nil, err
 	}
 
-	// Resolve optional data disk (works with all boot paths).
-	if guest.Spec.DataDiskRef != nil {
-		dataDisk, err := r.resolveDataDisk(ctx, guest)
-		if err != nil {
-			return nil, err
-		}
-		rg.DataDisk = dataDisk
+	// Resolve secondary data disks (work with all boot paths), in declaration
+	// order: the legacy singular spec.dataDiskRef first, then spec.dataDiskRefs[].
+	dataDisks, err := r.resolveDataDisks(ctx, guest)
+	if err != nil {
+		return nil, err
 	}
+	rg.DataDisks = dataDisks
 
 	return rg, nil
 }
@@ -105,13 +105,41 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 	return rg, nil
 }
 
-func (r *resolver) resolveDataDisk(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (*PreparedImage, error) {
+// resolveDataDisks builds the ordered secondary-disk list. The legacy singular
+// spec.dataDiskRef is the first entry (image-backed, Filesystem, at the
+// historical /disks/data/image.raw path). The plural spec.dataDiskRefs[]
+// (image-backed / blank / attached-PVC) are appended after it.
+func (r *resolver) resolveDataDisks(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) ([]ResolvedDataDisk, error) {
+	var out []ResolvedDataDisk
+
+	if guest.Spec.DataDiskRef != nil {
+		pi, err := r.resolveDataDiskImage(ctx, guest.Namespace, guest.Spec.DataDiskRef.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ResolvedDataDisk{
+			Name:      "data",
+			PVCName:   pi.PVCName,
+			Block:     false,
+			HostPath:  runtimeintent.DisksDataPath + "/" + runtimeintent.DataDiskImageFile,
+			MountPath: runtimeintent.DisksDataPath,
+			Format:    "raw",
+			Ready:     pi.Ready,
+		})
+	}
+
+	return out, nil
+}
+
+// resolveDataDiskImage resolves an image-backed data disk's SwiftImage to its
+// prepared (Ready) PVC.
+func (r *resolver) resolveDataDiskImage(ctx context.Context, namespace, name string) (*PreparedImage, error) {
 	image := &imagev1alpha1.SwiftImage{}
-	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.DataDiskRef.Name}, image); err != nil {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: guest.Spec.DataDiskRef.Name}
+	if err := r.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, image); err != nil {
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: name}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: guest.Spec.DataDiskRef.Name}
+		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: name}
 	}
 	pi := mergePreparedImage(image)
 	return &pi, nil

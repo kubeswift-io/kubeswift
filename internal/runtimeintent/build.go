@@ -6,7 +6,7 @@ type ResolvedGuest interface {
 	HasSeed() bool
 	HasKernel() bool
 	HasNetwork() bool
-	HasDataDisk() bool
+	GetDataDisks() []DataDiskSpec
 	GetRootDiskFormat() string
 	// GetRootDiskVolumeMode returns "Filesystem" or "Block". Empty is
 	// treated as "Filesystem" (pre-W9 default). Block resolves the
@@ -33,13 +33,7 @@ type ResolvedGuest interface {
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
 func Build(rg ResolvedGuest) *RuntimeIntent {
-	var dataDisk *RootDiskSpec
-	if rg.HasDataDisk() {
-		dataDisk = &RootDiskSpec{
-			Path:   DisksDataPath + "/" + DataDiskImageFile,
-			Format: "raw",
-		}
-	}
+	dataDisks := rg.GetDataDisks()
 
 	nics := rg.GetNICs()
 	ports := rg.GetExposedPorts()
@@ -62,7 +56,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Network:          rg.HasNetwork(),
 			Hypervisor:       rg.GetHypervisor(),
 			OSType:           rg.GetOSType(),
-			DataDisk:         dataDisk,
+			DataDisks:        dataDisks,
 			NICs:             nics,
 			Ports:            ports,
 			Filesystems:      filesystems,
@@ -106,7 +100,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Network:          rg.HasNetwork(),
 		Hypervisor:       rg.GetHypervisor(),
 		OSType:           rg.GetOSType(),
-		DataDisk:         dataDisk,
+		DataDisks:        dataDisks,
 		NICs:             nics,
 		Ports:            ports,
 		Filesystems:      filesystems,

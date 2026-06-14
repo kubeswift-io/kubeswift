@@ -20,17 +20,21 @@ type KernelBoot struct {
 // ResolvedGuest is the normalized internal model produced by the resolver.
 // The controller uses only this type for runtime decisions after resolution succeeds.
 type ResolvedGuest struct {
-	GuestSettings GuestSettings  `json:"guestSettings"`
-	Resources     Resources      `json:"resources"`
-	RootDisk      RootDisk       `json:"rootDisk"`
-	Networks      Networks       `json:"networks"`
-	Seed          *Seed          `json:"seed,omitempty"`
-	Lifecycle     Lifecycle      `json:"lifecycle"`
-	PreparedImage PreparedImage  `json:"preparedImage"`
-	Meta          Meta           `json:"meta"`
-	KernelBoot    *KernelBoot    `json:"kernelBoot,omitempty"`
-	DataDisk      *PreparedImage `json:"dataDisk,omitempty"`
-	Network       bool           `json:"network"`
+	GuestSettings GuestSettings `json:"guestSettings"`
+	Resources     Resources     `json:"resources"`
+	RootDisk      RootDisk      `json:"rootDisk"`
+	Networks      Networks      `json:"networks"`
+	Seed          *Seed         `json:"seed,omitempty"`
+	Lifecycle     Lifecycle     `json:"lifecycle"`
+	PreparedImage PreparedImage `json:"preparedImage"`
+	Meta          Meta          `json:"meta"`
+	KernelBoot    *KernelBoot   `json:"kernelBoot,omitempty"`
+	// DataDisks are the resolved secondary VM disks, in deterministic
+	// declaration order: the legacy singular spec.dataDiskRef first (if set),
+	// then spec.dataDiskRefs[] in array order. Each becomes a CH --disk and
+	// enumerates in the guest as /dev/vdc, /dev/vdd, ... in this order.
+	DataDisks []ResolvedDataDisk `json:"dataDisks,omitempty"`
+	Network   bool               `json:"network"`
 	// Storage is the post-merge effective storage spec for controller-
 	// created PVCs (today: the root-disk clone). Always non-nil after a
 	// successful resolution: defaults are filled in (RWO + Filesystem +
@@ -173,6 +177,33 @@ type Meta struct {
 	UID       types.UID `json:"uid"`
 }
 
+// ResolvedDataDisk is one resolved secondary VM disk. It abstracts the three
+// kinds (image-backed, blank, attached-PVC) into what the pod builder and
+// swiftletd need: a PVC to attach and where the disk lives.
+type ResolvedDataDisk struct {
+	// Name is the disk's stable identifier (the legacy singular dataDiskRef
+	// resolves as "data"). Drives the pod volume/device name.
+	Name string `json:"name"`
+	// PVCName backs this disk: the SwiftImage's prepared PVC (image-backed),
+	// a guest-owned PVC the controller creates (blank), or the operator's
+	// PVCRef (attached).
+	PVCName string `json:"pvcName"`
+	// Block is true for a raw block disk (volumeDevices + CH --disk path=/dev/..);
+	// false for a filesystem-backed disk (volumeMount + an image.raw file).
+	Block bool `json:"block"`
+	// HostPath is the value passed to CH --disk path=: the in-pod block device
+	// path (Block) or the image.raw file path (Filesystem). Opaque to swiftletd.
+	HostPath string `json:"hostPath"`
+	// MountPath is the in-pod filesystem mount dir for a Filesystem disk (the
+	// directory that contains image.raw); empty for Block disks.
+	MountPath string `json:"mountPath,omitempty"`
+	// Format is the CH disk format ("raw").
+	Format string `json:"format"`
+	// Ready is true once the disk is usable: image-backed = SwiftImage Ready;
+	// blank/attached = always true (PVC binding is gated by the controller).
+	Ready bool `json:"ready"`
+}
+
 // HasSeed returns true if seed materialization inputs are present.
 func (r *ResolvedGuest) HasSeed() bool {
 	return r.Seed != nil && r.Seed.Datasource != ""
@@ -188,17 +219,27 @@ func (r *ResolvedGuest) HasNetwork() bool {
 	return r.Network
 }
 
-// HasDataDisk returns true when a secondary data disk is attached.
-func (r *ResolvedGuest) HasDataDisk() bool {
-	return r.DataDisk != nil && r.DataDisk.Ready
+// HasDataDisks returns true when at least one secondary data disk is attached.
+func (r *ResolvedGuest) HasDataDisks() bool {
+	return len(r.DataDisks) > 0
 }
 
-// GetDataDiskPVCName returns the PVC name for the data disk volume.
-func (r *ResolvedGuest) GetDataDiskPVCName() string {
-	if r.DataDisk == nil {
-		return ""
+// GetDataDisks maps the resolved data disks to the runtimeintent type for
+// RuntimeIntent (the build.go interface). The pod builder uses the r.DataDisks
+// field directly (it needs PVCName/Block/MountPath, not just the CH args).
+func (r *ResolvedGuest) GetDataDisks() []runtimeintent.DataDiskSpec {
+	if len(r.DataDisks) == 0 {
+		return nil
 	}
-	return r.DataDisk.PVCName
+	out := make([]runtimeintent.DataDiskSpec, 0, len(r.DataDisks))
+	for _, d := range r.DataDisks {
+		out = append(out, runtimeintent.DataDiskSpec{
+			Name:   d.Name,
+			Path:   d.HostPath,
+			Format: d.Format,
+		})
+	}
+	return out
 }
 
 // GetKernelPath returns the full path to the kernel (bzImage) inside the artifact dir.
