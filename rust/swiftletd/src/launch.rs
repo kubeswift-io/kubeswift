@@ -286,7 +286,7 @@ where
         .to_string_lossy()
         .to_string();
 
-    let data_disk_path = intent.data_disk_path().to_string();
+    let data_disk_paths = intent.data_disk_paths();
 
     // Build NIC config from intent (SR-IOV NICs produce VFIO devices).
     let (tap_name, ch_nics, mut vfio_devices) = build_ch_nics(intent);
@@ -395,7 +395,7 @@ where
             kernel_path: Some(kb.kernel_path.clone()),
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
-            data_disk_path: data_disk_path.clone(),
+            data_disk_paths: data_disk_paths.clone(),
             vfio_devices,
             fs_mounts,
             vhost_user_blk_sockets,
@@ -420,7 +420,7 @@ where
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
-            data_disk_path: data_disk_path.clone(),
+            data_disk_paths: data_disk_paths.clone(),
             vfio_devices,
             fs_mounts,
             vhost_user_blk_sockets,
@@ -506,7 +506,7 @@ where
         vfio_devices,
         serial_socket: serial_socket.clone(),
         qmp_socket: qmp_socket.clone(),
-        data_disk_path: intent.data_disk_path().to_string(),
+        data_disk_paths: intent.data_disk_paths(),
     };
 
     let mut process = QemuProcess::spawn(&config)?;

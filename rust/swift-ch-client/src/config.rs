@@ -73,8 +73,12 @@ pub struct VmConfig {
     pub initramfs_path: Option<String>,
     /// Kernel command line. Only used when kernel_path is set.
     pub kernel_cmdline: Option<String>,
-    /// Optional secondary data disk path. Empty = no data disk.
-    pub data_disk_path: String,
+    /// Secondary data disk paths, in order. Empty = no data disks. Each
+    /// produces a `--disk path=<p>,image_type=raw,direct=on` argument
+    /// after the root (and seed) disk, appearing as the next virtio-blk
+    /// device in the guest (/dev/vdb, /dev/vdc, ...). Paths are opaque
+    /// (raw file or raw block device — decided controller-side).
+    pub data_disk_paths: Vec<String>,
     /// VFIO devices to pass through (SR-IOV VFs, GPUs).
     /// Each produces a --device path=<sysfs_path> argument.
     pub vfio_devices: Vec<VFIODeviceConfig>,
@@ -179,14 +183,15 @@ impl VmConfig {
                 args.push("--disk".to_string());
                 args.push(format!("path={},image_type=raw", self.seed_path));
             }
-            if !self.data_disk_path.is_empty() {
-                // direct=on: PVC-backed data disk, O_DIRECT-capable (see the
-                // disk-boot branch comment for why root/data bypass the cache).
+            // direct=on: PVC-backed data disks, O_DIRECT-capable (see the
+            // disk-boot branch comment for why root/data bypass the cache).
+            // One --disk per data disk, in order.
+            for p in &self.data_disk_paths {
+                if p.is_empty() {
+                    continue;
+                }
                 args.push("--disk".to_string());
-                args.push(format!(
-                    "path={},image_type=raw,direct=on",
-                    self.data_disk_path
-                ));
+                args.push(format!("path={},image_type=raw,direct=on", p));
             }
         } else {
             // --kernel (CLOUDHV.fd UEFI firmware) required for disk boot.
@@ -227,11 +232,13 @@ impl VmConfig {
                 // No direct=on: emptyDir/tmpfs-backed; tmpfs rejects O_DIRECT.
                 args.push(format!("path={},image_type=raw", self.seed_path));
             }
-            if !self.data_disk_path.is_empty() {
-                args.push(format!(
-                    "path={},image_type=raw,direct=on",
-                    self.data_disk_path
-                ));
+            // Data disks continue the same multi-value --disk argument
+            // (--disk path=root path=seed path=data0 path=data1 ...).
+            for p in &self.data_disk_paths {
+                if p.is_empty() {
+                    continue;
+                }
+                args.push(format!("path={},image_type=raw,direct=on", p));
             }
         }
 
@@ -333,7 +340,7 @@ mod tests {
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
-            data_disk_path: String::new(),
+            data_disk_paths: vec![],
             vfio_devices: vec![],
             fs_mounts: vec![],
             vhost_user_blk_sockets: vec![],
@@ -494,7 +501,7 @@ mod tests {
     #[test]
     fn test_disks_carry_image_type_raw() {
         let mut cfg = make_disk_boot_config();
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let args = cfg.to_args();
         // Every --disk value carries image_type=raw (CH v52 deprecates disk
         // image-type autodetection; raw is the runtime invariant).
@@ -529,7 +536,7 @@ mod tests {
     fn test_disks_direct_io_per_role() {
         // Disk-boot: root + seed + data.
         let mut cfg = make_disk_boot_config();
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let joined = cfg.to_args().join(" ");
         // Root (PVC) and data (PVC) bypass the cache.
         assert!(
@@ -554,7 +561,7 @@ mod tests {
         let mut kcfg = make_disk_boot_config();
         kcfg.kernel_path = Some("/k/bzImage".to_string());
         kcfg.firmware_path = None;
-        kcfg.data_disk_path = "/data/extra.raw".to_string();
+        kcfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let kjoined = kcfg.to_args().join(" ");
         assert!(
             kjoined.contains("path=/data/extra.raw,image_type=raw,direct=on"),
@@ -572,7 +579,7 @@ mod tests {
     #[test]
     fn test_disk_boot_data_disk() {
         let mut cfg = make_disk_boot_config();
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let args = cfg.to_args();
         let joined = args.join(" ");
         assert!(
@@ -600,7 +607,7 @@ mod tests {
         cfg.kernel_path = Some("/kernels/bzImage".to_string());
         cfg.initramfs_path = Some("/kernels/rootfs.cpio.gz".to_string());
         cfg.kernel_cmdline = Some("console=ttyS0".to_string());
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let args = cfg.to_args();
         let joined = args.join(" ");
         assert!(
@@ -886,13 +893,13 @@ mod tests {
     /// W9 — Block-mode root with a Filesystem-mode data disk produces
     /// CH args carrying both surfaces independently. The mixed case
     /// from architect Q4 mirrored at the swift-ch-client layer:
-    /// disk_path (device) and data_disk_path (file) coexist on the
+    /// disk_path (device) and data_disk_paths (file) coexist on the
     /// same `--disk` arg list with no suffix-driven re-routing.
     #[test]
     fn test_disk_boot_block_root_with_filesystem_data() {
         let mut cfg = make_disk_boot_config();
         cfg.disk_path = "/dev/kubeswift-root".to_string();
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let args = cfg.to_args();
         let joined = args.join(" ");
         assert!(

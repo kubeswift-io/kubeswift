@@ -40,8 +40,17 @@ pub struct RuntimeIntent {
     #[serde(default)]
     pub core_scheduling: Option<String>,
     /// Optional secondary data disk (appears as /dev/vdb in guest).
+    /// LEGACY singular field — superseded by `data_disks`. Retained so a
+    /// new swiftletd still honors intent JSON written by an older
+    /// controller (version-skew tolerance); `data_disk_paths()` merges
+    /// the two, preferring the slice when present.
     #[serde(default)]
     pub data_disk: Option<RootDisk>,
+    /// Secondary data disks (each becomes an additional virtio-blk device
+    /// in the guest, in order, after the root disk). A current controller
+    /// emits this slice; an older one emits the singular `data_disk`.
+    #[serde(default)]
+    pub data_disks: Option<Vec<DataDiskSpec>>,
     /// Network interface list for multi-NIC support.
     /// If empty/absent and network=true, a single default NIC is used (backward compat).
     #[serde(default)]
@@ -368,6 +377,25 @@ pub struct RootDisk {
     pub format: String,
 }
 
+/// A secondary data disk entry. Matches the controller-side
+/// `internal/runtimeintent.DataDiskSpec`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataDiskSpec {
+    /// Stable per-disk name (DNS label). Informational on the runtime
+    /// side — used by the controller to name the PVC/volume.
+    #[serde(default)]
+    pub name: String,
+    /// Disk path. Opaque to swiftletd — forwarded unchanged to Cloud
+    /// Hypervisor's `--disk path=<value>` argument, exactly like
+    /// `RootDisk.path` (a regular raw file on Filesystem PVCs, or a raw
+    /// block device on Block PVCs; the controller-side resolver decides).
+    pub path: String,
+    /// Disk format — informational only (always "raw" in practice).
+    #[serde(default)]
+    pub format: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelBoot {
@@ -402,17 +430,32 @@ impl RuntimeIntent {
         self.kernel_boot.is_some()
     }
 
-    /// Returns the data disk path, or empty string if no data disk.
-    pub fn data_disk_path(&self) -> &str {
+    /// Returns the ordered list of secondary data-disk paths.
+    ///
+    /// Version-skew tolerant: a current controller emits `dataDisks[]`,
+    /// an older one emits the singular `dataDisk`. When the slice is
+    /// present and yields at least one non-empty path it wins; otherwise
+    /// the legacy single field is used. Empty paths are skipped.
+    pub fn data_disk_paths(&self) -> Vec<String> {
+        if let Some(disks) = &self.data_disks {
+            let paths: Vec<String> = disks
+                .iter()
+                .filter(|d| !d.path.is_empty())
+                .map(|d| d.path.clone())
+                .collect();
+            if !paths.is_empty() {
+                return paths;
+            }
+        }
         match &self.data_disk {
-            Some(d) if !d.path.is_empty() => &d.path,
-            _ => "",
+            Some(d) if !d.path.is_empty() => vec![d.path.clone()],
+            _ => Vec::new(),
         }
     }
 
-    /// Returns true if a data disk is attached.
+    /// Returns true if at least one data disk is attached.
     pub fn has_data_disk(&self) -> bool {
-        !self.data_disk_path().is_empty()
+        !self.data_disk_paths().is_empty()
     }
 
     /// Returns true when this launcher pod is meant to restore a VM
@@ -554,6 +597,49 @@ mod tests {
             !lin.is_windows(),
             "absent osType should not be is_windows()"
         );
+    }
+
+    #[test]
+    fn test_data_disk_paths_new_slice() {
+        // New controller: dataDisks[] is honored in order.
+        let intent: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/g",
+                "dataDisks":[{"name":"data","path":"/disks/data/image.raw","format":"raw"},{"name":"blank0","path":"/dev/kubeswift-data-blank0","format":"raw"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            intent.data_disk_paths(),
+            vec![
+                "/disks/data/image.raw".to_string(),
+                "/dev/kubeswift-data-blank0".to_string()
+            ]
+        );
+        assert!(intent.has_data_disk());
+    }
+
+    #[test]
+    fn test_data_disk_paths_legacy_single() {
+        // Old controller: only the singular dataDisk is present.
+        let intent: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/g",
+                "dataDisk":{"path":"/disks/data/image.raw","format":"raw"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            intent.data_disk_paths(),
+            vec!["/disks/data/image.raw".to_string()]
+        );
+        assert!(intent.has_data_disk());
+    }
+
+    #[test]
+    fn test_data_disk_paths_none() {
+        let intent: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/g"}"#,
+        )
+        .unwrap();
+        assert!(intent.data_disk_paths().is_empty());
+        assert!(!intent.has_data_disk());
     }
 
     #[test]

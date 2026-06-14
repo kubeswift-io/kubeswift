@@ -50,8 +50,10 @@ pub struct QemuConfig {
     pub serial_socket: PathBuf,
     /// QMP (QEMU Machine Protocol) Unix socket path.
     pub qmp_socket: PathBuf,
-    /// Optional secondary data disk path. Empty = no data disk.
-    pub data_disk_path: String,
+    /// Secondary data disk paths, in order. Empty = no data disks. Each
+    /// produces a `-drive file=<p>,format=raw,if=virtio` argument after
+    /// the root disk.
+    pub data_disk_paths: Vec<String>,
     /// VFIO devices to pass through (SR-IOV VFs, GPUs).
     /// Each produces a -device vfio-pci,host=<address> argument.
     pub vfio_devices: Vec<QemuVFIODevice>,
@@ -120,11 +122,14 @@ impl QemuConfig {
             ]);
         }
 
-        // Data disk (secondary, appears as /dev/vdb)
-        if !self.data_disk_path.is_empty() {
+        // Data disks (secondary, appear as /dev/vdb, /dev/vdc, ...)
+        for p in &self.data_disk_paths {
+            if p.is_empty() {
+                continue;
+            }
             args.extend([
                 "-drive".to_string(),
-                format!("file={},format=raw,if=virtio", self.data_disk_path),
+                format!("file={},format=raw,if=virtio", p),
             ]);
         }
 
@@ -207,7 +212,7 @@ mod tests {
             vfio_devices: vec![],
             serial_socket: PathBuf::from("/tmp/run/serial.sock"),
             qmp_socket: PathBuf::from("/tmp/run/qmp.sock"),
-            data_disk_path: String::new(),
+            data_disk_paths: vec![],
         }
     }
 
@@ -296,7 +301,7 @@ mod tests {
     #[test]
     fn test_to_args_data_disk() {
         let mut cfg = make_config();
-        cfg.data_disk_path = "/data/extra.raw".to_string();
+        cfg.data_disk_paths = vec!["/data/extra.raw".to_string()];
         let args = cfg.to_args();
         let joined = args.join(" ");
         assert!(
