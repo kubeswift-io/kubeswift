@@ -110,6 +110,20 @@ intervention every clone inherits the source's identity. Two layers handle it:
 **To diverge guest-visible identity, reboot each replica once after it resumes.**
 (An in-guest vsock agent to do this without a reboot is a future enhancement.)
 
+> ⚠️ **Known limitation on Cloud Hypervisor v52 — a resumed clone cannot reboot.**
+> Rebooting a `--restore`d guest hangs in UEFI firmware (the EDK2 S3-resume / AP
+> init path freezes after `MpInitChangeApLoopCallback`; a *normal* guest reboots
+> fine through the same point). So the "reboot to regenerate" step above does
+> **not** currently complete — the clone keeps the source's guest-visible
+> identity, and because the resumed guest never re-runs DHCP, its IP is not
+> discovered (`status.network.primaryIP` stays empty even though the guest is
+> reachable on the source's address inside its own pod netns). This is a
+> CH-`--restore`+reboot firmware interaction, not a KubeSwift defect; tracked in
+> [`docs/design/known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md).
+> Until it is resolved, treat memory-snapshot clones as **warm read-mostly
+> replicas of the source's identity**; the in-guest vsock identity agent (above)
+> is the real fix and supersedes the reboot path.
+
 ## Quick start (walkthrough)
 
 ```bash
@@ -136,7 +150,8 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 | Guest `Failed`, *"requires spec.cloneFromSnapshot.targetNode"* | Tier C clone without a target node. In a pool the controller assigns it; a standalone clone must set it. |
 | Guest stuck `Pending`, *"waiting for SwiftSnapshot … to be Ready"* | The snapshot is still Capturing/Uploading. |
 | Guest stuck `Pending`, download Job present | The Tier C download is in progress (or `ImagePullBackOff` / `snapshot-s3 image not configured`). |
-| All clones share hostname/machine-id | Expected on resume — reboot each clone once to fire the regen bootcmd. |
+| All clones share hostname/machine-id | Expected on resume. The regen bootcmd fires on first reboot — but on CH v52 a clone reboot hangs in firmware (see the Known-limitation callout above), so this currently persists. |
+| Clone is `Running` but `status.network.primaryIP` is empty | Expected on resume — the guest kept the source's cached lease and never re-ran DHCP, so there is no lease for swiftletd to discover. It would surface after a reboot's fresh DHCP, but the clone-reboot firmware hang (above) blocks that on CH v52. The lease poller stays alive for restore guests (v0.4.3+), so the IP appears automatically *if/when* the guest does re-DHCP. |
 
 ## Cluster walkthrough
 
