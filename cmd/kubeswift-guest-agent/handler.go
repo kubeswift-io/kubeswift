@@ -1,0 +1,413 @@
+// Command kubeswift-guest-agent is a tiny in-guest agent that regenerates a
+// cloneFromSnapshot clone's identity (machine-id / SSH host keys / hostname /
+// MAC) and renews its DHCP lease IN PLACE — with no reboot — over a host-only
+// vsock channel.
+//
+// WHY THIS EXISTS (load-bearing — read before refactoring):
+//
+// A cloneFromSnapshot SwiftGuest boots via Cloud Hypervisor `--restore`: it
+// RESUMES the source's captured RAM byte-for-byte. A resume is NOT a boot —
+// cloud-init does not re-run — so every clone inherits the source's
+// /etc/machine-id, /etc/ssh/ssh_host_*, hostname, and the cached eth0 MAC + IP.
+// The old remedy ("reboot the clone once") is BROKEN on Cloud Hypervisor v52: a
+// restored guest's reboot hangs in EDK2 firmware (see
+// docs/design/known-issues-clone-reboot-firmware-hang.md). This agent is the
+// real fix — it regenerates identity without a reboot.
+//
+// THE LOAD-BEARING CONSTRAINT: because a clone never boots, this agent must
+// already be RUNNING in the SOURCE guest at snapshot-capture time so it is part
+// of the captured RAM and resumes — alive and listening — in every clone.
+// Installing/starting it on the clone is impossible (nothing new starts on a
+// resume). See docs/design/clone-identity-vsock-agent.md §6.1 (LBA-1).
+//
+// SECURITY: the command surface is exactly two ops (ping, regenerate-identity)
+// with a fixed schema — NO exec, no path argument, no file transfer. Inputs
+// (MAC, hostname) are validated then passed as argv (never shell-interpolated).
+// The transport is vsock — host<->guest only, not network-reachable. An
+// attacker who somehow reached the port could only ask the guest to regenerate
+// its own identity (self-inflicted, non-escalating).
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+// ProtocolVersion is the wire-protocol version (design §Q3). Bump only on a
+// breaking change; the agent accepts any request and degrades per-item.
+const ProtocolVersion = 1
+
+// DefaultPort is the AF_VSOCK port the agent listens on (above the privileged
+// range; shared constant with the host-side swift-vsock-client).
+const DefaultPort = 1024
+
+// Identity item names — MUST match api/swift/v1alpha1.CloneIdentityItem so the
+// controller can pass SwiftGuest.spec.cloneFromSnapshot.regenerate verbatim.
+const (
+	itemHostname     = "hostname"
+	itemMachineID    = "machineId"
+	itemSSHHostKeys  = "sshHostKeys"
+	itemMACAddresses = "macAddresses"
+)
+
+// allItems is the default set when a request omits items (matches the CRD's
+// "empty defaults to all four").
+var allItems = []string{itemMachineID, itemSSHHostKeys, itemHostname, itemMACAddresses}
+
+// Request is one host->guest command (newline-delimited JSON, one per connection).
+type Request struct {
+	V          int      `json:"v"`
+	Op         string   `json:"op"`
+	Items      []string `json:"items,omitempty"`
+	MAC        string   `json:"mac,omitempty"`
+	Hostname   string   `json:"hostname,omitempty"`
+	RenewLease bool     `json:"renewLease,omitempty"`
+}
+
+// Response is the guest->host reply.
+type Response struct {
+	V            int      `json:"v"`
+	OK           bool     `json:"ok"`
+	Op           string   `json:"op,omitempty"`
+	AgentVersion string   `json:"agentVersion,omitempty"`
+	Regenerated  []string `json:"regenerated,omitempty"`
+	NewIP        string   `json:"newIP,omitempty"`
+	MachineID    string   `json:"machineId,omitempty"`
+	Hostname     string   `json:"hostname,omitempty"`
+	MAC          string   `json:"mac,omitempty"`
+	IP           string   `json:"ip,omitempty"`
+	Error        string   `json:"error,omitempty"`
+}
+
+var (
+	macRE      = regexp.MustCompile(`^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`)
+	hostnameRE = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+)
+
+// system abstracts every side effect so the dispatch + validation logic is unit
+// testable without root. The real implementation (realSystem) shells out to
+// ip/hostnamectl/ssh-keygen/dhclient and touches the filesystem.
+type system interface {
+	run(name string, args ...string) (string, error)
+	readFile(path string) (string, error)
+	writeFile(path string, data []byte, perm os.FileMode) error
+	remove(path string) error
+	glob(pattern string) ([]string, error)
+	hostname() (string, error)
+}
+
+type handler struct {
+	sys     system
+	version string
+}
+
+// handle parses one request, dispatches it, and returns the JSON response bytes.
+// It NEVER returns a transport error to the caller for a malformed/uop request —
+// it returns a Response with ok=false so the host always sees a structured
+// answer (no silent failure, design principle #6).
+func (h *handler) handle(raw []byte) []byte {
+	var req Request
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return h.encode(Response{V: ProtocolVersion, OK: false, Error: "bad request: " + err.Error()})
+	}
+	var resp Response
+	switch req.Op {
+	case "ping", "status", "":
+		resp = h.status()
+	case "regenerate-identity":
+		resp = h.regenerate(req)
+	default:
+		resp = Response{OK: false, Error: "unknown op: " + req.Op}
+	}
+	resp.V = ProtocolVersion
+	resp.Op = req.Op
+	resp.AgentVersion = h.version
+	return h.encode(resp)
+}
+
+func (h *handler) encode(r Response) []byte {
+	b, err := json.Marshal(r)
+	if err != nil {
+		// last-resort, should never happen for our flat struct
+		return []byte(`{"v":1,"ok":false,"error":"encode failed"}` + "\n")
+	}
+	return append(b, '\n')
+}
+
+// status reports the guest's current identity (used as the liveness/readiness
+// probe before a regen, and to confirm a regen's effect).
+func (h *handler) status() Response {
+	r := Response{OK: true}
+	r.MachineID = h.machineID()
+	if hn, err := h.sys.hostname(); err == nil {
+		r.Hostname = hn
+	}
+	ifc, _ := h.primaryIface()
+	r.MAC = h.ifaceMAC(ifc)
+	r.IP = h.ifaceIP(ifc)
+	return r
+}
+
+// regenerate applies the requested identity changes in place. Order matters:
+// machine-id / ssh / hostname first, then the MAC, then the lease renew (so the
+// renew happens after the MAC + machine-id-derived DUID change).
+func (h *handler) regenerate(req Request) Response {
+	items := req.Items
+	if len(items) == 0 {
+		items = allItems
+	}
+	want := map[string]bool{}
+	for _, it := range items {
+		want[it] = true
+	}
+
+	resp := Response{OK: true}
+	var done []string
+	var firstErr string
+	fail := func(msg string) {
+		if firstErr == "" {
+			firstErr = msg
+		}
+	}
+
+	if want[itemMachineID] {
+		if err := h.regenMachineID(); err != nil {
+			fail("machineId: " + err.Error())
+		} else {
+			done = append(done, itemMachineID)
+		}
+	}
+	if want[itemSSHHostKeys] {
+		if err := h.regenSSHHostKeys(); err != nil {
+			fail("sshHostKeys: " + err.Error())
+		} else {
+			done = append(done, itemSSHHostKeys)
+		}
+	}
+	if want[itemHostname] {
+		if err := h.setHostname(req.Hostname); err != nil {
+			fail("hostname: " + err.Error())
+		} else {
+			done = append(done, itemHostname)
+		}
+	}
+	if want[itemMACAddresses] {
+		if err := h.setMAC(req.MAC); err != nil {
+			fail("macAddresses: " + err.Error())
+		} else {
+			done = append(done, itemMACAddresses)
+		}
+	}
+	if req.RenewLease {
+		ip, err := h.renewLease()
+		if err != nil {
+			fail("renewLease: " + err.Error())
+		}
+		resp.NewIP = ip
+	}
+
+	sort.Strings(done)
+	resp.Regenerated = done
+	resp.Error = firstErr
+	resp.OK = firstErr == ""
+	// echo the resulting identity so the host can confirm without a second probe
+	resp.MachineID = h.machineID()
+	if hn, err := h.sys.hostname(); err == nil {
+		resp.Hostname = hn
+	}
+	ifc, _ := h.primaryIface()
+	resp.MAC = h.ifaceMAC(ifc)
+	if resp.IP == "" {
+		resp.IP = h.ifaceIP(ifc)
+	}
+	return resp
+}
+
+// --- identity ops -------------------------------------------------------------
+
+func (h *handler) machineID() string {
+	s, _ := h.sys.readFile("/etc/machine-id")
+	return strings.TrimSpace(s)
+}
+
+func (h *handler) regenMachineID() error {
+	// Remove the inherited id (and the dbus copy, which is often a separate file
+	// on older images), then let systemd mint a fresh one.
+	_ = h.sys.remove("/etc/machine-id")
+	_ = h.sys.remove("/var/lib/dbus/machine-id")
+	if _, err := h.sys.run("systemd-machine-id-setup"); err != nil {
+		// fallback for images without systemd-machine-id-setup: dbus-uuidgen
+		if _, e2 := h.sys.run("dbus-uuidgen", "--ensure=/etc/machine-id"); e2 != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *handler) regenSSHHostKeys() error {
+	keys, err := h.sys.glob("/etc/ssh/ssh_host_*")
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		_ = h.sys.remove(k)
+	}
+	if _, err := h.sys.run("ssh-keygen", "-A"); err != nil {
+		return err
+	}
+	// Reload sshd so it picks up the new host keys without dropping the agent.
+	// Best-effort: the service unit name differs across distros (ssh vs sshd).
+	if _, err := h.sys.run("systemctl", "reload", "ssh"); err != nil {
+		_, _ = h.sys.run("systemctl", "reload", "sshd")
+	}
+	return nil
+}
+
+func (h *handler) setHostname(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty hostname")
+	}
+	if !hostnameRE.MatchString(name) {
+		return fmt.Errorf("invalid hostname %q", name)
+	}
+	if _, err := h.sys.run("hostnamectl", "set-hostname", name); err != nil {
+		// fallback for images without hostnamectl
+		if e2 := h.sys.writeFile("/etc/hostname", []byte(name+"\n"), 0o644); e2 != nil {
+			return err
+		}
+		if _, e3 := h.sys.run("hostname", name); e3 != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *handler) setMAC(mac string) error {
+	if mac == "" {
+		return fmt.Errorf("empty mac")
+	}
+	if !macRE.MatchString(mac) {
+		return fmt.Errorf("invalid mac %q", mac)
+	}
+	ifc, err := h.primaryIface()
+	if err != nil {
+		return err
+	}
+	// down -> set address -> up on the LIVE virtio-net link. The PR-0 spike
+	// confirmed this does not wedge the resumed link (ping/fdb/ARP all recover
+	// on the new MAC). See docs/design/clone-identity-vsock-agent-spike.md.
+	_, _ = h.sys.run("ip", "link", "set", ifc, "down")
+	if _, err := h.sys.run("ip", "link", "set", ifc, "address", mac); err != nil {
+		_, _ = h.sys.run("ip", "link", "set", ifc, "up")
+		return err
+	}
+	_, err = h.sys.run("ip", "link", "set", ifc, "up")
+	return err
+}
+
+// renewLease re-DHCPs the primary interface so a lease lands in THIS pod's
+// dnsmasq for the (v0.4.3) restore lease-poller to discover. It does NOT aim for
+// a globally-distinct IP — each clone has its own pod-netns dnsmasq, so the
+// guest-internal address is pod-isolated (spike correction; the MAC-set above is
+// for guest-MAC <-> host-fdb/DNAT consistency, not IP-distinctness).
+func (h *handler) renewLease() (string, error) {
+	ifc, err := h.primaryIface()
+	if err != nil {
+		return "", err
+	}
+	// dhclient first (isc client keys by MAC); fall back to systemd-networkd
+	// (Ubuntu Noble default) which keys by a machine-id-derived DUID.
+	_, _ = h.sys.run("dhclient", "-r", ifc)
+	if _, err := h.sys.run("dhclient", "-1", ifc); err != nil {
+		_, _ = h.sys.run("networkctl", "renew", ifc)
+		_, _ = h.sys.run("networkctl", "reconfigure", ifc)
+	}
+	// give the lease a moment to land, then read the address back
+	time.Sleep(2 * time.Second)
+	return h.ifaceIP(ifc), nil
+}
+
+// --- interface detection ------------------------------------------------------
+
+// primaryIface returns the guest's primary NIC. It does NOT assume "eth0":
+// a stock cloud image under predictable naming calls it enp0sN (PR-0 spike
+// finding). Prefer the default-route iface; else the first non-virtual link.
+func (h *handler) primaryIface() (string, error) {
+	if out, err := h.sys.run("ip", "-o", "-4", "route", "show", "default"); err == nil {
+		fields := strings.Fields(out)
+		for i, f := range fields {
+			if f == "dev" && i+1 < len(fields) {
+				return fields[i+1], nil
+			}
+		}
+	}
+	links, err := h.sys.glob("/sys/class/net/*")
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(links)
+	for _, l := range links {
+		n := filepath.Base(l)
+		if n == "lo" || strings.HasPrefix(n, "veth") || strings.HasPrefix(n, "docker") ||
+			strings.HasPrefix(n, "br") || strings.HasPrefix(n, "virbr") {
+			continue
+		}
+		// a physical/virtio NIC has a device symlink; bridges/veths don't
+		if _, err := h.sys.readFile(l + "/device/uevent"); err == nil {
+			return n, nil
+		}
+	}
+	return "", fmt.Errorf("no primary interface found")
+}
+
+func (h *handler) ifaceMAC(ifc string) string {
+	if ifc == "" {
+		return ""
+	}
+	s, _ := h.sys.readFile("/sys/class/net/" + ifc + "/address")
+	return strings.TrimSpace(s)
+}
+
+func (h *handler) ifaceIP(ifc string) string {
+	if ifc == "" {
+		return ""
+	}
+	out, err := h.sys.run("ip", "-4", "-o", "addr", "show", "dev", ifc)
+	if err != nil {
+		return ""
+	}
+	for _, tok := range strings.Fields(out) {
+		if strings.Contains(tok, "/") && len(tok) > 0 && tok[0] >= '0' && tok[0] <= '9' {
+			return strings.SplitN(tok, "/", 2)[0]
+		}
+	}
+	return ""
+}
+
+// --- real system implementation ----------------------------------------------
+
+type realSystem struct{}
+
+func (realSystem) run(name string, args ...string) (string, error) {
+	// exec.Command uses argv directly — no shell, so validated MAC/hostname args
+	// can never be interpreted (security: no shell interpolation).
+	out, err := exec.Command(name, args...).CombinedOutput()
+	return string(out), err
+}
+func (realSystem) readFile(p string) (string, error) {
+	b, err := os.ReadFile(p)
+	return string(b), err
+}
+func (realSystem) writeFile(p string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(p, data, perm)
+}
+func (realSystem) remove(p string) error           { return os.Remove(p) }
+func (realSystem) glob(p string) ([]string, error) { return filepath.Glob(p) }
+func (realSystem) hostname() (string, error)       { return os.Hostname() }

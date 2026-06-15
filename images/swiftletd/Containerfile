@@ -46,6 +46,13 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY api ./api
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/snapshot-stager ./cmd/snapshot-stager
+# kubeswift-guest-agent: the in-guest identity agent. It is NOT run by the
+# launcher pod — it is a static binary embedded here so it can be installed
+# INSIDE a source guest (via the guest-agent SwiftSeedProfile's virtiofs share
+# in PR 2, or a golden-image bake) and captured into the memory snapshot. CGO
+# off so it runs on any glibc/musl guest. See
+# docs/design/clone-identity-vsock-agent.md.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -114,6 +121,13 @@ RUN mkdir -p /usr/share/kubeswift-firmware && \
 
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
 COPY --from=go-builder /out/snapshot-stager /usr/local/bin/snapshot-stager
+# kubeswift-guest-agent + its systemd unit live in a share dir, NOT on the
+# launcher PATH — the agent runs INSIDE the guest, not in the launcher pod. The
+# guest-agent SwiftSeedProfile (PR 2) bind-mounts this dir read-only into a
+# source guest to install the agent before the snapshot; a golden image can bake
+# it instead. See docs/design/clone-identity-vsock-agent.md §6.1.
+COPY --from=go-builder /out/kubeswift-guest-agent /usr/local/share/kubeswift/guest-agent/kubeswift-guest-agent
+COPY cmd/kubeswift-guest-agent/kubeswift-guest-agent.service /usr/local/share/kubeswift/guest-agent/kubeswift-guest-agent.service
 COPY rust/swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh
 COPY rust/swiftletd/scripts/launcher-entrypoint.sh /usr/local/bin/launcher-entrypoint.sh
 COPY rust/swiftletd/scripts/gpu-init.sh /usr/local/bin/gpu-init.sh
