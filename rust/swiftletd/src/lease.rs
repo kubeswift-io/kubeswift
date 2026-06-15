@@ -52,8 +52,28 @@ fn parse_first_lease(contents: &str) -> Option<String> {
 }
 
 /// Spawns a background thread that polls the lease file and patches the pod annotation when IP found.
-/// Stops after a SUCCESSFUL patch or after max_attempts (default 120 = 4 min at 2s interval).
-/// First boot of cloud images can take 60–90s for cloud-init + DHCP.
+/// Lease-poll attempt caps (each attempt is `INTERVAL` = 2s apart).
+///
+/// `DEFAULT` (~4 min) covers a fresh boot: cloud images DHCP within ~60-90s.
+///
+/// `RESTORE` keeps the poller alive for the pod's lifetime. A cloneFromSnapshot
+/// guest (and any CH `--restore` receiver) RESUMES the source's captured RAM —
+/// including its already-configured `eth0` lease — so it does NOT re-run DHCP on
+/// start. dnsmasq writes no lease, so a fresh clone has no IP to discover. The
+/// guest only DHCPs on its FIRST REBOOT (which regenerates identity too), and an
+/// operator may reboot it many minutes after it reaches Running. With the
+/// `DEFAULT` cap the poller would have exited (`lease_poll_timeout`) long before
+/// then, so the post-reboot DHCP would land into a dead poller and the IP would
+/// never reach `status.network.primaryIP` (demo-06 finding, 2026-06-15). The
+/// poller still terminates immediately on the first successful patch, so an
+/// unbounded cap only means "wait as long as the pod lives" for a guest that has
+/// not yet acquired an IP.
+pub const LEASE_POLL_ATTEMPTS_DEFAULT: u32 = 120;
+pub const LEASE_POLL_ATTEMPTS_RESTORE: u32 = u32::MAX;
+
+/// Stops after a SUCCESSFUL patch or after `max_attempts` (× 2s interval —
+/// pass [`LEASE_POLL_ATTEMPTS_DEFAULT`] for fresh boots,
+/// [`LEASE_POLL_ATTEMPTS_RESTORE`] for CH `--restore` clone/receiver guests).
 /// `nics` is passed to build the multi-NIC interfaces annotation.
 ///
 /// Retry-on-failure invariant (added 2026-04-29 — Phase 2 walkthrough
@@ -69,19 +89,18 @@ fn parse_first_lease(contents: &str) -> Option<String> {
 /// patch. On any error from the kube client (transient apiserver
 /// unavailability, RBAC gap, etc.), continue polling — eventually
 /// the operator-fix will land and the next attempt will succeed.
-/// Bounded by MAX_ATTEMPTS (~4 min total).
 pub fn spawn_lease_poller(
     lease_path: impl AsRef<Path> + Send + 'static,
     namespace: String,
     pod_name: String,
     nics: Option<Vec<crate::intent::NICIntent>>,
+    max_attempts: u32,
 ) {
     let path = lease_path.as_ref().to_path_buf();
     thread::spawn(move || {
         const INTERVAL: Duration = Duration::from_secs(2);
-        const MAX_ATTEMPTS: u32 = 120;
 
-        for attempt in 0..MAX_ATTEMPTS {
+        for attempt in 0..max_attempts {
             if attempt > 0 {
                 thread::sleep(INTERVAL);
             }

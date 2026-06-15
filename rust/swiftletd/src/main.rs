@@ -221,7 +221,23 @@ fn main() {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let lease_path = runtime_dir.root().join("dnsmasq.leases");
                     let nics_for_poller = intent.nics.clone();
-                    lease::spawn_lease_poller(lease_path, ns.clone(), n.clone(), nics_for_poller);
+                    // A restore (cloneFromSnapshot) guest resumes the source's
+                    // RAM and does not re-DHCP until its first reboot, which may
+                    // be many minutes out — keep the poller alive for the pod's
+                    // lifetime so that post-reboot lease is discovered (a fresh
+                    // boot keeps the ~4 min cap). See lease::spawn_lease_poller.
+                    let max_attempts = if intent.is_restore() {
+                        lease::LEASE_POLL_ATTEMPTS_RESTORE
+                    } else {
+                        lease::LEASE_POLL_ATTEMPTS_DEFAULT
+                    };
+                    lease::spawn_lease_poller(
+                        lease_path,
+                        ns.clone(),
+                        n.clone(),
+                        nics_for_poller,
+                        max_attempts,
+                    );
                 }
             }
 
