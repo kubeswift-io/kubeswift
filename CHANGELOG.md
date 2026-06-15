@@ -4,6 +4,45 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.4.3] — 2026-06-15
+
+Patch release. swiftletd lease-poller fix for cloneFromSnapshot guests, and a
+documented Cloud-Hypervisor-v52 limitation surfaced validating the instant-clone
+flow.
+
+### Fixed
+
+- **swiftletd: the lease poller no longer gives up on restore/clone guests.** A
+  `cloneFromSnapshot` guest boots via CH `--restore` — it RESUMES the source's
+  captured RAM (including its already-configured `eth0` lease) and does not
+  re-run DHCP on start, so a fresh clone has no lease to discover. The guest only
+  re-DHCPs on a later reboot, but the lease poller capped at ~4 min and then
+  exited permanently (`lease_poll_timeout`) — so any post-reboot lease landed
+  into a dead poller and the IP never reached `status.network.primaryIP`. The
+  poll cap is now parameterized: fresh boots keep the ~4 min cap, CH `--restore`
+  receivers (`intent.is_restore()`) keep polling for the pod's lifetime so the
+  eventual lease is discovered. The poller still terminates immediately on the
+  first successful patch. swiftletd-only; no controller/CRD change.
+
+### Known issues
+
+- **A cloneFromSnapshot (memory-snapshot) guest cannot reboot on Cloud
+  Hypervisor v52** — rebooting a `--restore`d guest hangs in UEFI firmware (the
+  EDK2 S3-resume / AP-init path freezes after `MpInitChangeApLoopCallback`),
+  while a *normal* guest reboots through the same point and re-DHCPs in seconds.
+  Because the documented clone-identity remedy is "reboot once to regenerate
+  identity + re-DHCP", this means memory-snapshot clones currently keep the
+  source's guest-visible identity and do not surface their own IP — treat them as
+  warm, read-mostly replicas (collision-safe via per-pod network namespaces). It
+  is a CH-`--restore`+reboot firmware interaction, not a KubeSwift defect; the
+  in-guest vsock identity agent (regenerate without a reboot) is the planned real
+  fix. Investigation:
+  [`docs/design/known-issues-clone-reboot-firmware-hang.md`](docs/design/known-issues-clone-reboot-firmware-hang.md);
+  operator note in
+  [`docs/snapshots/clone-from-snapshot.md`](docs/snapshots/clone-from-snapshot.md).
+
+---
+
 ## [v0.4.2] — 2026-06-14
 
 Code + chart release. Headline: **blank / raw VM data disks** — the
