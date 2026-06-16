@@ -191,6 +191,11 @@ setup_primary_nad_nic() {
     nad_gw=$(ip route show default 2>/dev/null | awk -v d="$multus_iface" '$0 ~ ("dev "d){print $3; exit}')
     [ -z "$nad_gw" ] && nad_gw=$(ip route show dev "$multus_iface" 2>/dev/null | awk '/default/{print $3; exit}')
 
+    # The NAD interface's MTU (set by the CNI -- e.g. 1450 on a VXLAN overlay).
+    # Handed to the guest via DHCP so an overlay's encapsulation overhead does not
+    # silently drop the guest's full-size frames.
+    nad_mtu=$(ip -o link show "$multus_iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="mtu"){print $(i+1); exit}}')
+
     # Persist for the launcher entrypoint (shared run dir).
     rd=$(guest_run_dir); mkdir -p "$rd"
     {
@@ -199,6 +204,7 @@ setup_primary_nad_nic() {
         echo "NAD_GW=$nad_gw"
         echo "NAD_MAC=$guest_mac"
         echo "NAD_BRIDGE=$bridge"
+        echo "NAD_MTU=$nad_mtu"
     } > "$rd/primary-nad.env"
 
     # The guest claims nad_ip; the host must not also hold it on the L2.
