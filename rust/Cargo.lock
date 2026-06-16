@@ -1795,6 +1795,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "swift-vsock-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "swiftletd"
 version = "0.1.0"
 dependencies = [
@@ -1810,6 +1818,7 @@ dependencies = [
  "swift-qemu-client",
  "swift-runtime",
  "swift-seed",
+ "swift-vsock-client",
  "tempfile",
  "tokio",
 ]

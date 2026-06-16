@@ -18,6 +18,7 @@ COPY rust/swift-runtime ./swift-runtime
 COPY rust/swift-seed ./swift-seed
 COPY rust/swift-ch-client ./swift-ch-client
 COPY rust/swift-qemu-client ./swift-qemu-client
+COPY rust/swift-vsock-client ./swift-vsock-client
 
 RUN KUBESWIFT_VERSION=$VERSION KUBESWIFT_GIT_COMMIT=$GIT_COMMIT KUBESWIFT_BUILD_DATE=$BUILD_DATE \
     cargo build -p swiftletd --release
