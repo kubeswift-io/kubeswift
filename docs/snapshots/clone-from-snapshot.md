@@ -100,29 +100,40 @@ intervention every clone inherits the source's identity. Two layers handle it:
 - **MAC**: the controller rewrites each clone's *hypervisor* `config.net[].mac` to
   a value deterministic in `(namespace, name, iface)` — **always**, regardless of
   the `regenerate` list. Combined with each clone's own pod network namespace,
-  this makes N coexisting clones collision-safe **by construction** (the
-  guest-visible MAC stays the source's until reboot, but the clones are never on
-  the same L2 segment).
-- **hostname / machine-id / SSH host keys**: regenerated on each clone's **first
-  reboot** via the seed profile's `kubeswift.clone=true` bootcmd (listed in
-  `regenerate`). Until a reboot they are inherited.
+  this makes N coexisting clones collision-safe **by construction**.
+- **hostname / machine-id / SSH host keys / guest-visible MAC + IP**: regenerated
+  **in place, with no reboot**, by the in-guest identity agent (below).
 
-**To diverge guest-visible identity, reboot each replica once after it resumes.**
-(An in-guest vsock agent to do this without a reboot is a future enhancement.)
+### The in-guest identity agent (recommended)
 
-> ⚠️ **Known limitation on Cloud Hypervisor v52 — a resumed clone cannot reboot.**
-> Rebooting a `--restore`d guest hangs in UEFI firmware (the EDK2 S3-resume / AP
-> init path freezes after `MpInitChangeApLoopCallback`; a *normal* guest reboots
-> fine through the same point). So the "reboot to regenerate" step above does
-> **not** currently complete — the clone keeps the source's guest-visible
-> identity, and because the resumed guest never re-runs DHCP, its IP is not
-> discovered (`status.network.primaryIP` stays empty even though the guest is
-> reachable on the source's address inside its own pod netns). This is a
-> CH-`--restore`+reboot firmware interaction, not a KubeSwift defect; tracked in
-> [`docs/design/known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md).
-> Until it is resolved, treat memory-snapshot clones as **warm read-mostly
-> replicas of the source's identity**; the in-guest vsock identity agent (above)
-> is the real fix and supersedes the reboot path.
+Opt the **source** in with `spec.guestAgent.enabled: true` and install the agent
+(golden image, or the `guest-agent` SwiftSeedProfile — see
+[`identity-regeneration.md`](identity-regeneration.md)). The agent is then running
+in the source's captured RAM and resumes in every clone. Once a clone reaches
+`GuestRunning`, the controller drives a one-shot regeneration over a host↔guest
+**vsock** channel: it regenerates the items in `regenerate` (machine-id / SSH host
+keys / hostname), sets the per-clone guest-visible MAC, and re-DHCPs — **all
+without a reboot**. The result is reported on the clone's
+`CloneIdentityRegenerated` condition (`True`, or `False` with reason
+`GuestAgentUnreachable` if the agent is absent), and each clone's own IP lands in
+`status.network.primaryIP` via the restore lease-poller.
+
+Cluster-validated (2026-06-16): a 2-clone fan-out from one snapshot came up with
+**distinct machine-id, hostname, MAC, and IP** per clone (e.g. `.17` and `.20`,
+both different from the source's `.11`) — no reboot.
+
+> The agent is the fix for the **CH v52 clone-reboot firmware hang**: rebooting a
+> `--restore`d guest hangs in EDK2 firmware (freezes after
+> `MpInitChangeApLoopCallback`), so the legacy "reboot to regenerate" path does
+> not complete on CH v52
+> ([`known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md)).
+> The agent sidesteps the reboot entirely.
+
+**Without the agent** (no `guestAgent.enabled`, or a stock image), the clone keeps
+the source's guest-visible identity and `status.network.primaryIP` stays empty —
+a warm, read-mostly replica. The legacy `kubeswift.clone=true` bootcmd path is
+kept as a fallback but **does not complete on CH v52** (the reboot hangs); install
+the agent to get independently-addressable clones.
 
 ## Quick start (walkthrough)
 
@@ -150,8 +161,8 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 | Guest `Failed`, *"requires spec.cloneFromSnapshot.targetNode"* | Tier C clone without a target node. In a pool the controller assigns it; a standalone clone must set it. |
 | Guest stuck `Pending`, *"waiting for SwiftSnapshot … to be Ready"* | The snapshot is still Capturing/Uploading. |
 | Guest stuck `Pending`, download Job present | The Tier C download is in progress (or `ImagePullBackOff` / `snapshot-s3 image not configured`). |
-| All clones share hostname/machine-id | Expected on resume. The regen bootcmd fires on first reboot — but on CH v52 a clone reboot hangs in firmware (see the Known-limitation callout above), so this currently persists. |
-| Clone is `Running` but `status.network.primaryIP` is empty | Expected on resume — the guest kept the source's cached lease and never re-ran DHCP, so there is no lease for swiftletd to discover. It would surface after a reboot's fresh DHCP, but the clone-reboot firmware hang (above) blocks that on CH v52. The lease poller stays alive for restore guests (v0.4.3+), so the IP appears automatically *if/when* the guest does re-DHCP. |
+| All clones share hostname/machine-id | The source isn't agent-enabled. Set `spec.guestAgent.enabled: true` on the source + install the agent (see the in-guest agent section above); the controller then regenerates identity in place. Check the clone's `CloneIdentityRegenerated` condition — `False/GuestAgentUnreachable` means the agent isn't running in the snapshot. |
+| Clone is `Running` but `status.network.primaryIP` is empty | With the agent, the clone re-DHCPs and the IP appears automatically. If empty, the agent is absent (`CloneIdentityRegenerated=False/GuestAgentUnreachable`) — the guest kept the source's cached lease and never re-ran DHCP. Install the agent. (The lease poller stays alive for restore guests, v0.4.3+, so the IP lands as soon as the agent's `dhclient` runs.) |
 
 ## Cluster walkthrough
 
@@ -189,6 +200,7 @@ Results after the fixes:
 The 2-replica pool pre-assigned one replica per worker node, each ran its own
 node-pinned download from object storage, booted as a clone via `CH --restore`,
 resumed (one-shot resume action), and came up with the source's in-VM state
-preserved and a distinct per-clone hypervisor MAC. Guest-visible identity
-(machine-id / hostname / MAC) is inherited until each clone's first reboot — the
-documented resume-vs-boot rule.
+preserved and a distinct per-clone hypervisor MAC. (That run predated the
+in-guest agent, so guest-visible identity was still inherited. With
+`spec.guestAgent.enabled` on the source the agent now regenerates machine-id /
+hostname / guest MAC + re-DHCPs in place — see the Identity section above.)
