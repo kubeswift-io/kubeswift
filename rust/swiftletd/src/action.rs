@@ -221,6 +221,19 @@ pub const PROGRESS_BASELINE_MBPS: f64 = 108.0;
 /// removes this annotation entirely once mTLS lands.
 pub const MIGRATION_PHASE2_ACK_KEY: &str = "kubeswift.io/migration-phase2-unsafe-plaintext";
 
+// Identity namespace — controller writes (read by swiftletd). Drives the
+// in-guest identity agent over vsock (regenerate machine-id / SSH keys /
+// hostname / MAC + re-DHCP on a cloneFromSnapshot clone). See
+// docs/design/clone-identity-vsock-agent.md.
+pub const IDENTITY_ACTION_KEY: &str = "kubeswift.io/identity-action";
+pub const IDENTITY_ACTION_ID_KEY: &str = "kubeswift.io/identity-action-id";
+pub const IDENTITY_ACTION_ARGS_KEY: &str = "kubeswift.io/identity-action-args";
+
+// Identity namespace — swiftletd writes (read by controller).
+pub const IDENTITY_STATUS_KEY: &str = "kubeswift.io/identity-status";
+pub const IDENTITY_STATUS_ID_KEY: &str = "kubeswift.io/identity-status-id";
+pub const IDENTITY_STATUS_DETAIL_KEY: &str = "kubeswift.io/identity-status-detail";
+
 /// Annotation key set for one action namespace. Each namespace
 /// (snapshot, migration) has its own KeySet; the action loop runs
 /// `decide` against each per tick.
@@ -278,6 +291,21 @@ pub static MIGRATION_KEYS: KeySet = KeySet {
     ack_key: Some(MIGRATION_PHASE2_ACK_KEY),
     parse_verb: parse_migration_verb,
     namespace: "migration",
+};
+
+/// Identity namespace key set. Used by `dispatch_identity_regenerate`. No
+/// ack-gate (the transport is intra-pod host<->guest vsock, not a cross-pod
+/// channel — see docs/design/clone-identity-vsock-agent.md §Q5).
+pub static IDENTITY_KEYS: KeySet = KeySet {
+    action_key: IDENTITY_ACTION_KEY,
+    action_id_key: IDENTITY_ACTION_ID_KEY,
+    action_args_key: IDENTITY_ACTION_ARGS_KEY,
+    status_key: IDENTITY_STATUS_KEY,
+    status_id_key: IDENTITY_STATUS_ID_KEY,
+    status_detail_key: IDENTITY_STATUS_DETAIL_KEY,
+    ack_key: None,
+    parse_verb: parse_identity_verb,
+    namespace: "identity",
 };
 
 /// Env var the SwiftGuest controller sets on the launcher container when
@@ -382,6 +410,14 @@ fn parse_migration_verb(verb: &str) -> ActionKind {
     }
 }
 
+/// Maps an identity-namespace verb string to an [`ActionKind`].
+fn parse_identity_verb(verb: &str) -> ActionKind {
+    match verb {
+        "regenerate" => ActionKind::IdentityRegenerate,
+        other => ActionKind::Unknown(other.to_string()),
+    }
+}
+
 /// Default per-call timeout for pause/resume/snapshot when the action
 /// args don't carry a `timeout_seconds` hint. 600s covers a 200 GiB VM
 /// at the Phase 0 ~2.8s/GiB curve with margin; the controller passes
@@ -421,6 +457,12 @@ pub enum ActionKind {
     /// The source CH automatically resumes on the dst-kill (Q1d-F2).
     /// `docs/design/live-migration-phase-2.md` §2 row 7.
     MigrationCancel,
+
+    // Identity namespace — `kubeswift.io/identity-action` verbs.
+    /// Regenerate a cloneFromSnapshot clone's identity in place over vsock:
+    /// machine-id / SSH host keys / hostname / MAC + re-DHCP, with no reboot.
+    /// See docs/design/clone-identity-vsock-agent.md.
+    IdentityRegenerate,
 
     /// Anything else — surfaces as a malformed-rejection so the
     /// controller learns immediately rather than the launcher silently
@@ -535,6 +577,7 @@ pub struct NamespaceState {
 pub struct ActionState {
     pub snapshot: NamespaceState,
     pub migration: NamespaceState,
+    pub identity: NamespaceState,
 }
 
 /// Pure-function action-decision logic. Tested in isolation — no
@@ -673,6 +716,7 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
         ActionKind::MigrationSend => dispatch_migration_send(action, api_socket).await,
         ActionKind::MigrationReceive => dispatch_migration_receive(action, api_socket).await,
         ActionKind::MigrationCancel => dispatch_migration_cancel(action, api_socket).await,
+        ActionKind::IdentityRegenerate => dispatch_identity_regenerate(action, api_socket).await,
         ActionKind::Unknown(verb) => {
             log::warn!(
                 "dispatch_unknown_action_verb verb={} id={}",
@@ -682,6 +726,88 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
             Err(format!("unknown action verb: {}", verb))
         }
     }
+}
+
+/// Args parsed from `kubeswift.io/identity-action-args` for the `regenerate`
+/// verb. The controller writes these from
+/// `SwiftGuest.spec.cloneFromSnapshot.regenerate` + the per-clone MAC/hostname.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityRegenArgs {
+    #[serde(default)]
+    items: Vec<String>,
+    #[serde(default)]
+    mac: Option<String>,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    renew_lease: bool,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// Identity-regen timeout. The agent resumes from RAM (already running on a
+/// clone), so it answers ~immediately; the floor is the in-guest dhclient renew.
+const IDENTITY_ACTION_TIMEOUT_SECS: u64 = 30;
+
+/// Connect to the in-guest identity agent over vsock and ask it to regenerate
+/// the clone's identity in place. The vsock socket lives next to the CH API
+/// socket (`<runtime-dir>/vsock.sock`). Returns a `GuestAgentUnreachable` detail
+/// when the agent does not answer (absent / device-less / timeout) so the
+/// controller maps it to CloneIdentityRegenerated=False (PR 4) — never a silent
+/// success. The new IP is also discovered by the (v0.4.3) restore lease poller
+/// via dnsmasq, so this path does not need to surface it.
+async fn dispatch_identity_regenerate(
+    action: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    let args: IdentityRegenArgs = if action.args.is_null() {
+        IdentityRegenArgs::default()
+    } else {
+        serde_json::from_value(action.args.clone())
+            .map_err(|e| format!("parse identity args: {}", e))?
+    };
+    let vsock_socket = api_socket
+        .parent()
+        .unwrap_or_else(|| Path::new("/"))
+        .join("vsock.sock");
+    let timeout = std::time::Duration::from_secs(
+        args.timeout_seconds.unwrap_or(IDENTITY_ACTION_TIMEOUT_SECS),
+    );
+    let req = swift_vsock_client::IdentityRequest::regenerate(
+        args.items,
+        args.mac,
+        args.hostname,
+        args.renew_lease,
+    );
+    log::info!(
+        "dispatch_identity_regenerate id={} socket={}",
+        action.id,
+        vsock_socket.display()
+    );
+    // The vsock client is synchronous; run it off the action loop's
+    // current_thread runtime so a slow in-guest dhclient cannot wedge the loop
+    // (contrast the migration-send sync-in-async wedge, TFU #14).
+    let resp = tokio::task::spawn_blocking(move || {
+        swift_vsock_client::regenerate_identity(&vsock_socket, &req, timeout)
+    })
+    .await
+    .map_err(|e| format!("identity task join: {}", e))?
+    .map_err(|e| format!("GuestAgentUnreachable: {}", e))?;
+
+    if !resp.ok {
+        return Err(format!(
+            "agent error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+    Ok(ActionOutcome::detail(format!(
+        "regenerated {:?}{}",
+        resp.regenerated,
+        resp.new_ip
+            .map(|ip| format!(", ip={}", ip))
+            .unwrap_or_default()
+    )))
 }
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
@@ -1700,6 +1826,39 @@ pub async fn write_migration_status(
     Ok(())
 }
 
+/// Patch the launcher pod's status annotations for the identity namespace.
+/// Mirrors [`write_status`] (status / status-id / status-detail), written
+/// together in a single Patch::Merge so the controller never sees a status
+/// without its id. The `_pause_window_ms` parameter is unused (identity has no
+/// pause window — the new IP arrives via the lease poller); it is present only
+/// to satisfy the shared `StatusWriter` fn-pointer signature.
+pub async fn write_identity_status(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    action_id: &str,
+    status: StatusKind,
+    detail: Option<&str>,
+    _pause_window_ms: Option<u64>,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(IDENTITY_STATUS_KEY.to_string(), status.as_str().to_string());
+    annotations.insert(IDENTITY_STATUS_ID_KEY.to_string(), action_id.to_string());
+    annotations.insert(
+        IDENTITY_STATUS_DETAIL_KEY.to_string(),
+        detail.unwrap_or("").to_string(),
+    );
+    let patch = json!({
+        "metadata": {
+            "annotations": annotations
+        }
+    });
+    let pp = PatchParams::default();
+    api.patch(pod_name, &pp, &Patch::Merge(&patch)).await?;
+    Ok(())
+}
+
 // ─── Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────────
 //
 // Auto-write `migration-status: failed` on abnormal CH listener exit.
@@ -2012,6 +2171,23 @@ async fn handle_pod_state(
         write_migration_status_fn,
     )
     .await;
+
+    // Identity namespace (in-guest agent over vsock). A separate namespace with
+    // its own state — it is NOT part of the snapshot<->migration mutual-rejection
+    // above: identity-regen fires once on a fresh cloneFromSnapshot clone (post
+    // GuestRunning) and does not overlap a snapshot/migration of the same guest
+    // in the controller-driven flow (PR 4). See clone-identity-vsock-agent.md.
+    handle_namespace(
+        client,
+        namespace,
+        pod_name,
+        api_socket,
+        &mut state.identity,
+        &IDENTITY_KEYS,
+        annotations,
+        write_identity_status_fn,
+    )
+    .await;
 }
 
 /// Type alias for the namespace-specific status writer used by
@@ -2051,6 +2227,20 @@ fn write_migration_status_fn<'a>(
     pause: Option<u64>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
     Box::pin(write_migration_status(
+        client, ns, pod, id, status, detail, pause,
+    ))
+}
+
+fn write_identity_status_fn<'a>(
+    client: &'a Client,
+    ns: &'a str,
+    pod: &'a str,
+    id: &'a str,
+    status: StatusKind,
+    detail: Option<&'a str>,
+    pause: Option<u64>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
+    Box::pin(write_identity_status(
         client, ns, pod, id, status, detail, pause,
     ))
 }
@@ -3012,6 +3202,38 @@ mod tests {
             parse_migration_verb("xyz"),
             ActionKind::Unknown("xyz".to_string())
         );
+    }
+
+    #[test]
+    fn parse_identity_verb_maps_known_and_unknown() {
+        assert_eq!(
+            parse_identity_verb("regenerate"),
+            ActionKind::IdentityRegenerate
+        );
+        assert_eq!(
+            parse_identity_verb("xyz"),
+            ActionKind::Unknown("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn identity_keyset_no_ack_gate_and_accepts_regenerate() {
+        // Identity is a host<->guest vsock channel — no plaintext-ack gate.
+        assert!(IDENTITY_KEYS.ack_key.is_none());
+        let mut a = BTreeMap::new();
+        a.insert(IDENTITY_ACTION_KEY.to_string(), "regenerate".to_string());
+        a.insert(IDENTITY_ACTION_ID_KEY.to_string(), "id-1".to_string());
+        a.insert(
+            IDENTITY_ACTION_ARGS_KEY.to_string(),
+            r#"{"items":["machineId"],"renewLease":true}"#.to_string(),
+        );
+        match decide(&a, &IDENTITY_KEYS, None, None) {
+            ActionDecision::Accept(p) => {
+                assert_eq!(p.kind, ActionKind::IdentityRegenerate);
+                assert_eq!(p.id, "id-1");
+            }
+            other => panic!("expected Accept, got {:?}", other),
+        }
     }
 
     #[test]

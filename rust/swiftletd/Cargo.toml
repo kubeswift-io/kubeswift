@@ -17,6 +17,7 @@ swift-seed = { path = "../swift-seed" }
 swift-runtime = { path = "../swift-runtime" }
 swift-ch-client = { path = "../swift-ch-client" }
 swift-qemu-client = { path = "../swift-qemu-client" }
+swift-vsock-client = { path = "../swift-vsock-client" }
 
 [dev-dependencies]
 tempfile = "3"
