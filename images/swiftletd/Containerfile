@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # internal/snapshot/configjson — the source-of-truth for the narrow
 # config.json edits applied to a Tier B clone (see commits 12/13).
 FROM golang:1.25-bookworm AS go-builder
+ARG VERSION=dev
 WORKDIR /go-build
 COPY go.mod go.sum ./
 RUN go mod download
@@ -49,11 +50,13 @@ COPY api ./api
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/snapshot-stager ./cmd/snapshot-stager
 # kubeswift-guest-agent: the in-guest identity agent. It is NOT run by the
 # launcher pod — it is a static binary embedded here so it can be installed
-# INSIDE a source guest (via the guest-agent SwiftSeedProfile's virtiofs share
-# in PR 2, or a golden-image bake) and captured into the memory snapshot. CGO
-# off so it runs on any glibc/musl guest. See
-# docs/design/clone-identity-vsock-agent.md.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
+# INSIDE a source guest (via the guest-agent SwiftSeedProfile's NoCloud seed
+# disk, or a golden-image bake) and captured into the memory snapshot. CGO off
+# so it runs on any glibc/musl guest; -X main.version stamps the release version
+# (reported back on the agent's ping). See docs/design/clone-identity-vsock-agent.md.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags "-X main.version=${VERSION}" \
+    -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
 
 # Runtime stage
 FROM debian:bookworm-slim
