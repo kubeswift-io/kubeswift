@@ -89,6 +89,14 @@ const (
 	// host keys, and hostname on first wake (see
 	// docs/snapshots/identity-regeneration.md).
 	AnnotationRestoreAppendCmdlineMarker = "snapshot.kubeswift.io/restore-append-cmdline-marker"
+	// AnnotationCloneAgentEnabled, when "true" on a cloneFromSnapshot guest,
+	// records that the snapshot SOURCE opted into the in-guest identity agent
+	// (source.spec.guestAgent.enabled). The controller reads it after the clone
+	// reaches GuestRunning to drive the one-shot identity-action regen over
+	// vsock (see ensureCloneIdentityRegen). When set, the controller does NOT
+	// also append the kubeswift.clone=true cmdline marker — the agent owns
+	// identity regeneration, so the legacy reboot-bootcmd path is skipped.
+	AnnotationCloneAgentEnabled = "snapshot.kubeswift.io/clone-agent-enabled"
 	// AnnotationRestoreRuntimeDirFromPrefix is the source pod's
 	// runtime_dir prefix that the stager must rewrite in
 	// disks[].path and serial.socket. Must end in "/". Empty disables

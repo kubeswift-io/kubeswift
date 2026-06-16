@@ -159,7 +159,17 @@ func cloneRestoreAnnotations(
 		// pod's lifetime, so lazy paging is safe (snapshot-ch-v52-efficiency.md).
 		AnnotationRestoreMemoryMode: "ondemand",
 	}
-	if cloneRegenIncludesNonMAC(guest.Spec.CloneFromSnapshot) {
+	// In-guest identity agent: if the SOURCE opted in (and the device is in the
+	// snapshot), the agent regenerates identity in place over vsock once the
+	// clone is Running (ensureCloneIdentityRegen). Record it on the clone so the
+	// controller knows to drive the action — and SKIP the legacy reboot-bootcmd
+	// cmdline marker, since the agent owns regeneration (the two must not both
+	// fire). When the agent is absent, fall back to the marker (broken on CH
+	// v52; docs/snapshots/identity-regeneration.md).
+	agentEnabled := source.Spec.GuestAgent != nil && source.Spec.GuestAgent.Enabled
+	if agentEnabled {
+		annos[AnnotationCloneAgentEnabled] = "true"
+	} else if cloneRegenIncludesNonMAC(guest.Spec.CloneFromSnapshot) {
 		annos[AnnotationRestoreAppendCmdlineMarker] = "true"
 	}
 	return annos
