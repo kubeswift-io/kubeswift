@@ -166,6 +166,19 @@ shipped:
   needs no external hosting. **This requires the source guest to declare it wants
   the agent** (an opt-in seed profile + a controller flag to attach the share) —
   it is not automatic.
+
+  > **IMPLEMENTATION CORRECTION (2026-06-15) — superseded by the NoCloud seed
+  > disk, NOT virtiofs.** A virtiofs share is a virtio-PCI device; attaching it to
+  > the SOURCE means it is **captured in the snapshot**, and `run_ch_restore` does
+  > not spawn virtiofsd, so every clone restore would break on the orphaned
+  > vhost-user-fs backend. Instead, swiftletd drops the agent binary onto the
+  > guest's **NoCloud seed disk** (`main.rs::create_seed_iso`, gated on
+  > `intent.vsock.is_some()` — true for both the source and a clone, since a clone
+  > resolves off the source spec, keeping the two seed disks byte-identical). The
+  > seed `runcmd` mounts the `cidata` disk by label and installs from it. A disk —
+  > not a captured PCI device — so the clone restore is unaffected. The
+  > `guestAgent.enabled` SwiftGuest field is the opt-in (it also attaches the vsock
+  > device). See `config/samples/seed-profiles/guest-agent.yaml`.
 - **(b) Power path — bake into the golden image.** Operators building a golden
   SwiftImage install the agent + unit at image-build time (documented `apt`/`dnf`
   package or a `curl | install` in their image recipe). The snapshot of any guest

@@ -19,7 +19,14 @@ use std::sync::Arc;
 /// -joliet: Joliet extensions, additional filename compatibility.
 fn create_seed_iso(seed_dir: &Path, output_iso: &Path) -> Result<(), String> {
     let mut files = Vec::new();
-    for name in ["meta-data", "user-data", "network-config"] {
+    // The agent binary (when present) rides the seed disk alongside the NoCloud
+    // files; cloud-init ignores it, the guest-agent seed profile installs it.
+    for name in [
+        "meta-data",
+        "user-data",
+        "network-config",
+        GUEST_AGENT_SEED_FILE,
+    ] {
         let p = seed_dir.join(name);
         if p.exists() {
             files.push(name.to_string());
@@ -49,6 +56,15 @@ fn create_seed_iso(seed_dir: &Path, output_iso: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Path the swiftletd image ships the in-guest identity agent binary at (see
+/// images/swiftletd/Containerfile). Copied onto the NoCloud seed disk for an
+/// agent-enabled source guest so its first-boot cloud-init can install it (the
+/// guest-agent SwiftSeedProfile mounts the cidata disk and installs from here).
+const GUEST_AGENT_IMAGE_BINARY: &str =
+    "/usr/local/share/kubeswift/guest-agent/kubeswift-guest-agent";
+/// Filename the agent binary lands under on the cidata seed disk.
+const GUEST_AGENT_SEED_FILE: &str = "kubeswift-guest-agent";
 
 const VERSION: &str = env!("KUBESWIFT_VERSION");
 const GIT_COMMIT: &str = env!("KUBESWIFT_GIT_COMMIT");
@@ -162,6 +178,22 @@ fn main() {
                     std::process::exit(1);
                 }
                 log::info!("nocloud_built path={}", nocloud_output.display());
+                // In-guest identity agent: a vsock device on the intent marks an
+                // agent-enabled guest (source AND clone, since a clone resolves off
+                // the source spec — keeps both seed.isos byte-identical, which the
+                // clone restore needs). Drop the agent binary onto the seed disk so
+                // the source's first-boot cloud-init (guest-agent SwiftSeedProfile)
+                // installs it. See docs/design/clone-identity-vsock-agent.md.
+                if intent.vsock.is_some() && Path::new(GUEST_AGENT_IMAGE_BINARY).exists() {
+                    let dst = nocloud_output.join(GUEST_AGENT_SEED_FILE);
+                    match std::fs::copy(GUEST_AGENT_IMAGE_BINARY, &dst) {
+                        Ok(n) => log::info!("seed_guest_agent_added bytes={}", n),
+                        Err(e) => log::warn!(
+                            "seed_guest_agent_copy_failed src={} err={} (clone identity regen will report GuestAgentUnreachable)",
+                            GUEST_AGENT_IMAGE_BINARY, e
+                        ),
+                    }
+                }
                 // CH expects disk image (ISO), not directory. Create seed.iso for cloud-init.
                 let seed_iso = runtime_dir.root().join("seed.iso");
                 if let Err(e) = create_seed_iso(&nocloud_output, &seed_iso) {
