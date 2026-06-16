@@ -10,6 +10,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
 // templateSrcPod builds a minimal source-pod fixture suitable for
@@ -213,6 +214,50 @@ func TestNewDstPod_NoLauncherContainer_Errors(t *testing.T) {
 
 	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, ""); err == nil {
 		t.Errorf("expected error when launcher container is missing")
+	}
+}
+
+// TestNewDstPod_PreservesMultusAnnotation locks in the multi-node-L2 spike fix:
+// the dst pod MUST carry the Multus networks REQUEST so a NAD-attached guest
+// (primary-on-NAD multi-node L2, or a secondary multi-NIC) gets its interfaces
+// on the dst node. Regression: under mTLS the annotation allowlist returned an
+// empty map and dropped it, so network-init waited forever for `net1` and the
+// dst pod never reached Ready -> the migration failed DstNeverReady. Runtime
+// status (guest-ip) must still be dropped.
+func TestNewDstPod_PreservesMultusAnnotation(t *testing.T) {
+	const nets = `[{"name":"ksl2-a","namespace":"default","interface":"net1"}]`
+	for _, tc := range []struct {
+		name string
+		mtls bool
+	}{
+		{"mtls", true}, // the case that was broken
+		{"plaintext", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := testScheme(t)
+			mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
+			mig.Spec.Target.NodeName = "miles"
+			guest := &swiftv1alpha1.SwiftGuest{
+				ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+			}
+			src := templateSrcPod("guest", "default")
+			src.Annotations[swiftguest.MultusAnnotationKey] = nets
+
+			dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
+				mtlsEnabled: tc.mtls,
+				srcNodeName: "boba",
+				dstNodeName: "miles",
+			}, "")
+			if err != nil {
+				t.Fatalf("newDstPod: %v", err)
+			}
+			if got := dst.Annotations[swiftguest.MultusAnnotationKey]; got != nets {
+				t.Errorf("dst pod must preserve the Multus networks annotation; want %q, got %q", nets, got)
+			}
+			if _, ok := dst.Annotations["kubeswift.io/guest-ip"]; ok {
+				t.Errorf("dst pod must NOT carry runtime-status annotation kubeswift.io/guest-ip")
+			}
+		})
 	}
 }
 
