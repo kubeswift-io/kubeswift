@@ -10,6 +10,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
 // Pod label keys / values for the destination launcher pod. Per design
@@ -260,29 +261,42 @@ func mergeLabelsForDst(srcLabels map[string]string, guestName, migName string) m
 }
 
 // mergeAnnotationsForDst returns a fresh map containing only the
-// migration-relevant annotations. The src pod's annotations are
+// migration-relevant annotations. The src pod's annotations are mostly
 // dropped intentionally: they include kubeswift.io/guest-ip and other
 // runtime status the dst's swiftletd will repopulate, plus operator
 // annotations that don't transfer to the dst pod cleanly.
 //
-// The Phase 2 plaintext-ack annotation is set ONLY on the plaintext
-// path. Under mTLS (Phase 3c) the channel is TLS, swiftletd bypasses the
-// ack gate in secured mode (KUBESWIFT_MIGRATION_MTLS=1), and emitting an
-// "unsafe-plaintext: ack" annotation on a TLS-secured pod is misleading.
-// So when mtlsEnabled we omit it. This is safe from version skew: mTLS
-// only ever runs against the Phase 3c swiftletd (same release that added
-// the secured-mode bypass), so no in-flight migration sees an old
-// swiftletd that still requires the ack.
+// EXCEPTION — the Multus networks REQUEST annotation MUST transfer. It is
+// boot-time config (which NADs to attach), not runtime status. A guest whose
+// primary rides a multi-node-L2 NAD (primary-on-NAD) — or any guest with a
+// secondary NAD NIC — needs the dst pod to request the same interfaces, or
+// network-init's setup_primary_nad_nic / setup_secondary_nic wait forever for a
+// `net1` that never plumbs and the dst pod never reaches Ready (the migration
+// fails DstNeverReady). Offline migration is unaffected: it rebuilds the pod via
+// the SwiftGuest pod builder, which re-adds this annotation from spec.interfaces;
+// the live path clones the src pod through here, so this allowlist is the only
+// place it can be preserved. (Found in the multi-node-L2 validation spike — the
+// original allowlist predated primary-on-NAD; same default-to-explicit lesson as
+// PR #26 / W26.)
 //
-// The key is NOT deleted outright: the plaintext path still uses the ack
-// gate as the THREAT-MODEL's "operator acknowledged cleartext" guard.
+// The Phase 2 plaintext-ack annotation is set ONLY on the plaintext path. Under
+// mTLS (Phase 3c) the channel is TLS, swiftletd bypasses the ack gate in secured
+// mode (KUBESWIFT_MIGRATION_MTLS=1), and emitting an "unsafe-plaintext: ack"
+// annotation on a TLS-secured pod is misleading. So when mtlsEnabled we omit it.
+// This is safe from version skew: mTLS only ever runs against the Phase 3c
+// swiftletd (same release that added the secured-mode bypass), so no in-flight
+// migration sees an old swiftletd that still requires the ack. The key is NOT
+// deleted outright: the plaintext path still uses the ack gate as the
+// THREAT-MODEL's "operator acknowledged cleartext" guard.
 func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool) map[string]string {
-	if mtlsEnabled {
-		return map[string]string{}
+	out := map[string]string{}
+	if v, ok := srcAnnotations[swiftguest.MultusAnnotationKey]; ok && v != "" {
+		out[swiftguest.MultusAnnotationKey] = v
 	}
-	return map[string]string{
-		AnnotationMigrationPhase2Ack: AnnotationMigrationPhase2AckValue,
+	if !mtlsEnabled {
+		out[AnnotationMigrationPhase2Ack] = AnnotationMigrationPhase2AckValue
 	}
+	return out
 }
 
 // addReceiverEnvToLauncher mutates the pod's launcher container to
