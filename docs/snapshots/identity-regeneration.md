@@ -13,6 +13,61 @@ This document describes what KubeSwift does at the hypervisor layer,
 what does NOT happen automatically inside the guest, and the
 workarounds operators have today.
 
+## The real fix: the in-guest identity agent (vsock)
+
+> The reboot-based remedy further down (`clone-identity-regen.yaml` +
+> a cloud-init `bootcmd`) is **broken on Cloud Hypervisor v52**: a
+> `--restore`d guest hangs in EDK2 firmware on reboot
+> ([`../design/known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md)).
+> The replacement is the **in-guest identity agent** — it regenerates
+> machine-id / SSH host keys / hostname / MAC and re-DHCPs **in place,
+> with no reboot**, over a host-only vsock channel. Design + validated
+> spike:
+> [`../design/clone-identity-vsock-agent.md`](../design/clone-identity-vsock-agent.md),
+> [`../design/clone-identity-vsock-agent-spike.md`](../design/clone-identity-vsock-agent-spike.md).
+
+KubeSwift ships `kubeswift-guest-agent` (a tiny static binary) plus a
+`kubeswift-guest-agent.service` systemd unit inside the `swiftletd`
+image at `/usr/local/share/kubeswift/guest-agent/`. The agent must be
+**running in the SOURCE guest at snapshot-capture time** — a clone
+resumes captured RAM and never boots, so the agent cannot be started
+on the clone; it has to already be there.
+
+**Golden image (recommended for fleets).** Bake the binary + unit into
+your `SwiftImage` at build time:
+
+```sh
+install -m0755 kubeswift-guest-agent /usr/local/bin/kubeswift-guest-agent
+install -m0644 kubeswift-guest-agent.service /etc/systemd/system/
+systemctl enable kubeswift-guest-agent
+```
+
+**Seed profile.** Attach the `guest-agent` SwiftSeedProfile
+([`config/samples/seed-profiles/guest-agent.yaml`](../../config/samples/seed-profiles/guest-agent.yaml))
+to the source SwiftGuest via `spec.seedProfileRef`; it installs the
+agent from a controller-attached virtiofs share on first boot. (The
+controller-side share attachment and the auto-drive on clone resume
+ship in later PRs of the arc; once they land, a clone's identity is
+regenerated automatically and `status.network.primaryIP` populates
+with no operator action.)
+
+**Verify it is running on the source before snapshotting:**
+
+```sh
+systemctl is-active kubeswift-guest-agent   # -> active
+```
+
+If a clone is created from a snapshot whose source did **not** have
+the agent running, the clone still works as a warm replica with the
+source's identity; KubeSwift surfaces the gap as a
+`CloneIdentityRegenerated=False` / `GuestAgentUnreachable` condition
+(later PR) rather than failing silently.
+
+The remainder of this document describes the hypervisor-layer MAC
+rewrite (which the agent complements by setting the *guest-visible*
+MAC to match) and the legacy reboot-based workaround (kept for
+agent-absent guests on pre-v52 hypervisors).
+
 ## The fundamental constraint: resume is not a boot
 
 CH `--restore` resumes the captured guest state byte-for-byte. The

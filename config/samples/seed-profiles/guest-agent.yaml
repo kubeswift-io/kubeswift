@@ -1,0 +1,84 @@
+# SwiftSeedProfile that installs and starts the KubeSwift in-guest identity
+# agent on a SOURCE guest's first boot, so the agent is RUNNING when the guest's
+# memory snapshot is captured — and therefore resumes, alive and listening, in
+# every cloneFromSnapshot clone.
+#
+# # Why this supersedes clone-identity-regen.yaml
+#
+# The old approach regenerated a clone's identity from a cloud-init `bootcmd`
+# that fired on the clone's first REBOOT. That is BROKEN on Cloud Hypervisor v52:
+# a `--restore`d guest hangs in EDK2 firmware on reboot
+# (docs/design/known-issues-clone-reboot-firmware-hang.md). This agent
+# regenerates identity + re-DHCPs IN PLACE over vsock — no reboot — so it works
+# on CH v52. See docs/design/clone-identity-vsock-agent.md.
+#
+# # THE load-bearing constraint
+#
+# A cloneFromSnapshot clone never boots — it RESUMES the source's captured RAM.
+# So nothing new can start on a clone. The agent must already be running in the
+# SOURCE at snapshot time. That is exactly what this seed profile arranges:
+# attach it to the SOURCE SwiftGuest via spec.seedProfileRef; the agent is then
+# baked into every snapshot of that guest and resumes in every clone.
+#
+# # How the agent binary reaches the guest
+#
+# Two supported paths (pick one):
+#
+#  (a) virtiofs share (this sample). When a source guest references this seed
+#      profile, the SwiftGuest controller bind-mounts the swiftletd image's
+#      /usr/local/share/kubeswift/guest-agent directory into the guest as a
+#      read-only virtiofs share tagged `kubeswift-agent`. The runcmd below
+#      installs the agent from it. (The controller-side share attachment ships in
+#      PR 2 of the arc; until then, install the agent manually — see (b)/(c).)
+#
+#  (b) golden image (recommended for production fleets). Bake
+#      /usr/local/bin/kubeswift-guest-agent + this systemd unit into your
+#      SwiftImage at build time; then no per-guest seed wiring is needed.
+#
+#  (c) manual (for testing PR 1 standalone). Copy the binary into a running
+#      source guest, `systemctl enable --now kubeswift-guest-agent`, then
+#      snapshot it.
+#
+# # Fail-safe
+#
+# If a clone is created from a snapshot that did NOT have the agent running, the
+# controller surfaces CloneIdentityRegenerated=False / GuestAgentUnreachable
+# (PR 4) — the clone is still usable as a warm replica with the source's
+# identity, never a silent failure.
+
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: guest-agent
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    # The systemd unit is written inline (it is tiny) so only the binary needs to
+    # come from the share / golden image.
+    write_files:
+      - path: /etc/systemd/system/kubeswift-guest-agent.service
+        permissions: '0644'
+        content: |
+          [Unit]
+          Description=KubeSwift in-guest identity agent (vsock)
+          # LOAD-BEARING: must be RUNNING in the SOURCE at snapshot time so it is
+          # captured in RAM and resumes in every clone (a clone never boots).
+          After=network-pre.target
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/kubeswift-guest-agent
+          Restart=always
+          RestartSec=2
+          [Install]
+          WantedBy=multi-user.target
+    runcmd:
+      # (a) install from the controller-attached virtiofs share (PR 2).
+      - [ sh, -c, "mkdir -p /mnt/kubeswift-agent" ]
+      - [ sh, -c, "mount -t virtiofs kubeswift-agent /mnt/kubeswift-agent 2>/dev/null || true" ]
+      - [ sh, -c, "if [ -x /mnt/kubeswift-agent/kubeswift-guest-agent ]; then install -m0755 /mnt/kubeswift-agent/kubeswift-guest-agent /usr/local/bin/kubeswift-guest-agent; fi" ]
+      - [ sh, -c, "umount /mnt/kubeswift-agent 2>/dev/null || true" ]
+      # enable + start (no-op if the binary is absent — the controller's
+      # GuestAgentUnreachable fallback then makes the gap visible, not silent).
+      - [ sh, -c, "systemctl daemon-reload" ]
+      - [ sh, -c, "if [ -x /usr/local/bin/kubeswift-guest-agent ]; then systemctl enable --now kubeswift-guest-agent; fi" ]

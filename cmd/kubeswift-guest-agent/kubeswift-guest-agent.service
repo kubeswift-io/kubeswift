@@ -1,0 +1,18 @@
+[Unit]
+Description=KubeSwift in-guest identity agent (vsock)
+Documentation=https://github.com/projectbeskar/kubeswift docs/design/clone-identity-vsock-agent.md
+# LOAD-BEARING: this agent must be RUNNING in the SOURCE guest when its memory
+# snapshot is captured, so it is part of the captured RAM and resumes — alive
+# and listening — in every cloneFromSnapshot clone (a clone never boots, so
+# nothing new can start on it). Do not "fix" this to start later or on the
+# clone. See docs/design/clone-identity-vsock-agent.md §6.1 (LBA-1).
+After=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/kubeswift-guest-agent
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
