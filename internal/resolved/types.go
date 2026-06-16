@@ -70,6 +70,12 @@ type ResolvedGuest struct {
 	// CoreScheduling is the vCPU core-scheduling policy from the SwiftGuestClass
 	// ("off"/"vm"/"vcpu"). Empty/"off" omits the CH --cpus core_scheduling param.
 	CoreScheduling string `json:"coreScheduling,omitempty"`
+	// GuestAgentEnabled is true for a SOURCE guest that opted into the in-guest
+	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
+	// The resolver sets it false for a clone (cloneFromSnapshot): a clone
+	// reopens the captured vsock device from config.json, so it must not also
+	// add --vsock. See docs/design/clone-identity-vsock-agent.md.
+	GuestAgentEnabled bool `json:"guestAgentEnabled,omitempty"`
 }
 
 // GuestSettings holds architecture, firmware, bus, interface model, shutdown method.
@@ -326,6 +332,17 @@ func (r *ResolvedGuest) GetGuestID() string {
 		return r.Meta.Namespace + "/" + r.Meta.Name
 	}
 	return string(r.Meta.UID)
+}
+
+// GetVsockCID returns the deterministic vsock CID for a SOURCE guest that opted
+// into the in-guest identity agent, or 0 when the agent is not enabled. The
+// resolver already clears GuestAgentEnabled for a clone, so a clone returns 0
+// (it reopens the captured vsock device from config.json instead).
+func (r *ResolvedGuest) GetVsockCID() uint32 {
+	if !r.GuestAgentEnabled || r.Meta.Namespace == "" || r.Meta.Name == "" {
+		return 0
+	}
+	return runtimeintent.DeriveVsockCID(r.Meta.Namespace, r.Meta.Name)
 }
 
 // GetNICs builds the NICIntent list from spec.interfaces.

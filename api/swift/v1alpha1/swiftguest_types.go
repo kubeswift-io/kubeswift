@@ -212,6 +212,25 @@ type SwiftGuestSpec struct {
 	// live-migration capability while the rest of the class stays on RWO.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
+	// GuestAgent configures the in-guest identity agent (vsock). Set
+	// guestAgent.enabled=true on a SOURCE guest (one you will snapshot and
+	// clone) to attach a vsock device, so the agent — installed in the guest via
+	// a golden image or the guest-agent SwiftSeedProfile — can regenerate a
+	// cloneFromSnapshot clone's identity (machine-id / SSH keys / hostname / MAC)
+	// and re-DHCP in place, with no reboot. Nil/false attaches no device.
+	// The device must be present on the SOURCE: CH captures it into the memory
+	// snapshot and the clone reopens it on restore. See
+	// docs/design/clone-identity-vsock-agent.md.
+	// +optional
+	GuestAgent *GuestAgentSpec `json:"guestAgent,omitempty"`
+}
+
+// GuestAgentSpec configures the in-guest identity agent (vsock channel).
+type GuestAgentSpec struct {
+	// Enabled attaches the vsock device for the in-guest identity agent to a
+	// source guest. Default false.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // MigrationSpec is the per-SwiftGuest migration policy. Defaults are

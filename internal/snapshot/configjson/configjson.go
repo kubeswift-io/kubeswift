@@ -289,6 +289,11 @@ func rewriteMACs(cfg map[string]any, macsByIndex []string) ([]string, error) {
 //
 //   - disks[].path  (e.g. .../run/<source>/seed.iso → .../run/<clone>/seed.iso)
 //   - serial.socket (e.g. .../run/<source>/serial.sock → .../run/<clone>/serial.sock)
+//   - vsock.socket  (e.g. .../run/<source>/vsock.sock → .../run/<clone>/vsock.sock) —
+//     the in-guest identity agent's host-side socket. The CID is captured guest
+//     state and is NOT rewritten (the guest kernel's vsock is bound to it); only
+//     the host-side socket path moves to the clone's runtime dir. See
+//     docs/design/clone-identity-vsock-agent.md.
 //
 // disks[].path that does NOT start with `from` is left alone — the
 // root disk PVC ("/var/lib/kubeswift/disks/root/image.raw") is mounted
@@ -355,6 +360,26 @@ func rewriteRuntimeDirPrefix(cfg map[string]any, from, to string) ([]string, err
 				newSock := to + strings.TrimPrefix(oldSock, from)
 				serial["socket"] = newSock
 				changes = append(changes, fmt.Sprintf("rewrote serial.socket: %s -> %s", oldSock, newSock))
+			}
+		}
+	}
+
+	// vsock.socket (in-guest identity agent host-side socket). The cid is
+	// captured guest state and stays as-is; only the host socket path moves.
+	if vsockRaw, ok := configMap["vsock"]; ok && vsockRaw != nil {
+		vsock, ok := vsockRaw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("config.json: vsock is %T, want object", vsockRaw)
+		}
+		if sockRaw, ok := vsock["socket"]; ok && sockRaw != nil {
+			oldSock, ok := sockRaw.(string)
+			if !ok {
+				return nil, fmt.Errorf("config.json: vsock.socket is %T, want string", sockRaw)
+			}
+			if strings.HasPrefix(oldSock, from) {
+				newSock := to + strings.TrimPrefix(oldSock, from)
+				vsock["socket"] = newSock
+				changes = append(changes, fmt.Sprintf("rewrote vsock.socket: %s -> %s", oldSock, newSock))
 			}
 		}
 	}

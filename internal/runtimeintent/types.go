@@ -49,6 +49,21 @@ type RuntimeIntent struct {
 	// The VM comes up Paused; the SwiftRestore controller drives the
 	// resume separately via the snapshot-action annotation surface.
 	Restore *RestoreIntent `json:"restore,omitempty"`
+
+	// Vsock is set ONLY for a SOURCE guest that opted into the in-guest identity
+	// agent. It carries the per-guest CID; swiftletd computes the socket path
+	// under the runtime dir and emits `--vsock cid=<N>,socket=<path>`. A clone
+	// (cloneFromSnapshot) leaves this nil — CH reopens the captured vsock device
+	// from config.json on restore (the configjson patcher rewrites only the
+	// socket path). See docs/design/clone-identity-vsock-agent.md.
+	Vsock *VsockIntent `json:"vsock,omitempty"`
+}
+
+// VsockIntent is the vsock device for the in-guest identity agent.
+type VsockIntent struct {
+	// CID is the guest context id (>= 3), deterministic per guest
+	// (DeriveVsockCID); rides the snapshot on restore.
+	CID uint32 `json:"cid"`
 }
 
 // FilesystemIntent is one virtiofs share. swiftletd runs a virtiofsd

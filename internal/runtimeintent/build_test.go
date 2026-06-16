@@ -24,6 +24,7 @@ type mockResolvedGuest struct {
 	filesystems      []FilesystemIntent
 	vhostUserDevices []VhostUserDeviceIntent
 	coreScheduling   string
+	vsockCID         uint32
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -53,6 +54,27 @@ func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 	return m.vhostUserDevices
 }
 func (m *mockResolvedGuest) GetCoreScheduling() string { return m.coreScheduling }
+func (m *mockResolvedGuest) GetVsockCID() uint32       { return m.vsockCID }
+
+func TestBuild_VsockSetWhenCIDNonZero(t *testing.T) {
+	// disk boot with an agent CID -> intent carries Vsock
+	rg := &mockResolvedGuest{hasSeed: true, guestID: "default/src", cpu: 2, memory: 2048, vsockCID: 42}
+	got := Build(rg)
+	if got.Vsock == nil || got.Vsock.CID != 42 {
+		t.Fatalf("expected Vsock CID 42, got %+v", got.Vsock)
+	}
+	// kernel boot honors it too
+	rg.hasSeed = false
+	rg.hasKernel = true
+	if k := Build(rg); k.Vsock == nil || k.Vsock.CID != 42 {
+		t.Fatalf("kernel-boot Vsock not set: %+v", k.Vsock)
+	}
+	// CID 0 (agent disabled) -> nil
+	rg2 := &mockResolvedGuest{hasSeed: true, guestID: "default/src", cpu: 2, memory: 2048, vsockCID: 0}
+	if got := Build(rg2); got.Vsock != nil {
+		t.Fatalf("expected no Vsock when CID 0, got %+v", got.Vsock)
+	}
+}
 
 // TestBuild_DiskBootBlockMode is the W9 contract test for the
 // runtimeintent producer side: a guest with Block-mode root storage

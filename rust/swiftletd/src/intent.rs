@@ -79,6 +79,13 @@ pub struct RuntimeIntent {
     /// same path used for every other hypervisor action.
     #[serde(default)]
     pub restore: Option<RestoreIntent>,
+    /// vsock device for the in-guest identity agent. Populated by the controller
+    /// ONLY for a SOURCE guest that opted into the agent; carries just the CID
+    /// (swiftletd computes the socket path from the runtime dir). On `--restore`
+    /// the clone reopens the captured vsock device from config.json, so this is
+    /// absent on a clone's intent. See docs/design/clone-identity-vsock-agent.md.
+    #[serde(default)]
+    pub vsock: Option<VsockIntent>,
     /// Live-migration role (Phase 2). Constructed at startup in
     /// `main.rs` from the `KUBESWIFT_MIGRATION_ROLE` env var, NOT
     /// deserialized from the intent JSON file — env-var-driven keeps
@@ -88,6 +95,15 @@ pub struct RuntimeIntent {
     /// rationale.
     #[serde(skip)]
     pub migration: Option<MigrationIntent>,
+}
+
+/// vsock device configuration for swiftletd.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VsockIntent {
+    /// Guest context id (>= 3). Deterministic per guest, derived controller-side
+    /// from (namespace, name); rides the snapshot on restore.
+    pub cid: u32,
 }
 
 /// Restore-receive configuration for swiftletd.
