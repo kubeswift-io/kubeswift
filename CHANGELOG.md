@@ -4,6 +4,53 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.4.4] — 2026-06-16
+
+Feature release. The **in-guest vsock identity agent** — a `cloneFromSnapshot`
+clone now regenerates its identity (machine-id / SSH host keys / hostname / MAC)
+and re-DHCPs **in place, with no reboot**, sidestepping the Cloud-Hypervisor-v52
+clone-reboot firmware hang documented in v0.4.3. Cluster-validated end-to-end.
+
+### Added
+
+- **In-guest identity agent over vsock.** Opt a snapshot **source** in with
+  `spec.guestAgent.enabled: true`. The controller attaches a Cloud Hypervisor
+  `--vsock` device and (with the `guest-agent` SwiftSeedProfile) delivers a tiny
+  static agent binary onto the source's NoCloud seed disk, installed on first
+  boot. The agent is captured in the memory snapshot and resumes — alive — in
+  every clone. When a clone reaches `GuestRunning`, the SwiftGuest controller
+  drives a one-shot regeneration over the host↔guest vsock channel: it
+  regenerates the items in `cloneFromSnapshot.regenerate`, sets the per-clone
+  guest-visible MAC, and re-DHCPs — all without a reboot. The result is reported
+  on the new **`CloneIdentityRegenerated`** status condition (`True`, or `False`
+  with reason `GuestAgentUnreachable` when the agent is absent — a loud,
+  never-silent fallback), and each clone's own IP lands in
+  `status.network.primaryIP` via the restore lease-poller.
+  - New `cmd/kubeswift-guest-agent` (static Go AF_VSOCK listener; one
+    `regenerate-identity` op; validated argv inputs; primary-interface
+    detection), embedded in the swiftletd image and delivered via the seed disk.
+  - New `rust/swift-vsock-client` crate (the host-side CONNECT-handshake client)
+    + a swiftletd `identity` action namespace driving it.
+  - `SwiftGuest.spec.guestAgent.enabled` (opt-in on the source; Linux only).
+  - Design: [`docs/design/clone-identity-vsock-agent.md`](docs/design/clone-identity-vsock-agent.md);
+    operator guide:
+    [`docs/snapshots/identity-regeneration.md`](docs/snapshots/identity-regeneration.md)
+    + [`docs/snapshots/clone-from-snapshot.md`](docs/snapshots/clone-from-snapshot.md).
+  - Cluster-validated on **Tier B** (local) memory snapshots — a 2-clone fan-out
+    came up with distinct machine-id / hostname / MAC / IP per clone, no reboot.
+    **Tier C** (S3) clones inherit the identical agent flow (the snapshot carries
+    the agent + vsock device regardless of backend); validate in your environment.
+
+### Notes
+
+- No new container image or chart toggle: the agent ships inside the `swiftletd`
+  image and the opt-in is a SwiftGuest field. The `swift.kubeswift.io` CRD gains
+  `spec.guestAgent`; `kubectl apply`/`helm upgrade` updates it.
+- Windows guests (`osType: windows`) are out of scope for the agent in this
+  release (the regeneration mechanics differ); the controller skips the device.
+
+---
+
 ## [v0.4.3] — 2026-06-15
 
 Patch release. swiftletd lease-poller fix for cloneFromSnapshot guests, and a

@@ -71,6 +71,15 @@ The `docs/` directory also contains these focused reference documents:
 - [swiftguestpool-use-cases.md](swiftguestpool-use-cases.md) — GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
 - [api/swiftguestpool.md](api/swiftguestpool.md) — SwiftGuestPool API reference
 
+### Snapshots, clones & identity
+
+- [snapshots/fast-vms.md](snapshots/fast-vms.md) — Snapshots, restore, and instant clones overview
+- [snapshots/clone-from-snapshot.md](snapshots/clone-from-snapshot.md) — `cloneFromSnapshot`: fan out N VMs from one snapshot
+- [snapshots/identity-regeneration.md](snapshots/identity-regeneration.md) — Regenerate a clone's identity in place (the in-guest vsock agent)
+- [snapshots/local-snapshots.md](snapshots/local-snapshots.md) — Tier B (local) memory snapshots
+- [snapshots/s3-snapshots.md](snapshots/s3-snapshots.md) — Tier C (S3) cluster-portable snapshots
+- [snapshots/scheduled-snapshots.md](snapshots/scheduled-snapshots.md) — Cron-scheduled snapshots + keep-N retention
+
 ### Kernel boot
 
 - [swiftkernel.md](swiftkernel.md) — SwiftKernel full reference: node setup, profiles, OCI packaging
