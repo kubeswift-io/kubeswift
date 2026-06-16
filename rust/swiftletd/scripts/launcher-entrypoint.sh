@@ -59,15 +59,28 @@ if network_enabled; then
     nad_env="$lease_dir/primary-nad.env"
     if [ -f "$nad_env" ]; then
         # shellcheck disable=SC1090
-        . "$nad_env"   # NAD_IP, NAD_PREFIX, NAD_GW, NAD_MAC, NAD_BRIDGE
+        . "$nad_env"   # NAD_IP, NAD_PREFIX, NAD_GW, NAD_MAC, NAD_BRIDGE, NAD_MTU
         dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
         [ -z "$dns" ] && dns="10.96.0.10"
-        echo "Primary-on-NAD dnsmasq: handing $NAD_IP to $NAD_MAC on $NAD_BRIDGE (gw $NAD_GW)"
+        echo "Primary-on-NAD dnsmasq: handing $NAD_IP to $NAD_MAC on $NAD_BRIDGE (gw $NAD_GW, mtu ${NAD_MTU:-default})"
+        # Multiple primary-on-NAD pods can share ONE flat multi-node L2, so each
+        # pod's in-pod dnsmasq sees the OTHER guests' DHCP broadcasts and every pod
+        # binds a helper IP on the same subnet. Two guards make that safe (the
+        # multi-node-L2 validation spike, finding F-S2.3):
+        #   --dhcp-ignore=tag:!known -> answer ONLY this guest's MAC, so a sibling
+        #     pod's dnsmasq never NAKs/answers another guest's DISCOVER on the L2.
+        #   infinite lease -> the guest never renews, so the helper-IP server-id
+        #     (ambiguous when >1 pod holds it on the shared L2) is never contacted.
+        # Reachability is unaffected -- the guest talks via its NAD IP + gateway,
+        # never the helper. option:mtu carries the overlay MTU so encapsulation
+        # overhead does not silently drop the guest's full-size frames.
         dnsmasq --no-daemon --bind-interfaces --interface="$NAD_BRIDGE" \
-            --dhcp-range="$NAD_IP,$NAD_IP" \
+            --dhcp-range="$NAD_IP,$NAD_IP,infinite" \
             ${NAD_MAC:+--dhcp-host="$NAD_MAC,$NAD_IP"} \
+            ${NAD_MAC:+--dhcp-ignore=tag:!known} \
             ${NAD_GW:+--dhcp-option=option:router,"$NAD_GW"} \
             --dhcp-option=option:dns-server,"$dns" \
+            ${NAD_MTU:+--dhcp-option=option:mtu,"$NAD_MTU"} \
             --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
             --dhcp-authoritative &
         sleep 1
