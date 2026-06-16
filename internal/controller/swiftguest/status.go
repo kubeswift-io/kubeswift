@@ -220,6 +220,33 @@ func SetDataDisksReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool,
 	setCondition(status, cond)
 }
 
+// ConditionCloneIdentityRegenerated is set on a cloneFromSnapshot guest whose
+// source opted into the in-guest identity agent: True once the agent has
+// regenerated the clone's identity in place (machine-id / SSH keys / hostname /
+// MAC + re-DHCP), False with reason GuestAgentUnreachable when the agent does
+// not answer (the clone still runs as a warm replica sharing the source's
+// identity — a loud, never-silent fallback). Absent when the guest is not an
+// agent-enabled clone. See docs/design/clone-identity-vsock-agent.md.
+const ConditionCloneIdentityRegenerated = "CloneIdentityRegenerated"
+
+// SetCloneIdentityRegeneratedCondition sets CloneIdentityRegenerated.
+func SetCloneIdentityRegeneratedCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason, message string) {
+	cond := metav1.Condition{Type: ConditionCloneIdentityRegenerated}
+	if ok {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = "Regenerated"
+		cond.Message = message
+		if cond.Message == "" {
+			cond.Message = "Clone identity regenerated in place by the in-guest agent"
+		}
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = reason
+		cond.Message = message
+	}
+	setCondition(status, cond)
+}
+
 // SetResolvedCondition sets the Resolved condition.
 func SetResolvedCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, reason string) {
 	cond := metav1.Condition{

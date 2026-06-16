@@ -42,14 +42,31 @@ install -m0644 kubeswift-guest-agent.service /etc/systemd/system/
 systemctl enable kubeswift-guest-agent
 ```
 
-**Seed profile.** Attach the `guest-agent` SwiftSeedProfile
+Opt in on the **source** guest with `spec.guestAgent.enabled: true` — that
+attaches the vsock device the agent needs. KubeSwift then drives the
+regeneration automatically: once a `cloneFromSnapshot` clone reaches
+`GuestRunning`, the controller sends the agent a one-shot regenerate over
+vsock and reports the result on the clone's `CloneIdentityRegenerated`
+condition (`True`, or `False` with reason `GuestAgentUnreachable` if the agent
+is absent). The clone's own IP then lands in `status.network.primaryIP` via the
+v0.4.3 restore lease-poller — no reboot, no operator action.
+
+```yaml
+# the SOURCE SwiftGuest (the one you snapshot + clone from):
+spec:
+  guestAgent:
+    enabled: true        # attach the vsock device
+  # ... and install the agent in the guest (golden image above, recommended)
+```
+
+**Seed profile (agent-binary delivery).** The `guest-agent` SwiftSeedProfile
 ([`config/samples/seed-profiles/guest-agent.yaml`](../../config/samples/seed-profiles/guest-agent.yaml))
-to the source SwiftGuest via `spec.seedProfileRef`; it installs the
-agent from a controller-attached virtiofs share on first boot. (The
-controller-side share attachment and the auto-drive on clone resume
-ship in later PRs of the arc; once they land, a clone's identity is
-regenerated automatically and `status.network.primaryIP` populates
-with no operator action.)
+installs the agent from a virtiofs share on first boot. The controller-side
+attachment of that share is a tracked follow-up; until it lands, install the
+agent via the **golden image** (recommended) and just set `guestAgent.enabled`
+on the source. (`spec.seedProfileRef` to the profile is harmless meanwhile — the
+runcmd no-ops when the share is absent, and the loud `GuestAgentUnreachable`
+fallback makes a missing agent visible.)
 
 **Verify it is running on the source before snapshotting:**
 

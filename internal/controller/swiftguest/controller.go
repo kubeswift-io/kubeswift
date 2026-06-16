@@ -480,6 +480,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var existingPod corev1.Pod
 	var podForMetrics *corev1.Pod
+	var cloneIdentityRequeue time.Duration
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
@@ -512,6 +513,16 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Pod exists; update status from pod
 		podForMetrics = &existingPod
 		MapPodToStatus(&existingPod, status)
+		// In-guest identity agent (PR 4): for an agent-enabled cloneFromSnapshot
+		// clone, drive the one-shot identity-regen over vsock once it is Running.
+		// MUST run BEFORE the IP-not-discovered requeue below: a fresh clone has
+		// no IP precisely because the agent has not re-DHCP'd yet, so deferring
+		// the stamp would deadlock the IP wait. No-op for non-clones / agent-absent.
+		var idErr error
+		cloneIdentityRequeue, idErr = r.ensureCloneIdentityRegen(ctx, &guest, &existingPod, status)
+		if idErr != nil {
+			return ctrl.Result{}, idErr
+		}
 		// cloneFromSnapshot (Snapshot Phase 4): CH loads the snapshot PAUSED,
 		// but swiftletd now passes `resume=true` on `--restore` (CH v52) when the
 		// restore intent's AutoResume is set, so the clone comes up RUNNING with
@@ -551,7 +562,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// Requeue while an agent-enabled clone's identity regen is still in flight
+	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state).
+	return ctrl.Result{RequeueAfter: cloneIdentityRequeue}, nil
 }
 
 func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *swiftv1alpha1.SwiftGuestStatus, pod *corev1.Pod) {
