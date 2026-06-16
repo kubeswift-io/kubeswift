@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use swift_ch_client::{
     spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, FsMount, GenericVhostUser,
-    NICConfig, VFIODeviceConfig, VmConfig,
+    NICConfig, VFIODeviceConfig, VmConfig, VsockConfig,
 };
 use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
 use swift_runtime::RuntimeDir;
@@ -58,6 +58,7 @@ fn remove_stale_sockets(runtime_dir: &RuntimeDir) {
     let _ = std::fs::remove_file(runtime_dir.api_socket()); // ch.sock
     let _ = std::fs::remove_file(runtime_dir.root().join("serial.sock"));
     let _ = std::fs::remove_file(runtime_dir.root().join("qmp.sock"));
+    let _ = std::fs::remove_file(runtime_dir.root().join("vsock.sock"));
 }
 
 /// Dispatch VM launch to Cloud Hypervisor or QEMU based on `intent.hypervisor`.
@@ -375,6 +376,19 @@ where
         }
     }
 
+    // vsock device for the in-guest identity agent. The CID comes from the
+    // intent (deterministic per guest, set controller-side); swiftletd owns the
+    // socket path under the runtime dir (mirrors serial.sock), so the configjson
+    // patcher's runtime-dir-prefix rewrite relocates it on a clone restore.
+    let vsock = intent.vsock.as_ref().map(|v| VsockConfig {
+        cid: v.cid,
+        socket: runtime_dir
+            .root()
+            .join("vsock.sock")
+            .to_string_lossy()
+            .to_string(),
+    });
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -400,6 +414,7 @@ where
             fs_mounts,
             vhost_user_blk_sockets,
             generic_vhost_user,
+            vsock: vsock.clone(),
         }
     } else {
         VmConfig {
@@ -425,6 +440,7 @@ where
             fs_mounts,
             vhost_user_blk_sockets,
             generic_vhost_user,
+            vsock: vsock.clone(),
         }
     };
 

@@ -442,3 +442,20 @@ func TestGetCoreScheduling(t *testing.T) {
 		}
 	}
 }
+
+func TestGetVsockCID(t *testing.T) {
+	enabled := &ResolvedGuest{
+		Meta:              Meta{Namespace: "ns", Name: "src"},
+		GuestAgentEnabled: true,
+	}
+	if cid := enabled.GetVsockCID(); cid < 3 {
+		t.Fatalf("enabled guest CID = %d, want >= 3", cid)
+	}
+	if enabled.GetVsockCID() != runtimeintent.DeriveVsockCID("ns", "src") {
+		t.Error("GetVsockCID must match DeriveVsockCID(ns, name)")
+	}
+	disabled := &ResolvedGuest{Meta: Meta{Namespace: "ns", Name: "src"}, GuestAgentEnabled: false}
+	if cid := disabled.GetVsockCID(); cid != 0 {
+		t.Errorf("disabled guest CID = %d, want 0", cid)
+	}
+}

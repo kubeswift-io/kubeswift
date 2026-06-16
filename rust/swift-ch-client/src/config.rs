@@ -94,6 +94,28 @@ pub struct VmConfig {
     /// Generic vhost-user devices. Each produces a
     /// `--generic-vhost-user virtio_id=<id>,socket=<sock>[,queue_sizes=[...]]`.
     pub generic_vhost_user: Vec<GenericVhostUser>,
+    /// Optional vsock device. When set, produces `--vsock cid=<N>,socket=<path>`
+    /// — a host<->guest channel for the in-guest identity agent. Set ONLY on a
+    /// SOURCE guest (a snapshot source that opted into the agent): CH captures
+    /// the device state into the snapshot, so the restored clone gets a working
+    /// vsock device WITHOUT --vsock on the restore command (the clone path uses
+    /// `spawn_ch_restore`, which reopens the device from config.json; the Go
+    /// controller's configjson patcher rewrites only the socket PATH to the
+    /// clone runtime dir). See docs/design/clone-identity-vsock-agent.md.
+    pub vsock: Option<VsockConfig>,
+}
+
+/// A vsock device for `--vsock cid=<N>,socket=<path>`.
+#[derive(Debug, Clone)]
+pub struct VsockConfig {
+    /// Guest context id (>= 3; 0-2 are reserved). Deterministic per guest,
+    /// derived controller-side from (namespace, name). Rides the snapshot on
+    /// restore — never re-assigned on a clone.
+    pub cid: u32,
+    /// Host-side Unix socket CH bridges the guest's AF_VSOCK to (the launcher
+    /// connects here). Mirrors the serial/api runtime-dir socket convention:
+    /// `<runtime-dir>/vsock.sock`.
+    pub socket: String,
 }
 
 /// A generic vhost-user device for `--generic-vhost-user`.
@@ -316,6 +338,13 @@ impl VmConfig {
             args.push(arg);
         }
 
+        // vsock device for the in-guest identity agent (source guests only;
+        // the clone reopens it from config.json on restore).
+        if let Some(ref v) = self.vsock {
+            args.push("--vsock".to_string());
+            args.push(format!("cid={},socket={}", v.cid, v.socket));
+        }
+
         args
     }
 }
@@ -345,7 +374,29 @@ mod tests {
             fs_mounts: vec![],
             vhost_user_blk_sockets: vec![],
             generic_vhost_user: vec![],
+            vsock: None,
         }
+    }
+
+    #[test]
+    fn test_vsock_arg_emitted_when_set() {
+        let mut cfg = make_disk_boot_config();
+        cfg.vsock = Some(VsockConfig {
+            cid: 7,
+            socket: "/run/kubeswift/run/g/vsock.sock".to_string(),
+        });
+        let args = cfg.to_args();
+        let i = args
+            .iter()
+            .position(|a| a == "--vsock")
+            .expect("--vsock missing");
+        assert_eq!(args[i + 1], "cid=7,socket=/run/kubeswift/run/g/vsock.sock");
+        // default (no vsock) emits nothing
+        let none = make_disk_boot_config().to_args();
+        assert!(
+            !none.iter().any(|a| a == "--vsock"),
+            "vsock leaked when None"
+        );
     }
 
     #[test]

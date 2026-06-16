@@ -70,6 +70,14 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 	}
 	rg.DataDisks = dataDisks
 
+	// In-guest identity agent (vsock): SOURCE guests only. Clones never reach
+	// this resolver (the early return above), so they keep GuestAgentEnabled=false
+	// and reopen the captured vsock device from config.json instead of adding a
+	// second --vsock. Linux only — the v1 agent is a Linux binary; a Windows
+	// guest gets no device (the GuestAgentUnreachable fallback would otherwise
+	// fire pointlessly). See docs/design/clone-identity-vsock-agent.md.
+	rg.GuestAgentEnabled = guest.Spec.GuestAgent != nil && guest.Spec.GuestAgent.Enabled && !rg.IsWindows()
+
 	return rg, nil
 }
 

@@ -29,6 +29,10 @@ type ResolvedGuest interface {
 	GetFilesystems() []FilesystemIntent
 	GetVhostUserDevices() []VhostUserDeviceIntent
 	GetCoreScheduling() string
+	// GetVsockCID returns the vsock CID for a SOURCE guest that opted into the
+	// in-guest identity agent, or 0 when the agent is not enabled (or the guest
+	// is a clone — a clone reopens the captured vsock device from config.json).
+	GetVsockCID() uint32
 }
 
 // Build creates a RuntimeIntent from ResolvedGuest using canonical paths.
@@ -40,6 +44,11 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	filesystems := rg.GetFilesystems()
 	vhostUserDevices := rg.GetVhostUserDevices()
 	coreScheduling := rg.GetCoreScheduling()
+
+	var vsock *VsockIntent
+	if cid := rg.GetVsockCID(); cid != 0 {
+		vsock = &VsockIntent{CID: cid}
+	}
 
 	if rg.HasKernel() {
 		lifecycle := rg.GetLifecycle()
@@ -62,6 +71,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Filesystems:      filesystems,
 			VhostUserDevices: vhostUserDevices,
 			CoreScheduling:   coreScheduling,
+			Vsock:            vsock,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -106,5 +116,6 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Filesystems:      filesystems,
 		VhostUserDevices: vhostUserDevices,
 		CoreScheduling:   coreScheduling,
+		Vsock:            vsock,
 	}
 }

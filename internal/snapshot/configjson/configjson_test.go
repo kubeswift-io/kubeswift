@@ -453,6 +453,9 @@ func TestPatch_RewriteRuntimeDirPrefix_DiskAndSerial(t *testing.T) {
 			map[string]any{"id": "_disk1", "path": from + "seed.iso"},
 		},
 		"serial": map[string]any{"socket": from + "serial.sock"},
+		// vsock — host-side socket under the source runtime_dir, MUST be
+		// rewritten; the cid is captured guest state and must be left alone.
+		"vsock": map[string]any{"cid": 7.0, "socket": from + "vsock.sock"},
 	}
 	changes, err := Patch(cfg, PatchOptions{
 		RewriteRuntimeDirFrom: from,
@@ -461,8 +464,15 @@ func TestPatch_RewriteRuntimeDirPrefix_DiskAndSerial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Patch: %v", err)
 	}
-	if len(changes) != 2 {
-		t.Errorf("expected 2 changes (disks[1] + serial), got %d: %v", len(changes), changes)
+	if len(changes) != 3 {
+		t.Errorf("expected 3 changes (disks[1] + serial + vsock), got %d: %v", len(changes), changes)
+	}
+	vsockSock := cfg["vsock"].(map[string]any)["socket"]
+	if vsockSock != to+"vsock.sock" {
+		t.Errorf("vsock.socket = %v, want rewritten to %s", vsockSock, to+"vsock.sock")
+	}
+	if cid := cfg["vsock"].(map[string]any)["cid"]; cid != 7.0 {
+		t.Errorf("vsock.cid mutated: %v (must ride the snapshot unchanged)", cid)
 	}
 	rootPath := cfg["disks"].([]any)[0].(map[string]any)["path"]
 	if rootPath != "/var/lib/kubeswift/disks/root/image.raw" {
