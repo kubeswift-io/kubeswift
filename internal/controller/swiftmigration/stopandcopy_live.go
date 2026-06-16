@@ -543,29 +543,44 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		if srcArg != nil {
 			detail = srcArg.Annotations[AnnotationMigrationStatusDtl]
 		}
-		// Phase 3d — bounded retry for the mTLS source-sidecar readiness
-		// race. With mTLS on, target_url is the LOCAL stunnel client
-		// (127.0.0.1:6790); a "send_migration: connection_refused" means
-		// the client sidecar hasn't finished idle-polling its inputs and
-		// brought stunnel up yet (CH couldn't connect to localhost). The
-		// src CH never reached the dst, so NO migration data flowed and
-		// re-issuing is safe. The dst is still receive-ready (it never saw
-		// a connection), so bumping SendAttempts yields a fresh $SEND_ID
-		// that re-drives substatePreSend on the next reconcile. Bounded by
-		// maxMTLSSendRetries; the overall spec.timeout is the hard cap.
-		// Gated on dst NOT terminating so a genuine dst-gone failure (which
-		// surfaces as transport_error, not connection_refused) is never
-		// mistaken for sidecar-not-ready.
-		if r.MigrationMTLSEnabled && isLocalStunnelNotReady(detail) &&
+		// Phase 3d — bounded retry for the mTLS migration-channel readiness
+		// races. With mTLS on, target_url is the LOCAL stunnel client
+		// (127.0.0.1:6790). Two "not-ready-yet" failures leave the channel
+		// never established, so NO migration data flowed and re-issuing the
+		// send is safe (bumping SendAttempts yields a fresh $SEND_ID that
+		// re-drives substatePreSend on the next reconcile):
+		//   - SOURCE sidecar not ready: CH couldn't connect to the local
+		//     stunnel (it hasn't started yet) -> "connection_refused".
+		//   - DESTINATION receiver not ready: the local stunnel is up but the
+		//     dst CH hasn't called vm.receive-migration yet, so the dst
+		//     stunnel resets the forward and CH sees a generic Status-500 ->
+		//     "internal_server_error". This is the primary-on-NAD race (the
+		//     NAD dst pod's network-init runs the multi-node-L2 datapath and
+		//     is slower to reach receive-migration; non-NAD dst pods win the
+		//     race). Found in the multi-node-L2 validation spike.
+		// Bounded by maxMTLSSendRetries; spec.timeout is the hard cap. BOTH
+		// are gated on dst NOT terminating, so a genuine dst-gone failure
+		// (transport_error after data flowed, or W18 dst-K8s-termination which
+		// shares the internal_server_error symptom but is going away) is never
+		// mistaken for a not-ready-yet race.
+		srcNotReady := isLocalStunnelNotReady(detail)
+		dstNotReady := isDestReceiverNotReady(detail)
+		if r.MigrationMTLSEnabled && (srcNotReady || dstNotReady) &&
 			dstPod.DeletionTimestamp == nil && sendAttemptNumber(mig) < maxMTLSSendRetries {
 			status.SendAttempts = sendAttemptNumber(mig) + 1
-			setPhaseDetail(status, "source mTLS sidecar not ready; retrying send")
-			setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
-				"waiting for source mTLS sidecar to become ready; retrying send")
+			detailMsg := "source mTLS sidecar not ready; retrying send"
+			condMsg := "waiting for source mTLS sidecar to become ready; retrying send"
+			eventMsg := "source mTLS sidecar not yet listening (attempt %d/%d); re-issuing send"
+			if dstNotReady && !srcNotReady {
+				detailMsg = "destination receiver not ready; retrying send"
+				condMsg = "waiting for destination CH receiver to bind its listener; retrying send"
+				eventMsg = "destination receiver not yet listening (attempt %d/%d); re-issuing send"
+			}
+			setPhaseDetail(status, detailMsg)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy, condMsg)
 			if r.Recorder != nil {
 				r.Recorder.Eventf(mig, corev1.EventTypeNormal, "SendRetry",
-					"source mTLS sidecar not yet listening (attempt %d/%d); re-issuing send",
-					sendAttemptNumber(mig), maxMTLSSendRetries)
+					eventMsg, sendAttemptNumber(mig), maxMTLSSendRetries)
 			}
 			return phaseRequeue(stopAndCopyLivePollInterval)
 		}

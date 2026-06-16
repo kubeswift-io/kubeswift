@@ -37,6 +37,31 @@ func TestIsLocalStunnelNotReady(t *testing.T) {
 	}
 }
 
+// TestIsDestReceiverNotReady covers the primary-on-NAD send-retry case found in
+// the multi-node-L2 spike: the dst CH receiver hadn't bound its listener yet, so
+// the src send reset early and CH surfaced a generic Status-500 →
+// "internal_server_error". This is retryable (no data flowed, dst still alive);
+// it must NOT collide with the src-local case or the dst-gone transport_error.
+func TestIsDestReceiverNotReady(t *testing.T) {
+	cases := []struct {
+		detail string
+		want   bool
+	}{
+		{"send_migration: internal_server_error", true},
+		{"SEND_MIGRATION: INTERNAL_SERVER_ERROR", true},     // case-insensitive
+		{"send_migration: transport_error", false},          // dst-gone mid-transfer, not a not-ready race
+		{"send_migration: connection_refused", false},       // that is the src-local-stunnel case
+		{"receive_migration: internal_server_error", false}, // dst-side verb, not the src send
+		{"", false},
+		{"some other error", false},
+	}
+	for _, tc := range cases {
+		if got := isDestReceiverNotReady(tc.detail); got != tc.want {
+			t.Errorf("isDestReceiverNotReady(%q)=%v, want %v", tc.detail, got, tc.want)
+		}
+	}
+}
+
 // --- target_url repoint (substatePreSend) --------------------------------
 
 func setupPreSend(t *testing.T, mtls bool) (*SwiftMigrationReconciler, *corev1.Pod) {
@@ -180,6 +205,35 @@ func TestStopAndCopyLive_SrcFailed_MTLS_DstTerminating_NoRetry(t *testing.T) {
 	res := r.handleStopAndCopyLive(context.Background(), mig, status)
 	if res.FailureReason == "" {
 		t.Fatalf("terminating dst must not be retried; expected failure")
+	}
+}
+
+func TestStopAndCopyLive_SrcFailed_MTLS_DestReceiverNotReady_RetriesSend(t *testing.T) {
+	// Multi-node-L2 spike fix: internal_server_error with the dst pod ALIVE is the
+	// dst-CH-receiver-not-ready race (early reset, no data flowed) — must retry.
+	r, mig := srcFailedReconciler(t, true, 1, "send_migration: internal_server_error", false)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureMsg != "" || res.FailureReason != "" {
+		t.Fatalf("expected retry (no failure); got msg=%q reason=%q", res.FailureMsg, res.FailureReason)
+	}
+	if res.Requeue == 0 {
+		t.Errorf("expected requeue on retry")
+	}
+	if status.SendAttempts != 2 {
+		t.Errorf("SendAttempts: want 2 (bumped for retry), got %d", status.SendAttempts)
+	}
+}
+
+func TestStopAndCopyLive_SrcFailed_MTLS_InternalServerError_DstTerminating_NoRetry(t *testing.T) {
+	// The W18 gate: internal_server_error while the dst is TERMINATING is a genuine
+	// dst-K8s-termination (shares the symptom but the dst is going away) — must fail,
+	// NOT be mistaken for the not-ready-yet race.
+	r, mig := srcFailedReconciler(t, true, 1, "send_migration: internal_server_error", true)
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason == "" {
+		t.Fatalf("terminating dst must not be retried even on internal_server_error; expected failure")
 	}
 }
 
