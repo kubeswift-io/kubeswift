@@ -84,6 +84,31 @@ func isLocalStunnelNotReady(detail string) bool {
 	return strings.HasPrefix(d, "send_migration:") && strings.Contains(d, "connection_refused")
 }
 
+// isDestReceiverNotReady reports whether a src-side migration-status-detail
+// indicates the DESTINATION CH receiver had not yet bound its listener when
+// the src CH tried to send. Under mTLS the src CH dials its (up) LOCAL stunnel,
+// which forwards to the dst stunnel -> dst CH `vm.receive-migration`
+// (127.0.0.1:6790 on the dst). If the dst CH receiver hasn't called
+// receive-migration yet, the dst stunnel cannot forward and resets; the src
+// local stunnel resets the loopback with 0 bytes sent; CH surfaces a generic
+// Status-500 that swiftletd sanitizes to "internal_server_error". Because the
+// channel never carried data, re-issuing the send is safe.
+//
+// This is distinct from a dst *disappearance* mid-transfer (data had flowed),
+// which surfaces as "transport_error" and is a genuine failure (excluded here).
+// The caller MUST additionally gate on the dst pod NOT terminating so the W18
+// dst-K8s-termination case (same "internal_server_error" symptom, but the dst
+// is going away) is never mistaken for a not-ready-yet race.
+//
+// The race bites primary-on-NAD guests: the NAD dst pod's network-init runs the
+// multi-node-L2 datapath, making it slower to reach receive-migration, so the
+// controller's PreSend can out-run the dst receiver. Non-NAD dst pods get ready
+// fast enough to win the race. Found in the multi-node-L2 validation spike.
+func isDestReceiverNotReady(detail string) bool {
+	d := strings.ToLower(strings.TrimSpace(detail))
+	return strings.HasPrefix(d, "send_migration:") && strings.Contains(d, "internal_server_error")
+}
+
 // stampSourceMigrationInputs idempotently patches the dst-ip / peer-san
 // annotations onto the source pod. The SwiftGuest controller's downward-API
 // volume projects these into files the idle client sidecar polls; stamping
