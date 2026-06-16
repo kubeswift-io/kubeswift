@@ -24,20 +24,22 @@
 #
 # Two supported paths (pick one):
 #
-#  (a) virtiofs share (this sample). When a source guest references this seed
-#      profile, the SwiftGuest controller bind-mounts the swiftletd image's
-#      /usr/local/share/kubeswift/guest-agent directory into the guest as a
-#      read-only virtiofs share tagged `kubeswift-agent`. The runcmd below
-#      installs the agent from it. (The controller-side share attachment ships in
-#      PR 2 of the arc; until then, install the agent manually — see (b)/(c).)
+#  (a) seed disk (this sample). Set `spec.guestAgent.enabled: true` on the SOURCE
+#      SwiftGuest AND reference this seed profile. swiftletd then drops the agent
+#      binary (shipped in the swiftletd image at
+#      /usr/local/share/kubeswift/guest-agent) onto the NoCloud seed disk, and the
+#      runcmd below installs it from the mounted cidata disk on first boot. The
+#      binary rides a normal disk — no captured PCI device — so the clone restore
+#      is unaffected (the source's and clone's seed disks stay byte-identical).
 #
 #  (b) golden image (recommended for production fleets). Bake
 #      /usr/local/bin/kubeswift-guest-agent + this systemd unit into your
-#      SwiftImage at build time; then no per-guest seed wiring is needed.
+#      SwiftImage at build time; then no per-guest seed wiring is needed. Still
+#      set `spec.guestAgent.enabled: true` on the source to attach the vsock
+#      device the agent listens on.
 #
-#  (c) manual (for testing PR 1 standalone). Copy the binary into a running
-#      source guest, `systemctl enable --now kubeswift-guest-agent`, then
-#      snapshot it.
+#  (c) manual (for testing). Copy the binary into a running source guest,
+#      `systemctl enable --now kubeswift-guest-agent`, then snapshot it.
 #
 # # Fail-safe
 #
@@ -73,11 +75,15 @@ spec:
           [Install]
           WantedBy=multi-user.target
     runcmd:
-      # (a) install from the controller-attached virtiofs share (PR 2).
-      - [ sh, -c, "mkdir -p /mnt/kubeswift-agent" ]
-      - [ sh, -c, "mount -t virtiofs kubeswift-agent /mnt/kubeswift-agent 2>/dev/null || true" ]
-      - [ sh, -c, "if [ -x /mnt/kubeswift-agent/kubeswift-guest-agent ]; then install -m0755 /mnt/kubeswift-agent/kubeswift-guest-agent /usr/local/bin/kubeswift-guest-agent; fi" ]
-      - [ sh, -c, "umount /mnt/kubeswift-agent 2>/dev/null || true" ]
+      # Install the agent from the NoCloud seed disk. When guestAgent.enabled is
+      # set on the SOURCE guest, swiftletd drops the agent binary onto the cidata
+      # seed disk next to user-data/meta-data; mount it by its volume label and
+      # install. (If the binary is absent — agent not enabled, or a golden image
+      # already has it — every step is a harmless no-op.)
+      - [ sh, -c, "mkdir -p /mnt/cidata" ]
+      - [ sh, -c, "mount -o ro /dev/disk/by-label/cidata /mnt/cidata 2>/dev/null || true" ]
+      - [ sh, -c, "if [ -f /mnt/cidata/kubeswift-guest-agent ]; then install -m0755 /mnt/cidata/kubeswift-guest-agent /usr/local/bin/kubeswift-guest-agent; fi" ]
+      - [ sh, -c, "umount /mnt/cidata 2>/dev/null || true" ]
       # enable + start (no-op if the binary is absent — the controller's
       # GuestAgentUnreachable fallback then makes the gap visible, not silent).
       - [ sh, -c, "systemctl daemon-reload" ]

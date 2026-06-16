@@ -59,14 +59,16 @@ spec:
   # ... and install the agent in the guest (golden image above, recommended)
 ```
 
-**Seed profile (agent-binary delivery).** The `guest-agent` SwiftSeedProfile
+**Seed profile (no golden image needed).** Set `spec.guestAgent.enabled: true`
+on the source **and** reference the `guest-agent` SwiftSeedProfile
 ([`config/samples/seed-profiles/guest-agent.yaml`](../../config/samples/seed-profiles/guest-agent.yaml))
-installs the agent from a virtiofs share on first boot. The controller-side
-attachment of that share is a tracked follow-up; until it lands, install the
-agent via the **golden image** (recommended) and just set `guestAgent.enabled`
-on the source. (`spec.seedProfileRef` to the profile is harmless meanwhile — the
-runcmd no-ops when the share is absent, and the loud `GuestAgentUnreachable`
-fallback makes a missing agent visible.)
+via `spec.seedProfileRef`. swiftletd then drops the agent binary (shipped in the
+swiftletd image) onto the NoCloud **seed disk**, and the profile's `runcmd`
+installs it from the mounted `cidata` disk on first boot. The binary rides a
+normal disk — no captured PCI device — so the source's and clone's seed disks
+stay byte-identical and the clone restore is unaffected. (If the binary is absent
+the steps no-op and the loud `GuestAgentUnreachable` fallback makes the gap
+visible.)
 
 **Verify it is running on the source before snapshotting:**
 
