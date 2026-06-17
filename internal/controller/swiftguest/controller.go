@@ -474,6 +474,14 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Error(err, "failed to build pod spec")
 		return ctrl.Result{}, err
 	}
+	// kube-ovn primary-on-NAD: stamp the guest's MAC (+ pinned IP) so the OVN
+	// logical-switch port identity is the guest, not the pod NIC — otherwise the
+	// bridged guest MAC is unreachable on the segment. No-op for every other
+	// networking mode. Fails closed on a NAD Get error (boot-time correctness).
+	if err := r.stampKubeOVNIdentity(ctx, &guest, desiredPod); err != nil {
+		logger.Error(err, "failed to stamp kube-ovn primary-NAD identity")
+		return ctrl.Result{}, err
+	}
 	if err := controllerutil.SetControllerReference(&guest, desiredPod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}

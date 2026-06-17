@@ -4,6 +4,33 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **kube-ovn primary-on-NAD integration (IP-preserving live migration on a real
+  Tier-C OVN L2).** When a SwiftGuest's **primary** interface rides a
+  kube-ovn-class NAD (`config.type: kube-ovn`), the controller now programs the
+  guest's identity onto the OVN logical-switch port so the guest is reachable on
+  the segment, and preserves its IP across a live migration — with **no manual
+  `ovn-nbctl`**. Mechanism (pure pod annotations; no datapath/Rust change):
+  - The launcher pod gets `<provider>.kubernetes.io/mac_address: <guest MAC>` (so
+    OVN's per-port ARP responder / L2 delivery target the guest's bridged MAC,
+    not the pod NIC's) and, once known, `<provider>.kubernetes.io/ip_address:
+    <guest IP>` (a stable static IP across pod recreate).
+  - The live-migration **destination** pod additionally gets
+    `kubevirt.io/migrationJobName`, which makes kube-ovn's IPAM skip the conflict
+    check so the dst can acquire the **same** static IP the source still holds
+    during cutover — the guest keeps its address end-to-end.
+  - Validated on the dev cluster: a primary-on-NAD guest live-migrated cross-node
+    on a real kube-ovn L2, `mode: live` with **no `allowIPChange`**, Completed in
+    ~3.2 s downtime with the IP preserved and reachable from a third node. Reads
+    NADs read-only (new `k8s.cni.cncf.io/network-attachment-definitions` get RBAC).
+    A no-op for every other networking mode (node-local bridge, non-kube-ovn NAD,
+    SR-IOV). Composes with `#235`/`#236` (the NAD live-migration carry-through).
+
+---
+
 ## [v0.4.4] — 2026-06-16
 
 Feature release. The **in-guest vsock identity agent** — a `cloneFromSnapshot`
