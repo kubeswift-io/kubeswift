@@ -38,6 +38,12 @@ type SwiftSnapshotReconciler struct {
 	// SnapshotS3Image is the snapshot-s3 uploader image used by the s3
 	// (Tier C) backend's upload Job. Wired from KUBESWIFT_SNAPSHOT_S3_IMAGE.
 	SnapshotS3Image string
+	// VolumeSnapshotEnabled gates the Owns(VolumeSnapshot) watch. When the CSI
+	// external-snapshotter CRDs (snapshot.storage.k8s.io/v1) are absent, that watch
+	// cannot sync its cache and the manager fatally exits. Set from a one-time
+	// discovery check in main. When false, the csi-volume-snapshot backend is
+	// unavailable; the local and s3 backends are unaffected.
+	VolumeSnapshotEnabled bool
 }
 
 // Reconcile drives the SwiftSnapshot state machine.
@@ -387,10 +393,13 @@ func isNotFound(err error) bool {
 // SwiftSnapshot, so EnqueueRequestsFromMapFunc maps Pod events to
 // the SwiftSnapshots that reference that pod's guest.
 func (r *SwiftSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&snapshotv1alpha1.SwiftSnapshot{}).
-		Owns(&volumesnapshotv1.VolumeSnapshot{}).
-		Owns(&batchv1.Job{}).
+		Owns(&batchv1.Job{})
+	if r.VolumeSnapshotEnabled {
+		b = b.Owns(&volumesnapshotv1.VolumeSnapshot{})
+	}
+	return b.
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.podToSnapshots),

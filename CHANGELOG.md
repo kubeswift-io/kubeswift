@@ -34,6 +34,19 @@ All notable changes to KubeSwift are documented here.
   identical and its tests pass unchanged. Foundation for OVN-Kubernetes support
   ([RFC](docs/design/ovn-cni-backends.md)).
 
+### Fixed
+- **Controller no longer crash-loops on a cluster without the CSI VolumeSnapshot
+  CRDs.** The snapshot controllers `Owns(VolumeSnapshot)`; when the
+  external-snapshotter CRDs (`snapshot.storage.k8s.io/v1`) are absent, that watch's
+  cache could never sync and the manager exited fatally — so on a bare cluster
+  (e.g. one whose CSI driver doesn't bundle them) KubeSwift never started. The
+  manager now does a one-time discovery check and **gates those watches** on it,
+  logging a clear warning and degrading gracefully: the **core VM runtime**, the
+  **local/s3 snapshot backends**, and `cloneStrategy=copy` all keep working; only
+  the **CSI VolumeSnapshot backend** and `cloneStrategy=snapshot` are disabled
+  until the CRDs are installed. Surfaced by the OVN-K P3 cluster validation (the
+  W5 pattern — a bare cluster exposes a hard dependency unit tests can't see).
+
 ---
 
 ## [v0.4.5] — 2026-06-17

@@ -26,6 +26,12 @@ type SwiftImageReconciler struct {
 	Scheme    *runtime.Scheme
 	Converter ImageConverter
 	Clientset kubernetes.Interface
+	// VolumeSnapshotEnabled gates the Owns(VolumeSnapshot) watch. When the CSI
+	// external-snapshotter CRDs (snapshot.storage.k8s.io/v1) are absent, that watch
+	// cannot sync its cache and the manager fatally exits. Set from a one-time
+	// discovery check in main. When false, cloneStrategy=snapshot is unavailable;
+	// the import pipeline and cloneStrategy=copy are unaffected.
+	VolumeSnapshotEnabled bool
 }
 
 // Reconcile implements the reconcile loop.
@@ -220,10 +226,13 @@ func (r *SwiftImageReconciler) swiftGuestToSwiftImage(_ context.Context, obj cli
 
 // SetupWithManager registers the reconciler with the manager.
 func (r *SwiftImageReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&imagev1alpha1.SwiftImage{}).
-		Owns(&batchv1.Job{}).
-		Owns(&volumesnapshotv1.VolumeSnapshot{}).
+		Owns(&batchv1.Job{})
+	if r.VolumeSnapshotEnabled {
+		b = b.Owns(&volumesnapshotv1.VolumeSnapshot{})
+	}
+	return b.
 		Watches(&swiftv1alpha1.SwiftGuest{}, handler.EnqueueRequestsFromMapFunc(r.swiftGuestToSwiftImage)).
 		Complete(r)
 }
