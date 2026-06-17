@@ -130,16 +130,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	// CSI VolumeSnapshot CRDs are optional. The snapshot controllers
+	// Owns(VolumeSnapshot); if the external-snapshotter CRDs are absent that watch
+	// can never sync its cache and the manager fatally exits. Gate those watches on
+	// a one-time discovery check so a cluster without the snapshot CRDs still runs
+	// the core VM runtime (only CSI snapshots / cloneStrategy=snapshot degrade).
+	volumeSnapshotEnabled := volumeSnapshotCRDsInstalled(clientset)
+	if !volumeSnapshotEnabled {
+		klog.Warning("CSI VolumeSnapshot CRDs (snapshot.storage.k8s.io/v1) are not installed; " +
+			"the csi-volume-snapshot snapshot backend and SwiftImage cloneStrategy=snapshot are disabled. " +
+			"Core VM runtime, local/s3 snapshots, and cloneStrategy=copy are unaffected. " +
+			"Install the external-snapshotter CRDs to enable CSI snapshots.")
+	}
+
 	// CR-state gauges (kubeswift_guests, kubeswift_pool_replicas, ...) are
 	// computed from the informer cache at scrape time — every listed type
 	// already has a controller-driven informer, so scrapes are in-memory.
 	kubeswiftmetrics.RegisterStateCollector(mgr.GetClient())
 
 	if err = (&swiftimage.SwiftImageReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Converter: swiftimage.StubConverter{},
-		Clientset: clientset,
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		Converter:             swiftimage.StubConverter{},
+		Clientset:             clientset,
+		VolumeSnapshotEnabled: volumeSnapshotEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftImage controller")
 		os.Exit(1)
@@ -185,9 +199,10 @@ func main() {
 	}
 
 	if err = (&swiftsnapshot.SwiftSnapshotReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		SnapshotS3Image: swiftsnapshot.SnapshotS3Image(),
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		SnapshotS3Image:       swiftsnapshot.SnapshotS3Image(),
+		VolumeSnapshotEnabled: volumeSnapshotEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
 		os.Exit(1)
@@ -318,4 +333,23 @@ func main() {
 		klog.ErrorS(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// volumeSnapshotCRDsInstalled reports whether the CSI external-snapshotter
+// VolumeSnapshot CRD (snapshot.storage.k8s.io/v1) is present, via a discovery
+// lookup. Used to gate the snapshot controllers' Owns(VolumeSnapshot) watch: that
+// watch cannot sync its cache when the CRD is absent and would fatally exit the
+// manager, so on a cluster without the snapshot CRDs we skip it and run the core
+// VM runtime regardless.
+func volumeSnapshotCRDsInstalled(cs kubernetes.Interface) bool {
+	list, err := cs.Discovery().ServerResourcesForGroupVersion("snapshot.storage.k8s.io/v1")
+	if err != nil {
+		return false
+	}
+	for _, r := range list.APIResources {
+		if r.Kind == "VolumeSnapshot" {
+			return true
+		}
+	}
+	return false
 }
