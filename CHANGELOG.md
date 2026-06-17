@@ -6,6 +6,16 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+---
+
+## [v0.4.5] — 2026-06-17
+
+Closes the **multi-node L2 / kube-ovn primary-on-NAD** arc: a guest whose
+**primary** NIC rides a kube-ovn NAD is reachable cross-node on its own IP and
+**preserves that IP across a `mode: live` migration with no `allowIPChange`** —
+zero-touch, no manual `ovn-nbctl`. Cluster-validated end-to-end on image
+`sha-e403f4c`.
+
 ### Added
 
 - **kube-ovn primary-on-NAD integration (IP-preserving live migration on a real
@@ -33,14 +43,45 @@ All notable changes to KubeSwift are documented here.
     (the KubeVirt bridge-binding pattern); the OVN port keeps the guest MAC, so OVN
     still delivers the guest's frames `NIC -> br0 -> tap`. A no-op for any NAD whose
     IPAM gives the NIC its own distinct MAC.
-  - **Validation.** The mechanism is cluster-proven (cross-node `mode: live`, no
-    `allowIPChange`, Completed in ~3.2 s downtime, IP preserved + reachable from a
-    third node). The post-merge cluster validation of the **automated** path
+  - **Validation.** Cluster-validated **zero-touch end-to-end** on image
+    `sha-e403f4c`: a fresh kube-ovn-primary guest auto-stamps its OVN port
+    identity and `network-init` auto-re-MACs the pod NIC, so the guest comes up
+    reachable cross-node with its IP in `status.network.primaryIP` (no manual
+    `ovn-nbctl`); a cross-node `mode: live` migration with **no `allowIPChange`**
+    Completed in **~3.2 s** downtime with the IP **preserved and reachable from a
+    third node**. The post-merge cluster validation of the **automated** path
     surfaced the NIC-MAC-shadow gap above (the W5 pattern: unit tests verify the
-    annotation, only a cluster exercises the bridge fdb) — fixed here; full
-    automated end-to-end validation completes once the launcher image carrying this
-    datapath fix is deployed. **Both** the controller and the launcher image must
-    carry the integration.
+    annotation, only a cluster exercises the bridge fdb) — fixed here. **Both**
+    the controller and the launcher image must carry the integration.
+
+### Changed
+
+- **De-experimentalized the multi-node L2 guide (#238).**
+  [`docs/networking/multi-node-l2.md`](docs/networking/multi-node-l2.md) now
+  carries an honest validation matrix: the primary-on-NAD datapath, offline
+  migration, and **live** IP-preservation are cluster-validated on a kube-ovn
+  Tier-C L2; the hand-rolled bridge/macvlan mesh validates the datapath and
+  offline moves but not live migration.
+
+### Fixed
+
+- **Live migration of a guest on a Multus NAD no longer fails `DstNeverReady`
+  (#235).** The migration **destination** pod now inherits the source's
+  `k8s.v1.cni.cncf.io/networks` request annotation, so its secondary interface
+  (`net1`) is plumbed by Multus before the receiver starts — previously the dst
+  pod came up without the NAD attachment and the migration timed out waiting for
+  a receiver that could never bind.
+- **Bounded send-retry when the destination CH receiver is not yet listening on
+  the migration channel (#236).** The source launcher now retries the
+  live-migration send for a short bounded window instead of failing the first
+  time the dst Cloud Hypervisor receiver has not finished binding the channel —
+  closing a cutover race that intermittently failed otherwise-healthy
+  migrations.
+- **Hardened the primary-on-NAD per-pod dnsmasq for a shared flat multi-node L2
+  (#237).** On a NAD that places every guest on one flat L2 segment, the per-pod
+  dnsmasq now answers **only its own guest's MAC** (it will not reply to a peer
+  guest's DHCP on the shared wire), hands out an **infinite lease**, and carries
+  the **overlay MTU** so the guest matches the segment.
 
 ---
 

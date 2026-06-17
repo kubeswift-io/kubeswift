@@ -51,11 +51,11 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
-    # Primary-on-NAD (multi-node L2, EXPERIMENTAL): network-init persisted the
-    # NAD-assigned primary IP. Hand exactly that IP to the guest (matched by
-    # MAC) via a fixed dnsmasq lease, so the guest's primary IP is the NAD's
-    # portable IP. lease.rs then discovers it from the same lease file (no code
-    # change). DATAPATH UNVALIDATED -- see docs/networking/multi-node-l2.md.
+    # Primary-on-NAD (multi-node L2): network-init persisted the NAD-assigned
+    # primary IP. Hand exactly that IP to the guest (matched by MAC) via a fixed
+    # dnsmasq lease, so the guest's primary IP is the NAD's portable IP. lease.rs
+    # then discovers it from the same lease file (no code change). Datapath is
+    # cluster-validated -- see docs/networking/multi-node-l2.md.
     nad_env="$lease_dir/primary-nad.env"
     if [ -f "$nad_env" ]; then
         # shellcheck disable=SC1090

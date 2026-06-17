@@ -4,7 +4,7 @@
 > **portable primary IP** — the network substrate for **IP-preserving live
 > migration**, telco/NFV, and stateful services with external clients. This is the
 > path KubeSwift's primary-on-NAD live migration is **validated end-to-end** on
-> (cross-node `mode: live`, no `allowIPChange`, ~3 s downtime, IP preserved).
+> (cross-node `mode: live`, no `allowIPChange`, ~3.2 s downtime, IP preserved).
 >
 > See [Multi-node L2 networking](multi-node-l2.md) for the feature/CRD reference
 > and [Network Architecture Requirements](../design/network-architecture-requirements.md)
@@ -260,8 +260,8 @@ destination keep the source's static IP through the cutover.
   was programmed caches an incomplete entry; `ip neigh flush all` (or just wait)
   and re-ping.
 - **dst pod can't get the IP during migration.** Ensure the controller image is
-  `#239`+ (it sets `kubevirt.io/migrationJobName`) and `--keep-vm-ip=true` is on
-  in kube-ovn (the chart default).
+  `#239`+ (it sets `kubevirt.io/migrationJobName`) and ensure `--keep-vm-ip=true`
+  is enabled in kube-ovn.
 
 ## Uninstall (return to primary-CNI-only)
 

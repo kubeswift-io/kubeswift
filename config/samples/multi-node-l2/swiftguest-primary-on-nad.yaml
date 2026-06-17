@@ -1,11 +1,17 @@
 # A guest whose PRIMARY IP rides a multi-node L2 NAD, so the IP is portable
-# across nodes (e.g. for IP-preserving migration). Pair with the ovn-l2 NAD
-# (Recipe A) or the mesh bridge NAD (Recipe B) — see docs/networking/multi-node-l2.md.
+# across nodes (e.g. for IP-preserving migration). Pair with the kube-ovn
+# primary NAD (kube-ovn-subnet-nad.yaml) or the mesh bridge NAD (bridge-nad.yaml)
+# — see docs/networking/multi-node-l2.md.
 #
-# STATUS: the datapath + offline migration IP-preservation are cluster-validated.
-# End-to-end LIVE-migration IP-preservation is OVN-K-gated (use Recipe A / OVN-K
-# layer-2 for it; the hand-rolled mesh validates offline but not live). See the
-# validation matrix in docs/networking/multi-node-l2.md.
+# STATUS: the primary-on-NAD datapath, OFFLINE migration, and LIVE-migration
+# IP-preservation are all cluster-validated. The zero-touch path is a kube-ovn
+# primary NAD: see kube-ovn-subnet-nad.yaml + the install guide at
+# ../../../docs/networking/ovn-l2-install.md (a fresh guest auto-stamps its OVN
+# port identity and comes up reachable cross-node with its IP, and a cross-node
+# `mode: live` migration preserves the IP — no `allowIPChange`, no manual
+# ovn-nbctl). The hand-rolled bridge/macvlan mesh validates the datapath and
+# offline moves but NOT live migration. See the validation matrix in
+# docs/networking/multi-node-l2.md.
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:

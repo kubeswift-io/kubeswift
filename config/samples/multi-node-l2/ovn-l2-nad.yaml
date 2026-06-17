@@ -1,5 +1,9 @@
 # Reference OVN-Kubernetes layer-2 NAD: an overlay L2 segment spanning all
 # nodes. Requires OVN-K as the cluster CNI / secondary-network provider.
+# Use this when OVN-Kubernetes is the cluster's PRIMARY CNI. For a cluster
+# running another primary CNI (Calico/Cilium), use kube-ovn-subnet-nad.yaml
+# (kube-ovn as a non-primary secondary) — that is the cluster-validated
+# zero-touch IP-preserving-live path; see docs/networking/ovn-l2-install.md.
 # See docs/networking/multi-node-l2.md.
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
