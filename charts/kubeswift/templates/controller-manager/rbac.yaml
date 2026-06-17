@@ -29,11 +29,17 @@ rules:
   - apiGroups: ["seed.kubeswift.io"]
     resources: ["swiftseedprofiles"]
     verbs: ["get", "list", "watch"]
-  # Multus NADs — read-only, to detect a kube-ovn-class primary NAD and program
-  # the launcher pod's OVN logical-switch-port identity (kube-ovn integration).
+  # Multus NADs — read-only, to detect an OVN-class primary NAD (kube-ovn or
+  # ovn-kubernetes) and program the launcher pod's OVN logical-switch-port identity.
   - apiGroups: ["k8s.cni.cncf.io"]
     resources: ["network-attachment-definitions"]
     verbs: ["get", "list", "watch"]
+  # OVN-Kubernetes IPAMClaims — created+owned per guest to pin the primary IP of an
+  # OVN-K layer2 primary-on-NAD guest (OVN-K does not auto-create them). GC is via
+  # owner-ref cascade on the SwiftGuest, so no delete verb is needed.
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["ipamclaims"]
+    verbs: ["get", "list", "watch", "create"]
   # Core resources
   - apiGroups: [""]
     resources: ["pods", "pods/status"]
