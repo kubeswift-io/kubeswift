@@ -1,8 +1,11 @@
 # A guest whose PRIMARY IP rides a multi-node L2 NAD, so the IP is portable
-# across nodes (e.g. for IP-preserving live migration). Pair with the ovn-l2 NAD.
+# across nodes (e.g. for IP-preserving migration). Pair with the ovn-l2 NAD
+# (Recipe A) or the mesh bridge NAD (Recipe B) — see docs/networking/multi-node-l2.md.
 #
-# NOTE: the runtime datapath for primary-on-NAD is landing in follow-up PRs; the
-# control-plane (admission + migration IP-preservation classification) is shipped.
+# STATUS: the datapath + offline migration IP-preservation are cluster-validated.
+# End-to-end LIVE-migration IP-preservation is OVN-K-gated (use Recipe A / OVN-K
+# layer-2 for it; the hand-rolled mesh validates offline but not live). See the
+# validation matrix in docs/networking/multi-node-l2.md.
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:

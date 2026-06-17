@@ -168,6 +168,24 @@ logic are fully unit-testable; an end-to-end IP-preserving live migration
 needs a cluster with a real Tier-C attachment (an OVN-K lab, or a private
 VLAN for macvlan).
 
+**Validation outcome (2026-06, hand-rolled VXLAN-mesh substrate).** A lab
+VXLAN mesh (Recipe B in
+[`../networking/multi-node-l2.md`](../networking/multi-node-l2.md)) let us
+validate most of this on the Calico cluster after all: the **primary-on-NAD
+datapath**, **cross-node L2 reachability**, and **offline migration
+IP-preservation** are all cluster-proven. It surfaced two real KubeSwift
+live-migration bugs (both would break NAD live migration on *any* Tier-C
+network) — fixed in #235 (the dst pod dropped its Multus annotation →
+`DstNeverReady`) and #236 (the dst-receiver-not-ready send-retry) — plus a
+dnsmasq shared-L2 hardening (#237). **End-to-end live-migration
+IP-preservation remains OVN-K-gated**: on the hand-rolled mesh both migration
+pods are multi-homed across two overlays (the mesh + Calico), which
+intermittently breaks the migration channel (isolation: only the NAD↔NAD case
+fails). A real OVN-K layer-2 manages the attachment in-CNI and would not hit
+this — so §3's marquee live-migration capability is the one piece that still
+needs the OVN-K lab. Full diagnosis:
+`docs/design/multi-node-l2-validation-spike.md` (local).
+
 ## 7. Implementation gaps (what code work this implies)
 
 The abstraction is right, so the work is small and well-scoped:
