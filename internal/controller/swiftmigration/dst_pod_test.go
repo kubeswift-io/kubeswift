@@ -114,7 +114,7 @@ func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 	}
 	src := templateSrcPod("guest", "default")
 
-	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "")
+	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestNewDstPod_NoLauncherContainer_Errors(t *testing.T) {
 	src := templateSrcPod("guest", "default")
 	src.Spec.Containers[0].Name = "not-launcher"
 
-	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, ""); err == nil {
+	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "", nil); err == nil {
 		t.Errorf("expected error when launcher container is missing")
 	}
 }
@@ -247,7 +247,7 @@ func TestNewDstPod_PreservesMultusAnnotation(t *testing.T) {
 				mtlsEnabled: tc.mtls,
 				srcNodeName: "boba",
 				dstNodeName: "miles",
-			}, "")
+			}, "", nil)
 			if err != nil {
 				t.Fatalf("newDstPod: %v", err)
 			}
@@ -279,7 +279,7 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 		mtlsEnabled: true,
 		srcNodeName: "boba",  // source node — dst pins this SAN
 		dstNodeName: "miles", // destination node — dst presents this identity
-	}, "")
+	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod (mTLS): %v", err)
 	}
@@ -372,7 +372,7 @@ func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 
 	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
 		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
-	}, "")
+	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
 	}
 	src := templateSrcPod("guest", "default")
 
-	off, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "")
+	off, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod (plaintext): %v", err)
 	}
@@ -439,7 +439,7 @@ func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
 
 	on, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
 		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
-	}, "")
+	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod (mTLS): %v", err)
 	}
@@ -461,7 +461,7 @@ func TestNewDstPod_MTLS_EmptyNode_Errors(t *testing.T) {
 		mtlsEnabled: true,
 		srcNodeName: "", // unresolved
 		dstNodeName: "miles",
-	}, ""); err == nil {
+	}, "", nil); err == nil {
 		t.Errorf("expected error when mTLS enabled but source node name empty")
 	}
 }

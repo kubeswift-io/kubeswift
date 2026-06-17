@@ -123,7 +123,7 @@ func TestNewDstPod_RepointsRuntimeIntentVolume(t *testing.T) {
 	})
 
 	frozenName := "guest-mig-abcdef" + swiftguest.IntentConfigMapSuffix
-	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, frozenName)
+	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, frozenName, nil)
 	if err != nil {
 		t.Fatalf("newDstPod: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestNewDstPod_RepointsRuntimeIntentVolume(t *testing.T) {
 	}
 
 	// Empty frozen name leaves the inherited live CM in place.
-	dst2, _ := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "")
+	dst2, _ := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "", nil)
 	if got := intentVolumeCM(dst2); got != "guest"+swiftguest.IntentConfigMapSuffix {
 		t.Errorf("empty frozen name must leave the live CM; got %q", got)
 	}
