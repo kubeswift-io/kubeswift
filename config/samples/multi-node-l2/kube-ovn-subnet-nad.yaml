@@ -1,0 +1,33 @@
+# A kube-ovn layer-2 segment (cluster-wide OVN logical switch over geneve) exposed
+# to Multus as a NAD. A KubeSwift guest puts its PRIMARY interface on this NAD to
+# get a portable IP (IP-preserving live migration). EDIT the namespace placeholders.
+#
+# The Subnet is cluster-scoped; the NAD is namespaced; `provider` links them as
+# <nad-name>.<nad-namespace>.ovn. cidrBlock must not overlap your pod/service CIDRs
+# or kube-ovn's default VPC (10.16/16). See docs/networking/ovn-l2-install.md.
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: ovn-l2
+spec:
+  protocol: IPv4
+  cidrBlock: 10.20.0.0/16
+  excludeIps: ["10.20.0.1"]
+  gateway: "10.20.0.1"
+  gatewayType: distributed
+  natOutgoing: false              # flat L2 segment, not routed/NAT'd
+  provider: ovn-l2.default.ovn    # <nad-name>.<nad-namespace>.ovn
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: ovn-l2
+  namespace: default              # same namespace as your SwiftGuests
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "kube-ovn",
+      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+      "provider": "ovn-l2.default.ovn"
+    }
