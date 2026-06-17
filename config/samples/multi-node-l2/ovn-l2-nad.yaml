@@ -18,5 +18,10 @@ spec:
       "name": "ovn-l2",
       "topology": "layer2",
       "subnets": "10.20.0.0/16",
+      "allowPersistentIPs": true,
       "netAttachDefName": "default/ovn-l2"
     }
+# `allowPersistentIPs: true` is REQUIRED by KubeSwift's OVN-Kubernetes backend:
+# it is what lets the backend pin the guest's primary IP via an IPAMClaim, which
+# is in turn what preserves the IP across a `mode: live` migration (no
+# `allowIPChange`). Without it the IPAMClaim mechanism does not engage.

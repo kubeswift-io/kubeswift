@@ -4,6 +4,13 @@
 > OVN-Kubernetes (macvlan, bridge, vlan CNI), see the
 > [Networking Operations Guide](operations-guide.md).
 
+> **Want a portable *primary* IP + IP-preserving live migration?** This guide
+> covers OVN-Kubernetes **secondary** networks (a `networkRef` on a non-primary
+> NIC). To put a guest's **primary** NIC on an OVN-K `layer2` segment so its IP is
+> portable across nodes (cross-node `mode: live` migration with no `allowIPChange`),
+> see the **[OVN-Kubernetes-primary install guide](ovn-kubernetes-install.md)** —
+> cluster-validated.
+
 This guide covers how to use OVN-Kubernetes secondary networks with KubeSwift VMs.
 It assumes you have read [Multi-NIC Support](../multi-nic.md) for the general
 multi-interface architecture.
