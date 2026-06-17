@@ -17,9 +17,12 @@
 #   kubectl apply -f ../multi-node-l2/ovn-l2-nad.yaml    # the `ovn-l2` NAD
 #   a Ready SwiftImage `ubuntu-noble`.
 #
-# NOTE: the primary-on-NAD runtime datapath is experimental (control-plane —
-# admission + migration IP-preservation classification — is shipped; the
-# datapath validates on an OVN-Kubernetes cluster). See ../multi-node-l2/.
+# STATUS: the primary-on-NAD datapath + OFFLINE migration IP-preservation are
+# cluster-validated. End-to-end LIVE-migration IP-preservation is OVN-K-gated
+# (the `ovn-l2` NAD here is the right one for it). On a hand-rolled mesh the live
+# path hits a multi-homed-pod issue — see the validation matrix in
+# docs/networking/multi-node-l2.md. For a guaranteed-IP move today, use offline
+# migration (swiftctl migrate ... --mode offline).
 #
 # Migrate it:  swiftctl migrate ip-stable-vm --to <node>
 # (no --allow-ip-change needed — the primary IP is preserved.)

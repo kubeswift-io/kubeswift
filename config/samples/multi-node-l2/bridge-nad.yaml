@@ -1,0 +1,45 @@
+# Recipe B NAD — a Multus `bridge` NAD on the VXLAN-mesh bridge (br-ksl2 from
+# vxlan-mesh-daemonset.yaml). A primary-on-NAD SwiftGuest referencing this NAD
+# gets a portable IP on the mesh L2.
+#
+# IPAM: `host-local` is per-NODE and does NOT coordinate across nodes, so two
+# nodes would hand out the same address on the shared L2. Options:
+#   - whereabouts (cluster-wide IPAM) for a multi-IP pool (recommended for >1 guest);
+#   - per-node non-overlapping host-local rangeStart/rangeEnd (operator-managed);
+#   - a single-IP range (below) to PIN one guest's IP across nodes (migration-stable).
+# Match `mtu` to the mesh MTU so the pod veth doesn't exceed the overlay.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: ksl2
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "name": "ksl2",
+      "type": "bridge",
+      "bridge": "br-ksl2",
+      "mtu": 1450,
+      "ipam": {
+        "type": "host-local",
+        "subnet": "10.77.0.0/24",
+        "rangeStart": "10.77.0.11",
+        "rangeEnd": "10.77.0.11"
+      }
+    }
+---
+# A guest whose PRIMARY rides the mesh NAD (portable IP, no allowIPChange on migrate).
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: portable-ip-guest
+  namespace: default
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  interfaces:
+    - name: app
+      primary: true
+      networkRef: { name: ksl2 }

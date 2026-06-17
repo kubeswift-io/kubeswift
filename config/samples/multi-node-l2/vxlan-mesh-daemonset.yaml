@@ -1,0 +1,75 @@
+# Recipe B substrate — hand-rolled VXLAN-mesh multi-node L2 (lab / on-prem).
+#
+# Builds, on every node, a VXLAN uplink (vxksl2) + a host bridge (br-ksl2) and
+# unicast-meshes them into one flat L2 that spans different-subnet nodes. A
+# Multus `bridge` NAD (see bridge-nad.yaml) then attaches launcher pods to
+# br-ksl2. Validated for the primary-on-NAD datapath + offline migration
+# IP-preservation; NOT for end-to-end live migration (see docs/networking/multi-node-l2.md).
+#
+# THREE LOAD-BEARING RULES (each cost a debugging cycle in the validation spike):
+#   1. dstport MUST differ from the cluster CNI's VXLAN port. Calico uses 4789;
+#      sharing it BREAKS Calico's cross-node pod networking. 8472 below assumes a
+#      Calico cluster — on flannel (which uses 8472) pick another free UDP port,
+#      and confirm it is open between nodes.
+#   2. Every node hosting a primary-on-NAD guest (or a migration target) MUST run
+#      Multus, else the NAD never plumbs (`network-init: net1 not found`).
+#   3. Set NODE_IPS below to the InternalIPs of ALL participating nodes (the mesh
+#      FDB is built from this list; each pod skips its own).
+#
+# SECURITY: the mesh carries guest L2 frames unencrypted over the node underlay.
+# On an untrusted underlay, run it over a WireGuard/IPsec node mesh.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ksl2-mesh
+  namespace: kube-system
+  labels: { app: ksl2-mesh }
+spec:
+  selector:
+    matchLabels: { app: ksl2-mesh }
+  template:
+    metadata:
+      labels: { app: ksl2-mesh }
+    spec:
+      hostNetwork: true
+      tolerations:
+        - operator: Exists   # span control-plane + tainted nodes too
+      containers:
+        - name: mesh
+          image: nicolaka/netshoot:latest   # any image with iproute2 (ip + bridge)
+          securityContext:
+            privileged: true
+            capabilities: { add: ["NET_ADMIN"] }
+          env:
+            - name: MY_HOST_IP
+              valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+            # RULE 3: comma/space-separated InternalIPs of ALL participating nodes.
+            - name: NODE_IPS
+              value: "REPLACE_WITH node1ip node2ip node3ip"
+            - name: VXLAN_PORT   # RULE 1: must NOT equal the CNI's VXLAN port (Calico=4789)
+              value: "8472"
+            - name: VNI
+              value: "100"
+            - name: MESH_MTU     # underlay MTU - 50 (VXLAN overhead)
+              value: "1450"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              SELF="$MY_HOST_IP"
+              ip link del vxksl2 2>/dev/null || true
+              ip link add vxksl2 type vxlan id "$VNI" local "$SELF" dstport "$VXLAN_PORT"
+              ip link set vxksl2 mtu "$MESH_MTU"
+              ip link add br-ksl2 type bridge 2>/dev/null || true
+              ip link set br-ksl2 mtu "$MESH_MTU"
+              ip link set vxksl2 master br-ksl2
+              ip link set vxksl2 up
+              ip link set br-ksl2 up
+              for p in $(echo "$NODE_IPS" | tr ',' ' '); do
+                [ "$p" = "$SELF" ] && continue
+                bridge fdb append 00:00:00:00:00:00 dev vxksl2 dst "$p"
+              done
+              echo "ksl2 mesh up on $SELF (vxksl2 VNI=$VNI port=$VXLAN_PORT -> br-ksl2)"
+              # NOTE: this DS does NOT clean up vxksl2/br-ksl2 on SIGTERM; to remove
+              # the mesh, `ip link del vxksl2; ip link del br-ksl2` on each node.
+              while true; do sleep 3600; done
