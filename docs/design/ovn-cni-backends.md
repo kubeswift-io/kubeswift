@@ -1,18 +1,40 @@
 # RFC: Pluggable OVN CNI backends (OVN-Kubernetes as a second substrate)
 
-> Status (2026-06-17): **P0 spike COMPLETE — findings folded in; ALL decisions
-> RESOLVED.** The pivotal unknown (OVN-K non-KubeVirt *live* IP-keep) is
-> **RETIRED — PASS**: OVN-K gets full IP-preserving live migration via the NPWG
-> `IPAMClaim` path, and *simpler* than kube-ovn (no `migrationJobName`-equivalent
-> needed — see §3 / §8 / the spike doc). The §10(b) offline-only fallback is
-> dropped. The two decisions that needed the user's call — **(c) dual-substrate
-> maintenance** and **(d) supported-vs-advanced tiering** — were **signed off
-> 2026-06-17 → "full first-class support"** (accept the dual-substrate cost; ship
-> OVN-K-primary as a documented, validated, SUPPORTED option). **GREEN to proceed.**
-> Remaining = the build: P1 (behavior-preserving `ovnBackend` refactor) →
-> P2 (`ovnKubernetesBackend`) → P3 (full real-VM validation on the OVN-K `ntx`
-> cluster) → P4 (supported-option docs/runbook). UDN-primary multi-tenancy is a
-> separate later phase (P5 / R6). Author: staff-architect.
+> Status (2026-06-17): **SHIPPED (P1+P2 merged #243/#244; P3 cluster-validated
+> 2026-06-17).** OVN-Kubernetes is now a fully-supported second OVN substrate: a
+> SwiftGuest whose **primary** NIC rides an OVN-K `layer2` NAD is reachable
+> cross-node on its own IP and **preserves that IP across a `mode: live` migration
+> with no `allowIPChange`** — the same capability v0.4.5 shipped on kube-ovn, now on
+> a second substrate. P1 (#243) lifted the kube-ovn logic behind the pluggable
+> `ovnBackend` seam; P2 (#244) added `ovnKubernetesBackend`; **P3 validated the full
+> stack on a real OVN-K-primary cluster** (a real RWX+Block disk-boot Ubuntu-Noble
+> guest booted reachable cross-node and live-migrated IP-preserving in **2.806 s** —
+> see the **Validation** callout below and the validated §8 P3 row). The pivotal
+> unknown (OVN-K non-KubeVirt *live* IP-keep) was retired by the P0 spike: OVN-K
+> gets it via the NPWG `IPAMClaim` path, *simpler* than kube-ovn (no
+> `migrationJobName`-equivalent needed — §3 / §8). The two decisions that needed
+> the user's call — **(c) dual-substrate maintenance** and **(d) supported-vs-
+> advanced tiering** — were signed off 2026-06-17 → "full first-class support".
+> Operator install guide: [`ovn-kubernetes-install.md`](../networking/ovn-kubernetes-install.md).
+> UDN-primary multi-tenancy remains a separate later phase (P5 / R6). Author:
+> staff-architect.
+
+> ### Validation (P3, 2026-06-17 — SHIPPED evidence)
+>
+> Validated on a dedicated **OVN-Kubernetes-primary** cluster (3 libvirt VMs
+> `ntx1/2/3`, k0s v1.34.3, nested virt, Longhorn with a `migratable` StorageClass,
+> KubeSwift image `sha-12dad1e`). A **real RWX+Block disk-boot Ubuntu-Noble**
+> SwiftGuest `ovnk-vm`, primary on an `ovn-l2` NAD (`ovn-k8s-cni-overlay` `layer2`
+> `allowPersistentIPs: true`, subnet `10.20.0.0/16`):
+>
+> - **Boot:** the controller stamped the guest `mac` + `ipam-claim-reference` into
+>   the Multus networks annotation; `IPAMClaim ovnk-vm-net1` was created+owned
+>   (`ips: ["10.20.0.1/16"]`); `network-init` re-MAC'd `net1` off the guest MAC (the
+>   #240 datapath); the guest came up **Running, IP `10.20.0.1`, reachable
+>   cross-node** (ping from a pod attached to `ovn-l2` on another node, 0% loss).
+> - **Live migration:** `mode: live` ntx2→ntx1, **no `allowIPChange`** →
+>   **Completed, downtime 2.806 s, IP preserved `10.20.0.1`**, reachable from a
+>   **third** node (ntx3) at 0% loss.
 
 ## 0. TL;DR
 
@@ -499,8 +521,8 @@ follow-on spike), not a gate on starting the work.
 | **P0 — Spike — ✅ DONE (2026-06-17)** | On the OVN-K-primary `ntx` cluster (3 libvirt VMs, k0s 1.34.3, nested virt). **PASS:** (b) **Mechanism B offline** — a layer2 `allowPersistentIPs` NAD + a pre-created `IPAMClaim` + `ipam-claim-reference` persists the IP across pod-recreate; (c) **the pivotal live overlap** — two pods on different nodes referencing the **same `IPAMClaim`** simultaneously is **allowed by default** (dst gets the IP while src holds it; cutover clean; reachable from a 3rd node), **no marker annotation** — simpler than kube-ovn; **plus** UDN-secondary proven end-to-end (generated NAD + pod IP). **Surfaced:** OVN-K does NOT auto-create the `IPAMClaim` (the backend must), `status.ownerPod` goes stale post-cutover (advisory; backend owns it), UDN-*primary* node datapath crashlooped on this small cluster (separate phase, R6), and the OVN-K **identity** mechanism (§3.5) is the one not-yet-spiked residual. Findings doc: [`ovn-cni-backends-spike.md`](ovn-cni-backends-spike.md). | **Done. (c) PASS retired §10-b.** |
 | **P1 — `ovnBackend` refactor (behavior-preserving)** | Introduce the interface; lift the shipped #239/#240 kube-ovn logic into `kubeOVNBackend`; rewire the two call sites. **kube-ovn unit tests pass unchanged; kube-ovn cluster behavior identical** — the existing kube-ovn cluster validation is the regression gate. Zero OVN-K code yet. | PR 1. A pure refactor of shipped behavior; regression-gated by the existing kube-ovn tests + a kube-ovn cluster re-validation. |
 | **P2 — `ovnKubernetesBackend`** | New backend implementing the P0-proven Mechanism B (one mechanism for **both** offline and live — no separate live path needed): the `ovn-k8s-cni-overlay`/`layer2` detector; **`IPAMClaim` create+own+GC per guest** (OVN-K does not auto-create it); `ipam-claim-reference` (+ guest `mac`) in the Multus selection element; **`mergeAnnotationsForDst` carry-over** of the claim reference onto the dst pod (the #235 pattern — the live overlap); the §6 live-eligibility gate. **Pin the §3.5 identity slot here** (the `mac_address`-equivalent: NAD/pod `mac` or `k8s.ovn.org/...`) — short follow-on spike if it doesn't fall out of bring-up. RBAC for `ipamclaims.k8s.cni.cncf.io` (generated-NAD reads already covered by the existing `network-attachment-definitions` grant). UDN-*secondary* needs no extra code (rides the generated NAD, §4.4). | PR 2 (no PR 2b — Mechanism B is one path for offline+live). Unit-tested with fake NADs/claims. |
-| **P3 — Cluster validation (`ntx`, real KubeSwift VMs)** | The §7 matrix on the OVN-K-primary `ntx` cluster — it has nested virt, so this is **real VM boot + live-migrate**, not raw-pod probes. V1 (smoke regression) is the viability gate; V3-V5 + V6a are the ship bar (mechanisms spike-proven, confirmed on real VMs); **V6b (UDN-primary multi-tenancy) is a separate later phase** on a robust OVN-K cluster. | PR 3 (validation log + any walkthrough fixes — the W5 pattern *will* surface cluster-only bugs). |
-| **P4 — Docs** | This RFC → "SHIPPED" with the validation outcome (honest matrix, like the v0.4.5 multi-node-L2 doc). Operator install guide for OVN-K-primary (sibling to [`ovn-l2-install.md`](../networking/ovn-l2-install.md)); update [`ovn-kubernetes.md`](../networking/ovn-kubernetes.md), [`multi-node-l2.md`](../networking/multi-node-l2.md), [`network-architecture-requirements.md`](network-architecture-requirements.md) §6. Promote/annotate the staged UDN-secondary/localnet samples; mark the UDN-primary/CUDN samples as the separate-phase capability. | PR 4. |
+| **P3 — Cluster validation (`ntx`, real KubeSwift VMs) — ✅ DONE (2026-06-17)** | The §7 matrix on the OVN-K-primary `ntx` cluster (3 libvirt VMs, k0s 1.34.3, nested virt, image `sha-12dad1e`) — real VM boot + live-migrate, not raw-pod probes. **PASS:** a **real RWX+Block disk-boot Ubuntu-Noble** guest `ovnk-vm` on a `layer2` `allowPersistentIPs` NAD (subnet `10.20.0.0/16`) came up **Running, IP `10.20.0.1`, reachable cross-node** (V3 — the residual identity slot, the Multus selection-element `mac` field, confirmed: a foreign MAC behind `net1` is delivered to the guest); the controller created+owned `IPAMClaim ovnk-vm-net1` and `network-init` re-MAC'd `net1`. **LIVE** migration ntx2→ntx1 with **no `allowIPChange`** Completed in **2.806 s** with the IP **preserved (`10.20.0.1`) and reachable from a 3rd node** (V5). **Surfaced:** the stock `ovn-l2-nad.yaml` sample was missing `allowPersistentIPs: true` (the IPAMClaim prerequisite — fixed); a bare OVN-K cluster without the `snapshot.storage.k8s.io` CSI VolumeSnapshot CRDs historically crash-looped the controller (an optional snapshot prereq, not a runtime blocker — tracked separately for hard-dependency removal). UDN-secondary rides the same code path (V6a, transparent); **UDN-primary (V6b) remains a separate later phase** (R6). | Done. **SHIPPED.** |
+| **P4 — Docs — ✅ DONE (2026-06-17)** | This RFC → "SHIPPED" with the P3 validation outcome (the **Validation** callout + the validated §8 P3 row). New operator install guide for OVN-K-primary ([`ovn-kubernetes-install.md`](../networking/ovn-kubernetes-install.md), sibling to the kube-ovn [`ovn-l2-install.md`](../networking/ovn-l2-install.md)); updated [`ovn-kubernetes.md`](../networking/ovn-kubernetes.md), [`multi-node-l2.md`](../networking/multi-node-l2.md); fixed the [`ovn-l2-nad.yaml`](../../config/samples/multi-node-l2/ovn-l2-nad.yaml) sample (`allowPersistentIPs`). The UDN-secondary path is documented as transparent; the UDN-primary/CUDN samples are marked as the separate-phase capability. | Done. **SHIPPED.** |
 | **P5 — UDN-primary multi-tenancy *(separate later phase)*** | Guest-on-pod-PRIMARY-network UDN/CUDN multi-tenancy — a **different datapath** than the secondary-NAD backend (§4.4). Requires a robustly-resourced OVN-K cluster (the 3-VM `ntx` ovnkube-node crashlooped on UDN-network bring-up under the segmentation gate, R6). Its own design + spike + PRs when such a cluster exists. | Deferred; not gated by P1-P4. |
 
 ---

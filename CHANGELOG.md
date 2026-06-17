@@ -19,8 +19,13 @@ All notable changes to KubeSwift are documented here.
   overlap by **default**, so no `migrationJobName`-style marker is needed (simpler
   than kube-ovn). Adds `ipamclaims` RBAC (`get,list,watch,create`; GC via owner-ref
   cascade). The `PrimaryIPPreservedCrossNode()` live-eligibility gate already covers
-  it (CNI-agnostic). End-to-end validation on a real OVN-K cluster is P3.
-  ([RFC](docs/design/ovn-cni-backends.md))
+  it (CNI-agnostic). **Cluster-validated end-to-end** on a real OVN-Kubernetes-primary
+  cluster: a RWX+Block disk-boot guest on a `layer2 allowPersistentIPs` NAD booted
+  reachable cross-node, then `mode: live`-migrated with **no `allowIPChange`** in
+  **2.8 s** with the IP preserved and reachable from a third node. Operator guide:
+  [`docs/networking/ovn-kubernetes-install.md`](docs/networking/ovn-kubernetes-install.md).
+  UDN-*secondary* networks ride this backend transparently (a generated `layer2` NAD);
+  UDN-*primary* multi-tenancy is a separate later phase. ([RFC](docs/design/ovn-cni-backends.md))
 
 ### Changed
 - **Internal: pluggable OVN CNI backend seam (OVN-K arc P1).** Lifted the kube-ovn
