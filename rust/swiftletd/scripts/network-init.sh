@@ -148,12 +148,14 @@ setup_secondary_nic() {
     echo "Secondary NIC: $bridge with $tap, bridged to $multus_iface"
 }
 
-# setup_primary_nad_nic -- EXPERIMENTAL (multi-node L2, primary-on-NAD).
+# setup_primary_nad_nic -- multi-node L2, primary-on-NAD.
 #
-# DATAPATH IS UNVALIDATED on the dev cluster (no working multi-node L2). It
-# implements the KubeVirt-style "bridge binding": the NAD's CNI assigns the
-# pod's Multus interface an IP; we hand that exact IP to the GUEST so the
-# guest's primary IP is the NAD's portable IP (survives a move between nodes).
+# Datapath is cluster-validated (kube-ovn primary NAD: zero-touch cross-node
+# reachability + IP-preserving live migration; see docs/networking/multi-node-l2.md
+# and docs/networking/ovn-l2-install.md). It implements the KubeVirt-style "bridge
+# binding": the NAD's CNI assigns the pod's Multus interface an IP; we hand that
+# exact IP to the GUEST so the guest's primary IP is the NAD's portable IP
+# (survives a move between nodes).
 #
 #   1. wait for the Multus interface, read its CNI-assigned IP + gateway
 #   2. persist them (+ the guest MAC) to the per-guest run dir, for the
@@ -165,9 +167,9 @@ setup_secondary_nic() {
 #   5. give the bridge a best-effort helper IP in the NAD subnet so the
 #      entrypoint's dnsmasq can bind and serve the fixed lease
 #
-# Tuning of the helper IP / dnsmasq binding is expected during real-cluster
-# validation; the structure (read->flush->bridge->serve->lease.rs discovers) is the
-# contract.
+# The structure (read->flush->bridge->serve->lease.rs discovers) is the contract.
+# Residual caveat: the helper IP is a .254 heuristic (step 5 / below) and the
+# dnsmasq is redundant when the NAD's own segment already serves DHCP.
 setup_primary_nad_nic() {
     bridge="$1"; tap="$2"; multus_iface="$3"; guest_mac="$4"
 
@@ -241,14 +243,14 @@ setup_primary_nad_nic() {
     ip link set "$multus_iface" up
 
     # Best-effort helper IP in the NAD subnet for dnsmasq to bind. Heuristic
-    # (.254 host) -- refine during real-cluster validation; documented collision
-    # risk in docs/networking/multi-node-l2.md.
+    # (.254 host) with a standing collision risk if the subnet already uses it;
+    # documented in docs/networking/multi-node-l2.md.
     net_base=$(echo "$nad_ip" | sed 's/\.[0-9]*$//')
     helper="${net_base}.254"
     [ "$helper" = "$nad_ip" ] && helper="${net_base}.253"
     ip addr add "$helper/$nad_prefix" dev "$bridge" 2>/dev/null || true
 
-    echo "Primary NIC on NAD (EXPERIMENTAL): $bridge bridges $multus_iface to $tap; guest IP=$nad_ip/$nad_prefix gw=$nad_gw (helper $helper)"
+    echo "Primary NIC on NAD: $bridge bridges $multus_iface to $tap; guest IP=$nad_ip/$nad_prefix gw=$nad_gw (helper $helper)"
 }
 
 # --- Main ---
@@ -309,8 +311,8 @@ for nic in nics:
             continue
         fi
         if [ "$primary" = "1" ] && [ -n "$multus" ]; then
-            # Primary-on-NAD (multi-node L2, EXPERIMENTAL): the primary rides a
-            # Multus NAD instead of the node-local bridge.
+            # Primary-on-NAD (multi-node L2): the primary rides a Multus NAD
+            # instead of the node-local bridge.
             setup_primary_nad_nic "$bridge" "$tap" "$multus" "$mac"
         elif [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"

@@ -55,7 +55,8 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 - [Multi-NIC Support](multi-nic.md) -- CRD spec, MAC generation, architecture
 - [OVN-Kubernetes Integration](networking/ovn-kubernetes.md) -- Layer 2/3, localnet, UDN, CUDN
 - [SR-IOV NIC Passthrough](networking/sriov.md) -- VFIO passthrough for GPUDirect RDMA, DPDK
-- [Multi-node L2 (IP-preserving guests)](networking/multi-node-l2.md) -- primary-on-NAD, migration IP preservation (runtime experimental)
+- [Multi-node L2 (IP-preserving guests)](networking/multi-node-l2.md) -- primary-on-NAD, kube-ovn IP-preserving live migration
+- [kube-ovn L2 install guide](networking/ovn-l2-install.md) -- Deploy kube-ovn + a primary NAD for zero-touch IP-preserving guests
 
 ### Fleet Management
 
