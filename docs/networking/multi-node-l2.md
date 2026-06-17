@@ -147,6 +147,45 @@ guest's MAC (`--dhcp-ignore=tag:!known`), hands an infinite lease (the helper-IP
 server-id is ambiguous on the shared L2, so the guest must never renew), and
 carries the overlay MTU via `option:mtu`.
 
+## kube-ovn provider (validated) — automatic OVN port identity
+
+[kube-ovn](https://kube-ovn.io) can run as a **secondary** CNI alongside the
+cluster's primary CNI (its *non-primary mode*), exposing an OVN layer-2 `Subnet`
+to Multus as a NAD (`type: kube-ovn`). KubeSwift's primary-on-NAD live-migration
+IP-preservation is **validated end-to-end** on this provider (cross-node,
+`mode: live`, no `allowIPChange`, ~3.2 s downtime, IP preserved + reachable).
+
+```yaml
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata: { name: ovn-l2 }
+spec:
+  protocol: IPv4
+  cidrBlock: 10.20.0.0/16
+  provider: ovn-l2.<namespace>.ovn   # <nad-name>.<nad-namespace>.ovn
+  natOutgoing: false
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata: { name: ovn-l2, namespace: <namespace> }
+spec:
+  config: |
+    { "cniVersion": "0.3.1", "type": "kube-ovn",
+      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+      "provider": "ovn-l2.<namespace>.ovn" }
+```
+
+**What KubeSwift does for you (no manual `ovn-nbctl`):** OVN binds each
+logical-switch port to the *pod NIC's* MAC and answers ARP from it, but
+KubeSwift's datapath bridges the guest's *own* hypervisor MAC behind the pod NIC.
+So for a kube-ovn-class primary NAD the controller stamps
+`<provider>.kubernetes.io/mac_address` (the guest MAC) — making the OVN port
+identity the guest — plus `<provider>.kubernetes.io/ip_address` (a stable static
+IP) once known. On a live migration the destination pod also gets
+`kubevirt.io/migrationJobName`, which tells kube-ovn to let the dst share the
+source's still-held IP through cutover. This is automatic; it is a no-op for every
+other networking mode.
+
 ## Limitations / follow-ups
 
 - **End-to-end live-migration IP-preservation is OVN-K-gated** (the lab mesh's

@@ -29,6 +29,11 @@ rules:
   - apiGroups: ["seed.kubeswift.io"]
     resources: ["swiftseedprofiles"]
     verbs: ["get", "list", "watch"]
+  # Multus NADs — read-only, to detect a kube-ovn-class primary NAD and program
+  # the launcher pod's OVN logical-switch-port identity (kube-ovn integration).
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
   # Core resources
   - apiGroups: [""]
     resources: ["pods", "pods/status"]

@@ -2,6 +2,7 @@ package swiftmigration
 
 import (
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -183,7 +184,11 @@ func newDstPod(
 	// useful labels (guest, etc) by starting from src.Labels and
 	// adding migration-specific keys.
 	preservedLabels := mergeLabelsForDst(srcPod.Labels, guest.Name, mig.Name)
-	preservedAnnotations := mergeAnnotationsForDst(srcPod.Annotations, sidecar.mtlsEnabled)
+	guestPrimaryIP := ""
+	if guest.Status.Network != nil {
+		guestPrimaryIP = guest.Status.Network.PrimaryIP
+	}
+	preservedAnnotations := mergeAnnotationsForDst(srcPod.Annotations, sidecar.mtlsEnabled, guestPrimaryIP, mig.Name)
 
 	pod.ObjectMeta = metav1.ObjectMeta{
 		Name:        name,
@@ -288,13 +293,38 @@ func mergeLabelsForDst(srcLabels map[string]string, guestName, migName string) m
 // migration sees an old swiftletd that still requires the ack. The key is NOT
 // deleted outright: the plaintext path still uses the ack gate as the
 // THREAT-MODEL's "operator acknowledged cleartext" guard.
-func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool) map[string]string {
+func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool, guestPrimaryIP, migName string) map[string]string {
 	out := map[string]string{}
 	if v, ok := srcAnnotations[swiftguest.MultusAnnotationKey]; ok && v != "" {
 		out[swiftguest.MultusAnnotationKey] = v
 	}
 	if !mtlsEnabled {
 		out[AnnotationMigrationPhase2Ack] = AnnotationMigrationPhase2AckValue
+	}
+	// kube-ovn primary-on-NAD IP preservation. If the src pod carries a kube-ovn
+	// per-provider mac_address annotation (stamped by the SwiftGuest controller for
+	// a kube-ovn-class primary NAD — internal/controller/swiftguest/kubeovn.go),
+	// the dst pod must: (a) keep the SAME LSP identity (the guest MAC); (b) pin the
+	// guest's CURRENT static IP so the resumed guest stays reachable at its address;
+	// (c) carry kubevirt.io/migrationJobName so kube-ovn treats this dst as a
+	// migration target and its IPAM SKIPS the conflict check — without (c) kube-ovn
+	// rejects the dst's request for the IP the src still holds during the cutover
+	// overlap (empirically confirmed). Keyed off the src annotation, so this is
+	// inert for every non-kube-ovn networking mode. Offline migration is unaffected
+	// (it rebuilds the pod via the SwiftGuest pod builder, which re-stamps from
+	// scratch); the live path clones the src pod through here, so this allowlist is
+	// the only place to carry it — same default-to-explicit lesson as the Multus
+	// annotation above (W26 / PR #26).
+	for k, v := range srcAnnotations {
+		if v == "" || !strings.HasSuffix(k, swiftguest.KubeOVNMACAnnotationSuffix) {
+			continue
+		}
+		out[k] = v
+		provider := strings.TrimSuffix(k, swiftguest.KubeOVNMACAnnotationSuffix)
+		if guestPrimaryIP != "" {
+			out[swiftguest.KubeOVNIPAnnotationKey(provider)] = guestPrimaryIP
+		}
+		out[swiftguest.MigrationJobNameAnnotation] = migName
 	}
 	return out
 }
