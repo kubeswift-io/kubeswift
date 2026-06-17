@@ -215,6 +215,28 @@ setup_primary_nad_nic() {
     ip tuntap add dev "$tap" mode tap 2>/dev/null || true
     ip link set "$tap" up
     ip link set "$tap" master "$bridge"
+
+    # kube-ovn (OVN-class) primary NAD: the controller stamps the guest's MAC onto
+    # the pod NIC (ovn.kubernetes.io/mac_address) so the OVN logical-switch-port
+    # identity IS the guest -- otherwise OVN's per-port ARP responder answers with
+    # the pod NIC's own MAC and the bridged guest is unreachable on the segment.
+    # But if the NIC then carries the SAME MAC as the guest, enslaving it to the
+    # bridge makes the kernel add a permanent fdb entry <guest-mac> -> NIC, which
+    # SHADOWS the guest's tap: the bridge delivers the guest's return traffic (and
+    # unicast DHCP) to the NIC instead of the tap, so the guest is unreachable.
+    # Re-MAC the NIC to a dummy BEFORE enslaving (the KubeVirt bridge-binding
+    # pattern). The NIC's kernel MAC is not load-bearing once it is a bridge port;
+    # the OVN LSP keeps the guest MAC, so OVN still delivers the guest's frames to
+    # the NIC -> bridge -> tap. No-op for every NAD whose IPAM gives the NIC its own
+    # distinct MAC (the plain-bridge / VXLAN-mesh path).
+    nic_mac=$(cat "/sys/class/net/$multus_iface/address" 2>/dev/null)
+    if [ -n "$guest_mac" ] && [ "$nic_mac" = "$guest_mac" ]; then
+        ip link set "$multus_iface" down 2>/dev/null || true
+        ip link set "$multus_iface" address "0a:${guest_mac#*:}" 2>/dev/null || true
+        ip link set "$multus_iface" up 2>/dev/null || true
+        echo "Primary NAD: re-MAC'd $multus_iface off the guest MAC $guest_mac (it would shadow the tap on $bridge)"
+    fi
+
     ip link set "$multus_iface" master "$bridge"
     ip link set "$multus_iface" up
 

@@ -1,0 +1,29 @@
+# Helm values for kube-ovn as a SECONDARY (non-primary) CNI alongside an existing
+# primary CNI (Calico/Cilium/...). The primary CNI stays in charge of the pod
+# network; kube-ovn owns only the L2 secondary Subnet you expose to Multus.
+#
+#   helm repo add kubeovn https://kubeovn.github.io/kube-ovn/
+#   kubectl label node <a-worker-node> kube-ovn/role=master --overwrite
+#   helm install kube-ovn kubeovn/kube-ovn --version v1.16.2 \
+#     -n kube-system -f kube-ovn-nonprimary-values.yaml
+#
+# See docs/networking/ovn-l2-install.md for the full guide.
+MASTER_NODES: ""                 # use the kube-ovn/role=master label
+cni_conf:
+  NON_PRIMARY_CNI: true          # do NOT take over the primary pod network
+  CNI_CONFIG_PRIORITY: "99"      # SAFETY: sort kube-ovn's conflist AFTER the primary
+                                 # CNI's (e.g. 10-calico) so it can never preempt it
+  CNI_BIN_DIR: "/opt/cni/bin"
+  CNI_CONF_DIR: "/etc/cni/net.d"
+  MOUNT_CNI_CONF_DIR: "/etc/cni/net.d"
+kubelet_conf:
+  KUBELET_DIR: "/var/lib/kubelet"   # k0s/kubeadm default; set to your kubelet dir
+networking:
+  NET_STACK: ipv4
+  NETWORK_TYPE: geneve
+  IFACE: ""                      # auto-detect the node-IP interface
+ipv4:
+  POD_CIDR: "10.16.0.0/16"       # OVN default VPC — MUST NOT overlap your real pod CIDR
+  POD_GATEWAY: "10.16.0.1"
+  SVC_CIDR: "10.96.0.0/12"       # MATCH your cluster service CIDR
+  JOIN_CIDR: "100.64.0.0/16"

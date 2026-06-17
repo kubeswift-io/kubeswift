@@ -10,24 +10,37 @@ All notable changes to KubeSwift are documented here.
 
 - **kube-ovn primary-on-NAD integration (IP-preserving live migration on a real
   Tier-C OVN L2).** When a SwiftGuest's **primary** interface rides a
-  kube-ovn-class NAD (`config.type: kube-ovn`), the controller now programs the
-  guest's identity onto the OVN logical-switch port so the guest is reachable on
-  the segment, and preserves its IP across a live migration — with **no manual
-  `ovn-nbctl`**. Mechanism (pure pod annotations; no datapath/Rust change):
-  - The launcher pod gets `<provider>.kubernetes.io/mac_address: <guest MAC>` (so
-    OVN's per-port ARP responder / L2 delivery target the guest's bridged MAC,
-    not the pod NIC's) and, once known, `<provider>.kubernetes.io/ip_address:
-    <guest IP>` (a stable static IP across pod recreate).
-  - The live-migration **destination** pod additionally gets
+  kube-ovn-class NAD (`config.type: kube-ovn`), KubeSwift now programs the guest's
+  identity onto the OVN logical-switch port so the guest is reachable on the
+  segment, and preserves its IP across a live migration — with **no manual
+  `ovn-nbctl`**. Two coupled pieces:
+  - **Controller (#239):** stamps `<provider>.kubernetes.io/mac_address: <guest MAC>`
+    on the launcher pod (so OVN's per-port ARP responder / L2 delivery target the
+    guest's bridged MAC, not the pod NIC's) and, once known,
+    `<provider>.kubernetes.io/ip_address: <guest IP>` (a stable static IP across
+    pod recreate). The live-migration **destination** pod additionally gets
     `kubevirt.io/migrationJobName`, which makes kube-ovn's IPAM skip the conflict
-    check so the dst can acquire the **same** static IP the source still holds
-    during cutover — the guest keeps its address end-to-end.
-  - Validated on the dev cluster: a primary-on-NAD guest live-migrated cross-node
-    on a real kube-ovn L2, `mode: live` with **no `allowIPChange`**, Completed in
-    ~3.2 s downtime with the IP preserved and reachable from a third node. Reads
-    NADs read-only (new `k8s.cni.cncf.io/network-attachment-definitions` get RBAC).
-    A no-op for every other networking mode (node-local bridge, non-kube-ovn NAD,
-    SR-IOV). Composes with `#235`/`#236` (the NAD live-migration carry-through).
+    check so the dst acquires the **same** static IP the source still holds through
+    cutover. Reads NADs read-only (new
+    `k8s.cni.cncf.io/network-attachment-definitions` get RBAC). No-op for every
+    other networking mode (node-local bridge, non-kube-ovn NAD, SR-IOV). Composes
+    with `#235`/`#236` (the NAD live-migration carry-through).
+  - **Launcher datapath fix (this change):** stamping the guest MAC onto the pod
+    NIC means the NIC and the guest's tap share a MAC; enslaving the NIC to `br0`
+    makes the kernel add a permanent fdb entry `<guest-mac> -> NIC` that **shadows
+    the tap** (the bridge sends the guest's return traffic to the NIC, not the
+    guest). `network-init` now re-MACs the NIC to a dummy **before** enslaving it
+    (the KubeVirt bridge-binding pattern); the OVN port keeps the guest MAC, so OVN
+    still delivers the guest's frames `NIC -> br0 -> tap`. A no-op for any NAD whose
+    IPAM gives the NIC its own distinct MAC.
+  - **Validation.** The mechanism is cluster-proven (cross-node `mode: live`, no
+    `allowIPChange`, Completed in ~3.2 s downtime, IP preserved + reachable from a
+    third node). The post-merge cluster validation of the **automated** path
+    surfaced the NIC-MAC-shadow gap above (the W5 pattern: unit tests verify the
+    annotation, only a cluster exercises the bridge fdb) — fixed here; full
+    automated end-to-end validation completes once the launcher image carrying this
+    datapath fix is deployed. **Both** the controller and the launcher image must
+    carry the integration.
 
 ---
 

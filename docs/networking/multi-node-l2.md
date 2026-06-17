@@ -1,12 +1,14 @@
 # Multi-node L2 networking (IP-preserving guests)
 
-> **Status (2026-06): datapath + offline migration VALIDATED; live-migration
-> IP-preservation is partial (two bugs fixed, full completion OVN-K-gated).**
-> The control-plane (`spec.interfaces[].primary`, the resolver wiring, the
-> `PrimaryIPPreservedCrossNode()` migration gate) and the **runtime datapath**
-> (attaching the *primary* NIC to a NAD and giving the guest the NAD's IP) are
-> cluster-validated on a hand-rolled VXLAN-mesh L2. See the validation matrix
-> below for exactly what is proven vs. what still needs an OVN-Kubernetes lab.
+> **Status (2026-06): datapath + offline + LIVE migration IP-preservation
+> VALIDATED.** Live-migration IP-preservation is proven end-to-end on a real
+> **kube-ovn** Tier-C L2 (cross-node, `mode: live`, no `allowIPChange`, ~3.2 s
+> downtime, IP preserved + reachable from a third node). The control-plane
+> (`spec.interfaces[].primary`, the resolver wiring, the
+> `PrimaryIPPreservedCrossNode()` migration gate), the runtime datapath, offline
+> migration, and the live path are all cluster-validated. The **zero-touch
+> kube-ovn integration** (automatic OVN port identity) is the recommended path —
+> see the [OVN L2 install guide](ovn-l2-install.md). See the matrix below.
 
 By default a SwiftGuest's primary IP is **node-local** — it comes from a
 per-node dnsmasq on `br0` and is NAT-masqueraded out the pod's `eth0`. That IP
@@ -28,17 +30,17 @@ the operator's choice — the recommended reference is **OVN-Kubernetes layer-2*
 | Datapath — guest gets the NAD's portable IP | ✅ validated | `setup_primary_nad_nic`: flush NAD IP → bridge → fixed-lease dnsmasq → status |
 | Cross-node L2 reachability | ✅ validated | both directions over a VXLAN-mesh overlay |
 | **Offline** migration IP-preservation | ✅ validated | guest reacquired its NAD IP on the target node, no `allowIPChange` |
-| **Live** migration IP-preservation | ⚠️ partial | two real bugs fixed ([#235](https://github.com/projectbeskar/kubeswift/pull/235) Multus-annotation on the dst pod, [#236](https://github.com/projectbeskar/kubeswift/pull/236) dst-receiver send-retry); end-to-end completion is **OVN-K-gated** — see below |
+| **Live** migration IP-preservation | ✅ validated (kube-ovn) | proven on a real kube-ovn L2 (cross-node, `mode: live`, no `allowIPChange`, ~3.2 s, IP preserved + reachable). [#235](https://github.com/projectbeskar/kubeswift/pull/235)/[#236](https://github.com/projectbeskar/kubeswift/pull/236) carry the NAD path; the kube-ovn port-identity integration makes it zero-touch (see [install guide](ovn-l2-install.md)) |
 
-**Why live migration is OVN-K-gated.** On a *hand-rolled* VXLAN-mesh substrate,
-both the migration source and destination launcher pods end up **multi-homed
-across two overlays** (the cluster CNI's pod network *and* the mesh). That
-specific combination intermittently breaks the cross-node migration channel
-(isolation: plain↔plain, plain↔NAD, NAD↔plain all work; only NAD↔NAD fails).
-A real **OVN-Kubernetes layer-2** secondary network manages the attachment
-*inside the CNI* and never multi-homes a pod across two overlays, so it does not
-hit this — which is why end-to-end live-migration IP-preservation must be
-validated on an OVN-K (or equivalent) Tier-C network, not the lab mesh. See
+**Why the lab VXLAN mesh couldn't validate live migration (and kube-ovn does).**
+On a *hand-rolled* VXLAN-mesh substrate, both the migration source and destination
+launcher pods end up **multi-homed across two overlays** (the cluster CNI's pod
+network *and* the mesh). That specific combination intermittently breaks the
+cross-node migration channel (isolation: plain↔plain, plain↔NAD, NAD↔plain all
+work; only NAD↔NAD fails). A real **OVN** secondary network (kube-ovn / OVN-K)
+manages the attachment *inside the CNI* and never multi-homes a pod across two
+overlays, so it does not hit this — which is why live-migration IP-preservation is
+validated on **kube-ovn**, not the lab mesh. See
 [`../design/network-architecture-requirements.md`](../design/network-architecture-requirements.md) §6.
 
 ## The `primary` field
@@ -183,14 +185,22 @@ So for a kube-ovn-class primary NAD the controller stamps
 identity the guest — plus `<provider>.kubernetes.io/ip_address` (a stable static
 IP) once known. On a live migration the destination pod also gets
 `kubevirt.io/migrationJobName`, which tells kube-ovn to let the dst share the
-source's still-held IP through cutover. This is automatic; it is a no-op for every
-other networking mode.
+source's still-held IP through cutover. The launcher datapath then re-MACs the pod
+NIC off the guest MAC before bridging it (so the NIC doesn't shadow the guest's tap
+on `br0`). This is automatic; it is a no-op for every other networking mode.
+
+**Full step-by-step:** see the
+[OVN L2 install guide (kube-ovn non-primary)](ovn-l2-install.md) for installing
+kube-ovn alongside Calico/Cilium, creating the segment, and running a guest +
+live migration. Both the controller-manager **and** the launcher (`swiftletd`)
+image must carry the integration.
 
 ## Limitations / follow-ups
 
-- **End-to-end live-migration IP-preservation is OVN-K-gated** (the lab mesh's
-  multi-homed-pod issue). The control-plane gate, the datapath, offline
-  IP-preservation, and the two live-migration bug fixes are all in place; the
-  remaining validation needs an OVN-K (or real Tier-C) network.
+- **End-to-end live-migration IP-preservation — validated on kube-ovn** (the lab
+  VXLAN mesh could not, per the multi-homed-pod issue above). The zero-touch
+  kube-ovn port-identity integration is the recommended path
+  ([install guide](ovn-l2-install.md)); both the controller and the launcher image
+  must carry it.
 - **SR-IOV** is a hardware-passthrough NIC, not a Tier-C overlay; it is rejected
   for cross-node migration regardless.

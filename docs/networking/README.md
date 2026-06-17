@@ -18,6 +18,8 @@ The operator chooses their network stack; KubeSwift just references NADs.
 | [Virtualization Comparison](virtualization-comparison.md) | VMware ESXi and Proxmox VE concept mapping for migration |
 | [Multi-NIC Support](../multi-nic.md) | CRD spec reference, MAC generation, status reporting, architecture |
 | [OVN-Kubernetes Integration](ovn-kubernetes.md) | Layer 2/3, localnet, UDN, CUDN -- OVN-Kubernetes specific topologies |
+| [Multi-node L2 (IP-preserving guests)](multi-node-l2.md) | Portable primary IP on a multi-node L2 NAD -- the substrate for IP-preserving live migration |
+| [OVN L2 install guide (kube-ovn non-primary)](ovn-l2-install.md) | Stand up an OVN layer-2 secondary network alongside an existing primary CNI (Calico/Cilium) and run IP-preserving live migration |
 | [SR-IOV NIC Passthrough](sriov.md) | VFIO passthrough for VFs -- GPUDirect RDMA, DPDK, line-rate networking |
 
 ## Architecture
