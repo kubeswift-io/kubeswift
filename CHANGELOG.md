@@ -6,6 +6,22 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+- **OVN-Kubernetes as a second OVN CNI backend (OVN-K arc P2).** `ovnKubernetesBackend`
+  implements the `ovnBackend` seam for OVN-Kubernetes **layer2 primary-on-NAD** guests:
+  it detects `type: ovn-k8s-cni-overlay` + `topology: layer2`, injects the guest MAC
+  (the logical-switch-port identity) + an `ipam-claim-reference` into the Multus
+  network-selection element, and creates+owns a per-guest `IPAMClaim` to pin the
+  primary IP (OVN-K does not auto-create it). The identity mechanism — the `mac`
+  field of the selection element — was confirmed on a real OVN-K cluster (a foreign
+  MAC requested there comes up reachable cross-node). Live-migration IP preservation
+  rides the already-carried-over Multus annotation: OVN-K allows the cross-node claim
+  overlap by **default**, so no `migrationJobName`-style marker is needed (simpler
+  than kube-ovn). Adds `ipamclaims` RBAC (`get,list,watch,create`; GC via owner-ref
+  cascade). The `PrimaryIPPreservedCrossNode()` live-eligibility gate already covers
+  it (CNI-agnostic). End-to-end validation on a real OVN-K cluster is P3.
+  ([RFC](docs/design/ovn-cni-backends.md))
+
 ### Changed
 - **Internal: pluggable OVN CNI backend seam (OVN-K arc P1).** Lifted the kube-ovn
   primary-on-NAD identity logic behind an internal `ovnBackend` interface

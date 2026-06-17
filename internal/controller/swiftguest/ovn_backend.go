@@ -4,7 +4,10 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 )
@@ -41,11 +44,13 @@ type ovnIdentity struct {
 	// nothing beyond the carried-over Multus annotation, or has no live-overlap
 	// mechanism (the latter would make live migration offline-only — surfaced by the
 	// migration webhook gate, never a silent unreachable boot).
-	//
-	// (A future field — ClaimsToEnsure, the per-guest objects a backend needs
-	// created before the pod, e.g. an OVN-Kubernetes IPAMClaim — lands in P2 with
-	// its only user; kube-ovn needs none.)
 	MigrationDstAnnotations map[string]string
+	// ClaimsToEnsure are per-guest cluster objects a backend needs created BEFORE
+	// the launcher pod references them — e.g. an OVN-Kubernetes IPAMClaim (OVN-K
+	// does not auto-create it; spike §8). The stamp dispatch creates each one
+	// owner-referenced to the guest (so it GCs with the guest via cascade) before
+	// applying PodAnnotations. Nil for kube-ovn (it needs none).
+	ClaimsToEnsure []*unstructured.Unstructured
 }
 
 // ovnBackend is the internal seam for one OVN-based CNI's primary-on-NAD identity.
@@ -71,7 +76,7 @@ type ovnBackend interface {
 func ovnBackends() []ovnBackend {
 	return []ovnBackend{
 		kubeOVNBackend{},
-		// ovnKubernetesBackend{} — P2 (docs/design/ovn-cni-backends.md §8).
+		ovnKubernetesBackend{},
 	}
 }
 
@@ -110,6 +115,14 @@ func (r *SwiftGuestReconciler) stampOVNIdentity(ctx context.Context, guest *swif
 	if err != nil {
 		return err
 	}
+	// Ensure any backend-required objects (e.g. an OVN-Kubernetes IPAMClaim) exist
+	// BEFORE the pod references them — fail closed so a create failure requeues
+	// rather than booting a pod that references a non-existent claim.
+	for _, claim := range id.ClaimsToEnsure {
+		if err := r.ensureOVNClaim(ctx, guest, claim); err != nil {
+			return err
+		}
+	}
 	if len(id.PodAnnotations) == 0 {
 		return nil
 	}
@@ -118,6 +131,21 @@ func (r *SwiftGuestReconciler) stampOVNIdentity(ctx context.Context, guest *swif
 	}
 	for k, v := range id.PodAnnotations {
 		pod.Annotations[k] = v
+	}
+	return nil
+}
+
+// ensureOVNClaim creates a backend-required cluster object (e.g. an OVN-Kubernetes
+// IPAMClaim) owner-referenced to the guest so it GCs with the guest via cascade.
+// Idempotent: AlreadyExists is success (the claim is stable across pod recreate and
+// the migration dst pod, which references the same name). Create-only — no Get, so
+// it opens no informer (no extra list/watch RBAC needed beyond create).
+func (r *SwiftGuestReconciler) ensureOVNClaim(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, claim *unstructured.Unstructured) error {
+	if err := controllerutil.SetControllerReference(guest, claim, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
 	}
 	return nil
 }
