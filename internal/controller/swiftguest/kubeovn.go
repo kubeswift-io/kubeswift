@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,7 +14,8 @@ import (
 	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
 )
 
-// kube-ovn primary-on-NAD integration.
+// kube-ovn primary-on-NAD integration — the kubeOVNBackend implementation of the
+// ovnBackend seam (ovn_backend.go).
 //
 // When a SwiftGuest's PRIMARY interface rides a kube-ovn-managed NAD, the guest's
 // portable IP lives on a real OVN logical switch. OVN binds each logical-switch
@@ -24,7 +24,7 @@ import (
 // hypervisor MAC behind the pod NIC (network-init's setup_primary_nad_nic), so
 // without telling kube-ovn the guest's MAC, OVN delivers the guest's traffic to
 // the wrong MAC and the guest is unreachable on the segment. This was diagnosed
-// and fixed-by-hand on the multi-node-L2 OVN validation spike; this file makes it
+// and fixed-by-hand on the multi-node-L2 OVN validation spike; this makes it
 // automatic — the KubeVirt model: program the LSP identity to be the guest.
 //
 // Mechanism (all pod annotations; no CNI/datapath change):
@@ -33,9 +33,9 @@ import (
 //   - "<provider>.kubernetes.io/ip_address"  = the guest's current IP   -> a stable
 //     static IP across pod recreate (and, with the migration path below, across a
 //     live migration).
-//   - (migration dst only, in swiftmigration) "kubevirt.io/migrationJobName" -> kube-ovn
-//     skips the IPAM conflict check so the dst pod can acquire the SAME static IP
-//     the src still holds during the cutover overlap.
+//   - (migration dst only) "kubevirt.io/migrationJobName" -> kube-ovn skips the IPAM
+//     conflict check so the dst pod can acquire the SAME static IP the src still
+//     holds during the cutover overlap.
 //
 // "<provider>" is the kube-ovn provider of the NAD (its config "provider", e.g.
 // "ovn-l2.<ns>.ovn") — the PER-PROVIDER annotation form a Multus secondary uses;
@@ -91,7 +91,7 @@ func primaryMAC(guest *swiftv1alpha1.SwiftGuest, iface *swiftv1alpha1.GuestInter
 // (unstructured) and inspects its config. ok=false (no error) means "not a
 // kube-ovn primary-on-NAD guest" and the caller skips stamping. A Get error is
 // returned so the caller requeues.
-func (r *SwiftGuestReconciler) kubeOVNPrimaryProvider(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (provider, mac string, ok bool, err error) {
+func kubeOVNPrimaryProvider(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest) (provider, mac string, ok bool, err error) {
 	iface := guest.PrimaryInterface()
 	if iface == nil || iface.NetworkRef == nil {
 		return "", "", false, nil
@@ -102,7 +102,7 @@ func (r *SwiftGuestReconciler) kubeOVNPrimaryProvider(ctx context.Context, guest
 	}
 	nad := &unstructured.Unstructured{}
 	nad.SetGroupVersionKind(networkAttachmentDefinitionGVK)
-	if e := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: iface.NetworkRef.Name}, nad); e != nil {
+	if e := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: iface.NetworkRef.Name}, nad); e != nil {
 		return "", "", false, fmt.Errorf("get NAD %s/%s for kube-ovn identity: %w", ns, iface.NetworkRef.Name, e)
 	}
 	cfgStr, _, _ := unstructured.NestedString(nad.Object, "spec", "config")
@@ -124,33 +124,56 @@ func (r *SwiftGuestReconciler) kubeOVNPrimaryProvider(ctx context.Context, guest
 	return provider, primaryMAC(guest, iface), true, nil
 }
 
-// stampKubeOVNIdentity adds the kube-ovn LSP-identity annotations to a launcher
-// pod when the guest's primary interface rides a kube-ovn NAD; a no-op for every
-// other networking mode (node-local bridge, non-kube-ovn NAD, SR-IOV).
-//
-// A NAD Get failure is returned (fails closed): identity is a boot-time
-// correctness requirement — a guest that boots without it is unreachable on the
-// OVN segment — so requeuing rather than booting a broken guest is correct.
-func (r *SwiftGuestReconciler) stampKubeOVNIdentity(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod) error {
-	provider, mac, ok, err := r.kubeOVNPrimaryProvider(ctx, guest)
+// kubeOVNBackend is the ovnBackend for kube-ovn-managed primary NADs. Stateless;
+// the client is passed per call.
+type kubeOVNBackend struct{}
+
+func (kubeOVNBackend) Name() string { return KubeOVNCNIType }
+
+// Detect reports whether the guest's primary interface rides a kube-ovn-class NAD.
+func (kubeOVNBackend) Detect(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest) (bool, error) {
+	_, _, ok, err := kubeOVNPrimaryProvider(ctx, c, guest)
+	return ok, err
+}
+
+// Identity computes the kube-ovn LSP-identity annotations for the launcher pod and
+// the live-migration dst pod. The pinned IP (status's kube-ovn-assigned IP) is set
+// once known; on first boot it is empty and kube-ovn allocates dynamically.
+func (kubeOVNBackend) Identity(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest, migName string) (ovnIdentity, error) {
+	provider, mac, ok, err := kubeOVNPrimaryProvider(ctx, c, guest)
 	if err != nil {
-		return err
+		return ovnIdentity{}, err
 	}
 	if !ok || mac == "" {
-		return nil
+		return ovnIdentity{}, nil
 	}
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[KubeOVNMACAnnotationKey(provider)] = mac
+	macKey := KubeOVNMACAnnotationKey(provider)
+
 	// Pin the IP once it is known (status carries the kube-ovn-assigned IP from a
-	// prior boot). On first boot it is empty -> kube-ovn allocates dynamically and
-	// the controller records it; subsequent pods pin it. net.ParseIP guards a
-	// malformed status value.
+	// prior boot). net.ParseIP guards a malformed status value.
+	ip := ""
 	if guest.Status.Network != nil {
-		if ip := guest.Status.Network.PrimaryIP; ip != "" && net.ParseIP(ip) != nil {
-			pod.Annotations[KubeOVNIPAnnotationKey(provider)] = ip
+		if pip := guest.Status.Network.PrimaryIP; pip != "" && net.ParseIP(pip) != nil {
+			ip = pip
 		}
 	}
-	return nil
+
+	pod := map[string]string{macKey: mac}
+	if ip != "" {
+		pod[KubeOVNIPAnnotationKey(provider)] = ip
+	}
+
+	// The dst set keeps the same LSP identity (MAC) and IP pin, plus the
+	// migrationJobName marker so kube-ovn's IPAM skips the conflict check during
+	// the cutover overlap. migName is "" for the boot-time pod-identity call, whose
+	// caller uses only PodAnnotations.
+	dst := map[string]string{macKey: mac}
+	if ip != "" {
+		dst[KubeOVNIPAnnotationKey(provider)] = ip
+	}
+	if migName != "" {
+		dst[MigrationJobNameAnnotation] = migName
+	}
+
+	return ovnIdentity{PodAnnotations: pod, MigrationDstAnnotations: dst}, nil
 }

@@ -13,6 +13,7 @@ import (
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
+	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
 )
 
 // preparingLiveReadyBudget is the wall-clock window for the dst pod
@@ -160,11 +161,20 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		if frozenErr != nil {
 			return phaseTransient(fmt.Errorf("ensure frozen dst intent: %w", frozenErr))
 		}
+		// Resolve the OVN backend's dst-pod identity annotations from the guest
+		// (kube-ovn: the LSP MAC + IP pin + kubevirt.io/migrationJobName so the dst
+		// keeps the src's IP through cutover). Empty for non-OVN guests. Fail closed
+		// on a NAD Get error: a dst that boots without its OVN identity is
+		// unreachable on the segment, so requeue rather than build a broken pod.
+		ovnDstAnnotations, ovnErr := swiftguest.OVNMigrationDstAnnotations(ctx, r.Client, &guest, mig.Name)
+		if ovnErr != nil {
+			return phaseTransient(fmt.Errorf("resolve OVN dst identity: %w", ovnErr))
+		}
 		dst, buildErr := newDstPod(mig, &guest, &srcPod, r.Scheme, dstSidecarConfig{
 			mtlsEnabled: r.MigrationMTLSEnabled,
 			srcNodeName: guest.Status.NodeName,
 			dstNodeName: mig.Spec.Target.NodeName,
-		}, frozenIntentCM)
+		}, frozenIntentCM, ovnDstAnnotations)
 		if buildErr != nil {
 			return phaseFailure(
 				fmt.Sprintf("construct dst pod: %v", buildErr),

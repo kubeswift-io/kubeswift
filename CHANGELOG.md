@@ -6,6 +6,18 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+- **Internal: pluggable OVN CNI backend seam (OVN-K arc P1).** Lifted the kube-ovn
+  primary-on-NAD identity logic behind an internal `ovnBackend` interface
+  (`internal/controller/swiftguest/ovn_backend.go`) — `Detect`/`Identity` per
+  backend, first-match-wins, "two implementations, not a framework". The two call
+  sites (the launcher-pod stamp and the live-migration dst-pod annotations) now
+  dispatch through the seam, so additional OVN-based CNIs (OVN-Kubernetes next)
+  plug in without touching the controller. **Behavior-preserving** — no
+  user-facing change; the shipped kube-ovn IP-preserving live-migration path is
+  identical and its tests pass unchanged. Foundation for OVN-Kubernetes support
+  ([RFC](docs/design/ovn-cni-backends.md)).
+
 ---
 
 ## [v0.4.5] — 2026-06-17
