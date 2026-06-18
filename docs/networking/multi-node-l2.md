@@ -12,7 +12,9 @@
 > - on a cluster with a different primary CNI (Calico/Cilium) → **kube-ovn
 >   non-primary**: [OVN L2 install guide](ovn-l2-install.md);
 > - on a cluster already on OVN-K as the primary CNI → **OVN-Kubernetes-primary**:
->   [OVN-Kubernetes-primary install guide](ovn-kubernetes-install.md).
+>   [OVN-Kubernetes-primary install guide](ovn-kubernetes-install.md);
+> - building a cluster from scratch (kubeadm + OVN-K + Longhorn + KubeSwift + UDN) →
+>   [kubeadm + OVN-Kubernetes setup guide](kubeadm-ovn-kubernetes-setup.md).
 >
 > See the matrix below.
 
