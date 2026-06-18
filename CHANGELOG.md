@@ -6,6 +6,19 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+---
+
+## [v0.4.6] — 2026-06-18
+
+Adds **OVN-Kubernetes as a second OVN CNI backend**: a guest's **primary** NIC on an
+OVN-Kubernetes `layer2` NAD gets a portable IP with **IP-preserving live migration** —
+the same capability the kube-ovn backend already delivers, now on clusters where
+OVN-Kubernetes is the primary CNI. Cluster-validated end-to-end on a kubeadm
+OVN-K-primary cluster (boot + `mode: live` migration, no `allowIPChange`, IP
+preserved). Also hardens controller startup on clusters that lack the CSI
+VolumeSnapshot CRDs, and ships a full operator-doc set (cluster setup + per-tenant
+multi-tenancy recipes for both OVN substrates).
+
 ### Added
 - **OVN-Kubernetes as a second OVN CNI backend (OVN-K arc P2).** `ovnKubernetesBackend`
   implements the `ovnBackend` seam for OVN-Kubernetes **layer2 primary-on-NAD** guests:
@@ -51,6 +64,15 @@ All notable changes to KubeSwift are documented here.
   the **CSI VolumeSnapshot backend** and `cloneStrategy=snapshot` are disabled
   until the CRDs are installed. Surfaced by the OVN-K P3 cluster validation (the
   W5 pattern — a bare cluster exposes a hard dependency unit tests can't see).
+
+### Docs
+- **OVN-Kubernetes + UDN operator guides.** A kubeadm + OVN-Kubernetes-primary
+  cluster setup guide ([`kubeadm-ovn-kubernetes-setup.md`](docs/networking/kubeadm-ovn-kubernetes-setup.md)),
+  the OVN-Kubernetes-primary install guide
+  ([`ovn-kubernetes-install.md`](docs/networking/ovn-kubernetes-install.md)), and
+  per-tenant multi-tenancy recipes for both OVN substrates
+  ([`udn-multi-tenancy.md`](docs/networking/udn-multi-tenancy.md) for OVN-K,
+  [`kubeovn-multi-tenancy.md`](docs/networking/kubeovn-multi-tenancy.md) for kube-ovn).
 
 ---
 
