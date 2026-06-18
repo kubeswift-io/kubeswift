@@ -51,6 +51,12 @@ type ResolvedGuest struct {
 	// Interfaces from SwiftGuest spec, used for multi-NIC support.
 	// Nil or empty means single default NIC (backward compatible).
 	Interfaces []swiftv1alpha1.GuestInterface `json:"interfaces,omitempty"`
+	// PrimaryUDNInterface names the pod's OVN-Kubernetes primary UDN interface
+	// (ovn-udn1) when the guest's namespace is a primary-UDN tenant namespace
+	// (Model A). Empty otherwise. GetNICs applies it to the primary node-local
+	// NIC (a primary interface without a networkRef). Set by the resolver from
+	// the namespace label.
+	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// NetworkSpec is the SwiftGuest spec.network block (binding + declarative
 	// service ports). Nil preserves today's behavior (nat, no exposure).
 	// See docs/design/service-exposure.md.
@@ -432,6 +438,13 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 		} else {
 			// Legacy rule (unchanged): node-local bridges are primary.
 			nic.Primary = iface.NetworkRef == nil
+		}
+		if nic.Primary && iface.NetworkRef == nil && r.PrimaryUDNInterface != "" {
+			// Model A: the primary rides the namespace primary OVN-K UDN
+			// (ovn-udn1), not the node-local bridge. swiftletd's
+			// setup_primary_udn_nic bridges it to br0/tap0; eth0 stays on the
+			// cluster default. Skipped for a primary that rides a NAD (net1).
+			nic.PrimaryUDNInterface = r.PrimaryUDNInterface
 		}
 		nics = append(nics, nic)
 		tapIdx++

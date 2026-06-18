@@ -78,6 +78,20 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 	// fire pointlessly). See docs/design/clone-identity-vsock-agent.md.
 	rg.GuestAgentEnabled = guest.Spec.GuestAgent != nil && guest.Spec.GuestAgent.Enabled && !rg.IsWindows()
 
+	// Model A: a guest in a namespace carrying the OVN-Kubernetes primary-UDN
+	// label rides the namespace primary UDN (ovn-udn1) on its node-local primary
+	// NIC. GetNICs applies the interface only to a primary interface without a
+	// networkRef, so setting it here is a no-op for primary-on-NAD / secondary
+	// guests. No-op (and no Namespace read cost beyond one cached Get) for the
+	// vast majority of clusters that have no primary-UDN namespaces.
+	hasPrimaryUDN, err := NamespaceHasPrimaryUDN(ctx, r.client, guest.Namespace)
+	if err != nil {
+		return nil, &ResolutionError{Reason: "checking primary-UDN namespace: " + err.Error()}
+	}
+	if hasPrimaryUDN {
+		rg.PrimaryUDNInterface = OVNPrimaryUDNInterface
+	}
+
 	return rg, nil
 }
 
