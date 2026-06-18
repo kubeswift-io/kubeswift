@@ -145,6 +145,13 @@ type NICIntent struct {
 	// MultusInterface is the name of the Multus-created interface (net1, net2, etc.)
 	// Empty for the primary NIC.
 	MultusInterface string `json:"multusInterface,omitempty"`
+	// PrimaryUDNInterface is the pod's OVN-Kubernetes primary UserDefinedNetwork
+	// interface (ovn-udn1) when the guest rides its namespace's primary UDN
+	// (Model A). Mutually exclusive with MultusInterface — the primary UDN is
+	// bound by the namespace label, not a Multus NAD. swiftletd bridges this
+	// interface to br0/tap0 (setup_primary_udn_nic); eth0 stays on the cluster
+	// default. Empty for every other networking mode.
+	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// Bridge is the bridge device name (br0, br1, etc.)
 	// Empty for SR-IOV interfaces.
 	Bridge string `json:"bridge,omitempty"`

@@ -40,6 +40,12 @@ rules:
   - apiGroups: ["k8s.cni.cncf.io"]
     resources: ["ipamclaims"]
     verbs: ["get", "list", "watch", "create"]
+  # Namespaces — read-only, to detect the OVN-Kubernetes primary-UDN label
+  # (Model A: guest rides its namespace primary UDN). list,watch alongside get —
+  # the cached client opens a Namespace informer (W7/W8).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
   # Core resources
   - apiGroups: [""]
     resources: ["pods", "pods/status"]

@@ -329,6 +329,12 @@ pub struct NICIntent {
     /// Multus-created interface name (net1, net2, etc.). Empty for primary.
     #[serde(default)]
     pub multus_interface: Option<String>,
+    /// OVN-Kubernetes primary UDN interface (ovn-udn1) when the guest rides its
+    /// namespace's primary UserDefinedNetwork (Model A). None otherwise.
+    /// Mutually exclusive with multus_interface; network-init bridges it to
+    /// br0/tap0 via setup_primary_udn_nic.
+    #[serde(default)]
+    pub primary_udn_interface: Option<String>,
     /// Bridge device name (br0, br1, etc.). Empty for SR-IOV.
     #[serde(default)]
     pub bridge: String,
