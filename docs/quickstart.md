@@ -32,7 +32,7 @@ ls -la /dev/kvm
 
 ```bash
 helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
-  --version 0.4.2 \
+  --version 0.4.6 \
   -n kubeswift-system \
   --create-namespace
 ```
