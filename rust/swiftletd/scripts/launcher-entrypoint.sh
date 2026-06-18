@@ -51,6 +51,36 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
+    # Model A (docs/design/udn-primary-integration.md): network-init persisted the
+    # OVN-K primary-UDN-assigned IP + the OVN-derived MAC the guest MUST adopt (the LSP
+    # port_security pins MAC+IP). Hand exactly that IP to the guest (matched by MAC) via
+    # a fixed dnsmasq lease, and export the MAC so swiftletd uses it for the CH
+    # --net mac= (the guest cannot use its own 52:54:.. MAC -- OVN would drop it).
+    udn_env="$lease_dir/primary-udn.env"
+    if [ -f "$udn_env" ]; then
+        # shellcheck disable=SC1090
+        . "$udn_env"   # UDN_IP, UDN_PREFIX, UDN_GW, UDN_MAC, UDN_BRIDGE, UDN_MTU
+        dns=$(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | head -1 | awk '{print $2}')
+        [ -z "$dns" ] && dns="10.96.0.10"
+        # swiftletd reads this for the primary NIC's CH --net mac= so the guest sources
+        # frames with OVN's expected MAC (passes port_security).
+        export KUBESWIFT_PRIMARY_UDN_MAC="$UDN_MAC"
+        echo "Primary UDN dnsmasq: handing $UDN_IP to $UDN_MAC on $UDN_BRIDGE (gw $UDN_GW, mtu ${UDN_MTU:-default})"
+        # Same shared-L2 guards as the NAD path (answer only this guest's MAC, infinite
+        # lease, carry the overlay MTU) -- a primary UDN is a flat L2 too.
+        dnsmasq --no-daemon --bind-interfaces --interface="$UDN_BRIDGE" \
+            --dhcp-range="$UDN_IP,$UDN_IP,infinite" \
+            ${UDN_MAC:+--dhcp-host="$UDN_MAC,$UDN_IP"} \
+            ${UDN_MAC:+--dhcp-ignore=tag:!known} \
+            ${UDN_GW:+--dhcp-option=option:router,"$UDN_GW"} \
+            --dhcp-option=option:dns-server,"$dns" \
+            ${UDN_MTU:+--dhcp-option=option:mtu,"$UDN_MTU"} \
+            --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
+            --dhcp-authoritative &
+        sleep 1
+        exec /usr/local/bin/swiftletd "$@"
+    fi
+
     # Primary-on-NAD (multi-node L2): network-init persisted the NAD-assigned
     # primary IP. Hand exactly that IP to the guest (matched by MAC) via a fixed
     # dnsmasq lease, so the guest's primary IP is the NAD's portable IP. lease.rs

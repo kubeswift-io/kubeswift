@@ -439,18 +439,21 @@ func (r *ResolvedGuest) GetNICs() []runtimeintent.NICIntent {
 			// Legacy rule (unchanged): node-local bridges are primary.
 			nic.Primary = iface.NetworkRef == nil
 		}
-		if nic.Primary && iface.NetworkRef == nil && r.PrimaryUDNInterface != "" {
-			// Model A: the primary rides the namespace primary OVN-K UDN
-			// (ovn-udn1), not the node-local bridge. swiftletd's
-			// setup_primary_udn_nic bridges it to br0/tap0; eth0 stays on the
-			// cluster default. Skipped for a primary that rides a NAD (net1).
-			nic.PrimaryUDNInterface = r.PrimaryUDNInterface
-		}
 		nics = append(nics, nic)
 		tapIdx++
 		bridgeIdx++
 	}
 	return nics
+}
+
+// GetPrimaryUDNInterface returns the OVN-Kubernetes primary-UDN interface name
+// (ovn-udn1) when the guest rides its namespace primary UDN (Model A), else "".
+// The resolver has already gated PrimaryUDNInterface on the primary being
+// node-local (a primary-on-NAD guest is Model B and never sets it), so this is a
+// plain accessor. It is read at the intent TOP LEVEL (RuntimeIntent.PrimaryUDNInterface)
+// rather than per-NIC so it covers the default guest, whose intent has no nics array.
+func (r *ResolvedGuest) GetPrimaryUDNInterface() string {
+	return r.PrimaryUDNInterface
 }
 
 // GetExposedPorts builds the PortIntent list from spec.network.ports for a

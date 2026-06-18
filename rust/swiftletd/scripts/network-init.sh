@@ -253,6 +253,107 @@ setup_primary_nad_nic() {
     echo "Primary NIC on NAD: $bridge bridges $multus_iface to $tap; guest IP=$nad_ip/$nad_prefix gw=$nad_gw (helper $helper)"
 }
 
+# setup_primary_udn_nic -- multi-node L2, guest on the namespace PRIMARY OVN-K UDN
+# (Model A; docs/design/udn-primary-integration.md). OVN-Kubernetes attaches the pod
+# to its namespace primary UserDefinedNetwork as `ovn-udn1` (e.g. 10.50.0.10/16)
+# automatically, driven by the namespace label; eth0 stays on the cluster default
+# (role infrastructure-locked) for the swiftletd->apiserver control path + egress.
+#
+# Same KubeVirt bridge-binding as setup_primary_nad_nic, with ONE Model-A specific:
+# the OVN logical-switch-port PINS MAC+IP in port_security, and that MAC is IP-DERIVED
+# and immutable (0a:58:<ip-octets-hex>). The guest CANNOT present its own 52:54:.. MAC
+# -- OVN drops it. So the guest ADOPTS OVN's MAC: capture it here, hand it to swiftletd
+# (UDN_MAC -> KUBESWIFT_PRIMARY_UDN_MAC via the entrypoint) for CH `--net mac=`, and the
+# launcher's fixed-lease dnsmasq hands the captured IP to that MAC. (Controller-side
+# MAC stamping -- the kube-ovn primary-NAD trick -- is impossible: a primary UDN has no
+# Multus selection element to carry a requested MAC.)
+#
+#   1. wait for ovn-udn1; read its OVN-assigned MAC + IP + gw + MTU
+#   2. persist them (primary-udn.env) for the launcher entrypoint (dnsmasq fixed lease
+#      + the guest-MAC override)
+#   3. flush the IP off ovn-udn1 (the GUEST owns it; avoids a duplicate-address ARP
+#      conflict on the UDN)
+#   4. re-MAC ovn-udn1 to a DISTINCT dummy BEFORE enslaving -- the guest uses the SAME
+#      0a:58:.. MAC, which would otherwise add a permanent fdb entry shadowing the tap.
+#      The 0a:fe:<rest> dummy differs from the 0a:58:<rest> guest MAC (the #240
+#      0a:<rest> derivation is a no-op for a 0a:.. MAC).
+#   5. bridge ovn-udn1 to the guest's tap; give br a helper IP for dnsmasq to bind
+setup_primary_udn_nic() {
+    bridge="$1"; tap="$2"; udn_iface="$3"
+
+    attempts=0
+    while [ $attempts -lt 30 ]; do
+        ip link show "$udn_iface" >/dev/null 2>&1 && break
+        sleep 1; attempts=$((attempts + 1))
+    done
+    if ! ip link show "$udn_iface" >/dev/null 2>&1; then
+        echo "ERROR: primary UDN interface $udn_iface not found after 30s (is the namespace primary-UDN label set?)" >&2
+        exit 1
+    fi
+
+    udn_cidr=$(ip -4 addr show "$udn_iface" 2>/dev/null | awk '/inet /{print $2; exit}')
+    if [ -z "$udn_cidr" ]; then
+        echo "ERROR: primary UDN interface $udn_iface has no IPv4 address (OVN-K IPAM did not assign one)" >&2
+        exit 1
+    fi
+    udn_ip="${udn_cidr%/*}"
+    udn_prefix="${udn_cidr#*/}"
+    udn_mac=$(cat "/sys/class/net/$udn_iface/address" 2>/dev/null)
+    if [ -z "$udn_mac" ]; then
+        echo "ERROR: primary UDN interface $udn_iface has no MAC" >&2
+        exit 1
+    fi
+    udn_gw=$(ip route show default 2>/dev/null | awk -v d="$udn_iface" '$0 ~ ("dev "d){print $3; exit}')
+    [ -z "$udn_gw" ] && udn_gw=$(ip route show dev "$udn_iface" 2>/dev/null | awk '/default/{print $3; exit}')
+    udn_mtu=$(ip -o link show "$udn_iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="mtu"){print $(i+1); exit}}')
+
+    # Persist for the launcher entrypoint (shared run dir). The guest must adopt
+    # UDN_MAC (OVN port_security), so the entrypoint exports it as
+    # KUBESWIFT_PRIMARY_UDN_MAC for swiftletd's CH --net mac=.
+    rd=$(guest_run_dir); mkdir -p "$rd"
+    {
+        echo "UDN_IP=$udn_ip"
+        echo "UDN_PREFIX=$udn_prefix"
+        echo "UDN_GW=$udn_gw"
+        echo "UDN_MAC=$udn_mac"
+        echo "UDN_BRIDGE=$bridge"
+        echo "UDN_MTU=$udn_mtu"
+    } > "$rd/primary-udn.env"
+
+    # The guest claims udn_ip; the host must not also hold it on the UDN.
+    ip addr flush dev "$udn_iface" 2>/dev/null || true
+
+    ip link add "$bridge" type bridge stp_state 0 2>/dev/null || true
+    ip link set "$bridge" up
+    ip tuntap add dev "$tap" mode tap 2>/dev/null || true
+    ip link set "$tap" up
+    ip link set "$tap" master "$bridge"
+
+    # The guest adopts OVN's MAC (udn_mac), so the pod NIC's kernel MAC (== udn_mac)
+    # would add a permanent fdb entry <udn_mac> -> ovn-udn1 that SHADOWS the guest's
+    # tap (return traffic + unicast DHCP go to the NIC, not the guest). Re-MAC the NIC
+    # to a DISTINCT dummy before enslaving (KubeVirt bridge-binding). The OVN LSP keeps
+    # udn_mac, so OVN still delivers the guest's frames NIC -> bridge -> tap. Per-pod
+    # netns, so the dummy need only differ from udn_mac within this pod.
+    dummy="0a:fe:${udn_mac#*:*:}"
+    ip link set "$udn_iface" down 2>/dev/null || true
+    ip link set "$udn_iface" address "$dummy" 2>/dev/null || true
+    ip link set "$udn_iface" up 2>/dev/null || true
+    echo "Primary UDN: re-MAC'd $udn_iface $udn_mac -> $dummy (it would shadow the tap on $bridge); guest adopts $udn_mac"
+
+    ip link set "$udn_iface" master "$bridge"
+    ip link set "$udn_iface" up
+
+    # Best-effort helper IP in the UDN subnet for dnsmasq to bind (same .254 heuristic
+    # as the NAD path; the guest talks via its UDN IP + gateway, never the helper).
+    net_base=$(echo "$udn_ip" | sed 's/\.[0-9]*$//')
+    helper="${net_base}.254"
+    [ "$helper" = "$udn_ip" ] && helper="${net_base}.253"
+    ip addr add "$helper/$udn_prefix" dev "$bridge" 2>/dev/null || true
+
+    echo "Primary NIC on UDN: $bridge bridges $udn_iface to $tap; guest IP=$udn_ip/$udn_prefix mac=$udn_mac gw=$udn_gw (helper $helper)"
+}
+
 # --- Main ---
 
 # Check if intent has "nics" array (multi-NIC mode)
@@ -261,6 +362,12 @@ has_nics() {
     grep -q '"nics"' "$INTENT_PATH" || return 1
     return 0
 }
+
+# Model A (docs/design/udn-primary-integration.md): the top-level primaryUDNInterface
+# signal (ovn-udn1) applies to the PRIMARY NIC -- whether the guest has explicit
+# interfaces or the default single NIC -- so it is read once here, not per-NIC. Empty
+# for every other networking mode.
+PRIMARY_UDN_IFACE=$(sed -n 's/.*"primaryUDNInterface"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$INTENT_PATH" 2>/dev/null | head -1)
 
 if has_nics; then
     # Multi-NIC mode: parse NIC list from intent JSON with python3.
@@ -314,6 +421,11 @@ for nic in nics:
             # Primary-on-NAD (multi-node L2): the primary rides a Multus NAD
             # instead of the node-local bridge.
             setup_primary_nad_nic "$bridge" "$tap" "$multus" "$mac"
+        elif [ "$primary" = "1" ] && [ -n "$PRIMARY_UDN_IFACE" ]; then
+            # Model A: the primary rides the namespace primary OVN-K UDN (ovn-udn1).
+            # The resolver only sets the signal for a node-local primary, so a
+            # primary-on-NAD guest takes the branch above, never this one.
+            setup_primary_udn_nic "$bridge" "$tap" "$PRIMARY_UDN_IFACE"
         elif [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"
             setup_exposed_ports "$bridge"
@@ -327,7 +439,15 @@ else
     # Legacy mode: single NIC (backward compatible)
     BRIDGE="${BRIDGE_NAME:-br0}"
     TAP="${TAP_NAME:-tap0}"
-    setup_primary_nic "$BRIDGE" "$TAP"
-    setup_exposed_ports "$BRIDGE"
-    echo "Network init done: $BRIDGE (internal) with $TAP"
+    if [ -n "$PRIMARY_UDN_IFACE" ]; then
+        # Model A: the default single NIC rides the namespace primary OVN-K UDN
+        # (ovn-udn1). This is the common Model A case -- a plain SwiftGuest with no
+        # spec.interfaces in a primary-UDN namespace.
+        setup_primary_udn_nic "$BRIDGE" "$TAP" "$PRIMARY_UDN_IFACE"
+        echo "Network init done: $BRIDGE bridges $PRIMARY_UDN_IFACE (primary UDN) to $TAP"
+    else
+        setup_primary_nic "$BRIDGE" "$TAP"
+        setup_exposed_ports "$BRIDGE"
+        echo "Network init done: $BRIDGE (internal) with $TAP"
+    fi
 fi

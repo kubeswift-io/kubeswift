@@ -548,6 +548,19 @@ where
 fn build_ch_nics(
     intent: &RuntimeIntent,
 ) -> (Option<String>, Vec<NICConfig>, Vec<VFIODeviceConfig>) {
+    // Model A: the guest rides its namespace primary OVN-K UDN (ovn-udn1). network-init
+    // captured OVN's IP-derived MAC (the LSP port_security pins MAC+IP) and the launcher
+    // entrypoint exported it here. The PRIMARY NIC must source frames with this MAC or
+    // OVN drops them. Gated on the intent's primary_udn_interface signal so a stray env
+    // var never rewrites a non-Model-A guest's MAC. See docs/design/udn-primary-integration.md.
+    let primary_udn_mac = if intent.primary_udn_interface.is_some() {
+        std::env::var("KUBESWIFT_PRIMARY_UDN_MAC")
+            .ok()
+            .filter(|m| !m.is_empty())
+    } else {
+        None
+    };
+
     if let Some(nics) = intent.nics() {
         let mut ch_nics = vec![];
         let mut vfio_devs = vec![];
@@ -585,16 +598,38 @@ fn build_ch_nics(
                     }
                 }
             } else {
+                // Model A: the primary NIC adopts OVN's captured MAC; others keep
+                // their intent MAC.
+                let mac = if n.primary {
+                    primary_udn_mac.clone().unwrap_or_else(|| n.mac.clone())
+                } else {
+                    n.mac.clone()
+                };
                 ch_nics.push(NICConfig {
                     tap_name: n.tap_device.clone(),
-                    mac: n.mac.clone(),
+                    mac,
                     vhost_user_socket: None,
                 });
             }
         }
         (None, ch_nics, vfio_devs)
     } else if intent.has_network() {
-        (Some("tap0".to_string()), vec![], vec![])
+        // Legacy single default NIC. For a Model A default guest (no explicit
+        // interfaces), emit an explicit NICConfig carrying OVN's captured MAC instead
+        // of the auto-MAC tap0 path, so the guest passes the UDN's port_security.
+        if let Some(mac) = primary_udn_mac {
+            (
+                None,
+                vec![NICConfig {
+                    tap_name: "tap0".to_string(),
+                    mac,
+                    vhost_user_socket: None,
+                }],
+                vec![],
+            )
+        } else {
+            (Some("tap0".to_string()), vec![], vec![])
+        }
     } else {
         (None, vec![], vec![])
     }

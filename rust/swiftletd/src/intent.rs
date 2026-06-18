@@ -55,6 +55,15 @@ pub struct RuntimeIntent {
     /// If empty/absent and network=true, a single default NIC is used (backward compat).
     #[serde(default)]
     pub nics: Option<Vec<NICIntent>>,
+    /// OVN-Kubernetes primary UDN interface (ovn-udn1) when the guest rides its
+    /// namespace's primary UserDefinedNetwork (Model A). None otherwise. A TOP-LEVEL
+    /// attribute (not per-NIC) because the primary is singular and the common case is
+    /// a default guest with no nics. When set, network-init bridges this interface to
+    /// br0/tap0 (setup_primary_udn_nic) and the guest adopts OVN's IP-derived MAC + IP
+    /// (OVN port_security pins them); swiftletd uses that captured MAC for the primary
+    /// NIC. eth0 stays on the cluster default for the control path.
+    #[serde(default)]
+    pub primary_udn_interface: Option<String>,
     /// virtiofs shares. For each, swiftletd spawns a virtiofsd backend
     /// (shared-dir = source_path, listening on socket_path) before Cloud
     /// Hypervisor, then passes CH `--fs tag=<tag>,socket=<socket_path>`.
@@ -329,12 +338,6 @@ pub struct NICIntent {
     /// Multus-created interface name (net1, net2, etc.). Empty for primary.
     #[serde(default)]
     pub multus_interface: Option<String>,
-    /// OVN-Kubernetes primary UDN interface (ovn-udn1) when the guest rides its
-    /// namespace's primary UserDefinedNetwork (Model A). None otherwise.
-    /// Mutually exclusive with multus_interface; network-init bridges it to
-    /// br0/tap0 via setup_primary_udn_nic.
-    #[serde(default)]
-    pub primary_udn_interface: Option<String>,
     /// Bridge device name (br0, br1, etc.). Empty for SR-IOV.
     #[serde(default)]
     pub bridge: String,

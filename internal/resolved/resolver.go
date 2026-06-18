@@ -80,16 +80,22 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 
 	// Model A: a guest in a namespace carrying the OVN-Kubernetes primary-UDN
 	// label rides the namespace primary UDN (ovn-udn1) on its node-local primary
-	// NIC. GetNICs applies the interface only to a primary interface without a
-	// networkRef, so setting it here is a no-op for primary-on-NAD / secondary
-	// guests. No-op (and no Namespace read cost beyond one cached Get) for the
-	// vast majority of clusters that have no primary-UDN namespaces.
+	// NIC. The eligibility gate (primary is node-local, not on a NAD) is computed
+	// HERE — not in GetNICs — because a default guest has no spec.interfaces (so
+	// GetNICs returns nil and emits no per-NIC field). PrimaryInterface()==nil for
+	// a default guest means a node-local primary -> Model A applies; a primary that
+	// rides a NAD (NetworkRef != nil) is Model B (primary-on-NAD) and is skipped.
+	// The signal is carried at the intent top level (RuntimeIntent.PrimaryUDNInterface).
+	// No-op (one cached Namespace Get) for the vast majority of clusters that have
+	// no primary-UDN namespaces.
 	hasPrimaryUDN, err := NamespaceHasPrimaryUDN(ctx, r.client, guest.Namespace)
 	if err != nil {
 		return nil, &ResolutionError{Reason: "checking primary-UDN namespace: " + err.Error()}
 	}
 	if hasPrimaryUDN {
-		rg.PrimaryUDNInterface = OVNPrimaryUDNInterface
+		if p := guest.PrimaryInterface(); p == nil || p.NetworkRef == nil {
+			rg.PrimaryUDNInterface = OVNPrimaryUDNInterface
+		}
 	}
 
 	return rg, nil
