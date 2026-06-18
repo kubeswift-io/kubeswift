@@ -272,17 +272,23 @@ kubectl get swiftguest -n default ovnk-vm \
 
 ## UserDefinedNetwork (UDN) notes
 
-- **UDN *secondary* is handled transparently.** A `UserDefinedNetwork` (role
-  Secondary, topology Layer2) generates a `type: ovn-k8s-cni-overlay` `layer2` NAD,
-  which KubeSwift's OVN-Kubernetes backend detects exactly like the `ovn-l2` NAD
-  above. A guest just points `interfaces[].networkRef` at the generated NAD — **no
-  extra integration**. (Proven at the raw-pod level; rides the validated code
-  path.) See [UDN tenant isolation](ovn-kubernetes.md#4-tenant-isolation-with-userdefinednetwork).
-- **UDN *primary* (per-tenant primary networks / multi-tenancy) is a separate later
-  phase — NOT shipped here.** Guest-on-the-pod-PRIMARY-network is a different
-  datapath, requires the OVN-K `--enable-network-segmentation` gate, and
-  destabilized the node datapath on a small validation cluster. Do not treat
-  UDN-primary as available via this backend.
+- **UDN *secondary* is the shipped multi-tenancy path — cluster-validated.** A
+  `UserDefinedNetwork` (role Secondary, topology Layer2) generates a
+  `type: ovn-k8s-cni-overlay` `layer2` NAD that KubeSwift's OVN-Kubernetes backend
+  detects exactly like the `ovn-l2` NAD above; with **`ipam.lifecycle: Persistent`**
+  the generated NAD carries `allowPersistentIPs: true`, so the guest gets per-tenant
+  isolated L2 **+ IP-preserving live migration** with **no extra integration** — a
+  guest just points `interfaces[].networkRef` at the generated NAD. Validated
+  end-to-end (boot + `mode: live` migration, IP preserved). Full recipe:
+  [`udn-multi-tenancy.md`](udn-multi-tenancy.md).
+- **UDN *primary* (guest on the pod's PRIMARY network `ovn-udn1`) is a roadmap item
+  — NOT shipped here.** The primary-UDN *datapath itself* works on a properly-set-up
+  cluster (validated on kubeadm — see
+  [`kubeadm-ovn-kubernetes-setup.md`](kubeadm-ovn-kubernetes-setup.md); the earlier
+  "node instability" was a k0s cgroup quirk, not OVN-K), but the **KubeSwift
+  integration** to ride `ovn-udn1` is a separate launcher-datapath change (Model A),
+  gated on a namespace-as-tenant requirement + the OVN-K release-1.2 identity-webhook
+  caveat. Use the secondary-UDN path above for multi-tenancy today.
 
 ---
 
