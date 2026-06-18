@@ -26,6 +26,16 @@ type RuntimeIntent struct {
 	// NICs is the list of network interfaces for the VM.
 	// If empty and Network is true, a single default NIC is created (backward compat).
 	NICs []NICIntent `json:"nics,omitempty"`
+	// PrimaryUDNInterface is the pod's OVN-Kubernetes primary UserDefinedNetwork
+	// interface (ovn-udn1) when the guest rides its namespace's primary UDN
+	// (Model A). It is a TOP-LEVEL attribute of the primary NIC because the
+	// primary is singular and a default guest (no spec.interfaces -> empty NICs)
+	// is the common Model A case — a per-NIC field would never be emitted for it.
+	// When set, network-init.sh bridges this interface to br0/tap0
+	// (setup_primary_udn_nic): the guest adopts the OVN-assigned, IP-derived MAC +
+	// IP (OVN port_security pins them), and eth0 stays on the cluster default for
+	// the swiftletd->apiserver control path. Empty for every other networking mode.
+	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// Ports declares service ports to expose from the guest's primary NIC
 	// (service exposure — docs/design/service-exposure.md). When non-empty,
 	// network-init.sh pins the primary VM IP and installs an in-pod DNAT
@@ -145,13 +155,6 @@ type NICIntent struct {
 	// MultusInterface is the name of the Multus-created interface (net1, net2, etc.)
 	// Empty for the primary NIC.
 	MultusInterface string `json:"multusInterface,omitempty"`
-	// PrimaryUDNInterface is the pod's OVN-Kubernetes primary UserDefinedNetwork
-	// interface (ovn-udn1) when the guest rides its namespace's primary UDN
-	// (Model A). Mutually exclusive with MultusInterface — the primary UDN is
-	// bound by the namespace label, not a Multus NAD. swiftletd bridges this
-	// interface to br0/tap0 (setup_primary_udn_nic); eth0 stays on the cluster
-	// default. Empty for every other networking mode.
-	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// Bridge is the bridge device name (br0, br1, etc.)
 	// Empty for SR-IOV interfaces.
 	Bridge string `json:"bridge,omitempty"`

@@ -6,25 +6,26 @@ import (
 )
 
 type mockResolvedGuest struct {
-	hasSeed          bool
-	hasKernel        bool
-	hasNetwork       bool
-	dataDisks        []DataDiskSpec
-	format           string
-	rootVolumeMode   string // W9: "Filesystem" (default) or "Block"
-	cpu              int
-	memory           int
-	lifecycle        string
-	guestID          string
-	kernelPath       string
-	initramfsPath    string
-	kernelCmdline    string
-	hypervisor       string
-	osType           string
-	filesystems      []FilesystemIntent
-	vhostUserDevices []VhostUserDeviceIntent
-	coreScheduling   string
-	vsockCID         uint32
+	hasSeed             bool
+	hasKernel           bool
+	hasNetwork          bool
+	dataDisks           []DataDiskSpec
+	format              string
+	rootVolumeMode      string // W9: "Filesystem" (default) or "Block"
+	cpu                 int
+	memory              int
+	lifecycle           string
+	guestID             string
+	kernelPath          string
+	initramfsPath       string
+	kernelCmdline       string
+	hypervisor          string
+	osType              string
+	filesystems         []FilesystemIntent
+	vhostUserDevices    []VhostUserDeviceIntent
+	coreScheduling      string
+	vsockCID            uint32
+	primaryUDNInterface string
 }
 
 func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
@@ -48,6 +49,7 @@ func (m *mockResolvedGuest) GetOSType() string {
 	return m.osType
 }
 func (m *mockResolvedGuest) GetNICs() []NICIntent               { return nil }
+func (m *mockResolvedGuest) GetPrimaryUDNInterface() string     { return m.primaryUDNInterface }
 func (m *mockResolvedGuest) GetExposedPorts() []PortIntent      { return nil }
 func (m *mockResolvedGuest) GetFilesystems() []FilesystemIntent { return m.filesystems }
 func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
@@ -83,6 +85,29 @@ func TestBuild_VsockSetWhenCIDNonZero(t *testing.T) {
 // this string to Cloud Hypervisor's --disk path=<value> opaquely; the
 // kubelet attaches the Block PVC at this device path via VolumeDevices
 // in the launcher pod (controller-side, see pod.go::rootDiskMount).
+// TestBuild_PrimaryUDNInterface is the Model A wiring gate: the top-level
+// PrimaryUDNInterface flows from the resolver getter into the intent on BOTH boot
+// paths (a default guest's intent has no nics, so this MUST be top-level). Empty
+// when not Model A.
+func TestBuild_PrimaryUDNInterface(t *testing.T) {
+	// disk boot
+	rg := &mockResolvedGuest{hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 2048, lifecycle: "start", guestID: "default/udn", primaryUDNInterface: "ovn-udn1"}
+	if got := Build(rg).PrimaryUDNInterface; got != "ovn-udn1" {
+		t.Errorf("disk-boot PrimaryUDNInterface = %q, want ovn-udn1", got)
+	}
+	// kernel boot honors it too
+	rg.hasSeed = false
+	rg.hasKernel = true
+	if got := Build(rg).PrimaryUDNInterface; got != "ovn-udn1" {
+		t.Errorf("kernel-boot PrimaryUDNInterface = %q, want ovn-udn1", got)
+	}
+	// not Model A -> empty
+	rg2 := &mockResolvedGuest{hasSeed: true, hasNetwork: true, format: "raw", cpu: 2, memory: 2048, lifecycle: "start", guestID: "default/plain"}
+	if got := Build(rg2).PrimaryUDNInterface; got != "" {
+		t.Errorf("non-Model-A PrimaryUDNInterface = %q, want empty", got)
+	}
+}
+
 func TestBuild_DiskBootBlockMode(t *testing.T) {
 	rg := &mockResolvedGuest{
 		hasSeed:        true,

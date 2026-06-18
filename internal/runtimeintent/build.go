@@ -25,6 +25,9 @@ type ResolvedGuest interface {
 	GetHypervisor() string
 	GetOSType() string
 	GetNICs() []NICIntent
+	// GetPrimaryUDNInterface returns the OVN-Kubernetes primary-UDN interface
+	// (ovn-udn1) when the guest rides its namespace primary UDN (Model A), else "".
+	GetPrimaryUDNInterface() string
 	GetExposedPorts() []PortIntent
 	GetFilesystems() []FilesystemIntent
 	GetVhostUserDevices() []VhostUserDeviceIntent
@@ -40,6 +43,7 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	dataDisks := rg.GetDataDisks()
 
 	nics := rg.GetNICs()
+	primaryUDN := rg.GetPrimaryUDNInterface()
 	ports := rg.GetExposedPorts()
 	filesystems := rg.GetFilesystems()
 	vhostUserDevices := rg.GetVhostUserDevices()
@@ -56,22 +60,23 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			lifecycle = "start"
 		}
 		return &RuntimeIntent{
-			RootDisk:         RootDiskSpec{Path: "", Format: ""},
-			SeedPath:         "",
-			CPU:              rg.GetCPU(),
-			Memory:           rg.GetMemoryMiB(),
-			Lifecycle:        lifecycle,
-			GuestID:          rg.GetGuestID(),
-			Network:          rg.HasNetwork(),
-			Hypervisor:       rg.GetHypervisor(),
-			OSType:           rg.GetOSType(),
-			DataDisks:        dataDisks,
-			NICs:             nics,
-			Ports:            ports,
-			Filesystems:      filesystems,
-			VhostUserDevices: vhostUserDevices,
-			CoreScheduling:   coreScheduling,
-			Vsock:            vsock,
+			RootDisk:            RootDiskSpec{Path: "", Format: ""},
+			SeedPath:            "",
+			CPU:                 rg.GetCPU(),
+			Memory:              rg.GetMemoryMiB(),
+			Lifecycle:           lifecycle,
+			GuestID:             rg.GetGuestID(),
+			Network:             rg.HasNetwork(),
+			Hypervisor:          rg.GetHypervisor(),
+			OSType:              rg.GetOSType(),
+			DataDisks:           dataDisks,
+			NICs:                nics,
+			PrimaryUDNInterface: primaryUDN,
+			Ports:               ports,
+			Filesystems:         filesystems,
+			VhostUserDevices:    vhostUserDevices,
+			CoreScheduling:      coreScheduling,
+			Vsock:               vsock,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
 				InitramfsPath: rg.GetInitramfsPath(),
@@ -102,20 +107,21 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Path:   rootDiskPath,
 			Format: rg.GetRootDiskFormat(),
 		},
-		SeedPath:         seedPath,
-		CPU:              rg.GetCPU(),
-		Memory:           rg.GetMemoryMiB(),
-		Lifecycle:        lifecycle,
-		GuestID:          rg.GetGuestID(),
-		Network:          rg.HasNetwork(),
-		Hypervisor:       rg.GetHypervisor(),
-		OSType:           rg.GetOSType(),
-		DataDisks:        dataDisks,
-		NICs:             nics,
-		Ports:            ports,
-		Filesystems:      filesystems,
-		VhostUserDevices: vhostUserDevices,
-		CoreScheduling:   coreScheduling,
-		Vsock:            vsock,
+		SeedPath:            seedPath,
+		CPU:                 rg.GetCPU(),
+		Memory:              rg.GetMemoryMiB(),
+		Lifecycle:           lifecycle,
+		GuestID:             rg.GetGuestID(),
+		Network:             rg.HasNetwork(),
+		Hypervisor:          rg.GetHypervisor(),
+		OSType:              rg.GetOSType(),
+		DataDisks:           dataDisks,
+		NICs:                nics,
+		PrimaryUDNInterface: primaryUDN,
+		Ports:               ports,
+		Filesystems:         filesystems,
+		VhostUserDevices:    vhostUserDevices,
+		CoreScheduling:      coreScheduling,
+		Vsock:               vsock,
 	}
 }
