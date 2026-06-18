@@ -83,7 +83,7 @@ spec:
         - name: dra-driver
           # Pinned to the release (no :latest tag is published). Bump on release;
           # or use the Helm chart (dra.enabled=true), which manages this version.
-          image: ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:v0.4.2
+          image: ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:v0.4.6
           args:
             - --v=2
           env:
