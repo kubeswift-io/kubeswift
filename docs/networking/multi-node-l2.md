@@ -126,6 +126,13 @@ issue of the hand-rolled mesh.
 > DHCP on the segment (OVN-K layer-2), the per-pod dnsmasq is redundant; a
 > "segment-DHCP" mode that skips it is a follow-up.
 
+> **Per-tenant isolation.** For *multiple isolated tenant networks*, create a
+> per-tenant OVN-Kubernetes **UserDefinedNetwork** (`role: Secondary`,
+> `ipam.lifecycle: Persistent`) instead of a hand-written NAD — OVN-K auto-generates
+> a NAD this same backend drives, so each tenant gets its own isolated L2 segment
+> with IP-preserving live migration and **no extra KubeSwift config**. Recipe:
+> [udn-multi-tenancy.md](udn-multi-tenancy.md).
+
 ## Recipe B (lab / on-prem): hand-rolled VXLAN-mesh + bridge NAD
 
 > The lightweight path that validated the datapath + offline migration here,

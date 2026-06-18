@@ -1,0 +1,45 @@
+# Per-tenant isolated VM network via a SECONDARY OVN-Kubernetes UserDefinedNetwork.
+# The UDN auto-generates an `ovn-k8s-cni-overlay` layer2 NAD that KubeSwift's
+# shipped OVN-Kubernetes backend drives with NO extra config — the guest just
+# references it by `networkRef`. `ipam.lifecycle: Persistent` is what enables
+# IP-preserving LIVE migration (it puts `allowPersistentIPs: true` on the generated
+# NAD, engaging the IPAMClaim mechanism). Requires OVN-Kubernetes as the cluster CNI.
+# Full recipe + gotchas: docs/networking/udn-multi-tenancy.md
+#
+# Prereqs in the tenant namespace: a SwiftImage `ubuntu-noble`, a SwiftGuestClass
+# `default`, a SwiftSeedProfile `default`; cluster-wide: a migratable RWX+Block
+# StorageClass `longhorn-migratable`.
+apiVersion: k8s.ovn.org/v1
+kind: UserDefinedNetwork
+metadata:
+  name: tenant-a
+  namespace: tenant-a
+spec:
+  topology: Layer2
+  layer2:
+    role: Secondary
+    subnets: ["10.30.0.0/16"]
+    ipam:
+      lifecycle: Persistent       # REQUIRED for IP-preserving LIVE migration
+---
+# A guest whose primary IP rides the tenant's isolated UDN segment. Migrating it
+# (mode: live) keeps the IP with no allowIPChange — the IP follows the guest.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: tenant-a-vm
+  namespace: tenant-a
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  runPolicy: Running
+  # RWX+Block is the live-migration storage requirement (Longhorn migratable shown).
+  storage:
+    accessMode: ReadWriteMany
+    volumeMode: Block
+    storageClassName: longhorn-migratable
+  interfaces:
+    - name: app
+      primary: true                 # the guest's primary (portable) IP
+      networkRef: { name: tenant-a }  # the UDN's metadata.name == the generated NAD
