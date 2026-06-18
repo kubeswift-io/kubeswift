@@ -1,0 +1,59 @@
+# Per-tenant isolated VM network via a kube-ovn Subnet (kube-ovn non-primary mode).
+# Each tenant gets its own Subnet (an isolated OVN logical switch); a SwiftGuest
+# references the linked NAD by `networkRef`. KubeSwift's shipped kube-ovn backend
+# pins the guest's IP for IP-preserving live migration — NO persistent-IP flag
+# needed (unlike the OVN-Kubernetes UDN path). Full recipe + gotchas:
+# docs/networking/kubeovn-multi-tenancy.md
+#
+# Prereqs: kube-ovn installed non-primary (docs/networking/ovn-l2-install.md); in the
+# tenant namespace a SwiftImage `ubuntu-noble`, a SwiftGuestClass `default`, a
+# SwiftSeedProfile `default`; cluster-wide a migratable RWX+Block StorageClass
+# `longhorn-migratable`. `provider` MUST match <nad-name>.<nad-namespace>.ovn;
+# cidrBlock must not overlap pod/service CIDRs or kube-ovn's default VPC (10.16/16).
+apiVersion: kubeovn.io/v1
+kind: Subnet
+metadata:
+  name: tenant-a                    # cluster-scoped
+spec:
+  protocol: IPv4
+  cidrBlock: 10.30.0.0/16
+  excludeIps: ["10.30.0.1"]
+  gateway: "10.30.0.1"
+  gatewayType: distributed
+  natOutgoing: false                # a flat L2 segment, not routed/NAT'd
+  provider: tenant-a.tenant-a.ovn   # <nad-name>.<nad-namespace>.ovn
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: tenant-a
+  namespace: tenant-a
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "kube-ovn",
+      "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+      "provider": "tenant-a.tenant-a.ovn"
+    }
+---
+# A guest whose primary IP rides the tenant's isolated Subnet. Migrating it
+# (mode: live) keeps the IP with no allowIPChange — the IP follows the guest.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: tenant-a-vm
+  namespace: tenant-a
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  seedProfileRef: { name: default }
+  runPolicy: Running
+  storage:
+    accessMode: ReadWriteMany
+    volumeMode: Block
+    storageClassName: longhorn-migratable
+  interfaces:
+    - name: app
+      primary: true                 # the guest's primary (portable) IP
+      networkRef: { name: tenant-a }  # the NAD in this namespace

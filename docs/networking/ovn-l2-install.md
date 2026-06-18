@@ -178,6 +178,10 @@ kubectl get subnet ovn-l2          # PROTOCOL IPv4, V4AVAILABLE > 0
 > address to the guest. So there is **no DHCP conflict** to manage here (unlike a
 > segment that runs its own DHCP).
 
+> **Multiple tenants?** Give each tenant its own Subnet + NAD pair (isolated logical
+> switches) — see [kubeovn-multi-tenancy.md](kubeovn-multi-tenancy.md) for the
+> per-tenant recipe.
+
 ---
 
 ## Step 4 — run a guest on the segment
