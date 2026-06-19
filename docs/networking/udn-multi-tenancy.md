@@ -15,10 +15,13 @@ see [`ovn-l2-install.md`](ovn-l2-install.md) and [`multi-node-l2.md`](multi-node
   (their own OVN logical switch), isolated from other tenants — and each VM keeps
   its IP across a `mode: live` migration.
 
-This is **guest-level** tenancy: the VM's primary IP rides the tenant network; the
-launcher pod's `eth0` stays on the cluster-default network (control path). For
-*namespace-native* tenancy (the launcher pod's primary itself on the tenant
-network, for mixed pod+VM namespaces) — a **future enhancement**, not yet shipped.
+This is **guest-level** tenancy: the VM's primary IP rides a *secondary* tenant
+network; the launcher pod's `eth0` stays on the cluster-default network (control
+path). For *namespace-native* tenancy — the VM on the namespace's **primary** UDN, so
+every pod *and* VM in the namespace shares one tenant network — use **Model A**
+([`udn-primary-tenancy.md`](udn-primary-tenancy.md), shipped in v0.5.0). Model A gives a
+native UDN IP + cross-node reachability today; IP-preserving **live** migration is the
+Model B (secondary-UDN) path's advantage for now (Model A live migration is a v2 item).
 
 ## The recipe
 

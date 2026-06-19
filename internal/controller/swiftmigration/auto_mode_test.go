@@ -53,6 +53,32 @@ func TestResolveAutoMode_VFIO_ResolvesToOffline(t *testing.T) {
 	}
 }
 
+// A guest that would otherwise resolve to live (no VFIO, allowIPChange) but rides its
+// namespace's primary OVN-K UDN (Model A) MUST resolve to offline — live migration of a
+// primary-UDN guest is unsupported in v1 (no swiftletd<->swiftletd channel).
+func TestResolveAutoMode_ModelA_ResolvesToOffline(t *testing.T) {
+	scheme := testScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "model-a"},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "model-a",
+		Labels: map[string]string{"k8s.ovn.org/primary-user-defined-network": ""},
+	}}
+	mig := newMigration("m", "model-a")
+	mig.Spec.AllowIPChange = true
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, ns).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+
+	if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
+		t.Fatalf("expected nil result; got %+v", res)
+	}
+	if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeOffline {
+		t.Errorf("Model A must resolve auto→offline; got %q", mig.Status.Mode)
+	}
+}
+
 func TestResolveAutoMode_DefaultNetworking_NoAllowIPChange_ResolvesToOffline(t *testing.T) {
 	scheme := testScheme(t)
 	guest := &swiftv1alpha1.SwiftGuest{

@@ -9,6 +9,7 @@ import (
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/resolved"
 )
 
 // resolveAutoMode resolves spec.Mode=auto into a concrete status.Mode
@@ -95,6 +96,18 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 		// offline; offline migration on default networking also
 		// produces a fresh IP, but offline's "stop, move, start"
 		// semantics make the IP change explicit (the guest reboots).
+		return nil
+	}
+
+	// Model A: a guest on the namespace primary OVN-K UDN cannot live-migrate in v1
+	// (the primary UDN withholds the swiftletd<->swiftletd migration channel from the
+	// pod — the dst eth0 is infrastructure-locked, dropping pod-to-pod traffic). Auto
+	// resolves to offline, which works: the target acquires a fresh UDN IP. The webhook
+	// rejects explicit mode=live for these guests. Mirrors the VFIO rule above.
+	// See docs/design/udn-primary-integration.md.
+	if modelA, err := resolved.NamespaceHasPrimaryUDN(ctx, r.Client, mig.Namespace); err != nil {
+		return phaseTransient(fmt.Errorf("checking primary-UDN namespace for auto-resolution: %w", err))
+	} else if modelA {
 		return nil
 	}
 

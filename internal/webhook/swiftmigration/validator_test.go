@@ -412,6 +412,29 @@ func TestValidateClusterState_MigrationDisabled(t *testing.T) {
 	}
 }
 
+// A guest on its namespace primary OVN-K UDN (Model A) cannot live-migrate in v1; an
+// explicit mode=live SwiftMigration is rejected with a clear message (auto resolves to
+// offline in auto_mode.go). The primary UDN withholds the migration channel from the pod.
+func TestValidateClusterState_ModelA_LiveRejected(t *testing.T) {
+	scheme := migrationScheme(t)
+	guest := newSwiftGuest("guest", "model-a") // status.NodeName = boba
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "model-a",
+		Labels: map[string]string{"k8s.ovn.org/primary-user-defined-network": ""},
+	}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, ns, newReadyNode("miles")).Build()
+	v := &Validator{Client: c}
+
+	mig := newSwiftMigration("m", "model-a")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.AllowIPChange = true
+	_, err := v.validate(context.Background(), mig)
+	if err == nil || !strings.Contains(err.Error(), "primary OVN-K UDN") {
+		t.Fatalf("Model A mode=live must be rejected with the primary-UDN message; got %v", err)
+	}
+}
+
 func TestValidateClusterState_SameNodeRejected(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default") // status.NodeName = boba

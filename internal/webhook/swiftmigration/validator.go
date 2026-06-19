@@ -453,6 +453,23 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 			guest.Name)
 	}
 
+	// Model A (primary OVN-K UDN) live-migration gate. A guest on its namespace's
+	// primary OVN-Kubernetes UDN cannot live-migrate in v1: the primary UDN withholds
+	// the swiftletd<->swiftletd migration channel from the pod (the destination pod's
+	// eth0 is infrastructure-locked, dropping pod-to-pod traffic). Offline migration
+	// works (the target acquires a fresh UDN IP); auto resolves to offline
+	// (auto_mode.go), mirroring VFIO. See docs/design/udn-primary-integration.md.
+	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		modelA, err := resolved.NamespaceHasPrimaryUDN(ctx, v.Client, mig.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("checking primary-UDN namespace for SwiftGuest %q: %w", guest.Name, err)
+		}
+		if modelA {
+			return nil, fmt.Errorf("SwiftGuest %q is on the namespace primary OVN-K UDN (Model A); live migration is not supported in v1 — the primary UDN withholds the migration channel from the pod. Use mode=offline (or auto, which resolves to offline).",
+				guest.Name)
+		}
+	}
+
 	// Live-mode storage gate (W6 follow-up; Phase 3a kernel-boot
 	// adjustment).
 	//

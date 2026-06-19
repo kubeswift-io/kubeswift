@@ -1,0 +1,25 @@
+# Model A — namespace-native VM tenancy on the primary OVN-Kubernetes UDN.
+# See docs/networking/udn-primary-tenancy.md.
+#
+# 1. The namespace carries the OVN-K primary-UDN label (presence is the signal; the
+#    value is ignored). It MUST be set at namespace creation — OVN-K enforces immutability.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a
+  labels:
+    k8s.ovn.org/primary-user-defined-network: ""
+---
+# 2. The namespace primary UDN. Every pod and VM in tenant-a gets an `ovn-udn1`
+#    interface on this network as its primary (eth0 stays on the cluster default,
+#    locked to kubelet health checks).
+apiVersion: k8s.ovn.org/v1
+kind: UserDefinedNetwork
+metadata:
+  name: tenant-a-udn
+  namespace: tenant-a
+spec:
+  topology: Layer2
+  layer2:
+    role: Primary
+    subnets: ["10.50.0.0/16"]
