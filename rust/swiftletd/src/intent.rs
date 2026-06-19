@@ -62,7 +62,12 @@ pub struct RuntimeIntent {
     /// br0/tap0 (setup_primary_udn_nic) and the guest adopts OVN's IP-derived MAC + IP
     /// (OVN port_security pins them); swiftletd uses that captured MAC for the primary
     /// NIC. eth0 stays on the cluster default for the control path.
-    #[serde(default)]
+    ///
+    /// Explicit rename: the struct's rename_all=camelCase would expect
+    /// `primaryUdnInterface`, but the Go controller emits `primaryUDNInterface`
+    /// (the UDN acronym is kept upper-case in the json tag). Without the rename the
+    /// field silently deserializes to None and the MAC override never fires.
+    #[serde(default, rename = "primaryUDNInterface")]
     pub primary_udn_interface: Option<String>,
     /// virtiofs shares. For each, swiftletd spawns a virtiofsd backend
     /// (shared-dir = source_path, listening on socket_path) before Cloud
@@ -622,6 +627,31 @@ mod tests {
             !lin.is_windows(),
             "absent osType should not be is_windows()"
         );
+    }
+
+    // Model A: the Go controller emits the top-level key `primaryUDNInterface`
+    // (UDN acronym upper-case). The struct's rename_all=camelCase would otherwise
+    // expect `primaryUdnInterface` and silently drop it to None — which on a real
+    // cluster skips the CH --net mac override and the guest never gets a UDN IP.
+    // This round-trips the EXACT Go-emitted key (the gap a cross-side test closes).
+    #[test]
+    fn test_intent_primary_udn_interface_go_key() {
+        let intent: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"model-a/g","network":true,"primaryUDNInterface":"ovn-udn1"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            intent.primary_udn_interface.as_deref(),
+            Some("ovn-udn1"),
+            "the Go-emitted `primaryUDNInterface` key must deserialize into primary_udn_interface"
+        );
+
+        // Absent (every non-Model-A guest) -> None.
+        let plain: RuntimeIntent = serde_json::from_str(
+            r#"{"rootDisk":{"path":"/d/i.raw","format":"raw"},"seedPath":"","cpu":2,"memory":2048,"lifecycle":"start","guestId":"default/g","network":true}"#,
+        )
+        .unwrap();
+        assert_eq!(plain.primary_udn_interface, None);
     }
 
     #[test]

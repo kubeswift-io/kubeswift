@@ -212,7 +212,24 @@ fn main() {
 
             let (namespace, name) = (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok());
 
+            // Model A (guest on the namespace primary OVN-K UDN): swiftletd CANNOT reach
+            // the apiserver from a primary-UDN pod — the UDN is bridged to the guest and
+            // eth0 is infrastructure-locked. So skip every apiserver interaction (lease
+            // poller, action loop, GuestRunning/runtime reports); the controller derives
+            // status from the OVN pod annotation + launcher readiness instead. Without
+            // this gate swiftletd would spam "client error (Connect)" forever.
+            // See docs/design/udn-primary-integration.md.
+            let is_primary_udn = intent.primary_udn_interface.is_some();
+            if is_primary_udn {
+                log::info!(
+                    "primary-UDN guest: skipping apiserver reporting (controller derives status)"
+                );
+            }
+
             let report_running = |running: bool, reason: Option<&str>| {
+                if is_primary_udn {
+                    return;
+                }
                 let (Some(ns), Some(n)) = (&namespace, &name) else {
                     return;
                 };
@@ -249,7 +266,7 @@ fn main() {
             // on-receive-completion lease report driven by the
             // action loop. See `docs/design/live-migration-phase-2.md`
             // §4.3.2 + §3.4 (poll-info-API).
-            if intent.has_network() && !intent.is_migration_receiver() {
+            if intent.has_network() && !intent.is_migration_receiver() && !is_primary_udn {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let lease_path = runtime_dir.root().join("dnsmasq.leases");
                     let nics_for_poller = intent.nics.clone();
@@ -279,9 +296,11 @@ fn main() {
             // it here means it's running before launch::run blocks, so
             // the controller can drive it as soon as the launcher pod is
             // up (it does not require the VM to have already booted).
-            if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
-                let api_socket = runtime_dir.root().join("ch.sock");
-                action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
+            if !is_primary_udn {
+                if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                    let api_socket = runtime_dir.root().join("ch.sock");
+                    action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
+                }
             }
 
             // on_socket_ready: skipped in receiver mode. CH on a
@@ -295,7 +314,7 @@ fn main() {
             // operators verify destination success via the
             // migration-status: ready annotation OR via vm_info
             // directly.
-            let on_socket_ready = if intent.is_migration_receiver() {
+            let on_socket_ready = if intent.is_migration_receiver() || is_primary_udn {
                 None
             } else {
                 namespace.as_ref().zip(name.as_ref()).map(|_| {

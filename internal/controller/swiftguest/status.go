@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,6 +30,24 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		status.Network.PrimaryIP = ip
 		status.Network.Interface = "eth0"
 		status.Network.Ready = true
+	}
+
+	// Model A (primary OVN-K UDN): swiftletd cannot reach the apiserver from a
+	// primary-UDN pod (the UDN is bridged to the guest; eth0 is infrastructure-locked),
+	// so it never writes the guest-ip annotation. The guest's IP IS the pod's
+	// OVN-assigned UDN IP — derive it from the OVN pod-networks annotation when swiftletd
+	// has not (and cannot) provide one. See docs/design/udn-primary-integration.md.
+	if udn := pod.Annotations[PodAnnotationPrimaryUDNIface]; udn != "" {
+		if status.Network == nil || status.Network.PrimaryIP == "" {
+			if ip := primaryUDNIPFromPod(pod); ip != "" {
+				if status.Network == nil {
+					status.Network = &swiftv1alpha1.GuestNetworkStatus{}
+				}
+				status.Network.PrimaryIP = ip
+				status.Network.Interface = udn
+				status.Network.Ready = true
+			}
+		}
 	}
 
 	// Set network interfaces from pod annotation (set by swiftletd lease poller)
@@ -121,6 +140,57 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
 		SetPodScheduledCondition(status, pod, false, "Scheduling")
 	}
+
+	// GuestRunning for a Model A guest: swiftletd can't patch it (no apiserver), so the
+	// controller derives it from launcher readiness (the CH-socket readiness probe the
+	// pod-builder adds). For non-Model-A guests this is untouched — swiftletd owns it.
+	if udn := pod.Annotations[PodAnnotationPrimaryUDNIface]; udn != "" {
+		if isLauncherReady(pod) {
+			setCondition(status, metav1.Condition{
+				Type:    "GuestRunning",
+				Status:  metav1.ConditionTrue,
+				Reason:  "GuestRunning",
+				Message: "Cloud Hypervisor running (derived from launcher readiness; primary-UDN guest)",
+			})
+		} else {
+			setCondition(status, metav1.Condition{
+				Type:    "GuestRunning",
+				Status:  metav1.ConditionFalse,
+				Reason:  "GuestStarting",
+				Message: "waiting for Cloud Hypervisor (launcher not ready; primary-UDN guest)",
+			})
+		}
+	}
+}
+
+// primaryUDNIPFromPod extracts the guest's UDN IP from the pod's OVN-Kubernetes
+// pod-networks annotation: the entry that is NOT the cluster default network ("default",
+// role infrastructure-locked on a primary-UDN pod). Returns "" when absent/unparseable.
+func primaryUDNIPFromPod(pod *corev1.Pod) string {
+	raw := pod.Annotations[OVNPodNetworksAnnotation]
+	if raw == "" {
+		return ""
+	}
+	var nets map[string]struct {
+		IPAddresses []string `json:"ip_addresses"`
+		Role        string   `json:"role"`
+	}
+	if err := json.Unmarshal([]byte(raw), &nets); err != nil {
+		return ""
+	}
+	for name, n := range nets {
+		if name == "default" || n.Role == "infrastructure-locked" {
+			continue
+		}
+		if len(n.IPAddresses) > 0 {
+			ip := n.IPAddresses[0]
+			if i := strings.IndexByte(ip, '/'); i >= 0 {
+				ip = ip[:i]
+			}
+			return ip
+		}
+	}
+	return ""
 }
 
 func podFailureReason(pod *corev1.Pod) (string, string) {
