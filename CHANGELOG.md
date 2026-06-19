@@ -8,6 +8,44 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.5.0] — 2026-06-19
+
+Adds **Model A — namespace-native VM tenancy**: a SwiftGuest in a namespace whose
+**primary** network is an OVN-Kubernetes UserDefinedNetwork rides that UDN directly —
+holding a **native UDN IP**, cross-node reachable and tenant-isolated. Every pod *and*
+VM in the namespace shares one tenant network, with no per-guest `networkRef`.
+Cluster-validated end-to-end on a kubeadm OVN-K-primary cluster (boot → native UDN IP
+`10.50.0.x` → cross-node ping). Complements the v0.4.6 **Model B** (per-guest
+secondary-UDN) path.
+
+### Added
+- **Model A — guest on the namespace primary OVN-K UDN (namespace-native tenancy).**
+  Detected from the `k8s.ovn.org/primary-user-defined-network` namespace label — no
+  SwiftGuest spec change. The launcher datapath (`setup_primary_udn_nic`) bridge-binds
+  the pod's `ovn-udn1` interface to the VM's tap so the VM adopts OVN's IP-derived MAC +
+  IP (the KubeVirt bridge-binding pattern; OVN `port_security` pins them). Because the
+  primary UDN is bridged to the guest and the pod's `eth0` is infrastructure-locked,
+  swiftletd cannot reach the apiserver — so the **controller derives status**:
+  `status.network.primaryIP` from the pod's `k8s.ovn.org/pod-networks` annotation,
+  `GuestRunning` from a launcher CH-API-socket readiness probe; swiftletd skips all
+  apiserver calls for these guests. Operator guide:
+  [`docs/networking/udn-primary-tenancy.md`](docs/networking/udn-primary-tenancy.md);
+  sample: [`config/samples/model-a/`](config/samples/model-a/); design:
+  [`docs/design/udn-primary-integration.md`](docs/design/udn-primary-integration.md).
+  (PRs #252–#256.)
+
+### Limitations
+- **Model A guests are offline-only in v1.** Live migration of a primary-UDN guest is
+  rejected at admission (the webhook parallels the VFIO gate; `mode: auto` resolves to
+  **offline**) because the primary UDN withholds the swiftletd↔swiftletd migration
+  channel from the pod (the destination pod's `eth0` is infrastructure-locked, dropping
+  pod-to-pod). `kubectl drain` still evacuates Model A guests **offline** (the target
+  acquires a fresh UDN IP). **Live migration + snapshot of Model A guests are a v2
+  track.** For IP-preserving **live** migration today, use **Model B** (a per-guest
+  secondary UDN — [`docs/networking/udn-multi-tenancy.md`](docs/networking/udn-multi-tenancy.md)).
+
+---
+
 ## [v0.4.6] — 2026-06-18
 
 Adds **OVN-Kubernetes as a second OVN CNI backend**: a guest's **primary** NIC on an
