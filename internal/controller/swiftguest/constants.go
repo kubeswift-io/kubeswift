@@ -36,6 +36,19 @@ const PodAnnotationGuestHypervisor = "kubeswift.io/guest-hypervisor"
 // exposure §4). Mapped to status.network.egress + the EgressReady condition.
 const PodAnnotationEgress = "kubeswift.io/egress-cluster-reachable"
 
+// PodAnnotationPrimaryUDNIface marks a launcher pod whose guest rides the namespace
+// primary OVN-Kubernetes UDN (Model A); the value is the in-pod UDN interface name
+// (ovn-udn1). The pod-builder stamps it. swiftletd cannot reach the apiserver from a
+// primary-UDN pod (the UDN is bridged to the guest and eth0 is infrastructure-locked),
+// so the controller derives status for these guests from the OVN annotation + launcher
+// readiness instead of swiftletd's annotations. See docs/design/udn-primary-integration.md.
+const PodAnnotationPrimaryUDNIface = "kubeswift.io/primary-udn-interface"
+
+// OVNPodNetworksAnnotation is OVN-Kubernetes' status annotation carrying each attached
+// network's IP/MAC/routes. For a Model A pod the guest's IP is the entry that is NOT
+// the cluster default network ("default", role infrastructure-locked).
+const OVNPodNetworksAnnotation = "k8s.ovn.org/pod-networks"
+
 // Mount path constants. Must match internal/runtimeintent and rust/swiftletd.
 const (
 	DisksRootPath = "/var/lib/kubeswift/disks/root"

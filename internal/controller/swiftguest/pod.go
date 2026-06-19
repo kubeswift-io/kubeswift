@@ -44,7 +44,50 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	applyFilesystems(pod, guest)
 	applyVhostUserSocketVolumes(pod, guest)
 	applyExposedPorts(pod, guest)
+	applyPrimaryUDN(pod, guest, rg)
 	return pod
+}
+
+// applyPrimaryUDN marks a Model A launcher pod (guest on the namespace primary OVN-K
+// UDN) and gives it a readiness probe so the controller can derive status without
+// swiftletd's apiserver access. swiftletd cannot reach the apiserver from a primary-UDN
+// pod (the UDN is bridged to the guest; eth0 is infrastructure-locked), so:
+//   - the marker tells the controller to derive primaryIP from the OVN annotation; and
+//   - the readiness probe (CH API socket present == CH up) drives GuestRunning via pod
+//     readiness. A service-port readiness probe (applyExposedPorts) is a stronger signal
+//     and takes precedence — the CH-socket probe is added only when none exists.
+//
+// No-op for every non-Model-A guest. Runs after applyExposedPorts so it sees that
+// probe. See docs/design/udn-primary-integration.md.
+func applyPrimaryUDN(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) {
+	udnIface := rg.GetPrimaryUDNInterface()
+	if udnIface == "" {
+		return
+	}
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[PodAnnotationPrimaryUDNIface] = udnIface
+
+	chSock := fmt.Sprintf("%s/%s-%s/ch.sock", RunDirPath, guest.Namespace, guest.Name)
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != "launcher" {
+			continue
+		}
+		if c.ReadinessProbe != nil {
+			return // service-port probe already set (stronger signal)
+		}
+		c.ReadinessProbe = &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{Command: []string{"sh", "-c", "test -S " + chSock}},
+			},
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
+			FailureThreshold:    3,
+		}
+		return
+	}
 }
 
 // applyExposedPorts declares launcher containerPorts for each spec.network.ports
