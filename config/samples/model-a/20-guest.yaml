@@ -1,0 +1,19 @@
+# A plain SwiftGuest in the primary-UDN namespace — automatically Model A (KubeSwift
+# detects the namespace label). No Model-A-specific spec is needed.
+#
+# Requires a Ready SwiftImage named `ubuntu-noble` in `tenant-a` (provide your own;
+# any modern cloud image works). The guest boots holding a native UDN IP (10.50.0.x),
+# reported in status.network.primaryIP, reachable cross-node from the same namespace.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: tenant-vm
+  namespace: tenant-a
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: model-a-small
+  seedProfileRef:
+    name: model-a-seed
+  runPolicy: Running

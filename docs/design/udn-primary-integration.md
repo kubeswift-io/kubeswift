@@ -1,9 +1,30 @@
 # Design: Model A — guest on the pod's primary OVN-Kubernetes UserDefinedNetwork
 
-> Staff-architect design doc. Status: **APPROVED — implementation arc, target v0.5.0.**
-> Builds on the spike `docs/design/udn-primary-spike.md` (gitignored) and the shipped
-> OVN-Kubernetes backend (v0.4.6, PRs #242–#249). Cluster: ntx (kubeadm + OVN-K
-> primary, identity webhook off), staged namespace `model-a`.
+> Staff-architect design doc. Status: **v1 SHIPPED in v0.5.0** (PRs #253 detect, #254
+> datapath, #255 controller-derived status, + the migration guard). Builds on the spike
+> `docs/design/udn-primary-spike.md` (gitignored) and the shipped OVN-Kubernetes backend
+> (v0.4.6, PRs #242–#249). Cluster: ntx (kubeadm + OVN-K primary, identity webhook off).
+> Operator how-to: [`docs/networking/udn-primary-tenancy.md`](../networking/udn-primary-tenancy.md).
+>
+> **v1 implementation outcome (what changed from the sections below — cluster-driven):**
+> 1. **Datapath = bridge-binding** (the VM adopts the pod's OVN-assigned IP-derived MAC +
+>    IP; `setup_primary_udn_nic`). This part matches the design. The signal moved to the
+>    intent **top level** (`primaryUDNInterface`) because `GetNICs()` emits nothing for a
+>    default guest (the common case).
+> 2. **The hard finding:** bridge-binding severs swiftletd's **apiserver access** — OVN-K
+>    infrastructure-locks `eth0` (no route to services) and the UDN is the guest's. No 2nd
+>    pod IP (OKEP-5233 is single-address) and no eth0 unlock. KubeVirt hits this too and
+>    uses a host-level `virt-handler`.
+> 3. **v1 resolution (lighter than the host-reporter sketched below):** the **controller
+>    derives status** — `primaryIP` from the pod's `k8s.ovn.org/pod-networks` annotation,
+>    `GuestRunning` from a launcher CH-socket readiness probe; swiftletd skips all apiserver
+>    calls for these guests. No host DaemonSet needed for v1.
+> 4. **Migration:** Model A guests are **offline-only** in v1 (the webhook rejects
+>    `mode: live`; `auto`→offline). Live migration + snapshot of Model A guests = **v2**
+>    (they need the swiftletd↔swiftletd channel the primary UDN withholds from the pod —
+>    the host-reporter/action-relay track).
+>
+> The numbered sections below are the ORIGINAL design; read them through the outcome above.
 
 ## 1. Goal
 
