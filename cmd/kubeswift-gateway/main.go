@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/go-logr/logr"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +34,7 @@ func main() {
 	corsOrigin := flag.String("cors-allow-origin", "*", "Access-Control-Allow-Origin for browser clients")
 	clustersNS := flag.String("clusters-namespace", clustersNamespace(), "Namespace the hub watches for fleet.kubeswift.io Cluster objects")
 	metricsAddr := flag.String("metrics-bind-address", "0", `controller-runtime metrics address ("0" disables)`)
+	authMode := flag.String("auth-mode", "insecure", `end-user auth: "token" (impersonate the user via TokenReview) or "insecure" (SA-trusted dev; no impersonation)`)
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -58,6 +62,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// End-user authentication for member impersonation (decision D1).
+	auth, err := buildAuthenticator(*authMode, cfg, log)
+	if err != nil {
+		log.Error(err, "unable to build authenticator")
+		os.Exit(1)
+	}
+
 	// The shared informer broadcaster backing ClusterService.Watch.
 	watcher := gateway.NewClusterWatcher(mgr.GetCache())
 	if err := mgr.Add(watcher); err != nil {
@@ -65,14 +76,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The per-member client pool backing the guest read plane.
+	pool := gateway.NewClientPool(mgr.GetCache(), mgr.GetClient(), *clustersNS)
+	if err := mgr.Add(pool); err != nil {
+		log.Error(err, "unable to add client pool")
+		os.Exit(1)
+	}
+
 	clusterSvc := gateway.NewClusterService(mgr.GetClient(), *clustersNS, watcher)
 	clusterPath, clusterHandler := kubeswiftv1connect.NewClusterServiceHandler(clusterSvc)
+
+	guestSvc := gateway.NewGuestService(pool, auth)
+	guestPath, guestHandler := kubeswiftv1connect.NewGuestServiceHandler(guestSvc)
+
+	// Telemetry + Console are P0 stubs (return CodeUnimplemented) so the UI can
+	// build its client against the full service set; they are implemented in P1.
+	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(kubeswiftv1connect.UnimplementedTelemetryServiceHandler{})
+	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{})
 
 	srv := &gateway.Server{
 		Addr:          *listen,
 		AllowedOrigin: *corsOrigin,
 		Handlers: []gateway.ConnectHandler{
 			{Path: clusterPath, Handler: clusterHandler},
+			{Path: guestPath, Handler: guestHandler},
+			{Path: telPath, Handler: telHandler},
+			{Path: conPath, Handler: conHandler},
 		},
 		Log: log.WithName("server"),
 	}
@@ -94,4 +123,23 @@ func clustersNamespace() string {
 		return ns
 	}
 	return defaultClustersNamespace
+}
+
+// buildAuthenticator selects the end-user auth strategy (decision D1).
+// "token" impersonates the bearer-token user (validated via the hub's
+// TokenReview); "insecure" is the SA-trusted dev stub with no impersonation.
+func buildAuthenticator(mode string, cfg *rest.Config, log logr.Logger) (gateway.Authenticator, error) {
+	switch mode {
+	case "token":
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return gateway.NewTokenReviewAuthenticator(cs.AuthenticationV1().TokenReviews()), nil
+	case "insecure":
+		log.Info("auth-mode=insecure: member queries run as the gateway credential (no per-user impersonation)")
+		return gateway.NewInsecureAuthenticator(), nil
+	default:
+		return nil, fmt.Errorf("unknown auth-mode %q (want token|insecure)", mode)
+	}
 }
