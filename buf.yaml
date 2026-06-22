@@ -6,9 +6,12 @@ lint:
     - STANDARD
   except:
     # Streaming RPCs return a shared event message (ClusterEvent / GuestEvent /
-    # VMMetricSample), which is idiomatic for Connect watch streams but trips
-    # the "<Method>Response" / unique-message rules. Intentionally relaxed.
+    # VMMetricSample), and the lifecycle actions share one GuestActionRequest /
+    # GuestActionResponse — both idiomatic for this hand-shaped API but trip the
+    # per-method "<Method>Request"/"<Method>Response"/unique-message rules.
+    # Intentionally relaxed.
     - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_REQUEST_STANDARD_NAME
     - RPC_RESPONSE_STANDARD_NAME
 breaking:
   use:

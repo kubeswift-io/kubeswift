@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -10,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
@@ -193,6 +195,44 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&kubeswiftv1.GetGuestDetailResponse{Guest: guestToProto(ref.GetCluster(), g)}), nil
+}
+
+// StartGuest sets the guest's runPolicy to Running; StopGuest sets it to
+// Stopped. Both patch spec.runPolicy via the impersonating dynamic client, so
+// the member cluster's RBAC authorizes the end user (decision D1). The
+// controller acts on the change and the live Watch reflects the new phase.
+func (s *GuestService) StartGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
+	return s.setRunPolicy(ctx, req, "Running")
+}
+
+func (s *GuestService) StopGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
+	return s.setRunPolicy(ctx, req, "Stopped")
+}
+
+func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest], policy string) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	ref := req.Msg.GetRef()
+	if ref == nil || ref.GetCluster() == "" || ref.GetName() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("ref.cluster and ref.name are required"))
+	}
+	dyn, err := s.pool.DynamicFor(ref.GetCluster(), id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	patch := []byte(fmt.Sprintf(`{"spec":{"runPolicy":%q}}`, policy))
+	u, err := dyn.Resource(swiftGuestGVR).Namespace(ref.GetNamespace()).
+		Patch(ctx, ref.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	g, err := toSwiftGuest(u)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&kubeswiftv1.GuestActionResponse{Guest: guestToProto(ref.GetCluster(), g)}), nil
 }
 
 // targetClusters resolves the selector against the registered members. An empty

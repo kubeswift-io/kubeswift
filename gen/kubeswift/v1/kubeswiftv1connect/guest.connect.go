@@ -41,6 +41,10 @@ const (
 	// GuestServiceGetGuestDetailProcedure is the fully-qualified name of the GuestService's
 	// GetGuestDetail RPC.
 	GuestServiceGetGuestDetailProcedure = "/kubeswift.v1.GuestService/GetGuestDetail"
+	// GuestServiceStartGuestProcedure is the fully-qualified name of the GuestService's StartGuest RPC.
+	GuestServiceStartGuestProcedure = "/kubeswift.v1.GuestService/StartGuest"
+	// GuestServiceStopGuestProcedure is the fully-qualified name of the GuestService's StopGuest RPC.
+	GuestServiceStopGuestProcedure = "/kubeswift.v1.GuestService/StopGuest"
 )
 
 // GuestServiceClient is a client for the kubeswift.v1.GuestService service.
@@ -48,6 +52,11 @@ type GuestServiceClient interface {
 	ListGuests(context.Context, *connect.Request[v1.ListGuestsRequest]) (*connect.Response[v1.ListGuestsResponse], error)
 	WatchGuests(context.Context, *connect.Request[v1.WatchGuestsRequest]) (*connect.ServerStreamForClient[v1.GuestEvent], error)
 	GetGuestDetail(context.Context, *connect.Request[v1.GetGuestDetailRequest]) (*connect.Response[v1.GetGuestDetailResponse], error)
+	// Lifecycle (write plane, P1): patch the guest's runPolicy — StartGuest sets
+	// Running, StopGuest sets Stopped. The impersonated user (decision D1) must
+	// be allowed to patch swiftguests on the target member cluster.
+	StartGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
+	StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
 }
 
 // NewGuestServiceClient constructs a client for the kubeswift.v1.GuestService service. By default,
@@ -79,6 +88,18 @@ func NewGuestServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(guestServiceMethods.ByName("GetGuestDetail")),
 			connect.WithClientOptions(opts...),
 		),
+		startGuest: connect.NewClient[v1.GuestActionRequest, v1.GuestActionResponse](
+			httpClient,
+			baseURL+GuestServiceStartGuestProcedure,
+			connect.WithSchema(guestServiceMethods.ByName("StartGuest")),
+			connect.WithClientOptions(opts...),
+		),
+		stopGuest: connect.NewClient[v1.GuestActionRequest, v1.GuestActionResponse](
+			httpClient,
+			baseURL+GuestServiceStopGuestProcedure,
+			connect.WithSchema(guestServiceMethods.ByName("StopGuest")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -87,6 +108,8 @@ type guestServiceClient struct {
 	listGuests     *connect.Client[v1.ListGuestsRequest, v1.ListGuestsResponse]
 	watchGuests    *connect.Client[v1.WatchGuestsRequest, v1.GuestEvent]
 	getGuestDetail *connect.Client[v1.GetGuestDetailRequest, v1.GetGuestDetailResponse]
+	startGuest     *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
+	stopGuest      *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
 }
 
 // ListGuests calls kubeswift.v1.GuestService.ListGuests.
@@ -104,11 +127,26 @@ func (c *guestServiceClient) GetGuestDetail(ctx context.Context, req *connect.Re
 	return c.getGuestDetail.CallUnary(ctx, req)
 }
 
+// StartGuest calls kubeswift.v1.GuestService.StartGuest.
+func (c *guestServiceClient) StartGuest(ctx context.Context, req *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error) {
+	return c.startGuest.CallUnary(ctx, req)
+}
+
+// StopGuest calls kubeswift.v1.GuestService.StopGuest.
+func (c *guestServiceClient) StopGuest(ctx context.Context, req *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error) {
+	return c.stopGuest.CallUnary(ctx, req)
+}
+
 // GuestServiceHandler is an implementation of the kubeswift.v1.GuestService service.
 type GuestServiceHandler interface {
 	ListGuests(context.Context, *connect.Request[v1.ListGuestsRequest]) (*connect.Response[v1.ListGuestsResponse], error)
 	WatchGuests(context.Context, *connect.Request[v1.WatchGuestsRequest], *connect.ServerStream[v1.GuestEvent]) error
 	GetGuestDetail(context.Context, *connect.Request[v1.GetGuestDetailRequest]) (*connect.Response[v1.GetGuestDetailResponse], error)
+	// Lifecycle (write plane, P1): patch the guest's runPolicy — StartGuest sets
+	// Running, StopGuest sets Stopped. The impersonated user (decision D1) must
+	// be allowed to patch swiftguests on the target member cluster.
+	StartGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
+	StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
 }
 
 // NewGuestServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -136,6 +174,18 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(guestServiceMethods.ByName("GetGuestDetail")),
 		connect.WithHandlerOptions(opts...),
 	)
+	guestServiceStartGuestHandler := connect.NewUnaryHandler(
+		GuestServiceStartGuestProcedure,
+		svc.StartGuest,
+		connect.WithSchema(guestServiceMethods.ByName("StartGuest")),
+		connect.WithHandlerOptions(opts...),
+	)
+	guestServiceStopGuestHandler := connect.NewUnaryHandler(
+		GuestServiceStopGuestProcedure,
+		svc.StopGuest,
+		connect.WithSchema(guestServiceMethods.ByName("StopGuest")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.GuestService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GuestServiceListGuestsProcedure:
@@ -144,6 +194,10 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 			guestServiceWatchGuestsHandler.ServeHTTP(w, r)
 		case GuestServiceGetGuestDetailProcedure:
 			guestServiceGetGuestDetailHandler.ServeHTTP(w, r)
+		case GuestServiceStartGuestProcedure:
+			guestServiceStartGuestHandler.ServeHTTP(w, r)
+		case GuestServiceStopGuestProcedure:
+			guestServiceStopGuestHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -163,4 +217,12 @@ func (UnimplementedGuestServiceHandler) WatchGuests(context.Context, *connect.Re
 
 func (UnimplementedGuestServiceHandler) GetGuestDetail(context.Context, *connect.Request[v1.GetGuestDetailRequest]) (*connect.Response[v1.GetGuestDetailResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.GetGuestDetail is not implemented"))
+}
+
+func (UnimplementedGuestServiceHandler) StartGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.StartGuest is not implemented"))
+}
+
+func (UnimplementedGuestServiceHandler) StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.StopGuest is not implemented"))
 }

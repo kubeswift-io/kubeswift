@@ -45,6 +45,12 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests", "swiftguestclasses", "swiftguestpools"]
     verbs: ["get", "list", "watch"]
+  # Lifecycle write actions (UI Start/Stop) patch swiftguests.spec.runPolicy.
+  # Grant patch to the subjects you want to be able to act; drop this rule for
+  # a strictly read-only audience.
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests"]
+    verbs: ["update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
