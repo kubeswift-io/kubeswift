@@ -172,6 +172,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push kubeswift-gateway
+        id: build-gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/kubeswift-gateway/Containerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/kubeswift-gateway:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -192,6 +210,7 @@ jobs:
           cosign sign "${{ env.IMAGE_PREFIX }}/kubeswift-dra-driver@${{ steps.build-dra-driver.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/kubeswift-gateway@${{ steps.build-gateway.outputs.digest }}"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4

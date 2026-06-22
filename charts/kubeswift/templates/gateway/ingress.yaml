@@ -1,0 +1,38 @@
+{{- if and .Values.gateway.enabled .Values.gateway.ingress.enabled }}
+# Optional Ingress. The gateway serves Connect/gRPC-Web over h2c (cleartext
+# HTTP/2); terminate TLS at the ingress. For gRPC-Web streaming, the ingress
+# controller must allow HTTP/2 to the backend (e.g. nginx:
+# nginx.ingress.kubernetes.io/backend-protocol: "GRPC", or GCE/Contour
+# equivalents) — set via gateway.ingress.annotations.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+  {{- with .Values.gateway.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.gateway.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.gateway.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kubeswift-gateway
+                port:
+                  name: http
+  {{- with .Values.gateway.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

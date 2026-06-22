@@ -149,6 +149,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push kubeswift-gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/kubeswift-gateway/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/kubeswift-gateway:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:

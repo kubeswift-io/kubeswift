@@ -1,0 +1,62 @@
+# Apply on each MEMBER cluster (NOT the hub). Grants the gateway's member
+# credential the rights it needs for auth-mode=token: impersonate end users +
+# read the fleet's VMs as them. Bind your real users/groups (from your IdP) to
+# the reader role separately.
+#
+# Assumes the member credential authenticates as the ServiceAccount
+# `kubeswift-gateway` in `kubeswift-system` — adjust to match your kubeconfig.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-gateway
+  namespace: kubeswift-system
+---
+# 1) Let the member credential impersonate end users + groups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-impersonator
+rules:
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-impersonator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-impersonator
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: kubeswift-system
+---
+# 2) A read-only VM role to bind your IMPERSONATED users/groups to (so the UI
+#    can list their VMs). Bind real subjects from your IdP — this sample binds
+#    an example group.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-vm-reader
+rules:
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests", "swiftguestclasses", "swiftguestpools"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-vm-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-vm-reader
+subjects:
+  # Replace with the real users/groups your IdP issues (the subjects the
+  # gateway impersonates). Example:
+  - kind: Group
+    name: kubeswift-operators
+    apiGroup: rbac.authorization.k8s.io

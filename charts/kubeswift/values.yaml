@@ -102,6 +102,47 @@ dra:
       cpu: 100m
       memory: 128Mi
 
+# UI backend gateway (the browser-facing Connect hub for a separate kubeswift-ui
+# app). Opt-in. Runs in a hub cluster, watches fleet.kubeswift.io Cluster
+# objects, and fans the read plane across the registered member clusters.
+# See docs/ui/gateway.md and docs/design/ui-backend-enablement.md.
+gateway:
+  enabled: false
+  image:
+    registry: ghcr.io/projectbeskar/kubeswift
+    # Same as controllerManager; use tag: latest for local build+load.
+    tag: latest
+  replicas: 1
+  port: 8080
+  # End-user auth (decision D1):
+  #   token    - impersonate the bearer-token user via the hub's TokenReview
+  #              (production). The fleet should share an OIDC identity provider
+  #              so the impersonated subject authorizes uniformly on each member.
+  #   insecure - member queries run as the gateway's own credential, with NO
+  #              per-user impersonation. DEV/LAB ONLY: every UI user inherits
+  #              whatever the member credentials grant. Do not use in production.
+  authMode: insecure
+  # Browser origin allowed to call the Connect/gRPC-Web surface (the kubeswift-ui
+  # app's origin). "*" is acceptable for a token-auth API (no cookies); pin it
+  # for a hardened install.
+  corsAllowOrigin: "*"
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: false
+    className: ""
+    host: kubeswift-gateway.example.com
+    annotations: {}
+    tls: []
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 # Admission webhooks (optional). Requires cert-manager. When enabled, controller-manager runs with --webhook-enabled=true.
 webhook:
   enabled: false

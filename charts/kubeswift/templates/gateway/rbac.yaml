@@ -1,0 +1,83 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+---
+# Hub-namespace permissions: read the fleet registry + its credential Secrets,
+# and write Cluster status. Namespaced because a Cluster and its credential
+# Secret live in the gateway's namespace (the Cluster API model).
+#
+# NOTE: the hub does NOT need the `impersonate` verb. Impersonation happens
+# against MEMBER clusters using each member's own credential; that credential
+# (in the Secret) must carry impersonate rights on its member cluster. See
+# docs/ui/gateway.md.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+rules:
+  - apiGroups: ["fleet.kubeswift.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["fleet.kubeswift.io"]
+    resources: ["clusters/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kubeswift-gateway
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+---
+# Cluster-scoped: validate end-user bearer tokens (auth-mode=token).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+{{- end }}

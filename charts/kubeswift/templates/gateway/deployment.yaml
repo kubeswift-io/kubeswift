@@ -1,0 +1,69 @@
+{{- if .Values.gateway.enabled }}
+# kubeswift-gateway: the browser-facing Connect hub for the KubeSwift UI. Runs
+# in this (hub) cluster, watches fleet.kubeswift.io Cluster objects, and fans
+# the read plane out across the registered member clusters. See
+# docs/ui/gateway.md and docs/design/ui-backend-enablement.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: kubeswift-gateway
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: {{ .Values.gateway.image.registry }}/kubeswift-gateway:{{ include "kubeswift.imageTag" (dict "tag" .Values.gateway.image.tag "appVersion" .Chart.AppVersion) }}
+          args:
+            - --listen=:{{ .Values.gateway.port }}
+            - --clusters-namespace={{ .Values.namespace }}
+            - --auth-mode={{ .Values.gateway.authMode }}
+            - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.port }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            # /readyz answers only once the manager's cache has synced and the
+            # server is listening, so readiness reflects "able to serve".
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+{{- end }}
