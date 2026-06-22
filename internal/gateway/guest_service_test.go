@@ -121,3 +121,24 @@ func TestGuestService_TargetClusters(t *testing.T) {
 		t.Errorf("subset should intersect registered members: %v", sub)
 	}
 }
+
+func TestGuestService_StartStopGuest(t *testing.T) {
+	boba := fakeDyn(uGuest("default", "vm-a", "Running"))
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+	ref := &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"}
+
+	start, err := svc.StartGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{Ref: ref}))
+	if err != nil {
+		t.Fatalf("StartGuest: %v", err)
+	}
+	if start.Msg.Guest.GetRef().GetName() != "vm-a" {
+		t.Errorf("StartGuest returned %+v", start.Msg.Guest)
+	}
+	if _, err := svc.StopGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{Ref: ref})); err != nil {
+		t.Fatalf("StopGuest: %v", err)
+	}
+	// A missing ref is rejected, not silently a no-op.
+	if _, err := svc.StartGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{})); err == nil {
+		t.Error("StartGuest with no ref should be InvalidArgument")
+	}
+}

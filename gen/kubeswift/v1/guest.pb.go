@@ -511,6 +511,98 @@ func (x *GetGuestDetailResponse) GetGuest() *Guest {
 	return nil
 }
 
+// GuestActionRequest identifies the target VM for a lifecycle action.
+type GuestActionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ref           *ObjectRef             `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestActionRequest) Reset() {
+	*x = GuestActionRequest{}
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestActionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestActionRequest) ProtoMessage() {}
+
+func (x *GuestActionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestActionRequest.ProtoReflect.Descriptor instead.
+func (*GuestActionRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GuestActionRequest) GetRef() *ObjectRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+// GuestActionResponse returns the guest immediately after the action is
+// applied; its phase catches up asynchronously (the controller acts on the
+// runPolicy change), which the live Watch reflects.
+type GuestActionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Guest         *Guest                 `protobuf:"bytes,1,opt,name=guest,proto3" json:"guest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestActionResponse) Reset() {
+	*x = GuestActionResponse{}
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestActionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestActionResponse) ProtoMessage() {}
+
+func (x *GuestActionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestActionResponse.ProtoReflect.Descriptor instead.
+func (*GuestActionResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GuestActionResponse) GetGuest() *Guest {
+	if x != nil {
+		return x.Guest
+	}
+	return nil
+}
+
 var File_kubeswift_v1_guest_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_guest_proto_rawDesc = "" +
@@ -563,12 +655,19 @@ const file_kubeswift_v1_guest_proto_rawDesc = "" +
 	"\x15GetGuestDetailRequest\x12)\n" +
 	"\x03ref\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x03ref\"C\n" +
 	"\x16GetGuestDetailResponse\x12)\n" +
-	"\x05guest\x18\x01 \x01(\v2\x13.kubeswift.v1.GuestR\x05guest2\x89\x02\n" +
+	"\x05guest\x18\x01 \x01(\v2\x13.kubeswift.v1.GuestR\x05guest\"?\n" +
+	"\x12GuestActionRequest\x12)\n" +
+	"\x03ref\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x03ref\"@\n" +
+	"\x13GuestActionResponse\x12)\n" +
+	"\x05guest\x18\x01 \x01(\v2\x13.kubeswift.v1.GuestR\x05guest2\xae\x03\n" +
 	"\fGuestService\x12O\n" +
 	"\n" +
 	"ListGuests\x12\x1f.kubeswift.v1.ListGuestsRequest\x1a .kubeswift.v1.ListGuestsResponse\x12K\n" +
 	"\vWatchGuests\x12 .kubeswift.v1.WatchGuestsRequest\x1a\x18.kubeswift.v1.GuestEvent0\x01\x12[\n" +
-	"\x0eGetGuestDetail\x12#.kubeswift.v1.GetGuestDetailRequest\x1a$.kubeswift.v1.GetGuestDetailResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eGetGuestDetail\x12#.kubeswift.v1.GetGuestDetailRequest\x1a$.kubeswift.v1.GetGuestDetailResponse\x12Q\n" +
+	"\n" +
+	"StartGuest\x12 .kubeswift.v1.GuestActionRequest\x1a!.kubeswift.v1.GuestActionResponse\x12P\n" +
+	"\tStopGuest\x12 .kubeswift.v1.GuestActionRequest\x1a!.kubeswift.v1.GuestActionResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_guest_proto_rawDescOnce sync.Once
@@ -582,7 +681,7 @@ func file_kubeswift_v1_guest_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_guest_proto_rawDescData
 }
 
-var file_kubeswift_v1_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_kubeswift_v1_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_kubeswift_v1_guest_proto_goTypes = []any{
 	(*Guest)(nil),                  // 0: kubeswift.v1.Guest
 	(*ListGuestsRequest)(nil),      // 1: kubeswift.v1.ListGuestsRequest
@@ -591,43 +690,51 @@ var file_kubeswift_v1_guest_proto_goTypes = []any{
 	(*GuestEvent)(nil),             // 4: kubeswift.v1.GuestEvent
 	(*GetGuestDetailRequest)(nil),  // 5: kubeswift.v1.GetGuestDetailRequest
 	(*GetGuestDetailResponse)(nil), // 6: kubeswift.v1.GetGuestDetailResponse
-	nil,                            // 7: kubeswift.v1.Guest.LabelsEntry
-	(*ObjectRef)(nil),              // 8: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
-	(*Condition)(nil),              // 10: kubeswift.v1.Condition
-	(*ClusterSelector)(nil),        // 11: kubeswift.v1.ClusterSelector
-	(*PageRequest)(nil),            // 12: kubeswift.v1.PageRequest
-	(*PageResponse)(nil),           // 13: kubeswift.v1.PageResponse
-	(*ClusterError)(nil),           // 14: kubeswift.v1.ClusterError
-	(EventType)(0),                 // 15: kubeswift.v1.EventType
+	(*GuestActionRequest)(nil),     // 7: kubeswift.v1.GuestActionRequest
+	(*GuestActionResponse)(nil),    // 8: kubeswift.v1.GuestActionResponse
+	nil,                            // 9: kubeswift.v1.Guest.LabelsEntry
+	(*ObjectRef)(nil),              // 10: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),  // 11: google.protobuf.Timestamp
+	(*Condition)(nil),              // 12: kubeswift.v1.Condition
+	(*ClusterSelector)(nil),        // 13: kubeswift.v1.ClusterSelector
+	(*PageRequest)(nil),            // 14: kubeswift.v1.PageRequest
+	(*PageResponse)(nil),           // 15: kubeswift.v1.PageResponse
+	(*ClusterError)(nil),           // 16: kubeswift.v1.ClusterError
+	(EventType)(0),                 // 17: kubeswift.v1.EventType
 }
 var file_kubeswift_v1_guest_proto_depIdxs = []int32{
-	8,  // 0: kubeswift.v1.Guest.ref:type_name -> kubeswift.v1.ObjectRef
-	9,  // 1: kubeswift.v1.Guest.created_at:type_name -> google.protobuf.Timestamp
-	10, // 2: kubeswift.v1.Guest.conditions:type_name -> kubeswift.v1.Condition
-	7,  // 3: kubeswift.v1.Guest.labels:type_name -> kubeswift.v1.Guest.LabelsEntry
-	11, // 4: kubeswift.v1.ListGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
-	12, // 5: kubeswift.v1.ListGuestsRequest.page:type_name -> kubeswift.v1.PageRequest
+	10, // 0: kubeswift.v1.Guest.ref:type_name -> kubeswift.v1.ObjectRef
+	11, // 1: kubeswift.v1.Guest.created_at:type_name -> google.protobuf.Timestamp
+	12, // 2: kubeswift.v1.Guest.conditions:type_name -> kubeswift.v1.Condition
+	9,  // 3: kubeswift.v1.Guest.labels:type_name -> kubeswift.v1.Guest.LabelsEntry
+	13, // 4: kubeswift.v1.ListGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	14, // 5: kubeswift.v1.ListGuestsRequest.page:type_name -> kubeswift.v1.PageRequest
 	0,  // 6: kubeswift.v1.ListGuestsResponse.guests:type_name -> kubeswift.v1.Guest
-	13, // 7: kubeswift.v1.ListGuestsResponse.page:type_name -> kubeswift.v1.PageResponse
-	14, // 8: kubeswift.v1.ListGuestsResponse.errors:type_name -> kubeswift.v1.ClusterError
-	11, // 9: kubeswift.v1.WatchGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
-	15, // 10: kubeswift.v1.GuestEvent.type:type_name -> kubeswift.v1.EventType
+	15, // 7: kubeswift.v1.ListGuestsResponse.page:type_name -> kubeswift.v1.PageResponse
+	16, // 8: kubeswift.v1.ListGuestsResponse.errors:type_name -> kubeswift.v1.ClusterError
+	13, // 9: kubeswift.v1.WatchGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	17, // 10: kubeswift.v1.GuestEvent.type:type_name -> kubeswift.v1.EventType
 	0,  // 11: kubeswift.v1.GuestEvent.guest:type_name -> kubeswift.v1.Guest
-	14, // 12: kubeswift.v1.GuestEvent.error:type_name -> kubeswift.v1.ClusterError
-	8,  // 13: kubeswift.v1.GetGuestDetailRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	16, // 12: kubeswift.v1.GuestEvent.error:type_name -> kubeswift.v1.ClusterError
+	10, // 13: kubeswift.v1.GetGuestDetailRequest.ref:type_name -> kubeswift.v1.ObjectRef
 	0,  // 14: kubeswift.v1.GetGuestDetailResponse.guest:type_name -> kubeswift.v1.Guest
-	1,  // 15: kubeswift.v1.GuestService.ListGuests:input_type -> kubeswift.v1.ListGuestsRequest
-	3,  // 16: kubeswift.v1.GuestService.WatchGuests:input_type -> kubeswift.v1.WatchGuestsRequest
-	5,  // 17: kubeswift.v1.GuestService.GetGuestDetail:input_type -> kubeswift.v1.GetGuestDetailRequest
-	2,  // 18: kubeswift.v1.GuestService.ListGuests:output_type -> kubeswift.v1.ListGuestsResponse
-	4,  // 19: kubeswift.v1.GuestService.WatchGuests:output_type -> kubeswift.v1.GuestEvent
-	6,  // 20: kubeswift.v1.GuestService.GetGuestDetail:output_type -> kubeswift.v1.GetGuestDetailResponse
-	18, // [18:21] is the sub-list for method output_type
-	15, // [15:18] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	10, // 15: kubeswift.v1.GuestActionRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	0,  // 16: kubeswift.v1.GuestActionResponse.guest:type_name -> kubeswift.v1.Guest
+	1,  // 17: kubeswift.v1.GuestService.ListGuests:input_type -> kubeswift.v1.ListGuestsRequest
+	3,  // 18: kubeswift.v1.GuestService.WatchGuests:input_type -> kubeswift.v1.WatchGuestsRequest
+	5,  // 19: kubeswift.v1.GuestService.GetGuestDetail:input_type -> kubeswift.v1.GetGuestDetailRequest
+	7,  // 20: kubeswift.v1.GuestService.StartGuest:input_type -> kubeswift.v1.GuestActionRequest
+	7,  // 21: kubeswift.v1.GuestService.StopGuest:input_type -> kubeswift.v1.GuestActionRequest
+	2,  // 22: kubeswift.v1.GuestService.ListGuests:output_type -> kubeswift.v1.ListGuestsResponse
+	4,  // 23: kubeswift.v1.GuestService.WatchGuests:output_type -> kubeswift.v1.GuestEvent
+	6,  // 24: kubeswift.v1.GuestService.GetGuestDetail:output_type -> kubeswift.v1.GetGuestDetailResponse
+	8,  // 25: kubeswift.v1.GuestService.StartGuest:output_type -> kubeswift.v1.GuestActionResponse
+	8,  // 26: kubeswift.v1.GuestService.StopGuest:output_type -> kubeswift.v1.GuestActionResponse
+	22, // [22:27] is the sub-list for method output_type
+	17, // [17:22] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_guest_proto_init() }
@@ -642,7 +749,7 @@ func file_kubeswift_v1_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_guest_proto_rawDesc), len(file_kubeswift_v1_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

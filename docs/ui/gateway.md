@@ -142,7 +142,13 @@ In `insecure` mode these work with no token; in `token` mode add
   highest-value target. Restrict who can read Secrets in the gateway namespace,
   scope each member credential to the least privilege the UI needs, and rotate.
 - **`insecure` mode is a footgun** — it bypasses per-user authorization. The
-  gateway logs a warning at startup when it is on.
+  gateway logs a warning at startup when it is on. Note the **write actions**
+  below make this sharper: in `insecure` mode every UI user can start/stop VMs.
+- **Write actions** — `GuestService.StartGuest`/`StopGuest` patch
+  `swiftguests.spec.runPolicy` on the target member, as the impersonated user.
+  The acting subject therefore needs `patch` on `swiftguests` there (see
+  `config/samples/gateway/member-rbac.yaml`); a read-only audience gets a clean
+  permission denial. In `token` mode the member's RBAC gates who can act.
 - **CORS** defaults to `*` (safe for a token-auth API with no cookies); pin
   `gateway.corsAllowOrigin` to the UI origin for a hardened install.
 
