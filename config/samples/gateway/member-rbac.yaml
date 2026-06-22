@@ -46,11 +46,17 @@ rules:
     resources: ["swiftguests", "swiftguestclasses", "swiftguestpools"]
     verbs: ["get", "list", "watch"]
   # Lifecycle write actions (UI Start/Stop) patch swiftguests.spec.runPolicy.
-  # Grant patch to the subjects you want to be able to act; drop this rule for
+  # Grant these to the subjects you want to be able to act; drop both rules for
   # a strictly read-only audience.
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests"]
     verbs: ["update", "patch"]
+  # StopGuest also DELETES the launcher pod — the SwiftGuest stop guard is
+  # reactive (it blocks recreation, it does not stop a running VM), so a
+  # runPolicy patch alone would leave the guest running.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

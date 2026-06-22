@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	connect "connectrpc.com/connect"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -199,17 +200,23 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 
 // StartGuest sets the guest's runPolicy to Running; StopGuest sets it to
 // Stopped. Both patch spec.runPolicy via the impersonating dynamic client, so
-// the member cluster's RBAC authorizes the end user (decision D1). The
-// controller acts on the change and the live Watch reflects the new phase.
+// the member cluster's RBAC authorizes the end user (decision D1).
+//
+// StopGuest ALSO deletes the launcher pod: the SwiftGuest stop guard is
+// reactive — it prevents pod *recreation*, it does not stop a running VM — so a
+// runPolicy patch alone leaves the guest running (verified on-cluster). Deleting
+// the pod triggers swiftletd's graceful SIGTERM shutdown; the guard then keeps
+// it stopped. StartGuest needs no pod action — the controller recreates the pod
+// once runPolicy is Running. The live Watch reflects the resulting phase.
 func (s *GuestService) StartGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
-	return s.setRunPolicy(ctx, req, "Running")
+	return s.setRunPolicy(ctx, req, "Running", false)
 }
 
 func (s *GuestService) StopGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
-	return s.setRunPolicy(ctx, req, "Stopped")
+	return s.setRunPolicy(ctx, req, "Stopped", true)
 }
 
-func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest], policy string) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
+func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest], policy string, deleteLauncher bool) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
 	id, err := s.auth.Authenticate(ctx, req.Header())
 	if err != nil {
 		return nil, err
@@ -228,11 +235,35 @@ func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[ku
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	if deleteLauncher {
+		if err := s.deleteLauncherPods(ctx, dyn, ref); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("runPolicy patched but stopping the VM (pod delete) failed: %w", err))
+		}
+	}
 	g, err := toSwiftGuest(u)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&kubeswiftv1.GuestActionResponse{Guest: guestToProto(ref.GetCluster(), g)}), nil
+}
+
+// deleteLauncherPods deletes the guest's launcher pod(s), selected by the guest
+// label (robust to the <guest>-mig-<uid> rename after a live migration). A
+// pod that is already gone is success — the VM is already stopped.
+func (s *GuestService) deleteLauncherPods(ctx context.Context, dyn dynamic.Interface, ref *kubeswiftv1.ObjectRef) error {
+	pods, err := dyn.Resource(podGVR).Namespace(ref.GetNamespace()).
+		List(ctx, metav1.ListOptions{LabelSelector: guestPodLabel + "=" + ref.GetName()})
+	if err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		name := pods.Items[i].GetName()
+		if err := dyn.Resource(podGVR).Namespace(ref.GetNamespace()).
+			Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // targetClusters resolves the selector against the registered members. An empty

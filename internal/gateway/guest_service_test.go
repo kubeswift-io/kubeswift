@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	connect "connectrpc.com/connect"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -56,13 +57,27 @@ func uGuest(ns, name, phase string) *unstructured.Unstructured {
 	}}
 }
 
+func uPod(ns, name, guest string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata": map[string]interface{}{
+			"namespace": ns, "name": name,
+			"labels": map[string]interface{}{guestPodLabel: guest},
+		},
+	}}
+}
+
 func fakeDyn(objs ...*unstructured.Unstructured) dynamic.Interface {
 	ro := make([]runtime.Object, len(objs))
 	for i, o := range objs {
 		ro[i] = o
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{swiftGuestGVR: "SwiftGuestList"}, ro...)
+		map[schema.GroupVersionResource]string{
+			swiftGuestGVR: "SwiftGuestList",
+			podGVR:        "PodList",
+		}, ro...)
 }
 
 func TestGuestService_ListGuests_FanOutMergeAndPartialError(t *testing.T) {
@@ -123,9 +138,13 @@ func TestGuestService_TargetClusters(t *testing.T) {
 }
 
 func TestGuestService_StartStopGuest(t *testing.T) {
-	boba := fakeDyn(uGuest("default", "vm-a", "Running"))
+	boba := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
 	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
 	ref := &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"}
+	podCount := func() int {
+		l, _ := boba.Resource(podGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
+		return len(l.Items)
+	}
 
 	start, err := svc.StartGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{Ref: ref}))
 	if err != nil {
@@ -134,9 +153,21 @@ func TestGuestService_StartStopGuest(t *testing.T) {
 	if start.Msg.Guest.GetRef().GetName() != "vm-a" {
 		t.Errorf("StartGuest returned %+v", start.Msg.Guest)
 	}
+	// StartGuest must NOT delete the launcher pod (the controller recreates a
+	// stopped one; a running one keeps running).
+	if got := podCount(); got != 1 {
+		t.Errorf("StartGuest left %d launcher pods, want 1", got)
+	}
+
 	if _, err := svc.StopGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{Ref: ref})); err != nil {
 		t.Fatalf("StopGuest: %v", err)
 	}
+	// StopGuest must delete the launcher pod — the stop guard is reactive only,
+	// so a runPolicy patch alone would leave the VM running.
+	if got := podCount(); got != 0 {
+		t.Errorf("StopGuest left %d launcher pods, want 0", got)
+	}
+
 	// A missing ref is rejected, not silently a no-op.
 	if _, err := svc.StartGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{})); err == nil {
 		t.Error("StartGuest with no ref should be InvalidArgument")
