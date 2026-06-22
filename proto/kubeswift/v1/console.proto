@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// OpenConsoleRequest negotiates a serial console session for a guest. The
+// actual byte stream rides a raw WebSocket (xterm.js), not Connect; this RPC
+// authorizes the session and returns where to dial. The gateway routes to the
+// guest's member cluster and bridges to swiftletd's serial port, falling back
+// to exec-pipe until that port lands (decision D5). Stubbed in P0.
+message OpenConsoleRequest {
+  ObjectRef guest = 1;
+}
+
+message OpenConsoleResponse {
+  // websocket_url is where the browser dials for the raw serial byte stream.
+  string websocket_url = 1;
+  // session_token is a short-lived credential authorizing the WS upgrade.
+  string session_token = 2;
+}
+
+// ConsoleService brokers interactive guest consoles (decision D5).
+service ConsoleService {
+  rpc OpenConsole(OpenConsoleRequest) returns (OpenConsoleResponse);
+}

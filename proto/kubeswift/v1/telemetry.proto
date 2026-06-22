@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// StreamVMMetricsRequest asks for a live metric stream for one guest. The
+// gateway resolves the guest's member cluster (ref.cluster), queries that
+// member's Prometheus, and joins on the swift.kubeswift.io/guest label
+// (decision D4). Stubbed in P0; implemented in P1.
+message StreamVMMetricsRequest {
+  ObjectRef guest = 1;
+  // metrics names the series the UI charts (e.g. "cpu", "mem", "disk_io",
+  // "net"); empty requests a default set.
+  repeated string metrics = 2;
+}
+
+// VMMetricSample is one point on one series, tagged with its cluster.
+message VMMetricSample {
+  string cluster = 1;
+  string metric = 2;
+  double value = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// TelemetryService streams per-VM telemetry sourced from each member's
+// Prometheus (cAdvisor today, O5 swiftletd vm.counters in v2 — decision D4).
+service TelemetryService {
+  rpc StreamVMMetrics(StreamVMMetricsRequest) returns (stream VMMetricSample);
+}

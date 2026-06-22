@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Condition is a Kubernetes status condition flattened for the UI.
+message Condition {
+  string type = 1;
+  // status is "True" | "False" | "Unknown".
+  string status = 2;
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
+// ObjectRef identifies a namespaced object within a member cluster. The
+// `cluster` dimension is present on every resource the gateway returns
+// because the hub aggregates across the whole fleet (decision D2).
+message ObjectRef {
+  // cluster is the fleet member name (a fleet.kubeswift.io/v1alpha1 Cluster).
+  string cluster = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ClusterSelector chooses which member clusters an RPC fans out to. An empty
+// selector (or all_clusters=true) targets the entire fleet; otherwise only the
+// named clusters are queried.
+message ClusterSelector {
+  repeated string clusters = 1;
+  bool all_clusters = 2;
+}
+
+// PageRequest carries server-side pagination. The UI virtual-scrolls a paged,
+// filtered server view rather than loading the whole fleet. page_token is an
+// opaque cursor the gateway encodes across the per-cluster continue tokens.
+message PageRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+// PageResponse returns the cursor for the next page.
+message PageResponse {
+  string next_page_token = 1;
+  // remaining is a best-effort count of items still to come, or -1 if unknown.
+  int32 remaining = 2;
+}
+
+// ClusterError reports a per-member failure so a partial-fleet response can
+// surface which clusters failed, instead of failing the whole-fleet query
+// (the no-silent-failures rule applied to fan-out).
+message ClusterError {
+  string cluster = 1;
+  string message = 2;
+}
+
+// EventType classifies a streamed watch update.
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_ADDED = 1;
+  EVENT_TYPE_MODIFIED = 2;
+  EVENT_TYPE_DELETED = 3;
+  // EVENT_TYPE_BOOKMARK is a periodic sync marker (no payload change); it also
+  // carries a per-cluster error surface for a member that dropped mid-stream.
+  EVENT_TYPE_BOOKMARK = 4;
+}

@@ -25,6 +25,18 @@ CHART_OCI_INSTALL ?= oci://ghcr.io/projectbeskar/charts/kubeswift
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION)
 
+# Proto / buf — the kubeswift-gateway contract (proto/kubeswift/v1). Same
+# pin-via-go-run discipline as controller-gen: BUF runs a pinned version, so
+# `make proto` is reproducible regardless of any buf on PATH. CI overrides BUF
+# with the buf-setup-action binary (BUF=buf) to skip the go-run compile. The
+# codegen plugins are version-matched to the go.mod modules (go list -m) so the
+# generated code never skews from the runtime libraries the gateway links.
+LOCALBIN ?= $(shell pwd)/bin
+BUF_VERSION ?= v1.71.0
+BUF ?= go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
+PROTOC_GEN_GO_VERSION ?= $(shell go list -m -f '{{.Version}}' google.golang.org/protobuf)
+PROTOC_GEN_CONNECT_GO_VERSION ?= $(shell go list -m -f '{{.Version}}' connectrpc.com/connect)
+
 # Version stamping (defaults for local dev; overridden by release-* targets)
 VERSION ?= dev
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -166,6 +178,15 @@ generate:
 
 verify-crd-sync:
 	./hack/verify-crd-sync.sh
+
+.PHONY: proto proto-lint
+proto: ## Regenerate Go (messages + connect handlers) from proto/ into gen/.
+	GOBIN=$(LOCALBIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+	GOBIN=$(LOCALBIN) go install connectrpc.com/connect/cmd/protoc-gen-connect-go@$(PROTOC_GEN_CONNECT_GO_VERSION)
+	PATH="$(LOCALBIN):$$PATH" $(BUF) generate
+
+proto-lint: ## Lint the proto contract (buf lint).
+	$(BUF) lint
 
 deploy: generate verify-crd-sync
 	@echo "Deploying with IMAGE_TAG=$(IMAGE_TAG)"

@@ -1,0 +1,15 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Streaming RPCs return a shared event message (ClusterEvent / GuestEvent /
+    # VMMetricSample), which is idiomatic for Connect watch streams but trips
+    # the "<Method>Response" / unique-message rules. Intentionally relaxed.
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE
