@@ -31,6 +31,16 @@ var swiftGuestGVR = schema.GroupVersionResource{
 	Resource: "swiftguests",
 }
 
+// podGVR is the launcher-pod resource. StopGuest deletes the launcher pod (by
+// the guest label below) after patching runPolicy, because the SwiftGuest stop
+// guard is reactive only — it prevents pod recreation, it does not stop a
+// running VM.
+var podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+
+// guestPodLabel ties a launcher pod to its SwiftGuest. The label (not the pod
+// name) is the stable handle — a live-migrated guest's pod is <guest>-mig-<uid>.
+const guestPodLabel = "swift.kubeswift.io/guest"
+
 // ClientPool watches the hub's fleet.Cluster registry and maintains a base REST
 // config per member cluster, built from the member's credential Secret. It
 // hands out per-request dynamic clients that impersonate the end user (D1). On

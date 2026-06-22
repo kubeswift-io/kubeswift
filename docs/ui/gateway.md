@@ -146,9 +146,12 @@ In `insecure` mode these work with no token; in `token` mode add
   below make this sharper: in `insecure` mode every UI user can start/stop VMs.
 - **Write actions** — `GuestService.StartGuest`/`StopGuest` patch
   `swiftguests.spec.runPolicy` on the target member, as the impersonated user.
-  The acting subject therefore needs `patch` on `swiftguests` there (see
-  `config/samples/gateway/member-rbac.yaml`); a read-only audience gets a clean
-  permission denial. In `token` mode the member's RBAC gates who can act.
+  `StopGuest` additionally **deletes the launcher pod** (the SwiftGuest stop
+  guard is reactive — a runPolicy patch alone does not stop a running VM). So
+  the acting subject needs `patch` on `swiftguests` **and** `delete` on `pods`
+  there (see `config/samples/gateway/member-rbac.yaml`); a read-only audience
+  gets a clean permission denial. In `token` mode the member's RBAC gates who
+  can act.
 - **CORS** defaults to `*` (safe for a token-auth API with no cookies); pin
   `gateway.corsAllowOrigin` to the UI origin for a hardened install.
 
