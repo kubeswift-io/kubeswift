@@ -1,0 +1,28 @@
+# Multi-stage build for kubeswift-gateway (the UI backend Connect hub).
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -o kubeswift-gateway ./cmd/kubeswift-gateway
+
+# distroless static + nonroot: the gateway is a pure network service (no host
+# access). ca-certificates are bundled so it can dial member API servers /
+# Prometheus over TLS via the system trust store (per-member CAs still come
+# from the credential Secret's ca.crt).
+FROM gcr.io/distroless/static:nonroot
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+COPY --from=builder /build/kubeswift-gateway /kubeswift-gateway
+USER 65532:65532
+ENTRYPOINT ["/kubeswift-gateway"]

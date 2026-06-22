@@ -1,0 +1,46 @@
+# Register a member cluster with the kubeswift-gateway hub. Apply BOTH objects
+# in the gateway's namespace (default: kubeswift-system). Replace the kubeconfig
+# with one for your member whose user is impersonation-capable (see
+# member-rbac.yaml) for auth-mode=token.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: boba-kubeconfig
+  namespace: kubeswift-system
+type: Opaque
+stringData:
+  # A full kubeconfig for the member cluster. The gateway uses its
+  # current-context. (Alternatively, drop `kubeconfig` and provide `token` +
+  # optional `ca.crt`, paired with spec.server on the Cluster below.)
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: boba
+        cluster:
+          server: https://boba.example.com:6443
+          # certificate-authority-data: <base64 CA>
+    users:
+      - name: kubeswift-gateway
+        user:
+          token: <member service-account token>
+    contexts:
+      - name: boba
+        context:
+          cluster: boba
+          user: kubeswift-gateway
+    current-context: boba
+---
+apiVersion: fleet.kubeswift.io/v1alpha1
+kind: Cluster
+metadata:
+  name: boba
+  namespace: kubeswift-system
+spec:
+  # Optional when the kubeconfig already names the server.
+  server: https://boba.example.com:6443
+  credentialSecretRef:
+    name: boba-kubeconfig
+  # Optional: per-member Prometheus for VM telemetry (P1).
+  # prometheusEndpoint: http://prometheus.monitoring.svc:9090
+  displayName: Boba (lab)
