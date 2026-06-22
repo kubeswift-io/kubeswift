@@ -2,6 +2,7 @@ package scheme
 
 import (
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
 	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
 	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
@@ -42,6 +43,12 @@ func init() {
 	gvMigration := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
 	metav1.AddToGroupVersion(Scheme, gvMigration)
+	// fleet.kubeswift.io/v1alpha1 (UI backend): the kubeswift-gateway hub's
+	// registry of federated member clusters. Registered for serialization;
+	// the gateway (not the controller-manager) reconciles Cluster objects.
+	gvFleet := schema.GroupVersion{Group: "fleet.kubeswift.io", Version: "v1alpha1"}
+	Scheme.AddKnownTypes(gvFleet, &fleetv1alpha1.Cluster{}, &fleetv1alpha1.ClusterList{})
+	metav1.AddToGroupVersion(Scheme, gvFleet)
 	utilruntime.Must(volumesnapshotv1.AddToScheme(Scheme))
 	// resource.k8s.io/v1 (DRA): the DRA GPU allocation backend reads
 	// ResourceClaims back to discover the allocated device.

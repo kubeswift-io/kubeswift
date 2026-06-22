@@ -1,0 +1,217 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: clusters.fleet.kubeswift.io
+spec:
+  group: fleet.kubeswift.io
+  names:
+    kind: Cluster
+    listKind: ClusterList
+    plural: clusters
+    shortNames:
+    - ksc
+    singular: cluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.server
+      name: Server
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.kubernetesVersion
+      name: K8s
+      type: string
+    - jsonPath: .status.guestCount
+      name: Guests
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Cluster is a member cluster federated by the kubeswift-gateway
+          hub.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ClusterSpec describes a member cluster that the kubeswift-gateway hub
+              federates. The hub watches Cluster objects, builds an impersonation-capable
+              client + informer cache per member (the client pool), and fans out the
+              read/write/telemetry/console planes across the fleet, stamping a `cluster`
+              dimension on every result. See docs/design/ui-backend-enablement.md (D2/D2a).
+
+              Cluster objects are namespaced and live in the hub cluster alongside their
+              credential Secret (the Cluster API model). The kubeswift-gateway — NOT the
+              controller-manager — is the reconciler for this resource; the controller-
+              manager merely needs the type registered for serialization.
+            properties:
+              credentialSecretRef:
+                description: |-
+                  CredentialSecretRef names a Secret in the same namespace holding the
+                  hub's credential for this member. The Secret must carry EITHER a
+                  `kubeconfig` key (a full kubeconfig — the simplest path) OR a `token`
+                  key (a bearer token) plus an optional `ca.crt` key (the API server CA).
+
+                  The credential must be able to impersonate users: the gateway sets
+                  Impersonate-User / Impersonate-Group per request (decision D1), so the
+                  member's RBAC authorizes the end user, not the gateway. For that to
+                  authorize uniformly across the fleet, the members should share an
+                  identity provider; where they do not, impersonation is only valid where
+                  the subject is bound (documented degradation, surfaced per-cluster).
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              displayName:
+                description: |-
+                  DisplayName is an optional human-friendly label for the UI's cluster
+                  selector. The gateway falls back to metadata.name when empty.
+                type: string
+              insecureSkipTLSVerify:
+                description: |-
+                  InsecureSkipTLSVerify disables API server certificate verification for
+                  this member. UNSAFE — intended only for a trusted-network / dev member
+                  whose CA is not yet wired. Prefer shipping a `ca.crt` key in the
+                  credential Secret.
+                type: boolean
+              prometheusEndpoint:
+                description: |-
+                  PrometheusEndpoint is the base URL of this member's Prometheus (or a
+                  query frontend / Thanos) used for per-VM telemetry (decision D4). The
+                  gateway joins series on the swift.kubeswift.io/guest label (never pod
+                  name) and stamps the `cluster` dimension. Empty means telemetry is
+                  unavailable for this member; the UI degrades that panel, it does not
+                  fail the view.
+                type: string
+              server:
+                description: |-
+                  Server is the member cluster's API server URL (https://host:port).
+                  Optional when the credential Secret carries a full kubeconfig whose
+                  current-context already names the server.
+                type: string
+            required:
+            - credentialSecretRef
+            type: object
+          status:
+            description: |-
+              ClusterStatus is populated by the kubeswift-gateway as it connects to and
+              syncs the member cluster.
+            properties:
+              conditions:
+                description: Conditions follow the standard Kubernetes pattern (Ready,
+                  Reachable).
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              guestCount:
+                description: |-
+                  GuestCount is the number of SwiftGuests observed on this member at the
+                  last sync — a cheap roll-up for the cluster selector. Omitted until the
+                  gateway has synced the member at least once.
+                format: int32
+                type: integer
+              kubernetesVersion:
+                description: |-
+                  KubernetesVersion is the member's discovered API server version
+                  (e.g. "v1.34.3"), shown in the UI's cluster detail.
+                type: string
+              lastConnected:
+                description: |-
+                  LastConnected is the last time the gateway successfully reached this
+                  member's API server.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the gateway
+                  last reconciled.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
