@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Cluster is a UI-shaped view of a federated member cluster (a
+// fleet.kubeswift.io/v1alpha1 Cluster), denormalized for the cluster selector
+// in the UI shell. Hand-shaped (decision D8), not a 1:1 CRD mirror.
+message Cluster {
+  // name is the fleet member id (the Cluster object's metadata.name).
+  string name = 1;
+  string namespace = 2;
+  string display_name = 3;
+  string server = 4;
+  string kubernetes_version = 5;
+  bool ready = 6;
+  bool reachable = 7;
+  int32 guest_count = 8;
+  google.protobuf.Timestamp last_connected = 9;
+  repeated Condition conditions = 10;
+}
+
+message ListClustersRequest {
+  // The cluster list is fleet-global, so there is no selector; page is kept
+  // for fleets large enough to warrant it.
+  PageRequest page = 1;
+}
+
+message ListClustersResponse {
+  repeated Cluster clusters = 1;
+  PageResponse page = 2;
+  repeated ClusterError errors = 3;
+}
+
+message WatchClustersRequest {}
+
+message ClusterEvent {
+  EventType type = 1;
+  Cluster cluster = 2;
+  // error is set on a BOOKMARK event when a member's health changed; nil
+  // otherwise.
+  ClusterError error = 3;
+}
+
+// ClusterService exposes the hub's fleet registry to the UI: the cluster
+// selector lists members, and a watch keeps per-cluster health live.
+service ClusterService {
+  rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
+  rpc WatchClusters(WatchClustersRequest) returns (stream ClusterEvent);
+}

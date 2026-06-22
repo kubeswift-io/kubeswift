@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Guest is a UI-shaped, denormalized view of a SwiftGuest across the fleet.
+// Hand-shaped (decision D8) — a flat row for the virtual-scrolled inventory
+// table, NOT a 1:1 mirror of the SwiftGuest CRD. GetGuestDetail returns the
+// expanded view.
+message Guest {
+  // ref carries the cluster + namespace + name (the cluster dimension, D2).
+  ObjectRef ref = 1;
+  // phase is status.phase (Pending|Scheduling|Running|Failed|Stopped).
+  string phase = 2;
+  string node_name = 3;
+  // hypervisor is status.runtime.hypervisor (cloud-hypervisor|qemu).
+  string hypervisor = 4;
+  // primary_ip is status.network.primaryIP.
+  string primary_ip = 5;
+  // boot_source is the resolved boot origin (image / kernel / clone) for the
+  // inventory row, summarized into one human string.
+  string boot_source = 6;
+  string guest_class = 7;
+  // guest_running mirrors the GuestRunning condition (the authoritative "VM is
+  // actually up" signal, distinct from phase).
+  bool guest_running = 8;
+  int32 cpu = 9;
+  int64 memory_mib = 10;
+  google.protobuf.Timestamp created_at = 11;
+  repeated Condition conditions = 12;
+  // labels carries the swift.kubeswift.io/* labels the UI groups by — pool
+  // membership and, critically, the swift.kubeswift.io/guest telemetry-join
+  // label (never pod name, which changes to <guest>-mig-<uid> post-migration).
+  map<string, string> labels = 13;
+}
+
+message ListGuestsRequest {
+  ClusterSelector clusters = 1;
+  // namespace filters within each selected cluster; empty = every namespace
+  // the impersonated user is allowed to see.
+  string namespace = 2;
+  // phase is a minimal P0 server-side filter; richer field selectors are P1.
+  string phase = 3;
+  PageRequest page = 4;
+}
+
+message ListGuestsResponse {
+  repeated Guest guests = 1;
+  PageResponse page = 2;
+  repeated ClusterError errors = 3;
+}
+
+message WatchGuestsRequest {
+  ClusterSelector clusters = 1;
+  string namespace = 2;
+}
+
+message GuestEvent {
+  EventType type = 1;
+  Guest guest = 2;
+  ClusterError error = 3;
+}
+
+message GetGuestDetailRequest {
+  ObjectRef ref = 1;
+}
+
+// GetGuestDetailResponse is the aggregated single-guest view. P0 returns the
+// flat Guest only; P1 fills the launcher pod, recent Events, GPU, network, and
+// storage in this one call (decision D8 — one RPC per screen).
+message GetGuestDetailResponse {
+  Guest guest = 1;
+}
+
+// GuestService is the read plane for VM inventory. List/Watch fan out across
+// the selected member clusters and merge, stamping the cluster dimension on
+// every row; a per-cluster error surface preserves partial-fleet results.
+service GuestService {
+  rpc ListGuests(ListGuestsRequest) returns (ListGuestsResponse);
+  rpc WatchGuests(WatchGuestsRequest) returns (stream GuestEvent);
+  rpc GetGuestDetail(GetGuestDetailRequest) returns (GetGuestDetailResponse);
+}

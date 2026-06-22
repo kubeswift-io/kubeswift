@@ -19,6 +19,10 @@ on:
       - 'go.sum'
       - 'test/**'
       - 'Makefile'
+      - 'proto/**'
+      - 'gen/**'
+      - 'buf.yaml'
+      - 'buf.gen.yaml'
       - 'config/grafana/**'
       - 'tools/lint-dashboards.sh'
       - '.github/workflows/**'
@@ -36,6 +40,10 @@ on:
       - 'go.sum'
       - 'test/**'
       - 'Makefile'
+      - 'proto/**'
+      - 'gen/**'
+      - 'buf.yaml'
+      - 'buf.gen.yaml'
       - 'config/grafana/**'
       - 'tools/lint-dashboards.sh'
       - '.github/workflows/**'
@@ -102,6 +110,48 @@ jobs:
         run: |
           if ! git diff --exit-code config/crd/bases/ api/; then
             echo "Generated code is out of date. Run: make generate"
+            exit 1
+          fi
+
+  proto:
+    name: Proto
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: 1.71.0
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: buf lint
+
+      # Breaking-change gate against the contract on main. On the bootstrap PR
+      # (main has no buf.yaml yet) the guard skips it; every later PR enforces
+      # it so the UI repo's pinned contract never breaks underneath it.
+      - name: Breaking change check (vs main)
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          if git cat-file -e FETCH_HEAD:buf.yaml 2>/dev/null; then
+            buf breaking --against '.git#ref=FETCH_HEAD'
+          else
+            echo "main has no buf.yaml yet (bootstrap); skipping breaking check"
+          fi
+
+      # Same discipline as the generate job: regenerate and fail on drift, so
+      # gen/ in the repo always matches proto/.
+      - name: Verify generated code is up to date
+        run: |
+          make proto BUF=buf
+          if ! git diff --exit-code gen/; then
+            echo "Generated proto code is out of date. Run: make proto"
             exit 1
           fi
 
