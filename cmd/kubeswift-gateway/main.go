@@ -83,7 +83,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	clusterSvc := gateway.NewClusterService(mgr.GetClient(), *clustersNS, watcher)
+	clusterSvc := gateway.NewClusterService(mgr.GetClient(), *clustersNS, watcher, pool, auth)
 	clusterPath, clusterHandler := kubeswiftv1connect.NewClusterServiceHandler(clusterSvc)
 
 	guestSvc := gateway.NewGuestService(pool, auth)

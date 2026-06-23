@@ -37,6 +37,12 @@ var swiftGuestGVR = schema.GroupVersionResource{
 // running VM.
 var podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 
+// swiftMigrationGVR is the SwiftMigration resource — MigrateGuest creates one.
+var swiftMigrationGVR = schema.GroupVersionResource{Group: "migration.kubeswift.io", Version: "v1alpha1", Resource: "swiftmigrations"}
+
+// nodeGVR is the core node resource — ListNodes lists it for the migrate picker.
+var nodeGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+
 // guestPodLabel ties a launcher pod to its SwiftGuest. The label (not the pod
 // name) is the stable handle — a live-migrated guest's pod is <guest>-mig-<uid>.
 const guestPodLabel = "swift.kubeswift.io/guest"

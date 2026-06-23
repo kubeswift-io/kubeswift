@@ -20,7 +20,7 @@ func TestClusterService_ListClusters_NamespaceScoped(t *testing.T) {
 		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "other"}},
 	).Build()
 
-	svc := NewClusterService(hub, "kubeswift-system", nil)
+	svc := NewClusterService(hub, "kubeswift-system", nil, nil, nil) // ListClusters uses only the hub cache
 	resp, err := svc.ListClusters(context.Background(), connect.NewRequest(&kubeswiftv1.ListClustersRequest{}))
 	if err != nil {
 		t.Fatalf("ListClusters: %v", err)

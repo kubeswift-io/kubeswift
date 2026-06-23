@@ -4,6 +4,7 @@ import (
 	"context"
 
 	connect "connectrpc.com/connect"
+	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
@@ -22,13 +23,23 @@ type ClusterService struct {
 	hub       client.Reader
 	namespace string
 	watcher   *ClusterWatcher
+	// pool + auth power ListNodes, which fans out to a member (the migrate
+	// target picker); ListClusters/WatchClusters use only the hub cache above.
+	pool nodeProvider
+	auth Authenticator
+}
+
+// nodeProvider is the slice of ClientPool ListNodes needs.
+type nodeProvider interface {
+	DynamicFor(cluster string, id Identity) (dynamic.Interface, error)
 }
 
 var _ kubeswiftv1connect.ClusterServiceHandler = (*ClusterService)(nil)
 
-// NewClusterService wires the service to the hub cache + the shared watcher.
-func NewClusterService(hub client.Reader, namespace string, watcher *ClusterWatcher) *ClusterService {
-	return &ClusterService{hub: hub, namespace: namespace, watcher: watcher}
+// NewClusterService wires the service to the hub cache + the shared watcher,
+// plus the client pool + authenticator for ListNodes.
+func NewClusterService(hub client.Reader, namespace string, watcher *ClusterWatcher, pool nodeProvider, auth Authenticator) *ClusterService {
+	return &ClusterService{hub: hub, namespace: namespace, watcher: watcher, pool: pool, auth: auth}
 }
 
 // ListClusters returns every registered member cluster. The fleet is small, so

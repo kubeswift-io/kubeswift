@@ -88,10 +88,29 @@ message GuestActionResponse {
   Guest guest = 1;
 }
 
-// GuestService is the read plane for VM inventory plus the P1 lifecycle write
-// actions. List/Watch fan out across the selected member clusters and merge,
-// stamping the cluster dimension on every row; a per-cluster error surface
-// preserves partial-fleet results.
+// MigrateGuestRequest moves a guest to another node by creating a
+// SwiftMigration on its member cluster. targetNode is required; mode defaults
+// to auto. A cross-node move on default node-local networking changes the
+// guest IP, so allowIpChange is required there (the webhook rejects it
+// otherwise).
+message MigrateGuestRequest {
+  ObjectRef ref = 1;
+  string target_node = 2;
+  string mode = 3; // auto | live | offline
+  bool allow_ip_change = 4;
+}
+
+// MigrateGuestResponse returns the created SwiftMigration's ref; the migration
+// then progresses on the member (watch the guest's phase, or a future
+// migrations view).
+message MigrateGuestResponse {
+  ObjectRef migration = 1;
+}
+
+// GuestService is the read plane for VM inventory plus the P1/P2 write actions.
+// List/Watch fan out across the selected member clusters and merge, stamping
+// the cluster dimension on every row; a per-cluster error surface preserves
+// partial-fleet results.
 service GuestService {
   rpc ListGuests(ListGuestsRequest) returns (ListGuestsResponse);
   rpc WatchGuests(WatchGuestsRequest) returns (stream GuestEvent);
@@ -102,4 +121,8 @@ service GuestService {
   // be allowed to patch swiftguests on the target member cluster.
   rpc StartGuest(GuestActionRequest) returns (GuestActionResponse);
   rpc StopGuest(GuestActionRequest) returns (GuestActionResponse);
+
+  // Migrate (write plane, P2): create a SwiftMigration to move the guest. The
+  // impersonated user must be allowed to create swiftmigrations on the member.
+  rpc MigrateGuest(MigrateGuestRequest) returns (MigrateGuestResponse);
 }
