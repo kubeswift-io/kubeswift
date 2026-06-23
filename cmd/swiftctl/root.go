@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/projectbeskar/kubeswift/internal/cli"
 	"github.com/projectbeskar/kubeswift/internal/version"
@@ -46,6 +47,18 @@ func init() {
 	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(migrationCmd)
+}
+
+// newDynamicClient builds a dynamic client from the resolved kubeconfig. The
+// shared lifecycle actions (start/stop/migrate, internal/actions) operate over a
+// dynamic.Interface — the same model the gateway uses — so swiftctl builds one
+// here instead of a typed controller-runtime client for those commands.
+func newDynamicClient() (dynamic.Interface, error) {
+	cfg, err := kubeConfig.ToRESTConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubeconfig: %w", err)
+	}
+	return dynamic.NewForConfig(cfg)
 }
 
 func getNamespace() string {
