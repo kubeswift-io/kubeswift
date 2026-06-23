@@ -153,14 +153,24 @@ In `insecure` mode these work with no token; in `token` mode add
   gets a clean permission denial. In `token` mode the member's RBAC gates who
   can act.
 - **Console** — a raw WebSocket at `/console?cluster=&namespace=&name=&token=`
-  exec-bridges the guest's serial socket (the D5 bootstrap; swiftletd
-  serial-on-a-port is the later transport). It execs `socat` in the launcher
+  exec-bridges the guest's serial socket. It execs `socat` in the launcher
   pod, so the acting subject needs `create` on `pods/exec` — **powerful**
   (arbitrary in-pod commands); grant it only to console users. Because browsers
   can't set a WebSocket `Authorization` header, the bearer token rides the
   `?token=` query param — which **can land in proxy/access logs**; prefer a
   short-lived token, and a TLS-terminating ingress so the URL isn't on the wire.
   `insecure` mode needs no token (and then anyone can open any console).
+- **Console transport — exec-pipe is the chosen transport for the hub** (not
+  D5's "serial-on-a-port"). The gateway is a multi-cluster hub: it reaches a
+  member's launcher pod *through that member's API server* (the impersonating
+  client), never by dialing the pod's IP directly across cluster networks. The
+  exec-pipe already rides that path (the `pods/exec` subresource). A
+  swiftletd-serial-on-a-TCP-port transport would still have to tunnel through
+  the API server (the `pods/portforward` subresource) for a cross-cluster hub —
+  a lateral move (swap `exec`+`socat` for `portforward`, a different RBAC verb,
+  the same API-server tunnel) at the cost of a swiftletd change. So the
+  exec-pipe is kept; serial-on-a-port is only worth revisiting for a
+  single-cluster, in-cluster console (where a direct pod dial is possible).
 - **CORS** defaults to `*` (safe for a token-auth API with no cookies); pin
   `gateway.corsAllowOrigin` to the UI origin for a hardened install.
 
