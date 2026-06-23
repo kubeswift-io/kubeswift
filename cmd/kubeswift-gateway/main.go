@@ -89,6 +89,10 @@ func main() {
 	guestSvc := gateway.NewGuestService(pool, auth)
 	guestPath, guestHandler := kubeswiftv1connect.NewGuestServiceHandler(guestSvc)
 
+	// Migrations (P2): read plane over SwiftMigrations (the UI polls it live).
+	migSvc := gateway.NewMigrationService(pool, auth)
+	migPath, migHandler := kubeswiftv1connect.NewMigrationServiceHandler(migSvc)
+
 	// Telemetry (P1): per-VM range metrics from each member's Prometheus.
 	telSvc := gateway.NewTelemetryService(pool, auth)
 	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc)
@@ -106,6 +110,7 @@ func main() {
 		Handlers: []gateway.ConnectHandler{
 			{Path: clusterPath, Handler: clusterHandler},
 			{Path: guestPath, Handler: guestHandler},
+			{Path: migPath, Handler: migHandler},
 			{Path: telPath, Handler: telHandler},
 			{Path: conPath, Handler: conHandler},
 		},

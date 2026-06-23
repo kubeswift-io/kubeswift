@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Migration is a UI-shaped view of a SwiftMigration (decision D8), denormalized
+// for the migrations table — enough to show one in flight (phase + progress +
+// downtime) without re-reading the CRD.
+message Migration {
+  ObjectRef ref = 1;
+  string guest = 2;
+  string source_node = 3;
+  string target_node = 4;
+  string mode = 5;
+  string phase = 6;
+  string phase_detail = 7;
+  string failure_reason = 8;
+  string failure_message = 9;
+  // transfer_progress is the live pre-copy estimate (0-100), 0 when absent.
+  int32 transfer_progress = 10;
+  double observed_downtime_seconds = 11;
+  double observed_transfer_seconds = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp terminal_at = 14;
+}
+
+message ListMigrationsRequest {
+  ClusterSelector clusters = 1;
+  string namespace = 2;
+}
+
+message ListMigrationsResponse {
+  repeated Migration migrations = 1;
+  // errors carries a per-cluster failure (partial-fleet), never a silent drop.
+  repeated ClusterError errors = 2;
+}
+
+// MigrationService is the read plane for migrations. ListMigrations fans out
+// across the selected members and merges, stamping the cluster dimension; the
+// UI polls it while a migration is in flight (a server-stream Watch is a later
+// add, mirroring GuestService).
+service MigrationService {
+  rpc ListMigrations(ListMigrationsRequest) returns (ListMigrationsResponse);
+}

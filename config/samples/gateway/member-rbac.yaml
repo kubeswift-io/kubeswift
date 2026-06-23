@@ -63,11 +63,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
-  # The migrate action creates a SwiftMigration; ListNodes (the migrate target
-  # picker) lists nodes.
+  # The migrate action creates a SwiftMigration; the migrations view lists them;
+  # ListNodes (the migrate target picker) lists nodes.
   - apiGroups: ["migration.kubeswift.io"]
     resources: ["swiftmigrations"]
-    verbs: ["create"]
+    verbs: ["get", "list", "watch", "create"]
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["list"]
