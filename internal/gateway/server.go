@@ -27,7 +27,10 @@ type Server struct {
 	Addr          string
 	AllowedOrigin string
 	Handlers      []ConnectHandler
-	Log           logr.Logger
+	// RawHandlers are non-Connect routes (e.g. the WebSocket console plane),
+	// mounted on the same mux. They handle their own protocol upgrade.
+	RawHandlers []ConnectHandler
+	Log         logr.Logger
 }
 
 // NeedLeaderElection keeps the server running on every replica.
@@ -37,6 +40,9 @@ func (s *Server) NeedLeaderElection() bool { return false }
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	for _, h := range s.Handlers {
+		mux.Handle(h.Path, h.Handler)
+	}
+	for _, h := range s.RawHandlers {
 		mux.Handle(h.Path, h.Handler)
 	}
 	mux.HandleFunc("/healthz", okHandler)

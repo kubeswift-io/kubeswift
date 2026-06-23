@@ -161,6 +161,17 @@ func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) 
 // DynamicFor returns a dynamic client for the named member, impersonating the
 // given identity (an empty identity uses the member's own credential).
 func (p *ClientPool) DynamicFor(cluster string, id Identity) (dynamic.Interface, error) {
+	cfg, err := p.RestConfigFor(cluster, id)
+	if err != nil {
+		return nil, err
+	}
+	return dynamic.NewForConfig(cfg)
+}
+
+// RestConfigFor returns the member's REST config, impersonating the identity
+// (unless empty). The console plane needs the raw config for client-go's
+// remotecommand exec; DynamicFor builds on it.
+func (p *ClientPool) RestConfigFor(cluster string, id Identity) (*rest.Config, error) {
 	p.mu.RLock()
 	m, ok := p.members[cluster]
 	p.mu.RUnlock()
@@ -171,7 +182,7 @@ func (p *ClientPool) DynamicFor(cluster string, id Identity) (dynamic.Interface,
 	if !id.empty() {
 		cfg.Impersonate = rest.ImpersonationConfig{UserName: id.User, Groups: id.Groups}
 	}
-	return dynamic.NewForConfig(cfg)
+	return cfg, nil
 }
 
 // Members returns the names of all currently registered member clusters.

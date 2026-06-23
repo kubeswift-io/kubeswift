@@ -57,6 +57,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
+  # The console plane execs `socat` in the launcher pod to bridge the serial
+  # socket. pods/exec is powerful (arbitrary in-pod commands) — grant it only to
+  # subjects allowed to open VM consoles; drop it to disable the console.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
