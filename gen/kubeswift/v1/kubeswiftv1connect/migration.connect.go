@@ -36,11 +36,15 @@ const (
 	// MigrationServiceListMigrationsProcedure is the fully-qualified name of the MigrationService's
 	// ListMigrations RPC.
 	MigrationServiceListMigrationsProcedure = "/kubeswift.v1.MigrationService/ListMigrations"
+	// MigrationServiceWatchMigrationsProcedure is the fully-qualified name of the MigrationService's
+	// WatchMigrations RPC.
+	MigrationServiceWatchMigrationsProcedure = "/kubeswift.v1.MigrationService/WatchMigrations"
 )
 
 // MigrationServiceClient is a client for the kubeswift.v1.MigrationService service.
 type MigrationServiceClient interface {
 	ListMigrations(context.Context, *connect.Request[v1.ListMigrationsRequest]) (*connect.Response[v1.ListMigrationsResponse], error)
+	WatchMigrations(context.Context, *connect.Request[v1.WatchMigrationsRequest]) (*connect.ServerStreamForClient[v1.MigrationEvent], error)
 }
 
 // NewMigrationServiceClient constructs a client for the kubeswift.v1.MigrationService service. By
@@ -60,12 +64,19 @@ func NewMigrationServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(migrationServiceMethods.ByName("ListMigrations")),
 			connect.WithClientOptions(opts...),
 		),
+		watchMigrations: connect.NewClient[v1.WatchMigrationsRequest, v1.MigrationEvent](
+			httpClient,
+			baseURL+MigrationServiceWatchMigrationsProcedure,
+			connect.WithSchema(migrationServiceMethods.ByName("WatchMigrations")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // migrationServiceClient implements MigrationServiceClient.
 type migrationServiceClient struct {
-	listMigrations *connect.Client[v1.ListMigrationsRequest, v1.ListMigrationsResponse]
+	listMigrations  *connect.Client[v1.ListMigrationsRequest, v1.ListMigrationsResponse]
+	watchMigrations *connect.Client[v1.WatchMigrationsRequest, v1.MigrationEvent]
 }
 
 // ListMigrations calls kubeswift.v1.MigrationService.ListMigrations.
@@ -73,9 +84,15 @@ func (c *migrationServiceClient) ListMigrations(ctx context.Context, req *connec
 	return c.listMigrations.CallUnary(ctx, req)
 }
 
+// WatchMigrations calls kubeswift.v1.MigrationService.WatchMigrations.
+func (c *migrationServiceClient) WatchMigrations(ctx context.Context, req *connect.Request[v1.WatchMigrationsRequest]) (*connect.ServerStreamForClient[v1.MigrationEvent], error) {
+	return c.watchMigrations.CallServerStream(ctx, req)
+}
+
 // MigrationServiceHandler is an implementation of the kubeswift.v1.MigrationService service.
 type MigrationServiceHandler interface {
 	ListMigrations(context.Context, *connect.Request[v1.ListMigrationsRequest]) (*connect.Response[v1.ListMigrationsResponse], error)
+	WatchMigrations(context.Context, *connect.Request[v1.WatchMigrationsRequest], *connect.ServerStream[v1.MigrationEvent]) error
 }
 
 // NewMigrationServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -91,10 +108,18 @@ func NewMigrationServiceHandler(svc MigrationServiceHandler, opts ...connect.Han
 		connect.WithSchema(migrationServiceMethods.ByName("ListMigrations")),
 		connect.WithHandlerOptions(opts...),
 	)
+	migrationServiceWatchMigrationsHandler := connect.NewServerStreamHandler(
+		MigrationServiceWatchMigrationsProcedure,
+		svc.WatchMigrations,
+		connect.WithSchema(migrationServiceMethods.ByName("WatchMigrations")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.MigrationService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case MigrationServiceListMigrationsProcedure:
 			migrationServiceListMigrationsHandler.ServeHTTP(w, r)
+		case MigrationServiceWatchMigrationsProcedure:
+			migrationServiceWatchMigrationsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,4 +131,8 @@ type UnimplementedMigrationServiceHandler struct{}
 
 func (UnimplementedMigrationServiceHandler) ListMigrations(context.Context, *connect.Request[v1.ListMigrationsRequest]) (*connect.Response[v1.ListMigrationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.MigrationService.ListMigrations is not implemented"))
+}
+
+func (UnimplementedMigrationServiceHandler) WatchMigrations(context.Context, *connect.Request[v1.WatchMigrationsRequest], *connect.ServerStream[v1.MigrationEvent]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.MigrationService.WatchMigrations is not implemented"))
 }

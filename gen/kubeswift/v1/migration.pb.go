@@ -279,6 +279,120 @@ func (x *ListMigrationsResponse) GetErrors() []*ClusterError {
 	return nil
 }
 
+type WatchMigrationsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Clusters      *ClusterSelector       `protobuf:"bytes,1,opt,name=clusters,proto3" json:"clusters,omitempty"`
+	Namespace     string                 `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchMigrationsRequest) Reset() {
+	*x = WatchMigrationsRequest{}
+	mi := &file_kubeswift_v1_migration_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchMigrationsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchMigrationsRequest) ProtoMessage() {}
+
+func (x *WatchMigrationsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_migration_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchMigrationsRequest.ProtoReflect.Descriptor instead.
+func (*WatchMigrationsRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_migration_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *WatchMigrationsRequest) GetClusters() *ClusterSelector {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+func (x *WatchMigrationsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+type MigrationEvent struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Type      EventType              `protobuf:"varint,1,opt,name=type,proto3,enum=kubeswift.v1.EventType" json:"type,omitempty"`
+	Migration *Migration             `protobuf:"bytes,2,opt,name=migration,proto3" json:"migration,omitempty"`
+	// error is set on a BOOKMARK event when a member's watch failed, so a failing
+	// member surfaces as a per-cluster problem rather than a dead stream.
+	Error         *ClusterError `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MigrationEvent) Reset() {
+	*x = MigrationEvent{}
+	mi := &file_kubeswift_v1_migration_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MigrationEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MigrationEvent) ProtoMessage() {}
+
+func (x *MigrationEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_migration_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MigrationEvent.ProtoReflect.Descriptor instead.
+func (*MigrationEvent) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_migration_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MigrationEvent) GetType() EventType {
+	if x != nil {
+		return x.Type
+	}
+	return EventType_EVENT_TYPE_UNSPECIFIED
+}
+
+func (x *MigrationEvent) GetMigration() *Migration {
+	if x != nil {
+		return x.Migration
+	}
+	return nil
+}
+
+func (x *MigrationEvent) GetError() *ClusterError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 var File_kubeswift_v1_migration_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_migration_proto_rawDesc = "" +
@@ -311,9 +425,17 @@ const file_kubeswift_v1_migration_proto_rawDesc = "" +
 	"\n" +
 	"migrations\x18\x01 \x03(\v2\x17.kubeswift.v1.MigrationR\n" +
 	"migrations\x122\n" +
-	"\x06errors\x18\x02 \x03(\v2\x1a.kubeswift.v1.ClusterErrorR\x06errors2o\n" +
+	"\x06errors\x18\x02 \x03(\v2\x1a.kubeswift.v1.ClusterErrorR\x06errors\"q\n" +
+	"\x16WatchMigrationsRequest\x129\n" +
+	"\bclusters\x18\x01 \x01(\v2\x1d.kubeswift.v1.ClusterSelectorR\bclusters\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\"\xa6\x01\n" +
+	"\x0eMigrationEvent\x12+\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x17.kubeswift.v1.EventTypeR\x04type\x125\n" +
+	"\tmigration\x18\x02 \x01(\v2\x17.kubeswift.v1.MigrationR\tmigration\x120\n" +
+	"\x05error\x18\x03 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\xc8\x01\n" +
 	"\x10MigrationService\x12[\n" +
-	"\x0eListMigrations\x12#.kubeswift.v1.ListMigrationsRequest\x1a$.kubeswift.v1.ListMigrationsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eListMigrations\x12#.kubeswift.v1.ListMigrationsRequest\x1a$.kubeswift.v1.ListMigrationsResponse\x12W\n" +
+	"\x0fWatchMigrations\x12$.kubeswift.v1.WatchMigrationsRequest\x1a\x1c.kubeswift.v1.MigrationEvent0\x01BAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_migration_proto_rawDescOnce sync.Once
@@ -327,30 +449,39 @@ func file_kubeswift_v1_migration_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_migration_proto_rawDescData
 }
 
-var file_kubeswift_v1_migration_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_kubeswift_v1_migration_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_kubeswift_v1_migration_proto_goTypes = []any{
 	(*Migration)(nil),              // 0: kubeswift.v1.Migration
 	(*ListMigrationsRequest)(nil),  // 1: kubeswift.v1.ListMigrationsRequest
 	(*ListMigrationsResponse)(nil), // 2: kubeswift.v1.ListMigrationsResponse
-	(*ObjectRef)(nil),              // 3: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),  // 4: google.protobuf.Timestamp
-	(*ClusterSelector)(nil),        // 5: kubeswift.v1.ClusterSelector
-	(*ClusterError)(nil),           // 6: kubeswift.v1.ClusterError
+	(*WatchMigrationsRequest)(nil), // 3: kubeswift.v1.WatchMigrationsRequest
+	(*MigrationEvent)(nil),         // 4: kubeswift.v1.MigrationEvent
+	(*ObjectRef)(nil),              // 5: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),  // 6: google.protobuf.Timestamp
+	(*ClusterSelector)(nil),        // 7: kubeswift.v1.ClusterSelector
+	(*ClusterError)(nil),           // 8: kubeswift.v1.ClusterError
+	(EventType)(0),                 // 9: kubeswift.v1.EventType
 }
 var file_kubeswift_v1_migration_proto_depIdxs = []int32{
-	3, // 0: kubeswift.v1.Migration.ref:type_name -> kubeswift.v1.ObjectRef
-	4, // 1: kubeswift.v1.Migration.created_at:type_name -> google.protobuf.Timestamp
-	4, // 2: kubeswift.v1.Migration.terminal_at:type_name -> google.protobuf.Timestamp
-	5, // 3: kubeswift.v1.ListMigrationsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
-	0, // 4: kubeswift.v1.ListMigrationsResponse.migrations:type_name -> kubeswift.v1.Migration
-	6, // 5: kubeswift.v1.ListMigrationsResponse.errors:type_name -> kubeswift.v1.ClusterError
-	1, // 6: kubeswift.v1.MigrationService.ListMigrations:input_type -> kubeswift.v1.ListMigrationsRequest
-	2, // 7: kubeswift.v1.MigrationService.ListMigrations:output_type -> kubeswift.v1.ListMigrationsResponse
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	5,  // 0: kubeswift.v1.Migration.ref:type_name -> kubeswift.v1.ObjectRef
+	6,  // 1: kubeswift.v1.Migration.created_at:type_name -> google.protobuf.Timestamp
+	6,  // 2: kubeswift.v1.Migration.terminal_at:type_name -> google.protobuf.Timestamp
+	7,  // 3: kubeswift.v1.ListMigrationsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	0,  // 4: kubeswift.v1.ListMigrationsResponse.migrations:type_name -> kubeswift.v1.Migration
+	8,  // 5: kubeswift.v1.ListMigrationsResponse.errors:type_name -> kubeswift.v1.ClusterError
+	7,  // 6: kubeswift.v1.WatchMigrationsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	9,  // 7: kubeswift.v1.MigrationEvent.type:type_name -> kubeswift.v1.EventType
+	0,  // 8: kubeswift.v1.MigrationEvent.migration:type_name -> kubeswift.v1.Migration
+	8,  // 9: kubeswift.v1.MigrationEvent.error:type_name -> kubeswift.v1.ClusterError
+	1,  // 10: kubeswift.v1.MigrationService.ListMigrations:input_type -> kubeswift.v1.ListMigrationsRequest
+	3,  // 11: kubeswift.v1.MigrationService.WatchMigrations:input_type -> kubeswift.v1.WatchMigrationsRequest
+	2,  // 12: kubeswift.v1.MigrationService.ListMigrations:output_type -> kubeswift.v1.ListMigrationsResponse
+	4,  // 13: kubeswift.v1.MigrationService.WatchMigrations:output_type -> kubeswift.v1.MigrationEvent
+	12, // [12:14] is the sub-list for method output_type
+	10, // [10:12] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_migration_proto_init() }
@@ -365,7 +496,7 @@ func file_kubeswift_v1_migration_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_migration_proto_rawDesc), len(file_kubeswift_v1_migration_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

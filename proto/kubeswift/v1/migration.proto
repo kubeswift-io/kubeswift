@@ -39,10 +39,23 @@ message ListMigrationsResponse {
   repeated ClusterError errors = 2;
 }
 
-// MigrationService is the read plane for migrations. ListMigrations fans out
-// across the selected members and merges, stamping the cluster dimension; the
-// UI polls it while a migration is in flight (a server-stream Watch is a later
-// add, mirroring GuestService).
+message WatchMigrationsRequest {
+  ClusterSelector clusters = 1;
+  string namespace = 2;
+}
+
+message MigrationEvent {
+  EventType type = 1;
+  Migration migration = 2;
+  // error is set on a BOOKMARK event when a member's watch failed, so a failing
+  // member surfaces as a per-cluster problem rather than a dead stream.
+  ClusterError error = 3;
+}
+
+// MigrationService is the read plane for migrations. List/Watch fan out across
+// the selected members and merge, stamping the cluster dimension; the UI
+// snapshots with List then follows Watch (mirrors GuestService).
 service MigrationService {
   rpc ListMigrations(ListMigrationsRequest) returns (ListMigrationsResponse);
+  rpc WatchMigrations(WatchMigrationsRequest) returns (stream MigrationEvent);
 }
