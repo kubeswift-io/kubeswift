@@ -46,9 +46,31 @@ message ClusterEvent {
   ClusterError error = 3;
 }
 
+// Node is a member cluster's node, for the migrate target picker.
+message Node {
+  string cluster = 1;
+  string name = 2;
+  bool ready = 3;
+  bool schedulable = 4;
+}
+
+message ListNodesRequest {
+  // cluster is required — nodes are per-member (the migrate dialog asks for one
+  // cluster's nodes).
+  string cluster = 1;
+}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+  // error is set (nodes empty) when the cluster is unknown or unreachable.
+  ClusterError error = 2;
+}
+
 // ClusterService exposes the hub's fleet registry to the UI: the cluster
-// selector lists members, and a watch keeps per-cluster health live.
+// selector lists members, a watch keeps per-cluster health live, and ListNodes
+// feeds the migrate target picker.
 service ClusterService {
   rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
   rpc WatchClusters(WatchClustersRequest) returns (stream ClusterEvent);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 }

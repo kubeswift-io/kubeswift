@@ -63,6 +63,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # The migrate action creates a SwiftMigration; ListNodes (the migrate target
+  # picker) lists nodes.
+  - apiGroups: ["migration.kubeswift.io"]
+    resources: ["swiftmigrations"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

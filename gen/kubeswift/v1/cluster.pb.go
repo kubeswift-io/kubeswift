@@ -346,6 +346,174 @@ func (x *ClusterEvent) GetError() *ClusterError {
 	return nil
 }
 
+// Node is a member cluster's node, for the migrate target picker.
+type Node struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Ready         bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"`
+	Schedulable   bool                   `protobuf:"varint,4,opt,name=schedulable,proto3" json:"schedulable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Node) Reset() {
+	*x = Node{}
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Node) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Node) ProtoMessage() {}
+
+func (x *Node) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Node.ProtoReflect.Descriptor instead.
+func (*Node) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_cluster_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Node) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *Node) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Node) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
+func (x *Node) GetSchedulable() bool {
+	if x != nil {
+		return x.Schedulable
+	}
+	return false
+}
+
+type ListNodesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// cluster is required — nodes are per-member (the migrate dialog asks for one
+	// cluster's nodes).
+	Cluster       string `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodesRequest) Reset() {
+	*x = ListNodesRequest{}
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodesRequest) ProtoMessage() {}
+
+func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
+func (*ListNodesRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_cluster_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ListNodesRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+type ListNodesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Nodes []*Node                `protobuf:"bytes,1,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	// error is set (nodes empty) when the cluster is unknown or unreachable.
+	Error         *ClusterError `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodesResponse) Reset() {
+	*x = ListNodesResponse{}
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodesResponse) ProtoMessage() {}
+
+func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_cluster_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
+func (*ListNodesResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_cluster_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListNodesResponse) GetNodes() []*Node {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+func (x *ListNodesResponse) GetError() *ClusterError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 var File_kubeswift_v1_cluster_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_cluster_proto_rawDesc = "" +
@@ -376,10 +544,21 @@ const file_kubeswift_v1_cluster_proto_rawDesc = "" +
 	"\fClusterEvent\x12+\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x17.kubeswift.v1.EventTypeR\x04type\x12/\n" +
 	"\acluster\x18\x02 \x01(\v2\x15.kubeswift.v1.ClusterR\acluster\x120\n" +
-	"\x05error\x18\x03 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\xba\x01\n" +
+	"\x05error\x18\x03 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error\"l\n" +
+	"\x04Node\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
+	"\x05ready\x18\x03 \x01(\bR\x05ready\x12 \n" +
+	"\vschedulable\x18\x04 \x01(\bR\vschedulable\",\n" +
+	"\x10ListNodesRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\"o\n" +
+	"\x11ListNodesResponse\x12(\n" +
+	"\x05nodes\x18\x01 \x03(\v2\x12.kubeswift.v1.NodeR\x05nodes\x120\n" +
+	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\x88\x02\n" +
 	"\x0eClusterService\x12U\n" +
 	"\fListClusters\x12!.kubeswift.v1.ListClustersRequest\x1a\".kubeswift.v1.ListClustersResponse\x12Q\n" +
-	"\rWatchClusters\x12\".kubeswift.v1.WatchClustersRequest\x1a\x1a.kubeswift.v1.ClusterEvent0\x01BAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\rWatchClusters\x12\".kubeswift.v1.WatchClustersRequest\x1a\x1a.kubeswift.v1.ClusterEvent0\x01\x12L\n" +
+	"\tListNodes\x12\x1e.kubeswift.v1.ListNodesRequest\x1a\x1f.kubeswift.v1.ListNodesResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_cluster_proto_rawDescOnce sync.Once
@@ -393,39 +572,46 @@ func file_kubeswift_v1_cluster_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_cluster_proto_rawDescData
 }
 
-var file_kubeswift_v1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_kubeswift_v1_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_kubeswift_v1_cluster_proto_goTypes = []any{
 	(*Cluster)(nil),               // 0: kubeswift.v1.Cluster
 	(*ListClustersRequest)(nil),   // 1: kubeswift.v1.ListClustersRequest
 	(*ListClustersResponse)(nil),  // 2: kubeswift.v1.ListClustersResponse
 	(*WatchClustersRequest)(nil),  // 3: kubeswift.v1.WatchClustersRequest
 	(*ClusterEvent)(nil),          // 4: kubeswift.v1.ClusterEvent
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
-	(*Condition)(nil),             // 6: kubeswift.v1.Condition
-	(*PageRequest)(nil),           // 7: kubeswift.v1.PageRequest
-	(*PageResponse)(nil),          // 8: kubeswift.v1.PageResponse
-	(*ClusterError)(nil),          // 9: kubeswift.v1.ClusterError
-	(EventType)(0),                // 10: kubeswift.v1.EventType
+	(*Node)(nil),                  // 5: kubeswift.v1.Node
+	(*ListNodesRequest)(nil),      // 6: kubeswift.v1.ListNodesRequest
+	(*ListNodesResponse)(nil),     // 7: kubeswift.v1.ListNodesResponse
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*Condition)(nil),             // 9: kubeswift.v1.Condition
+	(*PageRequest)(nil),           // 10: kubeswift.v1.PageRequest
+	(*PageResponse)(nil),          // 11: kubeswift.v1.PageResponse
+	(*ClusterError)(nil),          // 12: kubeswift.v1.ClusterError
+	(EventType)(0),                // 13: kubeswift.v1.EventType
 }
 var file_kubeswift_v1_cluster_proto_depIdxs = []int32{
-	5,  // 0: kubeswift.v1.Cluster.last_connected:type_name -> google.protobuf.Timestamp
-	6,  // 1: kubeswift.v1.Cluster.conditions:type_name -> kubeswift.v1.Condition
-	7,  // 2: kubeswift.v1.ListClustersRequest.page:type_name -> kubeswift.v1.PageRequest
+	8,  // 0: kubeswift.v1.Cluster.last_connected:type_name -> google.protobuf.Timestamp
+	9,  // 1: kubeswift.v1.Cluster.conditions:type_name -> kubeswift.v1.Condition
+	10, // 2: kubeswift.v1.ListClustersRequest.page:type_name -> kubeswift.v1.PageRequest
 	0,  // 3: kubeswift.v1.ListClustersResponse.clusters:type_name -> kubeswift.v1.Cluster
-	8,  // 4: kubeswift.v1.ListClustersResponse.page:type_name -> kubeswift.v1.PageResponse
-	9,  // 5: kubeswift.v1.ListClustersResponse.errors:type_name -> kubeswift.v1.ClusterError
-	10, // 6: kubeswift.v1.ClusterEvent.type:type_name -> kubeswift.v1.EventType
+	11, // 4: kubeswift.v1.ListClustersResponse.page:type_name -> kubeswift.v1.PageResponse
+	12, // 5: kubeswift.v1.ListClustersResponse.errors:type_name -> kubeswift.v1.ClusterError
+	13, // 6: kubeswift.v1.ClusterEvent.type:type_name -> kubeswift.v1.EventType
 	0,  // 7: kubeswift.v1.ClusterEvent.cluster:type_name -> kubeswift.v1.Cluster
-	9,  // 8: kubeswift.v1.ClusterEvent.error:type_name -> kubeswift.v1.ClusterError
-	1,  // 9: kubeswift.v1.ClusterService.ListClusters:input_type -> kubeswift.v1.ListClustersRequest
-	3,  // 10: kubeswift.v1.ClusterService.WatchClusters:input_type -> kubeswift.v1.WatchClustersRequest
-	2,  // 11: kubeswift.v1.ClusterService.ListClusters:output_type -> kubeswift.v1.ListClustersResponse
-	4,  // 12: kubeswift.v1.ClusterService.WatchClusters:output_type -> kubeswift.v1.ClusterEvent
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	12, // 8: kubeswift.v1.ClusterEvent.error:type_name -> kubeswift.v1.ClusterError
+	5,  // 9: kubeswift.v1.ListNodesResponse.nodes:type_name -> kubeswift.v1.Node
+	12, // 10: kubeswift.v1.ListNodesResponse.error:type_name -> kubeswift.v1.ClusterError
+	1,  // 11: kubeswift.v1.ClusterService.ListClusters:input_type -> kubeswift.v1.ListClustersRequest
+	3,  // 12: kubeswift.v1.ClusterService.WatchClusters:input_type -> kubeswift.v1.WatchClustersRequest
+	6,  // 13: kubeswift.v1.ClusterService.ListNodes:input_type -> kubeswift.v1.ListNodesRequest
+	2,  // 14: kubeswift.v1.ClusterService.ListClusters:output_type -> kubeswift.v1.ListClustersResponse
+	4,  // 15: kubeswift.v1.ClusterService.WatchClusters:output_type -> kubeswift.v1.ClusterEvent
+	7,  // 16: kubeswift.v1.ClusterService.ListNodes:output_type -> kubeswift.v1.ListNodesResponse
+	14, // [14:17] is the sub-list for method output_type
+	11, // [11:14] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_cluster_proto_init() }
@@ -440,7 +626,7 @@ func file_kubeswift_v1_cluster_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_cluster_proto_rawDesc), len(file_kubeswift_v1_cluster_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -266,6 +266,65 @@ func (s *GuestService) deleteLauncherPods(ctx context.Context, dyn dynamic.Inter
 	return nil
 }
 
+// MigrateGuest creates a SwiftMigration to move the guest to targetNode, as the
+// impersonated user. The migration then progresses on the member; the UI
+// watches the guest's phase (a dedicated migrations view is a later add).
+func (s *GuestService) MigrateGuest(ctx context.Context, req *connect.Request[kubeswiftv1.MigrateGuestRequest]) (*connect.Response[kubeswiftv1.MigrateGuestResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	ref := req.Msg.GetRef()
+	if ref == nil || ref.GetCluster() == "" || ref.GetName() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("ref.cluster and ref.name are required"))
+	}
+	if req.Msg.GetTargetNode() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target_node is required"))
+	}
+	mode := req.Msg.GetMode()
+	if mode == "" {
+		mode = "auto"
+	}
+	dyn, err := s.pool.DynamicFor(ref.GetCluster(), id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	mig := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "migration.kubeswift.io/v1alpha1",
+		"kind":       "SwiftMigration",
+		"metadata": map[string]interface{}{
+			"generateName": ref.GetName() + "-mig-",
+			"namespace":    ref.GetNamespace(),
+		},
+		"spec": map[string]interface{}{
+			"guestRef":      map[string]interface{}{"name": ref.GetName()},
+			"target":        map[string]interface{}{"nodeName": req.Msg.GetTargetNode()},
+			"mode":          mode,
+			"allowIPChange": req.Msg.GetAllowIpChange(),
+			"reason":        "initiated from the KubeSwift UI",
+		},
+	}}
+	created, err := dyn.Resource(swiftMigrationGVR).Namespace(ref.GetNamespace()).
+		Create(ctx, mig, metav1.CreateOptions{})
+	if err != nil {
+		// A webhook admission denial (e.g. allowIPChange required for a
+		// cross-node move, or live+VFIO) surfaces here with its reason — never
+		// a silent failure.
+		code := connect.CodeInternal
+		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
+			code = connect.CodeFailedPrecondition
+		}
+		return nil, connect.NewError(code, err)
+	}
+	return connect.NewResponse(&kubeswiftv1.MigrateGuestResponse{
+		Migration: &kubeswiftv1.ObjectRef{
+			Cluster:   ref.GetCluster(),
+			Namespace: ref.GetNamespace(),
+			Name:      created.GetName(),
+		},
+	}), nil
+}
+
 // targetClusters resolves the selector against the registered members. An empty
 // or all-clusters selector targets the whole fleet.
 func (s *GuestService) targetClusters(sel *kubeswiftv1.ClusterSelector) []string {

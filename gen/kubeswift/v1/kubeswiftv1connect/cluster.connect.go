@@ -39,12 +39,16 @@ const (
 	// ClusterServiceWatchClustersProcedure is the fully-qualified name of the ClusterService's
 	// WatchClusters RPC.
 	ClusterServiceWatchClustersProcedure = "/kubeswift.v1.ClusterService/WatchClusters"
+	// ClusterServiceListNodesProcedure is the fully-qualified name of the ClusterService's ListNodes
+	// RPC.
+	ClusterServiceListNodesProcedure = "/kubeswift.v1.ClusterService/ListNodes"
 )
 
 // ClusterServiceClient is a client for the kubeswift.v1.ClusterService service.
 type ClusterServiceClient interface {
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	WatchClusters(context.Context, *connect.Request[v1.WatchClustersRequest]) (*connect.ServerStreamForClient[v1.ClusterEvent], error)
+	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
 }
 
 // NewClusterServiceClient constructs a client for the kubeswift.v1.ClusterService service. By
@@ -70,6 +74,12 @@ func NewClusterServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(clusterServiceMethods.ByName("WatchClusters")),
 			connect.WithClientOptions(opts...),
 		),
+		listNodes: connect.NewClient[v1.ListNodesRequest, v1.ListNodesResponse](
+			httpClient,
+			baseURL+ClusterServiceListNodesProcedure,
+			connect.WithSchema(clusterServiceMethods.ByName("ListNodes")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -77,6 +87,7 @@ func NewClusterServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 type clusterServiceClient struct {
 	listClusters  *connect.Client[v1.ListClustersRequest, v1.ListClustersResponse]
 	watchClusters *connect.Client[v1.WatchClustersRequest, v1.ClusterEvent]
+	listNodes     *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
 }
 
 // ListClusters calls kubeswift.v1.ClusterService.ListClusters.
@@ -89,10 +100,16 @@ func (c *clusterServiceClient) WatchClusters(ctx context.Context, req *connect.R
 	return c.watchClusters.CallServerStream(ctx, req)
 }
 
+// ListNodes calls kubeswift.v1.ClusterService.ListNodes.
+func (c *clusterServiceClient) ListNodes(ctx context.Context, req *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
+	return c.listNodes.CallUnary(ctx, req)
+}
+
 // ClusterServiceHandler is an implementation of the kubeswift.v1.ClusterService service.
 type ClusterServiceHandler interface {
 	ListClusters(context.Context, *connect.Request[v1.ListClustersRequest]) (*connect.Response[v1.ListClustersResponse], error)
 	WatchClusters(context.Context, *connect.Request[v1.WatchClustersRequest], *connect.ServerStream[v1.ClusterEvent]) error
+	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
 }
 
 // NewClusterServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -114,12 +131,20 @@ func NewClusterServiceHandler(svc ClusterServiceHandler, opts ...connect.Handler
 		connect.WithSchema(clusterServiceMethods.ByName("WatchClusters")),
 		connect.WithHandlerOptions(opts...),
 	)
+	clusterServiceListNodesHandler := connect.NewUnaryHandler(
+		ClusterServiceListNodesProcedure,
+		svc.ListNodes,
+		connect.WithSchema(clusterServiceMethods.ByName("ListNodes")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.ClusterService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ClusterServiceListClustersProcedure:
 			clusterServiceListClustersHandler.ServeHTTP(w, r)
 		case ClusterServiceWatchClustersProcedure:
 			clusterServiceWatchClustersHandler.ServeHTTP(w, r)
+		case ClusterServiceListNodesProcedure:
+			clusterServiceListNodesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -135,4 +160,8 @@ func (UnimplementedClusterServiceHandler) ListClusters(context.Context, *connect
 
 func (UnimplementedClusterServiceHandler) WatchClusters(context.Context, *connect.Request[v1.WatchClustersRequest], *connect.ServerStream[v1.ClusterEvent]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ClusterService.WatchClusters is not implemented"))
+}
+
+func (UnimplementedClusterServiceHandler) ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ClusterService.ListNodes is not implemented"))
 }

@@ -45,6 +45,9 @@ const (
 	GuestServiceStartGuestProcedure = "/kubeswift.v1.GuestService/StartGuest"
 	// GuestServiceStopGuestProcedure is the fully-qualified name of the GuestService's StopGuest RPC.
 	GuestServiceStopGuestProcedure = "/kubeswift.v1.GuestService/StopGuest"
+	// GuestServiceMigrateGuestProcedure is the fully-qualified name of the GuestService's MigrateGuest
+	// RPC.
+	GuestServiceMigrateGuestProcedure = "/kubeswift.v1.GuestService/MigrateGuest"
 )
 
 // GuestServiceClient is a client for the kubeswift.v1.GuestService service.
@@ -57,6 +60,9 @@ type GuestServiceClient interface {
 	// be allowed to patch swiftguests on the target member cluster.
 	StartGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
 	StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
+	// Migrate (write plane, P2): create a SwiftMigration to move the guest. The
+	// impersonated user must be allowed to create swiftmigrations on the member.
+	MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error)
 }
 
 // NewGuestServiceClient constructs a client for the kubeswift.v1.GuestService service. By default,
@@ -100,6 +106,12 @@ func NewGuestServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(guestServiceMethods.ByName("StopGuest")),
 			connect.WithClientOptions(opts...),
 		),
+		migrateGuest: connect.NewClient[v1.MigrateGuestRequest, v1.MigrateGuestResponse](
+			httpClient,
+			baseURL+GuestServiceMigrateGuestProcedure,
+			connect.WithSchema(guestServiceMethods.ByName("MigrateGuest")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -110,6 +122,7 @@ type guestServiceClient struct {
 	getGuestDetail *connect.Client[v1.GetGuestDetailRequest, v1.GetGuestDetailResponse]
 	startGuest     *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
 	stopGuest      *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
+	migrateGuest   *connect.Client[v1.MigrateGuestRequest, v1.MigrateGuestResponse]
 }
 
 // ListGuests calls kubeswift.v1.GuestService.ListGuests.
@@ -137,6 +150,11 @@ func (c *guestServiceClient) StopGuest(ctx context.Context, req *connect.Request
 	return c.stopGuest.CallUnary(ctx, req)
 }
 
+// MigrateGuest calls kubeswift.v1.GuestService.MigrateGuest.
+func (c *guestServiceClient) MigrateGuest(ctx context.Context, req *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error) {
+	return c.migrateGuest.CallUnary(ctx, req)
+}
+
 // GuestServiceHandler is an implementation of the kubeswift.v1.GuestService service.
 type GuestServiceHandler interface {
 	ListGuests(context.Context, *connect.Request[v1.ListGuestsRequest]) (*connect.Response[v1.ListGuestsResponse], error)
@@ -147,6 +165,9 @@ type GuestServiceHandler interface {
 	// be allowed to patch swiftguests on the target member cluster.
 	StartGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
 	StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error)
+	// Migrate (write plane, P2): create a SwiftMigration to move the guest. The
+	// impersonated user must be allowed to create swiftmigrations on the member.
+	MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error)
 }
 
 // NewGuestServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -186,6 +207,12 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(guestServiceMethods.ByName("StopGuest")),
 		connect.WithHandlerOptions(opts...),
 	)
+	guestServiceMigrateGuestHandler := connect.NewUnaryHandler(
+		GuestServiceMigrateGuestProcedure,
+		svc.MigrateGuest,
+		connect.WithSchema(guestServiceMethods.ByName("MigrateGuest")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.GuestService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GuestServiceListGuestsProcedure:
@@ -198,6 +225,8 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 			guestServiceStartGuestHandler.ServeHTTP(w, r)
 		case GuestServiceStopGuestProcedure:
 			guestServiceStopGuestHandler.ServeHTTP(w, r)
+		case GuestServiceMigrateGuestProcedure:
+			guestServiceMigrateGuestHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -225,4 +254,8 @@ func (UnimplementedGuestServiceHandler) StartGuest(context.Context, *connect.Req
 
 func (UnimplementedGuestServiceHandler) StopGuest(context.Context, *connect.Request[v1.GuestActionRequest]) (*connect.Response[v1.GuestActionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.StopGuest is not implemented"))
+}
+
+func (UnimplementedGuestServiceHandler) MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.MigrateGuest is not implemented"))
 }

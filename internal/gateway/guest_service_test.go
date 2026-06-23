@@ -82,6 +82,22 @@ func uPod(ns, name, guest string) *unstructured.Unstructured {
 	}}
 }
 
+func uNode(name string, ready, schedulable bool) *unstructured.Unstructured {
+	status := "False"
+	if ready {
+		status = "True"
+	}
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "Node",
+		"metadata":   map[string]interface{}{"name": name},
+		"spec":       map[string]interface{}{"unschedulable": !schedulable},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{map[string]interface{}{"type": "Ready", "status": status}},
+		},
+	}}
+}
+
 func fakeDyn(objs ...*unstructured.Unstructured) dynamic.Interface {
 	ro := make([]runtime.Object, len(objs))
 	for i, o := range objs {
@@ -89,8 +105,10 @@ func fakeDyn(objs ...*unstructured.Unstructured) dynamic.Interface {
 	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			swiftGuestGVR: "SwiftGuestList",
-			podGVR:        "PodList",
+			swiftGuestGVR:     "SwiftGuestList",
+			podGVR:            "PodList",
+			nodeGVR:           "NodeList",
+			swiftMigrationGVR: "SwiftMigrationList",
 		}, ro...)
 }
 
@@ -185,5 +203,34 @@ func TestGuestService_StartStopGuest(t *testing.T) {
 	// A missing ref is rejected, not silently a no-op.
 	if _, err := svc.StartGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{})); err == nil {
 		t.Error("StartGuest with no ref should be InvalidArgument")
+	}
+}
+
+func TestGuestService_MigrateGuest(t *testing.T) {
+	boba := fakeDyn(uGuest("default", "vm-a", "Running"))
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	resp, err := svc.MigrateGuest(context.Background(), connect.NewRequest(&kubeswiftv1.MigrateGuestRequest{
+		Ref:        &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+		TargetNode: "miles",
+		Mode:       "offline",
+	}))
+	if err != nil {
+		t.Fatalf("MigrateGuest: %v", err)
+	}
+	if resp.Msg.Migration.GetCluster() != "boba" || resp.Msg.Migration.GetNamespace() != "default" {
+		t.Errorf("unexpected migration ref: %+v", resp.Msg.Migration)
+	}
+	// A SwiftMigration was actually created in the namespace.
+	migs, _ := boba.Resource(swiftMigrationGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
+	if len(migs.Items) != 1 {
+		t.Errorf("want 1 SwiftMigration created, got %d", len(migs.Items))
+	}
+
+	// target_node is required, not silently defaulted.
+	if _, err := svc.MigrateGuest(context.Background(), connect.NewRequest(&kubeswiftv1.MigrateGuestRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+	})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("missing target_node should be InvalidArgument, got %v", err)
 	}
 }
