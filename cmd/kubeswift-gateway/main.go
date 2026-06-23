@@ -89,9 +89,10 @@ func main() {
 	guestSvc := gateway.NewGuestService(pool, auth)
 	guestPath, guestHandler := kubeswiftv1connect.NewGuestServiceHandler(guestSvc)
 
-	// Telemetry + Console are P0 stubs (return CodeUnimplemented) so the UI can
-	// build its client against the full service set; they are implemented in P1.
-	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(kubeswiftv1connect.UnimplementedTelemetryServiceHandler{})
+	// Telemetry (P1): per-VM range metrics from each member's Prometheus.
+	telSvc := gateway.NewTelemetryService(pool, auth)
+	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc)
+	// Console stays a P0 stub (CodeUnimplemented) until the console plane lands.
 	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{})
 
 	srv := &gateway.Server{

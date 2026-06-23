@@ -17,10 +17,16 @@ import (
 )
 
 // fakeProvider stands in for the ClientPool: a fake dynamic client per member,
-// plus members whose client construction fails (the unreachable case).
+// plus members whose client construction fails (the unreachable case), and an
+// optional per-member Prometheus endpoint (telemetry plane).
 type fakeProvider struct {
 	clients map[string]dynamic.Interface
 	errs    map[string]error
+	prom    map[string]string
+}
+
+func (f *fakeProvider) PrometheusEndpoint(cluster string) string {
+	return f.prom[cluster]
 }
 
 func (f *fakeProvider) DynamicFor(cluster string, _ Identity) (dynamic.Interface, error) {
