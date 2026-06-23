@@ -33,14 +33,14 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
-	// TelemetryServiceStreamVMMetricsProcedure is the fully-qualified name of the TelemetryService's
-	// StreamVMMetrics RPC.
-	TelemetryServiceStreamVMMetricsProcedure = "/kubeswift.v1.TelemetryService/StreamVMMetrics"
+	// TelemetryServiceGetGuestMetricsProcedure is the fully-qualified name of the TelemetryService's
+	// GetGuestMetrics RPC.
+	TelemetryServiceGetGuestMetricsProcedure = "/kubeswift.v1.TelemetryService/GetGuestMetrics"
 )
 
 // TelemetryServiceClient is a client for the kubeswift.v1.TelemetryService service.
 type TelemetryServiceClient interface {
-	StreamVMMetrics(context.Context, *connect.Request[v1.StreamVMMetricsRequest]) (*connect.ServerStreamForClient[v1.VMMetricSample], error)
+	GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error)
 }
 
 // NewTelemetryServiceClient constructs a client for the kubeswift.v1.TelemetryService service. By
@@ -54,10 +54,10 @@ func NewTelemetryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 	baseURL = strings.TrimRight(baseURL, "/")
 	telemetryServiceMethods := v1.File_kubeswift_v1_telemetry_proto.Services().ByName("TelemetryService").Methods()
 	return &telemetryServiceClient{
-		streamVMMetrics: connect.NewClient[v1.StreamVMMetricsRequest, v1.VMMetricSample](
+		getGuestMetrics: connect.NewClient[v1.GetGuestMetricsRequest, v1.GetGuestMetricsResponse](
 			httpClient,
-			baseURL+TelemetryServiceStreamVMMetricsProcedure,
-			connect.WithSchema(telemetryServiceMethods.ByName("StreamVMMetrics")),
+			baseURL+TelemetryServiceGetGuestMetricsProcedure,
+			connect.WithSchema(telemetryServiceMethods.ByName("GetGuestMetrics")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -65,17 +65,17 @@ func NewTelemetryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 
 // telemetryServiceClient implements TelemetryServiceClient.
 type telemetryServiceClient struct {
-	streamVMMetrics *connect.Client[v1.StreamVMMetricsRequest, v1.VMMetricSample]
+	getGuestMetrics *connect.Client[v1.GetGuestMetricsRequest, v1.GetGuestMetricsResponse]
 }
 
-// StreamVMMetrics calls kubeswift.v1.TelemetryService.StreamVMMetrics.
-func (c *telemetryServiceClient) StreamVMMetrics(ctx context.Context, req *connect.Request[v1.StreamVMMetricsRequest]) (*connect.ServerStreamForClient[v1.VMMetricSample], error) {
-	return c.streamVMMetrics.CallServerStream(ctx, req)
+// GetGuestMetrics calls kubeswift.v1.TelemetryService.GetGuestMetrics.
+func (c *telemetryServiceClient) GetGuestMetrics(ctx context.Context, req *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error) {
+	return c.getGuestMetrics.CallUnary(ctx, req)
 }
 
 // TelemetryServiceHandler is an implementation of the kubeswift.v1.TelemetryService service.
 type TelemetryServiceHandler interface {
-	StreamVMMetrics(context.Context, *connect.Request[v1.StreamVMMetricsRequest], *connect.ServerStream[v1.VMMetricSample]) error
+	GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error)
 }
 
 // NewTelemetryServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -85,16 +85,16 @@ type TelemetryServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewTelemetryServiceHandler(svc TelemetryServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	telemetryServiceMethods := v1.File_kubeswift_v1_telemetry_proto.Services().ByName("TelemetryService").Methods()
-	telemetryServiceStreamVMMetricsHandler := connect.NewServerStreamHandler(
-		TelemetryServiceStreamVMMetricsProcedure,
-		svc.StreamVMMetrics,
-		connect.WithSchema(telemetryServiceMethods.ByName("StreamVMMetrics")),
+	telemetryServiceGetGuestMetricsHandler := connect.NewUnaryHandler(
+		TelemetryServiceGetGuestMetricsProcedure,
+		svc.GetGuestMetrics,
+		connect.WithSchema(telemetryServiceMethods.ByName("GetGuestMetrics")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/kubeswift.v1.TelemetryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case TelemetryServiceStreamVMMetricsProcedure:
-			telemetryServiceStreamVMMetricsHandler.ServeHTTP(w, r)
+		case TelemetryServiceGetGuestMetricsProcedure:
+			telemetryServiceGetGuestMetricsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -104,6 +104,6 @@ func NewTelemetryServiceHandler(svc TelemetryServiceHandler, opts ...connect.Han
 // UnimplementedTelemetryServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedTelemetryServiceHandler struct{}
 
-func (UnimplementedTelemetryServiceHandler) StreamVMMetrics(context.Context, *connect.Request[v1.StreamVMMetricsRequest], *connect.ServerStream[v1.VMMetricSample]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.TelemetryService.StreamVMMetrics is not implemented"))
+func (UnimplementedTelemetryServiceHandler) GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.TelemetryService.GetGuestMetrics is not implemented"))
 }

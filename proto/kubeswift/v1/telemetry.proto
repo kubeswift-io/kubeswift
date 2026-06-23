@@ -7,27 +7,46 @@ import "kubeswift/v1/common.proto";
 
 option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
 
-// StreamVMMetricsRequest asks for a live metric stream for one guest. The
-// gateway resolves the guest's member cluster (ref.cluster), queries that
-// member's Prometheus, and joins on the swift.kubeswift.io/guest label
-// (decision D4). Stubbed in P0; implemented in P1.
-message StreamVMMetricsRequest {
-  ObjectRef guest = 1;
-  // metrics names the series the UI charts (e.g. "cpu", "mem", "disk_io",
-  // "net"); empty requests a default set.
-  repeated string metrics = 2;
+// GetGuestMetricsRequest asks for one guest's recent resource usage as range
+// series for charting. The gateway resolves the guest's current launcher pod
+// on its member cluster (ref.cluster) and range-queries that member's
+// Prometheus (cAdvisor; O5 swiftletd vm.counters in v2 — decision D4). The
+// launcher cgroup is the VM (Cloud Hypervisor runs in it).
+message GetGuestMetricsRequest {
+  ObjectRef ref = 1;
+  // WindowSeconds is the look-back duration; default 900 (15m).
+  int32 window_seconds = 2;
+  // StepSeconds is the sample interval; default 30.
+  int32 step_seconds = 3;
 }
 
-// VMMetricSample is one point on one series, tagged with its cluster.
-message VMMetricSample {
-  string cluster = 1;
-  string metric = 2;
-  double value = 3;
-  google.protobuf.Timestamp timestamp = 4;
+// MetricPoint is one sample on one series.
+message MetricPoint {
+  google.protobuf.Timestamp ts = 1;
+  double value = 2;
 }
 
-// TelemetryService streams per-VM telemetry sourced from each member's
+// MetricSeries is one named series over the window.
+message MetricSeries {
+  // Kind: cpu_cores | memory_bytes | net_rx_bps | net_tx_bps.
+  string kind = 1;
+  // Unit: cores | bytes | bytes/sec — a UI formatting hint.
+  string unit = 2;
+  repeated MetricPoint points = 3;
+}
+
+// GetGuestMetricsResponse carries the series, or an error when the member's
+// Prometheus is unconfigured/unreachable (never a silent empty chart).
+message GetGuestMetricsResponse {
+  repeated MetricSeries series = 1;
+  // Error is set (and series empty) when telemetry could not be sourced —
+  // e.g. no prometheusEndpoint registered for the cluster, or it was
+  // unreachable. The cluster field carries ref.cluster.
+  ClusterError error = 2;
+}
+
+// TelemetryService serves per-VM telemetry sourced from each member's
 // Prometheus (cAdvisor today, O5 swiftletd vm.counters in v2 — decision D4).
 service TelemetryService {
-  rpc StreamVMMetrics(StreamVMMetricsRequest) returns (stream VMMetricSample);
+  rpc GetGuestMetrics(GetGuestMetricsRequest) returns (GetGuestMetricsResponse);
 }

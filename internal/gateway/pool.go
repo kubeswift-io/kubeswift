@@ -185,6 +185,17 @@ func (p *ClientPool) Members() []string {
 	return names
 }
 
+// PrometheusEndpoint returns the member's registered Prometheus base URL, or ""
+// if the cluster is unknown or has no prometheusEndpoint configured.
+func (p *ClientPool) PrometheusEndpoint(cluster string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if m, ok := p.members[cluster]; ok {
+		return m.prometheus
+	}
+	return ""
+}
+
 func serverVersion(cfg *rest.Config) (string, error) {
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {

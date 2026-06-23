@@ -22,34 +22,36 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// StreamVMMetricsRequest asks for a live metric stream for one guest. The
-// gateway resolves the guest's member cluster (ref.cluster), queries that
-// member's Prometheus, and joins on the swift.kubeswift.io/guest label
-// (decision D4). Stubbed in P0; implemented in P1.
-type StreamVMMetricsRequest struct {
+// GetGuestMetricsRequest asks for one guest's recent resource usage as range
+// series for charting. The gateway resolves the guest's current launcher pod
+// on its member cluster (ref.cluster) and range-queries that member's
+// Prometheus (cAdvisor; O5 swiftletd vm.counters in v2 — decision D4). The
+// launcher cgroup is the VM (Cloud Hypervisor runs in it).
+type GetGuestMetricsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Guest *ObjectRef             `protobuf:"bytes,1,opt,name=guest,proto3" json:"guest,omitempty"`
-	// metrics names the series the UI charts (e.g. "cpu", "mem", "disk_io",
-	// "net"); empty requests a default set.
-	Metrics       []string `protobuf:"bytes,2,rep,name=metrics,proto3" json:"metrics,omitempty"`
+	Ref   *ObjectRef             `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	// WindowSeconds is the look-back duration; default 900 (15m).
+	WindowSeconds int32 `protobuf:"varint,2,opt,name=window_seconds,json=windowSeconds,proto3" json:"window_seconds,omitempty"`
+	// StepSeconds is the sample interval; default 30.
+	StepSeconds   int32 `protobuf:"varint,3,opt,name=step_seconds,json=stepSeconds,proto3" json:"step_seconds,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *StreamVMMetricsRequest) Reset() {
-	*x = StreamVMMetricsRequest{}
+func (x *GetGuestMetricsRequest) Reset() {
+	*x = GetGuestMetricsRequest{}
 	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *StreamVMMetricsRequest) String() string {
+func (x *GetGuestMetricsRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*StreamVMMetricsRequest) ProtoMessage() {}
+func (*GetGuestMetricsRequest) ProtoMessage() {}
 
-func (x *StreamVMMetricsRequest) ProtoReflect() protoreflect.Message {
+func (x *GetGuestMetricsRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -61,50 +63,55 @@ func (x *StreamVMMetricsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use StreamVMMetricsRequest.ProtoReflect.Descriptor instead.
-func (*StreamVMMetricsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetGuestMetricsRequest.ProtoReflect.Descriptor instead.
+func (*GetGuestMetricsRequest) Descriptor() ([]byte, []int) {
 	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *StreamVMMetricsRequest) GetGuest() *ObjectRef {
+func (x *GetGuestMetricsRequest) GetRef() *ObjectRef {
 	if x != nil {
-		return x.Guest
+		return x.Ref
 	}
 	return nil
 }
 
-func (x *StreamVMMetricsRequest) GetMetrics() []string {
+func (x *GetGuestMetricsRequest) GetWindowSeconds() int32 {
 	if x != nil {
-		return x.Metrics
+		return x.WindowSeconds
 	}
-	return nil
+	return 0
 }
 
-// VMMetricSample is one point on one series, tagged with its cluster.
-type VMMetricSample struct {
+func (x *GetGuestMetricsRequest) GetStepSeconds() int32 {
+	if x != nil {
+		return x.StepSeconds
+	}
+	return 0
+}
+
+// MetricPoint is one sample on one series.
+type MetricPoint struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
-	Metric        string                 `protobuf:"bytes,2,opt,name=metric,proto3" json:"metric,omitempty"`
-	Value         float64                `protobuf:"fixed64,3,opt,name=value,proto3" json:"value,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Ts            *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=ts,proto3" json:"ts,omitempty"`
+	Value         float64                `protobuf:"fixed64,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *VMMetricSample) Reset() {
-	*x = VMMetricSample{}
+func (x *MetricPoint) Reset() {
+	*x = MetricPoint{}
 	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *VMMetricSample) String() string {
+func (x *MetricPoint) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*VMMetricSample) ProtoMessage() {}
+func (*MetricPoint) ProtoMessage() {}
 
-func (x *VMMetricSample) ProtoReflect() protoreflect.Message {
+func (x *MetricPoint) ProtoReflect() protoreflect.Message {
 	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -116,35 +123,141 @@ func (x *VMMetricSample) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use VMMetricSample.ProtoReflect.Descriptor instead.
-func (*VMMetricSample) Descriptor() ([]byte, []int) {
+// Deprecated: Use MetricPoint.ProtoReflect.Descriptor instead.
+func (*MetricPoint) Descriptor() ([]byte, []int) {
 	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *VMMetricSample) GetCluster() string {
+func (x *MetricPoint) GetTs() *timestamppb.Timestamp {
 	if x != nil {
-		return x.Cluster
+		return x.Ts
 	}
-	return ""
+	return nil
 }
 
-func (x *VMMetricSample) GetMetric() string {
-	if x != nil {
-		return x.Metric
-	}
-	return ""
-}
-
-func (x *VMMetricSample) GetValue() float64 {
+func (x *MetricPoint) GetValue() float64 {
 	if x != nil {
 		return x.Value
 	}
 	return 0
 }
 
-func (x *VMMetricSample) GetTimestamp() *timestamppb.Timestamp {
+// MetricSeries is one named series over the window.
+type MetricSeries struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Kind: cpu_cores | memory_bytes | net_rx_bps | net_tx_bps.
+	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	// Unit: cores | bytes | bytes/sec — a UI formatting hint.
+	Unit          string         `protobuf:"bytes,2,opt,name=unit,proto3" json:"unit,omitempty"`
+	Points        []*MetricPoint `protobuf:"bytes,3,rep,name=points,proto3" json:"points,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MetricSeries) Reset() {
+	*x = MetricSeries{}
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MetricSeries) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MetricSeries) ProtoMessage() {}
+
+func (x *MetricSeries) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[2]
 	if x != nil {
-		return x.Timestamp
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MetricSeries.ProtoReflect.Descriptor instead.
+func (*MetricSeries) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *MetricSeries) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *MetricSeries) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+func (x *MetricSeries) GetPoints() []*MetricPoint {
+	if x != nil {
+		return x.Points
+	}
+	return nil
+}
+
+// GetGuestMetricsResponse carries the series, or an error when the member's
+// Prometheus is unconfigured/unreachable (never a silent empty chart).
+type GetGuestMetricsResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Series []*MetricSeries        `protobuf:"bytes,1,rep,name=series,proto3" json:"series,omitempty"`
+	// Error is set (and series empty) when telemetry could not be sourced —
+	// e.g. no prometheusEndpoint registered for the cluster, or it was
+	// unreachable. The cluster field carries ref.cluster.
+	Error         *ClusterError `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetGuestMetricsResponse) Reset() {
+	*x = GetGuestMetricsResponse{}
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetGuestMetricsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetGuestMetricsResponse) ProtoMessage() {}
+
+func (x *GetGuestMetricsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetGuestMetricsResponse.ProtoReflect.Descriptor instead.
+func (*GetGuestMetricsResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetGuestMetricsResponse) GetSeries() []*MetricSeries {
+	if x != nil {
+		return x.Series
+	}
+	return nil
+}
+
+func (x *GetGuestMetricsResponse) GetError() *ClusterError {
+	if x != nil {
+		return x.Error
 	}
 	return nil
 }
@@ -153,17 +266,23 @@ var File_kubeswift_v1_telemetry_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_telemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x1ckubeswift/v1/telemetry.proto\x12\fkubeswift.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19kubeswift/v1/common.proto\"a\n" +
-	"\x16StreamVMMetricsRequest\x12-\n" +
-	"\x05guest\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x05guest\x12\x18\n" +
-	"\ametrics\x18\x02 \x03(\tR\ametrics\"\x92\x01\n" +
-	"\x0eVMMetricSample\x12\x18\n" +
-	"\acluster\x18\x01 \x01(\tR\acluster\x12\x16\n" +
-	"\x06metric\x18\x02 \x01(\tR\x06metric\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\x01R\x05value\x128\n" +
-	"\ttimestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2k\n" +
-	"\x10TelemetryService\x12W\n" +
-	"\x0fStreamVMMetrics\x12$.kubeswift.v1.StreamVMMetricsRequest\x1a\x1c.kubeswift.v1.VMMetricSample0\x01BAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x1ckubeswift/v1/telemetry.proto\x12\fkubeswift.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19kubeswift/v1/common.proto\"\x8d\x01\n" +
+	"\x16GetGuestMetricsRequest\x12)\n" +
+	"\x03ref\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x03ref\x12%\n" +
+	"\x0ewindow_seconds\x18\x02 \x01(\x05R\rwindowSeconds\x12!\n" +
+	"\fstep_seconds\x18\x03 \x01(\x05R\vstepSeconds\"O\n" +
+	"\vMetricPoint\x12*\n" +
+	"\x02ts\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x02ts\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value\"i\n" +
+	"\fMetricSeries\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04unit\x18\x02 \x01(\tR\x04unit\x121\n" +
+	"\x06points\x18\x03 \x03(\v2\x19.kubeswift.v1.MetricPointR\x06points\"\x7f\n" +
+	"\x17GetGuestMetricsResponse\x122\n" +
+	"\x06series\x18\x01 \x03(\v2\x1a.kubeswift.v1.MetricSeriesR\x06series\x120\n" +
+	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2r\n" +
+	"\x10TelemetryService\x12^\n" +
+	"\x0fGetGuestMetrics\x12$.kubeswift.v1.GetGuestMetricsRequest\x1a%.kubeswift.v1.GetGuestMetricsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_telemetry_proto_rawDescOnce sync.Once
@@ -177,23 +296,29 @@ func file_kubeswift_v1_telemetry_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_telemetry_proto_rawDescData
 }
 
-var file_kubeswift_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_kubeswift_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_kubeswift_v1_telemetry_proto_goTypes = []any{
-	(*StreamVMMetricsRequest)(nil), // 0: kubeswift.v1.StreamVMMetricsRequest
-	(*VMMetricSample)(nil),         // 1: kubeswift.v1.VMMetricSample
-	(*ObjectRef)(nil),              // 2: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),  // 3: google.protobuf.Timestamp
+	(*GetGuestMetricsRequest)(nil),  // 0: kubeswift.v1.GetGuestMetricsRequest
+	(*MetricPoint)(nil),             // 1: kubeswift.v1.MetricPoint
+	(*MetricSeries)(nil),            // 2: kubeswift.v1.MetricSeries
+	(*GetGuestMetricsResponse)(nil), // 3: kubeswift.v1.GetGuestMetricsResponse
+	(*ObjectRef)(nil),               // 4: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),   // 5: google.protobuf.Timestamp
+	(*ClusterError)(nil),            // 6: kubeswift.v1.ClusterError
 }
 var file_kubeswift_v1_telemetry_proto_depIdxs = []int32{
-	2, // 0: kubeswift.v1.StreamVMMetricsRequest.guest:type_name -> kubeswift.v1.ObjectRef
-	3, // 1: kubeswift.v1.VMMetricSample.timestamp:type_name -> google.protobuf.Timestamp
-	0, // 2: kubeswift.v1.TelemetryService.StreamVMMetrics:input_type -> kubeswift.v1.StreamVMMetricsRequest
-	1, // 3: kubeswift.v1.TelemetryService.StreamVMMetrics:output_type -> kubeswift.v1.VMMetricSample
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	4, // 0: kubeswift.v1.GetGuestMetricsRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	5, // 1: kubeswift.v1.MetricPoint.ts:type_name -> google.protobuf.Timestamp
+	1, // 2: kubeswift.v1.MetricSeries.points:type_name -> kubeswift.v1.MetricPoint
+	2, // 3: kubeswift.v1.GetGuestMetricsResponse.series:type_name -> kubeswift.v1.MetricSeries
+	6, // 4: kubeswift.v1.GetGuestMetricsResponse.error:type_name -> kubeswift.v1.ClusterError
+	0, // 5: kubeswift.v1.TelemetryService.GetGuestMetrics:input_type -> kubeswift.v1.GetGuestMetricsRequest
+	3, // 6: kubeswift.v1.TelemetryService.GetGuestMetrics:output_type -> kubeswift.v1.GetGuestMetricsResponse
+	6, // [6:7] is the sub-list for method output_type
+	5, // [5:6] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_telemetry_proto_init() }
@@ -208,7 +333,7 @@ func file_kubeswift_v1_telemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_telemetry_proto_rawDesc), len(file_kubeswift_v1_telemetry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
