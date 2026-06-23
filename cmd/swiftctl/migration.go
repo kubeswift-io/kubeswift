@@ -10,10 +10,10 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/actions"
 	"github.com/projectbeskar/kubeswift/internal/scheme"
 )
 
@@ -165,57 +165,40 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := newMigrationClient()
+	if migrateCheck {
+		// Preflight only — the typed client drives the read-only checks; it
+		// creates nothing.
+		c, err := newMigrationClient()
+		if err != nil {
+			return err
+		}
+		return runMigratePreflight(cmd, c, guestName, ns, mode)
+	}
+
+	dyn, err := newDynamicClient()
 	if err != nil {
 		return err
 	}
-	if migrateCheck {
-		return runMigratePreflight(cmd, c, guestName, ns, mode)
-	}
-	name := migrateName
-	if name == "" {
-		// Use the apiserver's GenerateName so the resource gets a
-		// unique suffix even if the operator runs `swiftctl migrate`
-		// twice in quick succession.
-		name = ""
-	}
-	mig := &migrationv1alpha1.SwiftMigration{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ns,
-		},
-		Spec: migrationv1alpha1.SwiftMigrationSpec{
-			GuestRef:      migrationv1alpha1.SwiftMigrationGuestRef{Name: guestName},
-			Target:        migrationv1alpha1.SwiftMigrationTarget{NodeName: migrateTargetNode},
-			Mode:          mode,
-			AllowIPChange: migrateAllowIPChange,
-		},
-	}
-	// Only set spec.timeout when the operator passed --timeout; leaving it nil
-	// lets the apiserver apply the CRD default (30m).
-	mig.Spec.Timeout = migrationTimeoutPtr(migrateTimeout)
-	// --ttl (opt-in): auto-delete the migration record this long after it
-	// finishes. nil when unset (kept until deleted by hand).
-	mig.Spec.TTL = migrationTimeoutPtr(migrateTTL)
-	if name == "" {
-		mig.GenerateName = guestName + "-migrate-"
-	} else {
-		mig.Name = name
-	}
-	if err := c.Create(context.Background(), mig); err != nil {
+	// migrateName is "" by default, so actions.Migrate falls back to the
+	// "<guest>-migrate-" generateName prefix (the apiserver assigns a unique
+	// suffix even if the operator runs `swiftctl migrate` twice in quick
+	// succession). --timeout/--ttl of 0 are omitted so the CRD defaults apply
+	// (spec.timeout defaults to 30m; spec.ttl unset = keep).
+	created, err := actions.Migrate(context.Background(), dyn, actions.MigrateParams{
+		Namespace:     ns,
+		GuestName:     guestName,
+		TargetNode:    migrateTargetNode,
+		Mode:          string(mode),
+		AllowIPChange: migrateAllowIPChange,
+		Name:          migrateName,
+		Timeout:       migrateTimeout,
+		TTL:           migrateTTL,
+	})
+	if err != nil {
 		return fmt.Errorf("create SwiftMigration: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "swiftmigration.migration.kubeswift.io/%s created\n", mig.Name)
+	fmt.Fprintf(cmd.OutOrStdout(), "swiftmigration.migration.kubeswift.io/%s created\n", created.GetName())
 	return nil
-}
-
-// migrationTimeoutPtr maps the --timeout flag to spec.timeout: a positive
-// duration becomes an explicit override; zero (the flag default) returns nil so
-// the apiserver applies the CRD default (30m).
-func migrationTimeoutPtr(d time.Duration) *metav1.Duration {
-	if d <= 0 {
-		return nil
-	}
-	return &metav1.Duration{Duration: d}
 }
 
 func runMigrationList(cmd *cobra.Command, _ []string) error {

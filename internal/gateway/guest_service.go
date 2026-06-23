@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"sync"
 
@@ -12,13 +11,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
 	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
 	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
 	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	"github.com/projectbeskar/kubeswift/internal/actions"
 )
 
 // clientProvider is the subset of ClientPool the read plane needs: a per-member
@@ -199,24 +198,25 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 }
 
 // StartGuest sets the guest's runPolicy to Running; StopGuest sets it to
-// Stopped. Both patch spec.runPolicy via the impersonating dynamic client, so
-// the member cluster's RBAC authorizes the end user (decision D1).
-//
-// StopGuest ALSO deletes the launcher pod: the SwiftGuest stop guard is
-// reactive — it prevents pod *recreation*, it does not stop a running VM — so a
-// runPolicy patch alone leaves the guest running (verified on-cluster). Deleting
-// the pod triggers swiftletd's graceful SIGTERM shutdown; the guard then keeps
-// it stopped. StartGuest needs no pod action — the controller recreates the pod
-// once runPolicy is Running. The live Watch reflects the resulting phase.
+// Stopped and deletes the launcher pod. Both run as the impersonated user
+// against the member cluster (decision D1) and delegate to internal/actions,
+// the single implementation shared with swiftctl — so a stop that forgets the
+// pod delete (PR #267) cannot diverge between the two surfaces again. The live
+// Watch reflects the resulting phase.
 func (s *GuestService) StartGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
-	return s.setRunPolicy(ctx, req, "Running", false)
+	return s.guestAction(ctx, req, actions.Start)
 }
 
 func (s *GuestService) StopGuest(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest]) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
-	return s.setRunPolicy(ctx, req, "Stopped", true)
+	return s.guestAction(ctx, req, actions.Stop)
 }
 
-func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest], policy string, deleteLauncher bool) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
+// guestAction authenticates, validates the ref, resolves the impersonating
+// dynamic client, runs the shared action, and maps the patched guest to proto.
+// action is actions.Start or actions.Stop (same signature).
+func (s *GuestService) guestAction(ctx context.Context, req *connect.Request[kubeswiftv1.GuestActionRequest],
+	action func(context.Context, dynamic.Interface, string, string) (*unstructured.Unstructured, error),
+) (*connect.Response[kubeswiftv1.GuestActionResponse], error) {
 	id, err := s.auth.Authenticate(ctx, req.Header())
 	if err != nil {
 		return nil, err
@@ -229,41 +229,15 @@ func (s *GuestService) setRunPolicy(ctx context.Context, req *connect.Request[ku
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
-	patch := []byte(fmt.Sprintf(`{"spec":{"runPolicy":%q}}`, policy))
-	u, err := dyn.Resource(swiftGuestGVR).Namespace(ref.GetNamespace()).
-		Patch(ctx, ref.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
+	u, err := action(ctx, dyn, ref.GetNamespace(), ref.GetName())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	if deleteLauncher {
-		if err := s.deleteLauncherPods(ctx, dyn, ref); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("runPolicy patched but stopping the VM (pod delete) failed: %w", err))
-		}
 	}
 	g, err := toSwiftGuest(u)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&kubeswiftv1.GuestActionResponse{Guest: guestToProto(ref.GetCluster(), g)}), nil
-}
-
-// deleteLauncherPods deletes the guest's launcher pod(s), selected by the guest
-// label (robust to the <guest>-mig-<uid> rename after a live migration). A
-// pod that is already gone is success — the VM is already stopped.
-func (s *GuestService) deleteLauncherPods(ctx context.Context, dyn dynamic.Interface, ref *kubeswiftv1.ObjectRef) error {
-	pods, err := dyn.Resource(podGVR).Namespace(ref.GetNamespace()).
-		List(ctx, metav1.ListOptions{LabelSelector: guestPodLabel + "=" + ref.GetName()})
-	if err != nil {
-		return err
-	}
-	for i := range pods.Items {
-		name := pods.Items[i].GetName()
-		if err := dyn.Resource(podGVR).Namespace(ref.GetNamespace()).
-			Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-	}
-	return nil
 }
 
 // MigrateGuest creates a SwiftMigration to move the guest to targetNode, as the
@@ -281,31 +255,19 @@ func (s *GuestService) MigrateGuest(ctx context.Context, req *connect.Request[ku
 	if req.Msg.GetTargetNode() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target_node is required"))
 	}
-	mode := req.Msg.GetMode()
-	if mode == "" {
-		mode = "auto"
-	}
 	dyn, err := s.pool.DynamicFor(ref.GetCluster(), id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
-	mig := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "migration.kubeswift.io/v1alpha1",
-		"kind":       "SwiftMigration",
-		"metadata": map[string]interface{}{
-			"generateName": ref.GetName() + "-mig-",
-			"namespace":    ref.GetNamespace(),
-		},
-		"spec": map[string]interface{}{
-			"guestRef":      map[string]interface{}{"name": ref.GetName()},
-			"target":        map[string]interface{}{"nodeName": req.Msg.GetTargetNode()},
-			"mode":          mode,
-			"allowIPChange": req.Msg.GetAllowIpChange(),
-			"reason":        "initiated from the KubeSwift UI",
-		},
-	}}
-	created, err := dyn.Resource(swiftMigrationGVR).Namespace(ref.GetNamespace()).
-		Create(ctx, mig, metav1.CreateOptions{})
+	created, err := actions.Migrate(ctx, dyn, actions.MigrateParams{
+		Namespace:     ref.GetNamespace(),
+		GuestName:     ref.GetName(),
+		TargetNode:    req.Msg.GetTargetNode(),
+		Mode:          req.Msg.GetMode(), // empty resolves to auto in actions.Migrate
+		AllowIPChange: req.Msg.GetAllowIpChange(),
+		Reason:        "initiated from the KubeSwift UI",
+		GenerateName:  ref.GetName() + "-mig-",
+	})
 	if err != nil {
 		// A webhook admission denial (e.g. allowIPChange required for a
 		// cross-node move, or live+VFIO) surfaces here with its reason — never

@@ -181,8 +181,6 @@ func (r *GuestResolver) DeletePod(ctx context.Context, pod *corev1.Pod) error {
 	return r.Delete(ctx, pod)
 }
 
-// PatchRunPolicy patches the SwiftGuest spec.runPolicy.
-func (r *GuestResolver) PatchRunPolicy(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, runPolicy swiftv1alpha1.RunPolicy) error {
-	guest.Spec.RunPolicy = runPolicy
-	return r.Update(ctx, guest)
-}
+// NOTE: run-policy patching (start/stop) now lives in internal/actions
+// (shared with the kubeswift-gateway over a dynamic client). The former
+// GuestResolver.PatchRunPolicy was removed to keep a single implementation.

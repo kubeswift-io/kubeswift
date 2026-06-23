@@ -20,36 +20,31 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
+	"github.com/projectbeskar/kubeswift/internal/actions"
 )
 
-// swiftGuestGVR is the dynamic resource the read plane lists/watches per member.
-// Using the dynamic client keyed by a known GVR avoids per-request discovery /
-// RESTMapper construction; member clients are therefore cheap to create.
-var swiftGuestGVR = schema.GroupVersionResource{
-	Group:    "swift.kubeswift.io",
-	Version:  "v1alpha1",
-	Resource: "swiftguests",
-}
-
-// podGVR is the launcher-pod resource. StopGuest deletes the launcher pod (by
-// the guest label below) after patching runPolicy, because the SwiftGuest stop
-// guard is reactive only — it prevents pod recreation, it does not stop a
-// running VM.
-var podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
-
-// swiftMigrationGVR is the SwiftMigration resource — MigrateGuest creates one.
-var swiftMigrationGVR = schema.GroupVersionResource{Group: "migration.kubeswift.io", Version: "v1alpha1", Resource: "swiftmigrations"}
+// swiftGuestGVR, podGVR, swiftMigrationGVR, guestPodLabel, and launcherContainer
+// are sourced from internal/actions — the single definition shared with
+// swiftctl and the write-action primitives. The read plane (ListGuests /
+// WatchGuests), console, and telemetry reference these gateway-local names; the
+// values live in one place.
+var (
+	swiftGuestGVR     = actions.SwiftGuestGVR
+	podGVR            = actions.PodGVR
+	swiftMigrationGVR = actions.SwiftMigrationGVR
+)
 
 // nodeGVR is the core node resource — ListNodes lists it for the migrate picker.
+// It is gateway-only (no write action touches nodes), so it stays local.
 var nodeGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
 
 // guestPodLabel ties a launcher pod to its SwiftGuest. The label (not the pod
 // name) is the stable handle — a live-migrated guest's pod is <guest>-mig-<uid>.
-const guestPodLabel = "swift.kubeswift.io/guest"
+const guestPodLabel = actions.GuestLabel
 
 // launcherContainer is the swiftletd container in the (multi-container) launcher
 // pod — the one holding the serial socket. The console exec must name it.
-const launcherContainer = "launcher"
+const launcherContainer = actions.LauncherContainer
 
 // ClientPool watches the hub's fleet.Cluster registry and maintains a base REST
 // config per member cluster, built from the member's credential Secret. It
