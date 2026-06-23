@@ -41,6 +41,10 @@ var podGVR = schema.GroupVersionResource{Version: "v1", Resource: "pods"}
 // name) is the stable handle — a live-migrated guest's pod is <guest>-mig-<uid>.
 const guestPodLabel = "swift.kubeswift.io/guest"
 
+// launcherContainer is the swiftletd container in the (multi-container) launcher
+// pod — the one holding the serial socket. The console exec must name it.
+const launcherContainer = "launcher"
+
 // ClientPool watches the hub's fleet.Cluster registry and maintains a base REST
 // config per member cluster, built from the member's credential Secret. It
 // hands out per-request dynamic clients that impersonate the end user (D1). On

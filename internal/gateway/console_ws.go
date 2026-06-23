@@ -117,11 +117,12 @@ func (h *ConsoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command: []string{"sh", "-c", bridge},
-			Stdin:   true,
-			Stdout:  true,
-			Stderr:  false,
-			TTY:     true,
+			Container: launcherContainer, // the launcher pod is multi-container; name the swiftletd one
+			Command:   []string{"sh", "-c", bridge},
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    false,
+			TTY:       true,
 		}, scheme.ParameterCodec)
 
 	executor, err := remotecommand.NewSPDYExecutor(cfg, "POST", execReq.URL())
