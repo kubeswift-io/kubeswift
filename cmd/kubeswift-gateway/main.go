@@ -95,6 +95,11 @@ func main() {
 	// Console stays a P0 stub (CodeUnimplemented) until the console plane lands.
 	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{})
 
+	// Console plane (D5 bootstrap): a raw WebSocket at /console that exec-bridges
+	// the guest's serial socket. Not a Connect RPC — browsers can't do bidi
+	// Connect — so it rides RawHandlers, not the generated ConsoleService stub.
+	consoleWS := gateway.NewConsoleHandler(pool, auth)
+
 	srv := &gateway.Server{
 		Addr:          *listen,
 		AllowedOrigin: *corsOrigin,
@@ -103,6 +108,9 @@ func main() {
 			{Path: guestPath, Handler: guestHandler},
 			{Path: telPath, Handler: telHandler},
 			{Path: conPath, Handler: conHandler},
+		},
+		RawHandlers: []gateway.ConnectHandler{
+			{Path: "/console", Handler: consoleWS},
 		},
 		Log: log.WithName("server"),
 	}

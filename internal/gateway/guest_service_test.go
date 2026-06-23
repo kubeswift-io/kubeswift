@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/rest"
 
 	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
 )
@@ -27,6 +28,13 @@ type fakeProvider struct {
 
 func (f *fakeProvider) PrometheusEndpoint(cluster string) string {
 	return f.prom[cluster]
+}
+
+func (f *fakeProvider) RestConfigFor(cluster string, _ Identity) (*rest.Config, error) {
+	if _, ok := f.clients[cluster]; ok {
+		return &rest.Config{Host: "http://fake"}, nil
+	}
+	return nil, errors.New("no config for " + cluster)
 }
 
 func (f *fakeProvider) DynamicFor(cluster string, _ Identity) (dynamic.Interface, error) {
