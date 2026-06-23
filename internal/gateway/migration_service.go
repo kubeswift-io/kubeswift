@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/watch"
 
 	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
 	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
@@ -84,6 +85,112 @@ func (s *MigrationService) listOne(ctx context.Context, cluster string, id Ident
 		out = append(out, migrationToProto(cluster, &ul.Items[i]))
 	}
 	return out, nil
+}
+
+// WatchMigrations multiplexes a per-cluster watch into one stream (mirrors
+// WatchGuests). A member whose watch fails yields a BOOKMARK event carrying a
+// ClusterError, so the UI shows a per-cluster problem rather than a dead stream.
+func (s *MigrationService) WatchMigrations(ctx context.Context, req *connect.Request[kubeswiftv1.WatchMigrationsRequest], stream *connect.ServerStream[kubeswiftv1.MigrationEvent]) error {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return err
+	}
+	clusters := s.targetClusters(req.Msg.GetClusters())
+	namespace := req.Msg.GetNamespace()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	events := make(chan *kubeswiftv1.MigrationEvent, 256)
+	var wg sync.WaitGroup
+	for _, cl := range clusters {
+		wg.Add(1)
+		go func(cl string) {
+			defer wg.Done()
+			s.watchOne(ctx, cl, id, namespace, events)
+		}(cl)
+	}
+	go func() { wg.Wait(); close(events) }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev, ok := <-events:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(ev); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (s *MigrationService) watchOne(ctx context.Context, cluster string, id Identity, namespace string, out chan<- *kubeswiftv1.MigrationEvent) {
+	dyn, err := s.pool.DynamicFor(cluster, id)
+	if err != nil {
+		s.sendErr(ctx, out, cluster, err)
+		return
+	}
+	res := dyn.Resource(swiftMigrationGVR)
+	var w watch.Interface
+	if namespace != "" {
+		w, err = res.Namespace(namespace).Watch(ctx, metav1.ListOptions{})
+	} else {
+		w, err = res.Watch(ctx, metav1.ListOptions{})
+	}
+	if err != nil {
+		s.sendErr(ctx, out, cluster, err)
+		return
+	}
+	defer w.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-w.ResultChan():
+			if !ok {
+				return
+			}
+			if ev := migrationWatchEventToProto(cluster, e); ev != nil {
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+func migrationWatchEventToProto(cluster string, e watch.Event) *kubeswiftv1.MigrationEvent {
+	var t kubeswiftv1.EventType
+	switch e.Type {
+	case watch.Added:
+		t = kubeswiftv1.EventType_EVENT_TYPE_ADDED
+	case watch.Modified:
+		t = kubeswiftv1.EventType_EVENT_TYPE_MODIFIED
+	case watch.Deleted:
+		t = kubeswiftv1.EventType_EVENT_TYPE_DELETED
+	default: // Bookmark / Error from a member watch: not a migration row
+		return nil
+	}
+	u, ok := e.Object.(*unstructured.Unstructured)
+	if !ok {
+		return nil
+	}
+	return &kubeswiftv1.MigrationEvent{Type: t, Migration: migrationToProto(cluster, u)}
+}
+
+func (s *MigrationService) sendErr(ctx context.Context, out chan<- *kubeswiftv1.MigrationEvent, cluster string, err error) {
+	select {
+	case out <- &kubeswiftv1.MigrationEvent{
+		Type:  kubeswiftv1.EventType_EVENT_TYPE_BOOKMARK,
+		Error: &kubeswiftv1.ClusterError{Cluster: cluster, Message: err.Error()},
+	}:
+	case <-ctx.Done():
+	}
 }
 
 // targetClusters resolves the selector against the registered members (mirrors
