@@ -529,6 +529,237 @@ func (x *GetResourceResponse) GetJson() string {
 	return ""
 }
 
+// ApplyResourceRequest creates-or-updates one object from edited YAML via
+// server-side apply, AS THE IMPERSONATED USER — RBAC is the only gate. The
+// kind's GVR comes from the catalog; the object's name comes from the YAML
+// (namespace from the YAML, falling back to the request field for scoping).
+type ApplyResourceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"` // a ResourceKind.key
+	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Yaml          string                 `protobuf:"bytes,4,opt,name=yaml,proto3" json:"yaml,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyResourceRequest) Reset() {
+	*x = ApplyResourceRequest{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyResourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyResourceRequest) ProtoMessage() {}
+
+func (x *ApplyResourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyResourceRequest.ProtoReflect.Descriptor instead.
+func (*ApplyResourceRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ApplyResourceRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *ApplyResourceRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ApplyResourceRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *ApplyResourceRequest) GetYaml() string {
+	if x != nil {
+		return x.Yaml
+	}
+	return ""
+}
+
+type ApplyResourceResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// the applied object re-rendered (managedFields stripped) — the editor
+	// refreshes from this.
+	Yaml          string `protobuf:"bytes,1,opt,name=yaml,proto3" json:"yaml,omitempty"`
+	Json          string `protobuf:"bytes,2,opt,name=json,proto3" json:"json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyResourceResponse) Reset() {
+	*x = ApplyResourceResponse{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyResourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyResourceResponse) ProtoMessage() {}
+
+func (x *ApplyResourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyResourceResponse.ProtoReflect.Descriptor instead.
+func (*ApplyResourceResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ApplyResourceResponse) GetYaml() string {
+	if x != nil {
+		return x.Yaml
+	}
+	return ""
+}
+
+func (x *ApplyResourceResponse) GetJson() string {
+	if x != nil {
+		return x.Json
+	}
+	return ""
+}
+
+// DeleteResourceRequest deletes one object AS THE IMPERSONATED USER.
+type DeleteResourceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"` // a ResourceKind.key
+	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteResourceRequest) Reset() {
+	*x = DeleteResourceRequest{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteResourceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteResourceRequest) ProtoMessage() {}
+
+func (x *DeleteResourceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteResourceRequest.ProtoReflect.Descriptor instead.
+func (*DeleteResourceRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *DeleteResourceRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *DeleteResourceRequest) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *DeleteResourceRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *DeleteResourceRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteResourceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteResourceResponse) Reset() {
+	*x = DeleteResourceResponse{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteResourceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteResourceResponse) ProtoMessage() {}
+
+func (x *DeleteResourceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteResourceResponse.ProtoReflect.Descriptor instead.
+func (*DeleteResourceResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{11}
+}
+
 var File_kubeswift_v1_resource_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_resource_proto_rawDesc = "" +
@@ -571,11 +802,27 @@ const file_kubeswift_v1_resource_proto_rawDesc = "" +
 	"\x04name\x18\x04 \x01(\tR\x04name\"=\n" +
 	"\x13GetResourceResponse\x12\x12\n" +
 	"\x04yaml\x18\x01 \x01(\tR\x04yaml\x12\x12\n" +
-	"\x04json\x18\x02 \x01(\tR\x04json2\xa5\x02\n" +
+	"\x04json\x18\x02 \x01(\tR\x04json\"v\n" +
+	"\x14ApplyResourceRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04yaml\x18\x04 \x01(\tR\x04yaml\"?\n" +
+	"\x15ApplyResourceResponse\x12\x12\n" +
+	"\x04yaml\x18\x01 \x01(\tR\x04yaml\x12\x12\n" +
+	"\x04json\x18\x02 \x01(\tR\x04json\"w\n" +
+	"\x15DeleteResourceRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\"\x18\n" +
+	"\x16DeleteResourceResponse2\xdc\x03\n" +
 	"\x0fResourceService\x12d\n" +
 	"\x11ListResourceKinds\x12&.kubeswift.v1.ListResourceKindsRequest\x1a'.kubeswift.v1.ListResourceKindsResponse\x12X\n" +
 	"\rListResources\x12\".kubeswift.v1.ListResourcesRequest\x1a#.kubeswift.v1.ListResourcesResponse\x12R\n" +
-	"\vGetResource\x12 .kubeswift.v1.GetResourceRequest\x1a!.kubeswift.v1.GetResourceResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\vGetResource\x12 .kubeswift.v1.GetResourceRequest\x1a!.kubeswift.v1.GetResourceResponse\x12X\n" +
+	"\rApplyResource\x12\".kubeswift.v1.ApplyResourceRequest\x1a#.kubeswift.v1.ApplyResourceResponse\x12[\n" +
+	"\x0eDeleteResource\x12#.kubeswift.v1.DeleteResourceRequest\x1a$.kubeswift.v1.DeleteResourceResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_resource_proto_rawDescOnce sync.Once
@@ -589,7 +836,7 @@ func file_kubeswift_v1_resource_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_resource_proto_rawDescData
 }
 
-var file_kubeswift_v1_resource_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_kubeswift_v1_resource_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_kubeswift_v1_resource_proto_goTypes = []any{
 	(*ResourceKind)(nil),              // 0: kubeswift.v1.ResourceKind
 	(*ListResourceKindsRequest)(nil),  // 1: kubeswift.v1.ListResourceKindsRequest
@@ -599,26 +846,34 @@ var file_kubeswift_v1_resource_proto_goTypes = []any{
 	(*ListResourcesResponse)(nil),     // 5: kubeswift.v1.ListResourcesResponse
 	(*GetResourceRequest)(nil),        // 6: kubeswift.v1.GetResourceRequest
 	(*GetResourceResponse)(nil),       // 7: kubeswift.v1.GetResourceResponse
-	nil,                               // 8: kubeswift.v1.Resource.ColumnsEntry
-	(*ObjectRef)(nil),                 // 9: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),     // 10: google.protobuf.Timestamp
-	(*ClusterError)(nil),              // 11: kubeswift.v1.ClusterError
+	(*ApplyResourceRequest)(nil),      // 8: kubeswift.v1.ApplyResourceRequest
+	(*ApplyResourceResponse)(nil),     // 9: kubeswift.v1.ApplyResourceResponse
+	(*DeleteResourceRequest)(nil),     // 10: kubeswift.v1.DeleteResourceRequest
+	(*DeleteResourceResponse)(nil),    // 11: kubeswift.v1.DeleteResourceResponse
+	nil,                               // 12: kubeswift.v1.Resource.ColumnsEntry
+	(*ObjectRef)(nil),                 // 13: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),     // 14: google.protobuf.Timestamp
+	(*ClusterError)(nil),              // 15: kubeswift.v1.ClusterError
 }
 var file_kubeswift_v1_resource_proto_depIdxs = []int32{
 	0,  // 0: kubeswift.v1.ListResourceKindsResponse.kinds:type_name -> kubeswift.v1.ResourceKind
-	9,  // 1: kubeswift.v1.Resource.ref:type_name -> kubeswift.v1.ObjectRef
-	10, // 2: kubeswift.v1.Resource.created_at:type_name -> google.protobuf.Timestamp
-	8,  // 3: kubeswift.v1.Resource.columns:type_name -> kubeswift.v1.Resource.ColumnsEntry
+	13, // 1: kubeswift.v1.Resource.ref:type_name -> kubeswift.v1.ObjectRef
+	14, // 2: kubeswift.v1.Resource.created_at:type_name -> google.protobuf.Timestamp
+	12, // 3: kubeswift.v1.Resource.columns:type_name -> kubeswift.v1.Resource.ColumnsEntry
 	3,  // 4: kubeswift.v1.ListResourcesResponse.resources:type_name -> kubeswift.v1.Resource
-	11, // 5: kubeswift.v1.ListResourcesResponse.error:type_name -> kubeswift.v1.ClusterError
+	15, // 5: kubeswift.v1.ListResourcesResponse.error:type_name -> kubeswift.v1.ClusterError
 	1,  // 6: kubeswift.v1.ResourceService.ListResourceKinds:input_type -> kubeswift.v1.ListResourceKindsRequest
 	4,  // 7: kubeswift.v1.ResourceService.ListResources:input_type -> kubeswift.v1.ListResourcesRequest
 	6,  // 8: kubeswift.v1.ResourceService.GetResource:input_type -> kubeswift.v1.GetResourceRequest
-	2,  // 9: kubeswift.v1.ResourceService.ListResourceKinds:output_type -> kubeswift.v1.ListResourceKindsResponse
-	5,  // 10: kubeswift.v1.ResourceService.ListResources:output_type -> kubeswift.v1.ListResourcesResponse
-	7,  // 11: kubeswift.v1.ResourceService.GetResource:output_type -> kubeswift.v1.GetResourceResponse
-	9,  // [9:12] is the sub-list for method output_type
-	6,  // [6:9] is the sub-list for method input_type
+	8,  // 9: kubeswift.v1.ResourceService.ApplyResource:input_type -> kubeswift.v1.ApplyResourceRequest
+	10, // 10: kubeswift.v1.ResourceService.DeleteResource:input_type -> kubeswift.v1.DeleteResourceRequest
+	2,  // 11: kubeswift.v1.ResourceService.ListResourceKinds:output_type -> kubeswift.v1.ListResourceKindsResponse
+	5,  // 12: kubeswift.v1.ResourceService.ListResources:output_type -> kubeswift.v1.ListResourcesResponse
+	7,  // 13: kubeswift.v1.ResourceService.GetResource:output_type -> kubeswift.v1.GetResourceResponse
+	9,  // 14: kubeswift.v1.ResourceService.ApplyResource:output_type -> kubeswift.v1.ApplyResourceResponse
+	11, // 15: kubeswift.v1.ResourceService.DeleteResource:output_type -> kubeswift.v1.DeleteResourceResponse
+	11, // [11:16] is the sub-list for method output_type
+	6,  // [6:11] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name
 	6,  // [6:6] is the sub-list for extension extendee
 	0,  // [0:6] is the sub-list for field type_name
@@ -636,7 +891,7 @@ func file_kubeswift_v1_resource_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_resource_proto_rawDesc), len(file_kubeswift_v1_resource_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
