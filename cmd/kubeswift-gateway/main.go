@@ -114,6 +114,11 @@ func main() {
 	// networking, storage, secrets — metadata only — and the KubeSwift CRDs).
 	resSvc := gateway.NewResourceService(pool, auth)
 	resPath, resHandler := kubeswiftv1connect.NewResourceServiceHandler(resSvc)
+
+	// Access (B3): the RBAC editor backend — list/create KubeSwift roles + assign
+	// them to OIDC users/groups (cluster-wide or per-namespace), as the user.
+	accessSvc := gateway.NewAccessService(pool, auth)
+	accessPath, accessHandler := kubeswiftv1connect.NewAccessServiceHandler(accessSvc)
 	// Console stays a P0 stub (CodeUnimplemented) until the console plane lands.
 	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{})
 
@@ -131,6 +136,7 @@ func main() {
 			{Path: migPath, Handler: migHandler},
 			{Path: telPath, Handler: telHandler},
 			{Path: resPath, Handler: resHandler},
+			{Path: accessPath, Handler: accessHandler},
 			{Path: conPath, Handler: conHandler},
 		},
 		RawHandlers: []gateway.ConnectHandler{
