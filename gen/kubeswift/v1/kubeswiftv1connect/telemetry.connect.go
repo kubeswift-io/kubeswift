@@ -36,11 +36,15 @@ const (
 	// TelemetryServiceGetGuestMetricsProcedure is the fully-qualified name of the TelemetryService's
 	// GetGuestMetrics RPC.
 	TelemetryServiceGetGuestMetricsProcedure = "/kubeswift.v1.TelemetryService/GetGuestMetrics"
+	// TelemetryServiceGetNodeMetricsProcedure is the fully-qualified name of the TelemetryService's
+	// GetNodeMetrics RPC.
+	TelemetryServiceGetNodeMetricsProcedure = "/kubeswift.v1.TelemetryService/GetNodeMetrics"
 )
 
 // TelemetryServiceClient is a client for the kubeswift.v1.TelemetryService service.
 type TelemetryServiceClient interface {
 	GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error)
+	GetNodeMetrics(context.Context, *connect.Request[v1.GetNodeMetricsRequest]) (*connect.Response[v1.GetNodeMetricsResponse], error)
 }
 
 // NewTelemetryServiceClient constructs a client for the kubeswift.v1.TelemetryService service. By
@@ -60,12 +64,19 @@ func NewTelemetryServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(telemetryServiceMethods.ByName("GetGuestMetrics")),
 			connect.WithClientOptions(opts...),
 		),
+		getNodeMetrics: connect.NewClient[v1.GetNodeMetricsRequest, v1.GetNodeMetricsResponse](
+			httpClient,
+			baseURL+TelemetryServiceGetNodeMetricsProcedure,
+			connect.WithSchema(telemetryServiceMethods.ByName("GetNodeMetrics")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // telemetryServiceClient implements TelemetryServiceClient.
 type telemetryServiceClient struct {
 	getGuestMetrics *connect.Client[v1.GetGuestMetricsRequest, v1.GetGuestMetricsResponse]
+	getNodeMetrics  *connect.Client[v1.GetNodeMetricsRequest, v1.GetNodeMetricsResponse]
 }
 
 // GetGuestMetrics calls kubeswift.v1.TelemetryService.GetGuestMetrics.
@@ -73,9 +84,15 @@ func (c *telemetryServiceClient) GetGuestMetrics(ctx context.Context, req *conne
 	return c.getGuestMetrics.CallUnary(ctx, req)
 }
 
+// GetNodeMetrics calls kubeswift.v1.TelemetryService.GetNodeMetrics.
+func (c *telemetryServiceClient) GetNodeMetrics(ctx context.Context, req *connect.Request[v1.GetNodeMetricsRequest]) (*connect.Response[v1.GetNodeMetricsResponse], error) {
+	return c.getNodeMetrics.CallUnary(ctx, req)
+}
+
 // TelemetryServiceHandler is an implementation of the kubeswift.v1.TelemetryService service.
 type TelemetryServiceHandler interface {
 	GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error)
+	GetNodeMetrics(context.Context, *connect.Request[v1.GetNodeMetricsRequest]) (*connect.Response[v1.GetNodeMetricsResponse], error)
 }
 
 // NewTelemetryServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -91,10 +108,18 @@ func NewTelemetryServiceHandler(svc TelemetryServiceHandler, opts ...connect.Han
 		connect.WithSchema(telemetryServiceMethods.ByName("GetGuestMetrics")),
 		connect.WithHandlerOptions(opts...),
 	)
+	telemetryServiceGetNodeMetricsHandler := connect.NewUnaryHandler(
+		TelemetryServiceGetNodeMetricsProcedure,
+		svc.GetNodeMetrics,
+		connect.WithSchema(telemetryServiceMethods.ByName("GetNodeMetrics")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.TelemetryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case TelemetryServiceGetGuestMetricsProcedure:
 			telemetryServiceGetGuestMetricsHandler.ServeHTTP(w, r)
+		case TelemetryServiceGetNodeMetricsProcedure:
+			telemetryServiceGetNodeMetricsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -106,4 +131,8 @@ type UnimplementedTelemetryServiceHandler struct{}
 
 func (UnimplementedTelemetryServiceHandler) GetGuestMetrics(context.Context, *connect.Request[v1.GetGuestMetricsRequest]) (*connect.Response[v1.GetGuestMetricsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.TelemetryService.GetGuestMetrics is not implemented"))
+}
+
+func (UnimplementedTelemetryServiceHandler) GetNodeMetrics(context.Context, *connect.Request[v1.GetNodeMetricsRequest]) (*connect.Response[v1.GetNodeMetricsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.TelemetryService.GetNodeMetrics is not implemented"))
 }

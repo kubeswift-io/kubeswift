@@ -39,12 +39,16 @@ const (
 	// ResourceServiceListResourcesProcedure is the fully-qualified name of the ResourceService's
 	// ListResources RPC.
 	ResourceServiceListResourcesProcedure = "/kubeswift.v1.ResourceService/ListResources"
+	// ResourceServiceGetResourceProcedure is the fully-qualified name of the ResourceService's
+	// GetResource RPC.
+	ResourceServiceGetResourceProcedure = "/kubeswift.v1.ResourceService/GetResource"
 )
 
 // ResourceServiceClient is a client for the kubeswift.v1.ResourceService service.
 type ResourceServiceClient interface {
 	ListResourceKinds(context.Context, *connect.Request[v1.ListResourceKindsRequest]) (*connect.Response[v1.ListResourceKindsResponse], error)
 	ListResources(context.Context, *connect.Request[v1.ListResourcesRequest]) (*connect.Response[v1.ListResourcesResponse], error)
+	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
 }
 
 // NewResourceServiceClient constructs a client for the kubeswift.v1.ResourceService service. By
@@ -70,6 +74,12 @@ func NewResourceServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(resourceServiceMethods.ByName("ListResources")),
 			connect.WithClientOptions(opts...),
 		),
+		getResource: connect.NewClient[v1.GetResourceRequest, v1.GetResourceResponse](
+			httpClient,
+			baseURL+ResourceServiceGetResourceProcedure,
+			connect.WithSchema(resourceServiceMethods.ByName("GetResource")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -77,6 +87,7 @@ func NewResourceServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 type resourceServiceClient struct {
 	listResourceKinds *connect.Client[v1.ListResourceKindsRequest, v1.ListResourceKindsResponse]
 	listResources     *connect.Client[v1.ListResourcesRequest, v1.ListResourcesResponse]
+	getResource       *connect.Client[v1.GetResourceRequest, v1.GetResourceResponse]
 }
 
 // ListResourceKinds calls kubeswift.v1.ResourceService.ListResourceKinds.
@@ -89,10 +100,16 @@ func (c *resourceServiceClient) ListResources(ctx context.Context, req *connect.
 	return c.listResources.CallUnary(ctx, req)
 }
 
+// GetResource calls kubeswift.v1.ResourceService.GetResource.
+func (c *resourceServiceClient) GetResource(ctx context.Context, req *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error) {
+	return c.getResource.CallUnary(ctx, req)
+}
+
 // ResourceServiceHandler is an implementation of the kubeswift.v1.ResourceService service.
 type ResourceServiceHandler interface {
 	ListResourceKinds(context.Context, *connect.Request[v1.ListResourceKindsRequest]) (*connect.Response[v1.ListResourceKindsResponse], error)
 	ListResources(context.Context, *connect.Request[v1.ListResourcesRequest]) (*connect.Response[v1.ListResourcesResponse], error)
+	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
 }
 
 // NewResourceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -114,12 +131,20 @@ func NewResourceServiceHandler(svc ResourceServiceHandler, opts ...connect.Handl
 		connect.WithSchema(resourceServiceMethods.ByName("ListResources")),
 		connect.WithHandlerOptions(opts...),
 	)
+	resourceServiceGetResourceHandler := connect.NewUnaryHandler(
+		ResourceServiceGetResourceProcedure,
+		svc.GetResource,
+		connect.WithSchema(resourceServiceMethods.ByName("GetResource")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.ResourceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ResourceServiceListResourceKindsProcedure:
 			resourceServiceListResourceKindsHandler.ServeHTTP(w, r)
 		case ResourceServiceListResourcesProcedure:
 			resourceServiceListResourcesHandler.ServeHTTP(w, r)
+		case ResourceServiceGetResourceProcedure:
+			resourceServiceGetResourceHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -135,4 +160,8 @@ func (UnimplementedResourceServiceHandler) ListResourceKinds(context.Context, *c
 
 func (UnimplementedResourceServiceHandler) ListResources(context.Context, *connect.Request[v1.ListResourcesRequest]) (*connect.Response[v1.ListResourcesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.ListResources is not implemented"))
+}
+
+func (UnimplementedResourceServiceHandler) GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.GetResource is not implemented"))
 }

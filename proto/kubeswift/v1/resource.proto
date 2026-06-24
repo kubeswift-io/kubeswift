@@ -63,11 +63,29 @@ message ListResourcesResponse {
   ClusterError error = 2;
 }
 
-// ResourceService is the read-only cluster explorer. ListResourceKinds returns
-// the browsable catalog; ListResources lists one kind on one member as the
-// impersonated user. Read-only by design — VM lifecycle stays the typed
-// Start/Stop/Migrate path.
+// GetResourceRequest fetches one object's full content (for the detail drawer +
+// the YAML editor).
+message GetResourceRequest {
+  string cluster = 1;
+  string kind = 2; // a ResourceKind.key
+  string namespace = 3;
+  string name = 4;
+}
+
+message GetResourceResponse {
+  // yaml is the object rendered as YAML (managedFields stripped) — what the
+  // editor shows and what ApplyResource accepts back.
+  string yaml = 1;
+  // json is the same object as a compact JSON string, so the UI can read fields
+  // (conditions, capacity, …) without a YAML parser.
+  string json = 2;
+}
+
+// ResourceService is the cluster explorer + object editor. ListResourceKinds /
+// ListResources / GetResource read; the read plane is the default and the
+// write RPCs (P3.3) are gated entirely by the impersonated user's RBAC.
 service ResourceService {
   rpc ListResourceKinds(ListResourceKindsRequest) returns (ListResourceKindsResponse);
   rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
+  rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
 }
