@@ -96,6 +96,11 @@ func main() {
 	// Telemetry (P1): per-VM range metrics from each member's Prometheus.
 	telSvc := gateway.NewTelemetryService(pool, auth)
 	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc)
+
+	// Explorer (P2): read-only generic resource browser (nodes, namespaces,
+	// networking, storage, secrets — metadata only — and the KubeSwift CRDs).
+	resSvc := gateway.NewResourceService(pool, auth)
+	resPath, resHandler := kubeswiftv1connect.NewResourceServiceHandler(resSvc)
 	// Console stays a P0 stub (CodeUnimplemented) until the console plane lands.
 	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{})
 
@@ -112,6 +117,7 @@ func main() {
 			{Path: guestPath, Handler: guestHandler},
 			{Path: migPath, Handler: migHandler},
 			{Path: telPath, Handler: telHandler},
+			{Path: resPath, Handler: resHandler},
 			{Path: conPath, Handler: conHandler},
 		},
 		RawHandlers: []gateway.ConnectHandler{

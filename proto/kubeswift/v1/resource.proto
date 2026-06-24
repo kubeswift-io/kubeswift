@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// ResourceKind is one browsable resource type in the explorer catalog. The
+// gateway owns the catalog (decision E2); the UI renders its left nav from it,
+// so adding a kind is a gateway-side edit, not a new RPC + screen.
+message ResourceKind {
+  // key is the stable catalog id (e.g. "pods", "swiftguests", "secrets") — the
+  // value passed back in ListResourcesRequest.kind.
+  string key = 1;
+  string display_name = 2;
+  // group/version/resource form the GVR; group is "" for the core API.
+  string group = 3;
+  string version = 4;
+  string resource = 5;
+  bool namespaced = 6;
+  // category groups the nav: "Cluster" | "Workloads" | "Networking" |
+  // "Storage" | "Config" | "KubeSwift".
+  string category = 7;
+  // columns is the ordered set of projected column keys this kind emits (the
+  // table header). Each Resource.columns map is keyed by these.
+  repeated string columns = 8;
+}
+
+message ListResourceKindsRequest {}
+
+message ListResourceKindsResponse {
+  repeated ResourceKind kinds = 1;
+}
+
+// Resource is a generic, UI-shaped row for any kind. Kind-specific fields ride
+// the `columns` map, which the gateway projects (decision E3). For Secrets the
+// projection is metadata only — never values (E4).
+message Resource {
+  // ref carries the cluster dimension (D2) + namespace + name.
+  ObjectRef ref = 1;
+  string kind = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // columns are the projected, kind-specific display fields, keyed by the
+  // ResourceKind.columns entries.
+  map<string, string> columns = 4;
+}
+
+message ListResourcesRequest {
+  // cluster is required — the explorer browses one member at a time (E1).
+  string cluster = 1;
+  // kind is a ResourceKind.key from the catalog.
+  string kind = 2;
+  // namespace scopes namespaced kinds; "" lists across all namespaces.
+  string namespace = 3;
+}
+
+message ListResourcesResponse {
+  repeated Resource resources = 1;
+  // error reports a per-cluster failure (kind absent on this member, RBAC
+  // denial, unreachable) instead of a silent empty list.
+  ClusterError error = 2;
+}
+
+// ResourceService is the read-only cluster explorer. ListResourceKinds returns
+// the browsable catalog; ListResources lists one kind on one member as the
+// impersonated user. Read-only by design — VM lifecycle stays the typed
+// Start/Stop/Migrate path.
+service ResourceService {
+  rpc ListResourceKinds(ListResourceKindsRequest) returns (ListResourceKindsResponse);
+  rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
+}
