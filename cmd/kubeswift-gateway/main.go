@@ -34,7 +34,13 @@ func main() {
 	corsOrigin := flag.String("cors-allow-origin", "*", "Access-Control-Allow-Origin for browser clients")
 	clustersNS := flag.String("clusters-namespace", clustersNamespace(), "Namespace the hub watches for fleet.kubeswift.io Cluster objects")
 	metricsAddr := flag.String("metrics-bind-address", "0", `controller-runtime metrics address ("0" disables)`)
-	authMode := flag.String("auth-mode", "insecure", `end-user auth: "token" (impersonate the user via TokenReview) or "insecure" (SA-trusted dev; no impersonation)`)
+	authMode := flag.String("auth-mode", "insecure", `end-user auth: "oidc" (verify an IdP-issued OIDC token, impersonate the user), "token" (impersonate via TokenReview), or "insecure" (SA-trusted dev; no impersonation)`)
+	oidcIssuer := flag.String("oidc-issuer-url", "", "OIDC issuer URL (auth-mode=oidc), e.g. https://keycloak.example.com/realms/kubeswift")
+	oidcClientID := flag.String("oidc-client-id", "", "OIDC client ID / audience the ID token must carry (auth-mode=oidc)")
+	oidcUsernameClaim := flag.String("oidc-username-claim", "email", "OIDC claim to use as the impersonated username")
+	oidcGroupsClaim := flag.String("oidc-groups-claim", "groups", "OIDC claim to use as the impersonated groups")
+	oidcUsernamePrefix := flag.String("oidc-username-prefix", "", "prefix prepended to the OIDC username (mirrors apiserver --oidc-username-prefix)")
+	oidcGroupsPrefix := flag.String("oidc-groups-prefix", "", "prefix prepended to each OIDC group")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -63,7 +69,14 @@ func main() {
 	}
 
 	// End-user authentication for member impersonation (decision D1).
-	auth, err := buildAuthenticator(*authMode, cfg, log)
+	auth, err := buildAuthenticator(*authMode, cfg, log, oidcOptions{
+		issuer:         *oidcIssuer,
+		clientID:       *oidcClientID,
+		usernameClaim:  *oidcUsernameClaim,
+		groupsClaim:    *oidcGroupsClaim,
+		usernamePrefix: *oidcUsernamePrefix,
+		groupsPrefix:   *oidcGroupsPrefix,
+	})
 	if err != nil {
 		log.Error(err, "unable to build authenticator")
 		os.Exit(1)
@@ -145,11 +158,31 @@ func clustersNamespace() string {
 	return defaultClustersNamespace
 }
 
+// oidcOptions carries the auth-mode=oidc flags into buildAuthenticator.
+type oidcOptions struct {
+	issuer, clientID             string
+	usernameClaim, groupsClaim   string
+	usernamePrefix, groupsPrefix string
+}
+
 // buildAuthenticator selects the end-user auth strategy (decision D1).
-// "token" impersonates the bearer-token user (validated via the hub's
-// TokenReview); "insecure" is the SA-trusted dev stub with no impersonation.
-func buildAuthenticator(mode string, cfg *rest.Config, log logr.Logger) (gateway.Authenticator, error) {
+// "oidc" verifies an IdP-issued OIDC ID token (gateway-side OIDC, A1) and
+// impersonates the claim-derived user; "token" impersonates the bearer-token
+// user via the hub's TokenReview; "insecure" is the SA-trusted dev stub with no
+// impersonation.
+func buildAuthenticator(mode string, cfg *rest.Config, log logr.Logger, oidc oidcOptions) (gateway.Authenticator, error) {
 	switch mode {
+	case "oidc":
+		if oidc.issuer == "" || oidc.clientID == "" {
+			return nil, fmt.Errorf("auth-mode=oidc requires --oidc-issuer-url and --oidc-client-id")
+		}
+		log.Info("auth-mode=oidc: impersonate the OIDC-token user", "issuer", oidc.issuer, "clientID", oidc.clientID, "usernameClaim", oidc.usernameClaim)
+		return gateway.NewOIDCAuthenticator(oidc.issuer, oidc.clientID, gateway.OIDCClaimConfig{
+			UsernameClaim:  oidc.usernameClaim,
+			GroupsClaim:    oidc.groupsClaim,
+			UsernamePrefix: oidc.usernamePrefix,
+			GroupsPrefix:   oidc.groupsPrefix,
+		}), nil
 	case "token":
 		cs, err := kubernetes.NewForConfig(cfg)
 		if err != nil {
@@ -160,6 +193,6 @@ func buildAuthenticator(mode string, cfg *rest.Config, log logr.Logger) (gateway
 		log.Info("auth-mode=insecure: member queries run as the gateway credential (no per-user impersonation)")
 		return gateway.NewInsecureAuthenticator(), nil
 	default:
-		return nil, fmt.Errorf("unknown auth-mode %q (want token|insecure)", mode)
+		return nil, fmt.Errorf("unknown auth-mode %q (want oidc|token|insecure)", mode)
 	}
 }
