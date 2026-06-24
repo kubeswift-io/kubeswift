@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -226,8 +225,13 @@ func (s *TelemetryService) GetNodeMetrics(ctx context.Context, req *connect.Requ
 	if ip == "" {
 		return nodeMetricsErr(cluster, "node has no InternalIP"), nil
 	}
-	inst := regexp.QuoteMeta(ip) + ":.*"
-	nodeRe := regexp.QuoteMeta(node)
+	// Raw values, used directly in PromQL =~ regex matchers. Do NOT
+	// regexp.QuoteMeta them: its backslash escapes (e.g. `\.`) are invalid
+	// escape sequences inside a PromQL double-quoted string literal and 400 the
+	// whole query. An unescaped dot is regex-any here, which still matches the
+	// literal dot in an IP/node name (no real collision risk).
+	inst := ip + ":.*"
+	nodeRe := node
 
 	const rateWin = "2m"
 	window := time.Duration(orDefaultInt32(req.Msg.GetWindowSeconds(), 900)) * time.Second
