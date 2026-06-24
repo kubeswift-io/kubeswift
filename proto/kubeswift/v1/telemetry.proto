@@ -45,8 +45,28 @@ message GetGuestMetricsResponse {
   ClusterError error = 2;
 }
 
-// TelemetryService serves per-VM telemetry sourced from each member's
-// Prometheus (cAdvisor today, O5 swiftletd vm.counters in v2 — decision D4).
+// GetNodeMetricsRequest asks for one node's recent utilization. The gateway
+// resolves the node's InternalIP and range-queries the member's Prometheus:
+// node-exporter for CPU/mem/net, DCGM for GPU (absent → empty GPU series).
+message GetNodeMetricsRequest {
+  string cluster = 1;
+  string node = 2;
+  int32 window_seconds = 3; // default 900
+  int32 step_seconds = 4;   // default 30
+}
+
+// GetNodeMetricsResponse carries the series (cpu_util/mem_util/net_rx_bps/
+// net_tx_bps/gpu_util — the utilization series are 0–1 ratios), or an error
+// when the member's Prometheus is unconfigured/unreachable.
+message GetNodeMetricsResponse {
+  repeated MetricSeries series = 1;
+  ClusterError error = 2;
+}
+
+// TelemetryService serves per-VM + per-node telemetry sourced from each member's
+// Prometheus (cAdvisor + node-exporter + DCGM; O5 swiftletd vm.counters in v2 —
+// decision D4).
 service TelemetryService {
   rpc GetGuestMetrics(GetGuestMetricsRequest) returns (GetGuestMetricsResponse);
+  rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
 }

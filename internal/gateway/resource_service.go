@@ -2,13 +2,16 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 
 	connect "connectrpc.com/connect"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+	"sigs.k8s.io/yaml"
 
 	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
 	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
@@ -101,6 +104,46 @@ func (s *ResourceService) ListResources(ctx context.Context, req *connect.Reques
 	}
 	sortResources(out.Resources)
 	return connect.NewResponse(out), nil
+}
+
+// GetResource returns one object's full content (YAML for the editor + JSON for
+// the UI to read fields from), as the impersonated user. managedFields are
+// stripped. Feeds the detail drawer and the YAML editor.
+func (s *ResourceService) GetResource(ctx context.Context, req *connect.Request[kubeswiftv1.GetResourceRequest]) (*connect.Response[kubeswiftv1.GetResourceResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	cluster, name := req.Msg.GetCluster(), req.Msg.GetName()
+	if cluster == "" || name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cluster and name are required"))
+	}
+	kind := lookupKind(req.Msg.GetKind())
+	if kind == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown kind %q", req.Msg.GetKind()))
+	}
+	dyn, err := s.pool.DynamicFor(cluster, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	var ri dynamic.ResourceInterface = dyn.Resource(kind.gvr)
+	if kind.namespaced {
+		ri = dyn.Resource(kind.gvr).Namespace(req.Msg.GetNamespace())
+	}
+	obj, err := ri.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, mapAccessErr(err)
+	}
+	unstructured.RemoveNestedField(obj.Object, "metadata", "managedFields")
+	jsonBytes, err := json.Marshal(obj.Object)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	yamlBytes, err := yaml.Marshal(obj.Object)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&kubeswiftv1.GetResourceResponse{Yaml: string(yamlBytes), Json: string(jsonBytes)}), nil
 }
 
 func resourcesErr(cluster, msg string) *connect.Response[kubeswiftv1.ListResourcesResponse] {

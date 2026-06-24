@@ -262,6 +262,132 @@ func (x *GetGuestMetricsResponse) GetError() *ClusterError {
 	return nil
 }
 
+// GetNodeMetricsRequest asks for one node's recent utilization. The gateway
+// resolves the node's InternalIP and range-queries the member's Prometheus:
+// node-exporter for CPU/mem/net, DCGM for GPU (absent → empty GPU series).
+type GetNodeMetricsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Node          string                 `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
+	WindowSeconds int32                  `protobuf:"varint,3,opt,name=window_seconds,json=windowSeconds,proto3" json:"window_seconds,omitempty"` // default 900
+	StepSeconds   int32                  `protobuf:"varint,4,opt,name=step_seconds,json=stepSeconds,proto3" json:"step_seconds,omitempty"`       // default 30
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNodeMetricsRequest) Reset() {
+	*x = GetNodeMetricsRequest{}
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNodeMetricsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNodeMetricsRequest) ProtoMessage() {}
+
+func (x *GetNodeMetricsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNodeMetricsRequest.ProtoReflect.Descriptor instead.
+func (*GetNodeMetricsRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *GetNodeMetricsRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *GetNodeMetricsRequest) GetNode() string {
+	if x != nil {
+		return x.Node
+	}
+	return ""
+}
+
+func (x *GetNodeMetricsRequest) GetWindowSeconds() int32 {
+	if x != nil {
+		return x.WindowSeconds
+	}
+	return 0
+}
+
+func (x *GetNodeMetricsRequest) GetStepSeconds() int32 {
+	if x != nil {
+		return x.StepSeconds
+	}
+	return 0
+}
+
+// GetNodeMetricsResponse carries the series (cpu_util/mem_util/net_rx_bps/
+// net_tx_bps/gpu_util — the utilization series are 0–1 ratios), or an error
+// when the member's Prometheus is unconfigured/unreachable.
+type GetNodeMetricsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Series        []*MetricSeries        `protobuf:"bytes,1,rep,name=series,proto3" json:"series,omitempty"`
+	Error         *ClusterError          `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNodeMetricsResponse) Reset() {
+	*x = GetNodeMetricsResponse{}
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNodeMetricsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNodeMetricsResponse) ProtoMessage() {}
+
+func (x *GetNodeMetricsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_telemetry_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNodeMetricsResponse.ProtoReflect.Descriptor instead.
+func (*GetNodeMetricsResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_telemetry_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetNodeMetricsResponse) GetSeries() []*MetricSeries {
+	if x != nil {
+		return x.Series
+	}
+	return nil
+}
+
+func (x *GetNodeMetricsResponse) GetError() *ClusterError {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 var File_kubeswift_v1_telemetry_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_telemetry_proto_rawDesc = "" +
@@ -280,9 +406,18 @@ const file_kubeswift_v1_telemetry_proto_rawDesc = "" +
 	"\x06points\x18\x03 \x03(\v2\x19.kubeswift.v1.MetricPointR\x06points\"\x7f\n" +
 	"\x17GetGuestMetricsResponse\x122\n" +
 	"\x06series\x18\x01 \x03(\v2\x1a.kubeswift.v1.MetricSeriesR\x06series\x120\n" +
-	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2r\n" +
+	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error\"\x8f\x01\n" +
+	"\x15GetNodeMetricsRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
+	"\x04node\x18\x02 \x01(\tR\x04node\x12%\n" +
+	"\x0ewindow_seconds\x18\x03 \x01(\x05R\rwindowSeconds\x12!\n" +
+	"\fstep_seconds\x18\x04 \x01(\x05R\vstepSeconds\"~\n" +
+	"\x16GetNodeMetricsResponse\x122\n" +
+	"\x06series\x18\x01 \x03(\v2\x1a.kubeswift.v1.MetricSeriesR\x06series\x120\n" +
+	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\xcf\x01\n" +
 	"\x10TelemetryService\x12^\n" +
-	"\x0fGetGuestMetrics\x12$.kubeswift.v1.GetGuestMetricsRequest\x1a%.kubeswift.v1.GetGuestMetricsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0fGetGuestMetrics\x12$.kubeswift.v1.GetGuestMetricsRequest\x1a%.kubeswift.v1.GetGuestMetricsResponse\x12[\n" +
+	"\x0eGetNodeMetrics\x12#.kubeswift.v1.GetNodeMetricsRequest\x1a$.kubeswift.v1.GetNodeMetricsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_telemetry_proto_rawDescOnce sync.Once
@@ -296,29 +431,35 @@ func file_kubeswift_v1_telemetry_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_telemetry_proto_rawDescData
 }
 
-var file_kubeswift_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_kubeswift_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kubeswift_v1_telemetry_proto_goTypes = []any{
 	(*GetGuestMetricsRequest)(nil),  // 0: kubeswift.v1.GetGuestMetricsRequest
 	(*MetricPoint)(nil),             // 1: kubeswift.v1.MetricPoint
 	(*MetricSeries)(nil),            // 2: kubeswift.v1.MetricSeries
 	(*GetGuestMetricsResponse)(nil), // 3: kubeswift.v1.GetGuestMetricsResponse
-	(*ObjectRef)(nil),               // 4: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),   // 5: google.protobuf.Timestamp
-	(*ClusterError)(nil),            // 6: kubeswift.v1.ClusterError
+	(*GetNodeMetricsRequest)(nil),   // 4: kubeswift.v1.GetNodeMetricsRequest
+	(*GetNodeMetricsResponse)(nil),  // 5: kubeswift.v1.GetNodeMetricsResponse
+	(*ObjectRef)(nil),               // 6: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),   // 7: google.protobuf.Timestamp
+	(*ClusterError)(nil),            // 8: kubeswift.v1.ClusterError
 }
 var file_kubeswift_v1_telemetry_proto_depIdxs = []int32{
-	4, // 0: kubeswift.v1.GetGuestMetricsRequest.ref:type_name -> kubeswift.v1.ObjectRef
-	5, // 1: kubeswift.v1.MetricPoint.ts:type_name -> google.protobuf.Timestamp
+	6, // 0: kubeswift.v1.GetGuestMetricsRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	7, // 1: kubeswift.v1.MetricPoint.ts:type_name -> google.protobuf.Timestamp
 	1, // 2: kubeswift.v1.MetricSeries.points:type_name -> kubeswift.v1.MetricPoint
 	2, // 3: kubeswift.v1.GetGuestMetricsResponse.series:type_name -> kubeswift.v1.MetricSeries
-	6, // 4: kubeswift.v1.GetGuestMetricsResponse.error:type_name -> kubeswift.v1.ClusterError
-	0, // 5: kubeswift.v1.TelemetryService.GetGuestMetrics:input_type -> kubeswift.v1.GetGuestMetricsRequest
-	3, // 6: kubeswift.v1.TelemetryService.GetGuestMetrics:output_type -> kubeswift.v1.GetGuestMetricsResponse
-	6, // [6:7] is the sub-list for method output_type
-	5, // [5:6] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	8, // 4: kubeswift.v1.GetGuestMetricsResponse.error:type_name -> kubeswift.v1.ClusterError
+	2, // 5: kubeswift.v1.GetNodeMetricsResponse.series:type_name -> kubeswift.v1.MetricSeries
+	8, // 6: kubeswift.v1.GetNodeMetricsResponse.error:type_name -> kubeswift.v1.ClusterError
+	0, // 7: kubeswift.v1.TelemetryService.GetGuestMetrics:input_type -> kubeswift.v1.GetGuestMetricsRequest
+	4, // 8: kubeswift.v1.TelemetryService.GetNodeMetrics:input_type -> kubeswift.v1.GetNodeMetricsRequest
+	3, // 9: kubeswift.v1.TelemetryService.GetGuestMetrics:output_type -> kubeswift.v1.GetGuestMetricsResponse
+	5, // 10: kubeswift.v1.TelemetryService.GetNodeMetrics:output_type -> kubeswift.v1.GetNodeMetricsResponse
+	9, // [9:11] is the sub-list for method output_type
+	7, // [7:9] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_telemetry_proto_init() }
@@ -333,7 +474,7 @@ func file_kubeswift_v1_telemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_telemetry_proto_rawDesc), len(file_kubeswift_v1_telemetry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
