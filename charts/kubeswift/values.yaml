@@ -143,6 +143,70 @@ gateway:
       cpu: 500m
       memory: 256Mi
 
+# KubeSwift web console (the kubeswift-ui Angular app, served by nginx). Opt-in.
+# It talks to the gateway above, so enable gateway.enabled too (or point
+# ui.gateway.url at an externally reachable gateway). The kubeswift-ui image is
+# released from the SEPARATE projectbeskar/kubeswift-ui repo, so — unlike the
+# operator images — its tag is NOT derived from the chart appVersion: pin a
+# published kubeswift-ui tag in ui.image.tag. See docs/ui/gateway.md.
+ui:
+  enabled: false
+  image:
+    # Full image repository (kubeswift-ui is a top-level package, not under the
+    # ghcr.io/projectbeskar/kubeswift/ prefix the operator images use).
+    repository: ghcr.io/projectbeskar/kubeswift-ui
+    # Pin a published tag (sha-<short> or vX.Y.Z). "latest" tracks the
+    # kubeswift-ui main branch; fine for dev, pin a version for production.
+    tag: latest
+    pullPolicy: IfNotPresent
+  # New ghcr packages default PRIVATE; until the kubeswift-ui package is made
+  # public (one-time, web UI), reference a docker-registry pull Secret here,
+  # e.g. [{name: ghcr-kubeswift-ui}].
+  imagePullSecrets: []
+  replicas: 1
+  # How the BROWSER reaches the gateway:
+  #   proxy (default): the UI's nginx reverse-proxies the gateway's Connect RPCs
+  #     and the /console WebSocket to the in-cluster gateway Service, so the
+  #     browser uses ONE origin (the UI's) — no CORS, no separate gateway
+  #     exposure. Requires gateway.enabled in THIS cluster (or a Service named
+  #     ui.gateway.service in this namespace).
+  #   url: the browser calls the gateway directly at an absolute, externally
+  #     reachable URL (the gateway's own Ingress/LB). gateway.corsAllowOrigin
+  #     must allow the UI's origin. Leave url empty to let the app fall back to
+  #     its built-in default (a dev port-forward of the gateway on :18080).
+  gateway:
+    mode: proxy
+    # proxy mode: in-cluster gateway Service name + port to reverse-proxy to.
+    service: kubeswift-gateway
+    port: 8080
+    # url mode: absolute browser-reachable gateway URL, e.g.
+    # https://kubeswift-gateway.example.com
+    url: ""
+  # Browser OIDC login (Authorization Code + PKCE). Set BOTH to turn login on;
+  # the browser authenticates against issuer and sends the ID token to the
+  # gateway. MUST match gateway.oidc.issuerURL / gateway.oidc.clientID (the
+  # browser and the gateway verify the same issuer + audience). Leave empty and
+  # the UI runs auth-OFF (pair with gateway.authMode=insecure).
+  oidc:
+    issuer: "" # e.g. https://keycloak.example.com/realms/kubeswift
+    clientId: "" # the public OIDC client the browser logs in with
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    host: kubeswift-ui.example.com
+    annotations: {}
+    tls: []
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 # Admission webhooks (optional). Requires cert-manager. When enabled, controller-manager runs with --webhook-enabled=true.
 webhook:
   enabled: false

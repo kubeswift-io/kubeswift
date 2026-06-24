@@ -1,0 +1,88 @@
+{{- if .Values.ui.enabled }}
+# kubeswift-ui: the KubeSwift web console (an Angular SPA served by nginx),
+# released from the separate projectbeskar/kubeswift-ui repo. It talks to the
+# gateway above; in the default ui.gateway.mode=proxy the UI's nginx
+# reverse-proxies the in-cluster kubeswift-gateway Service so the browser uses a
+# single origin. See docs/ui/gateway.md and the kubeswift-ui README.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubeswift-ui
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: ui
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubeswift
+      app.kubernetes.io/component: ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubeswift
+        app.kubernetes.io/component: ui
+    spec:
+      {{- with .Values.ui.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          # Independently released from the kubeswift-ui repo, so (unlike the
+          # operator images) the tag is NOT derived from the chart appVersion.
+          image: "{{ .Values.ui.image.repository }}:{{ .Values.ui.image.tag }}"
+          imagePullPolicy: {{ .Values.ui.image.pullPolicy }}
+          env:
+            # How the BROWSER reaches the gateway (see values.yaml ui.gateway):
+            {{- if eq .Values.ui.gateway.mode "proxy" }}
+            # proxy: nginx reverse-proxies the gateway Service; the SPA points
+            # at its own origin.
+            - name: KUBESWIFT_GATEWAY_URL
+              value: "@origin"
+            - name: KUBESWIFT_GATEWAY_UPSTREAM
+              value: "{{ .Values.ui.gateway.service }}.{{ .Values.namespace }}.svc.cluster.local:{{ .Values.ui.gateway.port }}"
+            {{- else }}
+            # url: the SPA calls the gateway directly at this absolute URL.
+            # Empty falls back to the app's built-in default (dev port-forward).
+            - name: KUBESWIFT_GATEWAY_URL
+              value: {{ .Values.ui.gateway.url | quote }}
+            {{- end }}
+            {{- if and .Values.ui.oidc.issuer .Values.ui.oidc.clientId }}
+            # Browser OIDC login (must match gateway.oidc — same issuer+audience).
+            - name: KUBESWIFT_OIDC_ISSUER
+              value: {{ .Values.ui.oidc.issuer | quote }}
+            - name: KUBESWIFT_OIDC_CLIENT_ID
+              value: {{ .Values.ui.oidc.clientId | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            # nginx regenerates /usr/share/nginx/html/config.js and writes temp
+            # files at startup, so the root filesystem stays writable (the image
+            # runs unprivileged, non-root, with all capabilities dropped).
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.ui.resources | nindent 12 }}
+{{- end }}

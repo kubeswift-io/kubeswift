@@ -1,0 +1,39 @@
+{{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+# Optional Ingress for the web console. Plain HTTP/1.1 static assets (plus, in
+# ui.gateway.mode=proxy, the gateway's Connect RPCs and the /console WebSocket
+# forwarded by the UI's nginx) — so no gRPC backend-protocol annotation is
+# needed here (that lives on the gateway's own Ingress). For the /console
+# WebSocket through this Ingress, the controller must allow connection upgrades
+# (most do by default; nginx-ingress honours Upgrade/Connection headers).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubeswift-ui
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: ui
+  {{- with .Values.ui.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ui.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ui.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kubeswift-ui
+                port:
+                  name: http
+  {{- with .Values.ui.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
