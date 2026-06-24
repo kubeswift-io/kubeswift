@@ -48,6 +48,9 @@ const (
 	// GuestServiceMigrateGuestProcedure is the fully-qualified name of the GuestService's MigrateGuest
 	// RPC.
 	GuestServiceMigrateGuestProcedure = "/kubeswift.v1.GuestService/MigrateGuest"
+	// GuestServiceCreateGuestProcedure is the fully-qualified name of the GuestService's CreateGuest
+	// RPC.
+	GuestServiceCreateGuestProcedure = "/kubeswift.v1.GuestService/CreateGuest"
 )
 
 // GuestServiceClient is a client for the kubeswift.v1.GuestService service.
@@ -63,6 +66,10 @@ type GuestServiceClient interface {
 	// Migrate (write plane, P2): create a SwiftMigration to move the guest. The
 	// impersonated user must be allowed to create swiftmigrations on the member.
 	MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error)
+	// Create (write plane, P3): build + server-side-apply a SwiftGuest from the
+	// wizard's structured input. The impersonated user must be allowed to create
+	// swiftguests on the member; the admission webhook validates the spec.
+	CreateGuest(context.Context, *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error)
 }
 
 // NewGuestServiceClient constructs a client for the kubeswift.v1.GuestService service. By default,
@@ -112,6 +119,12 @@ func NewGuestServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(guestServiceMethods.ByName("MigrateGuest")),
 			connect.WithClientOptions(opts...),
 		),
+		createGuest: connect.NewClient[v1.CreateGuestRequest, v1.CreateGuestResponse](
+			httpClient,
+			baseURL+GuestServiceCreateGuestProcedure,
+			connect.WithSchema(guestServiceMethods.ByName("CreateGuest")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -123,6 +136,7 @@ type guestServiceClient struct {
 	startGuest     *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
 	stopGuest      *connect.Client[v1.GuestActionRequest, v1.GuestActionResponse]
 	migrateGuest   *connect.Client[v1.MigrateGuestRequest, v1.MigrateGuestResponse]
+	createGuest    *connect.Client[v1.CreateGuestRequest, v1.CreateGuestResponse]
 }
 
 // ListGuests calls kubeswift.v1.GuestService.ListGuests.
@@ -155,6 +169,11 @@ func (c *guestServiceClient) MigrateGuest(ctx context.Context, req *connect.Requ
 	return c.migrateGuest.CallUnary(ctx, req)
 }
 
+// CreateGuest calls kubeswift.v1.GuestService.CreateGuest.
+func (c *guestServiceClient) CreateGuest(ctx context.Context, req *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error) {
+	return c.createGuest.CallUnary(ctx, req)
+}
+
 // GuestServiceHandler is an implementation of the kubeswift.v1.GuestService service.
 type GuestServiceHandler interface {
 	ListGuests(context.Context, *connect.Request[v1.ListGuestsRequest]) (*connect.Response[v1.ListGuestsResponse], error)
@@ -168,6 +187,10 @@ type GuestServiceHandler interface {
 	// Migrate (write plane, P2): create a SwiftMigration to move the guest. The
 	// impersonated user must be allowed to create swiftmigrations on the member.
 	MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error)
+	// Create (write plane, P3): build + server-side-apply a SwiftGuest from the
+	// wizard's structured input. The impersonated user must be allowed to create
+	// swiftguests on the member; the admission webhook validates the spec.
+	CreateGuest(context.Context, *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error)
 }
 
 // NewGuestServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -213,6 +236,12 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(guestServiceMethods.ByName("MigrateGuest")),
 		connect.WithHandlerOptions(opts...),
 	)
+	guestServiceCreateGuestHandler := connect.NewUnaryHandler(
+		GuestServiceCreateGuestProcedure,
+		svc.CreateGuest,
+		connect.WithSchema(guestServiceMethods.ByName("CreateGuest")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.GuestService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GuestServiceListGuestsProcedure:
@@ -227,6 +256,8 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 			guestServiceStopGuestHandler.ServeHTTP(w, r)
 		case GuestServiceMigrateGuestProcedure:
 			guestServiceMigrateGuestHandler.ServeHTTP(w, r)
+		case GuestServiceCreateGuestProcedure:
+			guestServiceCreateGuestHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -258,4 +289,8 @@ func (UnimplementedGuestServiceHandler) StopGuest(context.Context, *connect.Requ
 
 func (UnimplementedGuestServiceHandler) MigrateGuest(context.Context, *connect.Request[v1.MigrateGuestRequest]) (*connect.Response[v1.MigrateGuestResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.MigrateGuest is not implemented"))
+}
+
+func (UnimplementedGuestServiceHandler) CreateGuest(context.Context, *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.CreateGuest is not implemented"))
 }

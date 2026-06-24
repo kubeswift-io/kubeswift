@@ -234,3 +234,57 @@ func TestGuestService_MigrateGuest(t *testing.T) {
 		t.Errorf("missing target_node should be InvalidArgument, got %v", err)
 	}
 }
+
+func TestGuestService_CreateGuest(t *testing.T) {
+	boba := fakeDyn()
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	resp, err := svc.CreateGuest(context.Background(), connect.NewRequest(&kubeswiftv1.CreateGuestRequest{
+		Cluster: "boba", Namespace: "default", Name: "web-1",
+		ImageRef: "ubuntu-noble", GuestClassRef: "small", SeedProfileRef: "default-seed", RunPolicy: "Running",
+		Ports: []*kubeswiftv1.GuestPortSpec{{Name: "ssh", Port: 22, Expose: "ClusterIP"}},
+	}))
+	if err != nil {
+		t.Fatalf("CreateGuest: %v", err)
+	}
+	if resp.Msg.Ref.GetName() != "web-1" || resp.Msg.Ref.GetCluster() != "boba" {
+		t.Errorf("unexpected ref: %+v", resp.Msg.Ref)
+	}
+	// The SwiftGuest exists with the wizard's spec.
+	got, err := boba.Resource(swiftGuestGVR).Namespace("default").Get(context.Background(), "web-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("created guest not found: %v", err)
+	}
+	image, _, _ := unstructured.NestedString(got.Object, "spec", "imageRef", "name")
+	class, _, _ := unstructured.NestedString(got.Object, "spec", "guestClassRef", "name")
+	ports, _, _ := unstructured.NestedSlice(got.Object, "spec", "network", "ports")
+	if image != "ubuntu-noble" || class != "small" || len(ports) != 1 {
+		t.Errorf("spec wrong: image=%q class=%q ports=%d", image, class, len(ports))
+	}
+
+	// A name clash fails loudly (no silent overwrite of an existing VM).
+	_, err = svc.CreateGuest(context.Background(), connect.NewRequest(&kubeswiftv1.CreateGuestRequest{
+		Cluster: "boba", Namespace: "default", Name: "web-1", ImageRef: "x", GuestClassRef: "small",
+	}))
+	if connect.CodeOf(err) != connect.CodeAlreadyExists {
+		t.Errorf("duplicate name should be AlreadyExists, got %v", err)
+	}
+}
+
+func TestGuestService_CreateGuest_Validation(t *testing.T) {
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeDyn()}}, NewInsecureAuthenticator())
+	cases := []struct {
+		name string
+		req  *kubeswiftv1.CreateGuestRequest
+	}{
+		{"missing name", &kubeswiftv1.CreateGuestRequest{Cluster: "boba", Namespace: "default", ImageRef: "x", GuestClassRef: "small"}},
+		{"missing class", &kubeswiftv1.CreateGuestRequest{Cluster: "boba", Namespace: "default", Name: "g", ImageRef: "x"}},
+		{"no boot source", &kubeswiftv1.CreateGuestRequest{Cluster: "boba", Namespace: "default", Name: "g", GuestClassRef: "small"}},
+		{"two boot sources", &kubeswiftv1.CreateGuestRequest{Cluster: "boba", Namespace: "default", Name: "g", ImageRef: "x", KernelRef: "y", GuestClassRef: "small"}},
+	}
+	for _, tc := range cases {
+		if _, err := svc.CreateGuest(context.Background(), connect.NewRequest(tc.req)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("%s: want InvalidArgument, got %v", tc.name, err)
+		}
+	}
+}
