@@ -42,6 +42,12 @@ const (
 	// ResourceServiceGetResourceProcedure is the fully-qualified name of the ResourceService's
 	// GetResource RPC.
 	ResourceServiceGetResourceProcedure = "/kubeswift.v1.ResourceService/GetResource"
+	// ResourceServiceApplyResourceProcedure is the fully-qualified name of the ResourceService's
+	// ApplyResource RPC.
+	ResourceServiceApplyResourceProcedure = "/kubeswift.v1.ResourceService/ApplyResource"
+	// ResourceServiceDeleteResourceProcedure is the fully-qualified name of the ResourceService's
+	// DeleteResource RPC.
+	ResourceServiceDeleteResourceProcedure = "/kubeswift.v1.ResourceService/DeleteResource"
 )
 
 // ResourceServiceClient is a client for the kubeswift.v1.ResourceService service.
@@ -49,6 +55,8 @@ type ResourceServiceClient interface {
 	ListResourceKinds(context.Context, *connect.Request[v1.ListResourceKindsRequest]) (*connect.Response[v1.ListResourceKindsResponse], error)
 	ListResources(context.Context, *connect.Request[v1.ListResourcesRequest]) (*connect.Response[v1.ListResourcesResponse], error)
 	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
+	ApplyResource(context.Context, *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error)
+	DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error)
 }
 
 // NewResourceServiceClient constructs a client for the kubeswift.v1.ResourceService service. By
@@ -80,6 +88,18 @@ func NewResourceServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(resourceServiceMethods.ByName("GetResource")),
 			connect.WithClientOptions(opts...),
 		),
+		applyResource: connect.NewClient[v1.ApplyResourceRequest, v1.ApplyResourceResponse](
+			httpClient,
+			baseURL+ResourceServiceApplyResourceProcedure,
+			connect.WithSchema(resourceServiceMethods.ByName("ApplyResource")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteResource: connect.NewClient[v1.DeleteResourceRequest, v1.DeleteResourceResponse](
+			httpClient,
+			baseURL+ResourceServiceDeleteResourceProcedure,
+			connect.WithSchema(resourceServiceMethods.ByName("DeleteResource")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -88,6 +108,8 @@ type resourceServiceClient struct {
 	listResourceKinds *connect.Client[v1.ListResourceKindsRequest, v1.ListResourceKindsResponse]
 	listResources     *connect.Client[v1.ListResourcesRequest, v1.ListResourcesResponse]
 	getResource       *connect.Client[v1.GetResourceRequest, v1.GetResourceResponse]
+	applyResource     *connect.Client[v1.ApplyResourceRequest, v1.ApplyResourceResponse]
+	deleteResource    *connect.Client[v1.DeleteResourceRequest, v1.DeleteResourceResponse]
 }
 
 // ListResourceKinds calls kubeswift.v1.ResourceService.ListResourceKinds.
@@ -105,11 +127,23 @@ func (c *resourceServiceClient) GetResource(ctx context.Context, req *connect.Re
 	return c.getResource.CallUnary(ctx, req)
 }
 
+// ApplyResource calls kubeswift.v1.ResourceService.ApplyResource.
+func (c *resourceServiceClient) ApplyResource(ctx context.Context, req *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error) {
+	return c.applyResource.CallUnary(ctx, req)
+}
+
+// DeleteResource calls kubeswift.v1.ResourceService.DeleteResource.
+func (c *resourceServiceClient) DeleteResource(ctx context.Context, req *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error) {
+	return c.deleteResource.CallUnary(ctx, req)
+}
+
 // ResourceServiceHandler is an implementation of the kubeswift.v1.ResourceService service.
 type ResourceServiceHandler interface {
 	ListResourceKinds(context.Context, *connect.Request[v1.ListResourceKindsRequest]) (*connect.Response[v1.ListResourceKindsResponse], error)
 	ListResources(context.Context, *connect.Request[v1.ListResourcesRequest]) (*connect.Response[v1.ListResourcesResponse], error)
 	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
+	ApplyResource(context.Context, *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error)
+	DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error)
 }
 
 // NewResourceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -137,6 +171,18 @@ func NewResourceServiceHandler(svc ResourceServiceHandler, opts ...connect.Handl
 		connect.WithSchema(resourceServiceMethods.ByName("GetResource")),
 		connect.WithHandlerOptions(opts...),
 	)
+	resourceServiceApplyResourceHandler := connect.NewUnaryHandler(
+		ResourceServiceApplyResourceProcedure,
+		svc.ApplyResource,
+		connect.WithSchema(resourceServiceMethods.ByName("ApplyResource")),
+		connect.WithHandlerOptions(opts...),
+	)
+	resourceServiceDeleteResourceHandler := connect.NewUnaryHandler(
+		ResourceServiceDeleteResourceProcedure,
+		svc.DeleteResource,
+		connect.WithSchema(resourceServiceMethods.ByName("DeleteResource")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.ResourceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ResourceServiceListResourceKindsProcedure:
@@ -145,6 +191,10 @@ func NewResourceServiceHandler(svc ResourceServiceHandler, opts ...connect.Handl
 			resourceServiceListResourcesHandler.ServeHTTP(w, r)
 		case ResourceServiceGetResourceProcedure:
 			resourceServiceGetResourceHandler.ServeHTTP(w, r)
+		case ResourceServiceApplyResourceProcedure:
+			resourceServiceApplyResourceHandler.ServeHTTP(w, r)
+		case ResourceServiceDeleteResourceProcedure:
+			resourceServiceDeleteResourceHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -164,4 +214,12 @@ func (UnimplementedResourceServiceHandler) ListResources(context.Context, *conne
 
 func (UnimplementedResourceServiceHandler) GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.GetResource is not implemented"))
+}
+
+func (UnimplementedResourceServiceHandler) ApplyResource(context.Context, *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.ApplyResource is not implemented"))
+}
+
+func (UnimplementedResourceServiceHandler) DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.DeleteResource is not implemented"))
 }

@@ -81,11 +81,43 @@ message GetResourceResponse {
   string json = 2;
 }
 
+// ApplyResourceRequest creates-or-updates one object from edited YAML via
+// server-side apply, AS THE IMPERSONATED USER — RBAC is the only gate. The
+// kind's GVR comes from the catalog; the object's name comes from the YAML
+// (namespace from the YAML, falling back to the request field for scoping).
+message ApplyResourceRequest {
+  string cluster = 1;
+  string kind = 2; // a ResourceKind.key
+  string namespace = 3;
+  string yaml = 4;
+}
+
+message ApplyResourceResponse {
+  // the applied object re-rendered (managedFields stripped) — the editor
+  // refreshes from this.
+  string yaml = 1;
+  string json = 2;
+}
+
+// DeleteResourceRequest deletes one object AS THE IMPERSONATED USER.
+message DeleteResourceRequest {
+  string cluster = 1;
+  string kind = 2; // a ResourceKind.key
+  string namespace = 3;
+  string name = 4;
+}
+
+message DeleteResourceResponse {}
+
 // ResourceService is the cluster explorer + object editor. ListResourceKinds /
-// ListResources / GetResource read; the read plane is the default and the
-// write RPCs (P3.3) are gated entirely by the impersonated user's RBAC.
+// ListResources / GetResource read; ApplyResource / DeleteResource write. Every
+// call impersonates the end user, so both the read and write planes are gated
+// entirely by that user's Kubernetes RBAC — a denial surfaces as a permission
+// error, never a silent success.
 service ResourceService {
   rpc ListResourceKinds(ListResourceKindsRequest) returns (ListResourceKindsResponse);
   rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
   rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
+  rpc ApplyResource(ApplyResourceRequest) returns (ApplyResourceResponse);
+  rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
 }

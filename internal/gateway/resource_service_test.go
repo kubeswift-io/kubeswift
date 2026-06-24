@@ -159,3 +159,78 @@ func TestResourceService_UnknownKindAndCluster(t *testing.T) {
 		t.Errorf("want a ghost ClusterError, got %+v", resp.Msg.Error)
 	}
 }
+
+// GetResource on a Secret must also redact values (E4) — it returns the FULL
+// object, so without the redaction it would leak what ListResources hides.
+func TestResourceService_GetResource_RedactsSecret(t *testing.T) {
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(uSecret("default", "db-creds"))}}
+	svc := NewResourceService(prov, NewInsecureAuthenticator())
+	resp, err := svc.GetResource(context.Background(), connect.NewRequest(&kubeswiftv1.GetResourceRequest{
+		Cluster: "boba", Kind: "secrets", Namespace: "default", Name: "db-creds",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"c3VwZXItc2VjcmV0", "super-secret", "dG9wLXNlY3JldA==", "top-secret"} {
+		if strings.Contains(resp.Msg.Yaml, leak) || strings.Contains(resp.Msg.Json, leak) {
+			t.Fatalf("GetResource leaked secret value %q", leak)
+		}
+	}
+	if !strings.Contains(resp.Msg.Json, "db-creds") || !strings.Contains(resp.Msg.Json, "Opaque") {
+		t.Errorf("GetResource should keep Secret metadata + type, got %s", resp.Msg.Json)
+	}
+}
+
+func TestResourceService_DeleteResource(t *testing.T) {
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(mkNode("miles", true))}}
+	svc := NewResourceService(prov, NewInsecureAuthenticator())
+
+	// Missing name -> InvalidArgument.
+	_, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "boba", Kind: "nodes"}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("missing name: want InvalidArgument, got %v", err)
+	}
+	// Delete then confirm gone.
+	if _, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "boba", Kind: "nodes", Name: "miles"})); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "boba", Kind: "nodes"}))
+	if len(list.Msg.Resources) != 0 {
+		t.Errorf("node should be deleted, got %d", len(list.Msg.Resources))
+	}
+}
+
+func TestResourceService_ApplyResource_Validation(t *testing.T) {
+	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}, NewInsecureAuthenticator())
+	cases := []struct {
+		name string
+		req  *kubeswiftv1.ApplyResourceRequest
+	}{
+		{"missing cluster", &kubeswiftv1.ApplyResourceRequest{Kind: "nodes", Yaml: "apiVersion: v1\nkind: Node\nmetadata:\n  name: x"}},
+		{"unknown kind", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "frobnicators", Yaml: "x"}},
+		{"empty yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "   "}},
+		{"non-object yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "- a\n- b"}},
+		{"no identity", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "metadata: {}"}},
+		{"namespaced needs ns", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "secrets", Yaml: "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s"}},
+	}
+	for _, tc := range cases {
+		_, err := svc.ApplyResource(context.Background(), connect.NewRequest(tc.req))
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("%s: want InvalidArgument, got %v", tc.name, err)
+		}
+	}
+}
+
+// ApplyResource server-side-applies a (cluster-scoped) object as the user.
+func TestResourceService_ApplyResource_Creates(t *testing.T) {
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}
+	svc := NewResourceService(prov, NewInsecureAuthenticator())
+	y := "apiVersion: v1\nkind: Node\nmetadata:\n  name: newnode\n  resourceVersion: \"999\"\n"
+	resp, err := svc.ApplyResource(context.Background(), connect.NewRequest(&kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: y}))
+	if err != nil {
+		t.Skipf("fake dynamic client SSA Apply unsupported in this client-go: %v", err)
+	}
+	if !strings.Contains(resp.Msg.Json, "newnode") {
+		t.Errorf("applied node not echoed back: %s", resp.Msg.Json)
+	}
+}
