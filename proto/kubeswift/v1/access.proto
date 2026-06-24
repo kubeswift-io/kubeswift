@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Capability is one granular permission the custom-role builder offers (each
+// maps to a fixed set of Kubernetes RBAC rules, server-side).
+message Capability {
+  string key = 1; // stable id, e.g. "manage-vms"
+  string display_name = 2;
+  string description = 3;
+}
+
+// Role is a bindable KubeSwift role — a ClusterRole labelled kubeswift.io/role.
+// The three predefined roles (Admin/Operator/View-only) and any custom role
+// are both expressed as capability sets.
+message Role {
+  string name = 1; // the ClusterRole name
+  string display_name = 2;
+  bool predefined = 3;
+  repeated string capabilities = 4; // capability keys this role grants
+}
+
+// Subject is who a role is assigned to — an OIDC user or group.
+message Subject {
+  string kind = 1; // "User" | "Group"
+  string name = 2;
+}
+
+// Assignment binds a Subject to a Role, either cluster-wide or in one namespace.
+message Assignment {
+  string binding_name = 1;
+  Subject subject = 2;
+  string role = 3;       // ClusterRole name
+  string scope = 4;      // "Cluster" | "Namespace"
+  string namespace = 5;  // set when scope == "Namespace"
+}
+
+message ListCapabilitiesRequest {}
+message ListCapabilitiesResponse {
+  repeated Capability capabilities = 1;
+}
+
+message ListRolesRequest {
+  string cluster = 1;
+}
+message ListRolesResponse {
+  repeated Role roles = 1;
+  ClusterError error = 2;
+}
+
+message CreateRoleRequest {
+  string cluster = 1;
+  string name = 2;
+  string display_name = 3;
+  repeated string capabilities = 4;
+}
+message CreateRoleResponse {
+  Role role = 1;
+}
+
+message DeleteRoleRequest {
+  string cluster = 1;
+  string name = 2;
+}
+message DeleteRoleResponse {}
+
+message ListAssignmentsRequest {
+  string cluster = 1;
+}
+message ListAssignmentsResponse {
+  repeated Assignment assignments = 1;
+  ClusterError error = 2;
+}
+
+message AssignRoleRequest {
+  string cluster = 1;
+  Subject subject = 2;
+  string role = 3;
+  // namespace "" assigns cluster-wide (ClusterRoleBinding); otherwise a
+  // RoleBinding scoped to this namespace.
+  string namespace = 4;
+}
+message AssignRoleResponse {
+  Assignment assignment = 1;
+}
+
+message RemoveAssignmentRequest {
+  string cluster = 1;
+  string binding_name = 2;
+  string namespace = 3; // "" = a ClusterRoleBinding
+}
+message RemoveAssignmentResponse {}
+
+// AccessService is the UI RBAC editor's backend: list the bindable roles +
+// the capability catalog, create/delete custom roles, and assign/unassign roles
+// to OIDC users/groups (cluster-wide or per-namespace). Every call runs as the
+// impersonated user, so Kubernetes RBAC itself gates who may edit access —
+// only a subject with rbac write can.
+service AccessService {
+  rpc ListCapabilities(ListCapabilitiesRequest) returns (ListCapabilitiesResponse);
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
+  rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
+  rpc RemoveAssignment(RemoveAssignmentRequest) returns (RemoveAssignmentResponse);
+}
