@@ -1,0 +1,84 @@
+# Apply on each MEMBER cluster (NOT the hub). Grants the cluster-explorer's
+# read access to the IMPERSONATED users (the subjects the gateway impersonates
+# for auth-mode=token/oidc). The explorer is read-only; it lists the kinds in
+# the gateway catalog (nodes, namespaces, networking, storage, config, and the
+# KubeSwift CRDs).
+#
+# In insecure dev mode there is no impersonation, so bind these rights to the
+# gateway's own member credential instead (the ServiceAccount its kubeconfig
+# authenticates as).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-explorer-reader
+rules:
+  # Core cluster + namespaced kinds.
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - namespaces
+      - pods
+      - services
+      - persistentvolumeclaims
+      - persistentvolumes
+      - configmaps
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list"]
+  # KubeSwift CRDs surfaced in the explorer (SwiftGuests/SwiftMigrations have
+  # their own views and are covered by kubeswift-vm-reader).
+  - apiGroups: ["image.kubeswift.io"]
+    resources: ["swiftimages"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kernel.kubeswift.io"]
+    resources: ["swiftkernels"]
+    verbs: ["get", "list"]
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguestclasses", "swiftguestpools"]
+    verbs: ["get", "list"]
+  - apiGroups: ["seed.kubeswift.io"]
+    resources: ["swiftseedprofiles"]
+    verbs: ["get", "list"]
+  - apiGroups: ["snapshot.kubeswift.io"]
+    resources: ["swiftsnapshots", "swiftsnapshotschedules", "swiftrestores"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes", "swiftgpuprofiles"]
+    verbs: ["get", "list"]
+---
+# OPT-IN: Secrets. The explorer shows Secret metadata only — type + the data
+# KEY NAMES, never values (the gateway redacts; defense-in-depth). But granting
+# `secrets get/list` lets a user read values directly (e.g. via kubectl), so
+# this is a SEPARATE rule — bind it only to audiences you trust to browse
+# Secret metadata. Drop it (and the secrets entry will simply error in the
+# explorer, surfaced as a per-cluster permission denial, not a silent gap).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-explorer-secrets-reader
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-explorer-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-explorer-reader
+subjects:
+  # Replace with the real users/groups your IdP issues (the subjects the
+  # gateway impersonates). Example:
+  - kind: Group
+    name: kubeswift-operators
+    apiGroup: rbac.authorization.k8s.io
