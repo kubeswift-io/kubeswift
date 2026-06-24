@@ -88,13 +88,14 @@ kubectl -n kubeswift-system get clusters
 
 | `gateway.authMode` | Behaviour |
 |---|---|
-| `token` (**production**) | The UI sends the end user's bearer token; the gateway validates it via the hub's **TokenReview**, then **impersonates** that user against each member. Existing Kubernetes RBAC (and Model-A namespace tenancy) applies per user. |
+| `oidc` (**production**) | The UI logs the user in against an **IdP** (Keycloak/Dex) and sends the resulting OIDC **ID token**; the gateway verifies it against the issuer (`--oidc-issuer-url`/`--oidc-client-id`, JWKS auto-discovered), maps its claims to a user+groups (`--oidc-username-claim` default `email`, `--oidc-groups-claim` default `groups`, optional `--oidc-username-prefix`/`--oidc-groups-prefix`), and **impersonates** that subject against each member. Works even when the member API servers are *not* OIDC-wired (the gateway, not the apiserver, verifies the token). Full setup: [`auth.md`](auth.md). |
+| `token` | The UI sends the end user's bearer token; the gateway validates it via the hub's **TokenReview**, then impersonates that user. Use when the cluster's API server is already OIDC-wired (or for ServiceAccount tokens). |
 | `insecure` (**dev/lab only**) | No impersonation — member queries run as the member's own credential. **Every UI user inherits whatever that credential grants.** Do not use in production. |
 
-For `token` mode to authorize uniformly, the fleet should share an **identity
-provider** (OIDC), so the impersonated subject is bound in every member's RBAC.
-Where members don't federate, impersonation is only valid where the subject is
-bound.
+For `oidc`/`token` to authorize uniformly across the fleet, the impersonated
+subject (the OIDC username/groups) must be **bound in every member's RBAC** —
+so the fleet should share one identity provider. Where members don't federate,
+impersonation is only valid where the subject is bound.
 
 ### Member-side permissions
 
