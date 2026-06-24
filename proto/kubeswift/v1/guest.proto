@@ -107,6 +107,50 @@ message MigrateGuestResponse {
   ObjectRef migration = 1;
 }
 
+// GuestPortSpec is one declarative service port for a created guest (the
+// service-exposure surface). expose mints a per-guest Service; omitted = DNAT
+// only.
+message GuestPortSpec {
+  string name = 1; // required when more than one port
+  int32 port = 2;
+  int32 target_port = 3; // defaults to port
+  string protocol = 4; // TCP (default) | UDP | SCTP
+  string expose = 5; // "" | ClusterIP | NodePort | LoadBalancer
+}
+
+// CreateGuestRequest is the structured input the Create-VM wizard submits. The
+// gateway builds a SwiftGuest from it and server-side-applies it AS THE
+// IMPERSONATED USER, so the member's RBAC + the SwiftGuest admission webhook are
+// the authority (a denial surfaces, never a silent create). Exactly one boot
+// source (image / kernel / clone) is required.
+message CreateGuestRequest {
+  string cluster = 1;
+  string namespace = 2;
+  string name = 3;
+
+  // Boot source — exactly one of:
+  string image_ref = 4; // SwiftImage name (disk boot)
+  string kernel_ref = 5; // SwiftKernel name (kernel boot)
+  string kernel_cmdline = 6; // optional, with kernel_ref
+  string clone_snapshot_ref = 7; // SwiftSnapshot name (cloneFromSnapshot)
+  string clone_target_node = 8; // optional pin (required for an s3 snapshot)
+
+  string guest_class_ref = 9; // REQUIRED (CPU/mem)
+  string seed_profile_ref = 10; // optional (cloud-init; disk boot)
+  string gpu_profile_ref = 11; // optional (combines with image, not kernel)
+  string run_policy = 12; // default Running
+  string os_type = 13; // "" | linux | windows
+  string node_name = 14; // optional pin
+
+  repeated GuestPortSpec ports = 15; // optional service ports
+}
+
+// CreateGuestResponse returns the new guest's ref; the live WatchGuests stream
+// carries its phase from there.
+message CreateGuestResponse {
+  ObjectRef ref = 1;
+}
+
 // GuestService is the read plane for VM inventory plus the P1/P2 write actions.
 // List/Watch fan out across the selected member clusters and merge, stamping
 // the cluster dimension on every row; a per-cluster error surface preserves
@@ -125,4 +169,9 @@ service GuestService {
   // Migrate (write plane, P2): create a SwiftMigration to move the guest. The
   // impersonated user must be allowed to create swiftmigrations on the member.
   rpc MigrateGuest(MigrateGuestRequest) returns (MigrateGuestResponse);
+
+  // Create (write plane, P3): build + server-side-apply a SwiftGuest from the
+  // wizard's structured input. The impersonated user must be allowed to create
+  // swiftguests on the member; the admission webhook validates the spec.
+  rpc CreateGuest(CreateGuestRequest) returns (CreateGuestResponse);
 }

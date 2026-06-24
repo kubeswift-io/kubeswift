@@ -287,6 +287,124 @@ func (s *GuestService) MigrateGuest(ctx context.Context, req *connect.Request[ku
 	}), nil
 }
 
+// CreateGuest builds a SwiftGuest from the wizard's structured input and
+// server-side-applies it as the impersonated user. The admission webhook is the
+// authority on spec validity (boot-source exclusivity, gpu+kernel, osType, …); a
+// denial surfaces as FailedPrecondition, never a silent create.
+func (s *GuestService) CreateGuest(ctx context.Context, req *connect.Request[kubeswiftv1.CreateGuestRequest]) (*connect.Response[kubeswiftv1.CreateGuestResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	m := req.Msg
+	if m.GetCluster() == "" || m.GetNamespace() == "" || m.GetName() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cluster, namespace, and name are required"))
+	}
+	if m.GetGuestClassRef() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("guest_class_ref is required"))
+	}
+	// Exactly one boot source — a clear gateway error ahead of the webhook.
+	boot := 0
+	for _, v := range []string{m.GetImageRef(), m.GetKernelRef(), m.GetCloneSnapshotRef()} {
+		if v != "" {
+			boot++
+		}
+	}
+	if boot != 1 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("exactly one boot source is required: image_ref, kernel_ref, or clone_snapshot_ref"))
+	}
+
+	dyn, err := s.pool.DynamicFor(m.GetCluster(), id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	obj := buildSwiftGuest(m)
+	// Create (not apply) — a "create a new VM" must fail loudly on a name clash
+	// rather than silently overwrite an existing guest's spec.
+	if _, err := guestResource(dyn, m.GetNamespace()).Create(ctx, obj, metav1.CreateOptions{}); err != nil {
+		// A name clash, a webhook denial (boot-source / gpu / osType rules), or an
+		// RBAC refusal surfaces here with its reason — never a silent create.
+		code := connect.CodeInternal
+		switch {
+		case apierrors.IsAlreadyExists(err):
+			code = connect.CodeAlreadyExists
+		case apierrors.IsForbidden(err) || apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
+			code = connect.CodeFailedPrecondition
+		}
+		return nil, connect.NewError(code, err)
+	}
+	return connect.NewResponse(&kubeswiftv1.CreateGuestResponse{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: m.GetCluster(), Namespace: m.GetNamespace(), Name: m.GetName()},
+	}), nil
+}
+
+// buildSwiftGuest constructs the SwiftGuest unstructured object from the wizard
+// request — only the set fields are written; CRD defaults + the webhook handle
+// the rest.
+func buildSwiftGuest(m *kubeswiftv1.CreateGuestRequest) *unstructured.Unstructured {
+	ref := func(name string) map[string]interface{} { return map[string]interface{}{"name": name} }
+	spec := map[string]interface{}{"guestClassRef": ref(m.GetGuestClassRef())}
+
+	switch {
+	case m.GetImageRef() != "":
+		spec["imageRef"] = ref(m.GetImageRef())
+	case m.GetKernelRef() != "":
+		spec["kernelRef"] = ref(m.GetKernelRef())
+		if c := m.GetKernelCmdline(); c != "" {
+			spec["kernelCmdline"] = c
+		}
+	case m.GetCloneSnapshotRef() != "":
+		clone := map[string]interface{}{"snapshotRef": ref(m.GetCloneSnapshotRef())}
+		if t := m.GetCloneTargetNode(); t != "" {
+			clone["targetNode"] = t
+		}
+		spec["cloneFromSnapshot"] = clone
+	}
+
+	if v := m.GetSeedProfileRef(); v != "" {
+		spec["seedProfileRef"] = ref(v)
+	}
+	if v := m.GetGpuProfileRef(); v != "" {
+		spec["gpuProfileRef"] = ref(v)
+	}
+	if v := m.GetRunPolicy(); v != "" {
+		spec["runPolicy"] = v
+	}
+	if v := m.GetOsType(); v != "" {
+		spec["osType"] = v
+	}
+	if v := m.GetNodeName(); v != "" {
+		spec["nodeName"] = v
+	}
+	if ports := m.GetPorts(); len(ports) > 0 {
+		out := make([]interface{}, 0, len(ports))
+		for _, p := range ports {
+			port := map[string]interface{}{"port": int64(p.GetPort())}
+			if p.GetName() != "" {
+				port["name"] = p.GetName()
+			}
+			if p.GetTargetPort() != 0 {
+				port["targetPort"] = int64(p.GetTargetPort())
+			}
+			if p.GetProtocol() != "" {
+				port["protocol"] = p.GetProtocol()
+			}
+			if p.GetExpose() != "" {
+				port["expose"] = p.GetExpose()
+			}
+			out = append(out, port)
+		}
+		spec["network"] = map[string]interface{}{"ports": out}
+	}
+
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "swift.kubeswift.io/v1alpha1",
+		"kind":       "SwiftGuest",
+		"metadata":   map[string]interface{}{"name": m.GetName(), "namespace": m.GetNamespace()},
+		"spec":       spec,
+	}}
+}
+
 // targetClusters resolves the selector against the registered members. An empty
 // or all-clusters selector targets the whole fleet.
 func (s *GuestService) targetClusters(sel *kubeswiftv1.ClusterSelector) []string {
