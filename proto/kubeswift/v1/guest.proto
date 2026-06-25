@@ -91,6 +91,39 @@ message GetGuestDetailResponse {
   Guest guest = 1;
   // spec is the structured config (for Clone). Filled from the SwiftGuest spec.
   GuestSpec spec = 2;
+  // network is the service-exposure + egress view (the Networking drawer
+  // section). Nil when the guest declares no spec.network.
+  GuestNetwork network = 3;
+}
+
+// GuestNetwork is the service-exposure + egress view of a SwiftGuest — the
+// Networking section of the VM drawer. Spec (binding/ports) joined with the
+// status the controller + swiftletd report (programmed ports, Service, egress
+// reachability, conditions).
+message GuestNetwork {
+  // binding is spec.network.binding (nat | bridge).
+  string binding = 1;
+  // egress is status.network.egress (ClusterServices | DirectOnly | "").
+  string egress = 2;
+  // service_ref is status.network.serviceRef.name (the minted per-guest Service).
+  string service_ref = 3;
+  // Condition mirrors (no-silent-failure surfaces).
+  bool ports_programmed = 4; // PortsProgrammed=True
+  bool service_ready = 5; // ServiceReady=True
+  bool egress_ready = 6; // EgressReady=True
+  repeated GuestNetworkPort ports = 7;
+}
+
+message GuestNetworkPort {
+  string name = 1;
+  int32 port = 2;
+  int32 target_port = 3;
+  string protocol = 4; // TCP | UDP | SCTP
+  // expose is the Service type (ClusterIP|NodePort|LoadBalancer) or "" for
+  // DNAT-only (reachable pod->VM by the pod IP, no Service object).
+  string expose = 5;
+  // programmed is true when this port appears in status.network.exposedPorts.
+  bool programmed = 6;
 }
 
 // GuestActionRequest identifies the target VM for a lifecycle action.
