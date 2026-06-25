@@ -355,6 +355,80 @@ func TestGuestService_GetGuestDetail_Spec(t *testing.T) {
 	}
 }
 
+func TestGuestService_GetGuestDetail_Network(t *testing.T) {
+	g := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "swift.kubeswift.io/v1alpha1", "kind": "SwiftGuest",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "vm-a"},
+		"spec": map[string]interface{}{
+			"imageRef":      map[string]interface{}{"name": "ubuntu-noble"},
+			"guestClassRef": map[string]interface{}{"name": "small"},
+			"network": map[string]interface{}{
+				"binding": "nat",
+				"ports": []interface{}{
+					map[string]interface{}{"name": "ssh", "port": int64(22), "targetPort": int64(22), "protocol": "TCP", "expose": "ClusterIP"},
+					map[string]interface{}{"name": "web", "port": int64(80), "targetPort": int64(8080), "protocol": "TCP"},
+				},
+			},
+		},
+		"status": map[string]interface{}{
+			"network": map[string]interface{}{
+				"egress":       "ClusterServices",
+				"serviceRef":   map[string]interface{}{"name": "vm-a-svc"},
+				"exposedPorts": []interface{}{map[string]interface{}{"name": "ssh", "port": int64(22), "targetPort": int64(22), "protocol": "TCP"}},
+			},
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "EgressReady", "status": "True", "reason": "Reachable", "lastTransitionTime": "2026-06-25T00:00:00Z"},
+				map[string]interface{}{"type": "ServiceReady", "status": "True", "reason": "Ready", "lastTransitionTime": "2026-06-25T00:00:00Z"},
+				map[string]interface{}{"type": "PortsProgrammed", "status": "False", "reason": "Pending", "lastTransitionTime": "2026-06-25T00:00:00Z"},
+			},
+		},
+	}}
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeDyn(g)}}, NewInsecureAuthenticator())
+	resp, err := svc.GetGuestDetail(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestDetailRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := resp.Msg.Network
+	if n == nil {
+		t.Fatal("network not surfaced")
+	}
+	if n.Binding != "nat" || n.Egress != "ClusterServices" || n.ServiceRef != "vm-a-svc" {
+		t.Errorf("bad network header: %+v", n)
+	}
+	if !n.EgressReady || !n.ServiceReady || n.PortsProgrammed {
+		t.Errorf("condition mapping wrong: egressReady=%v serviceReady=%v portsProgrammed=%v", n.EgressReady, n.ServiceReady, n.PortsProgrammed)
+	}
+	if len(n.Ports) != 2 {
+		t.Fatalf("want 2 ports, got %d", len(n.Ports))
+	}
+	if n.Ports[0].Name != "ssh" || n.Ports[0].Expose != "ClusterIP" || !n.Ports[0].Programmed {
+		t.Errorf("ssh port wrong: %+v", n.Ports[0])
+	}
+	if n.Ports[1].Name != "web" || n.Ports[1].Expose != "" || n.Ports[1].Programmed {
+		t.Errorf("web port should be DNAT-only + not programmed: %+v", n.Ports[1])
+	}
+}
+
+func TestGuestService_GetGuestDetail_NoNetwork(t *testing.T) {
+	g := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "swift.kubeswift.io/v1alpha1", "kind": "SwiftGuest",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "vm-b"},
+		"spec":     map[string]interface{}{"imageRef": map[string]interface{}{"name": "ubuntu"}, "guestClassRef": map[string]interface{}{"name": "small"}},
+	}}
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeDyn(g)}}, NewInsecureAuthenticator())
+	resp, err := svc.GetGuestDetail(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestDetailRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-b"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Msg.Network != nil {
+		t.Errorf("expected nil network for guest without spec.network, got %+v", resp.Msg.Network)
+	}
+}
+
 func TestGuestService_CreateGuest_Validation(t *testing.T) {
 	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeDyn()}}, NewInsecureAuthenticator())
 	cases := []struct {

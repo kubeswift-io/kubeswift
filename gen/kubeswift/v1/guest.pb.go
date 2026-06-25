@@ -582,7 +582,10 @@ type GetGuestDetailResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Guest *Guest                 `protobuf:"bytes,1,opt,name=guest,proto3" json:"guest,omitempty"`
 	// spec is the structured config (for Clone). Filled from the SwiftGuest spec.
-	Spec          *GuestSpec `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
+	Spec *GuestSpec `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
+	// network is the service-exposure + egress view (the Networking drawer
+	// section). Nil when the guest declares no spec.network.
+	Network       *GuestNetwork `protobuf:"bytes,3,opt,name=network,proto3" json:"network,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -631,6 +634,200 @@ func (x *GetGuestDetailResponse) GetSpec() *GuestSpec {
 	return nil
 }
 
+func (x *GetGuestDetailResponse) GetNetwork() *GuestNetwork {
+	if x != nil {
+		return x.Network
+	}
+	return nil
+}
+
+// GuestNetwork is the service-exposure + egress view of a SwiftGuest — the
+// Networking section of the VM drawer. Spec (binding/ports) joined with the
+// status the controller + swiftletd report (programmed ports, Service, egress
+// reachability, conditions).
+type GuestNetwork struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// binding is spec.network.binding (nat | bridge).
+	Binding string `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	// egress is status.network.egress (ClusterServices | DirectOnly | "").
+	Egress string `protobuf:"bytes,2,opt,name=egress,proto3" json:"egress,omitempty"`
+	// service_ref is status.network.serviceRef.name (the minted per-guest Service).
+	ServiceRef string `protobuf:"bytes,3,opt,name=service_ref,json=serviceRef,proto3" json:"service_ref,omitempty"`
+	// Condition mirrors (no-silent-failure surfaces).
+	PortsProgrammed bool                `protobuf:"varint,4,opt,name=ports_programmed,json=portsProgrammed,proto3" json:"ports_programmed,omitempty"` // PortsProgrammed=True
+	ServiceReady    bool                `protobuf:"varint,5,opt,name=service_ready,json=serviceReady,proto3" json:"service_ready,omitempty"`          // ServiceReady=True
+	EgressReady     bool                `protobuf:"varint,6,opt,name=egress_ready,json=egressReady,proto3" json:"egress_ready,omitempty"`             // EgressReady=True
+	Ports           []*GuestNetworkPort `protobuf:"bytes,7,rep,name=ports,proto3" json:"ports,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *GuestNetwork) Reset() {
+	*x = GuestNetwork{}
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestNetwork) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestNetwork) ProtoMessage() {}
+
+func (x *GuestNetwork) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestNetwork.ProtoReflect.Descriptor instead.
+func (*GuestNetwork) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GuestNetwork) GetBinding() string {
+	if x != nil {
+		return x.Binding
+	}
+	return ""
+}
+
+func (x *GuestNetwork) GetEgress() string {
+	if x != nil {
+		return x.Egress
+	}
+	return ""
+}
+
+func (x *GuestNetwork) GetServiceRef() string {
+	if x != nil {
+		return x.ServiceRef
+	}
+	return ""
+}
+
+func (x *GuestNetwork) GetPortsProgrammed() bool {
+	if x != nil {
+		return x.PortsProgrammed
+	}
+	return false
+}
+
+func (x *GuestNetwork) GetServiceReady() bool {
+	if x != nil {
+		return x.ServiceReady
+	}
+	return false
+}
+
+func (x *GuestNetwork) GetEgressReady() bool {
+	if x != nil {
+		return x.EgressReady
+	}
+	return false
+}
+
+func (x *GuestNetwork) GetPorts() []*GuestNetworkPort {
+	if x != nil {
+		return x.Ports
+	}
+	return nil
+}
+
+type GuestNetworkPort struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Port       int32                  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	TargetPort int32                  `protobuf:"varint,3,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	Protocol   string                 `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"` // TCP | UDP | SCTP
+	// expose is the Service type (ClusterIP|NodePort|LoadBalancer) or "" for
+	// DNAT-only (reachable pod->VM by the pod IP, no Service object).
+	Expose string `protobuf:"bytes,5,opt,name=expose,proto3" json:"expose,omitempty"`
+	// programmed is true when this port appears in status.network.exposedPorts.
+	Programmed    bool `protobuf:"varint,6,opt,name=programmed,proto3" json:"programmed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestNetworkPort) Reset() {
+	*x = GuestNetworkPort{}
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestNetworkPort) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestNetworkPort) ProtoMessage() {}
+
+func (x *GuestNetworkPort) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestNetworkPort.ProtoReflect.Descriptor instead.
+func (*GuestNetworkPort) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GuestNetworkPort) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GuestNetworkPort) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *GuestNetworkPort) GetTargetPort() int32 {
+	if x != nil {
+		return x.TargetPort
+	}
+	return 0
+}
+
+func (x *GuestNetworkPort) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *GuestNetworkPort) GetExpose() string {
+	if x != nil {
+		return x.Expose
+	}
+	return ""
+}
+
+func (x *GuestNetworkPort) GetProgrammed() bool {
+	if x != nil {
+		return x.Programmed
+	}
+	return false
+}
+
 // GuestActionRequest identifies the target VM for a lifecycle action.
 type GuestActionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -641,7 +838,7 @@ type GuestActionRequest struct {
 
 func (x *GuestActionRequest) Reset() {
 	*x = GuestActionRequest{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -653,7 +850,7 @@ func (x *GuestActionRequest) String() string {
 func (*GuestActionRequest) ProtoMessage() {}
 
 func (x *GuestActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[8]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -666,7 +863,7 @@ func (x *GuestActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestActionRequest.ProtoReflect.Descriptor instead.
 func (*GuestActionRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{8}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GuestActionRequest) GetRef() *ObjectRef {
@@ -688,7 +885,7 @@ type GuestActionResponse struct {
 
 func (x *GuestActionResponse) Reset() {
 	*x = GuestActionResponse{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[9]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -700,7 +897,7 @@ func (x *GuestActionResponse) String() string {
 func (*GuestActionResponse) ProtoMessage() {}
 
 func (x *GuestActionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[9]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -713,7 +910,7 @@ func (x *GuestActionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestActionResponse.ProtoReflect.Descriptor instead.
 func (*GuestActionResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{9}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GuestActionResponse) GetGuest() *Guest {
@@ -740,7 +937,7 @@ type MigrateGuestRequest struct {
 
 func (x *MigrateGuestRequest) Reset() {
 	*x = MigrateGuestRequest{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[10]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -752,7 +949,7 @@ func (x *MigrateGuestRequest) String() string {
 func (*MigrateGuestRequest) ProtoMessage() {}
 
 func (x *MigrateGuestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[10]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -765,7 +962,7 @@ func (x *MigrateGuestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateGuestRequest.ProtoReflect.Descriptor instead.
 func (*MigrateGuestRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{10}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MigrateGuestRequest) GetRef() *ObjectRef {
@@ -808,7 +1005,7 @@ type MigrateGuestResponse struct {
 
 func (x *MigrateGuestResponse) Reset() {
 	*x = MigrateGuestResponse{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[11]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -820,7 +1017,7 @@ func (x *MigrateGuestResponse) String() string {
 func (*MigrateGuestResponse) ProtoMessage() {}
 
 func (x *MigrateGuestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[11]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -833,7 +1030,7 @@ func (x *MigrateGuestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrateGuestResponse.ProtoReflect.Descriptor instead.
 func (*MigrateGuestResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{11}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MigrateGuestResponse) GetMigration() *ObjectRef {
@@ -859,7 +1056,7 @@ type GuestPortSpec struct {
 
 func (x *GuestPortSpec) Reset() {
 	*x = GuestPortSpec{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[12]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -871,7 +1068,7 @@ func (x *GuestPortSpec) String() string {
 func (*GuestPortSpec) ProtoMessage() {}
 
 func (x *GuestPortSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[12]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -884,7 +1081,7 @@ func (x *GuestPortSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestPortSpec.ProtoReflect.Descriptor instead.
 func (*GuestPortSpec) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{12}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GuestPortSpec) GetName() string {
@@ -951,7 +1148,7 @@ type CreateGuestRequest struct {
 
 func (x *CreateGuestRequest) Reset() {
 	*x = CreateGuestRequest{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[13]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -963,7 +1160,7 @@ func (x *CreateGuestRequest) String() string {
 func (*CreateGuestRequest) ProtoMessage() {}
 
 func (x *CreateGuestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[13]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -976,7 +1173,7 @@ func (x *CreateGuestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateGuestRequest.ProtoReflect.Descriptor instead.
 func (*CreateGuestRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{13}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CreateGuestRequest) GetCluster() string {
@@ -1095,7 +1292,7 @@ type CreateGuestResponse struct {
 
 func (x *CreateGuestResponse) Reset() {
 	*x = CreateGuestResponse{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[14]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1304,7 @@ func (x *CreateGuestResponse) String() string {
 func (*CreateGuestResponse) ProtoMessage() {}
 
 func (x *CreateGuestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[14]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1317,7 @@ func (x *CreateGuestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateGuestResponse.ProtoReflect.Descriptor instead.
 func (*CreateGuestResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{14}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CreateGuestResponse) GetRef() *ObjectRef {
@@ -1140,7 +1337,7 @@ type DeleteGuestRequest struct {
 
 func (x *DeleteGuestRequest) Reset() {
 	*x = DeleteGuestRequest{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[15]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1349,7 @@ func (x *DeleteGuestRequest) String() string {
 func (*DeleteGuestRequest) ProtoMessage() {}
 
 func (x *DeleteGuestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[15]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1362,7 @@ func (x *DeleteGuestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteGuestRequest.ProtoReflect.Descriptor instead.
 func (*DeleteGuestRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{15}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteGuestRequest) GetRef() *ObjectRef {
@@ -1183,7 +1380,7 @@ type DeleteGuestResponse struct {
 
 func (x *DeleteGuestResponse) Reset() {
 	*x = DeleteGuestResponse{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[16]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1195,7 +1392,7 @@ func (x *DeleteGuestResponse) String() string {
 func (*DeleteGuestResponse) ProtoMessage() {}
 
 func (x *DeleteGuestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[16]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1208,7 +1405,7 @@ func (x *DeleteGuestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteGuestResponse.ProtoReflect.Descriptor instead.
 func (*DeleteGuestResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{16}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{18}
 }
 
 // GuestEventEntry is one Kubernetes Event involving the guest or its launcher
@@ -1227,7 +1424,7 @@ type GuestEventEntry struct {
 
 func (x *GuestEventEntry) Reset() {
 	*x = GuestEventEntry{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[17]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1239,7 +1436,7 @@ func (x *GuestEventEntry) String() string {
 func (*GuestEventEntry) ProtoMessage() {}
 
 func (x *GuestEventEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[17]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1252,7 +1449,7 @@ func (x *GuestEventEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestEventEntry.ProtoReflect.Descriptor instead.
 func (*GuestEventEntry) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{17}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *GuestEventEntry) GetType() string {
@@ -1306,7 +1503,7 @@ type GetGuestEventsRequest struct {
 
 func (x *GetGuestEventsRequest) Reset() {
 	*x = GetGuestEventsRequest{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[18]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1318,7 +1515,7 @@ func (x *GetGuestEventsRequest) String() string {
 func (*GetGuestEventsRequest) ProtoMessage() {}
 
 func (x *GetGuestEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[18]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1331,7 +1528,7 @@ func (x *GetGuestEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuestEventsRequest.ProtoReflect.Descriptor instead.
 func (*GetGuestEventsRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{18}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetGuestEventsRequest) GetRef() *ObjectRef {
@@ -1350,7 +1547,7 @@ type GetGuestEventsResponse struct {
 
 func (x *GetGuestEventsResponse) Reset() {
 	*x = GetGuestEventsResponse{}
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[19]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1362,7 +1559,7 @@ func (x *GetGuestEventsResponse) String() string {
 func (*GetGuestEventsResponse) ProtoMessage() {}
 
 func (x *GetGuestEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_guest_proto_msgTypes[19]
+	mi := &file_kubeswift_v1_guest_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1375,7 +1572,7 @@ func (x *GetGuestEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetGuestEventsResponse.ProtoReflect.Descriptor instead.
 func (*GetGuestEventsResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{19}
+	return file_kubeswift_v1_guest_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetGuestEventsResponse) GetEvents() []*GuestEventEntry {
@@ -1447,10 +1644,30 @@ const file_kubeswift_v1_guest_proto_rawDesc = "" +
 	"\x0fgpu_profile_ref\x18\a \x01(\tR\rgpuProfileRef\x12\x1d\n" +
 	"\n" +
 	"run_policy\x18\b \x01(\tR\trunPolicy\x12\x17\n" +
-	"\aos_type\x18\t \x01(\tR\x06osType\"p\n" +
+	"\aos_type\x18\t \x01(\tR\x06osType\"\xa6\x01\n" +
 	"\x16GetGuestDetailResponse\x12)\n" +
 	"\x05guest\x18\x01 \x01(\v2\x13.kubeswift.v1.GuestR\x05guest\x12+\n" +
-	"\x04spec\x18\x02 \x01(\v2\x17.kubeswift.v1.GuestSpecR\x04spec\"?\n" +
+	"\x04spec\x18\x02 \x01(\v2\x17.kubeswift.v1.GuestSpecR\x04spec\x124\n" +
+	"\anetwork\x18\x03 \x01(\v2\x1a.kubeswift.v1.GuestNetworkR\anetwork\"\x8a\x02\n" +
+	"\fGuestNetwork\x12\x18\n" +
+	"\abinding\x18\x01 \x01(\tR\abinding\x12\x16\n" +
+	"\x06egress\x18\x02 \x01(\tR\x06egress\x12\x1f\n" +
+	"\vservice_ref\x18\x03 \x01(\tR\n" +
+	"serviceRef\x12)\n" +
+	"\x10ports_programmed\x18\x04 \x01(\bR\x0fportsProgrammed\x12#\n" +
+	"\rservice_ready\x18\x05 \x01(\bR\fserviceReady\x12!\n" +
+	"\fegress_ready\x18\x06 \x01(\bR\vegressReady\x124\n" +
+	"\x05ports\x18\a \x03(\v2\x1e.kubeswift.v1.GuestNetworkPortR\x05ports\"\xaf\x01\n" +
+	"\x10GuestNetworkPort\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x1f\n" +
+	"\vtarget_port\x18\x03 \x01(\x05R\n" +
+	"targetPort\x12\x1a\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\x12\x16\n" +
+	"\x06expose\x18\x05 \x01(\tR\x06expose\x12\x1e\n" +
+	"\n" +
+	"programmed\x18\x06 \x01(\bR\n" +
+	"programmed\"?\n" +
 	"\x12GuestActionRequest\x12)\n" +
 	"\x03ref\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x03ref\"@\n" +
 	"\x13GuestActionResponse\x12)\n" +
@@ -1530,7 +1747,7 @@ func file_kubeswift_v1_guest_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_guest_proto_rawDescData
 }
 
-var file_kubeswift_v1_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_kubeswift_v1_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_kubeswift_v1_guest_proto_goTypes = []any{
 	(*Guest)(nil),                  // 0: kubeswift.v1.Guest
 	(*ListGuestsRequest)(nil),      // 1: kubeswift.v1.ListGuestsRequest
@@ -1540,78 +1757,82 @@ var file_kubeswift_v1_guest_proto_goTypes = []any{
 	(*GetGuestDetailRequest)(nil),  // 5: kubeswift.v1.GetGuestDetailRequest
 	(*GuestSpec)(nil),              // 6: kubeswift.v1.GuestSpec
 	(*GetGuestDetailResponse)(nil), // 7: kubeswift.v1.GetGuestDetailResponse
-	(*GuestActionRequest)(nil),     // 8: kubeswift.v1.GuestActionRequest
-	(*GuestActionResponse)(nil),    // 9: kubeswift.v1.GuestActionResponse
-	(*MigrateGuestRequest)(nil),    // 10: kubeswift.v1.MigrateGuestRequest
-	(*MigrateGuestResponse)(nil),   // 11: kubeswift.v1.MigrateGuestResponse
-	(*GuestPortSpec)(nil),          // 12: kubeswift.v1.GuestPortSpec
-	(*CreateGuestRequest)(nil),     // 13: kubeswift.v1.CreateGuestRequest
-	(*CreateGuestResponse)(nil),    // 14: kubeswift.v1.CreateGuestResponse
-	(*DeleteGuestRequest)(nil),     // 15: kubeswift.v1.DeleteGuestRequest
-	(*DeleteGuestResponse)(nil),    // 16: kubeswift.v1.DeleteGuestResponse
-	(*GuestEventEntry)(nil),        // 17: kubeswift.v1.GuestEventEntry
-	(*GetGuestEventsRequest)(nil),  // 18: kubeswift.v1.GetGuestEventsRequest
-	(*GetGuestEventsResponse)(nil), // 19: kubeswift.v1.GetGuestEventsResponse
-	nil,                            // 20: kubeswift.v1.Guest.LabelsEntry
-	(*ObjectRef)(nil),              // 21: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),  // 22: google.protobuf.Timestamp
-	(*Condition)(nil),              // 23: kubeswift.v1.Condition
-	(*ClusterSelector)(nil),        // 24: kubeswift.v1.ClusterSelector
-	(*PageRequest)(nil),            // 25: kubeswift.v1.PageRequest
-	(*PageResponse)(nil),           // 26: kubeswift.v1.PageResponse
-	(*ClusterError)(nil),           // 27: kubeswift.v1.ClusterError
-	(EventType)(0),                 // 28: kubeswift.v1.EventType
+	(*GuestNetwork)(nil),           // 8: kubeswift.v1.GuestNetwork
+	(*GuestNetworkPort)(nil),       // 9: kubeswift.v1.GuestNetworkPort
+	(*GuestActionRequest)(nil),     // 10: kubeswift.v1.GuestActionRequest
+	(*GuestActionResponse)(nil),    // 11: kubeswift.v1.GuestActionResponse
+	(*MigrateGuestRequest)(nil),    // 12: kubeswift.v1.MigrateGuestRequest
+	(*MigrateGuestResponse)(nil),   // 13: kubeswift.v1.MigrateGuestResponse
+	(*GuestPortSpec)(nil),          // 14: kubeswift.v1.GuestPortSpec
+	(*CreateGuestRequest)(nil),     // 15: kubeswift.v1.CreateGuestRequest
+	(*CreateGuestResponse)(nil),    // 16: kubeswift.v1.CreateGuestResponse
+	(*DeleteGuestRequest)(nil),     // 17: kubeswift.v1.DeleteGuestRequest
+	(*DeleteGuestResponse)(nil),    // 18: kubeswift.v1.DeleteGuestResponse
+	(*GuestEventEntry)(nil),        // 19: kubeswift.v1.GuestEventEntry
+	(*GetGuestEventsRequest)(nil),  // 20: kubeswift.v1.GetGuestEventsRequest
+	(*GetGuestEventsResponse)(nil), // 21: kubeswift.v1.GetGuestEventsResponse
+	nil,                            // 22: kubeswift.v1.Guest.LabelsEntry
+	(*ObjectRef)(nil),              // 23: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),  // 24: google.protobuf.Timestamp
+	(*Condition)(nil),              // 25: kubeswift.v1.Condition
+	(*ClusterSelector)(nil),        // 26: kubeswift.v1.ClusterSelector
+	(*PageRequest)(nil),            // 27: kubeswift.v1.PageRequest
+	(*PageResponse)(nil),           // 28: kubeswift.v1.PageResponse
+	(*ClusterError)(nil),           // 29: kubeswift.v1.ClusterError
+	(EventType)(0),                 // 30: kubeswift.v1.EventType
 }
 var file_kubeswift_v1_guest_proto_depIdxs = []int32{
-	21, // 0: kubeswift.v1.Guest.ref:type_name -> kubeswift.v1.ObjectRef
-	22, // 1: kubeswift.v1.Guest.created_at:type_name -> google.protobuf.Timestamp
-	23, // 2: kubeswift.v1.Guest.conditions:type_name -> kubeswift.v1.Condition
-	20, // 3: kubeswift.v1.Guest.labels:type_name -> kubeswift.v1.Guest.LabelsEntry
-	24, // 4: kubeswift.v1.ListGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
-	25, // 5: kubeswift.v1.ListGuestsRequest.page:type_name -> kubeswift.v1.PageRequest
+	23, // 0: kubeswift.v1.Guest.ref:type_name -> kubeswift.v1.ObjectRef
+	24, // 1: kubeswift.v1.Guest.created_at:type_name -> google.protobuf.Timestamp
+	25, // 2: kubeswift.v1.Guest.conditions:type_name -> kubeswift.v1.Condition
+	22, // 3: kubeswift.v1.Guest.labels:type_name -> kubeswift.v1.Guest.LabelsEntry
+	26, // 4: kubeswift.v1.ListGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	27, // 5: kubeswift.v1.ListGuestsRequest.page:type_name -> kubeswift.v1.PageRequest
 	0,  // 6: kubeswift.v1.ListGuestsResponse.guests:type_name -> kubeswift.v1.Guest
-	26, // 7: kubeswift.v1.ListGuestsResponse.page:type_name -> kubeswift.v1.PageResponse
-	27, // 8: kubeswift.v1.ListGuestsResponse.errors:type_name -> kubeswift.v1.ClusterError
-	24, // 9: kubeswift.v1.WatchGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
-	28, // 10: kubeswift.v1.GuestEvent.type:type_name -> kubeswift.v1.EventType
+	28, // 7: kubeswift.v1.ListGuestsResponse.page:type_name -> kubeswift.v1.PageResponse
+	29, // 8: kubeswift.v1.ListGuestsResponse.errors:type_name -> kubeswift.v1.ClusterError
+	26, // 9: kubeswift.v1.WatchGuestsRequest.clusters:type_name -> kubeswift.v1.ClusterSelector
+	30, // 10: kubeswift.v1.GuestEvent.type:type_name -> kubeswift.v1.EventType
 	0,  // 11: kubeswift.v1.GuestEvent.guest:type_name -> kubeswift.v1.Guest
-	27, // 12: kubeswift.v1.GuestEvent.error:type_name -> kubeswift.v1.ClusterError
-	21, // 13: kubeswift.v1.GetGuestDetailRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	29, // 12: kubeswift.v1.GuestEvent.error:type_name -> kubeswift.v1.ClusterError
+	23, // 13: kubeswift.v1.GetGuestDetailRequest.ref:type_name -> kubeswift.v1.ObjectRef
 	0,  // 14: kubeswift.v1.GetGuestDetailResponse.guest:type_name -> kubeswift.v1.Guest
 	6,  // 15: kubeswift.v1.GetGuestDetailResponse.spec:type_name -> kubeswift.v1.GuestSpec
-	21, // 16: kubeswift.v1.GuestActionRequest.ref:type_name -> kubeswift.v1.ObjectRef
-	0,  // 17: kubeswift.v1.GuestActionResponse.guest:type_name -> kubeswift.v1.Guest
-	21, // 18: kubeswift.v1.MigrateGuestRequest.ref:type_name -> kubeswift.v1.ObjectRef
-	21, // 19: kubeswift.v1.MigrateGuestResponse.migration:type_name -> kubeswift.v1.ObjectRef
-	12, // 20: kubeswift.v1.CreateGuestRequest.ports:type_name -> kubeswift.v1.GuestPortSpec
-	21, // 21: kubeswift.v1.CreateGuestResponse.ref:type_name -> kubeswift.v1.ObjectRef
-	21, // 22: kubeswift.v1.DeleteGuestRequest.ref:type_name -> kubeswift.v1.ObjectRef
-	22, // 23: kubeswift.v1.GuestEventEntry.last_seen:type_name -> google.protobuf.Timestamp
-	21, // 24: kubeswift.v1.GetGuestEventsRequest.ref:type_name -> kubeswift.v1.ObjectRef
-	17, // 25: kubeswift.v1.GetGuestEventsResponse.events:type_name -> kubeswift.v1.GuestEventEntry
-	1,  // 26: kubeswift.v1.GuestService.ListGuests:input_type -> kubeswift.v1.ListGuestsRequest
-	3,  // 27: kubeswift.v1.GuestService.WatchGuests:input_type -> kubeswift.v1.WatchGuestsRequest
-	5,  // 28: kubeswift.v1.GuestService.GetGuestDetail:input_type -> kubeswift.v1.GetGuestDetailRequest
-	8,  // 29: kubeswift.v1.GuestService.StartGuest:input_type -> kubeswift.v1.GuestActionRequest
-	8,  // 30: kubeswift.v1.GuestService.StopGuest:input_type -> kubeswift.v1.GuestActionRequest
-	10, // 31: kubeswift.v1.GuestService.MigrateGuest:input_type -> kubeswift.v1.MigrateGuestRequest
-	13, // 32: kubeswift.v1.GuestService.CreateGuest:input_type -> kubeswift.v1.CreateGuestRequest
-	15, // 33: kubeswift.v1.GuestService.DeleteGuest:input_type -> kubeswift.v1.DeleteGuestRequest
-	18, // 34: kubeswift.v1.GuestService.GetGuestEvents:input_type -> kubeswift.v1.GetGuestEventsRequest
-	2,  // 35: kubeswift.v1.GuestService.ListGuests:output_type -> kubeswift.v1.ListGuestsResponse
-	4,  // 36: kubeswift.v1.GuestService.WatchGuests:output_type -> kubeswift.v1.GuestEvent
-	7,  // 37: kubeswift.v1.GuestService.GetGuestDetail:output_type -> kubeswift.v1.GetGuestDetailResponse
-	9,  // 38: kubeswift.v1.GuestService.StartGuest:output_type -> kubeswift.v1.GuestActionResponse
-	9,  // 39: kubeswift.v1.GuestService.StopGuest:output_type -> kubeswift.v1.GuestActionResponse
-	11, // 40: kubeswift.v1.GuestService.MigrateGuest:output_type -> kubeswift.v1.MigrateGuestResponse
-	14, // 41: kubeswift.v1.GuestService.CreateGuest:output_type -> kubeswift.v1.CreateGuestResponse
-	16, // 42: kubeswift.v1.GuestService.DeleteGuest:output_type -> kubeswift.v1.DeleteGuestResponse
-	19, // 43: kubeswift.v1.GuestService.GetGuestEvents:output_type -> kubeswift.v1.GetGuestEventsResponse
-	35, // [35:44] is the sub-list for method output_type
-	26, // [26:35] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	8,  // 16: kubeswift.v1.GetGuestDetailResponse.network:type_name -> kubeswift.v1.GuestNetwork
+	9,  // 17: kubeswift.v1.GuestNetwork.ports:type_name -> kubeswift.v1.GuestNetworkPort
+	23, // 18: kubeswift.v1.GuestActionRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	0,  // 19: kubeswift.v1.GuestActionResponse.guest:type_name -> kubeswift.v1.Guest
+	23, // 20: kubeswift.v1.MigrateGuestRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	23, // 21: kubeswift.v1.MigrateGuestResponse.migration:type_name -> kubeswift.v1.ObjectRef
+	14, // 22: kubeswift.v1.CreateGuestRequest.ports:type_name -> kubeswift.v1.GuestPortSpec
+	23, // 23: kubeswift.v1.CreateGuestResponse.ref:type_name -> kubeswift.v1.ObjectRef
+	23, // 24: kubeswift.v1.DeleteGuestRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	24, // 25: kubeswift.v1.GuestEventEntry.last_seen:type_name -> google.protobuf.Timestamp
+	23, // 26: kubeswift.v1.GetGuestEventsRequest.ref:type_name -> kubeswift.v1.ObjectRef
+	19, // 27: kubeswift.v1.GetGuestEventsResponse.events:type_name -> kubeswift.v1.GuestEventEntry
+	1,  // 28: kubeswift.v1.GuestService.ListGuests:input_type -> kubeswift.v1.ListGuestsRequest
+	3,  // 29: kubeswift.v1.GuestService.WatchGuests:input_type -> kubeswift.v1.WatchGuestsRequest
+	5,  // 30: kubeswift.v1.GuestService.GetGuestDetail:input_type -> kubeswift.v1.GetGuestDetailRequest
+	10, // 31: kubeswift.v1.GuestService.StartGuest:input_type -> kubeswift.v1.GuestActionRequest
+	10, // 32: kubeswift.v1.GuestService.StopGuest:input_type -> kubeswift.v1.GuestActionRequest
+	12, // 33: kubeswift.v1.GuestService.MigrateGuest:input_type -> kubeswift.v1.MigrateGuestRequest
+	15, // 34: kubeswift.v1.GuestService.CreateGuest:input_type -> kubeswift.v1.CreateGuestRequest
+	17, // 35: kubeswift.v1.GuestService.DeleteGuest:input_type -> kubeswift.v1.DeleteGuestRequest
+	20, // 36: kubeswift.v1.GuestService.GetGuestEvents:input_type -> kubeswift.v1.GetGuestEventsRequest
+	2,  // 37: kubeswift.v1.GuestService.ListGuests:output_type -> kubeswift.v1.ListGuestsResponse
+	4,  // 38: kubeswift.v1.GuestService.WatchGuests:output_type -> kubeswift.v1.GuestEvent
+	7,  // 39: kubeswift.v1.GuestService.GetGuestDetail:output_type -> kubeswift.v1.GetGuestDetailResponse
+	11, // 40: kubeswift.v1.GuestService.StartGuest:output_type -> kubeswift.v1.GuestActionResponse
+	11, // 41: kubeswift.v1.GuestService.StopGuest:output_type -> kubeswift.v1.GuestActionResponse
+	13, // 42: kubeswift.v1.GuestService.MigrateGuest:output_type -> kubeswift.v1.MigrateGuestResponse
+	16, // 43: kubeswift.v1.GuestService.CreateGuest:output_type -> kubeswift.v1.CreateGuestResponse
+	18, // 44: kubeswift.v1.GuestService.DeleteGuest:output_type -> kubeswift.v1.DeleteGuestResponse
+	21, // 45: kubeswift.v1.GuestService.GetGuestEvents:output_type -> kubeswift.v1.GetGuestEventsResponse
+	37, // [37:46] is the sub-list for method output_type
+	28, // [28:37] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_guest_proto_init() }
@@ -1626,7 +1847,7 @@ func file_kubeswift_v1_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_guest_proto_rawDesc), len(file_kubeswift_v1_guest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

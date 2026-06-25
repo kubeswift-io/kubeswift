@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
 	connect "connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -198,9 +200,54 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&kubeswiftv1.GetGuestDetailResponse{
-		Guest: guestToProto(ref.GetCluster(), g),
-		Spec:  guestSpecToProto(g),
+		Guest:   guestToProto(ref.GetCluster(), g),
+		Spec:    guestSpecToProto(g),
+		Network: guestNetworkToProto(g),
 	}), nil
+}
+
+// guestNetworkToProto surfaces the service-exposure + egress view (the Networking
+// drawer section): spec.network (binding/ports) joined with the status the
+// controller + swiftletd report (programmed ports, Service, egress reachability,
+// conditions). Returns nil when the guest declares no spec.network.
+func guestNetworkToProto(g *swiftv1alpha1.SwiftGuest) *kubeswiftv1.GuestNetwork {
+	if g.Spec.Network == nil {
+		return nil
+	}
+	n := &kubeswiftv1.GuestNetwork{
+		Binding:         g.Spec.Network.Binding,
+		PortsProgrammed: meta.IsStatusConditionTrue(g.Status.Conditions, swiftv1alpha1.ConditionPortsProgrammed),
+		ServiceReady:    meta.IsStatusConditionTrue(g.Status.Conditions, swiftv1alpha1.ConditionServiceReady),
+		EgressReady:     meta.IsStatusConditionTrue(g.Status.Conditions, swiftv1alpha1.ConditionEgressReady),
+	}
+	if g.Status.Network != nil {
+		n.Egress = g.Status.Network.Egress
+		if g.Status.Network.ServiceRef != nil {
+			n.ServiceRef = g.Status.Network.ServiceRef.Name
+		}
+	}
+	// Programmed set = the ports the controller echoed into status.exposedPorts.
+	programmed := map[string]bool{}
+	if g.Status.Network != nil {
+		for _, ep := range g.Status.Network.ExposedPorts {
+			programmed[portKey(ep.Name, ep.Port)] = true
+		}
+	}
+	for _, p := range g.Spec.Network.Ports {
+		n.Ports = append(n.Ports, &kubeswiftv1.GuestNetworkPort{
+			Name:       p.Name,
+			Port:       p.Port,
+			TargetPort: p.TargetPort,
+			Protocol:   string(p.Protocol),
+			Expose:     p.Expose,
+			Programmed: programmed[portKey(p.Name, p.Port)],
+		})
+	}
+	return n
+}
+
+func portKey(name string, port int32) string {
+	return name + "/" + strconv.Itoa(int(port))
 }
 
 // guestSpecToProto surfaces the structured boot source + config so the UI can
