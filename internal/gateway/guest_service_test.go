@@ -271,6 +271,48 @@ func TestGuestService_CreateGuest(t *testing.T) {
 	}
 }
 
+func TestGuestService_DeleteGuest(t *testing.T) {
+	boba := fakeDyn(uGuest("default", "vm-a", "Running"))
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	if _, err := svc.DeleteGuest(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteGuestRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("missing ref: want InvalidArgument, got %v", err)
+	}
+	if _, err := svc.DeleteGuest(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteGuestRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+	})); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ := boba.Resource(swiftGuestGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
+	if len(list.Items) != 0 {
+		t.Errorf("guest should be deleted, got %d", len(list.Items))
+	}
+}
+
+// GetGuestDetail surfaces the structured spec (for Clone).
+func TestGuestService_GetGuestDetail_Spec(t *testing.T) {
+	g := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "swift.kubeswift.io/v1alpha1", "kind": "SwiftGuest",
+		"metadata": map[string]interface{}{"namespace": "default", "name": "vm-a"},
+		"spec": map[string]interface{}{
+			"imageRef":      map[string]interface{}{"name": "ubuntu-noble"},
+			"guestClassRef": map[string]interface{}{"name": "small"},
+			"runPolicy":     "Running",
+		},
+	}}
+	boba := fakeDyn(g)
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+	resp, err := svc.GetGuestDetail(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestDetailRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Msg.Spec == nil || resp.Msg.Spec.ImageRef != "ubuntu-noble" || resp.Msg.Spec.GuestClassRef != "small" {
+		t.Errorf("spec not surfaced for clone: %+v", resp.Msg.Spec)
+	}
+}
+
 func TestGuestService_CreateGuest_Validation(t *testing.T) {
 	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeDyn()}}, NewInsecureAuthenticator())
 	cases := []struct {
