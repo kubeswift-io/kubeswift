@@ -69,11 +69,28 @@ message GetGuestDetailRequest {
   ObjectRef ref = 1;
 }
 
+// GuestSpec is the structured boot source + config of a SwiftGuest, so the UI
+// can clone it (pre-fill the Create-VM wizard) without re-deriving it from the
+// summarized boot_source string.
+message GuestSpec {
+  string image_ref = 1;
+  string kernel_ref = 2;
+  string kernel_cmdline = 3;
+  string clone_snapshot_ref = 4;
+  string guest_class_ref = 5;
+  string seed_profile_ref = 6;
+  string gpu_profile_ref = 7;
+  string run_policy = 8;
+  string os_type = 9;
+}
+
 // GetGuestDetailResponse is the aggregated single-guest view. P0 returns the
 // flat Guest only; P1 fills the launcher pod, recent Events, GPU, network, and
 // storage in this one call (decision D8 — one RPC per screen).
 message GetGuestDetailResponse {
   Guest guest = 1;
+  // spec is the structured config (for Clone). Filled from the SwiftGuest spec.
+  GuestSpec spec = 2;
 }
 
 // GuestActionRequest identifies the target VM for a lifecycle action.
@@ -151,6 +168,13 @@ message CreateGuestResponse {
   ObjectRef ref = 1;
 }
 
+// DeleteGuestRequest deletes one SwiftGuest AS THE IMPERSONATED USER.
+message DeleteGuestRequest {
+  ObjectRef ref = 1;
+}
+
+message DeleteGuestResponse {}
+
 // GuestService is the read plane for VM inventory plus the P1/P2 write actions.
 // List/Watch fan out across the selected member clusters and merge, stamping
 // the cluster dimension on every row; a per-cluster error surface preserves
@@ -174,4 +198,7 @@ service GuestService {
   // wizard's structured input. The impersonated user must be allowed to create
   // swiftguests on the member; the admission webhook validates the spec.
   rpc CreateGuest(CreateGuestRequest) returns (CreateGuestResponse);
+
+  // Delete (write plane, P3): delete a SwiftGuest as the impersonated user.
+  rpc DeleteGuest(DeleteGuestRequest) returns (DeleteGuestResponse);
 }

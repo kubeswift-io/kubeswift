@@ -194,7 +194,65 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	return connect.NewResponse(&kubeswiftv1.GetGuestDetailResponse{Guest: guestToProto(ref.GetCluster(), g)}), nil
+	return connect.NewResponse(&kubeswiftv1.GetGuestDetailResponse{
+		Guest: guestToProto(ref.GetCluster(), g),
+		Spec:  guestSpecToProto(g),
+	}), nil
+}
+
+// guestSpecToProto surfaces the structured boot source + config so the UI can
+// clone a guest (pre-fill the Create-VM wizard).
+func guestSpecToProto(g *swiftv1alpha1.SwiftGuest) *kubeswiftv1.GuestSpec {
+	s := &kubeswiftv1.GuestSpec{
+		GuestClassRef: g.Spec.GuestClassRef.Name,
+		KernelCmdline: g.Spec.KernelCmdline,
+		RunPolicy:     string(g.Spec.RunPolicy),
+		OsType:        string(g.Spec.OSType),
+	}
+	if g.Spec.ImageRef != nil {
+		s.ImageRef = g.Spec.ImageRef.Name
+	}
+	if g.Spec.KernelRef != nil {
+		s.KernelRef = g.Spec.KernelRef.Name
+	}
+	if g.Spec.SeedProfileRef != nil {
+		s.SeedProfileRef = g.Spec.SeedProfileRef.Name
+	}
+	if g.Spec.GPUProfileRef != nil {
+		s.GpuProfileRef = g.Spec.GPUProfileRef.Name
+	}
+	if g.Spec.CloneFromSnapshot != nil {
+		s.CloneSnapshotRef = g.Spec.CloneFromSnapshot.SnapshotRef.Name
+	}
+	return s
+}
+
+// DeleteGuest deletes one SwiftGuest as the impersonated user. RBAC gates it; a
+// denial surfaces (never a silent no-op).
+func (s *GuestService) DeleteGuest(ctx context.Context, req *connect.Request[kubeswiftv1.DeleteGuestRequest]) (*connect.Response[kubeswiftv1.DeleteGuestResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	ref := req.Msg.GetRef()
+	if ref == nil || ref.GetCluster() == "" || ref.GetName() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("ref.cluster and ref.name are required"))
+	}
+	dyn, err := s.pool.DynamicFor(ref.GetCluster(), id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	if err := guestResource(dyn, ref.GetNamespace()).Delete(ctx, ref.GetName(), metav1.DeleteOptions{}); err != nil {
+		code := connect.CodeInternal
+		switch {
+		case apierrors.IsNotFound(err):
+			code = connect.CodeNotFound
+		case apierrors.IsForbidden(err) || apierrors.IsInvalid(err):
+			code = connect.CodeFailedPrecondition
+		}
+		return nil, connect.NewError(code, err)
+	}
+	return connect.NewResponse(&kubeswiftv1.DeleteGuestResponse{}), nil
 }
 
 // StartGuest sets the guest's runPolicy to Running; StopGuest sets it to
