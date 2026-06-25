@@ -8,6 +8,62 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.6.0] — 2026-06-25
+
+Adds the **KubeSwift web console** — a multi-cluster operator UI for the fleet,
+served by a new in-cluster **gateway** (`kubeswift-gateway`) that federates the
+registered `fleet.kubeswift.io` Cluster members and fans a read / write / telemetry
+/ console plane across them **as the signed-in user**. The browser app ships from
+the companion **projectbeskar/kubeswift-ui** repo; this release adds the gateway,
+the `kubeswift.v1` proto contract, and the `gateway.enabled` / `ui.enabled` Helm
+surface — including end-to-end **OIDC login** (e.g. Keycloak) with per-user
+Kubernetes **RBAC impersonation**, exposed behind one ingress. Cluster-validated
+end-to-end on the dev hub (login → impersonation → RBAC denial surfaces).
+
+### Added
+- **Multi-cluster gateway (`kubeswift-gateway`, `gateway.enabled`)** — a
+  Connect / gRPC-Web hub that watches `fleet.kubeswift.io/v1alpha1` Cluster
+  objects and serves the UI: ClusterService (fleet inventory), GuestService
+  (list / watch / detail / create / start / stop / delete / clone / migrate +
+  events), MigrationService (list + watch), TelemetryService (per-VM CPU/mem/net
+  from each member's Prometheus, + node metrics), ResourceService (an RBAC-scoped
+  generic resource explorer with read + apply / delete), AccessService (an RBAC
+  editor — predefined + capability ClusterRoles bound to OIDC users/groups), and a
+  WebSocket serial console (exec-pipe). (#258–#288)
+- **`fleet.kubeswift.io/v1alpha1` Cluster CRD** — registers a member cluster and
+  its credential for the hub to federate. (#259)
+- **Gateway OIDC auth (`gateway.authMode=oidc`)** — verifies the browser's
+  IdP-issued ID token and impersonates the claim-derived user + groups onto each
+  member, so every action authorizes against that member's own Kubernetes RBAC.
+  `gateway.oidc.*` Helm values; **`--oidc-ca-file`** (`gateway.oidc.caSecret`)
+  trusts a private / self-signed IdP CA for the JWKS fetch. (#278, #289)
+- **Web-console Helm surface (`ui.enabled`)** — deploys the kubeswift-ui app
+  (nginx); the default `ui.gateway.mode=proxy` reverse-proxies the gateway so the
+  browser is single-origin (no CORS, one ingress host, one OIDC redirect).
+  `ui.oidc.*` turns on the browser Authorization-Code + PKCE login. (#290)
+- **`GetGuestDetail` structured spec + networking view** — Clone reads the
+  structured boot source; the drawer's Networking section shows binding / exposed
+  ports / Service / egress (`GuestNetwork`). (#286, #288)
+
+### Fixed
+- Gateway maps a member RBAC **403 → `PermissionDenied`** (was `Internal`) on the
+  no-policy-webhook paths, so the UI can show a clean permission error. (#291)
+- `StopGuest` deletes the launcher pod (not just patches `runPolicy`), matching
+  `swiftctl` via the shared `internal/actions` primitives. (#267, #275)
+- Node-metrics PromQL 400 (`regexp.QuoteMeta` in `=~` matchers). (#283)
+- Console exec must name the launcher container. (#270)
+
+### Operator notes
+- The console requires **HTTPS** for the OIDC login (PKCE `crypto.subtle` is
+  disabled on non-secure remote origins). Expose the UI and the IdP over TLS; for a
+  private CA, set `gateway.oidc.caSecret`. Full Keycloak + Kubernetes-RBAC runbook:
+  `docs/ui/auth.md`.
+- The gateway and UI run on a **hub** cluster only; members just need KubeSwift
+  installed (CRDs + controller) and to be registered as `fleet.kubeswift.io`
+  Cluster objects.
+
+---
+
 ## [v0.5.0] — 2026-06-19
 
 Adds **Model A — namespace-native VM tenancy**: a SwiftGuest in a namespace whose
