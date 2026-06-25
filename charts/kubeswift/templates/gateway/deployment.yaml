@@ -36,11 +36,32 @@ spec:
             - --clusters-namespace={{ .Values.namespace }}
             - --auth-mode={{ .Values.gateway.authMode }}
             - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}
+            {{- if eq .Values.gateway.authMode "oidc" }}
+            - --oidc-issuer-url={{ required "gateway.oidc.issuerURL is required when gateway.authMode=oidc" .Values.gateway.oidc.issuerURL }}
+            - --oidc-client-id={{ required "gateway.oidc.clientID is required when gateway.authMode=oidc" .Values.gateway.oidc.clientID }}
+            - --oidc-username-claim={{ .Values.gateway.oidc.usernameClaim }}
+            - --oidc-groups-claim={{ .Values.gateway.oidc.groupsClaim }}
+            {{- with .Values.gateway.oidc.usernamePrefix }}
+            - --oidc-username-prefix={{ . }}
+            {{- end }}
+            {{- with .Values.gateway.oidc.groupsPrefix }}
+            - --oidc-groups-prefix={{ . }}
+            {{- end }}
+            {{- if .Values.gateway.oidc.caSecret }}
+            - --oidc-ca-file=/etc/kubeswift/oidc-ca/{{ .Values.gateway.oidc.caKey }}
+            {{- end }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+          {{- if and (eq .Values.gateway.authMode "oidc") .Values.gateway.oidc.caSecret }}
+          volumeMounts:
+            - name: oidc-ca
+              mountPath: /etc/kubeswift/oidc-ca
+              readOnly: true
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.gateway.port }}
@@ -66,4 +87,10 @@ spec:
                 - ALL
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+      {{- if and (eq .Values.gateway.authMode "oidc") .Values.gateway.oidc.caSecret }}
+      volumes:
+        - name: oidc-ca
+          secret:
+            secretName: {{ .Values.gateway.oidc.caSecret }}
+      {{- end }}
 {{- end }}

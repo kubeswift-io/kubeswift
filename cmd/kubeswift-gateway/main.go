@@ -41,6 +41,7 @@ func main() {
 	oidcGroupsClaim := flag.String("oidc-groups-claim", "groups", "OIDC claim to use as the impersonated groups")
 	oidcUsernamePrefix := flag.String("oidc-username-prefix", "", "prefix prepended to the OIDC username (mirrors apiserver --oidc-username-prefix)")
 	oidcGroupsPrefix := flag.String("oidc-groups-prefix", "", "prefix prepended to each OIDC group")
+	oidcCAFile := flag.String("oidc-ca-file", "", "PEM CA bundle to trust when fetching the OIDC issuer's discovery/JWKS (for a private-CA IdP, e.g. a self-signed Keycloak); empty = system roots")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -76,6 +77,7 @@ func main() {
 		groupsClaim:    *oidcGroupsClaim,
 		usernamePrefix: *oidcUsernamePrefix,
 		groupsPrefix:   *oidcGroupsPrefix,
+		caFile:         *oidcCAFile,
 	})
 	if err != nil {
 		log.Error(err, "unable to build authenticator")
@@ -169,6 +171,7 @@ type oidcOptions struct {
 	issuer, clientID             string
 	usernameClaim, groupsClaim   string
 	usernamePrefix, groupsPrefix string
+	caFile                       string
 }
 
 // buildAuthenticator selects the end-user auth strategy (decision D1).
@@ -182,8 +185,8 @@ func buildAuthenticator(mode string, cfg *rest.Config, log logr.Logger, oidc oid
 		if oidc.issuer == "" || oidc.clientID == "" {
 			return nil, fmt.Errorf("auth-mode=oidc requires --oidc-issuer-url and --oidc-client-id")
 		}
-		log.Info("auth-mode=oidc: impersonate the OIDC-token user", "issuer", oidc.issuer, "clientID", oidc.clientID, "usernameClaim", oidc.usernameClaim)
-		return gateway.NewOIDCAuthenticator(oidc.issuer, oidc.clientID, gateway.OIDCClaimConfig{
+		log.Info("auth-mode=oidc: impersonate the OIDC-token user", "issuer", oidc.issuer, "clientID", oidc.clientID, "usernameClaim", oidc.usernameClaim, "caFile", oidc.caFile)
+		return gateway.NewOIDCAuthenticator(oidc.issuer, oidc.clientID, oidc.caFile, gateway.OIDCClaimConfig{
 			UsernameClaim:  oidc.usernameClaim,
 			GroupsClaim:    oidc.groupsClaim,
 			UsernamePrefix: oidc.usernamePrefix,
