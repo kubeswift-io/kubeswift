@@ -193,7 +193,7 @@ func (s *GuestService) GetGuestDetail(ctx context.Context, req *connect.Request[
 	}
 	u, err := dyn.Resource(swiftGuestGVR).Namespace(ref.GetNamespace()).Get(ctx, ref.GetName(), metav1.GetOptions{})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, mapAccessErr(err) // RBAC 403 -> PermissionDenied, not Internal
 	}
 	g, err := toSwiftGuest(u)
 	if err != nil {
@@ -339,7 +339,9 @@ func (s *GuestService) guestAction(ctx context.Context, req *connect.Request[kub
 	}
 	u, err := action(ctx, dyn, ref.GetNamespace(), ref.GetName())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		// Start/Stop patch runPolicy (no policy webhook denies it), so a 403 here
+		// is an RBAC denial -> PermissionDenied, and NotFound -> NotFound.
+		return nil, mapAccessErr(err)
 	}
 	g, err := toSwiftGuest(u)
 	if err != nil {

@@ -79,7 +79,7 @@ func (s *TelemetryService) GetGuestMetrics(ctx context.Context, req *connect.Req
 	pods, err := dyn.Resource(podGVR).Namespace(ref.GetNamespace()).
 		List(ctx, metav1.ListOptions{LabelSelector: guestPodLabel + "=" + ref.GetName()})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, mapAccessErr(err) // RBAC 403 -> PermissionDenied, not Internal
 	}
 	if len(pods.Items) == 0 {
 		// Stopped guest — no pod, no series. Not an error.

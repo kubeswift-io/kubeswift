@@ -7,8 +7,10 @@ import (
 
 	connect "connectrpc.com/connect"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
 
@@ -202,5 +204,27 @@ func TestAccess_ListAssignments_Roundtrip(t *testing.T) {
 	a := resp.Msg.Assignments[0]
 	if a.Role != "kubeswift-admin" || a.Subject.Name != "root@example.com" || a.Scope != "Cluster" {
 		t.Errorf("assignment = %+v", a)
+	}
+}
+
+func TestMapAccessErr(t *testing.T) {
+	gr := schema.GroupResource{Group: "swift.kubeswift.io", Resource: "swiftguests"}
+	cases := []struct {
+		name string
+		err  error
+		want connect.Code
+	}{
+		{"forbidden->permission_denied", apierrors.NewForbidden(gr, "vm", errors.New("rbac")), connect.CodePermissionDenied},
+		{"unauthorized->unauthenticated", apierrors.NewUnauthorized("token expired"), connect.CodeUnauthenticated},
+		{"notfound->not_found", apierrors.NewNotFound(gr, "vm"), connect.CodeNotFound},
+		{"alreadyexists->already_exists", apierrors.NewAlreadyExists(gr, "vm"), connect.CodeAlreadyExists},
+		{"other->internal", errors.New("boom"), connect.CodeInternal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := connect.CodeOf(mapAccessErr(c.err)); got != c.want {
+				t.Errorf("mapAccessErr(%s) = %v, want %v", c.name, got, c.want)
+			}
+		})
 	}
 }
