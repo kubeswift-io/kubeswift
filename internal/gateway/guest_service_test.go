@@ -289,6 +289,48 @@ func TestGuestService_DeleteGuest(t *testing.T) {
 	}
 }
 
+func uEvent(ns, name, objName, typ, reason, msg, lastTs string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "v1", "kind": "Event",
+		"metadata":       map[string]interface{}{"namespace": ns, "name": name, "uid": name},
+		"type":           typ,
+		"reason":         reason,
+		"message":        msg,
+		"count":          int64(1),
+		"lastTimestamp":  lastTs,
+		"involvedObject": map[string]interface{}{"kind": "SwiftGuest", "name": objName},
+	}}
+}
+
+func TestGuestService_GetGuestEvents(t *testing.T) {
+	guest := uGuest("default", "vm-a", "Pending")
+	ev1 := uEvent("default", "ev1", "vm-a", "Warning", "FailedScheduling", "0/3 nodes available", "2026-01-01T00:00:00Z")
+	ev2 := uEvent("default", "ev2", "vm-a", "Normal", "Scheduled", "assigned to boba", "2026-01-01T00:01:00Z")
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			swiftGuestGVR: "SwiftGuestList",
+			eventsGVR:     "EventList",
+		}, guest, ev1, ev2)
+	svc := NewGuestService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": dyn}}, NewInsecureAuthenticator())
+
+	resp, err := svc.GetGuestEvents(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestEventsRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Msg.Events) != 2 {
+		t.Fatalf("want 2 events, got %d", len(resp.Msg.Events))
+	}
+	// Newest first.
+	if resp.Msg.Events[0].Reason != "Scheduled" {
+		t.Errorf("want newest event (Scheduled) first, got %q", resp.Msg.Events[0].Reason)
+	}
+	if resp.Msg.Events[0].Object != "SwiftGuest/vm-a" {
+		t.Errorf("object = %q, want SwiftGuest/vm-a", resp.Msg.Events[0].Object)
+	}
+}
+
 // GetGuestDetail surfaces the structured spec (for Clone).
 func TestGuestService_GetGuestDetail_Spec(t *testing.T) {
 	g := &unstructured.Unstructured{Object: map[string]interface{}{

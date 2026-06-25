@@ -175,6 +175,25 @@ message DeleteGuestRequest {
 
 message DeleteGuestResponse {}
 
+// GuestEventEntry is one Kubernetes Event involving the guest or its launcher
+// pod — the "why won't my VM boot" diagnostics surface.
+message GuestEventEntry {
+  string type = 1; // Normal | Warning
+  string reason = 2;
+  string message = 3;
+  int32 count = 4;
+  string object = 5; // involvedObject kind/name
+  google.protobuf.Timestamp last_seen = 6;
+}
+
+message GetGuestEventsRequest {
+  ObjectRef ref = 1;
+}
+
+message GetGuestEventsResponse {
+  repeated GuestEventEntry events = 1; // newest first
+}
+
 // GuestService is the read plane for VM inventory plus the P1/P2 write actions.
 // List/Watch fan out across the selected member clusters and merge, stamping
 // the cluster dimension on every row; a per-cluster error surface preserves
@@ -201,4 +220,7 @@ service GuestService {
 
   // Delete (write plane, P3): delete a SwiftGuest as the impersonated user.
   rpc DeleteGuest(DeleteGuestRequest) returns (DeleteGuestResponse);
+
+  // Diagnostics (read, P3): Kubernetes Events for the guest + its launcher pod.
+  rpc GetGuestEvents(GetGuestEventsRequest) returns (GetGuestEventsResponse);
 }
