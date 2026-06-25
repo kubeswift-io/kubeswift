@@ -57,9 +57,9 @@ var resourceCatalog = []resourceKind{
 	{key: "swiftguestclasses", displayName: "Guest Classes", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestclasses"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
 	{key: "swiftguestpools", displayName: "Guest Pools", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "replicas"}, project: poolProject},
 	{key: "swiftseedprofiles", displayName: "Seed Profiles", gvr: gvr("seed.kubeswift.io", "v1alpha1", "swiftseedprofiles"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
-	{key: "swiftsnapshots", displayName: "Snapshots", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshots"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
-	{key: "swiftsnapshotschedules", displayName: "Snapshot Schedules", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshotschedules"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
-	{key: "swiftrestores", displayName: "Restores", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftrestores"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
+	{key: "swiftsnapshots", displayName: "Snapshots", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshots"), namespaced: true, category: "KubeSwift", columns: []string{"guest", "backend", "phase"}, project: snapshotProject},
+	{key: "swiftsnapshotschedules", displayName: "Snapshot Schedules", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshotschedules"), namespaced: true, category: "KubeSwift", columns: []string{"schedule", "suspend", "lastRun"}, project: scheduleProject},
+	{key: "swiftrestores", displayName: "Restores", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftrestores"), namespaced: true, category: "KubeSwift", columns: []string{"snapshot", "target", "phase"}, project: restoreProject},
 	{key: "swiftgpunodes", displayName: "GPU Nodes", gvr: gvr("gpu.kubeswift.io", "v1alpha1", "swiftgpunodes"), namespaced: false, category: "KubeSwift", columns: []string{"phase", "gpus", "free"}, project: gpuNodeProject},
 	{key: "swiftgpuprofiles", displayName: "GPU Profiles", gvr: gvr("gpu.kubeswift.io", "v1alpha1", "swiftgpuprofiles"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
 }
@@ -86,6 +86,37 @@ func nilProject(*unstructured.Unstructured) map[string]string { return map[strin
 func phaseStatusProject(u *unstructured.Unstructured) map[string]string {
 	p := nestedStr(u, "status", "phase")
 	return map[string]string{"phase": p, "status": p}
+}
+
+// snapshotProject reports a SwiftSnapshot's source guest, backend type, and phase.
+func snapshotProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"guest":   nestedStr(u, "spec", "guestRef", "name"),
+		"backend": nestedStr(u, "spec", "backend", "type"),
+		"phase":   nestedStr(u, "status", "phase"),
+	}
+}
+
+// restoreProject reports a SwiftRestore's source snapshot, target guest, and phase.
+func restoreProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"snapshot": nestedStr(u, "spec", "snapshotRef", "name"),
+		"target":   nestedStr(u, "spec", "targetGuest", "name"),
+		"phase":    nestedStr(u, "status", "phase"),
+	}
+}
+
+// scheduleProject reports a SwiftSnapshotSchedule's cron, suspend flag, and last run.
+func scheduleProject(u *unstructured.Unstructured) map[string]string {
+	suspend := "false"
+	if b, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && b {
+		suspend = "true"
+	}
+	return map[string]string{
+		"schedule": nestedStr(u, "spec", "schedule"),
+		"suspend":  suspend,
+		"lastRun":  nestedStr(u, "status", "lastScheduleTime"),
+	}
 }
 
 func nodeProject(u *unstructured.Unstructured) map[string]string {
