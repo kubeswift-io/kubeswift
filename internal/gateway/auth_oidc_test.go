@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	connect "connectrpc.com/connect"
@@ -79,7 +81,7 @@ func TestStringSliceClaim_Variants(t *testing.T) {
 }
 
 func TestNewOIDCAuthenticator_AppliesDefaults(t *testing.T) {
-	a := NewOIDCAuthenticator("https://issuer.example", "kubeswift", OIDCClaimConfig{})
+	a := NewOIDCAuthenticator("https://issuer.example", "kubeswift", "", OIDCClaimConfig{})
 	oa, ok := a.(*oidcAuthenticator)
 	if !ok {
 		t.Fatal("NewOIDCAuthenticator did not return an *oidcAuthenticator")
@@ -92,9 +94,22 @@ func TestNewOIDCAuthenticator_AppliesDefaults(t *testing.T) {
 // A missing bearer token is rejected before any IdP round-trip, so this needs no
 // live issuer.
 func TestOIDCAuthenticator_MissingToken(t *testing.T) {
-	a := NewOIDCAuthenticator("https://issuer.example", "kubeswift", OIDCClaimConfig{})
+	a := NewOIDCAuthenticator("https://issuer.example", "kubeswift", "", OIDCClaimConfig{})
 	_, err := a.Authenticate(context.Background(), http.Header{})
 	if connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("want Unauthenticated for a missing token, got %v", err)
+	}
+}
+
+func TestHTTPClientWithCA(t *testing.T) {
+	if _, err := httpClientWithCA("/no/such/oidc-ca.pem"); err == nil {
+		t.Error("expected error for a missing CA file")
+	}
+	f := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(f, []byte("not a pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := httpClientWithCA(f); err == nil {
+		t.Error("expected error for a file with no PEM certificates")
 	}
 }

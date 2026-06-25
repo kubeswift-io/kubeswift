@@ -115,16 +115,37 @@ gateway:
   replicas: 1
   port: 8080
   # End-user auth (decision D1):
-  #   token    - impersonate the bearer-token user via the hub's TokenReview
-  #              (production). The fleet should share an OIDC identity provider
-  #              so the impersonated subject authorizes uniformly on each member.
+  #   oidc     - verify the browser's IdP-issued OIDC ID token (gateway.oidc
+  #              below) and impersonate the claim-derived user+groups on each
+  #              member. The production path with a shared IdP (e.g. Keycloak).
+  #   token    - impersonate the bearer-token user via the hub's TokenReview.
+  #              The fleet should share an OIDC identity provider so the
+  #              impersonated subject authorizes uniformly on each member.
   #   insecure - member queries run as the gateway's own credential, with NO
   #              per-user impersonation. DEV/LAB ONLY: every UI user inherits
   #              whatever the member credentials grant. Do not use in production.
   authMode: insecure
+  # OIDC settings (used only when authMode=oidc). The gateway verifies the
+  # browser-supplied ID token against issuerURL's JWKS and impersonates the
+  # claim-derived user+groups onto each member. issuerURL must resolve to ONE URL
+  # reachable from BOTH the browser and the gateway (see docs/ui/auth.md). Mirror
+  # these into the UI via ui.oidc so the browser logs in against the same issuer.
+  oidc:
+    issuerURL: "" # e.g. https://keycloak.example.com/realms/kubeswift
+    clientID: "" # the OIDC client ID / audience the ID token must carry
+    usernameClaim: email # claim used as the impersonated username
+    groupsClaim: groups # claim used as the impersonated groups
+    usernamePrefix: "" # mirrors apiserver --oidc-username-prefix
+    groupsPrefix: "" # mirrors apiserver --oidc-groups-prefix
+    # caSecret: trust a private/self-signed IdP CA for the JWKS fetch. Name a
+    # Secret in .Values.namespace holding the PEM at key caKey; the gateway mounts
+    # it and passes --oidc-ca-file. Empty = system roots only.
+    caSecret: ""
+    caKey: ca.crt
   # Browser origin allowed to call the Connect/gRPC-Web surface (the kubeswift-ui
   # app's origin). "*" is acceptable for a token-auth API (no cookies); pin it
-  # for a hardened install.
+  # for a hardened install. With ui.gateway.mode=proxy the browser is same-origin,
+  # so CORS does not apply.
   corsAllowOrigin: "*"
   service:
     type: ClusterIP

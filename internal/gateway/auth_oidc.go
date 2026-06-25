@@ -2,8 +2,11 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 
 	connect "connectrpc.com/connect"
@@ -34,6 +37,7 @@ type OIDCClaimConfig struct {
 type oidcAuthenticator struct {
 	issuerURL string
 	clientID  string
+	caFile    string
 	claims    OIDCClaimConfig
 
 	mu       sync.Mutex
@@ -42,15 +46,18 @@ type oidcAuthenticator struct {
 
 // NewOIDCAuthenticator builds a gateway-side OIDC authenticator. issuerURL is
 // the IdP's OIDC issuer (its discovery doc + JWKS are fetched lazily on first
-// use); clientID is the audience the ID token must carry.
-func NewOIDCAuthenticator(issuerURL, clientID string, claims OIDCClaimConfig) Authenticator {
+// use); clientID is the audience the ID token must carry. caFile, when set, is a
+// PEM CA bundle added to the system roots for the discovery/JWKS fetch — needed
+// when the IdP serves a private/self-signed cert (e.g. a self-signed Keycloak);
+// empty means system roots only.
+func NewOIDCAuthenticator(issuerURL, clientID, caFile string, claims OIDCClaimConfig) Authenticator {
 	if claims.UsernameClaim == "" {
 		claims.UsernameClaim = "email"
 	}
 	if claims.GroupsClaim == "" {
 		claims.GroupsClaim = "groups"
 	}
-	return &oidcAuthenticator{issuerURL: issuerURL, clientID: clientID, claims: claims}
+	return &oidcAuthenticator{issuerURL: issuerURL, clientID: clientID, caFile: caFile, claims: claims}
 }
 
 func (a *oidcAuthenticator) getVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
@@ -59,12 +66,40 @@ func (a *oidcAuthenticator) getVerifier(ctx context.Context) (*oidc.IDTokenVerif
 	if a.verifier != nil {
 		return a.verifier, nil
 	}
+	// Trust a private IdP CA for the discovery/JWKS fetch when configured.
+	if a.caFile != "" {
+		client, err := httpClientWithCA(a.caFile)
+		if err != nil {
+			return nil, err
+		}
+		ctx = oidc.ClientContext(ctx, client)
+	}
 	provider, err := oidc.NewProvider(ctx, a.issuerURL)
 	if err != nil {
 		return nil, err
 	}
 	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.clientID})
 	return a.verifier, nil
+}
+
+// httpClientWithCA returns an http.Client whose TLS root pool is the system
+// roots plus the PEM bundle at caFile. The provider/verifier are cached, so the
+// file is read at most once per gateway lifetime (on the first OIDC request).
+func httpClientWithCA(caFile string) (*http.Client, error) {
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read oidc CA file %q: %w", caFile, err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("oidc CA file %q: no PEM certificates parsed", caFile)
+	}
+	return &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+	}}, nil
 }
 
 func (a *oidcAuthenticator) Authenticate(ctx context.Context, h http.Header) (Identity, error) {
