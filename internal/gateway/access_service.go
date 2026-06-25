@@ -312,10 +312,19 @@ func (s *AccessService) ensureRole(ctx context.Context, rc rbacv1client.RbacV1In
 	return nil
 }
 
+// mapAccessErr maps a Kubernetes apimachinery error from an impersonated
+// member-cluster call to the matching Connect code, so the UI can tell a
+// permission denial (RBAC 403) apart from a generic server error. Used gateway-
+// wide for impersonated reads/actions that carry NO validating webhook (reads,
+// Explorer, Start/Stop). The webhook-heavy write paths (Create/Migrate/Delete)
+// keep their own FailedPrecondition mapping on purpose: a k8s 403 there can be a
+// webhook policy denial, not an RBAC denial, and the message carries the reason.
 func mapAccessErr(err error) *connect.Error {
 	switch {
 	case apierrors.IsForbidden(err):
 		return connect.NewError(connect.CodePermissionDenied, err)
+	case apierrors.IsUnauthorized(err):
+		return connect.NewError(connect.CodeUnauthenticated, err)
 	case apierrors.IsAlreadyExists(err):
 		return connect.NewError(connect.CodeAlreadyExists, err)
 	case apierrors.IsNotFound(err):
