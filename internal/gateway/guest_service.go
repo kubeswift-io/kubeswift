@@ -5,12 +5,15 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	connect "connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 
@@ -461,6 +464,93 @@ func buildSwiftGuest(m *kubeswiftv1.CreateGuestRequest) *unstructured.Unstructur
 		"metadata":   map[string]interface{}{"name": m.GetName(), "namespace": m.GetNamespace()},
 		"spec":       spec,
 	}}
+}
+
+var eventsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}
+
+// GetGuestEvents returns the Kubernetes Events involving the guest and its
+// launcher pod (the "why won't my VM boot" surface), newest first, as the
+// impersonated user. The launcher pod is named after the guest (so one query by
+// name catches both the SwiftGuest and Pod events); a migrated guest's pod is
+// renamed, so its podRef is queried too.
+func (s *GuestService) GetGuestEvents(ctx context.Context, req *connect.Request[kubeswiftv1.GetGuestEventsRequest]) (*connect.Response[kubeswiftv1.GetGuestEventsResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	ref := req.Msg.GetRef()
+	if ref == nil || ref.GetCluster() == "" || ref.GetName() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("ref.cluster and ref.name are required"))
+	}
+	dyn, err := s.pool.DynamicFor(ref.GetCluster(), id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	ns := ref.GetNamespace()
+
+	// Resolve the launcher pod name (renamed after a live migration).
+	queryNames := []string{ref.GetName()}
+	if gu, err := dyn.Resource(swiftGuestGVR).Namespace(ns).Get(ctx, ref.GetName(), metav1.GetOptions{}); err == nil {
+		if p, ok, _ := unstructured.NestedString(gu.Object, "status", "podRef", "name"); ok && p != "" && p != ref.GetName() {
+			queryNames = append(queryNames, p)
+		}
+	}
+
+	seen := map[string]bool{}
+	out := &kubeswiftv1.GetGuestEventsResponse{}
+	for i, qn := range queryNames {
+		list, err := dyn.Resource(eventsGVR).Namespace(ns).List(ctx, metav1.ListOptions{
+			FieldSelector: "involvedObject.name=" + qn,
+		})
+		if err != nil {
+			if i == 0 {
+				return nil, mapAccessErr(err) // surface RBAC/connectivity, never a silent empty
+			}
+			continue // best-effort on the secondary (pod) query
+		}
+		for j := range list.Items {
+			e := &list.Items[j]
+			if uid, _, _ := unstructured.NestedString(e.Object, "metadata", "uid"); uid != "" {
+				if seen[uid] {
+					continue
+				}
+				seen[uid] = true
+			}
+			out.Events = append(out.Events, mapEvent(e))
+		}
+	}
+	sort.Slice(out.Events, func(i, j int) bool {
+		return out.Events[i].GetLastSeen().AsTime().After(out.Events[j].GetLastSeen().AsTime())
+	})
+	return connect.NewResponse(out), nil
+}
+
+func mapEvent(e *unstructured.Unstructured) *kubeswiftv1.GuestEventEntry {
+	str := func(f ...string) string { v, _, _ := unstructured.NestedString(e.Object, f...); return v }
+	count, _, _ := unstructured.NestedInt64(e.Object, "count")
+	entry := &kubeswiftv1.GuestEventEntry{
+		Type:    str("type"),
+		Reason:  str("reason"),
+		Message: str("message"),
+		Count:   int32(count),
+		Object:  str("involvedObject", "kind") + "/" + str("involvedObject", "name"),
+	}
+	for _, f := range []string{"lastTimestamp", "eventTime"} {
+		if ts := str(f); ts != "" {
+			if t, perr := time.Parse(time.RFC3339, ts); perr == nil {
+				entry.LastSeen = timestamppb.New(t)
+				break
+			}
+		}
+	}
+	if entry.LastSeen == nil {
+		if ts := str("metadata", "creationTimestamp"); ts != "" {
+			if t, perr := time.Parse(time.RFC3339, ts); perr == nil {
+				entry.LastSeen = timestamppb.New(t)
+			}
+		}
+	}
+	return entry
 }
 
 // targetClusters resolves the selector against the registered members. An empty

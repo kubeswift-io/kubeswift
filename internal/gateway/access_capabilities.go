@@ -33,10 +33,11 @@ func rule(groups, resources, verbs []string) rbacv1.PolicyRule {
 var capabilities = []capability{
 	{
 		key: "view-vms", displayName: "View VMs",
-		description: "Read SwiftGuests, pools, classes, and migrations.",
+		description: "Read SwiftGuests, pools, classes, migrations, and their Events (boot diagnostics).",
 		rules: []rbacv1.PolicyRule{
 			rule([]string{"swift.kubeswift.io"}, []string{"swiftguests", "swiftguestpools", "swiftguestclasses"}, []string{"get", "list", "watch"}),
 			rule([]string{"migration.kubeswift.io"}, []string{"swiftmigrations"}, []string{"get", "list", "watch"}),
+			rule([]string{""}, []string{"events"}, []string{"get", "list", "watch"}),
 		},
 	},
 	{

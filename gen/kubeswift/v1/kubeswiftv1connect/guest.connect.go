@@ -54,6 +54,9 @@ const (
 	// GuestServiceDeleteGuestProcedure is the fully-qualified name of the GuestService's DeleteGuest
 	// RPC.
 	GuestServiceDeleteGuestProcedure = "/kubeswift.v1.GuestService/DeleteGuest"
+	// GuestServiceGetGuestEventsProcedure is the fully-qualified name of the GuestService's
+	// GetGuestEvents RPC.
+	GuestServiceGetGuestEventsProcedure = "/kubeswift.v1.GuestService/GetGuestEvents"
 )
 
 // GuestServiceClient is a client for the kubeswift.v1.GuestService service.
@@ -75,6 +78,8 @@ type GuestServiceClient interface {
 	CreateGuest(context.Context, *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error)
 	// Delete (write plane, P3): delete a SwiftGuest as the impersonated user.
 	DeleteGuest(context.Context, *connect.Request[v1.DeleteGuestRequest]) (*connect.Response[v1.DeleteGuestResponse], error)
+	// Diagnostics (read, P3): Kubernetes Events for the guest + its launcher pod.
+	GetGuestEvents(context.Context, *connect.Request[v1.GetGuestEventsRequest]) (*connect.Response[v1.GetGuestEventsResponse], error)
 }
 
 // NewGuestServiceClient constructs a client for the kubeswift.v1.GuestService service. By default,
@@ -136,6 +141,12 @@ func NewGuestServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(guestServiceMethods.ByName("DeleteGuest")),
 			connect.WithClientOptions(opts...),
 		),
+		getGuestEvents: connect.NewClient[v1.GetGuestEventsRequest, v1.GetGuestEventsResponse](
+			httpClient,
+			baseURL+GuestServiceGetGuestEventsProcedure,
+			connect.WithSchema(guestServiceMethods.ByName("GetGuestEvents")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -149,6 +160,7 @@ type guestServiceClient struct {
 	migrateGuest   *connect.Client[v1.MigrateGuestRequest, v1.MigrateGuestResponse]
 	createGuest    *connect.Client[v1.CreateGuestRequest, v1.CreateGuestResponse]
 	deleteGuest    *connect.Client[v1.DeleteGuestRequest, v1.DeleteGuestResponse]
+	getGuestEvents *connect.Client[v1.GetGuestEventsRequest, v1.GetGuestEventsResponse]
 }
 
 // ListGuests calls kubeswift.v1.GuestService.ListGuests.
@@ -191,6 +203,11 @@ func (c *guestServiceClient) DeleteGuest(ctx context.Context, req *connect.Reque
 	return c.deleteGuest.CallUnary(ctx, req)
 }
 
+// GetGuestEvents calls kubeswift.v1.GuestService.GetGuestEvents.
+func (c *guestServiceClient) GetGuestEvents(ctx context.Context, req *connect.Request[v1.GetGuestEventsRequest]) (*connect.Response[v1.GetGuestEventsResponse], error) {
+	return c.getGuestEvents.CallUnary(ctx, req)
+}
+
 // GuestServiceHandler is an implementation of the kubeswift.v1.GuestService service.
 type GuestServiceHandler interface {
 	ListGuests(context.Context, *connect.Request[v1.ListGuestsRequest]) (*connect.Response[v1.ListGuestsResponse], error)
@@ -210,6 +227,8 @@ type GuestServiceHandler interface {
 	CreateGuest(context.Context, *connect.Request[v1.CreateGuestRequest]) (*connect.Response[v1.CreateGuestResponse], error)
 	// Delete (write plane, P3): delete a SwiftGuest as the impersonated user.
 	DeleteGuest(context.Context, *connect.Request[v1.DeleteGuestRequest]) (*connect.Response[v1.DeleteGuestResponse], error)
+	// Diagnostics (read, P3): Kubernetes Events for the guest + its launcher pod.
+	GetGuestEvents(context.Context, *connect.Request[v1.GetGuestEventsRequest]) (*connect.Response[v1.GetGuestEventsResponse], error)
 }
 
 // NewGuestServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -267,6 +286,12 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(guestServiceMethods.ByName("DeleteGuest")),
 		connect.WithHandlerOptions(opts...),
 	)
+	guestServiceGetGuestEventsHandler := connect.NewUnaryHandler(
+		GuestServiceGetGuestEventsProcedure,
+		svc.GetGuestEvents,
+		connect.WithSchema(guestServiceMethods.ByName("GetGuestEvents")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.GuestService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case GuestServiceListGuestsProcedure:
@@ -285,6 +310,8 @@ func NewGuestServiceHandler(svc GuestServiceHandler, opts ...connect.HandlerOpti
 			guestServiceCreateGuestHandler.ServeHTTP(w, r)
 		case GuestServiceDeleteGuestProcedure:
 			guestServiceDeleteGuestHandler.ServeHTTP(w, r)
+		case GuestServiceGetGuestEventsProcedure:
+			guestServiceGetGuestEventsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -324,4 +351,8 @@ func (UnimplementedGuestServiceHandler) CreateGuest(context.Context, *connect.Re
 
 func (UnimplementedGuestServiceHandler) DeleteGuest(context.Context, *connect.Request[v1.DeleteGuestRequest]) (*connect.Response[v1.DeleteGuestResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.DeleteGuest is not implemented"))
+}
+
+func (UnimplementedGuestServiceHandler) GetGuestEvents(context.Context, *connect.Request[v1.GetGuestEventsRequest]) (*connect.Response[v1.GetGuestEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.GuestService.GetGuestEvents is not implemented"))
 }
