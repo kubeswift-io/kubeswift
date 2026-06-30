@@ -90,7 +90,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```
@@ -216,7 +216,7 @@ Push from the directory containing the build outputs:
 ```bash
 cd output/images/
 
-oras push ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
 ```
@@ -233,7 +233,7 @@ Pushing from the artifact directory ensures clean layer titles (`bzImage` and `r
 ### Verify the manifest
 
 ```bash
-oras manifest fetch ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0 | jq .
+oras manifest fetch ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0 | jq .
 ```
 
 Check that:
@@ -245,7 +245,7 @@ Check that:
 
 ```bash
 mkdir -p /tmp/kernel-test && cd /tmp/kernel-test
-oras pull ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+oras pull ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0
 ls -lh
 ```
 

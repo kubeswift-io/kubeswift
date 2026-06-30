@@ -3,8 +3,8 @@ package clonecommon
 import (
 	"strings"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
 // ComputeMACRewrites returns a CSV of new MACs indexed by NIC ordinal matching

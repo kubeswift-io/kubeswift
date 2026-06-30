@@ -13,7 +13,7 @@ CI does not publish `latest`. For **local builds** (kind/minikube), use `make bu
 ## Chart (install / pull reference)
 
 ```
-oci://ghcr.io/projectbeskar/charts/kubeswift
+oci://ghcr.io/kubeswift-io/charts/kubeswift
 ```
 
 ### Push vs install reference
@@ -22,15 +22,15 @@ Helm OCI uses different references for **push** vs **install/pull**:
 
 | Use | Reference | Notes |
 |-----|-----------|-------|
-| **Push** | `oci://ghcr.io/projectbeskar/charts` | Parent repo only; Helm appends chart name from `Chart.yaml` and version from the package. Per [Helm docs](https://helm.sh/docs/registries/), the push reference must NOT contain the chart basename or tag. |
-| **Install / pull** | `oci://ghcr.io/projectbeskar/charts/kubeswift` | Full path including chart name; used with `--version` for install. |
+| **Push** | `oci://ghcr.io/kubeswift-io/charts` | Parent repo only; Helm appends chart name from `Chart.yaml` and version from the package. Per [Helm docs](https://helm.sh/docs/registries/), the push reference must NOT contain the chart basename or tag. |
+| **Install / pull** | `oci://ghcr.io/kubeswift-io/charts/kubeswift` | Full path including chart name; used with `--version` for install. |
 
-Stored artifact: `ghcr.io/projectbeskar/charts/kubeswift:<version>`.
+Stored artifact: `ghcr.io/kubeswift-io/charts/kubeswift:<version>`.
 
 ## Install
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --version 0.1.0 \
   -n kubeswift-system \
   --create-namespace
@@ -51,7 +51,7 @@ Use dev for bleeding edge; RC for pre-release; stable for production.
 Requires [cert-manager](https://cert-manager.io/):
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --version 0.1.0 \
   -n kubeswift-system \
   --create-namespace \
@@ -61,7 +61,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
 ## Image overrides (air-gapped / custom registry)
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --version 0.1.0 \
   -n kubeswift-system \
   --create-namespace \
@@ -73,13 +73,13 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
 
 ## Migration: previously published charts
 
-If charts were pushed before this fix using the full path (`oci://ghcr.io/projectbeskar/charts/kubeswift`) as the push destination, they may have landed at a nested path such as `ghcr.io/projectbeskar/charts/kubeswift/kubeswift:<version>`. Those charts would require a different install reference:
+If charts were pushed before this fix using the full path (`oci://ghcr.io/kubeswift-io/charts/kubeswift`) as the push destination, they may have landed at a nested path such as `ghcr.io/kubeswift-io/charts/kubeswift/kubeswift:<version>`. Those charts would require a different install reference:
 
 ```bash
 # Nested path (legacy, if applicable)
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift/kubeswift --version <version> ...
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift/kubeswift --version <version> ...
 ```
 
-Charts pushed after this fix use the correct path `ghcr.io/projectbeskar/charts/kubeswift:<version>`. Verify with `helm show chart oci://ghcr.io/projectbeskar/charts/kubeswift --version <version>` before installing.
+Charts pushed after this fix use the correct path `ghcr.io/kubeswift-io/charts/kubeswift:<version>`. Verify with `helm show chart oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version>` before installing.
 
 [Releases](../releases.md) · [Remote cluster](remote-cluster.md)

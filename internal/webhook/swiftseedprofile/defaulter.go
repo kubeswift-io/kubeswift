@@ -5,7 +5,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 
-	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 )
 
 // Defaulter defaults SwiftSeedProfile fields.

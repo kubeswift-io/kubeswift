@@ -11,7 +11,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 )
 
 func testScheme() *runtime.Scheme {

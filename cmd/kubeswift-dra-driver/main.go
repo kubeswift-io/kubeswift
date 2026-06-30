@@ -31,7 +31,7 @@ import (
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
 
-	"github.com/projectbeskar/kubeswift/internal/gpualloc"
+	"github.com/kubeswift-io/kubeswift/internal/gpualloc"
 )
 
 func main() {

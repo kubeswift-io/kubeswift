@@ -7,8 +7,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 func gpuNode(name string, vfioReady bool, free int, model string) *gpuv1alpha1.SwiftGPUNode {

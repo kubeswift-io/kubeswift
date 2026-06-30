@@ -19,13 +19,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/imageref"
-	"github.com/projectbeskar/kubeswift/internal/metrics"
-	"github.com/projectbeskar/kubeswift/internal/resolved"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
-	"github.com/projectbeskar/kubeswift/internal/seed"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/imageref"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	"github.com/kubeswift-io/kubeswift/internal/seed"
 )
 
 // gpuHypervisorAnnotation overrides hypervisor selection for manual QEMU testing

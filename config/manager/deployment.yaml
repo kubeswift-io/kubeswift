@@ -21,7 +21,7 @@ spec:
       serviceAccountName: controller-manager
       containers:
         - name: controller-manager
-          image: ghcr.io/projectbeskar/kubeswift/controller-manager:latest
+          image: ghcr.io/kubeswift-io/kubeswift/controller-manager:latest
           args:
             - --leader-elect
             - --webhook-enabled=false

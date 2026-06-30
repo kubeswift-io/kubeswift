@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // TestStopAndCopy_FirstEntry_PatchesAtomically verifies the architect's
@@ -108,7 +108,7 @@ func TestStopAndCopy_PodOnDestination_Advances(t *testing.T) {
 		Spec: corev1.PodSpec{
 			NodeName: "miles",
 			Containers: []corev1.Container{
-				{Name: "launcher", Image: "ghcr.io/projectbeskar/kubeswift/swiftletd:test"},
+				{Name: "launcher", Image: "ghcr.io/kubeswift-io/kubeswift/swiftletd:test"},
 			},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodPending},
@@ -159,7 +159,7 @@ func TestStopAndCopy_PodOnWrongNode_Fails(t *testing.T) {
 		Spec: corev1.PodSpec{
 			NodeName: "boba", // landed on the wrong node!
 			Containers: []corev1.Container{
-				{Name: "launcher", Image: "ghcr.io/projectbeskar/kubeswift/swiftletd:test"},
+				{Name: "launcher", Image: "ghcr.io/kubeswift-io/kubeswift/swiftletd:test"},
 			},
 		},
 	}

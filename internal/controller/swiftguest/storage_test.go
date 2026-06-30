@@ -12,7 +12,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/projectbeskar/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // resolvedAccessModes / resolvedVolumeMode / resolvedStorageClassName

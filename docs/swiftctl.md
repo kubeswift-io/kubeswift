@@ -7,7 +7,7 @@ swiftctl is the KubeSwift operator CLI for SwiftGuest lifecycle management and o
 **From source:**
 
 ```bash
-go install github.com/projectbeskar/kubeswift/cmd/swiftctl@latest
+go install github.com/kubeswift-io/kubeswift/cmd/swiftctl@latest
 ```
 
 **From build:**

@@ -268,7 +268,7 @@ Manages a kernel + initramfs OCI artifact. The controller pulls artifacts to lab
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `ociRef.image` | string | Yes | OCI artifact reference (e.g. `ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.1`). |
+| `ociRef.image` | string | Yes | OCI artifact reference (e.g. `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.1`). |
 | `ociRef.pullSecret` | string | No | Image pull secret name for private registries. |
 | `kernelCmdline` | string | No | Default kernel command line. Can be overridden per-guest via `spec.kernelCmdline`. |
 | `profile` | string | No | Informational label for the kernel profile (e.g. `faas-minimal`). |
@@ -309,7 +309,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.1
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.1
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```

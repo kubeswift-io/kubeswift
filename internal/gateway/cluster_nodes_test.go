@@ -7,7 +7,7 @@ import (
 	connect "connectrpc.com/connect"
 	"k8s.io/client-go/dynamic"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 func TestClusterService_ListNodes(t *testing.T) {

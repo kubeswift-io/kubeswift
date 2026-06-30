@@ -1041,7 +1041,7 @@ const file_kubeswift_v1_access_proto_rawDesc = "" +
 	"\x0fListAssignments\x12$.kubeswift.v1.ListAssignmentsRequest\x1a%.kubeswift.v1.ListAssignmentsResponse\x12O\n" +
 	"\n" +
 	"AssignRole\x12\x1f.kubeswift.v1.AssignRoleRequest\x1a .kubeswift.v1.AssignRoleResponse\x12a\n" +
-	"\x10RemoveAssignment\x12%.kubeswift.v1.RemoveAssignmentRequest\x1a&.kubeswift.v1.RemoveAssignmentResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x10RemoveAssignment\x12%.kubeswift.v1.RemoveAssignmentRequest\x1a&.kubeswift.v1.RemoveAssignmentResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_access_proto_rawDescOnce sync.Once

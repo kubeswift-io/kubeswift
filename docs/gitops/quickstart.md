@@ -26,7 +26,7 @@ kind: OCIRepository
 metadata: { name: kubeswift, namespace: flux-system }
 spec:
   interval: 10m
-  url: oci://ghcr.io/projectbeskar/charts/kubeswift
+  url: oci://ghcr.io/kubeswift-io/charts/kubeswift
   ref: { semver: ">=0.1.0" }
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2

@@ -7,8 +7,8 @@ import (
 	toolscache "k8s.io/client-go/tools/cache"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 
-	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	fleetv1alpha1 "github.com/kubeswift-io/kubeswift/api/fleet/v1alpha1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 // ClusterWatcher fans the hub's fleet.Cluster informer out to any number of

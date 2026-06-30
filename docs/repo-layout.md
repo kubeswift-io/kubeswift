@@ -1,6 +1,6 @@
 # KubeSwift Repository Layout
 
-Repository: github.com/projectbeskar/kubeswift
+Repository: github.com/kubeswift-io/kubeswift
 
 ## Directories
 
@@ -11,7 +11,7 @@ Repository: github.com/projectbeskar/kubeswift
 | cmd/ | Go binaries: controller-manager, swiftctl |
 | internal/ | Go internal packages (controller, webhook, resolved) |
 | config/ | CRDs, RBAC, Kustomize, samples, deploy manifests |
-| charts/ | Helm chart for OCI install (`oci://ghcr.io/projectbeskar/charts/kubeswift`) |
+| charts/ | Helm chart for OCI install (`oci://ghcr.io/kubeswift-io/charts/kubeswift`) |
 | images/ | Container build definitions (controller-manager, swiftletd) |
 | rust/ | Rust workspace (swiftletd, swift-runtime, swift-seed, swift-ch-client) |
 | docs/ | Documentation |

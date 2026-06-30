@@ -13,7 +13,7 @@ import (
 	"path"
 	"path/filepath"
 
-	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 )
 
 // HostPathBase is the kubeswift-managed subtree the node-local snapshot cache

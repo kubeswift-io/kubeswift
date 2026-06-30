@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // MultusAnnotationKey is the standard Multus annotation for requesting additional networks.

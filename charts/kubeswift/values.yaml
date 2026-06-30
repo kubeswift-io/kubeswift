@@ -1,5 +1,5 @@
 # Default values for kubeswift.
-# Install: helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> --create-namespace
+# Install: helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version> --create-namespace
 
 # Namespace for KubeSwift resources. Use --create-namespace or pre-create the namespace.
 namespace: kubeswift-system
@@ -9,7 +9,7 @@ createNamespace: false
 
 controllerManager:
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     # Default "latest" is overridden by chart to match published tags (vX.Y.Z or sha-xxx for dev).
     # Set explicitly for local builds: tag: latest
     tag: latest
@@ -28,7 +28,7 @@ swiftletd:
   daemonset:
     enabled: false
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
   resources:
@@ -45,7 +45,7 @@ swiftletd:
 # separate workload is deployed for it; this only sets the image reference.
 snapshotS3:
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
 
@@ -55,7 +55,7 @@ snapshotS3:
 # No separate workload is deployed; this only sets the image reference.
 migrationStunnel:
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
 
@@ -66,7 +66,7 @@ migrationStunnel:
 gpuDiscovery:
   enabled: false
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     tag: latest
   interval: "60s"
   resources:
@@ -87,7 +87,7 @@ gpuDiscovery:
 dra:
   enabled: false
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     tag: latest
   # The cluster-scoped DeviceClass a ResourceClaim references. Set create=false
   # if you manage the DeviceClass out-of-band (e.g. shared across installs).
@@ -109,7 +109,7 @@ dra:
 gateway:
   enabled: false
   image:
-    registry: ghcr.io/projectbeskar/kubeswift
+    registry: ghcr.io/kubeswift-io/kubeswift
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
   replicas: 1
@@ -167,15 +167,15 @@ gateway:
 # KubeSwift web console (the kubeswift-ui Angular app, served by nginx). Opt-in.
 # It talks to the gateway above, so enable gateway.enabled too (or point
 # ui.gateway.url at an externally reachable gateway). The kubeswift-ui image is
-# released from the SEPARATE projectbeskar/kubeswift-ui repo, so — unlike the
+# released from the SEPARATE kubeswift-io/kubeswift-ui repo, so — unlike the
 # operator images — its tag is NOT derived from the chart appVersion: pin a
 # published kubeswift-ui tag in ui.image.tag. See docs/ui/gateway.md.
 ui:
   enabled: false
   image:
     # Full image repository (kubeswift-ui is a top-level package, not under the
-    # ghcr.io/projectbeskar/kubeswift/ prefix the operator images use).
-    repository: ghcr.io/projectbeskar/kubeswift-ui
+    # ghcr.io/kubeswift-io/kubeswift/ prefix the operator images use).
+    repository: ghcr.io/kubeswift-io/kubeswift-ui
     # Pin a published tag (sha-<short> or vX.Y.Z). "latest" tracks the
     # kubeswift-ui main branch; fine for dev, pin a version for production.
     tag: latest

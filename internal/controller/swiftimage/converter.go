@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 )
 
 // ImageConverter prepares an image for runtime. Stub implementation: pass-through when formats match; error for conversion.

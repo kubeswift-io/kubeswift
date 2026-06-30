@@ -5,7 +5,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
+	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 )
 
 const (

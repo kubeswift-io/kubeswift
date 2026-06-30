@@ -43,10 +43,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	swiftguestctrl "github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
-	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // SkipHypervisorVersionCheckAnnotation lets an operator bypass the

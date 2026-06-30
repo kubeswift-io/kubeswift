@@ -10,7 +10,7 @@ The chart packages everything behind `monitoring.enabled` (default **off**, so
 default installs incur no Prometheus-Operator CRD dependency):
 
 ```bash
-helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --set monitoring.enabled=true \
   --set monitoring.dashboards.namespace=<your-grafana-namespace>
 ```

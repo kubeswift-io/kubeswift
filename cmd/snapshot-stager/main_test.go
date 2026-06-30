@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/projectbeskar/kubeswift/internal/snapshot/configjson"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/configjson"
 )
 
 // writeMockSnapshot creates a directory layout that resembles a CH

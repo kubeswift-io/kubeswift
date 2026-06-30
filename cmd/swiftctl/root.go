@@ -7,8 +7,8 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/projectbeskar/kubeswift/internal/cli"
-	"github.com/projectbeskar/kubeswift/internal/version"
+	"github.com/kubeswift-io/kubeswift/internal/cli"
+	"github.com/kubeswift-io/kubeswift/internal/version"
 )
 
 func init() {

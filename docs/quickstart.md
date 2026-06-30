@@ -13,7 +13,7 @@ This guide gets you from zero to a running VM in the shortest path. It covers di
 ### Install swiftctl
 
 ```bash
-go install github.com/projectbeskar/kubeswift/cmd/swiftctl@latest
+go install github.com/kubeswift-io/kubeswift/cmd/swiftctl@latest
 ```
 
 Or download from the GitHub release page.
@@ -31,7 +31,7 @@ ls -la /dev/kvm
 **From OCI Helm chart:**
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --version 0.6.0 \
   -n kubeswift-system \
   --create-namespace
@@ -40,7 +40,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
 **From source:**
 
 ```bash
-git clone https://github.com/projectbeskar/kubeswift.git
+git clone https://github.com/kubeswift-io/kubeswift.git
 cd kubeswift
 make build-images
 make deploy

@@ -822,7 +822,7 @@ const file_kubeswift_v1_resource_proto_rawDesc = "" +
 	"\rListResources\x12\".kubeswift.v1.ListResourcesRequest\x1a#.kubeswift.v1.ListResourcesResponse\x12R\n" +
 	"\vGetResource\x12 .kubeswift.v1.GetResourceRequest\x1a!.kubeswift.v1.GetResourceResponse\x12X\n" +
 	"\rApplyResource\x12\".kubeswift.v1.ApplyResourceRequest\x1a#.kubeswift.v1.ApplyResourceResponse\x12[\n" +
-	"\x0eDeleteResource\x12#.kubeswift.v1.DeleteResourceRequest\x1a$.kubeswift.v1.DeleteResourceResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eDeleteResource\x12#.kubeswift.v1.DeleteResourceRequest\x1a$.kubeswift.v1.DeleteResourceResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_resource_proto_rawDescOnce sync.Once

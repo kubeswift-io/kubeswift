@@ -10,11 +10,11 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
+  IMAGE_PREFIX: ghcr.io/kubeswift-io/kubeswift
   # Push: parent repo only (Helm appends chart name)
-  CHART_OCI_PUSH: oci://ghcr.io/projectbeskar/charts
+  CHART_OCI_PUSH: oci://ghcr.io/kubeswift-io/charts
   # Install: full reference
-  CHART_OCI_INSTALL: oci://ghcr.io/projectbeskar/charts/kubeswift
+  CHART_OCI_INSTALL: oci://ghcr.io/kubeswift-io/charts/kubeswift
 
 jobs:
   build-and-push:

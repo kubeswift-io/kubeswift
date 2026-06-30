@@ -188,9 +188,9 @@ jobs:
         run: |
           make build-images
           kind load docker-image \
-            ghcr.io/projectbeskar/kubeswift/controller-manager:dev \
-            ghcr.io/projectbeskar/kubeswift/swiftletd:dev \
-            ghcr.io/projectbeskar/kubeswift/gpu-discovery:dev \
+            ghcr.io/kubeswift-io/kubeswift/controller-manager:dev \
+            ghcr.io/kubeswift-io/kubeswift/swiftletd:dev \
+            ghcr.io/kubeswift-io/kubeswift/gpu-discovery:dev \
             --name kubeswift-e2e
 
       - name: Deploy KubeSwift

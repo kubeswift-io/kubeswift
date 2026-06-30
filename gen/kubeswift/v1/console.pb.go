@@ -135,7 +135,7 @@ const file_kubeswift_v1_console_proto_rawDesc = "" +
 	"\rwebsocket_url\x18\x01 \x01(\tR\fwebsocketUrl\x12#\n" +
 	"\rsession_token\x18\x02 \x01(\tR\fsessionToken2d\n" +
 	"\x0eConsoleService\x12R\n" +
-	"\vOpenConsole\x12 .kubeswift.v1.OpenConsoleRequest\x1a!.kubeswift.v1.OpenConsoleResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\vOpenConsole\x12 .kubeswift.v1.OpenConsoleRequest\x1a!.kubeswift.v1.OpenConsoleResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_console_proto_rawDescOnce sync.Once

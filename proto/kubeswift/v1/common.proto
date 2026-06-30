@@ -4,7 +4,7 @@ package kubeswift.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+option go_package = "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1";
 
 // Condition is a Kubernetes status condition flattened for the UI.
 message Condition {

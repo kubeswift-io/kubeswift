@@ -44,7 +44,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/projectbeskar/kubeswift/internal/snapshot/configjson"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/configjson"
 )
 
 const sentinelFilename = ".copy-complete"

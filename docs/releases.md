@@ -14,10 +14,10 @@ KubeSwift uses three release types: **dev** (main branch), **RC** (release candi
 
 ```bash
 # Dev (latest main)
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.0.0-dev.a1b2c3d -n kubeswift-system --create-namespace
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.0.0-dev.a1b2c3d -n kubeswift-system --create-namespace
 
 # Stable
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.1.0 -n kubeswift-system --create-namespace
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1.0 -n kubeswift-system --create-namespace
 ```
 
 ## CI workflows
@@ -28,7 +28,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.
 | `release-rc` | Tag `v*.*.*-rc.*` |
 | `release-stable` | Tag `v*.*.*` (excluding `-rc`) |
 
-Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI (`oci://ghcr.io/projectbeskar/charts` — parent repo; Helm appends chart name). `release-stable` also creates a GitHub Release. See [Helm OCI](install/helm-oci.md#push-vs-install-reference) for push vs install reference.
+Each workflow builds images, pushes to ghcr.io, packages the Helm chart, and pushes to OCI (`oci://ghcr.io/kubeswift-io/charts` — parent repo; Helm appends chart name). `release-stable` also creates a GitHub Release. See [Helm OCI](install/helm-oci.md#push-vs-install-reference) for push vs install reference.
 
 ### Adding a NEW image to the build/push matrix — one-time publicize step
 
@@ -37,7 +37,7 @@ default for org packages), and **GitHub provides no REST API to change
 package visibility** — the release workflow cannot automate it. After the
 first push of a new image, a maintainer must publicize the package **once**:
 
-> `https://github.com/orgs/projectbeskar/packages/container/<package>/settings`
+> `https://github.com/orgs/kubeswift-io/packages/container/<package>/settings`
 > → **Danger Zone → Change visibility → Public** (confirm by typing the name).
 
 Otherwise pods pulling the image stick at `ImagePullBackOff` / `401
@@ -77,9 +77,9 @@ swiftctl is the operator CLI for SwiftGuest lifecycle and console access. It is 
 
 | Obtain | Command |
 |--------|---------|
-| From source | `go install github.com/projectbeskar/kubeswift/cmd/swiftctl@latest` |
+| From source | `go install github.com/kubeswift-io/kubeswift/cmd/swiftctl@latest` |
 | From build | `make build-go` → `./swiftctl` |
-| From release | Download from [GitHub Releases](https://github.com/projectbeskar/kubeswift/releases) |
+| From release | Download from [GitHub Releases](https://github.com/kubeswift-io/kubeswift/releases) |
 
 Version stamping: `swiftctl --version` prints the same VERSION and GIT_COMMIT as controller-manager and swiftletd. See [swiftctl](swiftctl.md) for usage.
 
@@ -115,20 +115,20 @@ Release artifacts (rc and stable) are signed and attested:
 Verify an image signature and inspect its provenance/SBOM:
 
 ```bash
-cosign verify ghcr.io/projectbeskar/kubeswift/controller-manager:<tag> \
-  --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:<tag> \
+  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-docker buildx imagetools inspect ghcr.io/projectbeskar/kubeswift/controller-manager:<tag> \
+docker buildx imagetools inspect ghcr.io/kubeswift-io/kubeswift/controller-manager:<tag> \
   --format '{{ json .Provenance }}'    # or .SBOM
 ```
 
 Verify the chart (signed by digest):
 
 ```bash
-DIGEST=$(crane digest ghcr.io/projectbeskar/charts/kubeswift:<version>)   # or skopeo inspect
-cosign verify ghcr.io/projectbeskar/charts/kubeswift@$DIGEST \
-  --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+DIGEST=$(crane digest ghcr.io/kubeswift-io/charts/kubeswift:<version>)   # or skopeo inspect
+cosign verify ghcr.io/kubeswift-io/charts/kubeswift@$DIGEST \
+  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -136,7 +136,7 @@ Verify stable binaries:
 
 ```bash
 cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
-  --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-stable.yaml@.*' \
+  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-stable.yaml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c SHA256SUMS
 ```

@@ -14,7 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 func newFakeAccess(objs ...runtime.Object) (*AccessService, *fake.Clientset) {

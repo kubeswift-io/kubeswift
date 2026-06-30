@@ -13,8 +13,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/projectbeskar/kubeswift/internal/cli"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
+	"github.com/kubeswift-io/kubeswift/internal/cli"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 var (

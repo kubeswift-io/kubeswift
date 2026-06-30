@@ -26,7 +26,7 @@ package gpualloc
 import (
 	"context"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // Backend is a pluggable GPU allocation strategy. Implementations:

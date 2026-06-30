@@ -13,10 +13,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
-	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
-	"github.com/projectbeskar/kubeswift/internal/migrationsidecar"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/migrationsidecar"
 )
 
 // Phase 3c PR 3d — SOURCE-side activation of the live-migration mTLS path.

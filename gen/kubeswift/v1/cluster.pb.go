@@ -558,7 +558,7 @@ const file_kubeswift_v1_cluster_proto_rawDesc = "" +
 	"\x0eClusterService\x12U\n" +
 	"\fListClusters\x12!.kubeswift.v1.ListClustersRequest\x1a\".kubeswift.v1.ListClustersResponse\x12Q\n" +
 	"\rWatchClusters\x12\".kubeswift.v1.WatchClustersRequest\x1a\x1a.kubeswift.v1.ClusterEvent0\x01\x12L\n" +
-	"\tListNodes\x12\x1e.kubeswift.v1.ListNodesRequest\x1a\x1f.kubeswift.v1.ListNodesResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\tListNodes\x12\x1e.kubeswift.v1.ListNodesRequest\x1a\x1f.kubeswift.v1.ListNodesResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_cluster_proto_rawDescOnce sync.Once

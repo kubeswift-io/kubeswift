@@ -35,7 +35,7 @@ spec:
           annotations:
             summary: KubeSwift controller-manager is not being scraped / is down
             description: No healthy controller-manager scrape target for 5m. VM reconciliation, status reporting, and admission are unavailable.
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftcontrollerdown
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftcontrollerdown
         - alert: KubeSwiftReconcileErrorsHigh
           expr: |
             sum by (controller) (rate(controller_runtime_reconcile_errors_total[5m]))
@@ -46,7 +46,7 @@ spec:
           annotations:
             summary: "Controller {{`{{ $labels.controller }}`}} reconcile error ratio > 10%"
             description: "{{`{{ $labels.controller }}`}} has been erroring on >10% of reconciles for 15m."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftreconcileerrorshigh
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftreconcileerrorshigh
         - alert: KubeSwiftWebhookRejectionSpike
           expr: |
             sum(rate(controller_runtime_webhook_requests_total{code!~"2.."}[5m])) > 1
@@ -56,7 +56,7 @@ spec:
           annotations:
             summary: KubeSwift admission webhooks are rejecting requests at a high rate
             description: Sustained webhook rejections (>1/s for 15m). Could be a bad manifest loop, a stalling drain (eviction 429s), or a misconfiguration.
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftwebhookrejectionspike
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftwebhookrejectionspike
     - name: kubeswift.guests
       rules:
         - alert: KubeSwiftGuestsFailed
@@ -68,7 +68,7 @@ spec:
           annotations:
             summary: "SwiftGuests in Failed phase in {{`{{ $labels.namespace }}`}}"
             description: "{{`{{ $value }}`}} SwiftGuest(s) have been Failed for 10m in namespace {{`{{ $labels.namespace }}`}}."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftguestsfailed
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftguestsfailed
         - alert: KubeSwiftGuestStuckPending
           expr: |
             sum by (namespace) (kubeswift_guests{phase=~"Pending|Scheduling"}) > 0
@@ -78,7 +78,7 @@ spec:
           annotations:
             summary: "SwiftGuests stuck Pending/Scheduling in {{`{{ $labels.namespace }}`}}"
             description: "{{`{{ $value }}`}} SwiftGuest(s) have not progressed past Pending/Scheduling for 15m (no capacity, image not Ready, or scheduling blocked)."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftgueststuckpending
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftgueststuckpending
         - alert: KubeSwiftGuestCrashLooping
           expr: |
             sum by (namespace) (rate(kubeswift_vm_failures_total[15m])) > 0
@@ -88,7 +88,7 @@ spec:
           annotations:
             summary: "SwiftGuests failing repeatedly in {{`{{ $labels.namespace }}`}}"
             description: "Sustained VM failure rate for 15m in {{`{{ $labels.namespace }}`}} — a guest is likely crash-looping."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftguestcrashlooping
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftguestcrashlooping
         - alert: KubeSwiftPoolDegraded
           expr: |
             (kubeswift_pool_replicas{state="ready"} < on (namespace, pool) kubeswift_pool_replicas{state="desired"})
@@ -98,7 +98,7 @@ spec:
           annotations:
             summary: "SwiftGuestPool {{`{{ $labels.namespace }}`}}/{{`{{ $labels.pool }}`}} degraded"
             description: "Ready replicas below desired for 15m."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftpooldegraded
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftpooldegraded
     - name: kubeswift.images-migration
       rules:
         - alert: KubeSwiftImageImportStuck
@@ -110,7 +110,7 @@ spec:
           annotations:
             summary: "SwiftImage import stuck in {{`{{ $labels.namespace }}`}}"
             description: "An image import has been non-terminal for 30m (download stalled, conversion hung, or snapshot not readyToUse)."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftimageimportstuck
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftimageimportstuck
         - alert: KubeSwiftMigrationFailures
           expr: |
             increase(kubeswift_migration_total{result="failed"}[1h]) > 0
@@ -119,7 +119,7 @@ spec:
           annotations:
             summary: SwiftMigrations failing
             description: "At least one SwiftMigration failed in the last hour. See kubeswift_migration_failures_total for the reason breakdown."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftmigrationfailures
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftmigrationfailures
     - name: kubeswift.snapshots-gpu
       rules:
         - alert: KubeSwiftSnapshotFailures
@@ -131,7 +131,7 @@ spec:
           annotations:
             summary: SwiftSnapshots or SwiftRestores failing
             description: "At least one snapshot or restore failed in the last hour."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftsnapshotfailures
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftsnapshotfailures
         - alert: KubeSwiftSnapshotScheduleStale
           expr: |
             time() - kubeswift_snapshot_schedule_last_success_timestamp_seconds > 86400
@@ -141,7 +141,7 @@ spec:
           annotations:
             summary: "SwiftSnapshotSchedule {{`{{ $labels.namespace }}`}}/{{`{{ $labels.schedule }}`}} has not succeeded in 24h"
             description: "No successful scheduled snapshot in over 24h. Adjust the threshold to your schedule period if it fires too eagerly."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftsnapshotschedulestale
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftsnapshotschedulestale
         - alert: KubeSwiftGPUNodeDiscoveryStale
           expr: |
             time() - kubeswift_gpu_node_last_discovery_timestamp_seconds > 600
@@ -151,5 +151,5 @@ spec:
           annotations:
             summary: "GPU discovery stale on node {{`{{ $labels.node }}`}}"
             description: "No successful GPU discovery for >10m — the gpu-discovery DaemonSet pod on this node may be down; allocation decisions use stale inventory."
-            runbook_url: https://github.com/projectbeskar/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftgpunodediscoverystale
+            runbook_url: https://github.com/kubeswift-io/kubeswift/blob/main/docs/observability/alerts.md#kubeswiftgpunodediscoverystale
 {{- end }}

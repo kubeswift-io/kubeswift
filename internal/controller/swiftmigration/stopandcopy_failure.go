@@ -3,7 +3,7 @@ package swiftmigration
 import (
 	"strings"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 )
 
 // classifyFailureFromDetail maps swiftletd's migration-status-detail

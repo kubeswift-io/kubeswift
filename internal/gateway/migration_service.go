@@ -12,8 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/watch"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
-	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
+	"github.com/kubeswift-io/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
 )
 
 // MigrationService is the read plane for SwiftMigrations. It mirrors

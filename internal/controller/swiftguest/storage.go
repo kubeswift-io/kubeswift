@@ -9,7 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/projectbeskar/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // resolvedAccessModes returns the AccessModes slice for controller-

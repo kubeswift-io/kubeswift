@@ -12,9 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/actions"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/actions"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 // migrationProgressEstimateAnnotation mirrors the key swiftletd-source

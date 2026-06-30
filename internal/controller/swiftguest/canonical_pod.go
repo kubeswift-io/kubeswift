@@ -1,7 +1,7 @@
 package swiftguest
 
 import (
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // canonicalPodName returns the launcher pod name to look up for this

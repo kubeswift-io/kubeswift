@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 )
 
 // Resolve resolves a SeedDataField to a string. If ValueFrom is set, fetches from Secret or ConfigMap.

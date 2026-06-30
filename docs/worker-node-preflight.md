@@ -40,5 +40,5 @@ The script prints **PASS / WARN / FAIL** lines for each check, followed by a fin
 ## Download from the repository
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/projectbeskar/kubeswift/main/scripts/kubeswift-worker-preflight.sh -o kubeswift-worker-preflight.sh
+curl -fsSL https://raw.githubusercontent.com/kubeswift-io/kubeswift/main/scripts/kubeswift-worker-preflight.sh -o kubeswift-worker-preflight.sh
 chmod +x kubeswift-worker-preflight.sh

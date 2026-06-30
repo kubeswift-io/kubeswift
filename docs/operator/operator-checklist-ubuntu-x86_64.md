@@ -1,6 +1,6 @@
 # KubeSwift Smoke Test: Operator Checklist (Ubuntu x86_64)
 
-Host-level prerequisites for running the current smoke-test implementation on Ubuntu x86_64 machines. Derived from `github.com/projectbeskar/kubeswift` codebase and Cloud Hypervisor requirements.
+Host-level prerequisites for running the current smoke-test implementation on Ubuntu x86_64 machines. Derived from `github.com/kubeswift-io/kubeswift` codebase and Cloud Hypervisor requirements.
 
 ---
 

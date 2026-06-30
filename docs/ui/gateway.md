@@ -33,7 +33,7 @@ clusters, or a dedicated management cluster.
 The gateway ships with the KubeSwift chart, gated off by default:
 
 ```bash
-helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   -n kubeswift-system --create-namespace \
   --set gateway.enabled=true \
   --set gateway.authMode=token        # see "Authentication" below

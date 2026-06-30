@@ -7,7 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
+	fleetv1alpha1 "github.com/kubeswift-io/kubeswift/api/fleet/v1alpha1"
 )
 
 func TestClusterToProto(t *testing.T) {

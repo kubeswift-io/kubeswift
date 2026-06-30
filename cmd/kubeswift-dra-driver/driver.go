@@ -15,7 +15,7 @@ import (
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
 
-	"github.com/projectbeskar/kubeswift/internal/gpualloc"
+	"github.com/kubeswift-io/kubeswift/internal/gpualloc"
 )
 
 // driverName is the DRA driver name devices are published under and

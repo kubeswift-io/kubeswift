@@ -14,7 +14,7 @@ Adds the **KubeSwift web console** — a multi-cluster operator UI for the fleet
 served by a new in-cluster **gateway** (`kubeswift-gateway`) that federates the
 registered `fleet.kubeswift.io` Cluster members and fans a read / write / telemetry
 / console plane across them **as the signed-in user**. The browser app ships from
-the companion **projectbeskar/kubeswift-ui** repo; this release adds the gateway,
+the companion **kubeswift-io/kubeswift-ui** repo; this release adds the gateway,
 the `kubeswift.v1` proto contract, and the `gateway.enabled` / `ui.enabled` Helm
 surface — including end-to-end **OIDC login** (e.g. Keycloak) with per-user
 Kubernetes **RBAC impersonation**, exposed behind one ingress. Cluster-validated

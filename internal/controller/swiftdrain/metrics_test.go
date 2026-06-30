@@ -5,7 +5,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/projectbeskar/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // TestReconcile_CreatesMigration_CountsDrainMetric: the O3 drain counter

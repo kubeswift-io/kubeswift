@@ -8,7 +8,7 @@ import (
 	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
-	v1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	v1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 	http "net/http"
 	strings "strings"
 )

@@ -4,8 +4,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 // guestRunningCondition is the SwiftGuest condition that reports the VM is

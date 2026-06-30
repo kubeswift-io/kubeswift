@@ -12,9 +12,9 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
-  CHART_OCI_PUSH: oci://ghcr.io/projectbeskar/charts
-  CHART_OCI_INSTALL: oci://ghcr.io/projectbeskar/charts/kubeswift
+  IMAGE_PREFIX: ghcr.io/kubeswift-io/kubeswift
+  CHART_OCI_PUSH: oci://ghcr.io/kubeswift-io/charts
+  CHART_OCI_INSTALL: oci://ghcr.io/kubeswift-io/charts/kubeswift
 
 jobs:
   build-and-push:
@@ -174,7 +174,7 @@ jobs:
       # certificate are stored alongside the image in GHCR and logged in the
       # Rekor transparency log. Verify with:
       #   cosign verify <image>@<digest> \
-      #     --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
+      #     --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Sign images (cosign keyless)
         env:
@@ -207,7 +207,7 @@ jobs:
       - name: Sign chart (cosign keyless)
         env:
           COSIGN_YES: "true"
-        run: cosign sign "ghcr.io/projectbeskar/charts/kubeswift@${{ steps.chart.outputs.digest }}"
+        run: cosign sign "ghcr.io/kubeswift-io/charts/kubeswift@${{ steps.chart.outputs.digest }}"
 
       # Create the GitHub pre-release so RC tags are visible on the Releases
       # page (previously only release-stable.yaml created releases; RC releases
@@ -231,11 +231,11 @@ jobs:
 
             ## Images
 
-            - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ steps.version.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ steps.version.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/gpu-discovery:${{ steps.version.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/snapshot-s3:${{ steps.version.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/migration-stunnel:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/snapshot-s3:${{ steps.version.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/migration-stunnel:${{ steps.version.outputs.tag }}`
 
             ## Supply chain
 
@@ -243,7 +243,7 @@ jobs:
             SLSA build provenance + SPDX SBOM attestations (BuildKit, in-registry).
 
             ```bash
-            cosign verify ghcr.io/projectbeskar/kubeswift/controller-manager:${{ steps.version.outputs.tag }} \
-              --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+            cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ steps.version.outputs.tag }} \
+              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```

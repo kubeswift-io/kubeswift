@@ -60,7 +60,7 @@ The discovery DaemonSet (`gpu-discovery`) auto-detects GPU hardware on labeled n
 ### Enable via Helm
 
 ```bash
-helm upgrade kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --set gpuDiscovery.enabled=true
 ```
 

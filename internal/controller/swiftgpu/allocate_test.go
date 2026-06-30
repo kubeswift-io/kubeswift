@@ -3,7 +3,7 @@ package swiftgpu
 import (
 	"testing"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
 )
 
 // makeGPU creates a GPUDevice with the given index, PCI address, model, NUMA node, and allocation state.

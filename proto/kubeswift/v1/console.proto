@@ -4,7 +4,7 @@ package kubeswift.v1;
 
 import "kubeswift/v1/common.proto";
 
-option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+option go_package = "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1";
 
 // OpenConsoleRequest negotiates a serial console session for a guest. The
 // actual byte stream rides a raw WebSocket (xterm.js), not Connect; this RPC

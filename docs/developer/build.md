@@ -16,7 +16,7 @@ Go output: `./cmd/controller-manager/`, `./cmd/swiftctl/`. Rust output: `rust/ta
 make build-images
 ```
 
-Builds controller-manager and swiftletd. Default tag: `ghcr.io/projectbeskar/kubeswift/<component>:latest`.
+Builds controller-manager and swiftletd. Default tag: `ghcr.io/kubeswift-io/kubeswift/<component>:latest`.
 
 ```bash
 make build-controller-image   # controller-manager only

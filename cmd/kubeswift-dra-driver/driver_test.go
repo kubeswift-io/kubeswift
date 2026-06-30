@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/projectbeskar/kubeswift/internal/gpualloc"
+	"github.com/kubeswift-io/kubeswift/internal/gpualloc"
 )
 
 // writeFakeGPU creates a sysfs-shaped GPU under root.

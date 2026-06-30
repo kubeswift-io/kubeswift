@@ -42,7 +42,7 @@ kubectl logs -n kubeswift-system deployment/controller-manager --previous
 
 ## ImagePullBackOff (controller-manager, swiftletd)
 
-**Symptom:** Pods fail with `ErrImagePull` or `ImagePullBackOff` for `ghcr.io/projectbeskar/kubeswift/controller-manager:latest` or `swiftletd:latest`.
+**Symptom:** Pods fail with `ErrImagePull` or `ImagePullBackOff` for `ghcr.io/kubeswift-io/kubeswift/controller-manager:latest` or `swiftletd:latest`.
 
 **Cause:** CI does not publish images with `latest`. Published tags: `vX.Y.Z` (stable/RC), `sha-<shortsha>` (dev).
 
@@ -50,7 +50,7 @@ kubectl logs -n kubeswift-system deployment/controller-manager --previous
 
 - **OCI install:** Use a chart version whose images exist. The chart (as of the fix) defaults image tags to match the chart version. Reinstall or upgrade:
   ```bash
-  helm upgrade kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version 0.1.0 -n kubeswift-system \
+  helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1.0 -n kubeswift-system \
     --set controllerManager.image.tag=v0.1.0 \
     --set swiftletd.image.tag=v0.1.0
   ```
@@ -136,7 +136,7 @@ kubectl describe swiftguest <name> -n <namespace>
 - Apply RBAC in the namespace
 - Check launcher logs for swiftletd/Cloud Hypervisor errors
 - Verify runtime intent ConfigMap is mounted at `/var/lib/kubeswift/intent`
-- If logs show `client error (Connect)`: rebuild and redeploy swiftletd image; use latest from `ghcr.io/projectbeskar/kubeswift/swiftletd` or a release tag
+- If logs show `client error (Connect)`: rebuild and redeploy swiftletd image; use latest from `ghcr.io/kubeswift-io/kubeswift/swiftletd` or a release tag
 
 ### swiftletd errors in logs
 
