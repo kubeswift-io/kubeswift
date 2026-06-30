@@ -9,9 +9,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/resolved"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
 // W9 Component 2 tests for the launcher pod builder + clone-grow-init

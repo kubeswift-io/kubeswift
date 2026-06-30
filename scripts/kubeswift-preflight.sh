@@ -76,7 +76,7 @@ Exit codes:
 
 Examples:
   ./$SCRIPT_NAME
-  curl -fsSL https://raw.githubusercontent.com/projectbeskar/kubeswift/main/scripts/$SCRIPT_NAME -o $SCRIPT_NAME
+  curl -fsSL https://raw.githubusercontent.com/kubeswift-io/kubeswift/main/scripts/$SCRIPT_NAME -o $SCRIPT_NAME
   chmod +x $SCRIPT_NAME
   ./$SCRIPT_NAME
 

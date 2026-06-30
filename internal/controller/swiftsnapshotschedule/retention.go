@@ -8,9 +8,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/controller/swiftsnapshot"
-	"github.com/projectbeskar/kubeswift/internal/metrics"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshot"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // pruneKeepN deletes the schedule's oldest snapshots beyond

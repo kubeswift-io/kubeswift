@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

@@ -1,6 +1,6 @@
 # Repository Layout
 
-github.com/projectbeskar/kubeswift
+github.com/kubeswift-io/kubeswift
 
 ## Top-level directories
 

@@ -4,8 +4,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/projectbeskar/kubeswift/internal/controller/migrationcert"
-	"github.com/projectbeskar/kubeswift/internal/migrationsidecar"
+	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
+	"github.com/kubeswift-io/kubeswift/internal/migrationsidecar"
 )
 
 // Phase 3c (Option B) live-migration mTLS stunnel sidecar wiring.

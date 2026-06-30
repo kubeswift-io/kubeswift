@@ -6,7 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
-	"github.com/projectbeskar/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // CloneGrowInitImage is the image used by clone-grow-init.

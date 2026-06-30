@@ -10,9 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/resolved"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
 // IntentConfigMapSuffix is the suffix for the runtime intent ConfigMap name.

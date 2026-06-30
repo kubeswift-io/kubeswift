@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // Identity-action annotation keys — the Go side of swiftletd's IDENTITY_KEYS

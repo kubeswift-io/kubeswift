@@ -23,7 +23,7 @@ const (
 	// ImageEnv overrides the sidecar image; ImageDefault is the fallback.
 	// The release pipeline sets ImageEnv to the version-stamped tag.
 	ImageEnv     = "KUBESWIFT_MIGRATION_STUNNEL_IMAGE"
-	ImageDefault = "ghcr.io/projectbeskar/kubeswift/migration-stunnel:latest"
+	ImageDefault = "ghcr.io/kubeswift-io/kubeswift/migration-stunnel:latest"
 
 	// ContainerName is the sidecar container name on both src and dst pods.
 	// Distinct from the launcher container so launcher-by-name lookups

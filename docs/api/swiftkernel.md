@@ -8,7 +8,7 @@ SwiftKernel defines a **kernel + initramfs OCI artifact** for direct kernel boot
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `ociRef.image` | Yes | OCI artifact reference (e.g. `ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0`) |
+| `ociRef.image` | Yes | OCI artifact reference (e.g. `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0`) |
 | `ociRef.pullSecret` | No | Name of a Secret for private registry auth |
 | `kernelCmdline` | No | Default kernel command line; SwiftGuest `kernelCmdline` overrides this |
 | `profile` | No | Profile name for documentation (e.g. `faas-minimal`) |
@@ -21,7 +21,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/projectbeskar/kubeswift/kernels/faas:6.6.0
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```

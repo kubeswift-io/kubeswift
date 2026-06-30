@@ -96,7 +96,7 @@ cargo build -p swiftletd # build one crate
 
 ```bash
 make build-images    # build controller-manager and swiftletd images
-make push-images     # push to ghcr.io/projectbeskar/kubeswift/
+make push-images     # push to ghcr.io/kubeswift-io/kubeswift/
 ```
 
 ## Deploy

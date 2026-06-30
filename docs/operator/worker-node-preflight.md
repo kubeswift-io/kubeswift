@@ -40,7 +40,7 @@ The script prints **PASS / WARN / FAIL** lines for each check, followed by a fin
 ### Download from the repository
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/projectbeskar/kubeswift/main/scripts/kubeswift-preflight.sh -o kubeswift-preflight.sh
+curl -fsSL https://raw.githubusercontent.com/kubeswift-io/kubeswift/main/scripts/kubeswift-preflight.sh -o kubeswift-preflight.sh
 chmod +x kubeswift-preflight.sh
 ./kubeswift-preflight.sh
 ```

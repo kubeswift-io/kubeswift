@@ -189,4 +189,4 @@ A kernel profile PR must include:
 - [ ] Boot verification output in PR description (terminal screenshot or paste of kernel boot + init output)
 - [ ] Local Cloud Hypervisor boot test (the verification command above)
 
-[SwiftKernel reference](../swiftkernel.md) · [faas-minimal profile](https://github.com/projectbeskar/kubeswift/tree/main/build/kernels/faas-minimal)
+[SwiftKernel reference](../swiftkernel.md) · [faas-minimal profile](https://github.com/kubeswift-io/kubeswift/tree/main/build/kernels/faas-minimal)

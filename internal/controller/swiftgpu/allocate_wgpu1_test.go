@@ -6,8 +6,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // nodeAllocatedTo builds a SwiftGPUNode whose single GPU is allocated to the

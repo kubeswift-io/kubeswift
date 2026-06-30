@@ -61,7 +61,7 @@ kubectl get certificate -n kubeswift-system | grep migration-node
 
 ### Prerequisite: the migration-stunnel image must be pullable
 
-The sidecar image `ghcr.io/projectbeskar/kubeswift/migration-stunnel` must
+The sidecar image `ghcr.io/kubeswift-io/kubeswift/migration-stunnel` must
 be readable by the cluster. New ghcr packages default to **private** and
 **GitHub has no API to change package visibility** — a maintainer must set
 it public once (Package settings → Danger Zone → Change visibility), or the

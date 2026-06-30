@@ -15,8 +15,8 @@
 | Node OS | Ubuntu 24.04.4 LTS |
 | Node kernels | 6.8.0-106-generic (frida), 6.8.0-101-generic (miles) |
 | Container runtime | containerd 1.7.30 |
-| Controller image | `ghcr.io/projectbeskar/kubeswift/controller-manager:sha-3c5c476` |
-| Swiftletd image | `ghcr.io/projectbeskar/kubeswift/swiftletd:sha-3c5c476` |
+| Controller image | `ghcr.io/kubeswift-io/kubeswift/controller-manager:sha-3c5c476` |
+| Swiftletd image | `ghcr.io/kubeswift-io/kubeswift/swiftletd:sha-3c5c476` |
 | Commit | `3c5c476` (main) |
 
 ## Prerequisites

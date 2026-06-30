@@ -8,6 +8,6 @@ keywords:
   - kubeswift
   - cloud-hypervisor
   - vmm
-home: https://github.com/projectbeskar/kubeswift
+home: https://github.com/kubeswift-io/kubeswift
 sources:
-  - https://github.com/projectbeskar/kubeswift
+  - https://github.com/kubeswift-io/kubeswift

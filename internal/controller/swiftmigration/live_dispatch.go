@@ -1,7 +1,7 @@
 package swiftmigration
 
 import (
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 )
 
 // isLiveMode returns true when the SwiftMigration should be handled by

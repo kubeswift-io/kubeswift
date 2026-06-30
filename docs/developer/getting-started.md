@@ -16,7 +16,7 @@ Quick start for contributors.
 ## Clone and build
 
 ```bash
-git clone https://github.com/projectbeskar/kubeswift.git
+git clone https://github.com/kubeswift-io/kubeswift.git
 cd kubeswift
 make build
 ```

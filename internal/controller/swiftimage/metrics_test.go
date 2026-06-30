@@ -10,8 +10,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/metrics"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // TestReconcile_FailedImport_CountsImageImportTotal proves the O3 import

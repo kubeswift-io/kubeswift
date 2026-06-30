@@ -20,7 +20,7 @@ For remote clusters, install KubeSwift from the OCI Helm chart:
 ### Install command
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version> -n kubeswift-system --create-namespace
 ```
 
 ### Version selection
@@ -36,7 +36,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <v
 To enable admission webhooks (requires [cert-manager](https://cert-manager.io/)):
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace --set webhook.enabled=true
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version> -n kubeswift-system --create-namespace --set webhook.enabled=true
 ```
 
 ### Image overrides
@@ -44,7 +44,7 @@ helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <v
 For air-gapped or custom registry installs:
 
 ```bash
-helm install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift --version <version> -n kubeswift-system --create-namespace \
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version> -n kubeswift-system --create-namespace \
   --set controllerManager.image.registry=my-registry.io \
   --set controllerManager.image.tag=v0.1.0 \
   --set swiftletd.image.registry=my-registry.io \
@@ -101,7 +101,7 @@ make build-controller-image   # controller-manager
 make build-swiftletd-image   # swiftletd
 ```
 
-Images are tagged as `ghcr.io/projectbeskar/kubeswift/<component>:latest` by default. Override with `IMAGE_TAG`:
+Images are tagged as `ghcr.io/kubeswift-io/kubeswift/<component>:latest` by default. Override with `IMAGE_TAG`:
 
 ```bash
 make build-images IMAGE_TAG=v0.1.0
@@ -158,7 +158,7 @@ To deploy with custom image tags, use kustomize:
 ```bash
 kubectl apply -k config/crd
 kubectl kustomize config/default | \
-  sed 's|ghcr.io/projectbeskar/kubeswift/controller-manager:latest|your-registry/controller-manager:v1|g' | \
+  sed 's|ghcr.io/kubeswift-io/kubeswift/controller-manager:latest|your-registry/controller-manager:v1|g' | \
   kubectl apply -f -
 ```
 

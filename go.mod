@@ -1,4 +1,4 @@
-module github.com/projectbeskar/kubeswift
+module github.com/kubeswift-io/kubeswift
 
 go 1.25.0
 

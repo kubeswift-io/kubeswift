@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 // ListNodes lists a member cluster's nodes for the migrate target picker. It

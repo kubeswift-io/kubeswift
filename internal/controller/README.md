@@ -28,7 +28,7 @@ The SwiftGuest controller reconciles `SwiftGuest` resources by creating and mana
 
 ```go
 import (
-    "github.com/projectbeskar/kubeswift/internal/resolved"
+    "github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

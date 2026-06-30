@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
 )
 
 func uMigration(ns, name, guest, target, phase string, progress int64) *unstructured.Unstructured {

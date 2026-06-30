@@ -34,7 +34,7 @@ state of the cluster's VM fleet.
 FluxCD aligns naturally with KubeSwift for several reasons:
 
 - **OCI-native** — KubeSwift distributes its Helm chart via OCI
-  (`oci://ghcr.io/projectbeskar/charts/kubeswift`). Flux's `OCIRepository` source
+  (`oci://ghcr.io/kubeswift-io/charts/kubeswift`). Flux's `OCIRepository` source
   is the modern, recommended way to consume OCI-distributed Helm charts.
 - **Declarative reconciliation** — KubeSwift controllers already converge to
   desired state on a reconciliation loop. Flux applies the same model at the
@@ -65,7 +65,7 @@ metadata:
   namespace: kubeswift-system
 spec:
   interval: 24h
-  url: oci://ghcr.io/projectbeskar/charts/kubeswift
+  url: oci://ghcr.io/kubeswift-io/charts/kubeswift
   ref:
     semver: "0.2.x"
   layerSelector:
@@ -354,7 +354,7 @@ copy as a starting point.
 **Tasks:**
 
 1. Create `examples/gitops-flux/` in the KubeSwift repo (or a separate public
-   repo `projectbeskar/kubeswift-fleet-example`).
+   repo `kubeswift-io/kubeswift-fleet-example`).
 2. Implement the full directory structure from the Concepts section.
 3. Include working examples for:
    - Layer 1: HelmRelease for KubeSwift platform install

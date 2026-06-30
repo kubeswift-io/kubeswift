@@ -55,9 +55,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/metrics"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // Standard reasons used for Conditions and Events. Centralised so

@@ -5,7 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // TestValidate_GPUResourceClaim covers the DRA backend admission rules: a

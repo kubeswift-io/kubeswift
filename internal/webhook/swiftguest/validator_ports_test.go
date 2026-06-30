@@ -3,7 +3,7 @@ package swiftguest
 import (
 	"testing"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 func withNetwork(n *swiftv1alpha1.GuestNetworkSpec) func(*swiftv1alpha1.SwiftGuest) {

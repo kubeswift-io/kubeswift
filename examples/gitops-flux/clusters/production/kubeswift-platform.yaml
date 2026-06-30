@@ -8,7 +8,7 @@ metadata:
   namespace: flux-system
 spec:
   interval: 10m
-  url: oci://ghcr.io/projectbeskar/charts/kubeswift
+  url: oci://ghcr.io/kubeswift-io/charts/kubeswift
   ref:
     semver: ">=0.1.0"
 ---

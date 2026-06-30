@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
+	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 )
 
 // Validator validates SwiftSeedProfile resources.

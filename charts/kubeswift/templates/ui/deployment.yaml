@@ -1,6 +1,6 @@
 {{- if .Values.ui.enabled }}
 # kubeswift-ui: the KubeSwift web console (an Angular SPA served by nginx),
-# released from the separate projectbeskar/kubeswift-ui repo. It talks to the
+# released from the separate kubeswift-io/kubeswift-ui repo. It talks to the
 # gateway above; in the default ui.gateway.mode=proxy the UI's nginx
 # reverse-proxies the in-cluster kubeswift-gateway Service so the browser uses a
 # single origin. See docs/ui/gateway.md and the kubeswift-ui README.

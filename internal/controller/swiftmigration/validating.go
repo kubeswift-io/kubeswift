@@ -10,9 +10,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // handleValidating implements the Validating phase.

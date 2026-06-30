@@ -3,7 +3,7 @@ package swiftmigration
 import (
 	"testing"
 
-	"github.com/projectbeskar/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // mergeAnnotationsForDst merges the OVN backend's pre-computed dst annotations

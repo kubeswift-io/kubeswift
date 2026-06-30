@@ -28,7 +28,7 @@ spec:
         - operator: Exists
       containers:
         - name: swiftletd
-          image: ghcr.io/projectbeskar/kubeswift/swiftletd:latest
+          image: ghcr.io/kubeswift-io/kubeswift/swiftletd:latest
           securityContext:
             privileged: true
           volumeMounts:

@@ -6,7 +6,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/projectbeskar/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // Render resolves userData, metaData, networkData from ResolvedGuest.Seed.

@@ -70,7 +70,7 @@ kcadm set-password -r kubeswift --username alice --new-password '<password>'
 Run the gateway in `oidc` mode (chart values or container args):
 
 ```bash
-helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   -n kubeswift-system \
   --set gateway.enabled=true \
   --set gateway.authMode=oidc

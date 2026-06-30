@@ -12,9 +12,9 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/projectbeskar/kubeswift
-  CHART_OCI_PUSH: oci://ghcr.io/projectbeskar/charts
-  CHART_OCI_INSTALL: oci://ghcr.io/projectbeskar/charts/kubeswift
+  IMAGE_PREFIX: ghcr.io/kubeswift-io/kubeswift
+  CHART_OCI_PUSH: oci://ghcr.io/kubeswift-io/charts
+  CHART_OCI_INSTALL: oci://ghcr.io/kubeswift-io/charts/kubeswift
 
 jobs:
   build-and-push:
@@ -198,7 +198,7 @@ jobs:
       # certificate are stored alongside the image in GHCR and logged in the
       # Rekor transparency log. Verify with:
       #   cosign verify <image>@<digest> \
-      #     --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
+      #     --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Sign images (cosign keyless)
         env:
@@ -244,7 +244,7 @@ jobs:
       - name: Sign chart (cosign keyless)
         env:
           COSIGN_YES: "true"
-        run: cosign sign "ghcr.io/projectbeskar/charts/kubeswift@${{ steps.chart.outputs.digest }}"
+        run: cosign sign "ghcr.io/kubeswift-io/charts/kubeswift@${{ steps.chart.outputs.digest }}"
 
   github-release:
     if: "!contains(github.ref_name, '-rc')"
@@ -266,7 +266,7 @@ jobs:
           VERSION="${{ needs.build-and-push.outputs.version }}"
           GIT_COMMIT="$(git rev-parse HEAD)"
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          LDFLAGS="-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}"
+          LDFLAGS="-X github.com/kubeswift-io/kubeswift/internal/version.Version=${VERSION} -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/kubeswift-io/kubeswift/internal/version.BuildDate=${BUILD_DATE}"
           mkdir -p dist
           GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-linux-amd64 ./cmd/swiftctl
           GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/swiftctl-darwin-amd64 ./cmd/swiftctl
@@ -305,10 +305,10 @@ jobs:
 
             ## Images
 
-            - `ghcr.io/projectbeskar/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/projectbeskar/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
 
             ## swiftctl
 
@@ -321,17 +321,17 @@ jobs:
             in-registry by BuildKit. Verify an image:
 
             ```bash
-            cosign verify ghcr.io/projectbeskar/kubeswift/controller-manager:${{ github.ref_name }} \
-              --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+            cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} \
+              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
-            docker buildx imagetools inspect ghcr.io/projectbeskar/kubeswift/controller-manager:${{ github.ref_name }} --format '{{ json .Provenance }}'
+            docker buildx imagetools inspect ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} --format '{{ json .Provenance }}'
             ```
 
             Verify the binaries (SHA256SUMS is cosign-signed; the checksums then cover each binary):
 
             ```bash
             cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
-              --certificate-identity-regexp 'https://github.com/projectbeskar/kubeswift/.github/workflows/release-stable.yaml@.*' \
+              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-stable.yaml@.*' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
             sha256sum -c SHA256SUMS
             ```

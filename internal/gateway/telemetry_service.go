@@ -17,8 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
-	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
+	"github.com/kubeswift-io/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
 )
 
 // metricsProvider is the subset of ClientPool the telemetry plane needs: the

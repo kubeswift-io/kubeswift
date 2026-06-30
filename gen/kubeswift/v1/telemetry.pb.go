@@ -417,7 +417,7 @@ const file_kubeswift_v1_telemetry_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\xcf\x01\n" +
 	"\x10TelemetryService\x12^\n" +
 	"\x0fGetGuestMetrics\x12$.kubeswift.v1.GetGuestMetricsRequest\x1a%.kubeswift.v1.GetGuestMetricsResponse\x12[\n" +
-	"\x0eGetNodeMetrics\x12#.kubeswift.v1.GetNodeMetricsRequest\x1a$.kubeswift.v1.GetNodeMetricsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eGetNodeMetrics\x12#.kubeswift.v1.GetNodeMetricsRequest\x1a$.kubeswift.v1.GetNodeMetricsResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_telemetry_proto_rawDescOnce sync.Once

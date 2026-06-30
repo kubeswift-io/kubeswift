@@ -7,7 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 )
 
 func TestStampTransferProgress(t *testing.T) {

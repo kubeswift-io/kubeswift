@@ -6,9 +6,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/resolved"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 func assertPrivileged(t *testing.T, sc *corev1.SecurityContext, name string) {

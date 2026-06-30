@@ -11,7 +11,7 @@
 - **Kernel:** 6.8.0-101-generic (miles)
 - **Container runtime:** containerd 1.7.30
 - **GPU hardware:** None (validation covers host topology discovery without GPUs)
-- **Image used:** `ghcr.io/projectbeskar/kubeswift/gpu-discovery:sha-111f3d2`
+- **Image used:** `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:sha-111f3d2`
 - **Node under test:** miles
 
 ## Validation Checks

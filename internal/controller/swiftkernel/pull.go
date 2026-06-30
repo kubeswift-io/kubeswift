@@ -15,7 +15,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
+	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 )
 
 const (

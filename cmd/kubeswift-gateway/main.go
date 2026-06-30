@@ -20,10 +20,10 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
-	"github.com/projectbeskar/kubeswift/internal/gateway"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
-	"github.com/projectbeskar/kubeswift/internal/version"
+	"github.com/kubeswift-io/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	"github.com/kubeswift-io/kubeswift/internal/gateway"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
+	"github.com/kubeswift-io/kubeswift/internal/version"
 )
 
 const defaultClustersNamespace = "kubeswift-system"

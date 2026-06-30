@@ -17,7 +17,7 @@ COPY . .
 
 # Build gpu-discovery with version stamping
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -ldflags "-X github.com/kubeswift-io/kubeswift/internal/version.Version=${VERSION} -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/kubeswift-io/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
     -o gpu-discovery ./cmd/gpu-discovery
 
 # Runtime stage — needs pciutils (lspci) and util-linux (lscpu)

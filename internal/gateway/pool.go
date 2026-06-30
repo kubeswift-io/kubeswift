@@ -19,8 +19,8 @@ import (
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/actions"
+	fleetv1alpha1 "github.com/kubeswift-io/kubeswift/api/fleet/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/actions"
 )
 
 // swiftGuestGVR, podGVR, swiftMigrationGVR, guestPodLabel, and launcherContainer

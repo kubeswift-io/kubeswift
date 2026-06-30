@@ -5,7 +5,7 @@ package kubeswift.v1;
 import "google/protobuf/timestamp.proto";
 import "kubeswift/v1/common.proto";
 
-option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+option go_package = "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1";
 
 // Cluster is a UI-shaped view of a federated member cluster (a
 // fleet.kubeswift.io/v1alpha1 Cluster), denormalized for the cluster selector

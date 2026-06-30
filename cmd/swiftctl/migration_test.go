@@ -9,7 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 )
 
 func TestParsePreferredMode(t *testing.T) {

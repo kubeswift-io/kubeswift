@@ -5,7 +5,7 @@ package kubeswift.v1;
 import "google/protobuf/timestamp.proto";
 import "kubeswift/v1/common.proto";
 
-option go_package = "github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+option go_package = "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1";
 
 // Guest is a UI-shaped, denormalized view of a SwiftGuest across the fleet.
 // Hand-shaped (decision D8) — a flat row for the virtual-scrolled inventory

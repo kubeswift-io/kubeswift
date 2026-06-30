@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=${VERSION} -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -ldflags "-X github.com/kubeswift-io/kubeswift/internal/version.Version=${VERSION} -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/kubeswift-io/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
     -o kubeswift-gateway ./cmd/kubeswift-gateway
 
 # distroless static + nonroot: the gateway is a pure network service (no host

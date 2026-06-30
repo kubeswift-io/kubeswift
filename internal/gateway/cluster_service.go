@@ -7,9 +7,9 @@ import (
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
-	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	fleetv1alpha1 "github.com/kubeswift-io/kubeswift/api/fleet/v1alpha1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
+	"github.com/kubeswift-io/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
 )
 
 // ClusterService serves the hub's fleet registry to the UI cluster selector.

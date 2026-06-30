@@ -8,12 +8,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	kernelv1alpha1 "github.com/projectbeskar/kubeswift/api/kernel/v1alpha1"
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // StateCollector exports CR-state gauges computed from the informer cache at

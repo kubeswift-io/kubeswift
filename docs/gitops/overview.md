@@ -10,7 +10,7 @@ cluster converged to it.
 
 | Layer | What | Git objects | Changes |
 |---|---|---|---|
-| **1 — Platform** | KubeSwift itself: controllers, webhooks, **CRDs** | `OCIRepository` + `HelmRelease` for `oci://ghcr.io/projectbeskar/charts/kubeswift` | rarely (version bumps) |
+| **1 — Platform** | KubeSwift itself: controllers, webhooks, **CRDs** | `OCIRepository` + `HelmRelease` for `oci://ghcr.io/kubeswift-io/charts/kubeswift` | rarely (version bumps) |
 | **2 — Infrastructure** | SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftGPUProfile, NADs | plain manifests under `infrastructure/` | occasionally |
 | **3 — Workloads** | SwiftGuest, SwiftGuestPool | per-environment manifests under `workloads/<env>/` | often |
 

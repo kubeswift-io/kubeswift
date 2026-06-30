@@ -6,7 +6,7 @@ import "os"
 const LauncherImageEnv = "KUBESWIFT_LAUNCHER_IMAGE"
 
 // LauncherImageDefault is the default container image for the guest pod (swiftletd + Cloud Hypervisor).
-const LauncherImageDefault = "ghcr.io/projectbeskar/kubeswift/swiftletd:latest"
+const LauncherImageDefault = "ghcr.io/kubeswift-io/kubeswift/swiftletd:latest"
 
 // LauncherImage returns the launcher image, from KUBESWIFT_LAUNCHER_IMAGE env or LauncherImageDefault.
 func LauncherImage() string {

@@ -8,9 +8,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	fleetv1alpha1 "github.com/projectbeskar/kubeswift/api/fleet/v1alpha1"
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
+	fleetv1alpha1 "github.com/kubeswift-io/kubeswift/api/fleet/v1alpha1"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 func TestClusterService_ListClusters_NamespaceScoped(t *testing.T) {

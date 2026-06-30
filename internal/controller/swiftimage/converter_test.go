@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 )
 
 func TestStubConverter_PassThroughWhenFormatsMatch(t *testing.T) {

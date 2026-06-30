@@ -1733,7 +1733,7 @@ const file_kubeswift_v1_guest_proto_rawDesc = "" +
 	"\fMigrateGuest\x12!.kubeswift.v1.MigrateGuestRequest\x1a\".kubeswift.v1.MigrateGuestResponse\x12R\n" +
 	"\vCreateGuest\x12 .kubeswift.v1.CreateGuestRequest\x1a!.kubeswift.v1.CreateGuestResponse\x12R\n" +
 	"\vDeleteGuest\x12 .kubeswift.v1.DeleteGuestRequest\x1a!.kubeswift.v1.DeleteGuestResponse\x12[\n" +
-	"\x0eGetGuestEvents\x12#.kubeswift.v1.GetGuestEventsRequest\x1a$.kubeswift.v1.GetGuestEventsResponseBAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eGetGuestEvents\x12#.kubeswift.v1.GetGuestEventsRequest\x1a$.kubeswift.v1.GetGuestEventsResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_guest_proto_rawDescOnce sync.Once

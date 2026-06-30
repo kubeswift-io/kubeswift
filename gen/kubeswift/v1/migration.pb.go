@@ -435,7 +435,7 @@ const file_kubeswift_v1_migration_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\v2\x1a.kubeswift.v1.ClusterErrorR\x05error2\xc8\x01\n" +
 	"\x10MigrationService\x12[\n" +
 	"\x0eListMigrations\x12#.kubeswift.v1.ListMigrationsRequest\x1a$.kubeswift.v1.ListMigrationsResponse\x12W\n" +
-	"\x0fWatchMigrations\x12$.kubeswift.v1.WatchMigrationsRequest\x1a\x1c.kubeswift.v1.MigrationEvent0\x01BAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0fWatchMigrations\x12$.kubeswift.v1.WatchMigrationsRequest\x1a\x1c.kubeswift.v1.MigrationEvent0\x01B@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_migration_proto_rawDescOnce sync.Once

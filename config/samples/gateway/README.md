@@ -6,7 +6,7 @@ hub.
 1. **Enable the gateway on the hub** (Helm):
 
    ```bash
-   helm upgrade --install kubeswift oci://ghcr.io/projectbeskar/charts/kubeswift \
+   helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
      -n kubeswift-system --create-namespace \
      --set gateway.enabled=true --set gateway.authMode=token
    ```

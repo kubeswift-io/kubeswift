@@ -7,5 +7,5 @@ resources:
   - deployment.yaml
   - service.yaml
 images:
-  - name: ghcr.io/projectbeskar/kubeswift/controller-manager
+  - name: ghcr.io/kubeswift-io/kubeswift/controller-manager
     newTag: latest

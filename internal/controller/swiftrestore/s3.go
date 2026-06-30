@@ -23,10 +23,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	snapshotv1alpha1 "github.com/projectbeskar/kubeswift/api/snapshot/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/metrics"
-	"github.com/projectbeskar/kubeswift/internal/snapshot/clonecommon"
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // s3DownloadMount aliases the shared mount path (referenced by tests + the

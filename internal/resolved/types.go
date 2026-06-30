@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	seedv1alpha1 "github.com/projectbeskar/kubeswift/api/seed/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/runtimeintent"
+	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 )

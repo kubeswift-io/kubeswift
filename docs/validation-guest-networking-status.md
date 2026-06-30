@@ -46,8 +46,8 @@ This document summarizes the root causes, fixes, and validation steps for the sm
 2. **Deploy to cluster:**
    - **Remote cluster (ghcr.io):** Push images, then redeploy:
      ```bash
-     docker push ghcr.io/projectbeskar/kubeswift/controller-manager:latest
-     docker push ghcr.io/projectbeskar/kubeswift/swiftletd:latest
+     docker push ghcr.io/kubeswift-io/kubeswift/controller-manager:latest
+     docker push ghcr.io/kubeswift-io/kubeswift/swiftletd:latest
      KUBECONFIG=/path/to/kubeconfig make deploy
      ```
    - **kind/minikube:** Load images locally:

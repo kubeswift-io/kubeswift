@@ -11,9 +11,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	migrationv1alpha1 "github.com/projectbeskar/kubeswift/api/migration/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	swiftmigration "github.com/projectbeskar/kubeswift/internal/controller/swiftmigration"
+	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	swiftmigration "github.com/kubeswift-io/kubeswift/internal/controller/swiftmigration"
 )
 
 // nfdCPUIDLabelPrefix is the node-feature-discovery label prefix for CPUID

@@ -474,7 +474,7 @@ const file_kubeswift_v1_common_proto_rawDesc = "" +
 	"\x10EVENT_TYPE_ADDED\x10\x01\x12\x17\n" +
 	"\x13EVENT_TYPE_MODIFIED\x10\x02\x12\x16\n" +
 	"\x12EVENT_TYPE_DELETED\x10\x03\x12\x17\n" +
-	"\x13EVENT_TYPE_BOOKMARK\x10\x04BAZ?github.com/projectbeskar/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x13EVENT_TYPE_BOOKMARK\x10\x04B@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_common_proto_rawDescOnce sync.Once

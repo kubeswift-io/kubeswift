@@ -5,5 +5,5 @@ resources:
   - serviceaccount.yaml
   - daemonset.yaml
 images:
-  - name: ghcr.io/projectbeskar/kubeswift/swiftletd
+  - name: ghcr.io/kubeswift-io/kubeswift/swiftletd
     newTag: latest

@@ -13,7 +13,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
 )
 
 // --- GPU Discovery ---

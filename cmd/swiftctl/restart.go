@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
-	"github.com/projectbeskar/kubeswift/internal/cli"
-	"github.com/projectbeskar/kubeswift/internal/scheme"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/cli"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 var restartCmd = &cobra.Command{

@@ -14,8 +14,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 
-	kubeswiftv1 "github.com/projectbeskar/kubeswift/gen/kubeswift/v1"
-	"github.com/projectbeskar/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
+	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
+	"github.com/kubeswift-io/kubeswift/gen/kubeswift/v1/kubeswiftv1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

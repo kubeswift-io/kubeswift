@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 )
 
 // Validator validates SwiftImage resources.

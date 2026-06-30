@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/projectbeskar/kubeswift/internal/actions"
+	"github.com/kubeswift-io/kubeswift/internal/actions"
 )
 
 var stopCmd = &cobra.Command{

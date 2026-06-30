@@ -14,8 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	imagev1alpha1 "github.com/projectbeskar/kubeswift/api/image/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 func finalizerScheme(t *testing.T) *runtime.Scheme {

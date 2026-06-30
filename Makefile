@@ -3,18 +3,18 @@
 # IMAGE_TAG defaults to sha-<short-git-hash> matching CI's tagging convention.
 # Override with: make deploy IMAGE_TAG=v1.0.0
 IMAGE_TAG ?= sha-$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-CONTROLLER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/controller-manager:$(IMAGE_TAG)
-SWIFTLETD_IMAGE ?= ghcr.io/projectbeskar/kubeswift/swiftletd:$(IMAGE_TAG)
-GPU_DISCOVERY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/gpu-discovery:$(IMAGE_TAG)
-DRA_DRIVER_IMAGE ?= ghcr.io/projectbeskar/kubeswift/kubeswift-dra-driver:$(IMAGE_TAG)
-MIGRATION_STUNNEL_IMAGE ?= ghcr.io/projectbeskar/kubeswift/migration-stunnel:$(IMAGE_TAG)
-SNAPSHOT_S3_IMAGE ?= ghcr.io/projectbeskar/kubeswift/snapshot-s3:$(IMAGE_TAG)
-GATEWAY_IMAGE ?= ghcr.io/projectbeskar/kubeswift/kubeswift-gateway:$(IMAGE_TAG)
-IMAGE_REGISTRY ?= ghcr.io/projectbeskar/kubeswift
+CONTROLLER_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/controller-manager:$(IMAGE_TAG)
+SWIFTLETD_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/swiftletd:$(IMAGE_TAG)
+GPU_DISCOVERY_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/gpu-discovery:$(IMAGE_TAG)
+DRA_DRIVER_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:$(IMAGE_TAG)
+MIGRATION_STUNNEL_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/migration-stunnel:$(IMAGE_TAG)
+SNAPSHOT_S3_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/snapshot-s3:$(IMAGE_TAG)
+GATEWAY_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:$(IMAGE_TAG)
+IMAGE_REGISTRY ?= ghcr.io/kubeswift-io/kubeswift
 # Push destination: parent OCI repo only (Helm appends chart name from Chart.yaml)
-CHART_OCI_PUSH ?= oci://ghcr.io/projectbeskar/charts
+CHART_OCI_PUSH ?= oci://ghcr.io/kubeswift-io/charts
 # Install/pull reference: full path including chart name
-CHART_OCI_INSTALL ?= oci://ghcr.io/projectbeskar/charts/kubeswift
+CHART_OCI_INSTALL ?= oci://ghcr.io/kubeswift-io/charts/kubeswift
 
 # controller-gen is PINNED so `make generate` is reproducible regardless of
 # whatever version a developer has on PATH. An unpinned binary churns the
@@ -88,7 +88,7 @@ help:
 build: build-go build-rust
 
 build-go:
-	go build -ldflags "-X github.com/projectbeskar/kubeswift/internal/version.Version=$(VERSION) -X github.com/projectbeskar/kubeswift/internal/version.GitCommit=$(GIT_COMMIT) -X github.com/projectbeskar/kubeswift/internal/version.BuildDate=$(BUILD_DATE)" ./cmd/...
+	go build -ldflags "-X github.com/kubeswift-io/kubeswift/internal/version.Version=$(VERSION) -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=$(GIT_COMMIT) -X github.com/kubeswift-io/kubeswift/internal/version.BuildDate=$(BUILD_DATE)" ./cmd/...
 
 build-rust:
 	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	gpuv1alpha1 "github.com/projectbeskar/kubeswift/api/gpu/v1alpha1"
-	swiftv1alpha1 "github.com/projectbeskar/kubeswift/api/swift/v1alpha1"
+	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 var errNoCapacity = errors.New("no GPU node has sufficient capacity")
