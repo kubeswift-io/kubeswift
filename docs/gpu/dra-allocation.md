@@ -100,7 +100,7 @@ the DRA driver does its own discovery, so a DRA-only cluster keeps
 
 ```bash
 helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.6.0 -n kubeswift-system --create-namespace \
+  --version 0.6.1 -n kubeswift-system --create-namespace \
   --set dra.enabled=true
 ```
 
