@@ -8,6 +8,24 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.6.1] — 2026-06-30
+
+Project rehomed to the **kubeswift-io** GitHub organization. **No functional
+changes** — this release re-points the Go module path, container images, and the
+Helm OCI chart to the new org. Old `projectbeskar` URLs and images keep working
+(GitHub redirects + the old packages remain), so existing installs are unaffected
+until they upgrade.
+
+### Changed
+- **Go module**: `github.com/projectbeskar/kubeswift` → `github.com/kubeswift-io/kubeswift`.
+- **Images**: `ghcr.io/kubeswift-io/kubeswift/*` (controller-manager, swiftletd,
+  kubeswift-gateway, gpu-discovery, snapshot-s3, migration-stunnel,
+  kubeswift-dra-driver); the web console at `ghcr.io/kubeswift-io/kubeswift-ui`.
+- **Helm chart**: `oci://ghcr.io/kubeswift-io/charts/kubeswift`.
+- **Repos**: `github.com/kubeswift-io/{kubeswift,kubeswift-ui}`.
+
+---
+
 ## [v0.6.0] — 2026-06-25
 
 Adds the **KubeSwift web console** — a multi-cluster operator UI for the fleet,
