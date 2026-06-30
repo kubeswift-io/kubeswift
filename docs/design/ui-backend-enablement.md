@@ -1,9 +1,10 @@
 # Design: UI Backend Enablement — gateway, contract, and data planes
 
-> Status: **ACCEPTED** — decisions resolved 2026-06-22 (§4). Build plan + decision record for the
-> KubeSwift **backend** work that unlocks a separate `kubeswift-ui` (Angular static app). No code
-> in this doc; it is the build plan + the resolved decisions. The Angular app itself is out of
-> scope (separate repo). First deliverable: the **P0 cut** (§6).
+> Status: **P0 SHIPPED + cluster-validated (2026-06-22).** Decisions resolved (§4); the P0 cut (§6)
+> built across PRs #259/#260/#261/#263/#264 and proven end-to-end on two real clusters (see "P0 —
+> shipped + validated" below). Decision/build record for the KubeSwift **backend** that unlocks a
+> separate `kubeswift-ui` (Angular static app); the Angular app itself is out of scope (separate
+> repo). Remaining backend work is the **P1+ planes** (§5).
 
 ## 1. Context
 
@@ -179,4 +180,32 @@ console in v1; O5 rich telemetry in v1. *(Multi-cluster is now in scope — D2.)
 - Telemetry: the O-program — [`docs/design/observability.md`](observability.md) + the
   cAdvisor-join recipe (`docs/observability/`).
 - Action logic today: `internal/cli` (swiftctl).
-- CRDs: `api/**`; the new fleet-registry CRD: `api/fleet/v1alpha1` (to be created in P0).
+- CRDs: `api/**`; the fleet-registry CRD: `api/fleet/v1alpha1`.
+- Gateway operator guide: [`docs/ui/gateway.md`](../ui/gateway.md); samples: `config/samples/gateway/`.
+
+## 9. P0 — shipped + cluster-validated (2026-06-22)
+
+The P0 cut (§6) is built and proven end-to-end:
+
+| PR | Increment |
+|---|---|
+| #259 | `fleet.kubeswift.io/v1alpha1` Cluster CRD (the registry) |
+| #260 | `kubeswift.v1` Connect contract + buf codegen + CI |
+| #261 | gateway skeleton + `ClusterService` |
+| #263 | per-cluster client pool + impersonation + `GuestService` fan-out |
+| #264 | Helm `gateway.enabled` + image + hub RBAC + release |
+
+**Cluster validation:** the gateway (`kubeswift-gateway:sha-6fe5e7d`, `authMode=insecure`) was deployed
+on a hub and registered **two independent real clusters** as fleet members (the hub itself via an
+in-cluster SA, and a separate k0s 1.35 cluster reachable over the network). `ClusterService.ListClusters`
+returned both Ready with their real Kubernetes versions (v1.34.3 + v1.35.3); `GuestService.ListGuests`
+**merged** guests from the cluster that had them — cluster dimension + phase + boot source all mapped —
+**and** surfaced the other cluster's missing `swiftguests` CRD as a **per-cluster error** rather than
+failing the whole-fleet query. That is the no-silent-failures partial-fleet property (D2) working in
+production.
+
+The separate `kubeswift-ui` repo can now build its shell + cluster/namespace selectors + a live,
+fleet-merged inventory against this gateway. **Remaining backend work is the P1+ planes** (§5): the write
+plane (CRUD/lifecycle via an `internal/actions` extraction from swiftctl), telemetry (Prometheus →
+`TelemetryService`), consoles (serial WebSocket), the aggregated `GetGuestDetail`, and `Cluster.status`
+guest-count enrichment (the pool writes Ready/version today; per-cluster guest counts are P1).
