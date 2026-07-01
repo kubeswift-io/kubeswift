@@ -80,7 +80,8 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 // defaults to true and is not plumbed into the capture action.
 func backendCapturesMemory(snap *snapshotv1alpha1.SwiftSnapshot) bool {
 	return snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
-		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI
 }
 
 // deletionPolicyWarnings surfaces the OQ3 advisory: spec.deletionPolicy is a
@@ -203,6 +204,10 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 		if err := validateS3Backend(snap); err != nil {
 			return err
 		}
+	case snapshotv1alpha1.SnapshotBackendOCI:
+		if err := validateOCIBackend(snap); err != nil {
+			return err
+		}
 	case "":
 		return fmt.Errorf("spec.backend.type is required")
 	default:
@@ -216,6 +221,9 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	}
 	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendS3 && snap.Spec.Backend.S3 != nil {
 		return fmt.Errorf("spec.backend.s3 is only valid when spec.backend.type=s3")
+	}
+	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendOCI && snap.Spec.Backend.OCI != nil {
+		return fmt.Errorf("spec.backend.oci is only valid when spec.backend.type=oci")
 	}
 	return nil
 }
@@ -235,6 +243,26 @@ func validateS3Backend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	// AWS needs a region; an S3-compatible store is identified by its endpoint.
 	if s3.Endpoint == "" && s3.Region == "" {
 		return fmt.Errorf("spec.backend.s3.region is required for AWS S3 (or set spec.backend.s3.endpoint for an S3-compatible store)")
+	}
+	return nil
+}
+
+// validateOCIBackend checks the oci (OCI registry / ORAS) backend config.
+// Credentials are optional (an anonymous / in-cluster registry is valid); the
+// repository is the one hard requirement. Reference well-formedness beyond this
+// is left to ORAS at push time (fail-loud) rather than re-implemented here.
+func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	oci := snap.Spec.Backend.OCI
+	if oci == nil {
+		return fmt.Errorf("spec.backend.oci is required when spec.backend.type=oci")
+	}
+	if oci.Repository == "" {
+		return fmt.Errorf("spec.backend.oci.repository is required (e.g. ghcr.io/org/vm-snapshots)")
+	}
+	// Tag, when set, must be a bare tag — not a ref carrying its own ':tag',
+	// '@digest', or repository path. The controller composes repository:tag.
+	if strings.ContainsAny(oci.Tag, ":@/") {
+		return fmt.Errorf("spec.backend.oci.tag must be a bare tag, not a reference (got %q)", oci.Tag)
 	}
 	return nil
 }

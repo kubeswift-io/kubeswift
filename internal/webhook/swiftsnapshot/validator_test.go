@@ -168,6 +168,60 @@ func TestValidate_S3Backend(t *testing.T) {
 	}
 }
 
+func TestValidate_OCIBackend(t *testing.T) {
+	v := &Validator{}
+	valid := func() *snapshotv1alpha1.SwiftSnapshot {
+		s := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+		s.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{
+			Repository: "zot.registry.svc:5000/vm-snapshots",
+		}
+		return s
+	}
+	// Repository set, anonymous (no creds) is valid.
+	if _, err := v.ValidateCreate(context.Background(), valid()); err != nil {
+		t.Errorf("valid oci backend should be accepted; got %v", err)
+	}
+	// A bare tag is accepted.
+	s := valid()
+	s.Spec.Backend.OCI.Tag = "prod-2026"
+	if _, err := v.ValidateCreate(context.Background(), s); err != nil {
+		t.Errorf("bare tag should be accepted; got %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mut    func(*snapshotv1alpha1.OCIBackend)
+		reject string
+	}{
+		{"missing repository", func(o *snapshotv1alpha1.OCIBackend) { o.Repository = "" }, "repository"},
+		{"tag carries a ref", func(o *snapshotv1alpha1.OCIBackend) { o.Tag = "repo:tag" }, "bare tag"},
+		{"tag carries a digest", func(o *snapshotv1alpha1.OCIBackend) { o.Tag = "x@sha256" }, "bare tag"},
+	}
+	for _, tc := range cases {
+		s := valid()
+		tc.mut(s.Spec.Backend.OCI)
+		if _, err := v.ValidateCreate(context.Background(), s); err == nil || !strings.Contains(err.Error(), tc.reject) {
+			t.Errorf("%s: want rejection mentioning %q; got %v", tc.name, tc.reject, err)
+		}
+	}
+
+	// type=oci with a nil oci carrier is rejected.
+	bare := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+	if _, err := v.ValidateCreate(context.Background(), bare); err == nil || !strings.Contains(err.Error(), "backend.oci is required") {
+		t.Errorf("nil oci carrier: want 'backend.oci is required'; got %v", err)
+	}
+}
+
+// TestValidate_OCICarrierForbidden: an oci carrier on a non-oci backend is rejected.
+func TestValidate_OCICarrierForbidden(t *testing.T) {
+	v := &Validator{}
+	s := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	s.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{Repository: "r"}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil || !strings.Contains(err.Error(), "backend.oci") {
+		t.Errorf("oci carrier on local backend should be rejected; got %v", err)
+	}
+}
+
 func TestValidate_BackendTypeMissing_Rejected(t *testing.T) {
 	snap := makeSnap("")
 	snap.Spec.Backend.CSIVolumeSnapshot = nil
