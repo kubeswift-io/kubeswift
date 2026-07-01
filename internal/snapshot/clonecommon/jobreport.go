@@ -27,6 +27,9 @@ type TransferReport struct {
 	// ManifestDigest is the sha256 of the pushed OCI manifest (oci backend only;
 	// empty for s3). Restore pins the artifact by this digest.
 	ManifestDigest string `json:"manifestDigest,omitempty"`
+	// Signed is true when the oci artifact was cosign-signed as an OCI referrer
+	// (oci backend only; the controller stamps status.oci.signed from it).
+	Signed bool `json:"signed,omitempty"`
 }
 
 // JobTransferReport reads the byte report a completed snapshot-s3 Job left in

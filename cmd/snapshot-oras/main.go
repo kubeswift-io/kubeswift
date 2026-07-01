@@ -52,11 +52,12 @@ func main() {
 	insecure := flag.Bool("insecure", false, "allow a plaintext (http) registry — UNSAFE; in-cluster / test registry only")
 	snapName := flag.String("snapshot", "", "ns/name of the SwiftSnapshot, recorded in the manifest annotations (upload only)")
 	includeMemory := flag.Bool("include-memory", false, "record includeMemory=true in the manifest (upload only)")
+	signKey := flag.String("sign-key", "", "path to a cosign private key; when set, cosign-sign the pushed artifact as an OCI referrer (upload only; COSIGN_PASSWORD from env)")
 	flag.Parse()
 
 	if err := run(runArgs{
 		mode: *mode, dir: *dir, repository: *repository, tag: *tag, digest: *digest,
-		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory,
+		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory, signKey: *signKey,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
 		os.Exit(1)
@@ -64,8 +65,8 @@ func main() {
 }
 
 type runArgs struct {
-	mode, dir, repository, tag, digest, snapName string
-	insecure, includeMemory                      bool
+	mode, dir, repository, tag, digest, snapName, signKey string
+	insecure, includeMemory                               bool
 }
 
 func (a runArgs) validate() error {
@@ -106,6 +107,15 @@ func run(a runArgs) error {
 			return err
 		}
 		stats.Reference = ref
+		if a.signKey != "" {
+			// Sign the pushed digest as an OCI referrer. Strict: a signing
+			// failure fails the Job (and the snapshot) — never report an
+			// unsigned artifact as signed.
+			if err := signArtifact(ctx, a.repository, stats.ManifestDigest, a.signKey, a.insecure); err != nil {
+				return err
+			}
+			stats.Signed = true
+		}
 		reportTransfer(stats)
 	case "download":
 		pullRef := a.tag

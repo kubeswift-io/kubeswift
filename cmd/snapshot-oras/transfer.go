@@ -33,6 +33,8 @@ type transferStats struct {
 	TotalBytes       int64  `json:"totalBytes"`
 	Reference        string `json:"reference,omitempty"`
 	ManifestDigest   string `json:"manifestDigest,omitempty"`
+	// Signed is true when the artifact was cosign-signed as an OCI referrer.
+	Signed bool `json:"signed,omitempty"`
 }
 
 // mediaTypeFor gives each snapshot artifact a descriptive OCI layer media type.
