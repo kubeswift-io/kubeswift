@@ -46,6 +46,9 @@ type SwiftRestoreReconciler struct {
 	// SnapshotS3Image is the snapshot-s3 image used by the s3 (Tier C)
 	// backend's download Job. Wired from KUBESWIFT_SNAPSHOT_S3_IMAGE.
 	SnapshotS3Image string
+	// SnapshotORASImage is the snapshot-oras image used by the oci backend's
+	// download Job. Wired from KUBESWIFT_SNAPSHOT_ORAS_IMAGE.
+	SnapshotORASImage string
 }
 
 // Reconcile drives the SwiftRestore state machine.
@@ -87,10 +90,14 @@ func (r *SwiftRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 
 	case snapshotv1alpha1.SwiftRestorePhaseDownloading:
-		// s3 backend only: watch the download Job pull artifacts into the
+		// s3 / oci backends: watch the download Job pull artifacts into the
 		// node-local cache, then hand off to the shared Tier B restore tail
 		// (materializeRestoreTarget) and advance to Restoring.
-		advanced, requeue, errMsg, err := r.handleDownloading(ctx, &restore, status)
+		handleDl := r.handleDownloading
+		if r.downloadBackendIsOCI(ctx, &restore) {
+			handleDl = r.handleDownloadingOCI
+		}
+		advanced, requeue, errMsg, err := handleDl(ctx, &restore, status)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -219,6 +226,8 @@ func (r *SwiftRestoreReconciler) handlePending(
 		return r.handlePendingLocal(ctx, restore, &snap, status)
 	case snapshotv1alpha1.SnapshotBackendS3:
 		return r.handlePendingS3(ctx, restore, &snap, status)
+	case snapshotv1alpha1.SnapshotBackendOCI:
+		return r.handlePendingOCI(ctx, restore, &snap, status)
 	default:
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,

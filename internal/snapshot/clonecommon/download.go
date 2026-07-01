@@ -143,3 +143,110 @@ func BuildDownloadJob(p DownloadJobParams) *batchv1.Job {
 		},
 	}
 }
+
+// ociDownloadAuthMount is where the dockerconfigjson credential is mounted for
+// the oci download Job; DOCKER_CONFIG points here so oras-go reads config.json.
+const ociDownloadAuthMount = "/oras-auth"
+
+// OCIDownloadJobParams parameterizes the node-pinned oci (ORAS) download Job for
+// both the SwiftRestore and cloneFromSnapshot paths. The restore pulls by
+// Digest (status.oci.manifestDigest) so it materializes the exact captured
+// artifact; Tag is passed for the reference. The caller sets the ownerRef.
+type OCIDownloadJobParams struct {
+	// Snapshot supplies the node-local cache dir (S3LocalDir, backend-neutral).
+	Snapshot *snapshotv1alpha1.SwiftSnapshot
+	// Repository / Tag / Digest identify the artifact; Digest pins it.
+	Repository string
+	Tag        string
+	Digest     string
+	Insecure   bool
+	// CredentialsSecretName is a dockerconfigjson Secret; "" = anonymous.
+	CredentialsSecretName string
+	// Image is the snapshot-oras uploader/downloader image.
+	Image string
+	// Name / Namespace / Node of the Job; Component is the component label.
+	Name, Namespace, Node, Component string
+	ExtraLabels                      map[string]string
+}
+
+// BuildOCIDownloadJob constructs the node-pinned oci download Job: it pulls the
+// snapshot's OCI artifact from the registry into the node-local cache hostPath
+// (S3LocalDir) — ORAS verifies every blob's digest against the manifest. Runs
+// as root because it writes the kubelet-created root-owned cache hostPath; still
+// drop ALL / no-priv-esc / ro-rootfs. Registry credentials, when configured,
+// come from a dockerconfigjson Secret at DOCKER_CONFIG; else anonymous.
+func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
+	args := []string{
+		"--mode=download",
+		"--dir=" + DownloadMount,
+		"--repository=" + p.Repository,
+		"--tag=" + p.Tag,
+	}
+	if p.Digest != "" {
+		args = append(args, "--digest="+p.Digest)
+	}
+	if p.Insecure {
+		args = append(args, "--insecure")
+	}
+
+	volumes := []corev1.Volume{{
+		Name: "cache",
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: S3LocalDir(p.Snapshot),
+				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
+			},
+		},
+	}}
+	mounts := []corev1.VolumeMount{{Name: "cache", MountPath: DownloadMount}}
+	var env []corev1.EnvVar
+	if p.CredentialsSecretName != "" {
+		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociDownloadAuthMount})
+		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociDownloadAuthMount, ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{
+			Name: "oras-auth",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: p.CredentialsSecretName,
+					Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
+				},
+			},
+		})
+	}
+
+	labels := map[string]string{
+		"app.kubernetes.io/name":      "kubeswift",
+		"app.kubernetes.io/component": p.Component,
+	}
+	for k, v := range p.ExtraLabels {
+		labels[k] = v
+	}
+
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: p.Name, Namespace: p.Namespace, Labels: labels},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: ptr.To(DownloadBackoffLimit),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					NodeName:      p.Node,
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{{
+						Name:         "download",
+						Image:        p.Image,
+						Args:         args,
+						Env:          env,
+						VolumeMounts: mounts,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptr.To(false),
+							RunAsUser:                ptr.To(int64(0)),
+							RunAsNonRoot:             ptr.To(false),
+							ReadOnlyRootFilesystem:   ptr.To(true),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
+					}},
+					Volumes: volumes,
+				},
+			},
+		},
+	}
+}
