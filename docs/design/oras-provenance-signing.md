@@ -14,17 +14,18 @@ attestation referrers are a follow-on (§8).
 
 ## 1. Goal
 
-Make a pushed oci snapshot artifact **cosign-signed**, with the signature stored
-as an **OCI referrer** of the artifact — discoverable via `oras discover` and
-verifiable with `cosign verify`. This extends the supply-chain spine (already
-keyless-cosign on images/charts/CLI blobs in `release-stable.yaml`) to the
-at-rest disk/memory artifact, and is the provenance half of the
-confidential-computing alignment (ADR §7): build/capture-time provenance,
-distinct from and complementary to SEV-SNP launch-time attestation.
+Make a pushed oci snapshot artifact **cosign-signed** and **verifiable with a
+plain `cosign verify --key`**. The signature uses cosign's standard tag-based
+attachment (`sha256-<digest>.sig`) — the most registry-portable form (§2.2). This
+extends the supply-chain spine (already keyless-cosign on images/charts/CLI blobs
+in `release-stable.yaml`) to the at-rest disk/memory artifact, and is the
+provenance half of the confidential-computing alignment (ADR §7):
+build/capture-time provenance, distinct from and complementary to SEV-SNP
+launch-time attestation.
 
-The spike proved the mechanism against a real registry: `oras attach` +
-`oras discover` return a referrer; cosign signs the artifact digest. P2
-productizes it.
+The spike proved cosign signs the artifact digest against a real registry; P2
+productizes it, and cluster validation (§2.2/§2.5) then pinned the attachment
+mode to cosign's verifiable default.
 
 ---
 
@@ -54,16 +55,19 @@ stays a Kubernetes actor, never a registry client; ADR §5). The `snapshot-oras`
 image gains the `cosign` binary; after a successful push the binary shells out:
 
 ```
-cosign sign --key <mounted cosign.key> --registry-referrers-mode=oci-1-1 \
-  --tlog-upload=false --yes <repository>@<manifestDigest>
+cosign sign --key <mounted cosign.key> --tlog-upload=false --yes \
+  <repository>@<manifestDigest>
 ```
 
-`--registry-referrers-mode=oci-1-1` stores the signature as an **OCI 1.1
-referrer** (not the legacy `sha256-<digest>.sig` tag), so it rides the same
-Referrers API the ADR's discovery/provenance story depends on.
-`COSIGN_PASSWORD` comes from the Secret's `cosign.password` (env, never a flag or
-log). Registry auth reuses the push path (dockerconfigjson at `DOCKER_CONFIG`, or
-anonymous).
+This uses cosign's **default tag-based attachment** (a `sha256-<digest>.sig`
+tag), **not** `--registry-referrers-mode=oci-1-1`. Cluster validation (§2.5)
+surfaced that the referrer mode makes the operator's `cosign verify` **fail** —
+there is no verify-side referrer-discovery flag (`--registry-referrers-mode` is
+sign-only), so a referrer-mode signature reports "no signatures found". The
+tag-based attachment verifies with a plain `cosign verify --key` and is the most
+registry-portable form (GHCR/ECR/Harbor all support it). `COSIGN_PASSWORD` comes
+from the Secret's `cosign.password` (env, never a flag or log). Registry auth
+reuses the push path (dockerconfigjson at `DOCKER_CONFIG`, or anonymous).
 
 *Rejected — embedding sigstore-go in the binary:* heavier dep tree, and the
 cosign CLI is the spike-validated surface. Shelling out to a pinned cosign is
@@ -86,24 +90,26 @@ separate signature-digest field in P2 — the signature is discoverable from the
 artifact digest via the Referrers API; adding a pinned signature digest is a
 cheap follow-on if operators want it.
 
-### 2.5 Verification story — the **TLS caveat is load-bearing**
+### 2.5 Verification story — validated; the **TLS caveat is load-bearing**
 
-Spike finding (carried into the CRD docstring + this doc): cosign's
-referrer-mode **verify** path is **HTTPS-only** — `--allow-http-registry` is not
-honored on the initial `/v2/` ping for verify / oci-1-1 against a plaintext
-registry. Consequences:
+**Validated on-cluster (3c):** a controller-driven signed snapshot pushed to an
+in-cluster Zot, then `cosign verify --key cosign.pub --insecure-ignore-tlog`
+against a **TLS-fronted** Zot **PASSED** ("The signatures were verified against
+the specified public key"). The tag-based signature (§2.2) is what makes this
+work out of the box — the oci-1-1 referrer variant reported "no signatures
+found" from the same `cosign verify`.
 
-- The signature **lands and is discoverable** (`oras discover`) even on a
-  plaintext registry — the referrer graph is registry-native.
+The **TLS caveat** is load-bearing: `cosign verify` is **HTTPS-only**
+(`--allow-http-registry` is not honored on the `/v2/` ping for verify). So:
+
+- The signature **lands** even on a plaintext registry (sign over http works with
+  `--allow-http-registry`), but
 - `cosign verify` requires a **TLS** registry (every real one — GHCR, Harbor,
   ECR, Zot-with-TLS — is HTTPS; plaintext is the explicit-unsafe in-cluster/test
   path, `spec.backend.oci.insecure`).
 
-So 3c's cluster validation proves the referrer **lands** (via `oras discover`) on
-the in-cluster Zot, and proves `cosign verify` against a **TLS-fronted** Zot (a
-self-signed cert + `cosign verify --key --insecure-ignore-tlog`). The webhook
-does **not** reject `insecure: true` + signing — the signature is still useful
-(offline `oras`-level discovery, TLS-fronted later); it is documented, not
+The webhook does **not** reject `insecure: true` + signing — the signature still
+lands and verifies once the registry is fronted by TLS; it is documented, not
 blocked.
 
 ### 2.6 Key management + security
@@ -130,15 +136,19 @@ blocked.
 
 ## 4. Phased PRs
 
-- **3a (shipped, #300)** — API/CRD surface + webhook + tests.
-- **3b** — `snapshot-oras` image: add the pinned cosign binary; a `--sign-key
-  <path>` (+ `COSIGN_PASSWORD` env) flag; sign-after-push in upload mode; strict
-  failure. Unit-test the arg/flow; local smoke against a TLS `registry:2` or Zot.
-- **3c** — controller: `buildOCIPushJob` mounts the `signingKeySecretRef` Secret
-  (`cosign.key`→file, `cosign.password`→env) and passes `--sign-key` when set;
-  `handleUploadingOCI` stamps `status.oci.signed` from the push report; strict —
-  a signing failure surfaces as a Failed snapshot. Cluster-validate: referrer
-  lands (`oras discover`) on the HTTP Zot; `cosign verify` on a TLS-fronted Zot.
+All three landed together in **#300** (API + image + controller are meaningless
+apart), cluster-validated pre-merge.
+
+- **3a (#300)** — API/CRD surface + webhook + tests.
+- **3b (#300)** — `snapshot-oras` image: pinned, checksum-verified cosign +
+  `--sign-key`; sign-after-push in upload mode (cosign **default tag**
+  attachment, §2.2); strict failure. Unit-tested.
+- **3c (#300)** — controller: `buildOCIPushJob` mounts the `signingKeySecretRef`
+  Secret (`cosign.key`→file, `cosign.password`→env, writable HOME/TMPDIR) and
+  passes `--sign-key`; `handleUploadingOCI` stamps `status.oci.signed`; strict.
+  **Cluster-validated:** a controller-driven signed memory snapshot reached Ready
+  with `status.oci.signed=true` + `pushedBytes`, and `cosign verify --key` PASSED
+  against a TLS-fronted Zot.
 
 ---
 
