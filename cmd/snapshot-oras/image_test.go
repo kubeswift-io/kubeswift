@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"oras.land/oras-go/v2/content/memory"
+	"oras.land/oras-go/v2/content/oci"
 )
 
 func writeDisk(t *testing.T, path string, windows [][]byte) {
@@ -104,6 +105,43 @@ func TestChunkDedup_ChangedChunkOnly(t *testing.T) {
 	orig, _ := os.ReadFile(v2)
 	if !bytes.Equal(got, orig) {
 		t.Error("v1.1 reassembled disk differs from original")
+	}
+}
+
+// A chunk larger than oras's 32 MiB content.FetchAll cap must still round-trip
+// (regression for the streaming fix — FetchAll refuses >32 MiB blobs, so the
+// download path streams instead). Uses a 33 MiB chunk = one layer.
+func TestChunkLargerThan32MiB_RoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	const big = 33 * 1024 * 1024 // > maxDescriptorSize (32 MiB)
+	data := make([]byte, big)
+	for i := range data {
+		data[i] = byte(i % 251) // non-zero, non-uniform
+	}
+	src := filepath.Join(dir, "big.raw")
+	if err := os.WriteFile(src, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Disk-backed store: memory.Store caps blobs at 32 MiB (like content.FetchAll),
+	// but a real registry does not — oci.Store models that.
+	store, err := oci.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stats, err := chunkAndPush(context.Background(), src, store, "big", big, "raw", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TransferredBytes != int64(big) {
+		t.Errorf("transferred = %d, want %d", stats.TransferredBytes, big)
+	}
+	out := filepath.Join(dir, "big-out.raw")
+	if _, err := pullAndReassemble(context.Background(), store, "big", out); err != nil {
+		t.Fatalf("reassemble of a >32MiB chunk failed (FetchAll cap regression?): %v", err)
+	}
+	got, _ := os.ReadFile(out)
+	if !bytes.Equal(got, data) {
+		t.Error(">32MiB chunk did not round-trip byte-identical")
 	}
 }
 
