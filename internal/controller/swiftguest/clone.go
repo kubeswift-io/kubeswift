@@ -86,8 +86,28 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 			return nil, "", true, nil
 		}
 		snapshotPath = clonecommon.S3LocalDir(&snap)
+	case snapshotv1alpha1.SnapshotBackendOCI:
+		node = src.TargetNode
+		if node == "" {
+			return nil, "cloneFromSnapshot from an oci snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
+		}
+		if snap.Status.OCI == nil || snap.Status.OCI.ManifestDigest == "" {
+			return nil, "SwiftSnapshot " + snap.Name + " has no status.oci — its push is not complete", false, nil
+		}
+		done, failReason, derr := r.ensureCloneDownloadJob(ctx, guest, &snap, node)
+		if derr != nil {
+			return nil, "", false, derr
+		}
+		if failReason != "" {
+			return nil, failReason, false, nil
+		}
+		if !done {
+			// Still pulling the snapshot artifacts onto the target node.
+			return nil, "", true, nil
+		}
+		snapshotPath = clonecommon.S3LocalDir(&snap)
 	default:
-		return nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local or s3); got " + string(snap.Spec.Backend.Type), false, nil
+		return nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local, s3, or oci); got " + string(snap.Spec.Backend.Type), false, nil
 	}
 
 	// The clone needs the source guest's full spec (image/seed/class) to build
@@ -254,23 +274,15 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	node string,
 ) (bool, string, error) {
-	if r.SnapshotS3Image == "" {
-		return false, "snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)", nil
-	}
 	// The Job lives in the snapshot's namespace (== the guest's namespace).
 	name := cloneDownloadJobName(snap, node)
 	var job batchv1.Job
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: snap.Namespace}, &job)
 	if apierrors.IsNotFound(err) {
-		j := clonecommon.BuildDownloadJob(clonecommon.DownloadJobParams{
-			Snapshot:    snap,
-			Image:       r.SnapshotS3Image,
-			Name:        name,
-			Namespace:   snap.Namespace,
-			Node:        node,
-			Component:   "snapshot-s3-clone-download",
-			ExtraLabels: map[string]string{"kubeswift.io/snapshot": snap.Name},
-		})
+		j, failReason := r.buildCloneDownloadJob(snap, node, name)
+		if failReason != "" {
+			return false, failReason, nil
+		}
 		if cerr := ctrl.SetControllerReference(guest, j, r.Scheme); cerr != nil {
 			return false, "", cerr
 		}
@@ -299,4 +311,56 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 		}
 	}
 	return false, "", nil
+}
+
+// buildCloneDownloadJob builds the s3 or oci clone download Job for the
+// snapshot's backend. Returns (job, failReason): a non-empty failReason is
+// terminal (the required transfer image is not configured).
+func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.SwiftSnapshot, node, name string) (*batchv1.Job, string) {
+	labels := map[string]string{"kubeswift.io/snapshot": snap.Name}
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
+		if r.SnapshotORASImage == "" {
+			return nil, "snapshot-oras image not configured (set KUBESWIFT_SNAPSHOT_ORAS_IMAGE)"
+		}
+		oci := snap.Spec.Backend.OCI
+		credName := ""
+		if oci.CredentialsSecretRef != nil {
+			credName = oci.CredentialsSecretRef.Name
+		}
+		return clonecommon.BuildOCIDownloadJob(clonecommon.OCIDownloadJobParams{
+			Snapshot:              snap,
+			Repository:            oci.Repository,
+			Tag:                   cloneOCITag(snap),
+			Digest:                snap.Status.OCI.ManifestDigest,
+			Insecure:              oci.Insecure,
+			CredentialsSecretName: credName,
+			Image:                 r.SnapshotORASImage,
+			Name:                  name,
+			Namespace:             snap.Namespace,
+			Node:                  node,
+			Component:             "snapshot-oci-clone-download",
+			ExtraLabels:           labels,
+		}), ""
+	}
+	if r.SnapshotS3Image == "" {
+		return nil, "snapshot-s3 image not configured (set KUBESWIFT_SNAPSHOT_S3_IMAGE)"
+	}
+	return clonecommon.BuildDownloadJob(clonecommon.DownloadJobParams{
+		Snapshot:    snap,
+		Image:       r.SnapshotS3Image,
+		Name:        name,
+		Namespace:   snap.Namespace,
+		Node:        node,
+		Component:   "snapshot-s3-clone-download",
+		ExtraLabels: labels,
+	}), ""
+}
+
+// cloneOCITag resolves the artifact tag: the operator-supplied tag, or the
+// "<namespace>-<name>" default (matching the capture + restore sides).
+func cloneOCITag(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if snap.Spec.Backend.OCI != nil && snap.Spec.Backend.OCI.Tag != "" {
+		return snap.Spec.Backend.OCI.Tag
+	}
+	return snap.Namespace + "-" + snap.Name
 }

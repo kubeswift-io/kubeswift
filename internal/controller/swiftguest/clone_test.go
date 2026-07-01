@@ -183,6 +183,74 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	}
 }
 
+func ociCloneSnap() *snapshotv1alpha1.SwiftSnapshot {
+	return &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap", Namespace: "ns"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "src"},
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendOCI,
+				OCI:  &snapshotv1alpha1.OCIBackend{Repository: "zot.svc:5000/vmsnap", Insecure: true},
+			},
+		},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{
+			Phase: snapshotv1alpha1.SwiftSnapshotPhaseReady,
+			OCI:   &snapshotv1alpha1.OCISnapshotStatus{Reference: "zot.svc:5000/vmsnap:ns-snap", ManifestDigest: "sha256:abc"},
+		},
+	}
+}
+
+func TestCloneOCITag(t *testing.T) {
+	if got := cloneOCITag(ociCloneSnap()); got != "ns-snap" {
+		t.Errorf("default oci clone tag = %q, want ns-snap", got)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_OCI_RequiresTargetNode(t *testing.T) {
+	g := cloneGuest() // no targetNode
+	r, _ := newCloneReconciler(t, g, sourceGuest(), ociCloneSnap())
+	r.SnapshotORASImage = "img"
+	_, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || !strings.Contains(fail, "requires spec.cloneFromSnapshot.targetNode") {
+		t.Fatalf("oci clone without targetNode should fail; fail=%q err=%v", fail, err)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	r, c := newCloneReconciler(t, g, sourceGuest(), ociCloneSnap())
+	r.SnapshotORASImage = "img"
+
+	// First pass: creates the oci download Job + requeues (not yet complete).
+	_, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || !requeue {
+		t.Fatalf("first pass should create the oci download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	var job batchv1.Job
+	wantJob := cloneDownloadJobName(ociCloneSnap(), "boba")
+	if err := c.Get(context.Background(), client.ObjectKey{Name: wantJob, Namespace: "ns"}, &job); err != nil {
+		t.Fatalf("oci download Job not created: %v", err)
+	}
+	args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "--mode=download") || !strings.Contains(args, "--repository=zot.svc:5000/vmsnap") || !strings.Contains(args, "--digest=sha256:abc") {
+		t.Errorf("download Job is not an oci pull-by-digest: %q", args)
+	}
+	if job.Spec.Template.Spec.NodeName != "boba" {
+		t.Errorf("oci download Job must pin to targetNode boba; got %q", job.Spec.Template.Spec.NodeName)
+	}
+
+	// Mark the Job complete; second pass should proceed (effective + stamped).
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &job); err != nil {
+		t.Fatal(err)
+	}
+	eff, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || requeue || eff == nil {
+		t.Fatalf("after oci download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+}
+
 func TestCloneDownloadJobName_PerNodeSnapshot(t *testing.T) {
 	snap := s3CloneSnap()
 	// Deterministic + DNS-1123 valid + guest-independent.

@@ -82,6 +82,10 @@ type SwiftGuestReconciler struct {
 	// before the restore-receive launcher boots. Wired from
 	// KUBESWIFT_SNAPSHOT_S3_IMAGE.
 	SnapshotS3Image string
+	// SnapshotORASImage is the snapshot-oras downloader image used by a
+	// cloneFromSnapshot guest cloning from an oci snapshot. Wired from
+	// KUBESWIFT_SNAPSHOT_ORAS_IMAGE.
+	SnapshotORASImage string
 }
 
 // Reconcile implements the reconcile loop.
