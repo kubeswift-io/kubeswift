@@ -49,6 +49,16 @@ snapshotS3:
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
 
+# snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
+# snapshot backend. The controller passes this to the per-snapshot push Job (and
+# the per-restore download Job) via the KUBESWIFT_SNAPSHOT_ORAS_IMAGE env var. No
+# separate workload is deployed for it; this only sets the image reference.
+snapshotORAS:
+  image:
+    registry: ghcr.io/kubeswift-io/kubeswift
+    # Same as controllerManager; use tag: latest for local build+load.
+    tag: latest
+
 # migration-stunnel: the mTLS sidecar image for cross-node live migration
 # (Phase 3c). The controller injects it into launcher pods when
 # migration.mtls.enabled=true, reading KUBESWIFT_MIGRATION_STUNNEL_IMAGE.

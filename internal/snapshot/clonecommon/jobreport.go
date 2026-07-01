@@ -8,11 +8,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// TransferReport mirrors the JSON the snapshot-s3 binary writes to its
-// container termination message on a successful transfer
-// (cmd/snapshot-s3 transferStats). Keep the json tags in sync with that struct:
-// the two are coupled only by this wire shape (the binary stays minimal and does
-// not import this package). transferredBytes + skippedBytes == totalBytes.
+// TransferReport mirrors the JSON the snapshot-s3 and snapshot-oras binaries
+// write to their container termination message on a successful transfer
+// (cmd/snapshot-s3 transferStats / cmd/snapshot-oras transferStats). Keep the
+// json tags in sync with those structs: the two sides are coupled only by this
+// wire shape (the binaries stay minimal and do not import this package).
+// transferredBytes + skippedBytes == totalBytes.
 type TransferReport struct {
 	// TransferredBytes is the artifact bytes actually moved over the wire
 	// (excludes resume-skipped objects) — the bandwidth/cost figure.
@@ -21,6 +22,11 @@ type TransferReport struct {
 	SkippedBytes int64 `json:"skippedBytes"`
 	// TotalBytes is the snapshot's full artifact footprint.
 	TotalBytes int64 `json:"totalBytes"`
+	// Reference is the pushed artifact reference (oci backend only; empty for s3).
+	Reference string `json:"reference,omitempty"`
+	// ManifestDigest is the sha256 of the pushed OCI manifest (oci backend only;
+	// empty for s3). Restore pins the artifact by this digest.
+	ManifestDigest string `json:"manifestDigest,omitempty"`
 }
 
 // JobTransferReport reads the byte report a completed snapshot-s3 Job left in
