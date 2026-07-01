@@ -108,6 +108,25 @@ spec:
                           "ghcr.io/kubeswift-io/vm-snapshots" or "zot.registry.svc:5000/snapshots".
                           Required. The snapshot artifact is pushed to Repository:Tag.
                         type: string
+                      signingKeySecretRef:
+                        description: |-
+                          SigningKeySecretRef, when set, makes the push cosign-sign the artifact as
+                          an OCI referrer (discoverable via `oras discover` / `cosign verify`),
+                          extending the supply-chain spine to the disk artifact. The referenced
+                          Secret (same namespace) must hold a cosign keypair: keys `cosign.key`
+                          (the encrypted private key) and `cosign.password`. Key-based (not keyless)
+                          — an in-cluster capture has no CI OIDC identity, and a key-based signature
+                          verifies offline for sovereign/air-gapped edge. Signing is strict: if it is
+                          requested and fails, the snapshot Fails (no unsigned artifact is left
+                          behind as if signed). NOTE: cosign verification of a referrer-mode
+                          signature requires a TLS registry; a plaintext (insecure) registry can
+                          carry the referrer but cosign verify against it is unsupported by cosign.
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
                       tag:
                         description: |-
                           Tag is the artifact tag. Empty defaults to "<namespace>-<snapshot>", a
@@ -389,6 +408,11 @@ spec:
                   reference:
                     description: Reference is the pushed artifact reference (repository:tag).
                     type: string
+                  signed:
+                    description: |-
+                      Signed is true when the push cosign-signed the artifact as an OCI referrer
+                      (spec.backend.oci.signingKeySecretRef was set and signing succeeded).
+                    type: boolean
                 type: object
               phase:
                 description: |-

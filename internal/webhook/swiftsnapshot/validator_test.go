@@ -187,6 +187,12 @@ func TestValidate_OCIBackend(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), s); err != nil {
 		t.Errorf("bare tag should be accepted; got %v", err)
 	}
+	// A named signing key ref is accepted (opt-in provenance signing).
+	sig := valid()
+	sig.Spec.Backend.OCI.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "cosign-key"}
+	if _, err := v.ValidateCreate(context.Background(), sig); err != nil {
+		t.Errorf("named signingKeySecretRef should be accepted; got %v", err)
+	}
 
 	cases := []struct {
 		name   string
@@ -196,6 +202,9 @@ func TestValidate_OCIBackend(t *testing.T) {
 		{"missing repository", func(o *snapshotv1alpha1.OCIBackend) { o.Repository = "" }, "repository"},
 		{"tag carries a ref", func(o *snapshotv1alpha1.OCIBackend) { o.Tag = "repo:tag" }, "bare tag"},
 		{"tag carries a digest", func(o *snapshotv1alpha1.OCIBackend) { o.Tag = "x@sha256" }, "bare tag"},
+		{"signing key ref without name", func(o *snapshotv1alpha1.OCIBackend) {
+			o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{}
+		}, "signingKeySecretRef.name"},
 	}
 	for _, tc := range cases {
 		s := valid()
