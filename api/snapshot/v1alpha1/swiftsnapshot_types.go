@@ -138,6 +138,20 @@ type OCIBackend struct {
 	// means anonymous access (an unauthenticated / in-cluster registry).
 	// +optional
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
+
+	// SigningKeySecretRef, when set, makes the push cosign-sign the artifact as
+	// an OCI referrer (discoverable via `oras discover` / `cosign verify`),
+	// extending the supply-chain spine to the disk artifact. The referenced
+	// Secret (same namespace) must hold a cosign keypair: keys `cosign.key`
+	// (the encrypted private key) and `cosign.password`. Key-based (not keyless)
+	// — an in-cluster capture has no CI OIDC identity, and a key-based signature
+	// verifies offline for sovereign/air-gapped edge. Signing is strict: if it is
+	// requested and fails, the snapshot Fails (no unsigned artifact is left
+	// behind as if signed). NOTE: cosign verification of a referrer-mode
+	// signature requires a TLS registry; a plaintext (insecure) registry can
+	// carry the referrer but cosign verify against it is unsupported by cosign.
+	// +optional
+	SigningKeySecretRef *SecretObjectReference `json:"signingKeySecretRef,omitempty"`
 }
 
 // SecretObjectReference references a Secret in the same namespace.
@@ -311,6 +325,10 @@ type OCISnapshotStatus struct {
 	PushedBytes int64 `json:"pushedBytes,omitempty"`
 	// PushedAt is when the Uploading (push) phase completed.
 	PushedAt *metav1.Time `json:"pushedAt,omitempty"`
+	// Signed is true when the push cosign-signed the artifact as an OCI referrer
+	// (spec.backend.oci.signingKeySecretRef was set and signing succeeded).
+	// +optional
+	Signed bool `json:"signed,omitempty"`
 }
 
 // SwiftSnapshot is a point-in-time capture of a SwiftGuest's disk (and

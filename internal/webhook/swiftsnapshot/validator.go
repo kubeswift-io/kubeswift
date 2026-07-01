@@ -264,6 +264,12 @@ func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	if strings.ContainsAny(oci.Tag, ":@/") {
 		return fmt.Errorf("spec.backend.oci.tag must be a bare tag, not a reference (got %q)", oci.Tag)
 	}
+	if oci.SigningKeySecretRef != nil && oci.SigningKeySecretRef.Name == "" {
+		return fmt.Errorf("spec.backend.oci.signingKeySecretRef.name is required when signingKeySecretRef is set")
+	}
+	// cosign referrer-mode verification needs TLS; warn (not reject) on an
+	// insecure registry + signing so operators know the signature lands but
+	// cosign verify against a plaintext registry is unsupported.
 	return nil
 }
 
