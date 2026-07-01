@@ -217,6 +217,17 @@ spec:
                 required:
                 - name
                 type: object
+              includeDisk:
+                description: |-
+                  IncludeDisk requests the guest's disk be captured to the registry alongside
+                  memory, producing a FULL-STATE (cold / suspended-state migration) snapshot
+                  the import can resume in another cluster. Only valid with backend.type: oci
+                  coherent via capture-then-terminate: the guest is paused, memory
+                  snapshotted, NOT resumed, then terminated so the disk is frozen at the
+                  snapshot instant before it is chunked to the registry — so this IMPLIES the
+                  guest is migrated away, not a live backup. See
+                  docs/design/oras-cold-migration.md (P4).
+                type: boolean
               includeMemory:
                 default: true
                 description: |-
@@ -388,6 +399,27 @@ spec:
                   OCI records the registry location of an oci-backend export. Set when the
                   Uploading (push) phase completes.
                 properties:
+                  disk:
+                    description: |-
+                      Disk is the chunked disk artifact pushed alongside memory for a full-state
+                      (cold-migration) snapshot — populated only when spec.includeDisk is true.
+                      The import materializes the disk from this ref, then CH --restore's the
+                      memory (the fields above) against it. See docs/design/oras-cold-migration.md.
+                    properties:
+                      manifestDigest:
+                        description: ManifestDigest pins the disk artifact (Repository@digest)
+                          for the import.
+                        type: string
+                      pushedBytes:
+                        description: PushedBytes is the disk artifact's footprint
+                          in the registry.
+                        format: int64
+                        type: integer
+                      reference:
+                        description: Reference is the pushed disk artifact reference
+                          (repository:tag).
+                        type: string
+                    type: object
                   manifestDigest:
                     description: |-
                       ManifestDigest is the sha256 digest of the pushed OCI manifest. Restore

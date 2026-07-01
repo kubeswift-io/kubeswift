@@ -476,3 +476,39 @@ func TestValidate_IncludeMemoryFalse_LocalWarns(t *testing.T) {
 		t.Errorf("csi + includeMemory:true must not warn; got %v", w)
 	}
 }
+
+func ociFullState() *snapshotv1alpha1.SwiftSnapshot {
+	s := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+	s.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{Repository: "zot.svc:5000/vm-snapshots"}
+	s.Spec.IncludeMemory = true
+	s.Spec.IncludeDisk = true
+	return s
+}
+
+func TestValidate_IncludeDisk_OK(t *testing.T) {
+	v := &Validator{}
+	if _, err := v.ValidateCreate(context.Background(), ociFullState()); err != nil {
+		t.Errorf("includeDisk + oci + includeMemory should be valid: %v", err)
+	}
+}
+
+func TestValidate_IncludeDisk_RequiresOCI(t *testing.T) {
+	v := &Validator{}
+	s := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	s.Spec.IncludeMemory = true
+	s.Spec.IncludeDisk = true
+	_, err := v.ValidateCreate(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), "requires spec.backend.type=oci") {
+		t.Errorf("includeDisk on a non-oci backend must be rejected; got %v", err)
+	}
+}
+
+func TestValidate_IncludeDisk_RequiresMemory(t *testing.T) {
+	v := &Validator{}
+	s := ociFullState()
+	s.Spec.IncludeMemory = false
+	_, err := v.ValidateCreate(context.Background(), s)
+	if err == nil || !strings.Contains(err.Error(), "requires spec.includeMemory") {
+		t.Errorf("includeDisk without includeMemory must be rejected; got %v", err)
+	}
+}
