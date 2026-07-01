@@ -20,7 +20,6 @@ func TestCosignSignArgs(t *testing.T) {
 	for _, want := range []string{
 		"sign",
 		"--key " + key,
-		"--registry-referrers-mode oci-1-1",
 		"--tlog-upload=false",
 		"--yes",
 		repo + "@" + digest,
@@ -28,6 +27,11 @@ func TestCosignSignArgs(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("secure args missing %q; got: %s", want, joined)
 		}
+	}
+	// Default tag-based attachment — NOT oci-1-1 referrer mode (cosign verify
+	// can't discover a referrer-mode signature). Guards against regressing to it.
+	if strings.Contains(joined, "registry-referrers-mode") {
+		t.Errorf("must use cosign's default tag-based sig (no referrers mode); got: %s", joined)
 	}
 	if strings.Contains(joined, "--allow-http-registry") {
 		t.Errorf("secure args must not carry --allow-http-registry; got: %s", joined)
