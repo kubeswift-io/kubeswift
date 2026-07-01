@@ -120,4 +120,83 @@ func TestBuildOCIPushJob_Anonymous(t *testing.T) {
 	if strings.Contains(strings.Join(pod.Containers[0].Args, " "), "--insecure") {
 		t.Errorf("--insecure should be absent when Insecure=false")
 	}
+	// No signing key -> no --sign-key and no signing volumes.
+	if strings.Contains(strings.Join(pod.Containers[0].Args, " "), "--sign-key") {
+		t.Errorf("--sign-key must be absent without a signing-key Secret")
+	}
+	for _, v := range pod.Volumes {
+		if v.Name == "oras-signing-key" || v.Name == "cosign-home" {
+			t.Errorf("signing volume %q must be absent without a signing-key Secret", v.Name)
+		}
+	}
+}
+
+func TestBuildOCIPushJob_WithSigning(t *testing.T) {
+	snap := ociSnap(func(o *snapshotv1alpha1.OCIBackend) {
+		o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "cosign-key"}
+	})
+	pod := buildOCIPushJob(snap, "img:tag", "boba").Spec.Template.Spec
+	c := pod.Containers[0]
+
+	if !strings.Contains(strings.Join(c.Args, " "), "--sign-key=/oras-signing-key/cosign.key") {
+		t.Errorf("--sign-key arg missing; got %q", strings.Join(c.Args, " "))
+	}
+
+	// COSIGN_PASSWORD from the signing Secret (optional), plus writable HOME/TMPDIR.
+	var pwFromSecret, homeSet, tmpSet bool
+	for _, e := range c.Env {
+		switch e.Name {
+		case "COSIGN_PASSWORD":
+			if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+				e.ValueFrom.SecretKeyRef.Name != "cosign-key" || e.ValueFrom.SecretKeyRef.Key != "cosign.password" ||
+				e.ValueFrom.SecretKeyRef.Optional == nil || !*e.ValueFrom.SecretKeyRef.Optional {
+				t.Errorf("COSIGN_PASSWORD must be an optional secretKeyRef to cosign-key/cosign.password; got %+v", e.ValueFrom)
+			}
+			pwFromSecret = true
+		case "HOME":
+			homeSet = e.Value == ociCosignHome
+		case "TMPDIR":
+			tmpSet = e.Value == ociCosignHome
+		}
+	}
+	if !pwFromSecret || !homeSet || !tmpSet {
+		t.Errorf("expected COSIGN_PASSWORD + HOME + TMPDIR env; pw=%v home=%v tmp=%v", pwFromSecret, homeSet, tmpSet)
+	}
+
+	// The key volume (cosign.key remapped) + the writable cosign-home emptyDir.
+	var keyVol, homeVol bool
+	for _, v := range pod.Volumes {
+		switch v.Name {
+		case "oras-signing-key":
+			if v.Secret == nil || v.Secret.SecretName != "cosign-key" ||
+				len(v.Secret.Items) != 1 || v.Secret.Items[0].Key != "cosign.key" || v.Secret.Items[0].Path != "cosign.key" {
+				t.Errorf("oras-signing-key volume malformed: %+v", v.Secret)
+			}
+			keyVol = true
+		case "cosign-home":
+			if v.EmptyDir == nil {
+				t.Errorf("cosign-home must be an emptyDir")
+			}
+			homeVol = true
+		}
+	}
+	if !keyVol || !homeVol {
+		t.Errorf("expected oras-signing-key + cosign-home volumes; key=%v home=%v", keyVol, homeVol)
+	}
+}
+
+func TestOCISigningRequested(t *testing.T) {
+	if ociSigningRequested(ociSnap(nil)) {
+		t.Error("no signing-key Secret must not request signing")
+	}
+	if ociSigningRequested(ociSnap(func(o *snapshotv1alpha1.OCIBackend) {
+		o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: ""}
+	})) {
+		t.Error("an empty signing-key name must not request signing")
+	}
+	if !ociSigningRequested(ociSnap(func(o *snapshotv1alpha1.OCIBackend) {
+		o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "cosign-key"}
+	})) {
+		t.Error("a named signing-key Secret must request signing")
+	}
 }

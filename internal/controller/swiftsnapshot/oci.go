@@ -53,6 +53,12 @@ const (
 	// ociAuthMount is where the dockerconfigjson credential is mounted; DOCKER_CONFIG
 	// points here so oras-go's credential store reads <dir>/config.json.
 	ociAuthMount = "/oras-auth"
+	// ociSignKeyMount is where the cosign signing key is mounted; snapshot-oras
+	// --sign-key points at <dir>/cosign.key.
+	ociSignKeyMount = "/oras-signing-key"
+	// ociCosignHome is a writable dir for cosign's HOME/TMPDIR (the container
+	// rootfs is read-only).
+	ociCosignHome = "/cosign-home"
 	// ociPushBackoffLimit bounds Job retries; snapshot-oras is idempotent (the
 	// registry dedups already-present layers by digest), so a retry resumes.
 	ociPushBackoffLimit int32 = 4
@@ -76,6 +82,13 @@ func ociTag(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // ociReference is the "repository:tag" recorded in status.
 func ociReference(snap *snapshotv1alpha1.SwiftSnapshot) string {
 	return snap.Spec.Backend.OCI.Repository + ":" + ociTag(snap)
+}
+
+// ociSigningRequested reports whether the snapshot opted into cosign provenance
+// signing via a signing-key Secret (P2).
+func ociSigningRequested(snap *snapshotv1alpha1.SwiftSnapshot) bool {
+	oci := snap.Spec.Backend.OCI
+	return oci != nil && oci.SigningKeySecretRef != nil && oci.SigningKeySecretRef.Name != ""
 }
 
 // ociPushJobName is the deterministic name of the push Job.
@@ -122,6 +135,10 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 			status.OCI = &snapshotv1alpha1.OCISnapshotStatus{
 				Reference: ociReference(snap),
 				PushedAt:  &now,
+				// A completed push Job with signing requested is signed (strict:
+				// a signing failure fails the Job). Robust against a missing byte
+				// report (which would leave rep.Signed false).
+				Signed: ociSigningRequested(snap),
 			}
 			// Read the push Job's byte report (best-effort; a missing report leaves
 			// bytes/digest empty and is not a failure). status carries the registry
@@ -194,6 +211,45 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 				},
 			},
 		})
+	}
+
+	// P2 provenance signing: mount the cosign key + password and tell
+	// snapshot-oras to sign the pushed digest as an OCI referrer. cosign needs a
+	// writable HOME/TMPDIR because the container rootfs is read-only.
+	if ociSigningRequested(snap) {
+		args = append(args, "--sign-key="+ociSignKeyMount+"/cosign.key")
+		mounts = append(mounts,
+			corev1.VolumeMount{Name: "oras-signing-key", MountPath: ociSignKeyMount, ReadOnly: true},
+			corev1.VolumeMount{Name: "cosign-home", MountPath: ociCosignHome},
+		)
+		env = append(env,
+			// Password for the encrypted key. Optional so a missing key fails
+			// loudly inside cosign (strict) rather than blocking pod creation.
+			corev1.EnvVar{Name: "COSIGN_PASSWORD", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: oci.SigningKeySecretRef.Name},
+					Key:                  "cosign.password",
+					Optional:             ptr.To(true),
+				},
+			}},
+			corev1.EnvVar{Name: "HOME", Value: ociCosignHome},
+			corev1.EnvVar{Name: "TMPDIR", Value: ociCosignHome},
+		)
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "oras-signing-key",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: oci.SigningKeySecretRef.Name,
+						Items:      []corev1.KeyToPath{{Key: "cosign.key", Path: "cosign.key"}},
+					},
+				},
+			},
+			corev1.Volume{
+				Name:         "cosign-home",
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			},
+		)
 	}
 
 	return &batchv1.Job{
