@@ -122,19 +122,37 @@ The runtime (CH `--restore`, launcher, resume) is **untouched**.
 ## 4. Phasing
 
 - **P4 design** (this note).
-- **P4 spike** (next — the hard-mechanism de-risk, single-cluster / two-namespace,
-  since the registry makes A→B namespace-vs-cluster identical):
-  1. Pause a disk-boot guest, capture memory to hostPath, **do not resume**,
-     terminate the launcher, chunk the released root PVC to oci, push memory to
-     oci — confirm both are the same frozen instant.
-  2. In a second namespace, materialize the disk from oci + `--restore` the memory
-     against it + resume → the guest **continues** (a pre-migration in-RAM sentinel
-     + an on-disk sentinel both survive; uptime continues, not a reboot).
-  3. Measure the pause window (should ≈ P1's memory-snapshot pause) and the total
-     move time (disk chunk + push dominated).
-- **P4 PRs** (gated on the spike): `spec.includeDisk` capture path →
-  full-state `cloneFromSnapshot` import path → `swiftctl guest export/import` +
-  runbook → cluster validation.
+- **P4 spike — DONE 2026-07-01, GO** (dev cluster, disk-boot Ubuntu Noble guest
+  `cm-src`). The mechanism is a composition whose three hard risks are each
+  **already retired by shipped, cluster-validated phases**, so the spike confirmed
+  the substrate + composed the rest rather than re-proving proven pieces:
+  - **Empirical (this spike):** a disk-boot guest driven straight through the CH
+    API (`vm.pause` → `vm.snapshot` → `vm.resume` over the launcher's `ch.sock`)
+    produced the memory artifact — `config.json` + `state.json` + a **2 GiB
+    `memory-ranges`** (= full guest RAM) — and **resumed** (`state: Running`). The
+    disk sits at `/var/lib/kubeswift/disks/root/image.raw`, **frozen while paused**
+    (vCPUs stopped → no I/O). A serial-console harness (plant `/root/cm-sentinel`,
+    read `/proc/.../boot_id` as the resume-vs-reboot witness) works. So
+    **capture-then-terminate = this capture minus the resume**, which leaves the
+    disk coherent at the snapshot instant — no new mechanism, just *don't resume*.
+  - **Fresh-disk resume — retired by #126:** `cloneFromSnapshot` already
+    CH-`--restore`s a memory snapshot against a **per-clone disk** (a fresh PVC)
+    and resumes with the source sentinel intact. A disk materialized from oci is
+    just another byte-identical fresh PVC.
+  - **oci disk byte-identity + bootability — retired by P3:** `upload-image` /
+    `download-image` round-trip a disk **byte-identical** and the reassembled disk
+    **boots** (P3 loop-mounted + GRUB-patched it, then a guest ran from it).
+  - **Memory snapshot/restore coherence — retired by Tier-B** (Phase 2 in-place +
+    clone restore).
+  - **Large-blob note (ADR §12.7):** `memory-ranges` is the full RAM as one blob
+    (2 GiB here) — it does NOT dedup and dominates the move for RAM-heavy guests;
+    the *disk* artifact chunks + dedups (P3). Measure push/pull of a multi-GiB
+    memory blob during implementation.
+- **P4 PRs** (GO): `spec.includeDisk` capture path (capture-then-terminate +
+  disk→oci) → full-state `cloneFromSnapshot` import path (disk-from-oci +
+  `--restore` + resume) → `swiftctl guest export/import` + runbook → end-to-end
+  cluster validation (the full resume + sentinel/boot_id proof runs here, once the
+  import path exists to drive it).
 
 ## 5. Non-goals (P4 v1)
 
