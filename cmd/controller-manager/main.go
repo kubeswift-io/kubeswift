@@ -170,6 +170,7 @@ func main() {
 		MigrationMTLSEnabled: *migrationMTLSEnabled,
 		SystemNamespace:      leaderElectionNS,
 		SnapshotS3Image:      swiftsnapshot.SnapshotS3Image(),
+		SnapshotORASImage:    swiftsnapshot.SnapshotORASImage(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuest controller")
 		os.Exit(1)
