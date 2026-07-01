@@ -154,6 +154,7 @@ func main() {
 		Converter:             swiftimage.StubConverter{},
 		Clientset:             clientset,
 		VolumeSnapshotEnabled: volumeSnapshotEnabled,
+		SnapshotORASImage:     swiftsnapshot.SnapshotORASImage(),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftImage controller")
 		os.Exit(1)

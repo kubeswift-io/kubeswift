@@ -32,6 +32,10 @@ type SwiftImageReconciler struct {
 	// discovery check in main. When false, cloneStrategy=snapshot is unavailable;
 	// the import pipeline and cloneStrategy=copy are unaffected.
 	VolumeSnapshotEnabled bool
+	// SnapshotORASImage is the snapshot-oras image the source.oci import Job's
+	// puller init container runs (--mode=download-image). Set in main from
+	// swiftsnapshot.SnapshotORASImage(); empty fails an oci import loudly.
+	SnapshotORASImage string
 }
 
 // Reconcile implements the reconcile loop.

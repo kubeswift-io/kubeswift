@@ -174,13 +174,29 @@ func pullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 		if err != nil {
 			return zero, fmt.Errorf("chunk %s missing/bad %s: %w", layer.Digest, chunkOffsetAnnotation, err)
 		}
-		data, err := content.FetchAll(ctx, src, layer) // verifies digest + size
-		if err != nil {
-			return zero, fmt.Errorf("fetch chunk at offset %d: %w", off, err)
-		}
-		if _, err := f.WriteAt(data, off); err != nil {
-			return zero, fmt.Errorf("write chunk at offset %d: %w", off, err)
+		if err := fetchChunkAt(ctx, src, layer, f, off); err != nil {
+			return zero, fmt.Errorf("chunk at offset %d: %w", off, err)
 		}
 	}
 	return manifestDesc, nil
+}
+
+// fetchChunkAt streams one chunk layer into f at off, verifying digest + size.
+// It streams (VerifyReader), NOT content.FetchAll, because FetchAll refuses any
+// blob larger than oras's 32 MiB in-memory cap (maxDescriptorSize) — chunks are
+// commonly 64 MiB — and streaming also avoids buffering the whole chunk.
+func fetchChunkAt(ctx context.Context, src oras.ReadOnlyTarget, layer ocispec.Descriptor, f *os.File, off int64) error {
+	rc, err := src.Fetch(ctx, layer)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	vr := content.NewVerifyReader(rc, layer)
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, vr); err != nil {
+		return err
+	}
+	return vr.Verify() // digest + size mismatch fails loudly
 }

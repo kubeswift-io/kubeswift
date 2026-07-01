@@ -39,7 +39,22 @@ func importScript(sourceURL, sourceFormat, osType string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
-	grubPatch := `
+	grubPatch := grubPatchBlock(osType)
+	if sourceFormat == "qcow2" {
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, grubPatch)
+	}
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, sourceURL, grubPatch)
+}
+
+// grubPatchBlock is the shell that loop-mounts a Linux disk image and injects
+// console=ttyS0 into GRUB for the Cloud Hypervisor serial console (it reads the
+// disk from $OUTPUT). Shared by the http and oci import scripts. Empty for
+// Windows (no GRUB — it boots bootmgfw and manages serial via EMS/SAC).
+func grubPatchBlock(osType string) string {
+	if osType == string(imagev1alpha1.OSTypeWindows) {
+		return ""
+	}
+	return `
 patch_grub() {
   local mnt="$1"
   for grub in $(find "$mnt" \( -name "grub.cfg" -o -name "grub.conf" \) 2>/dev/null); do
@@ -89,15 +104,21 @@ for offset in $GPT_OFFSETS $FALLBACK_OFFSETS; do
 done
 rmdir /mnt/disk 2>/dev/null || true
 `
-	// Windows: no GRUB to patch, and the loop-mount the patch needs is
-	// pointless on an NTFS/Windows layout. Skip the whole block.
-	if osType == string(imagev1alpha1.OSTypeWindows) {
-		grubPatch = ""
-	}
+}
+
+// importScriptOCI is the main-container script for a source.oci import. The
+// puller init container has already materialized the disk at $OUTPUT
+// (/data/image.raw); this skips the download and runs the same tail as the http
+// path: convert-if-qcow2 (in place), size measurement, and the Linux GRUB/serial
+// patch. Golden images are expected raw (raw-at-rest; §2.1) so the qcow2 branch
+// is the rare escape hatch.
+func importScriptOCI(sourceFormat, osType string) string {
+	output := importVolumeMountPath + "/" + importOutputFile
+	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq qemu-utils util-linux >/dev/null\nqemu-img convert -f qcow2 -O raw \"$OUTPUT\" \"$OUTPUT.tmp\"\nmv \"$OUTPUT.tmp\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, sourceURL, grubPatch)
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq util-linux >/dev/null%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
 }
 
 // ImportResult holds the outcome of an import attempt.
@@ -116,6 +137,8 @@ func (r *SwiftImageReconciler) StartImport(ctx context.Context, img *imagev1alph
 		return r.importHTTP(ctx, img)
 	case src.PVCClone != nil:
 		return r.importPVCClone(ctx, img)
+	case src.OCI != nil:
+		return r.importOCI(ctx, img)
 	case src.Upload != nil:
 		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhasePending, Error: ReasonUploadNotImpl}, nil
 	default:
@@ -203,6 +226,132 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 		return nil, err
 	}
 
+	return &ImportResult{
+		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
+		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
+	}, nil
+}
+
+// importOCI creates the import PVC and a Job whose puller init container
+// (snapshot-oras --mode=download-image) reassembles the golden raw disk into the
+// PVC, then the main container runs the shared resize/patch tail. Same PVC + Job
+// name as importHTTP, so CheckImportStatus/Validate/Prepare are unchanged.
+func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
+	if r.SnapshotORASImage == "" {
+		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: "snapshot-oras image not configured for oci source"}, nil
+	}
+	pvcName := importPVCNamePrefix + img.Name
+	jobName := importJobNamePrefix + img.Name
+
+	storageReq := resource.MustParse("10Gi")
+	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
+		storageReq = *img.Spec.RootDisk.Size
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: img.Namespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: storageReq},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(img, pvc, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, pvc); err != nil && !errors.IsAlreadyExists(err) {
+		return nil, err
+	}
+
+	oci := img.Spec.Source.OCI
+	output := importVolumeMountPath + "/" + importOutputFile
+	pullArgs := []string{
+		"--mode=download-image",
+		"--repository=" + oci.Repository,
+		"--file=" + output,
+	}
+	if oci.Digest != "" {
+		pullArgs = append(pullArgs, "--digest="+oci.Digest)
+	} else {
+		pullArgs = append(pullArgs, "--tag="+oci.Tag)
+	}
+	if oci.Insecure {
+		pullArgs = append(pullArgs, "--insecure")
+	}
+
+	dataMount := corev1.VolumeMount{Name: "data", MountPath: importVolumeMountPath}
+	volumes := []corev1.Volume{{
+		Name: "data",
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName},
+		},
+	}}
+	pullMounts := []corev1.VolumeMount{dataMount}
+	var pullEnv []corev1.EnvVar
+	if oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+		pullEnv = append(pullEnv, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/oras-auth"})
+		pullMounts = append(pullMounts, corev1.VolumeMount{Name: "oras-auth", MountPath: "/oras-auth", ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{
+			Name: "oras-auth",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: oci.CredentialsSecretRef.Name,
+					// A kubernetes.io/dockerconfigjson Secret stores the auth under
+					// .dockerconfigjson; oras-go expects a Docker config.json.
+					Items: []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
+				},
+			},
+		})
+	}
+
+	script := importScriptOCI(string(img.Spec.Format), string(img.Spec.OSType))
+	// Privileged only for the Linux GRUB-patch loop-mount (Windows skips it).
+	privileged := img.Spec.OSType != imagev1alpha1.OSTypeWindows
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{
+						// Root: the init container writes into the (root-owned) PVC
+						// mount; the main container runs apt-get (+ Linux loop-mount).
+						RunAsUser: ptr.To(int64(0)),
+					},
+					InitContainers: []corev1.Container{{
+						Name:         "pull",
+						Image:        r.SnapshotORASImage,
+						Args:         pullArgs,
+						Env:          pullEnv,
+						VolumeMounts: pullMounts,
+						// Minimal: writes only to the mounted PVC; no disk temp
+						// (oras streams chunks into the sparse file).
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptr.To(false),
+							ReadOnlyRootFilesystem:   ptr.To(true),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+						},
+					}},
+					Containers: []corev1.Container{{
+						Name:    "import",
+						Image:   "ubuntu:22.04",
+						Command: []string{"sh", "-c", script},
+						SecurityContext: &corev1.SecurityContext{
+							Privileged: ptr.To(privileged),
+						},
+						VolumeMounts: []corev1.VolumeMount{dataMount},
+					}},
+					Volumes: volumes,
+				},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(img, job, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Create(ctx, job); err != nil && !errors.IsAlreadyExists(err) {
+		return nil, err
+	}
 	return &ImportResult{
 		Phase:  imagev1alpha1.SwiftImagePhaseImporting,
 		PVCRef: &imagev1alpha1.PVCObjectReference{Name: pvcName, Namespace: img.Namespace},
