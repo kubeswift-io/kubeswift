@@ -202,6 +202,7 @@ func main() {
 		Client:                mgr.GetClient(),
 		Scheme:                mgr.GetScheme(),
 		SnapshotS3Image:       swiftsnapshot.SnapshotS3Image(),
+		SnapshotORASImage:     swiftsnapshot.SnapshotORASImage(),
 		VolumeSnapshotEnabled: volumeSnapshotEnabled,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")

@@ -264,10 +264,10 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 		Handle: captureDestDir(snap),
 	}
 
-	// s3 backend: capture is done locally; now upload to S3. Create the
-	// node-pinned upload Job and advance to Uploading (handleUploading watches
-	// it to completion, then stamps status.S3 + Ready). The local backend is
-	// done — go straight to Ready.
+	// s3 / oci backends: capture is done locally; now move it to the store.
+	// Create the node-pinned upload/push Job and advance to Uploading (the
+	// matching handler watches it to completion, then stamps status + Ready).
+	// The local backend is done — go straight to Ready.
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
 		if err := r.ensureUploadJob(ctx, snap, status); err != nil {
 			return false, "", err
@@ -275,6 +275,15 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseUploading)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonCapturing,
 			"capture complete on node "+status.NodeName+"; uploading to S3")
+		return true, "", nil
+	}
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
+		if err := r.ensureOCIPushJob(ctx, snap, status); err != nil {
+			return false, "", err
+		}
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseUploading)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonCapturing,
+			"capture complete on node "+status.NodeName+"; pushing to "+ociReference(snap))
 		return true, "", nil
 	}
 

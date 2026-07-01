@@ -121,6 +121,9 @@ func captureDestDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
 		return s3LocalDir(snap)
 	}
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
+		return ociLocalDir(snap)
+	}
 	if snap.Spec.Backend.Local != nil {
 		return snap.Spec.Backend.Local.HostPath
 	}

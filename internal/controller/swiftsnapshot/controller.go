@@ -38,6 +38,9 @@ type SwiftSnapshotReconciler struct {
 	// SnapshotS3Image is the snapshot-s3 uploader image used by the s3
 	// (Tier C) backend's upload Job. Wired from KUBESWIFT_SNAPSHOT_S3_IMAGE.
 	SnapshotS3Image string
+	// SnapshotORASImage is the snapshot-oras uploader image used by the oci
+	// backend's push Job. Wired from KUBESWIFT_SNAPSHOT_ORAS_IMAGE.
+	SnapshotORASImage string
 	// VolumeSnapshotEnabled gates the Owns(VolumeSnapshot) watch. When the CSI
 	// external-snapshotter CRDs (snapshot.storage.k8s.io/v1) are absent, that watch
 	// cannot sync its cache and the manager fatally exits. Set from a one-time
@@ -125,9 +128,13 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 
 	case snapshotv1alpha1.SwiftSnapshotPhaseUploading:
-		// s3 backend only: the capture is on the node-local hostPath; watch the
-		// upload Job push it to S3, then stamp status.S3 and go Ready.
-		ready, errMsg, err := r.handleUploading(ctx, &snap, status)
+		// s3 / oci backends: the capture is on the node-local hostPath; watch the
+		// upload/push Job move it to the store, then stamp status and go Ready.
+		handleUpload := r.handleUploading
+		if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
+			handleUpload = r.handleUploadingOCI
+		}
+		ready, errMsg, err := handleUpload(ctx, &snap, status)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -170,7 +177,7 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
 		// Falls through to the existing csi-volume-snapshot path.
-	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3:
+	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI:
 		return r.handlePendingLocal(ctx, snap, status)
 	default:
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
@@ -257,7 +264,8 @@ func (r *SwiftSnapshotReconciler) handleCapturing(
 	// Backend dispatch — local and s3 both capture via the launcher pod's
 	// status annotations (s3 just uploads afterward); CSI drives VolumeSnapshot.
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
-		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
 		return r.handleCapturingLocal(ctx, snap, status)
 	}
 	pvc, err := r.guestRootPVC(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
