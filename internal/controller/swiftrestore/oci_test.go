@@ -122,3 +122,30 @@ func TestHandlePendingOCI_MissingStatus(t *testing.T) {
 		t.Errorf("phase = %q, want Failed", status.Phase)
 	}
 }
+
+// TestIsTierBRestore_IncludesOCI guards the phase-dispatch classifier: oci is a
+// memory-snapshot backend and MUST route to the Tier B (CH --restore) restore
+// path, not the CSI disk path. A missing oci here sends the restore to
+// handleRestoring -> findRootDisk -> "no root disk" on a memory snapshot's empty
+// status.disks (the PR 2c cluster-validation bug this asserts against).
+func TestIsTierBRestore_IncludesOCI(t *testing.T) {
+	cases := []struct {
+		backend snapshotv1alpha1.SnapshotBackendType
+		want    bool
+	}{
+		{snapshotv1alpha1.SnapshotBackendLocal, true},
+		{snapshotv1alpha1.SnapshotBackendS3, true},
+		{snapshotv1alpha1.SnapshotBackendOCI, true},
+		{snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot, false},
+	}
+	for _, c := range cases {
+		snap := &snapshotv1alpha1.SwiftSnapshot{
+			Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+				Backend: snapshotv1alpha1.SwiftSnapshotBackend{Type: c.backend},
+			},
+		}
+		if got := IsTierBRestore(snap); got != c.want {
+			t.Errorf("IsTierBRestore(%s) = %v, want %v", c.backend, got, c.want)
+		}
+	}
+}

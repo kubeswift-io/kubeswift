@@ -175,13 +175,16 @@ func parseVersion(s string) (int, int, int, bool) {
 
 // IsTierBRestore returns true when the snapshot's backend drives the
 // node-local-cache restore path (CH --restore from a hostPath) rather than
-// CSI. That covers both local (Tier B) and s3 (Tier C): once the s3 download
-// Job has populated the node-local cache, the Restoring/Resuming phases are
-// identical to local. The Pending phase still forks (local vs s3-download)
-// before reaching that shared path.
+// CSI. That covers local (Tier B), s3 (Tier C), and oci: once the download Job
+// has populated the node-local cache, the Restoring/Resuming phases are
+// identical to local. The Pending phase still forks (local vs s3/oci-download)
+// before reaching that shared path. It must include EVERY memory-snapshot
+// backend — a missing one routes the restore to the CSI disk path, which fails
+// "no root disk" on the (empty) status.disks of a memory snapshot.
 func IsTierBRestore(snap *snapshotv1alpha1.SwiftSnapshot) bool {
 	return snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal ||
-		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 ||
+		snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI
 }
 
 // IsInPlaceRestore returns true when this is the fast-path: target name
