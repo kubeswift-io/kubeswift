@@ -5,16 +5,19 @@ import (
 )
 
 // SnapshotBackendType selects how the snapshot is captured and stored.
-// Phase 1 ships csi-volume-snapshot only; local and s3 are reserved for
-// later phases. The spec is structured so adding the other backends does
-// not require a breaking change.
-// +kubebuilder:validation:Enum=csi-volume-snapshot;local;s3
+// csi-volume-snapshot (Tier A, disk-only), local (Tier B, node-hostPath
+// memory+state), and s3 (Tier C, object-storage export) are shipped; oci
+// packages the snapshot as an OCI artifact and pushes it to a registry via
+// ORAS (see docs/design/oras-vm-disk-artifacts.md). The spec is structured so
+// adding a backend does not require a breaking change.
+// +kubebuilder:validation:Enum=csi-volume-snapshot;local;s3;oci
 type SnapshotBackendType string
 
 const (
 	SnapshotBackendCSIVolumeSnapshot SnapshotBackendType = "csi-volume-snapshot"
 	SnapshotBackendLocal             SnapshotBackendType = "local"
 	SnapshotBackendS3                SnapshotBackendType = "s3"
+	SnapshotBackendOCI               SnapshotBackendType = "oci"
 )
 
 // SwiftSnapshotPhase is the lifecycle phase of a SwiftSnapshot. The set of
@@ -106,6 +109,37 @@ type S3Backend struct {
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
 }
 
+// OCIBackend configures the oci (OCI registry / ORAS) backend — the snapshot
+// artifacts are packaged as an OCI artifact and pushed to a registry via ORAS.
+// The registry is a declared external dependency (Harbor / Zot / distribution /
+// a cloud registry), never embedded — KubeSwift is a registry client. Compared
+// to the s3 backend this adds content-addressed layer dedup (strongest for a
+// shared golden base), cosign/SBOM provenance as OCI referrers, and a single
+// artifact store for the edge. See docs/design/oras-vm-disk-artifacts.md.
+type OCIBackend struct {
+	// Repository is the target OCI repository WITHOUT a tag, e.g.
+	// "ghcr.io/kubeswift-io/vm-snapshots" or "zot.registry.svc:5000/snapshots".
+	// Required. The snapshot artifact is pushed to Repository:Tag.
+	Repository string `json:"repository,omitempty"`
+	// Tag is the artifact tag. Empty defaults to "<namespace>-<snapshot>", a
+	// stable per-snapshot tag; restore reads the artifact from Repository:Tag
+	// but pins it by digest (status.oci.manifestDigest).
+	// +optional
+	Tag string `json:"tag,omitempty"`
+	// Insecure allows a plaintext (http) registry instead of TLS. UNSAFE —
+	// credentials and snapshot bytes traverse the network unencrypted. Use only
+	// for an in-cluster Zot / test registry on a trusted network. Production
+	// registries (ghcr.io, TLS-fronted Harbor / Zot) must leave this false.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+	// CredentialsSecretRef references a Secret (same namespace) holding registry
+	// credentials — a kubernetes.io/dockerconfigjson Secret (key
+	// .dockerconfigjson), the same pull-secret shape SwiftKernel uses. Empty
+	// means anonymous access (an unauthenticated / in-cluster registry).
+	// +optional
+	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
+}
+
 // SecretObjectReference references a Secret in the same namespace.
 type SecretObjectReference struct {
 	Name string `json:"name"`
@@ -121,6 +155,9 @@ type SwiftSnapshotBackend struct {
 	// S3 is reserved for Phase 3.
 	// +optional
 	S3 *S3Backend `json:"s3,omitempty"`
+	// OCI configures the oci (OCI registry / ORAS) backend.
+	// +optional
+	OCI *OCIBackend `json:"oci,omitempty"`
 }
 
 // SwiftSnapshotSpec defines the desired state of a SwiftSnapshot.
@@ -232,6 +269,11 @@ type SwiftSnapshotStatus struct {
 	// (Phase 3 / Tier C). Set when the Uploading phase completes.
 	// +optional
 	S3 *S3SnapshotStatus `json:"s3,omitempty"`
+
+	// OCI records the registry location of an oci-backend export. Set when the
+	// Uploading (push) phase completes.
+	// +optional
+	OCI *OCISnapshotStatus `json:"oci,omitempty"`
 }
 
 // S3SnapshotStatus records where an s3-backend snapshot was exported and how to
@@ -250,6 +292,25 @@ type S3SnapshotStatus struct {
 	UploadedBytes int64 `json:"uploadedBytes,omitempty"`
 	// UploadedAt is when the Uploading phase completed.
 	UploadedAt *metav1.Time `json:"uploadedAt,omitempty"`
+}
+
+// OCISnapshotStatus records where an oci-backend snapshot was pushed and how to
+// verify it. Reference pins the human-readable tag; ManifestDigest pins the
+// exact content-addressed artifact the restore must pull (Repository@digest),
+// so a retag cannot silently swap the bytes underneath a restore.
+type OCISnapshotStatus struct {
+	// Reference is the pushed artifact reference (repository:tag).
+	Reference string `json:"reference,omitempty"`
+	// ManifestDigest is the sha256 digest of the pushed OCI manifest. Restore
+	// pulls Repository@ManifestDigest so the exact artifact is pinned.
+	ManifestDigest string `json:"manifestDigest,omitempty"`
+	// PushedBytes is the snapshot's total artifact footprint in the registry
+	// (from the push Job's byte report) — the full footprint, not the per-Job
+	// wire traffic (a resumed push that deduped already-present layers still
+	// reports the full footprint). Wire traffic is a metric.
+	PushedBytes int64 `json:"pushedBytes,omitempty"`
+	// PushedAt is when the Uploading (push) phase completed.
+	PushedAt *metav1.Time `json:"pushedAt,omitempty"`
 }
 
 // SwiftSnapshot is a point-in-time capture of a SwiftGuest's disk (and

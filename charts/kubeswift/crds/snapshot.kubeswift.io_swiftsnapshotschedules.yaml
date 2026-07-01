@@ -147,6 +147,42 @@ spec:
                                   where the snapshot is written.
                                 type: string
                             type: object
+                          oci:
+                            description: OCI configures the oci (OCI registry / ORAS)
+                              backend.
+                            properties:
+                              credentialsSecretRef:
+                                description: |-
+                                  CredentialsSecretRef references a Secret (same namespace) holding registry
+                                  credentials — a kubernetes.io/dockerconfigjson Secret (key
+                                  .dockerconfigjson), the same pull-secret shape SwiftKernel uses. Empty
+                                  means anonymous access (an unauthenticated / in-cluster registry).
+                                properties:
+                                  name:
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              insecure:
+                                description: |-
+                                  Insecure allows a plaintext (http) registry instead of TLS. UNSAFE —
+                                  credentials and snapshot bytes traverse the network unencrypted. Use only
+                                  for an in-cluster Zot / test registry on a trusted network. Production
+                                  registries (ghcr.io, TLS-fronted Harbor / Zot) must leave this false.
+                                type: boolean
+                              repository:
+                                description: |-
+                                  Repository is the target OCI repository WITHOUT a tag, e.g.
+                                  "ghcr.io/kubeswift-io/vm-snapshots" or "zot.registry.svc:5000/snapshots".
+                                  Required. The snapshot artifact is pushed to Repository:Tag.
+                                type: string
+                              tag:
+                                description: |-
+                                  Tag is the artifact tag. Empty defaults to "<namespace>-<snapshot>", a
+                                  stable per-snapshot tag; restore reads the artifact from Repository:Tag
+                                  but pins it by digest (status.oci.manifestDigest).
+                                type: string
+                            type: object
                           s3:
                             description: S3 is reserved for Phase 3.
                             properties:
@@ -194,13 +230,16 @@ spec:
                           type:
                             description: |-
                               SnapshotBackendType selects how the snapshot is captured and stored.
-                              Phase 1 ships csi-volume-snapshot only; local and s3 are reserved for
-                              later phases. The spec is structured so adding the other backends does
-                              not require a breaking change.
+                              csi-volume-snapshot (Tier A, disk-only), local (Tier B, node-hostPath
+                              memory+state), and s3 (Tier C, object-storage export) are shipped; oci
+                              packages the snapshot as an OCI artifact and pushes it to a registry via
+                              ORAS (see docs/design/oras-vm-disk-artifacts.md). The spec is structured so
+                              adding a backend does not require a breaking change.
                             enum:
                             - csi-volume-snapshot
                             - local
                             - s3
+                            - oci
                             type: string
                         required:
                         - type
