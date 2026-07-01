@@ -40,6 +40,67 @@ func TestValidateCloneStrategy_Default_TreatedAsCopy(t *testing.T) {
 	}
 }
 
+func ociImage(src imagev1alpha1.OCIImageSource) *imagev1alpha1.SwiftImage {
+	return &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "default"},
+		Spec: imagev1alpha1.SwiftImageSpec{
+			Source: imagev1alpha1.ImageSource{OCI: &src},
+			Format: imagev1alpha1.DiskFormatRaw,
+		},
+	}
+}
+
+func TestValidateSource_OCI_OK(t *testing.T) {
+	v := &Validator{}
+	for _, src := range []imagev1alpha1.OCIImageSource{
+		{Repository: "zot.svc:5000/golden-ubuntu", Digest: "sha256:abc"},
+		{Repository: "ghcr.io/org/golden", Tag: "noble"},
+	} {
+		if _, err := v.ValidateCreate(context.Background(), ociImage(src)); err != nil {
+			t.Errorf("oci source %+v should be valid: %v", src, err)
+		}
+	}
+}
+
+func TestValidateSource_OCI_NoRepository_Rejected(t *testing.T) {
+	v := &Validator{}
+	_, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{Tag: "noble"}))
+	if err == nil || !strings.Contains(err.Error(), "oci.repository is required") {
+		t.Errorf("empty oci.repository must be rejected; got %v", err)
+	}
+}
+
+func TestValidateSource_OCI_TagAndDigest_Rejected(t *testing.T) {
+	v := &Validator{}
+	_, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{
+		Repository: "ghcr.io/org/golden", Tag: "noble", Digest: "sha256:abc",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "one of tag or digest") {
+		t.Errorf("tag+digest must be rejected; got %v", err)
+	}
+}
+
+func TestValidateSource_OCI_NamelessCreds_Rejected(t *testing.T) {
+	v := &Validator{}
+	_, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{
+		Repository: "ghcr.io/org/golden", Tag: "noble",
+		CredentialsSecretRef: &imagev1alpha1.SecretObjectReference{},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "credentialsSecretRef.name is required") {
+		t.Errorf("nameless credentialsSecretRef must be rejected; got %v", err)
+	}
+}
+
+func TestValidateSource_OCI_PlusHTTP_Rejected(t *testing.T) {
+	img := ociImage(imagev1alpha1.OCIImageSource{Repository: "ghcr.io/org/golden", Tag: "noble"})
+	img.Spec.Source.HTTP = &imagev1alpha1.HTTPSource{URL: "https://example.com/i.raw"}
+	v := &Validator{}
+	_, err := v.ValidateCreate(context.Background(), img)
+	if err == nil || !strings.Contains(err.Error(), "only one of") {
+		t.Errorf("two sources (oci+http) must be rejected; got %v", err)
+	}
+}
+
 func TestValidateCloneStrategy_CopyWithSnapshotClass_Rejected(t *testing.T) {
 	img := makeImage("bad", imagev1alpha1.CloneStrategyCopy, "csi-class")
 	v := &Validator{}

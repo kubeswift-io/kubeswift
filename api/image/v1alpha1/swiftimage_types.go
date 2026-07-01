@@ -79,11 +79,49 @@ type UploadSource struct {
 	// Placeholder; upload UX to be defined later.
 }
 
+// SecretObjectReference names a Secret in the SwiftImage's namespace. Mirrors
+// the snapshot API's type so the OCI source reads symmetrically with the OCI
+// snapshot backend.
+type SecretObjectReference struct {
+	// Name of the Secret.
+	Name string `json:"name"`
+}
+
+// OCIImageSource pulls a golden VM disk artifact from an OCI registry (P3). The
+// artifact is a single raw disk layer (artifactType
+// application/vnd.kubeswift.vmimage.v1, layer title image.raw); the import
+// materializes it into the import PVC and runs the shared resize + sgdisk +
+// GRUB/serial patch tail — identical to the http path minus the download step.
+// See docs/design/oras-golden-image.md.
+type OCIImageSource struct {
+	// Repository is the OCI repository WITHOUT a tag
+	// (e.g. ghcr.io/org/golden-ubuntu-noble).
+	Repository string `json:"repository"`
+	// Tag selects the artifact by tag. Mutually exclusive with Digest.
+	// +optional
+	Tag string `json:"tag,omitempty"`
+	// Digest pins the artifact by manifest digest (sha256:...). Mutually
+	// exclusive with Tag; recommended for reproducibility (a tag is mutable).
+	// +optional
+	Digest string `json:"digest,omitempty"`
+	// Insecure allows a plaintext (http) registry. UNSAFE — in-cluster / test
+	// registry only.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+	// CredentialsSecretRef references a kubernetes.io/dockerconfigjson Secret
+	// (same namespace) for registry auth. Empty = anonymous.
+	// +optional
+	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
+}
+
 // ImageSource defines the source of an image.
 type ImageSource struct {
 	HTTP     *HTTPSource     `json:"http,omitempty"`
 	Upload   *UploadSource   `json:"upload,omitempty"`
 	PVCClone *PVCCloneSource `json:"pvcClone,omitempty"`
+	// OCI pulls a golden raw disk artifact from an OCI registry (P3).
+	// +optional
+	OCI *OCIImageSource `json:"oci,omitempty"`
 }
 
 // PVCObjectReference references a PVC.

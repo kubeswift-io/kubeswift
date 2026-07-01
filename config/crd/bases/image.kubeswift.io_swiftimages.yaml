@@ -121,6 +121,43 @@ spec:
                     required:
                     - url
                     type: object
+                  oci:
+                    description: OCI pulls a golden raw disk artifact from an OCI
+                      registry (P3).
+                    properties:
+                      credentialsSecretRef:
+                        description: |-
+                          CredentialsSecretRef references a kubernetes.io/dockerconfigjson Secret
+                          (same namespace) for registry auth. Empty = anonymous.
+                        properties:
+                          name:
+                            description: Name of the Secret.
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      digest:
+                        description: |-
+                          Digest pins the artifact by manifest digest (sha256:...). Mutually
+                          exclusive with Tag; recommended for reproducibility (a tag is mutable).
+                        type: string
+                      insecure:
+                        description: |-
+                          Insecure allows a plaintext (http) registry. UNSAFE — in-cluster / test
+                          registry only.
+                        type: boolean
+                      repository:
+                        description: |-
+                          Repository is the OCI repository WITHOUT a tag
+                          (e.g. ghcr.io/org/golden-ubuntu-noble).
+                        type: string
+                      tag:
+                        description: Tag selects the artifact by tag. Mutually exclusive
+                          with Digest.
+                        type: string
+                    required:
+                    - repository
+                    type: object
                   pvcClone:
                     description: PVCCloneSource specifies a source PVC to clone from.
                     properties:
