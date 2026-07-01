@@ -225,6 +225,17 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendOCI && snap.Spec.Backend.OCI != nil {
 		return fmt.Errorf("spec.backend.oci is only valid when spec.backend.type=oci")
 	}
+	// includeDisk (P4 full-state / cold migration) captures the disk to the
+	// registry alongside memory so the pair can resume in another cluster — only
+	// meaningful with the oci backend + a memory snapshot.
+	if snap.Spec.IncludeDisk {
+		if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendOCI {
+			return fmt.Errorf("spec.includeDisk requires spec.backend.type=oci")
+		}
+		if !snap.Spec.IncludeMemory {
+			return fmt.Errorf("spec.includeDisk requires spec.includeMemory=true")
+		}
+	}
 	return nil
 }
 

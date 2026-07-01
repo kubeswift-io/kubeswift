@@ -189,6 +189,17 @@ type SwiftSnapshotSpec struct {
 	// field remains for forward compatibility and manifest metadata.
 	// +kubebuilder:default=true
 	IncludeMemory bool `json:"includeMemory,omitempty"`
+	// IncludeDisk requests the guest's disk be captured to the registry alongside
+	// memory, producing a FULL-STATE (cold / suspended-state migration) snapshot
+	// the import can resume in another cluster. Only valid with backend.type: oci
+	// + includeMemory: true (the webhook enforces this). When set, the capture is
+	// coherent via capture-then-terminate: the guest is paused, memory
+	// snapshotted, NOT resumed, then terminated so the disk is frozen at the
+	// snapshot instant before it is chunked to the registry — so this IMPLIES the
+	// guest is migrated away, not a live backup. See
+	// docs/design/oras-cold-migration.md (P4).
+	// +optional
+	IncludeDisk bool `json:"includeDisk,omitempty"`
 	// ResumeAfterSnapshot controls whether the source SwiftGuest is resumed
 	// after the snapshot completes (default true). false leaves the VM
 	// stopped/paused for operator inspection. Ignored when the source guest
@@ -329,6 +340,24 @@ type OCISnapshotStatus struct {
 	// (spec.backend.oci.signingKeySecretRef was set and signing succeeded).
 	// +optional
 	Signed bool `json:"signed,omitempty"`
+	// Disk is the chunked disk artifact pushed alongside memory for a full-state
+	// (cold-migration) snapshot — populated only when spec.includeDisk is true.
+	// The import materializes the disk from this ref, then CH --restore's the
+	// memory (the fields above) against it. See docs/design/oras-cold-migration.md.
+	// +optional
+	Disk *OCIDiskArtifact `json:"disk,omitempty"`
+}
+
+// OCIDiskArtifact records the chunked disk artifact of a full-state oci snapshot
+// (P4). It is the P3 golden-image chunk format applied to the guest's frozen root
+// disk; the import pulls Repository@ManifestDigest and reassembles it.
+type OCIDiskArtifact struct {
+	// Reference is the pushed disk artifact reference (repository:tag).
+	Reference string `json:"reference,omitempty"`
+	// ManifestDigest pins the disk artifact (Repository@digest) for the import.
+	ManifestDigest string `json:"manifestDigest,omitempty"`
+	// PushedBytes is the disk artifact's footprint in the registry.
+	PushedBytes int64 `json:"pushedBytes,omitempty"`
 }
 
 // SwiftSnapshot is a point-in-time capture of a SwiftGuest's disk (and
