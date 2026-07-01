@@ -120,6 +120,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push snapshot-oras
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/snapshot-oras/Containerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/snapshot-oras:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build and push swiftletd
         uses: docker/build-push-action@v6
         with:

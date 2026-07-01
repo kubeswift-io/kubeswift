@@ -131,6 +131,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push snapshot-oras
+        id: build-snapshot-oras
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./images/snapshot-oras/Containerfile
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/snapshot-oras:${{ steps.version.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ steps.version.outputs.git_commit }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Build and push swiftletd
         id: build-swiftletd
         uses: docker/build-push-action@v6
@@ -207,6 +225,7 @@ jobs:
           cosign sign "${{ env.IMAGE_PREFIX }}/controller-manager@${{ steps.build-controller-manager.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/gpu-discovery@${{ steps.build-gpu-discovery.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/snapshot-s3@${{ steps.build-snapshot-s3.outputs.digest }}"
+          cosign sign "${{ env.IMAGE_PREFIX }}/snapshot-oras@${{ steps.build-snapshot-oras.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/kubeswift-dra-driver@${{ steps.build-dra-driver.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
           cosign sign "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
