@@ -285,6 +285,17 @@ spec:
                         required:
                         - name
                         type: object
+                      includeDisk:
+                        description: |-
+                          IncludeDisk requests the guest's disk be captured to the registry alongside
+                          memory, producing a FULL-STATE (cold / suspended-state migration) snapshot
+                          the import can resume in another cluster. Only valid with backend.type: oci
+                          coherent via capture-then-terminate: the guest is paused, memory
+                          snapshotted, NOT resumed, then terminated so the disk is frozen at the
+                          snapshot instant before it is chunked to the registry — so this IMPLIES the
+                          guest is migrated away, not a live backup. See
+                          docs/design/oras-cold-migration.md (P4).
+                        type: boolean
                       includeMemory:
                         default: true
                         description: |-
