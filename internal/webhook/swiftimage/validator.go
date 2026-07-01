@@ -74,11 +74,23 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 	if src.Upload != nil {
 		n++
 	}
+	if src.OCI != nil {
+		n++
+		if src.OCI.Repository == "" {
+			return fmt.Errorf("spec.source.oci.repository is required when oci source is specified")
+		}
+		if src.OCI.Tag != "" && src.OCI.Digest != "" {
+			return fmt.Errorf("spec.source.oci: only one of tag or digest may be specified")
+		}
+		if src.OCI.CredentialsSecretRef != nil && src.OCI.CredentialsSecretRef.Name == "" {
+			return fmt.Errorf("spec.source.oci.credentialsSecretRef.name is required when credentialsSecretRef is set")
+		}
+	}
 	if n == 0 {
-		return fmt.Errorf("spec.source: exactly one of http, pvcClone, or upload must be specified")
+		return fmt.Errorf("spec.source: exactly one of http, pvcClone, upload, or oci must be specified")
 	}
 	if n > 1 {
-		return fmt.Errorf("spec.source: only one of http, pvcClone, or upload may be specified")
+		return fmt.Errorf("spec.source: only one of http, pvcClone, upload, or oci may be specified")
 	}
 	if img.Spec.Format == "" {
 		return fmt.Errorf("spec.format is required (raw or qcow2)")
