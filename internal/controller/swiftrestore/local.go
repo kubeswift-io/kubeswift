@@ -681,6 +681,14 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 		},
 		Spec: source.Spec,
 	}
+	// runPolicy is TARGET-owned, not inherited: a restore's whole point is a
+	// RUNNING restored guest, and the natural DR flow restores FROM a stopped
+	// source — inheriting the source's Stopped would leave the target with no
+	// launcher pod and wedge this restore in Restoring ("waiting for ... CH
+	// socket") forever. Mirrors the cloneFromSnapshot rule in
+	// swiftguest/clone.go ("runPolicy is clone-owned"). Surfaced by the F2
+	// investigation (2026-07-02).
+	target.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
 	if !restore.Spec.ResumeAfterRestore {
 		// Caller asked the restored VM be left Paused. With Tier B
 		// the launcher pod is what gets paused (CH stays paused

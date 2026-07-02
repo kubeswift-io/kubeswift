@@ -219,16 +219,29 @@ The runtime (CH `--restore`, launcher, resume) is **untouched**.
      `src.runPolicy=Stopped` + `launcher=NONE` through the entire Uploading→Ready
      window (no resurrection), vs the pre-fix run where the source came back 2/2
      Running mid-capture; both artifacts still pushed.
-  2. **RAM-only tmpfs token missing on the resumed clone — narrow fidelity
-     curiosity, LOW.** The `/dev/shm/cm-ram-token` written before the snapshot is
-     absent on the clone, while `boot_id` (kernel RAM) and all other resume
-     witnesses survive and `/dev/shm`'s dir mtime is unchanged (nothing deleted it
-     post-restore). Hypothesis: the cloneFromSnapshot restore uses
-     `memoryMode: ondemand` (userfaultfd demand-paging) for fast pool scale-up; a
-     tmpfs/anonymous-page fault-in nuance is the likely cause. Does not affect disk
-     content or core guest state (cloud-init done, machine-id, processes intact).
-     Investigate whether cold-migration full-state clones should default to
-     **eager** restore rather than ondemand.
+  2. **RAM-only tmpfs token missing on the resumed clone — RESOLVED
+     (2026-07-02): NOT a restore-fidelity issue; root cause is in-guest
+     systemd-logind `RemoveIPC=yes`.** A controlled experiment (same Tier B
+     snapshot → a `cloneFromSnapshot` clone with `memory_restore_mode=ondemand`
+     AND a SwiftRestore clone with `copy`/eager) showed **both** modes "lose" the
+     `/dev/shm` probes identically while `boot_id`/journal/disk survive — refuting
+     the userfaultfd hypothesis. The decisive follow-up (no snapshot involved): on
+     a live guest, a user-owned `/dev/shm` file written over SSH is **deleted by
+     systemd-logind seconds after the user's last session ends**
+     (`RemoveIPC=yes`, the systemd/Ubuntu default for non-system users; a
+     root-owned file survives; the logind journal shows the session GC). The probe
+     files were therefore removed **on the source before the capture** — every
+     restore mode faithfully reproduced a memory image in which they were already
+     gone. **CH v52 restore fidelity (eager AND ondemand) is exonerated;
+     `ondemand` stays the cloneFromSnapshot default.** Operator note: write
+     resume-witness files as root (or outside `/dev/shm`) when probing.
+     The experiment also surfaced a real incidental bug — the SwiftRestore clone
+     target inherited the SOURCE's `runPolicy` (`ensureCloneTargetGuest`
+     `Spec: source.Spec`), so restoring from a **stopped** source (the natural DR
+     flow) created a Stopped target with no launcher and wedged the restore in
+     `Restoring` forever. Fixed: the target's runPolicy is target-owned
+     (Running, or Stopped only for `resumeAfterRestore: false`), mirroring
+     clone.go's "runPolicy is clone-owned" rule.
 
 ## 5. Non-goals (P4 v1)
 
