@@ -95,6 +95,14 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
 ) (*RootDiskCloneResult, error) {
+	// Full-state cloneFromSnapshot (P4): the root disk is materialized from the
+	// snapshot's oci disk artifact (the source's frozen runtime disk), not cloned
+	// from a base image. Handle it before the image-clone paths below (which
+	// require a prepared image PVC a full-state clone need not have).
+	if handled, res, err := r.maybeRootDiskFromOCI(ctx, guest, rg); handled {
+		return res, err
+	}
+
 	cloneName := RootDiskCloneName(guest.Name)
 	sourcePVC := rg.PreparedImage.PVCName
 	targetSize := rg.RootDisk.Size
