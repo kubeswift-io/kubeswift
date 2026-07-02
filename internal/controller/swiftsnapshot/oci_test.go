@@ -1,9 +1,12 @@
 package swiftsnapshot
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
@@ -198,5 +201,51 @@ func TestOCISigningRequested(t *testing.T) {
 		o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "cosign-key"}
 	})) {
 		t.Error("a named signing-key Secret must request signing")
+	}
+}
+
+// The memory-push finalize (handleUploadingOCI) reconstructs status.OCI. It must
+// preserve BOTH the full-state root disk ref AND the v1.1 data-disk artifacts —
+// they are stamped by the disk-capture step BEFORE the memory push completes.
+// Dropping DataDisks here made a captured data disk invisible to import
+// (cluster-caught: the chunk Job ran + uploaded, but status.oci.dataDisks stayed
+// empty because this finalize clobbered it).
+func TestHandleUploadingOCI_PreservesDiskAndDataDisks(t *testing.T) {
+	snap := ociSnap(nil)
+	r, c := newReconciler(t, snap)
+
+	// A completed push Job (what handleUploadingOCI watches).
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: ociPushJobName(snap), Namespace: snap.Namespace},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}},
+		},
+	}
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+
+	// Disk + data-disk artifacts already stamped by the capture step.
+	status := &snapshotv1alpha1.SwiftSnapshotStatus{
+		OCI: &snapshotv1alpha1.OCISnapshotStatus{
+			Disk: &snapshotv1alpha1.OCIDiskArtifact{Reference: "repo:tag-disk", ManifestDigest: "sha256:root"},
+			DataDisks: []snapshotv1alpha1.OCIDataDiskArtifact{
+				{Name: "scratch", Reference: "repo:tag-disk-scratch", ManifestDigest: "sha256:dd"},
+			},
+		},
+	}
+	ready, msg, err := r.handleUploadingOCI(context.Background(), snap, status)
+	if err != nil || msg != "" || !ready {
+		t.Fatalf("finalize should succeed; ready=%v msg=%q err=%v", ready, msg, err)
+	}
+	if status.OCI == nil || status.OCI.Disk == nil || status.OCI.Disk.ManifestDigest != "sha256:root" {
+		t.Errorf("root disk ref must survive the memory-push finalize; got %+v", status.OCI)
+	}
+	if len(status.OCI.DataDisks) != 1 || status.OCI.DataDisks[0].Name != "scratch" ||
+		status.OCI.DataDisks[0].ManifestDigest != "sha256:dd" {
+		t.Errorf("data-disk artifacts must survive the memory-push finalize; got %+v", status.OCI.DataDisks)
+	}
+	if status.OCI.Reference != ociReference(snap) {
+		t.Errorf("memory ref not stamped: %q", status.OCI.Reference)
 	}
 }

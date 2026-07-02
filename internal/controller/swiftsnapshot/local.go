@@ -144,6 +144,16 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	// minimal capture (the clone then needs the live source — no regression).
 	var rg *resolved.ResolvedGuest
 	if snap.Spec.IncludeDisk {
+		// v1.1: image-backed data disks attach the SwiftImage's SHARED prepared
+		// PVC — chunk-after-terminate would race other guests on it, and its
+		// lifecycle belongs to the image. Reject loudly up-front (Principle #6);
+		// blank + attachAsDisk disks are captured.
+		if hasImageBackedDataDisk(&guest) {
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed,
+				"includeDisk capture: source "+guest.Name+" has an image-backed data disk (dataDiskRef / dataDiskRefs[].imageRef), which attaches the image's shared PVC and cannot be captured full-state; only blank and attachAsDisk data disks are supported")
+			return false, 0, nil
+		}
 		if got, rerr := resolved.NewResolver(r.Client).Resolve(ctx, &guest); rerr == nil {
 			rg = got
 		} else {
@@ -152,6 +162,13 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 		}
 	}
 	status.GuestSpec = capturedGuestSpec(&guest, rg)
+	if snap.Spec.IncludeDisk && rg != nil && status.GuestSpec != nil {
+		dd, derr := r.capturedDataDisks(ctx, &guest, rg)
+		if derr != nil {
+			return false, 0, derr
+		}
+		status.GuestSpec.DataDisks = dd
+	}
 	if guest.Status.Runtime != nil {
 		status.Hypervisor = guest.Status.Runtime.Hypervisor
 	}

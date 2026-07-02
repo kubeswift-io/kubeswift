@@ -22,6 +22,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -103,45 +104,159 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 		return false, "", nil // requeue: wait for the launcher to be gone (PVC released)
 	}
 
-	// 2. Launcher gone → ensure the node-pinned disk-chunk Job.
-	var job batchv1.Job
-	jerr := r.Get(ctx, client.ObjectKey{Name: diskChunkJobName(snap), Namespace: snap.Namespace}, &job)
-	if apierrors.IsNotFound(jerr) {
-		block, berr := r.rootDiskIsBlock(ctx, snap)
-		if berr != nil {
-			return false, "", berr
-		}
-		j := buildDiskChunkJob(snap, r.SnapshotORASImage, status.NodeName, block)
-		if serr := ctrl.SetControllerReference(snap, j, r.Scheme); serr != nil {
-			return false, "", serr
-		}
-		if cerr := r.Create(ctx, j); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
-			return false, "", cerr
-		}
-		return false, "", nil
+	// 2. Launcher gone → ensure the node-pinned chunk Jobs: the root disk plus
+	//    one per captured data disk (v1.1 — blank + attachAsDisk; every PVC is
+	//    frozen at the snapshot instant and released by the termination above).
+	type chunkTarget struct {
+		dataName string // "" = the root disk
+		jobName  string
+		tag      string
+		pvcName  string
+		block    bool
 	}
-	if jerr != nil {
-		return false, "", jerr
+	rootBlock, berr := r.rootDiskIsBlock(ctx, snap)
+	if berr != nil {
+		return false, "", berr
+	}
+	targets := []chunkTarget{{
+		jobName: diskChunkJobName(snap),
+		tag:     ociDiskTag(snap),
+		pvcName: rootDiskPVCName(snap.Spec.GuestRef.Name),
+		block:   rootBlock,
+	}}
+	if status.GuestSpec != nil {
+		for _, dd := range status.GuestSpec.DataDisks {
+			targets = append(targets, chunkTarget{
+				dataName: dd.Name,
+				jobName:  diskChunkJobName(snap) + "-" + dd.Name,
+				tag:      ociDiskTag(snap) + "-" + dd.Name,
+				pvcName:  dd.PVCName,
+				block:    dd.Block,
+			})
+		}
 	}
 
-	// 3. Job status.
-	for _, c := range job.Status.Conditions {
-		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
-			if status.OCI == nil {
-				status.OCI = &snapshotv1alpha1.OCISnapshotStatus{}
+	allComplete := true
+	for _, t := range targets {
+		var job batchv1.Job
+		jerr := r.Get(ctx, client.ObjectKey{Name: t.jobName, Namespace: snap.Namespace}, &job)
+		if apierrors.IsNotFound(jerr) {
+			j := buildChunkJob(snap, r.SnapshotORASImage, status.NodeName, t.jobName, t.tag, t.pvcName, t.block)
+			if serr := ctrl.SetControllerReference(snap, j, r.Scheme); serr != nil {
+				return false, "", serr
 			}
-			status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{Reference: ociDiskReference(snap)}
-			if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, diskChunkJobName(snap)); rerr == nil && ok {
-				status.OCI.Disk.ManifestDigest = rep.ManifestDigest
-				status.OCI.Disk.PushedBytes = rep.TotalBytes
+			if cerr := r.Create(ctx, j); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+				return false, "", cerr
 			}
-			return true, "", nil
+			allComplete = false
+			continue
 		}
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return false, "OCI disk chunk Job failed: " + c.Message, nil
+		if jerr != nil {
+			return false, "", jerr
+		}
+		complete := false
+		for _, c := range job.Status.Conditions {
+			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+				complete = true
+			}
+			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+				disk := "root disk"
+				if t.dataName != "" {
+					disk = "data disk " + t.dataName
+				}
+				return false, "OCI chunk Job for the " + disk + " failed: " + c.Message, nil
+			}
+		}
+		if !complete {
+			allComplete = false
 		}
 	}
-	return false, "", nil // still chunking
+	if !allComplete {
+		return false, "", nil // still chunking
+	}
+
+	// 3. All chunk Jobs Complete → stamp the artifacts atomically (the
+	//    controller's Uploading guard keys on status.oci.disk, so nothing is
+	//    stamped until every disk is in the registry).
+	if status.OCI == nil {
+		status.OCI = &snapshotv1alpha1.OCISnapshotStatus{}
+	}
+	status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{Reference: ociDiskReference(snap)}
+	if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, diskChunkJobName(snap)); rerr == nil && ok {
+		status.OCI.Disk.ManifestDigest = rep.ManifestDigest
+		status.OCI.Disk.PushedBytes = rep.TotalBytes
+	}
+	status.OCI.DataDisks = nil
+	for _, t := range targets {
+		if t.dataName == "" {
+			continue
+		}
+		art := snapshotv1alpha1.OCIDataDiskArtifact{
+			Name:      t.dataName,
+			Reference: snap.Spec.Backend.OCI.Repository + ":" + t.tag,
+		}
+		if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, t.jobName); rerr == nil && ok {
+			art.ManifestDigest = rep.ManifestDigest
+			art.PushedBytes = rep.TotalBytes
+		}
+		status.OCI.DataDisks = append(status.OCI.DataDisks, art)
+	}
+	return true, "", nil
+}
+
+// hasImageBackedDataDisk reports whether the guest has an image-backed VM data
+// disk (the legacy singular dataDiskRef, or dataDiskRefs[].imageRef). Those
+// attach the SwiftImage's SHARED prepared PVC, which a full-state capture
+// cannot chunk safely (v1.1 design §5.5).
+func hasImageBackedDataDisk(guest *swiftv1alpha1.SwiftGuest) bool {
+	if guest.Spec.DataDiskRef != nil {
+		return true
+	}
+	for i := range guest.Spec.DataDiskRefs {
+		if guest.Spec.DataDiskRefs[i].ImageRef != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// capturedDataDisks freezes the launcher-sufficient shape of the source's VM
+// data disks (v1.1): name + Block + size + the source-cluster PVC the chunk Job
+// mounts. Blank disks take their size from the guest spec; attachAsDisk disks
+// from the operator PVC's storage request. Image-backed disks never reach here
+// (rejected in handlePendingLocal).
+func (r *SwiftSnapshotReconciler) capturedDataDisks(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) ([]snapshotv1alpha1.CapturedDataDisk, error) {
+	if len(rg.DataDisks) == 0 {
+		return nil, nil
+	}
+	blankSize := map[string]string{}
+	for i := range guest.Spec.DataDiskRefs {
+		d := &guest.Spec.DataDiskRefs[i]
+		if d.Blank != nil {
+			blankSize[d.Name] = d.Blank.Size.String()
+		}
+	}
+	out := make([]snapshotv1alpha1.CapturedDataDisk, 0, len(rg.DataDisks))
+	for _, dd := range rg.DataDisks {
+		c := snapshotv1alpha1.CapturedDataDisk{
+			Name:    dd.Name,
+			Block:   dd.Block,
+			PVCName: dd.PVCName,
+		}
+		if s, ok := blankSize[dd.Name]; ok {
+			c.Size = s
+		} else {
+			var pvc corev1.PersistentVolumeClaim
+			if err := r.Get(ctx, client.ObjectKey{Name: dd.PVCName, Namespace: guest.Namespace}, &pvc); err != nil {
+				return nil, err
+			}
+			if q, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+				c.Size = q.String()
+			}
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 // stopSourceGuest patches the source SwiftGuest to runPolicy=Stopped (idempotent)
@@ -169,16 +284,16 @@ func (r *SwiftSnapshotReconciler) stopSourceGuest(ctx context.Context, namespace
 	return r.Patch(ctx, &guest, patch)
 }
 
-// buildDiskChunkJob constructs the node-pinned Job that chunks the released root
-// PVC to the registry. Block root disks attach via volumeDevices at
-// rootDiskDevicePath; Filesystem root disks mount at diskChunkMount and the disk
-// is image.raw. Pinned to the capture node (the disk's node) so the RWO PVC
-// re-attaches locally. Runs as root to read the raw disk. The caller sets the
-// ownerRef.
-func buildDiskChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode string, block bool) *batchv1.Job {
+// buildChunkJob constructs a node-pinned Job that chunks one released PVC (the
+// root disk, or a v1.1 data disk) to the registry as tag. Block PVCs attach via
+// volumeDevices at rootDiskDevicePath; Filesystem PVCs mount at diskChunkMount
+// and the disk is image.raw (the paths are Job-internal — only --file must
+// match). Pinned to the capture node so the RWO PVC re-attaches locally. Runs
+// as root to read the raw disk. The caller sets the ownerRef.
+func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, jobName, tag, pvcName string, block bool) *batchv1.Job {
 	oci := snap.Spec.Backend.OCI
-	// Filesystem root: the PVC mounts at diskChunkMount, the disk is image.raw.
-	// Block root: the raw device attaches at rootDiskDevicePath.
+	// Filesystem: the PVC mounts at diskChunkMount, the disk is image.raw.
+	// Block: the raw device attaches at rootDiskDevicePath.
 	diskPath := diskChunkMount + "/image.raw"
 	if block {
 		diskPath = rootDiskDevicePath
@@ -187,7 +302,7 @@ func buildDiskChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode 
 		"--mode=upload-image",
 		"--file=" + diskPath,
 		"--repository=" + oci.Repository,
-		"--tag=" + ociDiskTag(snap),
+		"--tag=" + tag,
 	}
 	if oci.Insecure {
 		args = append(args, "--insecure")
@@ -210,7 +325,7 @@ func buildDiskChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode 
 	rootVol := corev1.Volume{
 		Name: "rootdisk",
 		VolumeSource: corev1.VolumeSource{
-			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: rootDiskPVCName(snap.Spec.GuestRef.Name)},
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvcName},
 		},
 	}
 	if block {
@@ -237,7 +352,7 @@ func buildDiskChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode 
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      diskChunkJobName(snap),
+			Name:      jobName,
 			Namespace: snap.Namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",

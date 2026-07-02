@@ -358,6 +358,41 @@ spec:
                 properties:
                   cpu:
                     type: string
+                  dataDisks:
+                    description: |-
+                      DataDisks is the launcher-sufficient shape of the source's secondary VM
+                      data disks (v1.1 full-state capture: blank + attachAsDisk disks; a source
+                      with image-backed data disks is rejected for includeDisk). Import
+                      materializes each from its oci artifact into a guest-owned PVC and
+                      attaches it under the same disk name, so CH device paths — which derive
+                      from the disk name — match the captured config.json.
+                    items:
+                      description: CapturedDataDisk is one secondary VM data disk
+                        frozen at capture.
+                      properties:
+                        block:
+                          description: |-
+                            Block is true for a raw block disk (volumeDevices), false for a
+                            filesystem-backed image.raw disk.
+                          type: boolean
+                        name:
+                          description: Name is the disk's stable identifier (drives
+                            the CH device path).
+                          type: string
+                        pvcName:
+                          description: |-
+                            PVCName is the SOURCE-cluster PVC backing this disk — capture-side
+                            only (the chunk Job mounts it); meaningless to the import side.
+                          type: string
+                        size:
+                          description: |-
+                            Size is the backing PVC's requested size (e.g. "20Gi") — the
+                            materialized clone PVC is created at this size.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
                   guestAgent:
                     description: |-
                       GuestAgent reports whether the source opted into the in-guest vsock
@@ -366,8 +401,9 @@ spec:
                   hasDataDisks:
                     description: |-
                       HasDataDisks reports whether the source had secondary data disks.
-                      Source-independent import rejects such snapshots in v1 (root-disk-only);
-                      full-state data-disk capture is a follow-on.
+                      Source-independent import rejects such snapshots when the data-disk
+                      artifacts are absent (pre-v1.1 captures); v1.1 full-state captures
+                      carry them (DataDisks below + status.oci.dataDisks).
                     type: boolean
                   hasSeed:
                     description: |-
@@ -446,6 +482,35 @@ spec:
                   OCI records the registry location of an oci-backend export. Set when the
                   Uploading (push) phase completes.
                 properties:
+                  dataDisks:
+                    description: |-
+                      DataDisks records the chunked artifacts of the source's secondary VM
+                      data disks (v1.1 full-state capture), one per captured disk, matched to
+                      status.guestSpec.dataDisks by Name. The import materializes each into a
+                      guest-owned PVC and attaches it under the same disk name.
+                    items:
+                      description: OCIDataDiskArtifact is one secondary data disk's
+                        chunked artifact.
+                      properties:
+                        manifestDigest:
+                          description: ManifestDigest pins the artifact for the import.
+                          type: string
+                        name:
+                          description: Name matches the captured disk's name (status.guestSpec.dataDisks).
+                          type: string
+                        pushedBytes:
+                          description: PushedBytes is the artifact's footprint in
+                            the registry.
+                          format: int64
+                          type: integer
+                        reference:
+                          description: Reference is the pushed artifact reference
+                            (repository:tag).
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
                   disk:
                     description: |-
                       Disk is the chunked disk artifact pushed alongside memory for a full-state

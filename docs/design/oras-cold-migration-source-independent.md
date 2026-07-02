@@ -216,9 +216,55 @@ demo assets survive the deletions:
    the documented nuance); all four transfer Jobs Complete (memory push/pull +
    disk chunk/materialize).
 
+## 5.5 v1.1 — data-disk full-state capture (design addendum, 2026-07-02)
+
+v1 is root-disk-only (D4). v1.1 extends full-state capture/import to secondary
+data disks, grounded in how they resolve today
+([`resolver.go::resolveDataDisks`](../../internal/resolved/resolver.go)):
+
+| Data-disk kind | Backing PVC | CH path | v1.1 |
+|---|---|---|---|
+| `blank` | guest-owned `<guest>-data-<name>` | `/dev/kubeswift-data-<name>` (Block) or `…/data-<name>/image.raw` (FS) — **guest-name-independent** | **captured** |
+| `pvcRef` + `attachAsDisk` | operator's Block PVC | `/dev/kubeswift-data-<name>` | **captured** |
+| `imageRef` (incl. legacy `dataDiskRef`) | the SwiftImage's **shared** prepared PVC | `…/data-<name>/image.raw` | **excluded** — chunk-after-terminate races other guests attached to the shared PVC, and its lifecycle belongs to the image; a full-state capture of such a source is rejected (loudly, controller-side) |
+
+Because CH disk paths derive from the **disk name**, a clone whose disks keep
+the source's names presents identical paths — `config.json` coheres with no
+rewriting (the same property the root/seed rely on).
+
+**Capture** (extends `handleFullStateDiskCapture`): after the launcher
+terminates (all PVCs frozen + released), one chunk Job **per data disk**
+(`<snap>-oci-disk-<name>`, tag `<tag>-disk-<name>`, Block volumeDevices or FS
+mount per the disk's shape — the existing root-chunk builder generalized).
+`status.oci.dataDisks[]` records `{name, reference, manifestDigest,
+pushedBytes}`; `status.guestSpec.dataDisks[]` records the launcher-sufficient
+shape `{name, size, block}`.
+
+**Import**: for a full-state snapshot carrying data-disk artifacts (either the
+same-cluster or the source-gone path), `maybeRootDiskFromOCI` generalizes to
+materialize root **and** each data disk into guest-owned PVCs named
+`BlankDataDiskPVCName(clone, name)` (one digest-pinned download Job per disk),
+then `rg.DataDisks[i].PVCName` is overridden to the materialized PVCs —
+keeping name/Block/HostPath so device order and paths match the captured
+`config.json`. `EnsureBlankDataDisks` skips materialized (RestoreSeeded-
+labelled) PVCs — they are not blank, and the Filesystem fill Job must not
+overwrite them. The v1 `hasDataDisks` rejection is lifted **only when the
+artifacts are present** (old snapshots that recorded `hasDataDisks` without
+artifacts still fail with the source-spec-required message).
+
+**Validation**: a source with a blank **Block** data disk (the
+cluster-validated v0.4.2 path): write a marker onto `vdc`, full-state export,
+delete the source (+ image + seed), import → Running with the `vdc` marker
+intact and `boot_id` matching.
+
+Phasing: **PR1** API (`CapturedDataDisk` + `status.oci.dataDisks`) + capture +
+image-backed rejection; **PR2** import (materialize + `rg.DataDisks` override
++ blank-skip guard + lift the rejection); **PR3** cluster validation +
+runbook.
+
 ## 6. Non-goals (v1)
 
-- Data-disk full-state capture (D4 — v1.1).
+- Data-disk full-state capture (D4 — **designed above as v1.1**).
 - Real seed content on the source-independent path (D3 caveat — option a/b later).
 - A `SwiftColdMigration` orchestration CRD (still compose-first, per
   [`oras-cold-migration.md`](oras-cold-migration.md) §2.2).

@@ -293,10 +293,36 @@ type CapturedGuestSpec struct {
 	// +optional
 	HasSeed bool `json:"hasSeed,omitempty"`
 	// HasDataDisks reports whether the source had secondary data disks.
-	// Source-independent import rejects such snapshots in v1 (root-disk-only);
-	// full-state data-disk capture is a follow-on.
+	// Source-independent import rejects such snapshots when the data-disk
+	// artifacts are absent (pre-v1.1 captures); v1.1 full-state captures
+	// carry them (DataDisks below + status.oci.dataDisks).
 	// +optional
 	HasDataDisks bool `json:"hasDataDisks,omitempty"`
+	// DataDisks is the launcher-sufficient shape of the source's secondary VM
+	// data disks (v1.1 full-state capture: blank + attachAsDisk disks; a source
+	// with image-backed data disks is rejected for includeDisk). Import
+	// materializes each from its oci artifact into a guest-owned PVC and
+	// attaches it under the same disk name, so CH device paths — which derive
+	// from the disk name — match the captured config.json.
+	// +optional
+	DataDisks []CapturedDataDisk `json:"dataDisks,omitempty"`
+}
+
+// CapturedDataDisk is one secondary VM data disk frozen at capture.
+type CapturedDataDisk struct {
+	// Name is the disk's stable identifier (drives the CH device path).
+	Name string `json:"name"`
+	// Size is the backing PVC's requested size (e.g. "20Gi") — the
+	// materialized clone PVC is created at this size.
+	Size string `json:"size,omitempty"`
+	// Block is true for a raw block disk (volumeDevices), false for a
+	// filesystem-backed image.raw disk.
+	// +optional
+	Block bool `json:"block,omitempty"`
+	// PVCName is the SOURCE-cluster PVC backing this disk — capture-side
+	// only (the chunk Job mounts it); meaningless to the import side.
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
 }
 
 // CapturedStorage is the resolved storage shape frozen at capture for a
@@ -397,6 +423,24 @@ type OCISnapshotStatus struct {
 	// memory (the fields above) against it. See docs/design/oras-cold-migration.md.
 	// +optional
 	Disk *OCIDiskArtifact `json:"disk,omitempty"`
+	// DataDisks records the chunked artifacts of the source's secondary VM
+	// data disks (v1.1 full-state capture), one per captured disk, matched to
+	// status.guestSpec.dataDisks by Name. The import materializes each into a
+	// guest-owned PVC and attaches it under the same disk name.
+	// +optional
+	DataDisks []OCIDataDiskArtifact `json:"dataDisks,omitempty"`
+}
+
+// OCIDataDiskArtifact is one secondary data disk's chunked artifact.
+type OCIDataDiskArtifact struct {
+	// Name matches the captured disk's name (status.guestSpec.dataDisks).
+	Name string `json:"name"`
+	// Reference is the pushed artifact reference (repository:tag).
+	Reference string `json:"reference,omitempty"`
+	// ManifestDigest pins the artifact for the import.
+	ManifestDigest string `json:"manifestDigest,omitempty"`
+	// PushedBytes is the artifact's footprint in the registry.
+	PushedBytes int64 `json:"pushedBytes,omitempty"`
 }
 
 // OCIDiskArtifact records the chunked disk artifact of a full-state oci snapshot

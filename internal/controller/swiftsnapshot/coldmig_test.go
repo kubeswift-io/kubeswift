@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 func TestOCIDiskTagAndReference(t *testing.T) {
@@ -23,7 +26,7 @@ func TestOCIDiskTagAndReference(t *testing.T) {
 }
 
 func TestBuildDiskChunkJob_Filesystem(t *testing.T) {
-	job := buildDiskChunkJob(ociSnap(nil), "oras:img", "miles", false)
+	job := buildChunkJob(ociSnap(nil), "oras:img", "miles", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootDiskPVCName("g1"), false)
 	pod := job.Spec.Template.Spec
 	if pod.NodeName != "miles" {
 		t.Errorf("disk chunk Job must be pinned to the capture node; got %q", pod.NodeName)
@@ -64,7 +67,7 @@ func TestBuildDiskChunkJob_Filesystem(t *testing.T) {
 }
 
 func TestBuildDiskChunkJob_Block(t *testing.T) {
-	job := buildDiskChunkJob(ociSnap(nil), "oras:img", "boba", true)
+	job := buildChunkJob(ociSnap(nil), "oras:img", "boba", diskChunkJobName(ociSnap(nil)), ociDiskTag(ociSnap(nil)), rootDiskPVCName("g1"), true)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--file=/dev/kubeswift-root") {
 		t.Errorf("Block root must chunk the raw device; got %q", strings.Join(c.Args, " "))
@@ -88,7 +91,7 @@ func TestBuildDiskChunkJob_InsecureAndCreds(t *testing.T) {
 		o.Insecure = true
 		o.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
 	})
-	job := buildDiskChunkJob(snap, "oras:img", "miles", false)
+	job := buildChunkJob(snap, "oras:img", "miles", diskChunkJobName(snap), ociDiskTag(snap), rootDiskPVCName("g1"), false)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--insecure") {
 		t.Errorf("--insecure must be present; got %q", strings.Join(c.Args, " "))
@@ -154,5 +157,86 @@ func TestStopSourceGuest_SourceGone_NoOp(t *testing.T) {
 func TestRootDiskBlockSentinel(t *testing.T) {
 	if corev1.PersistentVolumeBlock != "Block" {
 		t.Fatalf("unexpected Block volumeMode sentinel %q", corev1.PersistentVolumeBlock)
+	}
+}
+
+// ── v1.1: data-disk full-state capture ────────────────────────────────────────
+
+func TestHasImageBackedDataDisk(t *testing.T) {
+	g := makeGuest("ns", "g1")
+	if hasImageBackedDataDisk(g) {
+		t.Errorf("no data disks → false")
+	}
+	g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
+		{Name: "scratch", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("20Gi")}},
+	}
+	if hasImageBackedDataDisk(g) {
+		t.Errorf("blank disk → false")
+	}
+	g.Spec.DataDiskRefs = append(g.Spec.DataDiskRefs, swiftv1alpha1.DataDiskRef{
+		Name: "tools", ImageRef: &corev1.LocalObjectReference{Name: "tools-img"},
+	})
+	if !hasImageBackedDataDisk(g) {
+		t.Errorf("dataDiskRefs[].imageRef → true")
+	}
+	g2 := makeGuest("ns", "g2")
+	g2.Spec.DataDiskRef = &corev1.LocalObjectReference{Name: "legacy-img"}
+	if !hasImageBackedDataDisk(g2) {
+		t.Errorf("legacy singular dataDiskRef → true")
+	}
+}
+
+func TestCapturedDataDisks_BlankFromSpec_AttachedFromPVC(t *testing.T) {
+	g := makeGuest("ns", "g1")
+	g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
+		{Name: "scratch", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("20Gi")}},
+		{Name: "ops", PVCRef: &corev1.LocalObjectReference{Name: "ops-pvc"}, AttachAsDisk: true},
+	}
+	rg := &resolved.ResolvedGuest{DataDisks: []resolved.ResolvedDataDisk{
+		{Name: "scratch", PVCName: "g1-data-scratch", Block: true},
+		{Name: "ops", PVCName: "ops-pvc", Block: true},
+	}}
+	blockMode := corev1.PersistentVolumeBlock
+	opsPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-pvc", Namespace: "ns"},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeMode: &blockMode,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("8Gi")},
+			},
+		},
+	}
+	r, _ := newReconciler(t, g, opsPVC)
+	got, err := r.capturedDataDisks(context.Background(), g, rg)
+	if err != nil {
+		t.Fatalf("capturedDataDisks: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 captured disks, got %d: %+v", len(got), got)
+	}
+	if got[0].Name != "scratch" || got[0].Size != "20Gi" || !got[0].Block || got[0].PVCName != "g1-data-scratch" {
+		t.Errorf("blank disk captured wrong: %+v", got[0])
+	}
+	if got[1].Name != "ops" || got[1].Size != "8Gi" || !got[1].Block || got[1].PVCName != "ops-pvc" {
+		t.Errorf("attached disk captured wrong (size must come from the PVC): %+v", got[1])
+	}
+}
+
+func TestBuildChunkJob_DataDisk(t *testing.T) {
+	snap := ociSnap(nil)
+	job := buildChunkJob(snap, "oras:img", "miles",
+		diskChunkJobName(snap)+"-scratch", ociDiskTag(snap)+"-scratch", "g1-data-scratch", true)
+	if job.Name != "snap1-oci-disk-scratch" {
+		t.Errorf("job name = %q", job.Name)
+	}
+	c := job.Spec.Template.Spec.Containers[0]
+	if !strings.Contains(strings.Join(c.Args, " "), "--tag=team-a-snap1-disk-scratch") {
+		t.Errorf("per-disk tag missing: %q", strings.Join(c.Args, " "))
+	}
+	if job.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "g1-data-scratch" {
+		t.Errorf("data-disk PVC not mounted: %+v", job.Spec.Template.Spec.Volumes)
+	}
+	if len(c.VolumeDevices) != 1 {
+		t.Errorf("Block data disk must attach as a device: %+v", c.VolumeDevices)
 	}
 }
