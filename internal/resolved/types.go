@@ -104,6 +104,12 @@ type Resources struct {
 type RootDisk struct {
 	Size   resource.Quantity `json:"size"`
 	Format string            `json:"format"` // raw or qcow2
+	// FromOCI marks a root disk that is materialized from a snapshot's OCI disk
+	// artifact rather than cloned from a base SwiftImage — a source-independent
+	// full-state clone (FromCapturedSpec). The controller runs EnsureRootDiskClone
+	// (→ maybeRootDiskFromOCI) on this even though PreparedImage is empty (no
+	// image was resolved). See docs/design/oras-cold-migration-source-independent.md.
+	FromOCI bool `json:"fromOCI,omitempty"`
 }
 
 // Storage is the post-merge effective storage spec for controller-created
