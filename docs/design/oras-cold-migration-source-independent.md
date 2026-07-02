@@ -151,14 +151,27 @@ smaller change). The vsock identity agent path is unchanged.
 
 ## 4. Phasing
 
-- **PR 1 — capture surface:** expand `CapturedGuestSpec` (D1) + populate it at
-  capture from the resolved source guest; `make generate` + chart sync. Additive;
-  no behaviour change.
-- **PR 2 — resolver path:** `resolved.FromCapturedSpec` (D2) + unit tests (pure).
-- **PR 3 — import fallback:** `prepareCloneFromSnapshot` source-gone branch (D5) +
-  minimal-seed launcher path (D3) + MAC-from-names (D6) + webhook rejects
-  source-gone-with-data-disks (D4).
-- **PR 4 — CLI + validation:** `swiftctl guest import` works with the source (and
+- **PR 1 — capture surface (SHIPPED #311):** expand `CapturedGuestSpec` (D1) +
+  populate it at capture from the resolved source guest; `make generate` + chart
+  sync. Additive; no behaviour change.
+- **PR 2 — resolver path (SHIPPED #312):** `resolved.FromCapturedSpec` (D2) +
+  `RootDisk.FromOCI` sentinel + unit tests (pure).
+- **PR 3 — import fallback (this PR):** `prepareCloneFromSnapshot` dispatches a
+  source-gone clone to `prepareSourceIndependentClone` (D5): guards full-state +
+  captured surface (else the pre-SI needs-the-source-spec message) and rejects
+  captured `hasDataDisks` (D4, controller-side — races-immune vs an
+  admission-time check); builds `rg` via `FromCapturedSpec` from the clone's own
+  guestClass + the captured surface; a `placeholderSeed` (minimal NoCloud) rides
+  the EXISTING seed-ConfigMap + launcher ISO machinery so CH `--restore` can
+  re-open the config.json seed disk with zero Rust change (D3); a
+  `stubSourceFromCaptured` (identity + interface names + agent opt-in) feeds the
+  shared `cloneRestoreAnnotations` builder so MAC rewrites/runtime-dir
+  prefixes/agent-enable derive from the captured surface (D6). The controller
+  consumes the pre-resolved `rg` (skipping the image-oriented resolver) and the
+  root-disk gate also fires on `RootDisk.FromOCI` so `maybeRootDiskFromOCI`
+  materializes the disk. Same-cluster clones are byte-identical in behaviour
+  (source-present keeps the effective-spec path).
+- **PR 4 — validation:** `swiftctl guest import` works with the source (and
   its SwiftImage + seedProfile) deleted; cluster-validate by simulating
   cross-cluster (below). Runbook update (drop the same-cluster scope note).
 
@@ -176,6 +189,32 @@ source-gone in the same cluster:
 
 Ship explicitly labelled "cross-cluster validated by same-cluster
 source-deletion simulation; a true two-cluster move is the natural extension."
+
+### Validation — DONE 2026-07-02, PASS
+
+Dev cluster, controller `sha-e6af503` (PR 3 branch = main + #311 + #312 + PR 3),
+snapshot-oras `sha-a2edb7c`, in-cluster Zot. Dedicated source assets so shared
+demo assets survive the deletions:
+
+1. `cm5-image` (fresh Noble import) + `cm5-seed` + `cm5-src` (miles, class
+   `ft-small`) → Running; planted `/home/kubeswift/cm5-sentinel` + recorded
+   `boot_id=387c51dd-feed-4100-aba9-6982d4a7bccf`.
+2. `swiftctl guest export cm5-src … --wait` → **Ready**; the snapshot carried the
+   full captured surface (`status.guestSpec`: cpu=2, memoryMi=2048,
+   rootDiskSize=10Gi, storage RWO/Filesystem, network=true, osType=linux,
+   hasSeed=true) alongside both artifacts. (Prerequisite: apply the SI-PR1 CRD
+   first — a stale CRD silently strips the new status fields, the W27 trap.)
+3. **Deleted `cm5-src`, `cm5-image`, `cm5-seed`** — all three NotFound-confirmed.
+4. `swiftctl guest import cm5-clone --from-snapshot cm5-export --target-node boba
+   --guest-class ft-small --wait` → **Running on boba**, built from the snapshot +
+   registry + guestClass alone.
+5. **Resume proven**: sentinel present; clone `boot_id` **identical** to the
+   source's; single-boot journal spanning source-boot → clone;
+   `cloud-init status: done` (the placeholder seed was never read); hostname
+   resumed. Machinery: placeholder seed ConfigMap `cm5-clone-seed` minted (D3,
+   zero Rust change); RestoreSeeded clone PVC Bound (default-class fall-through,
+   the documented nuance); all four transfer Jobs Complete (memory push/pull +
+   disk chunk/materialize).
 
 ## 6. Non-goals (v1)
 

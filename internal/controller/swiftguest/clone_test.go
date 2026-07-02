@@ -7,6 +7,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -25,7 +26,10 @@ func cloneScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("clientgoscheme: %v", err)
 	}
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
-	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	s.AddKnownTypes(gvSwift,
+		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
+	)
 	metav1.AddToGroupVersion(s, gvSwift)
 	gvSnap := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSnap, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{})
@@ -79,7 +83,7 @@ func newCloneReconciler(t *testing.T, objs ...client.Object) (*SwiftGuestReconci
 func TestPrepareCloneFromSnapshot_TierB(t *testing.T) {
 	g := cloneGuest()
 	r, c := newCloneReconciler(t, g, sourceGuest(), localSnap(snapshotv1alpha1.SwiftSnapshotPhaseReady))
-	eff, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	eff, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || requeue {
 		t.Fatalf("expected success; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -111,7 +115,7 @@ func TestPrepareCloneFromSnapshot_TierB(t *testing.T) {
 func TestPrepareCloneFromSnapshot_NotReady(t *testing.T) {
 	g := cloneGuest()
 	r, _ := newCloneReconciler(t, g, sourceGuest(), localSnap(snapshotv1alpha1.SwiftSnapshotPhaseCapturing))
-	_, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || !requeue {
 		t.Fatalf("not-Ready snapshot should requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -138,7 +142,7 @@ func TestPrepareCloneFromSnapshot_TierC_RequiresTargetNode(t *testing.T) {
 	g := cloneGuest() // no targetNode
 	r, _ := newCloneReconciler(t, g, sourceGuest(), s3CloneSnap())
 	r.SnapshotS3Image = "img"
-	_, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || !strings.Contains(fail, "requires spec.cloneFromSnapshot.targetNode") {
 		t.Fatalf("Tier C without targetNode should fail; fail=%q err=%v", fail, err)
 	}
@@ -151,7 +155,7 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	r.SnapshotS3Image = "img"
 
 	// First pass: creates the download Job + requeues (not yet complete).
-	_, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || !requeue {
 		t.Fatalf("first pass should create the download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -173,7 +177,7 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	if err := c.Status().Update(context.Background(), &job); err != nil {
 		t.Fatal(err)
 	}
-	eff, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	eff, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || requeue || eff == nil {
 		t.Fatalf("after download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -210,7 +214,7 @@ func TestPrepareCloneFromSnapshot_OCI_RequiresTargetNode(t *testing.T) {
 	g := cloneGuest() // no targetNode
 	r, _ := newCloneReconciler(t, g, sourceGuest(), ociCloneSnap())
 	r.SnapshotORASImage = "img"
-	_, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || !strings.Contains(fail, "requires spec.cloneFromSnapshot.targetNode") {
 		t.Fatalf("oci clone without targetNode should fail; fail=%q err=%v", fail, err)
 	}
@@ -223,7 +227,7 @@ func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 	r.SnapshotORASImage = "img"
 
 	// First pass: creates the oci download Job + requeues (not yet complete).
-	_, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || !requeue {
 		t.Fatalf("first pass should create the oci download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -245,7 +249,7 @@ func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 	if err := c.Status().Update(context.Background(), &job); err != nil {
 		t.Fatal(err)
 	}
-	eff, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	eff, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || fail != "" || requeue || eff == nil {
 		t.Fatalf("after oci download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
@@ -330,7 +334,7 @@ func jobNames(l batchv1.JobList) []string {
 func TestPrepareCloneFromSnapshot_SourceGone(t *testing.T) {
 	g := cloneGuest()
 	r, _ := newCloneReconciler(t, g, localSnap(snapshotv1alpha1.SwiftSnapshotPhaseReady)) // no source guest
-	_, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	_, _, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
 	if err != nil || !strings.Contains(fail, "no longer exists") {
 		t.Fatalf("missing source should fail; fail=%q err=%v", fail, err)
 	}
@@ -385,4 +389,157 @@ func poolCloneReconciler(t *testing.T, objs ...client.Object) *SwiftGuestReconci
 	s := cloneScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 	return &SwiftGuestReconciler{Client: c, Scheme: s}
+}
+
+// ── Source-independent (cross-cluster) full-state clone ──────────────────────
+// docs/design/oras-cold-migration-source-independent.md: when the SOURCE guest
+// is gone, a full-state oci snapshot carrying the captured launcher-sufficient
+// surface resolves via FromCapturedSpec instead of the live source spec.
+
+func fullStateSnap() *snapshotv1alpha1.SwiftSnapshot {
+	s := ociCloneSnap() // ns/snap, guestRef src, repo zot.svc:5000/vmsnap
+	s.Status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{
+		Reference:      "zot.svc:5000/vmsnap:ns-snap-disk",
+		ManifestDigest: "sha256:disk123",
+	}
+	s.Status.GuestSpec = &snapshotv1alpha1.CapturedGuestSpec{
+		CPU: "2", MemoryMi: 2048, ImageName: "rocky9",
+		Storage:        &snapshotv1alpha1.CapturedStorage{AccessMode: "ReadWriteOnce", VolumeMode: "Filesystem", StorageClassName: "longhorn"},
+		RootDiskSize:   "40Gi",
+		Network:        true,
+		InterfaceNames: []string{"eth0"},
+		OSType:         "linux",
+		HasSeed:        true,
+	}
+	return s
+}
+
+func testGuestClass() *swiftv1alpha1.SwiftGuestClass {
+	return &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "cls"},
+		Spec: swiftv1alpha1.SwiftGuestClassSpec{
+			CPU:      resource.MustParse("1"),
+			Memory:   resource.MustParse("1Gi"),
+			RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi")},
+		},
+	}
+}
+
+// completeCloneDownload drives the first prepare pass (which creates the oci
+// download Job) and marks the Job Complete, so the next pass reaches the
+// source-guest resolution step.
+func completeCloneDownload(t *testing.T, r *SwiftGuestReconciler, c client.Client, g *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot) {
+	t.Helper()
+	_, _, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || !requeue {
+		t.Fatalf("first pass should create the oci download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: cloneDownloadJobName(snap, "boba"), Namespace: "ns"}, &job); err != nil {
+		t.Fatalf("oci download Job not created: %v", err)
+	}
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_SourceGone_FullState_ResolvesFromCaptured(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "cls"}
+	snap := fullStateSnap()
+	// NO source guest in the cluster — the source-independent path must fire.
+	r, c := newCloneReconciler(t, g, snap, testGuestClass())
+	r.SnapshotORASImage = "img"
+	completeCloneDownload(t, r, c, g, snap)
+
+	eff, rg, fail, requeue, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || fail != "" || requeue {
+		t.Fatalf("source-gone full-state clone should resolve; fail=%q requeue=%v err=%v", fail, requeue, err)
+	}
+	if eff != nil {
+		t.Errorf("source-independent path must not return an effective guest (nothing to resolve); got %v", eff.Name)
+	}
+	if rg == nil {
+		t.Fatal("source-independent path must return a pre-resolved rg")
+	}
+	if !rg.RootDisk.FromOCI || rg.RootDisk.Size.String() != "40Gi" {
+		t.Errorf("rootDisk = %+v, want FromOCI + 40Gi", rg.RootDisk)
+	}
+	if rg.Storage.StorageClassName != "longhorn" || rg.Storage.AccessMode != "ReadWriteOnce" {
+		t.Errorf("storage not from captured surface: %+v", rg.Storage)
+	}
+	if rg.Resources.CPU != 2 || rg.Resources.Memory != 2048 {
+		t.Errorf("resources = %+v, want captured 2/2048 (not the class's 1/1024)", rg.Resources)
+	}
+	// hasSeed → placeholder NoCloud seed so CH --restore can re-open seed.iso.
+	if !rg.HasSeed() || rg.Seed.Datasource != "NoCloud" {
+		t.Errorf("captured hasSeed must yield a placeholder NoCloud seed; got %+v", rg.Seed)
+	}
+	// Clone restore annotations stamped, with MAC rewrites seeded from the
+	// captured interface names and the FROM prefix from the source ns/name.
+	var got swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "clone-a", Namespace: "ns"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Annotations[AnnotationRestoreMode] != RestoreModeClone ||
+		got.Annotations[AnnotationRestoreMACRewrites] == "" ||
+		!strings.Contains(got.Annotations[AnnotationRestoreRuntimeDirFromPrefix], "src") {
+		t.Errorf("clone restore annotations not stamped from the captured surface: %+v", got.Annotations)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_SourceGone_MemoryOnly_Fails(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	snap := ociCloneSnap() // memory-only: no status.oci.disk, no captured surface
+	r, c := newCloneReconciler(t, g, snap)
+	r.SnapshotORASImage = "img"
+	completeCloneDownload(t, r, c, g, snap)
+
+	_, rg, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || rg != nil {
+		t.Fatalf("memory-only source-gone must not resolve; rg=%v err=%v", rg, err)
+	}
+	if !strings.Contains(fail, "needs the source spec") {
+		t.Errorf("fail = %q, want the pre-SI needs-the-source-spec message", fail)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_SourceGone_DataDisks_Fails(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "cls"}
+	snap := fullStateSnap()
+	snap.Status.GuestSpec.HasDataDisks = true
+	r, c := newCloneReconciler(t, g, snap, testGuestClass())
+	r.SnapshotORASImage = "img"
+	completeCloneDownload(t, r, c, g, snap)
+
+	_, rg, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || rg != nil {
+		t.Fatalf("data-disk source-gone must not resolve; rg=%v err=%v", rg, err)
+	}
+	if !strings.Contains(fail, "root-disk-only") {
+		t.Errorf("fail = %q, want the v1 root-disk-only rejection", fail)
+	}
+}
+
+func TestPrepareCloneFromSnapshot_SourceGone_NoGuestClass_Fails(t *testing.T) {
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "missing-cls"}
+	snap := fullStateSnap()
+	r, c := newCloneReconciler(t, g, snap) // class NOT in the cluster
+	r.SnapshotORASImage = "img"
+	completeCloneDownload(t, r, c, g, snap)
+
+	_, rg, fail, _, err := r.prepareCloneFromSnapshot(context.Background(), g)
+	if err != nil || rg != nil {
+		t.Fatalf("missing guestClass must not resolve; rg=%v err=%v", rg, err)
+	}
+	if !strings.Contains(fail, "SwiftGuestClass") {
+		t.Errorf("fail = %q, want a SwiftGuestClass-not-found message", fail)
+	}
 }

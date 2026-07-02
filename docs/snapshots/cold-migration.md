@@ -21,11 +21,14 @@ migration** instead ([../migration/overview.md](../migration/overview.md)). For
 fanning out many *fresh* clones from one snapshot, use
 [clone-from-snapshot.md](clone-from-snapshot.md).
 
-> **Scope (v1):** the **import resolves the source guest's spec**, so the source
-> SwiftGuest object must still exist in the target namespace (same cluster today).
-> The disk and memory bytes travel through the registry; the *spec* does not yet.
-> Fully source-independent, cross-cluster import is a tracked follow-up. Same-node
-> and cross-node moves within a cluster work end-to-end today.
+> **Source-independence:** a full-state export also captures a
+> **launcher-sufficient spec surface** into the snapshot
+> (`status.guestSpec`), so import works even when the source SwiftGuest —
+> and its SwiftImage and SwiftSeedProfile — **no longer exist**. When the
+> source is still present its live spec is used (unchanged behaviour); when
+> it is gone the clone resolves from the captured surface + the registry
+> artifacts alone. See "Cross-cluster (source-independent) import" below
+> for the recipe and v1 limits (root-disk-only; same-name namespace).
 
 ## How it works
 
@@ -120,6 +123,61 @@ spec:
   runPolicy: Running               # from the snapshot, but a class ref is mandatory)
 ```
 
+## Cross-cluster (source-independent) import
+
+A full-state export freezes a **launcher-sufficient surface** into
+`status.guestSpec` (resources, storage shape, root-disk size, networking,
+interface names, OS type, seed/agent flags) while the source is live. Import
+then needs only **three things in the target**: the snapshot object, the
+registry artifacts, and a SwiftGuestClass for the clone's `guestClassRef` —
+no source SwiftGuest, no SwiftImage, no SwiftSeedProfile.
+
+Within one cluster this is automatic: delete the source (and even its image
+and seed profile) after export, and `swiftctl guest import` still works.
+
+**To move to a different cluster**, recreate the SwiftSnapshot object there
+(the artifacts are already in the shared registry; only the small object
+moves). Its oci refs + captured surface live in *status*, which `kubectl
+apply` cannot set — patch the status subresource after creating the spec:
+
+```bash
+# In cluster A: dump the snapshot's spec and status.
+kubectl -n team-a get swiftsnapshot db-export -o json > snap.json
+
+# In cluster B: recreate the spec, then transplant the status.
+kubectl -n team-a apply -f <(jq 'del(.status, .metadata.uid, .metadata.resourceVersion,
+  .metadata.creationTimestamp, .metadata.generation, .metadata.finalizers,
+  .metadata.managedFields)' snap.json)
+kubectl -n team-a patch swiftsnapshot db-export --subresource=status \
+  --type=merge -p "$(jq '{status: .status}' snap.json)"
+
+# Then import as usual:
+swiftctl guest import db2 --from-snapshot db-export --target-node <node> --guest-class <class>
+```
+
+(A first-party `swiftctl snapshot export-manifest`-style helper is a tracked
+follow-up.)
+
+### v1 requirements and limits
+
+- **Same-name namespace.** The captured memory's `config.json` records paths
+  under the source's `<namespace>-<name>` runtime directory; the import
+  rewrites them using the snapshot's namespace. Recreate the snapshot in a
+  namespace **with the same name** as the source's original namespace.
+- **Root-disk-only.** A source with secondary data disks is rejected for
+  source-independent import (full-state capture doesn't carry data disks yet).
+- **Placeholder seed.** When the source had a seed profile, the clone gets a
+  minimal placeholder seed.iso purely so CH `--restore` can re-open the seed
+  disk — the resumed guest never reads it. A later *reboot* of such a clone
+  has no real seed (the identity-regen bootcmd won't fire); use the in-guest
+  vsock agent for identity ([identity-regeneration.md](identity-regeneration.md)).
+- **Default storage-class fall-through.** A source that didn't pin a
+  storageClassName clones onto the *target cluster's default* class.
+- **Registry reachability + credentials** in the target cluster (same
+  `credentialsSecretRef` semantics as capture).
+- **Pre-existing snapshots** captured by older controllers don't carry the
+  surface — those still require the live source guest.
+
 ## What resumes vs. what regenerates
 
 Because import **resumes** captured memory (it is not a fresh boot), the guest
@@ -163,7 +221,8 @@ kubectl delete swiftsnapshot db-export  # optional; oci objects are purged if
 | Export stuck in `Capturing`/`Uploading` | Check the snapshot's conditions (`swiftctl snapshot describe db-export`) and the `<snap>-oci-*` Job logs. A private registry needs `--credentials-secret`; a plaintext registry needs `--insecure`. |
 | Export `Failed: OCI disk chunk Job failed` | Registry auth/TLS, or the node ran out of space chunking the disk. Inspect the `<snap>-oci-disk` Job. |
 | Import guest stuck in `Scheduling` | The disk-from-oci download Job (`swiftguest-root-<guest>-oci-disk-dl`) is still pulling, or `--target-node` has no capacity. Check the Job + `kubectl describe swiftguest <guest>`. |
-| Import `Failed: source SwiftGuest ... no longer exists` | v1 needs the source spec — recreate the (stopped) source guest, or wait for source-independent import (tracked follow-up). |
+| Import `Failed: source SwiftGuest ... no longer exists` | The snapshot is memory-only or pre-dates the captured spec surface — those still need the live source. Full-state exports from current releases import source-independently (see the cross-cluster section). |
+| Import `Failed: ... root-disk-only` | The source had data disks; source-independent import doesn't carry them (v1). Recreate the source guest, or re-export without data disks. |
 | Two copies running | Pre-fix behaviour; on current releases the source is stopped during export. If you manually restarted the source, stop it again. |
 
 ## See also
