@@ -128,6 +128,29 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 
 	case snapshotv1alpha1.SwiftSnapshotPhaseUploading:
+		// Full-state (P4 includeDisk): capture-then-terminate the DISK to oci
+		// first — terminate the still-paused launcher to release the root PVC,
+		// then chunk it — before the memory push below. handleUploadingOCI
+		// preserves the status.oci.disk this stamps.
+		if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI &&
+			snap.Spec.IncludeDisk && (status.OCI == nil || status.OCI.Disk == nil) {
+			done, errMsg, err := r.handleFullStateDiskCapture(ctx, &snap, status)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if errMsg != "" {
+				setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+				setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed, errMsg)
+				return ctrl.Result{}, r.persist(ctx, &snap, status)
+			}
+			if !done {
+				if updateErr := r.persist(ctx, &snap, status); updateErr != nil {
+					return ctrl.Result{}, updateErr
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			// disk artifact done — fall through to the memory push.
+		}
 		// s3 / oci backends: the capture is on the node-local hostPath; watch the
 		// upload/push Job move it to the store, then stamp status and go Ready.
 		handleUpload := r.handleUploading
