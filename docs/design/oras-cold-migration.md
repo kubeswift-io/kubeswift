@@ -191,19 +191,24 @@ The runtime (CH `--restore`, launcher, resume) is **untouched**.
     node).
   - **Two findings (below), neither blocking the import path.**
 - **Findings from validation:**
-  1. **Source resurrection (capture-half, PR 1b) — real, migration-semantics
-     bug.** `handleFullStateDiskCapture` deletes the source launcher to release the
-     frozen root PVC but does NOT set the source `runPolicy: Stopped`, so the
-     SwiftGuest controller **recreates** it (the reactive-stop-guard lesson from
-     Live Migration Phase 1). Consequences: (a) a coherency race between the
-     disk-chunk Job (reads `image.raw` ro) and the resurrected guest's CH (writes
-     `image.raw` rw) on the same node; (b) split-brain — after the clone resumes
-     elsewhere the source is ALSO Running, contradicting §5 "P4 terminates the
-     source (it's a migration)". **Fix (follow-up):** patch the source
-     `runPolicy: Stopped` combined with the launcher Delete in the includeDisk
-     capture path (LM-Phase-1 "single combined MergeFrom + Delete, not just
-     Stopped"). Workaround today: the operator stops/deletes the source after the
-     snapshot is Ready.
+  1. **Source resurrection (capture-half, PR 1b) — RESOLVED (fix/coldmig-source-stop).**
+     `handleFullStateDiskCapture` deleted the source launcher to release the frozen
+     root PVC but did NOT set the source `runPolicy: Stopped`, so the SwiftGuest
+     controller **recreated** it (the reactive-stop-guard lesson from Live Migration
+     Phase 1). Consequences: (a) a coherency race between the disk-chunk Job (reads
+     `image.raw` ro) and the resurrected guest's CH (writes `image.raw` rw) on the
+     same node; (b) split-brain — after the clone resumes elsewhere the source was
+     ALSO Running, contradicting §5 "P4 terminates the source (it's a migration)".
+     **Fix:** a new step 0 `stopSourceGuest` patches the source `runPolicy: Stopped`
+     (idempotent; NotFound/already-Stopped = no-op) BEFORE the launcher Delete —
+     the guard is reactive, so the flip must precede the Delete or the launcher
+     resurrects (LM-Phase-1 "Stopped-before-Delete"). The source stays down (the
+     operator deletes it once the clone is up); the clone still resolves the source
+     spec because a Stopped guest still exists. **Cluster-confirmed 2026-07-02**
+     (controller `sha-29014b6`): a fresh full-state capture held
+     `src.runPolicy=Stopped` + `launcher=NONE` through the entire Uploading→Ready
+     window (no resurrection), vs the pre-fix run where the source came back 2/2
+     Running mid-capture; both artifacts still pushed.
   2. **RAM-only tmpfs token missing on the resumed clone — narrow fidelity
      curiosity, LOW.** The `/dev/shm/cm-ram-token` written before the snapshot is
      absent on the clone, while `boot_id` (kernel RAM) and all other resume

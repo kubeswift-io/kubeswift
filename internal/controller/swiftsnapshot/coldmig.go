@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -66,13 +67,27 @@ func (r *SwiftSnapshotReconciler) rootDiskIsBlock(ctx context.Context, snap *sna
 
 // handleFullStateDiskCapture is the capture-then-terminate disk half. It runs in
 // the Uploading phase BEFORE the memory push, so status.OCI.Disk is set first and
-// handleUploadingOCI preserves it. Sequence: terminate the (paused) launcher to
-// release the root PVC → chunk the released disk to oci → stamp status.OCI.Disk.
-// Returns (done, errMsg, err); done=false means requeue.
+// handleUploadingOCI preserves it. Sequence: STOP the source guest → terminate the
+// (paused) launcher to release the root PVC → chunk the released disk to oci →
+// stamp status.OCI.Disk. Returns (done, errMsg, err); done=false means requeue.
 func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, status *snapshotv1alpha1.SwiftSnapshotStatus) (bool, string, error) {
 	if r.SnapshotORASImage == "" {
 		return false, "snapshot-oras image not configured (set " + SnapshotORASImageEnv + ")", nil
 	}
+	// 0. Stop the source guest FIRST — flip runPolicy=Stopped so the SwiftGuest
+	//    controller does NOT recreate the launcher after we delete it in step 1.
+	//    The stop-guard is reactive: recreation happens while runPolicy=Running, so
+	//    a bare Delete without the Stopped flip lets the launcher resurrect — a
+	//    split-brain with the resumed clone AND a coherency race between the
+	//    disk-chunk Job (reads image.raw ro) and the resurrected guest's CH
+	//    (writes it rw). This is the "terminate the source" of capture-then-
+	//    terminate (design §2.1/§5): a full-state capture is a migration, so the
+	//    source stays down (the operator deletes it once the clone is up). Mirrors
+	//    the Live Migration Phase 1 combined runPolicy=Stopped-before-Delete rule.
+	if err := r.stopSourceGuest(ctx, snap.Namespace, snap.Spec.GuestRef.Name); err != nil {
+		return false, "", err
+	}
+
 	// 1. Terminate the launcher so the RWO root PVC releases (frozen at the
 	//    snapshot instant — the VM was captured with ResumeAfterSnapshot=false and
 	//    never resumed). Idempotent: re-Delete while it drains, requeue until gone.
@@ -127,6 +142,31 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 		}
 	}
 	return false, "", nil // still chunking
+}
+
+// stopSourceGuest patches the source SwiftGuest to runPolicy=Stopped (idempotent)
+// so the SwiftGuest controller's stop-guard does not recreate the launcher after
+// handleFullStateDiskCapture deletes it. runPolicy must flip to Stopped BEFORE the
+// Delete (the guard is reactive — it prevents recreation, it does not stop a
+// running pod), so this is step 0. A source-gone (NotFound) or already-Stopped
+// guest is a no-op — the capture is re-entrant across requeues. The clone still
+// resolves the source spec later (prepareCloneFromSnapshot needs the guest to
+// exist, not to be running); the operator deletes the stopped source once the
+// clone is up.
+func (r *SwiftSnapshotReconciler) stopSourceGuest(ctx context.Context, namespace, guestName string) error {
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &guest); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // source already gone → nothing to stop
+		}
+		return err
+	}
+	if guest.Spec.RunPolicy == swiftv1alpha1.RunPolicyStopped {
+		return nil // already stopped (idempotent re-entry)
+	}
+	patch := client.MergeFrom(guest.DeepCopy())
+	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
+	return r.Patch(ctx, &guest, patch)
 }
 
 // buildDiskChunkJob constructs the node-pinned Job that chunks the released root
