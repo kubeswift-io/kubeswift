@@ -75,6 +75,7 @@ The `docs/` directory also contains these focused reference documents:
 
 - [snapshots/fast-vms.md](snapshots/fast-vms.md) — Snapshots, restore, and instant clones overview
 - [snapshots/clone-from-snapshot.md](snapshots/clone-from-snapshot.md) — `cloneFromSnapshot`: fan out N VMs from one snapshot
+- [snapshots/cold-migration.md](snapshots/cold-migration.md) — Cold / suspended-state migration: move a VM's full state (memory + disk) between nodes/clusters via an OCI registry (`swiftctl guest export`/`import`)
 - [snapshots/identity-regeneration.md](snapshots/identity-regeneration.md) — Regenerate a clone's identity in place (the in-guest vsock agent)
 - [snapshots/local-snapshots.md](snapshots/local-snapshots.md) — Tier B (local) memory snapshots
 - [snapshots/s3-snapshots.md](snapshots/s3-snapshots.md) — Tier C (S3) cluster-portable snapshots

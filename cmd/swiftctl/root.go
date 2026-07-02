@@ -47,6 +47,7 @@ func init() {
 	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(migrationCmd)
+	rootCmd.AddCommand(guestCmd)
 }
 
 // newDynamicClient builds a dynamic client from the resolved kubeconfig. The

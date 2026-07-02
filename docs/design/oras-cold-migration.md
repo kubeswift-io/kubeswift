@@ -168,8 +168,16 @@ The runtime (CH `--restore`, launcher, resume) is **untouched**.
     the GPT would desync the memory image). Composes with the existing memory-download
     path in `prepareCloneFromSnapshot` (which pulls the memory artifact + requires the
     source spec) — the two artifacts are pulled independently, per §2.3.
-  - **Follow-ups:** `swiftctl guest export/import` + runbook; source-independent
-    (fully cross-cluster, source-gone) full-state clone.
+  - **PR 3 — `swiftctl guest export/import` + operator runbook (SHIPPED).**
+    `swiftctl guest export <guest> --to <repo>` creates the full-state oci
+    SwiftSnapshot; `swiftctl guest import <new> --from-snapshot <snap>
+    --target-node <node> --guest-class <class>` creates the cloneFromSnapshot
+    guest (both with `--wait`). Operator runbook:
+    [`docs/snapshots/cold-migration.md`](../snapshots/cold-migration.md).
+  - **Follow-ups:** source-independent (fully cross-cluster, source-gone)
+    full-state clone (capture enough of the source spec in the snapshot so import
+    no longer needs the live source); finding #2 (eager-vs-ondemand restore
+    fidelity); P5 edge-Zot profile.
 - **Cluster validation — DONE 2026-07-02, PASS** (dev cluster, `field-testing`,
   in-cluster Zot HTTP, controller+snapshot-oras `sha-a2edb7c`). Full
   suspend→registry→resume across nodes:
