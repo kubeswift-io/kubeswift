@@ -28,7 +28,16 @@ fanning out many *fresh* clones from one snapshot, use
 > source is still present its live spec is used (unchanged behaviour); when
 > it is gone the clone resolves from the captured surface + the registry
 > artifacts alone. See "Cross-cluster (source-independent) import" below
-> for the recipe and v1 limits (root-disk-only; same-name namespace).
+> for the recipe and limits (same-name namespace).
+>
+> **Data disks (v1.1):** a full-state export also carries the source's
+> **secondary VM data disks** (`blank` and `pvcRef` + `attachAsDisk`) as
+> their own registry artifacts, and import materializes + attaches them
+> under the same names — so a clone gets the data-disk state its resumed
+> RAM references, not fresh blank disks. A source with an **image-backed**
+> data disk (the legacy `dataDiskRef`, or `dataDiskRefs[].imageRef`) is
+> rejected for full-state export (that disk is the SwiftImage's shared PVC,
+> owned by the image, not the guest).
 
 ## How it works
 
@@ -164,8 +173,12 @@ follow-up.)
   under the source's `<namespace>-<name>` runtime directory; the import
   rewrites them using the snapshot's namespace. Recreate the snapshot in a
   namespace **with the same name** as the source's original namespace.
-- **Root-disk-only.** A source with secondary data disks is rejected for
-  source-independent import (full-state capture doesn't carry data disks yet).
+- **Data disks (v1.1).** A source's `blank` / `attachAsDisk` data disks are
+  captured + materialized on import (byte-round-tripped through the registry,
+  attached under the same names). A source with an **image-backed** data disk
+  (legacy `dataDiskRef` / `dataDiskRefs[].imageRef`) is rejected for full-state
+  export — that disk is the SwiftImage's shared PVC; re-export without it, or
+  convert it to a `blank`/`attachAsDisk` disk.
 - **Placeholder seed.** When the source had a seed profile, the clone gets a
   minimal placeholder seed.iso purely so CH `--restore` can re-open the seed
   disk — the resumed guest never reads it. A later *reboot* of such a clone
@@ -222,7 +235,8 @@ kubectl delete swiftsnapshot db-export  # optional; oci objects are purged if
 | Export `Failed: OCI disk chunk Job failed` | Registry auth/TLS, or the node ran out of space chunking the disk. Inspect the `<snap>-oci-disk` Job. |
 | Import guest stuck in `Scheduling` | The disk-from-oci download Job (`swiftguest-root-<guest>-oci-disk-dl`) is still pulling, or `--target-node` has no capacity. Check the Job + `kubectl describe swiftguest <guest>`. |
 | Import `Failed: source SwiftGuest ... no longer exists` | The snapshot is memory-only or pre-dates the captured spec surface — those still need the live source. Full-state exports from current releases import source-independently (see the cross-cluster section). |
-| Import `Failed: ... root-disk-only` | The source had data disks; source-independent import doesn't carry them (v1). Recreate the source guest, or re-export without data disks. |
+| Export rejected: image-backed data disk | Full-state export carries `blank`/`attachAsDisk` data disks (v1.1) but rejects an **image-backed** data disk (legacy `dataDiskRef` / `dataDiskRefs[].imageRef`) — that PVC belongs to the SwiftImage. Re-export without it. |
+| Import `Failed: ... pre-v1.1 root-disk-only snapshot` | The snapshot was captured by a controller predating v1.1 and recorded data disks without registry artifacts. Re-export from a current release, or keep the live source guest. |
 | Two copies running | Pre-fix behaviour; on current releases the source is stopped during export. If you manually restarted the source, stop it again. |
 
 ## See also
