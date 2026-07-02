@@ -34,9 +34,9 @@ func fsRG() *resolved.ResolvedGuest {
 	}
 }
 
-func TestBuildRootDiskFromOCIJob_Filesystem(t *testing.T) {
+func TestBuildDiskFromOCIJob_Filesystem(t *testing.T) {
 	guest := cloneGuest()
-	job := buildRootDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "miles", "j", "swiftguest-root-clone-a", false)
+	job := buildDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "miles", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
 	pod := job.Spec.Template.Spec
 	if pod.NodeName != "miles" {
 		t.Errorf("download Job must pin to the clone node; got %q", pod.NodeName)
@@ -76,8 +76,8 @@ func TestBuildRootDiskFromOCIJob_Filesystem(t *testing.T) {
 	}
 }
 
-func TestBuildRootDiskFromOCIJob_Block(t *testing.T) {
-	job := buildRootDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "boba", "j", "swiftguest-root-clone-a", true)
+func TestBuildDiskFromOCIJob_Block(t *testing.T) {
+	job := buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "boba", "j", "swiftguest-root-clone-a", "sha256:disk123", true)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--file="+DiskRootDevicePath) {
 		t.Errorf("Block root must download to the raw device; got %q", strings.Join(c.Args, " "))
@@ -96,10 +96,10 @@ func TestBuildRootDiskFromOCIJob_Block(t *testing.T) {
 	}
 }
 
-func TestBuildRootDiskFromOCIJob_Creds(t *testing.T) {
+func TestBuildDiskFromOCIJob_Creds(t *testing.T) {
 	snap := fullStateCloneSnap()
 	snap.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
-	job := buildRootDiskFromOCIJob(cloneGuest(), snap, "oras:img", "miles", "j", "swiftguest-root-clone-a", false)
+	job := buildDiskFromOCIJob(cloneGuest(), snap, "oras:img", "miles", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
 	c := job.Spec.Template.Spec.Containers[0]
 	var dockerCfg bool
 	for _, e := range c.Env {
@@ -205,5 +205,90 @@ func TestMaybeRootDiskFromOCI_MaterializesDiskThenReady(t *testing.T) {
 	}
 	if res.NeedsGrowInit {
 		t.Errorf("a full-state disk is byte-exact; it must NOT be grow-init'd")
+	}
+}
+
+// fullStateWithDataDisk is a v1.1 full-state snapshot: a root disk PLUS one Block
+// data disk artifact + its captured shape.
+func fullStateWithDataDisk() *snapshotv1alpha1.SwiftSnapshot {
+	s := fullStateCloneSnap()
+	s.Status.OCI.DataDisks = []snapshotv1alpha1.OCIDataDiskArtifact{
+		{Name: "scratch", Reference: "zot.svc:5000/vmsnap:ns-snap-disk-scratch", ManifestDigest: "sha256:dd1", PushedBytes: 8192},
+	}
+	s.Status.GuestSpec = &snapshotv1alpha1.CapturedGuestSpec{
+		HasDataDisks: true,
+		DataDisks:    []snapshotv1alpha1.CapturedDataDisk{{Name: "scratch", Size: "20Gi", Block: true}},
+	}
+	return s
+}
+
+// A full-state clone whose source had a data disk must materialize that disk into
+// its own RestoreSeeded PVC and OVERRIDE rg.DataDisks so the launcher attaches the
+// clone-owned PVC (not the source's). The root disk is only reported done once the
+// data disk is Bound + its download Job Complete.
+func TestMaybeRootDiskFromOCI_MaterializesDataDisks(t *testing.T) {
+	ctx := context.Background()
+	g := cloneGuest()
+	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	r, c := newCloneReconciler(t, g, fullStateWithDataDisk())
+	r.SnapshotORASImage = "img"
+	cloneName := RootDiskCloneName(g.Name)
+	dataPVC := resolved.BlankDataDiskPVCName(g.Name, "scratch")
+
+	bind := func(name string) {
+		var p corev1.PersistentVolumeClaim
+		if err := c.Get(ctx, client.ObjectKey{Name: name, Namespace: "ns"}, &p); err != nil {
+			return
+		}
+		p.Status.Phase = corev1.ClaimBound
+		_ = c.Status().Update(ctx, &p)
+	}
+	completeJob := func(name string) {
+		var j batchv1.Job
+		if err := c.Get(ctx, client.ObjectKey{Name: name, Namespace: "ns"}, &j); err != nil {
+			return
+		}
+		j.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+		_ = c.Status().Update(ctx, &j)
+	}
+
+	rg := fsRG()
+	// Iterate the reconcile, binding/completing PVCs+Jobs as they appear, until
+	// the root disk is reported ready (or we give up).
+	var res *RootDiskCloneResult
+	for i := 0; i < 8 && res == nil; i++ {
+		_, r2, _ := r.maybeRootDiskFromOCI(ctx, g, rg)
+		res = r2
+		bind(cloneName)
+		bind(dataPVC)
+		completeJob(cloneName + "-oci-disk-dl")
+		completeJob(dataPVC + "-oci-dl")
+	}
+	if res == nil {
+		t.Fatalf("root disk never reported ready with a data disk in flight")
+	}
+
+	// The data-disk PVC must exist, be RestoreSeeded + guest-owned, Block, 20Gi.
+	var ddpvc corev1.PersistentVolumeClaim
+	if err := c.Get(ctx, client.ObjectKey{Name: dataPVC, Namespace: "ns"}, &ddpvc); err != nil {
+		t.Fatalf("data-disk clone PVC not created: %v", err)
+	}
+	if ddpvc.Labels[RestoreSeededLabel] != "true" || ddpvc.Labels["swift.kubeswift.io/role"] != "data-disk" {
+		t.Errorf("data-disk PVC labels wrong: %+v", ddpvc.Labels)
+	}
+	if ddpvc.Spec.VolumeMode == nil || *ddpvc.Spec.VolumeMode != corev1.PersistentVolumeBlock {
+		t.Errorf("captured Block data disk must clone as Block; got %+v", ddpvc.Spec.VolumeMode)
+	}
+	if got := ddpvc.Spec.Resources.Requests[corev1.ResourceStorage]; got.String() != "20Gi" {
+		t.Errorf("data-disk size = %q, want 20Gi", got.String())
+	}
+
+	// rg.DataDisks must be OVERRIDDEN to the clone-owned PVC, under the source name.
+	if len(rg.DataDisks) != 1 {
+		t.Fatalf("rg.DataDisks not overridden: %+v", rg.DataDisks)
+	}
+	d := rg.DataDisks[0]
+	if d.Name != "scratch" || d.PVCName != dataPVC || !d.Block || !d.Ready {
+		t.Errorf("overridden data disk wrong: %+v (want name=scratch pvc=%s block ready)", d, dataPVC)
 	}
 }

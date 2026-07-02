@@ -241,26 +241,35 @@ pushedBytes}`; `status.guestSpec.dataDisks[]` records the launcher-sufficient
 shape `{name, size, block}`.
 
 **Import**: for a full-state snapshot carrying data-disk artifacts (either the
-same-cluster or the source-gone path), `maybeRootDiskFromOCI` generalizes to
-materialize root **and** each data disk into guest-owned PVCs named
-`BlankDataDiskPVCName(clone, name)` (one digest-pinned download Job per disk),
-then `rg.DataDisks[i].PVCName` is overridden to the materialized PVCs —
-keeping name/Block/HostPath so device order and paths match the captured
-`config.json`. `EnsureBlankDataDisks` skips materialized (RestoreSeeded-
-labelled) PVCs — they are not blank, and the Filesystem fill Job must not
-overwrite them. The v1 `hasDataDisks` rejection is lifted **only when the
-artifacts are present** (old snapshots that recorded `hasDataDisks` without
-artifacts still fail with the source-spec-required message).
+same-cluster or the source-gone path), `maybeRootDiskFromOCI` — once the root
+disk is Bound+Complete — calls `ensureCloneDataDisks`, which materializes each
+data disk into a guest-owned, RestoreSeeded PVC named
+`BlankDataDiskPVCName(clone, name)` (one digest-pinned download Job per disk,
+the root-disk builder generalized to take a per-disk digest) and, once every
+disk is Bound + its Job Complete, **replaces `rg.DataDisks`** with entries
+pointing at the materialized PVCs (name/Block/HostPath/MountPath rebuilt exactly
+as the resolver would, so device order + paths match the captured
+`config.json`). This override is load-bearing for **both** clone paths: a
+same-source clone would otherwise resolve `rg.DataDisks` to the **source's** data
+PVCs (frozen / RWO-conflicting); a source-gone clone starts with an empty
+`rg.DataDisks` (`FromCapturedSpec` sets none). No `EnsureBlankDataDisks` change is
+needed — a cloneFromSnapshot guest carries **no `DataDiskRefs` in its own spec**,
+so `EnsureBlankDataDisks(cloneGuest)` iterates an empty slice and is a natural
+no-op; only `ensureCloneDataDisks` ever writes the clone's data PVCs. The v1
+`hasDataDisks` rejection (source-gone path) is lifted **only when the artifacts
+are present** (old snapshots that recorded `hasDataDisks` without artifacts still
+fail with the source-spec-required message).
 
 **Validation**: a source with a blank **Block** data disk (the
 cluster-validated v0.4.2 path): write a marker onto `vdc`, full-state export,
 delete the source (+ image + seed), import → Running with the `vdc` marker
 intact and `boot_id` matching.
 
-Phasing: **PR1** API (`CapturedDataDisk` + `status.oci.dataDisks`) + capture +
-image-backed rejection; **PR2** import (materialize + `rg.DataDisks` override
-+ blank-skip guard + lift the rejection); **PR3** cluster validation +
-runbook.
+Phasing: **PR1** ([#318](https://github.com/kubeswift-io/kubeswift/pull/318)) API
+(`CapturedDataDisk` + `status.oci.dataDisks`) + capture + image-backed rejection;
+**PR2** (this PR) import (`ensureCloneDataDisks` materialize + `rg.DataDisks`
+override + lift the source-gone rejection when artifacts present); **PR3** cluster
+validation + runbook flip.
 
 ## 6. Non-goals (v1)
 

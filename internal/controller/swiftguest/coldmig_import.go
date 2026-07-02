@@ -24,6 +24,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
 // maybeRootDiskFromOCI handles the root disk for a FULL-STATE cloneFromSnapshot.
@@ -103,7 +104,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 	var job batchv1.Job
 	jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 	if apierrors.IsNotFound(jerr) {
-		j := buildRootDiskFromOCIJob(guest, &snap, r.SnapshotORASImage, node, jobName, cloneName, block)
+		j := buildDiskFromOCIJob(guest, &snap, r.SnapshotORASImage, node, jobName, cloneName, snap.Status.OCI.Disk.ManifestDigest, block)
 		if err := controllerutil.SetControllerReference(guest, j, r.Scheme); err != nil {
 			return true, nil, err
 		}
@@ -122,6 +123,15 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 			if pvc.Status.Phase != corev1.ClaimBound {
 				return true, nil, fmt.Errorf("full-state clone PVC %s not yet Bound", cloneName)
 			}
+			// Root disk is materialized. A full-state snapshot may also carry
+			// secondary data disks (v1.1); materialize + attach them under the
+			// captured names and OVERRIDE rg.DataDisks so the launcher wires the
+			// clone-owned PVCs — not the source's. Only report the root disk done
+			// once every data disk is ready (an err here is the transient requeue
+			// signal the caller already treats as progress).
+			if err := r.ensureCloneDataDisks(ctx, guest, &snap, rg, node); err != nil {
+				return true, nil, err
+			}
 			return true, &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
@@ -131,12 +141,13 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 	return true, nil, fmt.Errorf("full-state clone disk download in progress")
 }
 
-// buildRootDiskFromOCIJob runs snapshot-oras --mode=download-image to fill the
-// clone's root PVC from the snapshot's oci disk artifact (pinned by digest).
-// Block PVCs attach via volumeDevices at DiskRootDevicePath; Filesystem PVCs
-// mount at DisksRootPath and the disk is image.raw. Node-pinned so the PVC
-// attaches on the clone's node. Runs as root to write the raw disk.
-func buildRootDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot, image, node, jobName, pvcName string, block bool) *batchv1.Job {
+// buildDiskFromOCIJob runs snapshot-oras --mode=download-image to fill a clone
+// disk PVC from an oci disk artifact (pinned by the given manifest digest — the
+// root disk's or a data disk's). A single PVC attaches inside the Job pod, so
+// the same in-pod path (DiskRootDevicePath for Block, DisksRootPath/image.raw
+// for Filesystem) serves any disk; only the PVC + digest differ. Node-pinned so
+// the PVC attaches on the clone's node. Runs as root to write the raw disk.
+func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot, image, node, jobName, pvcName, digest string, block bool) *batchv1.Job {
 	oci := snap.Spec.Backend.OCI
 	diskPath := DisksRootPath + "/image.raw"
 	if block {
@@ -146,7 +157,7 @@ func buildRootDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1al
 		"--mode=download-image",
 		"--file=" + diskPath,
 		"--repository=" + oci.Repository,
-		"--digest=" + snap.Status.OCI.Disk.ManifestDigest,
+		"--digest=" + digest,
 	}
 	if oci.Insecure {
 		args = append(args, "--insecure")
@@ -211,4 +222,148 @@ func buildRootDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1al
 			},
 		},
 	}
+}
+
+// ensureCloneDataDisks materializes a full-state clone's secondary data disks
+// (v1.1) from the snapshot's per-disk oci artifacts (status.oci.dataDisks) and
+// OVERRIDES rg.DataDisks so the launcher attaches the clone-owned PVCs — not the
+// source's (a same-source clone would otherwise resolve to the SOURCE's data-disk
+// PVCs, which are frozen/RWO-conflicting). Each captured disk becomes a
+// RestoreSeeded clone-owned PVC filled by a node-pinned download Job under the
+// SAME disk name (so CH's name-derived --disk path coheres with the restored
+// config.json). Returns nil only when every data disk is Bound + its Job Complete
+// and rg.DataDisks has been set; any other return is the transient requeue signal.
+//
+// Only blank / attachAsDisk disks are ever captured (the capture side rejects
+// image-backed data disks), so materializing them fresh is always correct.
+func (r *SwiftGuestReconciler) ensureCloneDataDisks(
+	ctx context.Context, guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot,
+	rg *resolved.ResolvedGuest, node string,
+) error {
+	if snap.Status.OCI == nil || len(snap.Status.OCI.DataDisks) == 0 {
+		return nil // root-disk-only full-state snapshot (v1) — nothing to do.
+	}
+	// Captured shape (size/block) keyed by name.
+	shape := map[string]snapshotv1alpha1.CapturedDataDisk{}
+	if snap.Status.GuestSpec != nil {
+		for _, cd := range snap.Status.GuestSpec.DataDisks {
+			shape[cd.Name] = cd
+		}
+	}
+
+	// Pass 1: ensure every clone-owned PVC + its download Job exists. Creating
+	// all up-front lets the per-disk downloads run concurrently.
+	allCreated := true
+	for _, art := range snap.Status.OCI.DataDisks {
+		cd := shape[art.Name]
+		pvcName := resolved.BlankDataDiskPVCName(guest.Name, art.Name)
+
+		var pvc corev1.PersistentVolumeClaim
+		perr := r.Get(ctx, client.ObjectKey{Name: pvcName, Namespace: guest.Namespace}, &pvc)
+		if apierrors.IsNotFound(perr) {
+			size := resource.MustParse("1Gi")
+			if cd.Size != "" {
+				if q, err := resource.ParseQuantity(cd.Size); err == nil {
+					size = q
+				}
+			}
+			mode := corev1.PersistentVolumeFilesystem
+			if cd.Block {
+				mode = corev1.PersistentVolumeBlock
+			}
+			p := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      pvcName,
+					Namespace: guest.Namespace,
+					Labels: map[string]string{
+						"swift.kubeswift.io/guest": guest.Name,
+						"swift.kubeswift.io/role":  "data-disk",
+						RestoreSeededLabel:         "true",
+					},
+					OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(guest, swiftGuestGVK)},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					VolumeMode:  &mode,
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{corev1.ResourceStorage: size},
+					},
+				},
+			}
+			if err := r.Create(ctx, p); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("create clone data-disk PVC %s: %w", pvcName, err)
+			}
+			allCreated = false
+			continue
+		}
+		if perr != nil {
+			return perr
+		}
+
+		jobName := pvcName + "-oci-dl"
+		var job batchv1.Job
+		jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
+		if apierrors.IsNotFound(jerr) {
+			j := buildDiskFromOCIJob(guest, snap, r.SnapshotORASImage, node, jobName, pvcName, art.ManifestDigest, cd.Block)
+			if err := controllerutil.SetControllerReference(guest, j, r.Scheme); err != nil {
+				return err
+			}
+			if err := r.Create(ctx, j); err != nil && !apierrors.IsAlreadyExists(err) {
+				return err
+			}
+			allCreated = false
+			continue
+		}
+		if jerr != nil {
+			return jerr
+		}
+	}
+	if !allCreated {
+		return fmt.Errorf("materializing %d data disk(s) from oci", len(snap.Status.OCI.DataDisks))
+	}
+
+	// Pass 2: gate on all Bound + Complete, then build the override.
+	var disks []resolved.ResolvedDataDisk
+	for _, art := range snap.Status.OCI.DataDisks {
+		cd := shape[art.Name]
+		pvcName := resolved.BlankDataDiskPVCName(guest.Name, art.Name)
+
+		var pvc corev1.PersistentVolumeClaim
+		if err := r.Get(ctx, client.ObjectKey{Name: pvcName, Namespace: guest.Namespace}, &pvc); err != nil {
+			return err
+		}
+		var job batchv1.Job
+		if err := r.Get(ctx, client.ObjectKey{Name: pvcName + "-oci-dl", Namespace: guest.Namespace}, &job); err != nil {
+			return err
+		}
+		done := false
+		for _, c := range job.Status.Conditions {
+			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+				return fmt.Errorf("clone data-disk %s download failed: %s", art.Name, c.Message)
+			}
+			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+				done = true
+			}
+		}
+		if !done || pvc.Status.Phase != corev1.ClaimBound {
+			return fmt.Errorf("clone data-disk %s not yet ready", art.Name)
+		}
+
+		rd := resolved.ResolvedDataDisk{
+			Name:    art.Name,
+			PVCName: pvcName,
+			Block:   cd.Block,
+			Format:  "raw",
+			Ready:   true,
+		}
+		if cd.Block {
+			rd.HostPath = runtimeintent.DataDiskDevicePath(art.Name)
+		} else {
+			rd.MountPath = runtimeintent.DataDiskDir(art.Name)
+			rd.HostPath = rd.MountPath + "/" + runtimeintent.DataDiskImageFile
+		}
+		disks = append(disks, rd)
+	}
+	rg.DataDisks = disks
+	return nil
 }
