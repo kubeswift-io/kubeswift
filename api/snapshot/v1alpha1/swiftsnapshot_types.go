@@ -257,6 +257,57 @@ type CapturedGuestSpec struct {
 	CPU       string `json:"cpu,omitempty"`
 	MemoryMi  int64  `json:"memoryMi,omitempty"`
 	ImageName string `json:"imageName,omitempty"`
+
+	// The fields below are the launcher-sufficient surface for a
+	// source-independent (fully cross-cluster) full-state clone: captured
+	// while the source is live so a clone can resume when the source
+	// SwiftGuest / SwiftImage / SwiftSeedProfile are gone. Populated only for
+	// full-state (includeDisk oci) captures; a memory-only snapshot leaves
+	// them empty and its clone still needs the live source spec. See
+	// docs/design/oras-cold-migration-source-independent.md.
+
+	// Storage is the resolved storage settings for the clone's root PVC
+	// (materialized from the oci disk artifact).
+	// +optional
+	Storage *CapturedStorage `json:"storage,omitempty"`
+	// RootDiskSize is the resolved root disk size (e.g. "40Gi").
+	// +optional
+	RootDiskSize string `json:"rootDiskSize,omitempty"`
+	// Network reports whether the source had tap+bridge networking.
+	// +optional
+	Network bool `json:"network,omitempty"`
+	// InterfaceNames are the source's NIC names, used to seed deterministic
+	// per-clone MAC rewrites when the source guest is gone.
+	// +optional
+	InterfaceNames []string `json:"interfaceNames,omitempty"`
+	// GuestAgent reports whether the source opted into the in-guest vsock
+	// identity agent.
+	// +optional
+	GuestAgent bool `json:"guestAgent,omitempty"`
+	// OSType is the source OS family ("linux" or "windows").
+	// +optional
+	OSType string `json:"osType,omitempty"`
+	// HasSeed reports whether the source had a SwiftSeedProfile — the clone
+	// launcher must then synthesize a placeholder seed.iso so CH --restore can
+	// open the seed disk recorded in config.json (a resume never reads it).
+	// +optional
+	HasSeed bool `json:"hasSeed,omitempty"`
+	// HasDataDisks reports whether the source had secondary data disks.
+	// Source-independent import rejects such snapshots in v1 (root-disk-only);
+	// full-state data-disk capture is a follow-on.
+	// +optional
+	HasDataDisks bool `json:"hasDataDisks,omitempty"`
+}
+
+// CapturedStorage is the resolved storage shape frozen at capture for a
+// source-independent clone's root PVC.
+type CapturedStorage struct {
+	// +optional
+	AccessMode string `json:"accessMode,omitempty"`
+	// +optional
+	VolumeMode string `json:"volumeMode,omitempty"`
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
 }
 
 // SwiftSnapshotStatus is the observed state of a SwiftSnapshot.

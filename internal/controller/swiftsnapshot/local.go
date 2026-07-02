@@ -34,9 +34,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // Annotation keys — the controller writes (input to swiftletd).
@@ -135,8 +137,21 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 
 	// Capture the source guest spec, hypervisor, and node before we
 	// write the action — these become part of the snapshot's identity
-	// and are needed by SwiftRestore.
-	status.GuestSpec = capturedGuestSpec(&guest)
+	// and are needed by SwiftRestore. For a full-state (includeDisk oci)
+	// capture, resolve the source now (it is live → resolves cleanly) to
+	// freeze the launcher-sufficient surface a source-independent clone needs
+	// when the source is gone. Best-effort: a resolve failure degrades to the
+	// minimal capture (the clone then needs the live source — no regression).
+	var rg *resolved.ResolvedGuest
+	if snap.Spec.IncludeDisk {
+		if got, rerr := resolved.NewResolver(r.Client).Resolve(ctx, &guest); rerr == nil {
+			rg = got
+		} else {
+			log.FromContext(ctx).Info("full-state capture: could not resolve source guest; source-independent surface not captured",
+				"guest", guest.Name, "err", rerr.Error())
+		}
+	}
+	status.GuestSpec = capturedGuestSpec(&guest, rg)
 	if guest.Status.Runtime != nil {
 		status.Hypervisor = guest.Status.Runtime.Hypervisor
 	}
