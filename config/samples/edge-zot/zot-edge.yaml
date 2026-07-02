@@ -1,0 +1,91 @@
+# Edge Zot registry with hub->edge sync (docs/registry/edge-zot.md).
+#
+# A per-site pull-through mirror for KubeSwift's OCI artifacts (golden images,
+# full-state snapshots, cosign referrers). Edit before applying:
+#   - extensions.sync.registries[0].urls  -> your hub registry
+#   - content prefixes                    -> the repos you mirror
+#   - tlsVerify / credentialsFile         -> per your hub's auth + TLS
+#   - the emptyDir                        -> a PVC in production
+#
+# Cluster-validated 2026-07-02 (Zot v2.1.2): on-demand sync served tag pulls,
+# digest-pinned manifest pulls, and 64 MiB chunk blobs through the edge with
+# digests identical to the hub's.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: registry
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zot-edge-config
+  namespace: registry
+data:
+  config.json: |
+    {
+      "distSpecVersion": "1.1.0",
+      "storage": {"rootDirectory": "/var/lib/registry"},
+      "http": {"address": "0.0.0.0", "port": "5000"},
+      "log": {"level": "info"},
+      "extensions": {
+        "sync": {
+          "enable": true,
+          "registries": [
+            {
+              "urls": ["https://hub.example.com"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "pollInterval": "6h",
+              "content": [
+                {"prefix": "vm-images"},
+                {"prefix": "vm-snapshots"}
+              ]
+            }
+          ]
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zot-edge
+  namespace: registry
+  labels: {app: zot-edge}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: zot-edge}}
+  template:
+    metadata:
+      labels: {app: zot-edge}
+    spec:
+      containers:
+        - name: zot
+          # The FULL image — zot-minimal has no extensions (no sync).
+          image: ghcr.io/project-zot/zot-linux-amd64:v2.1.2
+          args: ["serve", "/etc/zot/config.json"]
+          ports: [{containerPort: 5000}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/zot}
+            - {name: data, mountPath: /var/lib/registry}
+          readinessProbe:
+            httpGet: {path: /v2/, port: 5000}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap: {name: zot-edge-config}
+        # Production: replace with a PersistentVolumeClaim sized for your
+        # artifact set (a full-state snapshot is ~guest-RAM + deduped disk
+        # chunks).
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zot-edge
+  namespace: registry
+spec:
+  selector: {app: zot-edge}
+  ports: [{port: 5000, targetPort: 5000}]
