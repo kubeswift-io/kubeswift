@@ -132,6 +132,13 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 			now := metav1.Now()
+			// Preserve the full-state disk ref (P4 includeDisk): the disk is
+			// captured before this memory push, so status.OCI.Disk is already set
+			// and must survive this (re)assignment of status.OCI.
+			var disk *snapshotv1alpha1.OCIDiskArtifact
+			if status.OCI != nil {
+				disk = status.OCI.Disk
+			}
 			status.OCI = &snapshotv1alpha1.OCISnapshotStatus{
 				Reference: ociReference(snap),
 				PushedAt:  &now,
@@ -139,6 +146,7 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 				// a signing failure fails the Job). Robust against a missing byte
 				// report (which would leave rep.Signed false).
 				Signed: ociSigningRequested(snap),
+				Disk:   disk,
 			}
 			// Read the push Job's byte report (best-effort; a missing report leaves
 			// bytes/digest empty and is not a failure). status carries the registry

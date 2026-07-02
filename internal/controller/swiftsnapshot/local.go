@@ -163,9 +163,16 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	// only processes the capture once.
 	actionID := capturingActionID(snap)
 
+	// Full-state (includeDisk) capture is capture-then-terminate: the guest must
+	// stay paused after the memory snapshot so the disk is frozen at that instant
+	// for the disk-chunk step — never resume it, regardless of the spec field.
+	resumeAfter := snap.Spec.ResumeAfterSnapshot
+	if snap.Spec.IncludeDisk {
+		resumeAfter = false
+	}
 	args := captureArgs{
 		DestinationURL:      srcURL,
-		ResumeAfterSnapshot: snap.Spec.ResumeAfterSnapshot,
+		ResumeAfterSnapshot: resumeAfter,
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
