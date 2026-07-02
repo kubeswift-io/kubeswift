@@ -1,12 +1,15 @@
 package swiftsnapshot
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 func TestOCIDiskTagAndReference(t *testing.T) {
@@ -107,6 +110,42 @@ func TestBuildDiskChunkJob_InsecureAndCreds(t *testing.T) {
 	}
 	if !authVol {
 		t.Errorf("oras-auth credential volume missing")
+	}
+}
+
+// stopSourceGuest is capture-then-terminate step 0: flip the source runPolicy to
+// Stopped BEFORE the launcher Delete so the SwiftGuest controller doesn't
+// resurrect it (split-brain / disk-coherency-race fix). Must be idempotent and
+// tolerant of a source that is already stopped or already gone.
+func TestStopSourceGuest_PatchesRunningToStopped(t *testing.T) {
+	g := makeGuest("team-a", "g1")
+	g.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
+	r, c := newReconciler(t, g)
+	if err := r.stopSourceGuest(context.Background(), "team-a", "g1"); err != nil {
+		t.Fatalf("stopSourceGuest: %v", err)
+	}
+	var got swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "g1", Namespace: "team-a"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyStopped {
+		t.Errorf("source runPolicy = %q, want Stopped (else the launcher resurrects)", got.Spec.RunPolicy)
+	}
+}
+
+func TestStopSourceGuest_AlreadyStopped_NoOp(t *testing.T) {
+	g := makeGuest("team-a", "g1")
+	g.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
+	r, _ := newReconciler(t, g)
+	if err := r.stopSourceGuest(context.Background(), "team-a", "g1"); err != nil {
+		t.Fatalf("idempotent re-entry on an already-Stopped source must not error: %v", err)
+	}
+}
+
+func TestStopSourceGuest_SourceGone_NoOp(t *testing.T) {
+	r, _ := newReconciler(t) // no source guest
+	if err := r.stopSourceGuest(context.Background(), "team-a", "nonexistent"); err != nil {
+		t.Fatalf("a missing source must be a no-op, not an error: %v", err)
 	}
 }
 
