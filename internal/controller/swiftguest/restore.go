@@ -331,6 +331,17 @@ func BuildRestorePod(
 	if rg.HasSeed() && seedConfigMapName != "" {
 		mounts = append(mounts, corev1.VolumeMount{Name: "seed", MountPath: SeedPath})
 	}
+	// Secondary VM data disks (v1.1 full-state clones): the captured config.json
+	// records every disk, and CH --restore re-opens each one — so a data disk
+	// materialized from oci MUST be attached at the SAME path the launcher passed
+	// at capture (Block → volumeDevices at HostPath; Filesystem → mount dir),
+	// exactly as the regular launcher does. Without this CH --restore fails with
+	// "Cannot open disk /dev/kubeswift-data-<name>". The disks are made ready +
+	// rg.DataDisks is overridden to the clone-owned PVCs by ensureCloneDataDisks
+	// before this pod is built.
+	volumes = append(volumes, dataDiskVolumes(rg)...)
+	mounts = append(mounts, dataDiskMounts(rg)...)
+	volumeDevices = append(volumeDevices, dataDiskDevices(rg)...)
 	if params.IsClone() {
 		// In clone mode the launcher reads the staged+patched copy.
 		// The RO source mount stays only on the init container —
