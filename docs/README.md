@@ -80,6 +80,7 @@ The `docs/` directory also contains these focused reference documents:
 - [snapshots/local-snapshots.md](snapshots/local-snapshots.md) — Tier B (local) memory snapshots
 - [snapshots/s3-snapshots.md](snapshots/s3-snapshots.md) — Tier C (S3) cluster-portable snapshots
 - [snapshots/scheduled-snapshots.md](snapshots/scheduled-snapshots.md) — Cron-scheduled snapshots + keep-N retention
+- [registry/edge-zot.md](registry/edge-zot.md) — Edge registry profile: per-site Zot mirroring VM artifacts from a hub (`zot sync`), incl. air-gap feeding
 
 ### Kernel boot
 
