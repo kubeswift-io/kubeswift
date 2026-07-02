@@ -4,16 +4,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -27,30 +30,35 @@ import (
 // overlaid (for resolution); the real guest keeps its identity
 // (name/namespace/annotations) and is used everywhere else.
 //
-// Returns (effective, failReason, requeue, err):
-//   - effective != nil  → resolve THIS instead of the real guest.
-//   - failReason != ""  → set Resolved=False / phase=Failed (terminal).
-//   - requeue           → snapshot not Ready yet; re-reconcile.
+// Returns (effective, preResolved, failReason, requeue, err):
+//   - effective != nil   → resolve THIS instead of the real guest.
+//   - preResolved != nil → skip the resolver entirely and use THIS ResolvedGuest
+//     (the source-independent path — the source guest/image/seedProfile are gone
+//     and rg is built from the snapshot's captured surface via FromCapturedSpec).
+//   - failReason != ""   → set Resolved=False / phase=Failed (terminal).
+//   - requeue            → snapshot not Ready yet; re-reconcile.
 //
-// PR 3a handles Tier B (local, same-node) snapshots. Tier C (s3) needs the
-// download path (PR 3b); the source guest must be live (the snapshot's
-// CapturedGuestSpec is validation-only — cross-cluster/source-gone clones are a
-// future enhancement).
+// PR 3a handles Tier B (local, same-node) snapshots; Tier C (s3/oci) adds the
+// download path. When the source guest still exists its live spec is used (the
+// validated same-cluster path). When it is GONE and the snapshot is a full-state
+// oci snapshot carrying the captured launcher-sufficient surface (SI PR1), the
+// clone resolves source-independently — the fully cross-cluster path
+// (docs/design/oras-cold-migration-source-independent.md).
 func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 	ctx context.Context, guest *swiftv1alpha1.SwiftGuest,
-) (*swiftv1alpha1.SwiftGuest, string, bool, error) {
+) (*swiftv1alpha1.SwiftGuest, *resolved.ResolvedGuest, string, bool, error) {
 	src := guest.Spec.CloneFromSnapshot
 
 	var snap snapshotv1alpha1.SwiftSnapshot
 	if err := r.Get(ctx, client.ObjectKey{Name: src.SnapshotRef.Name, Namespace: guest.Namespace}, &snap); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, "SwiftSnapshot " + src.SnapshotRef.Name + " not found", false, nil
+			return nil, nil, "SwiftSnapshot " + src.SnapshotRef.Name + " not found", false, nil
 		}
-		return nil, "", false, err
+		return nil, nil, "", false, err
 	}
 	if snap.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseReady {
 		// Transient — the snapshot may still be Capturing/Uploading.
-		return nil, "", true, nil
+		return nil, nil, "", true, nil
 	}
 
 	// Resolve the on-node snapshot directory + the node the clone runs on.
@@ -63,81 +71,72 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendLocal:
 		if snap.Status.NodeName == "" || snap.Spec.Backend.Local == nil || snap.Spec.Backend.Local.HostPath == "" {
-			return nil, "SwiftSnapshot " + snap.Name + " is missing status.nodeName or backend.local.hostPath", false, nil
+			return nil, nil, "SwiftSnapshot " + snap.Name + " is missing status.nodeName or backend.local.hostPath", false, nil
 		}
 		snapshotPath, node = snap.Spec.Backend.Local.HostPath, snap.Status.NodeName
 	case snapshotv1alpha1.SnapshotBackendS3:
 		node = src.TargetNode
 		if node == "" {
-			return nil, "cloneFromSnapshot from a Tier C (s3) snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
+			return nil, nil, "cloneFromSnapshot from a Tier C (s3) snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
 		}
 		if snap.Status.S3 == nil || snap.Status.S3.Location == "" {
-			return nil, "SwiftSnapshot " + snap.Name + " has no status.s3 — its upload is not complete", false, nil
+			return nil, nil, "SwiftSnapshot " + snap.Name + " has no status.s3 — its upload is not complete", false, nil
 		}
 		done, failReason, derr := r.ensureCloneDownloadJob(ctx, guest, &snap, node)
 		if derr != nil {
-			return nil, "", false, derr
+			return nil, nil, "", false, derr
 		}
 		if failReason != "" {
-			return nil, failReason, false, nil
+			return nil, nil, failReason, false, nil
 		}
 		if !done {
 			// Still downloading the snapshot artifacts onto the target node.
-			return nil, "", true, nil
+			return nil, nil, "", true, nil
 		}
 		snapshotPath = clonecommon.S3LocalDir(&snap)
 	case snapshotv1alpha1.SnapshotBackendOCI:
 		node = src.TargetNode
 		if node == "" {
-			return nil, "cloneFromSnapshot from an oci snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
+			return nil, nil, "cloneFromSnapshot from an oci snapshot requires spec.cloneFromSnapshot.targetNode", false, nil
 		}
 		if snap.Status.OCI == nil || snap.Status.OCI.ManifestDigest == "" {
-			return nil, "SwiftSnapshot " + snap.Name + " has no status.oci — its push is not complete", false, nil
+			return nil, nil, "SwiftSnapshot " + snap.Name + " has no status.oci — its push is not complete", false, nil
 		}
 		done, failReason, derr := r.ensureCloneDownloadJob(ctx, guest, &snap, node)
 		if derr != nil {
-			return nil, "", false, derr
+			return nil, nil, "", false, derr
 		}
 		if failReason != "" {
-			return nil, failReason, false, nil
+			return nil, nil, failReason, false, nil
 		}
 		if !done {
 			// Still pulling the snapshot artifacts onto the target node.
-			return nil, "", true, nil
+			return nil, nil, "", true, nil
 		}
 		snapshotPath = clonecommon.S3LocalDir(&snap)
 	default:
-		return nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local, s3, or oci); got " + string(snap.Spec.Backend.Type), false, nil
+		return nil, nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local, s3, or oci); got " + string(snap.Spec.Backend.Type), false, nil
 	}
 
-	// The clone needs the source guest's full spec (image/seed/class) to build
+	// The clone prefers the source guest's full spec (image/seed/class) to build
 	// the launcher pod — a fresh disk from the source image plus the restored
-	// memory. The snapshot's CapturedGuestSpec is insufficient (CPU/mem/image
-	// name only), so the source guest must still exist.
+	// memory. When the source is GONE, a full-state oci snapshot carrying the
+	// captured launcher-sufficient surface (SI PR1) can still clone
+	// source-independently — the disk comes from the oci disk artifact and rg is
+	// built from the captured surface instead of a live spec.
 	var source swiftv1alpha1.SwiftGuest
 	if err := r.Get(ctx, client.ObjectKey{Name: snap.Spec.GuestRef.Name, Namespace: guest.Namespace}, &source); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, "source SwiftGuest " + snap.Spec.GuestRef.Name + " no longer exists; cloneFromSnapshot needs the source spec", false, nil
+			return r.prepareSourceIndependentClone(ctx, guest, &snap, snapshotPath, node)
 		}
-		return nil, "", false, err
+		return nil, nil, "", false, err
 	}
 
 	// Self-stamp the clone-mode restore annotations (mirrors what the
 	// SwiftRestore controller stamps on its clone targets) if not already set.
 	annos := cloneRestoreAnnotations(guest, &snap, &source, snapshotPath, node)
-	if !cloneAnnotationsMatch(guest.Annotations, annos) {
-		patched := guest.DeepCopy()
-		if patched.Annotations == nil {
-			patched.Annotations = map[string]string{}
-		}
-		for k, v := range annos {
-			patched.Annotations[k] = v
-		}
-		if err := r.Patch(ctx, patched, client.MergeFrom(guest)); err != nil {
-			return nil, "", false, err
-		}
-		// Reflect the stamp in-memory so the rest of this reconcile sees it.
-		guest.Annotations = patched.Annotations
+	if err := r.stampCloneAnnotations(ctx, guest, annos); err != nil {
+		return nil, nil, "", false, err
 	}
 
 	// Effective guest: the real guest's identity (name/namespace/annotations/
@@ -148,7 +147,131 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 	clonePolicy := guest.Spec.RunPolicy
 	effective.Spec = source.Spec
 	effective.Spec.RunPolicy = clonePolicy
-	return effective, "", false, nil
+	return effective, nil, "", false, nil
+}
+
+// prepareSourceIndependentClone handles a cloneFromSnapshot whose SOURCE guest no
+// longer exists — the fully cross-cluster path
+// (docs/design/oras-cold-migration-source-independent.md). It requires a
+// FULL-STATE oci snapshot (status.oci.disk — the frozen runtime disk is in the
+// registry, so no SwiftImage is needed) carrying the captured
+// launcher-sufficient surface (status.guestSpec.storage — SI PR1); anything else
+// genuinely needs the live source spec and fails with the pre-SI message.
+//
+// The returned ResolvedGuest is built by resolved.FromCapturedSpec: the clone's
+// own guestClass supplies the system-default shell, the captured surface
+// supplies the resume-specific config, RootDisk.FromOCI routes the root disk to
+// maybeRootDiskFromOCI, and — when the source had a seedProfile — a minimal
+// placeholder NoCloud seed satisfies CH --restore's re-open of the seed.iso
+// disk recorded in config.json (a resume never reads seed content; see design
+// D3 — a later reboot has no real seed, the vsock agent is the identity path).
+func (r *SwiftGuestReconciler) prepareSourceIndependentClone(
+	ctx context.Context,
+	guest *swiftv1alpha1.SwiftGuest,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+	snapshotPath, node string,
+) (*swiftv1alpha1.SwiftGuest, *resolved.ResolvedGuest, string, bool, error) {
+	captured := snap.Status.GuestSpec
+	if snap.Status.OCI == nil || snap.Status.OCI.Disk == nil || snap.Status.OCI.Disk.ManifestDigest == "" ||
+		captured == nil || captured.Storage == nil {
+		// Not a full-state snapshot with the captured surface — the
+		// pre-source-independence contract applies.
+		return nil, nil, "source SwiftGuest " + snap.Spec.GuestRef.Name + " no longer exists; cloneFromSnapshot needs the source spec (only a full-state oci snapshot with a captured guest spec clones source-independently)", false, nil
+	}
+	if captured.HasDataDisks {
+		return nil, nil, "source-independent clone: snapshot " + snap.Name + "'s source had data disks, which full-state capture does not carry (v1 is root-disk-only); the source spec is required", false, nil
+	}
+	var class swiftv1alpha1.SwiftGuestClass
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil, "SwiftGuestClass " + guest.Spec.GuestClassRef.Name + " not found", false, nil
+		}
+		return nil, nil, "", false, err
+	}
+
+	cpu, _ := strconv.Atoi(captured.CPU) // "" → 0; FromCapturedSpec output feeds pod limits only (CH --restore uses config.json)
+	in := resolved.CapturedInput{
+		CPU:              cpu,
+		MemoryMi:         int(captured.MemoryMi),
+		RootDiskSize:     captured.RootDiskSize,
+		AccessMode:       captured.Storage.AccessMode,
+		VolumeMode:       captured.Storage.VolumeMode,
+		StorageClassName: captured.Storage.StorageClassName,
+		Network:          captured.Network,
+		OSType:           captured.OSType,
+		InterfaceNames:   captured.InterfaceNames,
+	}
+	rg := resolved.FromCapturedSpec(guest, &class, in)
+	if captured.HasSeed {
+		rg.Seed = placeholderSeed(guest.Name)
+	}
+
+	// A stub source (identity + the captured interface names + agent opt-in)
+	// makes the shared annotation builder work unchanged: MAC rewrites seed from
+	// interface names, the runtime-dir FROM prefix derives from the source's
+	// ns/name — which config.json records — and agent-enablement carries over.
+	// Cross-cluster note: the FROM prefix uses snap.Namespace, so the snapshot
+	// must be recreated in a namespace with the SAME NAME as the source's
+	// original namespace (documented in the runbook).
+	stub := stubSourceFromCaptured(snap, captured)
+	annos := cloneRestoreAnnotations(guest, snap, stub, snapshotPath, node)
+	if err := r.stampCloneAnnotations(ctx, guest, annos); err != nil {
+		return nil, nil, "", false, err
+	}
+	return nil, rg, "", false, nil
+}
+
+// stampCloneAnnotations idempotently patches the clone-mode restore annotations
+// onto the real guest (in-cluster + in-memory).
+func (r *SwiftGuestReconciler) stampCloneAnnotations(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, annos map[string]string) error {
+	if cloneAnnotationsMatch(guest.Annotations, annos) {
+		return nil
+	}
+	patched := guest.DeepCopy()
+	if patched.Annotations == nil {
+		patched.Annotations = map[string]string{}
+	}
+	for k, v := range annos {
+		patched.Annotations[k] = v
+	}
+	if err := r.Patch(ctx, patched, client.MergeFrom(guest)); err != nil {
+		return err
+	}
+	// Reflect the stamp in-memory so the rest of this reconcile sees it.
+	guest.Annotations = patched.Annotations
+	return nil
+}
+
+// stubSourceFromCaptured synthesizes a minimal source SwiftGuest from the
+// snapshot's captured surface, carrying exactly what cloneRestoreAnnotations
+// consumes: identity (ns/name → runtime-dir FROM prefix), interface names (MAC
+// rewrites), and the guest-agent opt-in.
+func stubSourceFromCaptured(snap *snapshotv1alpha1.SwiftSnapshot, captured *snapshotv1alpha1.CapturedGuestSpec) *swiftv1alpha1.SwiftGuest {
+	stub := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: snap.Spec.GuestRef.Name, Namespace: snap.Namespace},
+	}
+	for _, n := range captured.InterfaceNames {
+		stub.Spec.Interfaces = append(stub.Spec.Interfaces, swiftv1alpha1.GuestInterface{Name: n})
+	}
+	if captured.GuestAgent {
+		stub.Spec.GuestAgent = &swiftv1alpha1.GuestAgentSpec{Enabled: true}
+	}
+	return stub
+}
+
+// placeholderSeed is the minimal NoCloud seed for a source-independent clone
+// whose source had a seedProfile. CH --restore re-opens the seed.iso disk path
+// recorded in config.json and refuses to restore when the file is missing; the
+// launcher rebuilds seed.iso from the seed ConfigMap, so giving rg a minimal
+// seed makes the existing ConfigMap + ISO machinery produce a file at the right
+// path. The resumed guest never reads it (cloud-init already ran in the
+// captured state). Content is deliberately inert.
+func placeholderSeed(cloneName string) *resolved.Seed {
+	return &resolved.Seed{
+		Datasource: "NoCloud",
+		MetaData:   "instance-id: " + cloneName + "\nlocal-hostname: " + cloneName + "\n",
+		UserData:   "#cloud-config\n# Placeholder seed for a source-independent full-state clone.\n# The resumed guest never reads this (cloud-init already ran before capture).\n",
+	}
 }
 
 // cloneRestoreAnnotations builds the clone-mode restore-receive annotations for

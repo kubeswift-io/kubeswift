@@ -118,8 +118,9 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// resolution (seed/intent/rootdisk/pod) runs unchanged off the now-stamped
 	// restore annotations + the source-resolved rg.
 	guestForResolve := &guest
+	var rg *resolved.ResolvedGuest
 	if guest.UsesCloneFromSnapshot() {
-		effective, failReason, requeue, perr := r.prepareCloneFromSnapshot(ctx, &guest)
+		effective, preResolved, failReason, requeue, perr := r.prepareCloneFromSnapshot(ctx, &guest)
 		if perr != nil {
 			return ctrl.Result{}, perr
 		}
@@ -143,26 +144,38 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
-		guestForResolve = effective
+		if preResolved != nil {
+			// Source-independent full-state clone: the source guest (and its
+			// SwiftImage/seedProfile) are gone; rg was built from the snapshot's
+			// captured surface (FromCapturedSpec). Skip the resolver — its
+			// image-oriented path cannot run and is not needed (the disk comes
+			// from the oci artifact via RootDisk.FromOCI).
+			rg = preResolved
+		} else {
+			guestForResolve = effective
+		}
 	}
 
-	res := resolved.NewResolver(r.Client)
-	rg, err := res.Resolve(ctx, guestForResolve)
-	if err != nil {
-		var re *resolved.ResolutionError
-		if errors.As(err, &re) {
-			// Set Resolved=False, phase=Failed; do not create pod
-			status := guest.Status.DeepCopy()
-			SetResolvedCondition(status, false, re.Reason)
-			status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
-			recordGuestMetrics(&guest, &guest.Status, status, nil)
-			if err := r.patchStatus(ctx, &guest, status); err != nil {
-				return ctrl.Result{}, err
+	if rg == nil {
+		res := resolved.NewResolver(r.Client)
+		var err error
+		rg, err = res.Resolve(ctx, guestForResolve)
+		if err != nil {
+			var re *resolved.ResolutionError
+			if errors.As(err, &re) {
+				// Set Resolved=False, phase=Failed; do not create pod
+				status := guest.Status.DeepCopy()
+				SetResolvedCondition(status, false, re.Reason)
+				status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
+				recordGuestMetrics(&guest, &guest.Status, status, nil)
+				if err := r.patchStatus(ctx, &guest, status); err != nil {
+					return ctrl.Result{}, err
+				}
+				logger.Info("resolution failed", "reason", re.Reason, "resource", re.AffectedResource)
+				return ctrl.Result{}, nil
 			}
-			logger.Info("resolution failed", "reason", re.Reason, "resource", re.AffectedResource)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
 	}
 
 	// Set Resolved=True
@@ -421,8 +434,11 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// (status-only, not load-bearing for the runtime). Design doc §A2/§A6.
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
+	// RootDisk.FromOCI (a source-independent full-state clone) has NO prepared
+	// image — its disk is materialized from the snapshot's oci disk artifact
+	// inside EnsureRootDiskClone (maybeRootDiskFromOCI), so it enters here too.
 	var rootDiskClone *RootDiskCloneResult
-	if rg.PreparedImage.PVCName != "" && !rg.HasKernel() {
+	if (rg.PreparedImage.PVCName != "" || rg.RootDisk.FromOCI) && !rg.HasKernel() {
 		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
 			// Clone not ready — requeue

@@ -151,14 +151,27 @@ smaller change). The vsock identity agent path is unchanged.
 
 ## 4. Phasing
 
-- **PR 1 — capture surface:** expand `CapturedGuestSpec` (D1) + populate it at
-  capture from the resolved source guest; `make generate` + chart sync. Additive;
-  no behaviour change.
-- **PR 2 — resolver path:** `resolved.FromCapturedSpec` (D2) + unit tests (pure).
-- **PR 3 — import fallback:** `prepareCloneFromSnapshot` source-gone branch (D5) +
-  minimal-seed launcher path (D3) + MAC-from-names (D6) + webhook rejects
-  source-gone-with-data-disks (D4).
-- **PR 4 — CLI + validation:** `swiftctl guest import` works with the source (and
+- **PR 1 — capture surface (SHIPPED #311):** expand `CapturedGuestSpec` (D1) +
+  populate it at capture from the resolved source guest; `make generate` + chart
+  sync. Additive; no behaviour change.
+- **PR 2 — resolver path (SHIPPED #312):** `resolved.FromCapturedSpec` (D2) +
+  `RootDisk.FromOCI` sentinel + unit tests (pure).
+- **PR 3 — import fallback (this PR):** `prepareCloneFromSnapshot` dispatches a
+  source-gone clone to `prepareSourceIndependentClone` (D5): guards full-state +
+  captured surface (else the pre-SI needs-the-source-spec message) and rejects
+  captured `hasDataDisks` (D4, controller-side — races-immune vs an
+  admission-time check); builds `rg` via `FromCapturedSpec` from the clone's own
+  guestClass + the captured surface; a `placeholderSeed` (minimal NoCloud) rides
+  the EXISTING seed-ConfigMap + launcher ISO machinery so CH `--restore` can
+  re-open the config.json seed disk with zero Rust change (D3); a
+  `stubSourceFromCaptured` (identity + interface names + agent opt-in) feeds the
+  shared `cloneRestoreAnnotations` builder so MAC rewrites/runtime-dir
+  prefixes/agent-enable derive from the captured surface (D6). The controller
+  consumes the pre-resolved `rg` (skipping the image-oriented resolver) and the
+  root-disk gate also fires on `RootDisk.FromOCI` so `maybeRootDiskFromOCI`
+  materializes the disk. Same-cluster clones are byte-identical in behaviour
+  (source-present keeps the effective-spec path).
+- **PR 4 — validation:** `swiftctl guest import` works with the source (and
   its SwiftImage + seedProfile) deleted; cluster-validate by simulating
   cross-cluster (below). Runbook update (drop the same-cluster scope note).
 
