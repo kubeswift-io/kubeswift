@@ -1,10 +1,13 @@
 package swiftrestore
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -418,4 +421,70 @@ func TestRuntimeDirPrefix_FormatMatchesSwiftRuntime(t *testing.T) {
 // here but the call site reads better with the local name.
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
+}
+
+// A clone target must NOT inherit the source's runPolicy: the natural DR flow
+// restores FROM a stopped source, and an inherited Stopped leaves the target
+// with no launcher pod — wedging the restore in Restoring forever. runPolicy is
+// target-owned: Running by default, Stopped only when the operator asked for
+// resumeAfterRestore=false. (F2 investigation, 2026-07-02.)
+func TestEnsureCloneTargetGuest_StoppedSource_TargetRuns(t *testing.T) {
+	source := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "ns"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef: corev1.LocalObjectReference{Name: "cls"},
+			RunPolicy:     swiftv1alpha1.RunPolicyStopped, // stopped source (the DR case)
+		},
+	}
+	restore := &snapshotv1alpha1.SwiftRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "ns"},
+		Spec: snapshotv1alpha1.SwiftRestoreSpec{
+			SnapshotRef:        snapshotv1alpha1.SwiftRestoreSnapshotRef{Name: "snap"},
+			TargetGuest:        snapshotv1alpha1.SwiftRestoreTarget{Name: "clone"},
+			ResumeAfterRestore: true,
+		},
+	}
+	r, c := newReconciler(t, source, restore)
+	got, err := r.ensureCloneTargetGuest(context.Background(), restore, source, map[string]string{"a": "b"})
+	if err != nil {
+		t.Fatalf("ensureCloneTargetGuest: %v", err)
+	}
+	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
+		t.Errorf("target runPolicy = %q, want Running (must not inherit the stopped source's)", got.Spec.RunPolicy)
+	}
+	var stored swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "clone", Namespace: "ns"}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
+		t.Errorf("stored target runPolicy = %q, want Running", stored.Spec.RunPolicy)
+	}
+}
+
+// resumeAfterRestore=false still yields a Stopped target (the explicit ask).
+func TestEnsureCloneTargetGuest_NoResume_TargetStopped(t *testing.T) {
+	source := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "ns"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			ImageRef:  &corev1.LocalObjectReference{Name: "img"},
+			RunPolicy: swiftv1alpha1.RunPolicyRunning,
+		},
+	}
+	restore := &snapshotv1alpha1.SwiftRestore{
+		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "ns"},
+		Spec: snapshotv1alpha1.SwiftRestoreSpec{
+			SnapshotRef: snapshotv1alpha1.SwiftRestoreSnapshotRef{Name: "snap"},
+			TargetGuest: snapshotv1alpha1.SwiftRestoreTarget{Name: "clone"},
+			// ResumeAfterRestore false (zero value)
+		},
+	}
+	r, _ := newReconciler(t, source, restore)
+	got, err := r.ensureCloneTargetGuest(context.Background(), restore, source, nil)
+	if err != nil {
+		t.Fatalf("ensureCloneTargetGuest: %v", err)
+	}
+	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyStopped {
+		t.Errorf("target runPolicy = %q, want Stopped (resumeAfterRestore=false)", got.Spec.RunPolicy)
+	}
 }
