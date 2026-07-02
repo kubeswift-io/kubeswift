@@ -1,0 +1,202 @@
+# Source-independent (fully cross-cluster) full-state clone — design
+
+Status: **Proposed** — 2026-07-02. Extends
+[`oras-cold-migration.md`](oras-cold-migration.md) (P4). Grounded in a code
+investigation of the clone/resolve/launch path (references below are to `main`
+after PR #309).
+
+## 1. The problem
+
+P4 ships cold migration end-to-end **same-cluster**: `swiftctl guest export`
+pushes a full-state (memory + disk) artifact pair to a registry, and `guest
+import` resumes it. But "import" is not yet fully cross-cluster: it still resolves
+the **live source guest's spec**. A full-state clone today has **three live-source
+dependencies**, all of which must exist in the target namespace:
+
+| # | Dependency | Where | Why it fires |
+|---|---|---|---|
+| 1 | The source **SwiftGuest** | [`clone.go:120`](../../internal/controller/swiftguest/clone.go) — `prepareCloneFromSnapshot` does `effective.Spec = source.Spec` | Builds the clone launcher from the source spec. |
+| 2 | The source **SwiftImage** | [`resolver.go` `resolveDiskBoot`](../../internal/resolved/resolver.go) Gets it and requires `Ready` | The resolver is image-oriented — it resolves `PreparedImage` from the effective spec's `imageRef` even though the clone's disk actually comes from oci (`maybeRootDiskFromOCI` overrides `rg.PreparedImage.PVCName` afterwards). |
+| 3 | The source **SwiftSeedProfile** | [`restore.go:221-332`](../../internal/controller/swiftguest/restore.go) rebuilds `seed.iso` when `rg.HasSeed()` | CH `--restore` re-opens the `seed.iso` disk path recorded in `config.json` and **refuses to restore if the file is missing**. The launcher reconstructs it deterministically from the seed ConfigMap (resolved from the source `seedProfileRef`). |
+
+For a true cross-cluster move (source cluster A drained/gone), none of these exist
+in cluster B. Only the **registry artifacts** (memory + disk) travel. So the design
+question is: **what must the snapshot carry so the target can build the clone
+launcher from the registry alone?**
+
+## 2. What a full-state *resume* actually needs
+
+A full-state clone is a **resume**, not a boot. That collapses most of the source
+spec to irrelevance:
+
+- **CPU / memory** come from the captured `config.json` (CH `--restore` uses the
+  captured vCPU count + RAM). The pod's *resource limits* still need values — take
+  them from the captured spec (already `status.guestSpec.{cpu,memoryMi}`).
+- **The root disk** comes from the oci disk artifact (`maybeRootDiskFromOCI`). The
+  clone needs the **storage class / accessMode / volumeMode / size** for the
+  materialized PVC — from the clone's own `guestClassRef` + captured storage.
+- **The image is NOT needed** — the disk is byte-materialized from oci, not cloned
+  from a base image. Dependency #2 is *incidental*, not essential.
+- **Cloud-init does NOT re-run** — the guest resumes mid-flight. So the seed
+  *content* is irrelevant to the resume; CH only needs a **file at the seed.iso
+  path** so the disk device opens (dependency #3 is a file-existence requirement,
+  not a content requirement).
+- **Networking**: the launcher sets up tap/br0/dnsmasq (+ any secondary NICs). It
+  needs to know networking is on and the **interface names** (for deterministic
+  per-clone MAC rewrites — [`ComputeMACRewrites`](../../internal/snapshot/clonecommon/mac.go)
+  uses only `source.Spec.Interfaces[].name`, not the live MACs).
+- **guestAgent / osType** affect the launcher (vsock, Windows vs Linux).
+
+## 3. Decisions
+
+### D1 — Expand `status.capturedGuestSpec` to a launcher-sufficient surface
+
+Capture, at snapshot time, exactly the fields the resume launcher consumes (and no
+more — avoid re-capturing what `config.json` already holds):
+
+```go
+type CapturedGuestSpec struct {
+    CPU       string `json:"cpu,omitempty"`       // existing (pod limits)
+    MemoryMi  int64  `json:"memoryMi,omitempty"`  // existing (pod limits)
+    ImageName string `json:"imageName,omitempty"` // existing (informational)
+
+    // NEW — the launcher-sufficient surface (populated for includeDisk captures):
+    Storage       *CapturedStorage `json:"storage,omitempty"`       // accessMode/volumeMode/storageClassName
+    RootDiskSize  string           `json:"rootDiskSize,omitempty"`  // e.g. "40Gi"
+    Network       bool             `json:"network,omitempty"`       // networking enabled
+    InterfaceNames []string        `json:"interfaceNames,omitempty"`// for MAC-rewrite seeding
+    GuestAgent    bool             `json:"guestAgent,omitempty"`    // vsock agent opted in
+    OSType        string           `json:"osType,omitempty"`        // linux|windows
+    HasSeed       bool             `json:"hasSeed,omitempty"`       // source had a seedProfile
+}
+```
+
+Populated by the SwiftSnapshot controller from the resolved source guest at capture
+(the source is live *then*). This is additive — a CRD change (`make generate` +
+chart sync), no breaking field.
+
+### D2 — Resolver: a "full-state clone, disk-from-oci, no image" path (the crux)
+
+The resolver requires exactly one of `imageRef`/`kernelRef`
+([`resolver.go:41-45`](../../internal/resolved/resolver.go)). Add a third boot
+source it already half-knows about: **`cloneFromSnapshot`**. Today
+`UsesCloneFromSnapshot()` short-circuits to a "not implemented" error and the
+SwiftGuest controller routes around it via the effective-spec trick. Instead:
+
+- **Keep the effective-spec fast path when the source guest exists** (no behaviour
+  change for same-cluster — the validated path stays exactly as-is).
+- **When the source guest is absent AND the snapshot is a full-state oci snapshot**
+  (`status.oci.disk` set + `status.capturedGuestSpec.storage` populated), the
+  SwiftGuest controller **synthesizes `rg` directly from `CapturedGuestSpec`** — a
+  new `resolved.FromCapturedSpec(guest, captured)` constructor that fills
+  `Resources`, `Storage`, `RootDisk`, `Network`, `HasSeed=false` (see D3), and a
+  `RootDisk.FromOCI=true` sentinel — **skipping image resolution entirely**.
+  `maybeRootDiskFromOCI` then supplies the disk as it already does.
+
+`FromCapturedSpec` is a pure function (guest + captured → `*ResolvedGuest`), unit-
+testable with no cluster. This contains the blast radius: the image-oriented
+resolver is untouched; the new path is a parallel constructor gated on
+"source-gone + full-state".
+
+### D3 — Seed: a deterministic minimal placeholder (recommended), not captured content
+
+CH `--restore` needs a **file** at the config.json seed path, not the original
+bytes (cloud-init won't re-run). Three options considered:
+
+- **(a) Capture seed content** into `CapturedGuestSpec` → rebuild the real seed.iso.
+  Heaviest; re-captures data the resume ignores.
+- **(b) Chunk seed.iso to oci** as a third artifact. Extra transfer + plumbing for
+  bytes the resume ignores.
+- **(c) Rebuild a deterministic *minimal* NoCloud seed.iso** at the config.json
+  path (empty/placeholder user-data). **Recommended.** The resume opens the disk
+  and never reads it. Set `CapturedGuestSpec.HasSeed` so the launcher knows to
+  synthesize the placeholder at the right path; `FromCapturedSpec` sets
+  `HasSeed=false` on `rg` so the *content* path is skipped, and the launcher writes
+  a minimal cidata ISO purely to satisfy the disk-open.
+
+**Caveat (documented):** a source-independent clone that later *reboots* has no
+real seed — the identity-regen bootcmd would not fire. This is acceptable because
+the recommended identity path is the **in-guest vsock agent** (regenerate in place,
+no reboot — [`identity-regeneration.md`](../snapshots/identity-regeneration.md)),
+and the CH v52 clone-reboot firmware hang already discourages the reboot path.
+Operators needing the real seed on a source-independent clone use option (a)/(b) —
+tracked, not built in v1.
+
+### D4 — Data disks: out of scope for v1
+
+Secondary data disks (`dataDiskRefs`) would each need their own oci artifact +
+materialization in the target. v1 source-independence is **root-disk-only**: the
+webhook/controller rejects a source-gone import of a snapshot whose source had data
+disks (`CapturedGuestSpec` records their presence). Full-state data-disk capture is
+a v1.1 follow-on (chunk each data disk to oci alongside the root).
+
+### D5 — `prepareCloneFromSnapshot`: fall back to captured spec
+
+```
+source guest exists?
+  ├─ yes → effective.Spec = source.Spec   (validated same-cluster path, unchanged)
+  └─ no  → full-state oci snapshot with a populated CapturedGuestSpec?
+             ├─ yes → rg = resolved.FromCapturedSpec(guest, snap.Status.CapturedGuestSpec)
+             │         MAC rewrites from CapturedGuestSpec.InterfaceNames
+             └─ no  → fail (today's "source ... no longer exists" — a memory-only
+                       or pre-expansion snapshot genuinely needs the source spec)
+```
+
+### D6 — Identity
+
+MAC rewrites derive from `CapturedGuestSpec.InterfaceNames` (falls back to `eth0`).
+`ComputeMACRewrites` gains an overload taking names instead of a `*SwiftGuest`
+(or the caller synthesizes a stub guest with the captured interface names —
+smaller change). The vsock identity agent path is unchanged.
+
+## 4. Phasing
+
+- **PR 1 — capture surface:** expand `CapturedGuestSpec` (D1) + populate it at
+  capture from the resolved source guest; `make generate` + chart sync. Additive;
+  no behaviour change.
+- **PR 2 — resolver path:** `resolved.FromCapturedSpec` (D2) + unit tests (pure).
+- **PR 3 — import fallback:** `prepareCloneFromSnapshot` source-gone branch (D5) +
+  minimal-seed launcher path (D3) + MAC-from-names (D6) + webhook rejects
+  source-gone-with-data-disks (D4).
+- **PR 4 — CLI + validation:** `swiftctl guest import` works with the source (and
+  its SwiftImage + seedProfile) deleted; cluster-validate by simulating
+  cross-cluster (below). Runbook update (drop the same-cluster scope note).
+
+## 5. Validation strategy (one cluster)
+
+True cross-cluster can't be hardware-validated with one cluster, so **simulate**
+source-gone in the same cluster:
+
+1. Boot a source guest, plant a sentinel + record `boot_id`.
+2. `swiftctl guest export` (full-state oci) → Ready.
+3. **Delete the source SwiftGuest, its SwiftImage, and its SwiftSeedProfile** — the
+   three live-source dependencies. The registry artifacts remain.
+4. `swiftctl guest import` → the clone must reach Running from the captured spec +
+   oci artifacts alone, with the sentinel intact and `boot_id` matching (resume).
+
+Ship explicitly labelled "cross-cluster validated by same-cluster
+source-deletion simulation; a true two-cluster move is the natural extension."
+
+## 6. Non-goals (v1)
+
+- Data-disk full-state capture (D4 — v1.1).
+- Real seed content on the source-independent path (D3 caveat — option a/b later).
+- A `SwiftColdMigration` orchestration CRD (still compose-first, per
+  [`oras-cold-migration.md`](oras-cold-migration.md) §2.2).
+- Automatic cross-cluster snapshot-object replication — the operator recreates the
+  `SwiftSnapshot` object in cluster B pointing at the same repo/digest (a thin
+  `swiftctl` helper to emit that object is a candidate follow-on).
+
+## 7. Risks
+
+1. **Resolver bifurcation** — two paths that build `rg` (image-resolve vs
+   `FromCapturedSpec`) can drift. Mitigate: `FromCapturedSpec` is a small pure
+   function with a golden test asserting the `rg` it produces matches the
+   effective-spec path for the same inputs (same-cluster parity test).
+2. **Under-captured spec** — a field the launcher needs but we didn't capture
+   surfaces only when the source is gone. Mitigate: the same-cluster parity test +
+   the source-deletion cluster validation exercise the exact source-gone path.
+3. **Snapshot-object portability** — the target cluster needs a `SwiftSnapshot`
+   object with `status.oci.{disk,manifestDigest}` + `status.capturedGuestSpec`. In
+   v1 the operator recreates it (or reuses the same-cluster object). A future
+   helper emits a portable object.
