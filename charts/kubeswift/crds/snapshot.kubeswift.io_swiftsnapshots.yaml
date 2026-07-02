@@ -358,11 +358,58 @@ spec:
                 properties:
                   cpu:
                     type: string
+                  guestAgent:
+                    description: |-
+                      GuestAgent reports whether the source opted into the in-guest vsock
+                      identity agent.
+                    type: boolean
+                  hasDataDisks:
+                    description: |-
+                      HasDataDisks reports whether the source had secondary data disks.
+                      Source-independent import rejects such snapshots in v1 (root-disk-only);
+                      full-state data-disk capture is a follow-on.
+                    type: boolean
+                  hasSeed:
+                    description: |-
+                      HasSeed reports whether the source had a SwiftSeedProfile — the clone
+                      launcher must then synthesize a placeholder seed.iso so CH --restore can
+                      open the seed disk recorded in config.json (a resume never reads it).
+                    type: boolean
                   imageName:
                     type: string
+                  interfaceNames:
+                    description: |-
+                      InterfaceNames are the source's NIC names, used to seed deterministic
+                      per-clone MAC rewrites when the source guest is gone.
+                    items:
+                      type: string
+                    type: array
                   memoryMi:
                     format: int64
                     type: integer
+                  network:
+                    description: Network reports whether the source had tap+bridge
+                      networking.
+                    type: boolean
+                  osType:
+                    description: OSType is the source OS family ("linux" or "windows").
+                    type: string
+                  rootDiskSize:
+                    description: RootDiskSize is the resolved root disk size (e.g.
+                      "40Gi").
+                    type: string
+                  storage:
+                    description: |-
+                      Storage is the resolved storage settings for the clone's root PVC
+                      (materialized from the oci disk artifact).
+                    properties:
+                      accessMode:
+                        type: string
+                      storageClassName:
+                        type: string
+                      volumeMode:
+                        type: string
+                    type: object
                 type: object
               hypervisor:
                 type: string

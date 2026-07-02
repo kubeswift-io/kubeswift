@@ -13,6 +13,7 @@ package swiftsnapshot
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
@@ -29,6 +30,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // SwiftSnapshotReconciler reconciles SwiftSnapshot resources.
@@ -261,8 +263,9 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	}
 
 	// Capture spec metadata before kicking off the VolumeSnapshot — these
-	// are needed by SwiftRestore to validate compatibility.
-	status.GuestSpec = capturedGuestSpec(&guest)
+	// are needed by SwiftRestore to validate compatibility. CSI is disk-only
+	// (never a full-state source-independent source), so no resolved surface.
+	status.GuestSpec = capturedGuestSpec(&guest, nil)
 	if guest.Status.Runtime != nil {
 		status.Hypervisor = guest.Status.Runtime.Hypervisor
 	}
@@ -341,12 +344,39 @@ func guestRootDiskPopulated(guest *swiftv1alpha1.SwiftGuest) bool {
 	}
 }
 
-// capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs.
-func capturedGuestSpec(guest *swiftv1alpha1.SwiftGuest) *snapshotv1alpha1.CapturedGuestSpec {
+// capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs. When
+// rg is non-nil (a full-state oci capture, where the source is live at capture
+// time so it resolves cleanly), it also freezes the launcher-sufficient surface a
+// source-independent clone needs when the source guest/image/seedProfile are gone
+// (docs/design/oras-cold-migration-source-independent.md). A nil rg (CSI/local
+// captures, or a resolve failure) leaves the expanded fields empty — such a clone
+// still needs the live source spec (the pre-source-independence behaviour).
+func capturedGuestSpec(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) *snapshotv1alpha1.CapturedGuestSpec {
 	out := &snapshotv1alpha1.CapturedGuestSpec{}
 	if guest.Spec.ImageRef != nil {
 		out.ImageName = guest.Spec.ImageRef.Name
 	}
+	if rg == nil {
+		return out
+	}
+	out.CPU = strconv.Itoa(rg.Resources.CPU)
+	out.MemoryMi = int64(rg.Resources.Memory)
+	if !rg.RootDisk.Size.IsZero() {
+		out.RootDiskSize = rg.RootDisk.Size.String()
+	}
+	out.Storage = &snapshotv1alpha1.CapturedStorage{
+		AccessMode:       rg.Storage.AccessMode,
+		VolumeMode:       rg.Storage.VolumeMode,
+		StorageClassName: rg.Storage.StorageClassName,
+	}
+	out.Network = rg.HasNetwork()
+	for _, iface := range rg.Interfaces {
+		out.InterfaceNames = append(out.InterfaceNames, iface.Name)
+	}
+	out.GuestAgent = rg.GuestAgentEnabled
+	out.OSType = rg.GetOSType()
+	out.HasSeed = guest.Spec.SeedProfileRef != nil
+	out.HasDataDisks = guest.Spec.DataDiskRef != nil || len(guest.Spec.DataDiskRefs) > 0
 	return out
 }
 
