@@ -138,25 +138,36 @@ and seed profile) after export, and `swiftctl guest import` still works.
 **To move to a different cluster**, recreate the SwiftSnapshot object there
 (the artifacts are already in the shared registry; only the small object
 moves). Its oci refs + captured surface live in *status*, which `kubectl
-apply` cannot set — patch the status subresource after creating the spec:
+apply` cannot set — use the first-party pair:
 
 ```bash
-# In cluster A: dump the snapshot's spec and status.
-kubectl -n team-a get swiftsnapshot db-export -o json > snap.json
+# Against cluster A:
+swiftctl snapshot export-manifest db-export -o db-export.json
 
-# In cluster B: recreate the spec, then transplant the status.
-kubectl -n team-a apply -f <(jq 'del(.status, .metadata.uid, .metadata.resourceVersion,
-  .metadata.creationTimestamp, .metadata.generation, .metadata.finalizers,
-  .metadata.managedFields)' snap.json)
-kubectl -n team-a patch swiftsnapshot db-export --subresource=status \
-  --type=merge -p "$(jq '{status: .status}' snap.json)"
+# Against cluster B (same-name namespace — see the limits below):
+swiftctl snapshot import-manifest -f db-export.json
 
-# Then import as usual:
+# Then import the guest as usual:
 swiftctl guest import db2 --from-snapshot db-export --target-node <node> --guest-class <class>
 ```
 
-(A first-party `swiftctl snapshot export-manifest`-style helper is a tracked
-follow-up.)
+`export-manifest` rewrites the copy's `deletionPolicy` to **Retain** (pass
+`--keep-deletion-policy` to override): the target cluster's controller adds
+the cleanup finalizer to any Ready snapshot, and deleting a Delete-policy
+*copy* there would purge registry artifacts other clusters still use.
+
+<details><summary>Equivalent raw kubectl (no swiftctl)</summary>
+
+```bash
+kubectl -n team-a get swiftsnapshot db-export -o json > snap.json
+kubectl -n team-a apply -f <(jq 'del(.status, .metadata.uid, .metadata.resourceVersion,
+  .metadata.creationTimestamp, .metadata.generation, .metadata.finalizers,
+  .metadata.managedFields) | .spec.deletionPolicy="Retain"' snap.json)
+kubectl -n team-a patch swiftsnapshot db-export --subresource=status \
+  --type=merge -p "$(jq '{status: .status}' snap.json)"
+```
+
+</details>
 
 ### v1 requirements and limits
 
