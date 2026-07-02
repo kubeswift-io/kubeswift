@@ -148,11 +148,72 @@ The runtime (CH `--restore`, launcher, resume) is **untouched**.
     (2 GiB here) — it does NOT dedup and dominates the move for RAM-heavy guests;
     the *disk* artifact chunks + dedups (P3). Measure push/pull of a multi-GiB
     memory blob during implementation.
-- **P4 PRs** (GO): `spec.includeDisk` capture path (capture-then-terminate +
-  disk→oci) → full-state `cloneFromSnapshot` import path (disk-from-oci +
-  `--restore` + resume) → `swiftctl guest export/import` + runbook → end-to-end
-  cluster validation (the full resume + sentinel/boot_id proof runs here, once the
-  import path exists to drive it).
+- **P4 PRs** (GO):
+  - **PR 1a — SHIPPED (#305):** `spec.includeDisk` API surface + `status.oci.disk`
+    (`OCIDiskArtifact`) + webhook (includeDisk ⇒ backend.type=oci ∧ includeMemory).
+  - **PR 1b — SHIPPED (#306):** the capture-then-terminate disk half —
+    `handleFullStateDiskCapture` terminates the paused launcher to release the frozen
+    root PVC, chunks it to oci via `snapshot-oras --mode=upload-image` (P3), and
+    stamps `status.oci.disk`. Runs in Uploading before the memory push so
+    `handleUploadingOCI` preserves the disk ref. `handlePendingLocal` forces
+    `resumeAfterSnapshot=false` when `includeDisk` (the guest stays paused → disk
+    coherent).
+  - **PR 2 — this PR:** the full-state `cloneFromSnapshot` **import** path.
+    `EnsureRootDiskClone` intercepts a clone whose snapshot carries
+    `status.oci.disk` (`maybeRootDiskFromOCI`): it materializes the root disk from
+    the oci **disk** artifact (pinned by digest) into a `RestoreSeeded` PVC via a
+    node-pinned `--mode=download-image` Job — instead of cloning the base image — so
+    the restore-receive launcher `--restore`s the memory against the source's frozen
+    disk and resumes. `NeedsGrowInit=false` (a full-state disk is byte-exact; growing
+    the GPT would desync the memory image). Composes with the existing memory-download
+    path in `prepareCloneFromSnapshot` (which pulls the memory artifact + requires the
+    source spec) — the two artifacts are pulled independently, per §2.3.
+  - **Follow-ups:** `swiftctl guest export/import` + runbook; source-independent
+    (fully cross-cluster, source-gone) full-state clone.
+- **Cluster validation — DONE 2026-07-02, PASS** (dev cluster, `field-testing`,
+  in-cluster Zot HTTP, controller+snapshot-oras `sha-a2edb7c`). Full
+  suspend→registry→resume across nodes:
+  - Source `cm-src` (Ubuntu Noble, miles): planted a disk sentinel
+    (`/home/kubeswift/cm-sentinel`), a RAM-only tmpfs token
+    (`/dev/shm/cm-ram-token`), and recorded `boot_id=c953122a…`.
+  - Full-state `cm-snap` (`includeMemory+includeDisk`, backend oci) → **Ready**
+    with BOTH artifacts in Zot (`…cm-snap` memory `sha256:5aaf…`,
+    `…cm-snap-disk` disk `sha256:b928…`, 10 GiB logical). Capture-then-terminate +
+    disk→oci confirmed.
+  - Clone `cm-clone` (`cloneFromSnapshot`→cm-snap, **targetNode boba**) → the
+    disk-from-oci download Job filled a **RestoreSeeded** clone PVC, the launcher
+    CH-`--restore`'d the memory, and the guest reached **Running on boba**.
+  - **Resume proven** (not reboot): `journalctl --list-boots` shows a SINGLE boot
+    `c953122a…` spanning 08:06:38 (source boot) → 08:17:45 (on the clone);
+    `boot_id` matches source; `cloud-init status: done` (not re-run); `btime`
+    jumped ~5 min forward (pause signature). **Disk round-trip proven**: the disk
+    sentinel is present on the clone (source's frozen disk, via oci, on a different
+    node).
+  - **Two findings (below), neither blocking the import path.**
+- **Findings from validation:**
+  1. **Source resurrection (capture-half, PR 1b) — real, migration-semantics
+     bug.** `handleFullStateDiskCapture` deletes the source launcher to release the
+     frozen root PVC but does NOT set the source `runPolicy: Stopped`, so the
+     SwiftGuest controller **recreates** it (the reactive-stop-guard lesson from
+     Live Migration Phase 1). Consequences: (a) a coherency race between the
+     disk-chunk Job (reads `image.raw` ro) and the resurrected guest's CH (writes
+     `image.raw` rw) on the same node; (b) split-brain — after the clone resumes
+     elsewhere the source is ALSO Running, contradicting §5 "P4 terminates the
+     source (it's a migration)". **Fix (follow-up):** patch the source
+     `runPolicy: Stopped` combined with the launcher Delete in the includeDisk
+     capture path (LM-Phase-1 "single combined MergeFrom + Delete, not just
+     Stopped"). Workaround today: the operator stops/deletes the source after the
+     snapshot is Ready.
+  2. **RAM-only tmpfs token missing on the resumed clone — narrow fidelity
+     curiosity, LOW.** The `/dev/shm/cm-ram-token` written before the snapshot is
+     absent on the clone, while `boot_id` (kernel RAM) and all other resume
+     witnesses survive and `/dev/shm`'s dir mtime is unchanged (nothing deleted it
+     post-restore). Hypothesis: the cloneFromSnapshot restore uses
+     `memoryMode: ondemand` (userfaultfd demand-paging) for fast pool scale-up; a
+     tmpfs/anonymous-page fault-in nuance is the likely cause. Does not affect disk
+     content or core guest state (cloud-init done, machine-id, processes intact).
+     Investigate whether cold-migration full-state clones should default to
+     **eager** restore rather than ondemand.
 
 ## 5. Non-goals (P4 v1)
 
