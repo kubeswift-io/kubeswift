@@ -179,6 +179,25 @@ jobs:
           kubectl annotate volumesnapshotclass csi-hostpath-snapclass \
             snapshot.storage.kubernetes.io/is-default-class=true
 
+          # Make csi-hostpath-sc the cluster-DEFAULT StorageClass. kind's default
+          # is "standard" (rancher.io/local-path) — a NON-CSI provisioner, so a
+          # guest whose root PVC lands there cannot be CSI-snapshotted
+          # ("cannot find CSI PersistentVolumeSource for volume ..."). The
+          # snapshot / clonestrategy=snapshot e2e's SwiftGuestClass sets no
+          # storageClassName (it relies on the cluster default), so that default
+          # MUST be the snapshot-capable CSI class — exactly how a real
+          # snapshot-capable cluster is configured. Without this swap the snapshot
+          # scenario failed every nightly run. Un-default whatever is currently
+          # default (robust to the provisioner's SC name) before setting ours.
+          for sc in $(kubectl get sc \
+            -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}'); do
+            kubectl annotate --overwrite storageclass "$sc" \
+              storageclass.kubernetes.io/is-default-class=false
+          done
+          kubectl annotate --overwrite storageclass csi-hostpath-sc \
+            storageclass.kubernetes.io/is-default-class=true
+          kubectl get storageclass
+
       # IMAGE_TAG=dev scoped to this step only (see job-level note above).
       # Makefile default is sha-<git-short-hash> (IMAGE_TAG ?= ...); pinning
       # :dev here keeps build-images, the kind load below, and deploy aligned.
