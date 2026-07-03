@@ -14,15 +14,15 @@ name: E2E (cluster)
 #     regressions within 24 hours.
 #
 # Hosted-runner `all` scope (nightly + default dispatch):
-#   The `all` scenario runs only what a hosted ubuntu-latest runner can do
-#   reliably — the disk-boot smoke + the Tier B local-* memory-snapshot
-#   scenarios. The Tier A CSI-snapshot scenarios (snapshot / clonestrategy=
-#   snapshot) are DESCOPED from `all`: the reference csi-hostpath driver cannot
-#   snapshot a GiB-scale VM disk within the snapshotter timeout on a constrained
-#   runner (rpc DeadlineExceeded), and the full five-guest smoke exhausts the
-#   runner disk. Those scenarios remain available via workflow_dispatch for a
-#   self-hosted runner with a real CSI driver; Tier A is validated on the dev
-#   cluster (Longhorn). See the `all` case below for the full rationale.
+#   The `all` scenario runs the disk-boot smoke ONLY — the one scenario a hosted
+#   ubuntu-latest runner can do reliably (it boots a real Cloud Hypervisor VM
+#   under nested KVM end-to-end). The heavier scenarios are NOT hosted-runner-
+#   runnable and stay available via workflow_dispatch (self-hosted runner):
+#   the Tier A CSI-snapshot scenarios need a real CSI driver (csi-hostpath
+#   times out snapshotting a VM disk — validated on the dev cluster's Longhorn),
+#   the Tier B local-* scenarios need the operator SSH key that matches the
+#   sample seed, and the full five-guest smoke exhausts the runner disk. See the
+#   `all` case below for the full rationale.
 #
 # NOT YET wired:
 #   - pull_request path-touch triggers. Hosted-runner KVM + cloud-image
@@ -272,31 +272,31 @@ jobs:
             local-roundtrip)     run_one local-roundtrip-test ;;
             local-clone-identity) run_one local-clone-identity-test ;;
             all)
-              # Hosted-runner-feasible nightly. Two heavy scenarios are DESCOPED
-              # from the hosted `all` (still runnable via workflow_dispatch on a
-              # self-hosted runner with more headroom + a real CSI driver):
+              # Hosted-runner nightly = the disk-boot smoke ONLY. It boots a real
+              # Cloud Hypervisor VM under nested KVM end-to-end (controller deploy
+              # -> SwiftImage qcow2->raw import -> SwiftGuest boot -> DHCP ->
+              # primaryIP), so it catches control-plane / import / boot regressions.
               #
+              # Everything heavier is NOT runnable on a hosted runner. Each stays
+              # available via workflow_dispatch (point it at a self-hosted runner)
+              # and is validated on the dev cluster (Longhorn):
               #   - snapshot-test / clonestrategy=snapshot (Tier A CSI
               #     VolumeSnapshot): csi-hostpath is a REFERENCE driver whose
-              #     CreateSnapshot copies the volume directory; it cannot snapshot
-              #     a GiB-scale live VM disk within the snapshotter timeout on a
-              #     disk/CPU-constrained hosted runner (observed: "rpc error: code
-              #     = DeadlineExceeded"). The guest itself boots fine on
-              #     csi-hostpath — only the CSI snapshot is infeasible here. Tier A
-              #     is validated on the dev cluster's real CSI (Longhorn).
-              #   - full `make smoke-test` (five guests): each downloads its own
-              #     ~40 GiB import and the five together exhaust the runner disk.
-              #     The single disk-boot below is the honest hosted-runner smoke.
-              #
-              # KEPT (feasible + no CSI driver required): the disk-boot smoke and
-              # the Tier B local-* memory-snapshot scenarios (hostPath at
-              # /var/lib/kubeswift/snapshots), which exercise the
-              # SwiftSnapshot/SwiftRestore/clone controller logic.
+              #     CreateSnapshot copies the volume dir; it cannot snapshot a
+              #     GiB-scale live VM disk within the snapshotter timeout on a
+              #     disk/CPU-constrained runner ("rpc error: code = DeadlineExceeded").
+              #     The guest boots fine on csi-hostpath — only the snapshot is
+              #     infeasible. Needs a real CSI driver.
+              #   - local-roundtrip-test / local-clone-identity-test (Tier B): they
+              #     SSH into the guest and require the operator PRIVATE key matching
+              #     the sample seed's baked ssh_authorized_keys
+              #     (config/samples/local-snapshots/01-seed-profile.yaml); a hosted
+              #     runner has no such key. CI-enablement (generate a keypair +
+              #     inject its pubkey into the seed) is a tracked follow-up.
+              #   - full `make smoke-test` (five guests): exhausts the runner disk.
               echo "::group::e2e: smoke (disk-boot only)"
               test/smoke/boot-test.sh --scenario disk-boot
               echo "::endgroup::"
-              run_one local-roundtrip-test
-              run_one local-clone-identity-test
               ;;
             *)
               echo "::error::unknown scenario: $SCENARIO"
