@@ -1,15 +1,63 @@
-# Known issue — cloneFromSnapshot guests hang in firmware on reboot (CH v52)
+# Known issue — cloneFromSnapshot guests fail to reboot (root-disk geometry, NOT a firmware hang)
 
-> Status: OPEN. Surfaced 2026-06-15 validating demo 06 (instant clones) on the
-> v0.4.2 cluster. An off-cluster reproduction attempt (2026-07-03, see
-> "Off-cluster investigation" below) was **inconclusive** — restore/resume is
-> solid but a deterministic reboot-hang could not be reproduced, and it produced
-> one correction to the diagnosis. Severity: MEDIUM (blocks identity/IP
-> divergence for memory-snapshot clones; does not affect normal guests or the
-> source) — but effectively **mitigated** by the shipped in-guest vsock identity
-> agent (v0.4.4), which regenerates identity + re-DHCPs with no reboot.
-> Layer: **Cloud Hypervisor v52 `--restore` + guest reboot + EDK2 firmware** —
-> NOT KubeSwift Go/Rust code.
+> Status: **ROOT CAUSE IDENTIFIED (2026-07-03, cluster-reproduced with a
+> deterministic signal). The "CH v52 firmware hang" title/framing was a
+> MISDIAGNOSIS** — see "ROOT CAUSE" immediately below. The real fault is a
+> KubeSwift **clone root-disk geometry bug** (`internal/controller/swiftguest/rootdisk.go`),
+> not EDK2/Cloud Hypervisor. Severity: MEDIUM (a memory-snapshot clone cannot
+> reboot; unaffected: normal guests + the source). Effectively **mitigated** for
+> the primary need by the shipped in-guest vsock identity agent (v0.4.4), which
+> regenerates identity + re-DHCPs with no reboot.
+
+## ROOT CAUSE (2026-07-03, cluster-reproduced, deterministic)
+
+A `cloneFromSnapshot` clone's root disk is **cloned from the pristine SwiftImage**
+(`EnsureRootDiskClone` → `sourcePVC := rg.PreparedImage.PVCName`; `createCloneJob`
+does `cp image.raw` + `qemu-img resize` + `sgdisk -e` — **no `growpart` /
+`resize2fs`**). On a *normal* guest that is correct: cloud-init `growpart` grows
+the partition + `resize2fs` grows the filesystem on **first boot**. But a clone
+**RESUMES** captured RAM — **cloud-init never re-runs** — so the on-disk partition
+stays at the pristine image size while the resumed guest's in-RAM ext4 is the
+**source's already-grown** filesystem. The resumed guest syncs that grown
+superblock onto the small-partition clone disk, leaving it internally
+inconsistent: **filesystem size > partition size**.
+
+It works while running (the mount lives in the captured RAM). It only breaks on
+the **next reboot**, when the initramfs re-reads the disk and ext4 refuses:
+
+```
+EXT4-fs (vda1): bad geometry: block count 2359035 exceeds size of device (655099 blocks)
+```
+
+→ the guest drops to the **initramfs emergency shell**, never reaches systemd,
+never re-DHCPs, and is unreachable — which the operator saw as a "hang".
+
+**Cluster reproduction (2026-07-03, field-testing, boba, CH v52.0, deterministic
+`DHCPACK`+`boot_id` signal):**
+
+| Guest | root disk | partition `vda1` | ext4 superblock | reboot result |
+|---|---|---|---|---|
+| `rh-src` (normal source) | grown on first boot | 18,872,287 sec ≈ 9.66 GB | 2,359,035 blk ≈ 9.66 GB (**match**) | **rebooted cleanly in ~15 s** (new boot_id, 2×DHCPACK) |
+| `rh-clone` (cloneFromSnapshot) | pristine image copy | 5,240,799 sec ≈ 2.68 GB | 2,359,035 blk ≈ 9.66 GB (**fs > part**) | **initramfs; no DHCP; unreachable 4.3+ min** |
+
+The two corrections from the earlier off-cluster attempt hold and explain why it
+looked like firmware: (1) `MpInitChangeApLoopCallback() done!` is the firmware's
+*normal* hand-off point (the debug port goes quiet there on every boot as the
+kernel takes the console) — it is **not** an AP-init hang; the guest is past
+firmware, in the kernel's initramfs. (2) the serial console is an unreliable
+verdict tool; the deterministic signal is the launcher `DHCPACK` (as the
+original 2026-06-15 `ft-golden` vs `ft-clone-a` observation already used).
+
+**Fix direction:** a memory-snapshot clone must get a root disk whose on-disk
+geometry (and data) matches the resumed RAM — i.e. **clone the disk from the
+SOURCE's actual root PVC** (grown partition+fs), not from the pristine SwiftImage.
+(Equivalently: grow the clone disk's partition+fs to the source's geometry before
+resume — but cloning the source's disk is the clean fix and also gives the clone
+the source's real disk content, not the pristine image's.) Scope: the
+`cloneFromSnapshot` branch of `EnsureRootDiskClone`. Everything below this line is
+the **original (superseded) firmware-hang hypothesis**, kept for history.
+
+---
 
 ## Symptom
 
