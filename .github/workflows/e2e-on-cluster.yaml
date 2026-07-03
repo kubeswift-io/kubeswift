@@ -14,15 +14,21 @@ name: E2E (cluster)
 #     regressions within 24 hours.
 #
 # Hosted-runner `all` scope (nightly + default dispatch):
-#   The `all` scenario runs the disk-boot smoke ONLY — the one scenario a hosted
-#   ubuntu-latest runner can do reliably (it boots a real Cloud Hypervisor VM
-#   under nested KVM end-to-end). The heavier scenarios are NOT hosted-runner-
-#   runnable and stay available via workflow_dispatch (self-hosted runner):
+#   The `all` scenario runs the disk-boot smoke PLUS the two Tier B local-*
+#   scenarios (local-roundtrip, local-clone-identity) — all runnable on a hosted
+#   ubuntu-latest runner under nested KVM. Disk-boot boots one real Cloud
+#   Hypervisor VM end-to-end; the Tier B scenarios then exercise the
+#   SwiftSnapshot / SwiftRestore / clone controller logic against on-node
+#   hostPath snapshots (no CSI driver needed). The Tier B tests SSH into the
+#   guest, so the job generates an ephemeral keypair and the scripts splice its
+#   pubkey into the seed's ssh_authorized_keys at apply time (see the
+#   "Generate ephemeral SSH keypair" step and apply_seed_profile in the scripts).
+#
+#   Still NOT hosted-runner-runnable, kept on workflow_dispatch (self-hosted):
 #   the Tier A CSI-snapshot scenarios need a real CSI driver (csi-hostpath
 #   times out snapshotting a VM disk — validated on the dev cluster's Longhorn),
-#   the Tier B local-* scenarios need the operator SSH key that matches the
-#   sample seed, and the full five-guest smoke exhausts the runner disk. See the
-#   `all` case below for the full rationale.
+#   and the full five-guest smoke exhausts the runner disk. See the `all` case
+#   below for the full rationale.
 #
 # NOT YET wired:
 #   - pull_request path-touch triggers. Hosted-runner KVM + cloud-image
@@ -235,14 +241,34 @@ jobs:
       # The default guest class is cpu:"2", which does NOT schedule on a
       # 4-vCPU kind worker already running kube-system + snapshot-controller
       # + csi-hostpath + the KubeSwift controller (the disk-boot guest sat
-      # Pending "Insufficient cpu"). Shrink the checked-out sample to cpu:"1"
-      # so the single smoke VM fits. boot-test.sh's apply_shared re-applies
-      # this file from disk, so the edit is honoured. Local to the runner
-      # checkout only — never committed.
-      - name: Shrink default guest class for hosted-runner capacity
+      # Pending "Insufficient cpu"). Shrink the checked-out samples to cpu:"1"
+      # so the VMs fit. boot-test.sh's apply_shared (default class) and the Tier B
+      # scripts (local class) re-apply these files from disk, so the edits are
+      # honoured. Local to the runner checkout only — never committed.
+      - name: Shrink guest classes for hosted-runner capacity
         run: |
+          # Default class (disk-boot smoke): cpu 2 -> 1.
           sed -i 's/cpu: "2"/cpu: "1"/' config/samples/shared/swiftguestclass-default.yaml
           grep -n 'cpu:' config/samples/shared/swiftguestclass-default.yaml
+          # Tier B local-snapshot class (snapshot-local-class): cpu 2 -> 1 and
+          # memory 2Gi -> 1Gi. local-clone-identity boots THREE guests at once
+          # (source + two clones, which copy the source's spec/class), so 3x cpu:1
+          # must fit the worker; the smaller memory also shrinks the RAM snapshot
+          # and the per-clone stager copies on the ~14 GB-free runner.
+          sed -i -e 's/cpu: 2/cpu: 1/' -e 's/memory: "2Gi"/memory: "1Gi"/' \
+            config/samples/local-snapshots/02-source-guest.yaml
+          grep -nE 'cpu:|memory:' config/samples/local-snapshots/02-source-guest.yaml
+
+      # The Tier B local-snapshot scenarios (local-roundtrip, local-clone-identity)
+      # SSH into the guest using $HOME/.ssh/id_ed25519. Generate an ephemeral
+      # keypair here; the scripts' apply_seed_profile splices its PUBLIC half into
+      # the seed's ssh_authorized_keys at apply time, so no pre-shared operator key
+      # is needed. Harmless for the other scenarios, which never read it.
+      - name: Generate ephemeral SSH keypair for Tier B local-snapshot e2e
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N '' -C 'kubeswift-e2e' -f ~/.ssh/id_ed25519
+          ls -l ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
 
       - name: Run e2e ${{ github.event.inputs.scenario || 'all' }}
         run: |
@@ -272,14 +298,22 @@ jobs:
             local-roundtrip)     run_one local-roundtrip-test ;;
             local-clone-identity) run_one local-clone-identity-test ;;
             all)
-              # Hosted-runner nightly = the disk-boot smoke ONLY. It boots a real
-              # Cloud Hypervisor VM under nested KVM end-to-end (controller deploy
-              # -> SwiftImage qcow2->raw import -> SwiftGuest boot -> DHCP ->
-              # primaryIP), so it catches control-plane / import / boot regressions.
+              # Hosted-runner nightly = disk-boot smoke FIRST, then the two Tier B
+              # local-snapshot scenarios. Disk-boot boots a real Cloud Hypervisor VM
+              # under nested KVM end-to-end (controller deploy -> SwiftImage
+              # qcow2->raw import -> SwiftGuest boot -> DHCP -> primaryIP), catching
+              # control-plane / import / boot regressions. The Tier B scenarios then
+              # exercise the SwiftSnapshot / SwiftRestore / clone controller logic
+              # against on-node hostPath snapshots (no CSI driver): local-roundtrip
+              # proves a memory snapshot round-trips (a tmpfs sentinel survives an
+              # in-place restore); local-clone-identity proves two clones from one
+              # snapshot get distinct machine-id / SSH host keys / hostname / MAC.
+              # Both SSH into the guest with the ephemeral key generated above,
+              # whose pubkey the scripts splice into the seed (apply_seed_profile).
               #
-              # Everything heavier is NOT runnable on a hosted runner. Each stays
-              # available via workflow_dispatch (point it at a self-hosted runner)
-              # and is validated on the dev cluster (Longhorn):
+              # Still NOT runnable on a hosted runner; each stays available via
+              # workflow_dispatch (self-hosted) and is validated on the dev cluster
+              # (Longhorn):
               #   - snapshot-test / clonestrategy=snapshot (Tier A CSI
               #     VolumeSnapshot): csi-hostpath is a REFERENCE driver whose
               #     CreateSnapshot copies the volume dir; it cannot snapshot a
@@ -287,16 +321,12 @@ jobs:
               #     disk/CPU-constrained runner ("rpc error: code = DeadlineExceeded").
               #     The guest boots fine on csi-hostpath — only the snapshot is
               #     infeasible. Needs a real CSI driver.
-              #   - local-roundtrip-test / local-clone-identity-test (Tier B): they
-              #     SSH into the guest and require the operator PRIVATE key matching
-              #     the sample seed's baked ssh_authorized_keys
-              #     (config/samples/local-snapshots/01-seed-profile.yaml); a hosted
-              #     runner has no such key. CI-enablement (generate a keypair +
-              #     inject its pubkey into the seed) is a tracked follow-up.
               #   - full `make smoke-test` (five guests): exhausts the runner disk.
               echo "::group::e2e: smoke (disk-boot only)"
               test/smoke/boot-test.sh --scenario disk-boot
               echo "::endgroup::"
+              run_one local-roundtrip-test
+              run_one local-clone-identity-test
               ;;
             *)
               echo "::error::unknown scenario: $SCENARIO"

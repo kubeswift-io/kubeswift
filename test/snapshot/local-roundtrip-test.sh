@@ -112,10 +112,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# apply_seed_profile renders 01-seed-profile.yaml with THIS operator's SSH
+# public key spliced into ssh_authorized_keys, then applies it. The sample
+# ships a fixed pubkey; overriding it at apply time lets the test run with
+# ANY keypair — CI generates an ephemeral one, operators use their own —
+# instead of requiring the private key that matches the sample's baked-in
+# key. Prefer the .pub sidecar (needs no passphrase); fall back to deriving
+# the pubkey from the private $IDENTITY.
+apply_seed_profile() {
+  local pubkey
+  pubkey="$(cat "${IDENTITY}.pub" 2>/dev/null || ssh-keygen -y -f "$IDENTITY")"
+  # Keep only "type base64" (drop any trailing comment) so the value has no
+  # sed-special characters when spliced into the manifest.
+  pubkey="$(printf '%s' "$pubkey" | awk '{print $1, $2}')"
+  if [[ -z "$pubkey" ]]; then
+    echo "ERROR: could not derive an SSH public key from $IDENTITY" >&2
+    exit 2
+  fi
+  sed -E "s|^([[:space:]]*- )ssh-[^ ]+ .*|\1${pubkey}|" \
+    "$SAMPLES_DIR/01-seed-profile.yaml" \
+    | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+}
+
 # 1. Apply the combined seed profile (kubeswift user for swiftctl ssh +
 #    clone-identity-regen bootcmd) and the source SwiftGuest.
 echo "--- Step 1: Apply source manifests ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/01-seed-profile.yaml" >/dev/null
+apply_seed_profile
 kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/02-source-guest.yaml" >/dev/null
 
 # Ensure Ubuntu Noble image is present (most clusters running these
