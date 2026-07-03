@@ -92,9 +92,17 @@ pushes each non-zero chunk (oras/registry dedups by digest — a re-push of v1.1
 only transfers changed chunks), packs the config + chunk layers into the manifest,
 and reports `{totalBytes, transferredBytes, skippedBytes, reference,
 manifestDigest}` (the existing `clonecommon.TransferReport` shape — so the dedup
-% is observable). A first-party `swiftctl image publish <swiftimage>` (chunk a
-Ready SwiftImage's PVC via a Job, optionally P2-sign) is a **follow-on**; v1 ships
-the tool + a documented recipe.
+% is observable).
+
+> **Shipped (first-party publish):** `swiftctl image publish <disk> --to <repo>`
+> — the **client-side, local-file** variant (chunk a local raw/qcow2 golden disk
+> and push it, optionally `--sign-key`). It shares the chunk core with
+> `snapshot-oras` via the importable `internal/oci` package (Go forbids importing
+> one `package main` from another). The local-file form (not the originally
+> sketched `<swiftimage>` in-cluster form) is what a packer / virt-install / CI
+> pipeline needs — you publish a *new* golden disk, rather than re-publishing an
+> already-imported SwiftImage. Operator guide:
+> [`docs/registry/golden-images.md`](../registry/golden-images.md).
 
 ### 2.4 Import — reassemble into a sparse file (`--mode=download-image`)
 

@@ -1,4 +1,4 @@
-package main
+package oci
 
 import (
 	"bytes"
@@ -20,40 +20,51 @@ import (
 // unchanged blocks across versions (v1 -> v1.1) are shared. See
 // docs/design/oras-golden-image.md.
 const (
-	vmImageArtifactType = "application/vnd.kubeswift.vmimage.v1"
-	vmImageConfigType   = "application/vnd.kubeswift.vmimage.config.v1+json"
-	vmDiskChunkType     = "application/vnd.kubeswift.vmdisk.chunk.v1"
-	// chunkOffsetAnnotation records a chunk layer's byte offset in the disk;
+	VMImageArtifactType = "application/vnd.kubeswift.vmimage.v1"
+	VMImageConfigType   = "application/vnd.kubeswift.vmimage.config.v1+json"
+	VMDiskChunkType     = "application/vnd.kubeswift.vmdisk.chunk.v1"
+	// ChunkOffsetAnnotation records a chunk layer's byte offset in the disk;
 	// the offset is authoritative (not layer order), so an identical chunk at the
 	// same offset across versions yields a byte-identical descriptor -> dedup.
-	chunkOffsetAnnotation = "kubeswift.io/chunk-offset"
+	ChunkOffsetAnnotation = "kubeswift.io/chunk-offset"
 )
 
-// vmImageConfig is the artifact's config blob: enough to reassemble the sparse
-// disk (totalSize is the truncate target; chunkSize is informational).
-type vmImageConfig struct {
+// Config is the golden-image artifact's config blob: enough to reassemble the
+// sparse disk (TotalSize is the truncate target; ChunkSize is informational).
+type Config struct {
 	TotalSize int64  `json:"totalSize"`
 	ChunkSize int64  `json:"chunkSize"`
 	Format    string `json:"format"`
 	OSType    string `json:"osType,omitempty"`
 }
 
-// chunkAndPush streams filePath in chunkSize windows, SKIPS all-zero windows
+// PushResult reports the byte accounting of a ChunkAndPush. TransferredBytes are
+// the bytes actually pushed; SkippedBytes are chunks the registry already had
+// (deduped); TotalBytes is the logical disk size. TransferredBytes/TotalBytes is
+// the dedup figure.
+type PushResult struct {
+	ManifestDigest   string
+	TransferredBytes int64
+	SkippedBytes     int64
+	TotalBytes       int64
+}
+
+// ChunkAndPush streams filePath in chunkSize windows, SKIPS all-zero windows
 // (never stored — a raw disk is sparse), and pushes each non-zero chunk as one
 // digest-addressed layer. A chunk already present in dst (a re-push of an
 // unchanged v1.1 block, or a repeated non-zero pattern) is counted as skipped
-// (deduped), not re-uploaded — so transferredBytes/totalBytes is the dedup
+// (deduped), not re-uploaded — so TransferredBytes/TotalBytes is the dedup
 // figure. Streams window-by-window; the whole disk is never held in memory.
-func chunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag string, chunkSize int64, format, osType string) (ocispec.Descriptor, transferStats, error) {
+func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag string, chunkSize int64, format, osType string) (ocispec.Descriptor, PushResult, error) {
 	var zero ocispec.Descriptor
 	f, err := os.Open(filePath)
 	if err != nil {
-		return zero, transferStats{}, err
+		return zero, PushResult{}, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return zero, transferStats{}, err
+		return zero, PushResult{}, err
 	}
 	totalSize := fi.Size()
 	if fi.Mode()&os.ModeDevice != 0 {
@@ -65,7 +76,7 @@ func chunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 		if end, serr := f.Seek(0, io.SeekEnd); serr == nil {
 			totalSize = end
 			if _, serr := f.Seek(0, io.SeekStart); serr != nil {
-				return zero, transferStats{}, fmt.Errorf("seek to start after sizing %s: %w", filePath, serr)
+				return zero, PushResult{}, fmt.Errorf("seek to start after sizing %s: %w", filePath, serr)
 			}
 		}
 	}
@@ -81,21 +92,21 @@ func chunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 			chunk := buf[:n]
 			if !bytes.Equal(chunk, zeros[:n]) {
 				desc := ocispec.Descriptor{
-					MediaType:   vmDiskChunkType,
+					MediaType:   VMDiskChunkType,
 					Digest:      godigest.FromBytes(chunk),
 					Size:        int64(n),
-					Annotations: map[string]string{chunkOffsetAnnotation: strconv.FormatInt(offset, 10)},
+					Annotations: map[string]string{ChunkOffsetAnnotation: strconv.FormatInt(offset, 10)},
 				}
 				exists, eerr := dst.Exists(ctx, desc)
 				if eerr != nil {
-					return zero, transferStats{}, fmt.Errorf("exists check at offset %d: %w", offset, eerr)
+					return zero, PushResult{}, fmt.Errorf("exists check at offset %d: %w", offset, eerr)
 				}
 				if exists {
 					skipped += int64(n)
 				} else {
 					// Push reads the reader fully before returning, so buf is safe to reuse.
 					if perr := dst.Push(ctx, desc, bytes.NewReader(chunk)); perr != nil {
-						return zero, transferStats{}, fmt.Errorf("push chunk at offset %d: %w", offset, perr)
+						return zero, PushResult{}, fmt.Errorf("push chunk at offset %d: %w", offset, perr)
 					}
 					transferred += int64(n)
 				}
@@ -107,43 +118,43 @@ func chunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 			break
 		}
 		if rerr != nil {
-			return zero, transferStats{}, fmt.Errorf("read %s: %w", filePath, rerr)
+			return zero, PushResult{}, fmt.Errorf("read %s: %w", filePath, rerr)
 		}
 	}
 
 	// Config blob (must be pushed before the manifest that references it).
-	cfgBytes, err := json.Marshal(vmImageConfig{TotalSize: totalSize, ChunkSize: chunkSize, Format: format, OSType: osType})
+	cfgBytes, err := json.Marshal(Config{TotalSize: totalSize, ChunkSize: chunkSize, Format: format, OSType: osType})
 	if err != nil {
-		return zero, transferStats{}, err
+		return zero, PushResult{}, err
 	}
-	cfgDesc := ocispec.Descriptor{MediaType: vmImageConfigType, Digest: godigest.FromBytes(cfgBytes), Size: int64(len(cfgBytes))}
+	cfgDesc := ocispec.Descriptor{MediaType: VMImageConfigType, Digest: godigest.FromBytes(cfgBytes), Size: int64(len(cfgBytes))}
 	if exists, _ := dst.Exists(ctx, cfgDesc); !exists {
 		if err := dst.Push(ctx, cfgDesc, bytes.NewReader(cfgBytes)); err != nil {
-			return zero, transferStats{}, fmt.Errorf("push config: %w", err)
+			return zero, PushResult{}, fmt.Errorf("push config: %w", err)
 		}
 	}
 
-	manifestDesc, err := oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, vmImageArtifactType,
+	manifestDesc, err := oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, VMImageArtifactType,
 		oras.PackManifestOptions{Layers: layers, ConfigDescriptor: &cfgDesc})
 	if err != nil {
-		return zero, transferStats{}, fmt.Errorf("pack manifest: %w", err)
+		return zero, PushResult{}, fmt.Errorf("pack manifest: %w", err)
 	}
 	if err := dst.Tag(ctx, manifestDesc, tag); err != nil {
-		return zero, transferStats{}, fmt.Errorf("tag: %w", err)
+		return zero, PushResult{}, fmt.Errorf("tag: %w", err)
 	}
-	return manifestDesc, transferStats{
+	return manifestDesc, PushResult{
+		ManifestDigest:   manifestDesc.Digest.String(),
 		TransferredBytes: transferred,
 		SkippedBytes:     skipped,
 		TotalBytes:       totalSize,
-		ManifestDigest:   manifestDesc.Digest.String(),
 	}, nil
 }
 
-// pullAndReassemble resolves ref (tag or digest), reads the config, truncates
+// PullAndReassemble resolves ref (tag or digest), reads the config, truncates
 // filePath to totalSize (a sparse file — omitted zero windows cost nothing), then
-// fetches each chunk layer (content.FetchAll verifies the digest, so a corrupt
-// chunk fails loudly) and writes it at its recorded offset.
-func pullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePath string) (ocispec.Descriptor, error) {
+// fetches each chunk layer (digest-verified, so a corrupt chunk fails loudly)
+// and writes it at its recorded offset.
+func PullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePath string) (ocispec.Descriptor, error) {
 	var zero ocispec.Descriptor
 	manifestDesc, err := src.Resolve(ctx, ref)
 	if err != nil {
@@ -157,19 +168,19 @@ func pullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return zero, fmt.Errorf("parse manifest: %w", err)
 	}
-	if manifest.ArtifactType != vmImageArtifactType && manifest.Config.MediaType != vmImageConfigType {
+	if manifest.ArtifactType != VMImageArtifactType && manifest.Config.MediaType != VMImageConfigType {
 		return zero, fmt.Errorf("not a kubeswift golden image (artifactType %q)", manifest.ArtifactType)
 	}
 	cfgBytes, err := content.FetchAll(ctx, src, manifest.Config)
 	if err != nil {
 		return zero, fmt.Errorf("fetch config: %w", err)
 	}
-	var cfg vmImageConfig
+	var cfg Config
 	if err := json.Unmarshal(cfgBytes, &cfg); err != nil {
 		return zero, fmt.Errorf("parse config: %w", err)
 	}
 
-	// Zero windows are never stored (chunkAndPush skips them), so the destination
+	// Zero windows are never stored (ChunkAndPush skips them), so the destination
 	// must read as zero wherever no chunk lands. Two destination kinds:
 	//   - regular file (Filesystem image.raw): os.Create's O_TRUNC zeroes it, then
 	//     Truncate sizes the sparse file so the tail beyond the last chunk is zero.
@@ -200,12 +211,12 @@ func pullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 	for _, layer := range manifest.Layers {
 		// Skip non-chunk layers — oras.PackManifest injects an OCI "empty"
 		// placeholder layer when there are no real layers (an all-zero disk).
-		if layer.MediaType != vmDiskChunkType {
+		if layer.MediaType != VMDiskChunkType {
 			continue
 		}
-		off, err := strconv.ParseInt(layer.Annotations[chunkOffsetAnnotation], 10, 64)
+		off, err := strconv.ParseInt(layer.Annotations[ChunkOffsetAnnotation], 10, 64)
 		if err != nil {
-			return zero, fmt.Errorf("chunk %s missing/bad %s: %w", layer.Digest, chunkOffsetAnnotation, err)
+			return zero, fmt.Errorf("chunk %s missing/bad %s: %w", layer.Digest, ChunkOffsetAnnotation, err)
 		}
 		if err := fetchChunkAt(ctx, src, layer, f, off); err != nil {
 			return zero, fmt.Errorf("chunk at offset %d: %w", off, err)

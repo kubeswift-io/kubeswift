@@ -1,0 +1,32 @@
+# Golden VM image consumed from an OCI registry.
+#
+# Producer side (client-side, no cluster needed):
+#   swiftctl image publish ubuntu-noble.raw --to REGISTRY/vm-images --tag noble-24.04
+# then record the printed digest and reference it below (a tag is mutable).
+#
+# See docs/registry/golden-images.md.
+---
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: golden-noble
+spec:
+  source:
+    oci:
+      repository: zot.registry.svc:5000/vm-images
+      tag: noble-24.04
+      # digest: sha256:...          # prefer digest for reproducibility
+      insecure: true                # plaintext in-cluster/test registry ONLY
+      # credentialsSecretRef:        # kubernetes.io/dockerconfigjson, same namespace
+      #   name: regcreds
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: golden-guest
+spec:
+  imageRef:
+    name: golden-noble
+  guestClassRef:
+    name: ft-small
+  runPolicy: Running

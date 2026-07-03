@@ -1,4 +1,4 @@
-package main
+package oci
 
 import (
 	"context"
@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-func TestCosignSignArgs(t *testing.T) {
+func TestSignArgs(t *testing.T) {
 	const (
 		repo   = "ghcr.io/org/vm-snapshots"
 		digest = "sha256:abc123"
 		key    = "/oras-signing-key/cosign.key"
 	)
 
-	secure := cosignSignArgs(repo, digest, key, false)
+	secure := SignArgs(repo, digest, key, false)
 	joined := strings.Join(secure, " ")
 	for _, want := range []string{
 		"sign",
@@ -41,7 +41,7 @@ func TestCosignSignArgs(t *testing.T) {
 		t.Errorf("digest ref must be the final arg; got %q", secure[len(secure)-1])
 	}
 
-	insecure := cosignSignArgs(repo, digest, key, true)
+	insecure := SignArgs(repo, digest, key, true)
 	if !strings.Contains(strings.Join(insecure, " "), "--allow-http-registry") {
 		t.Errorf("insecure args must carry --allow-http-registry; got: %v", insecure)
 	}
@@ -50,15 +50,15 @@ func TestCosignSignArgs(t *testing.T) {
 	}
 }
 
-func TestSignArtifact_MissingKeyFails(t *testing.T) {
+func TestSign_MissingKeyFails(t *testing.T) {
 	// A signing key that does not exist must fail before ever invoking cosign
 	// (strict: no silent unsigned success).
 	called := false
-	orig := cosignRun
-	cosignRun = func(_ context.Context, _ []string) error { called = true; return nil }
-	defer func() { cosignRun = orig }()
+	orig := CosignRun
+	CosignRun = func(_ context.Context, _ []string) error { called = true; return nil }
+	defer func() { CosignRun = orig }()
 
-	err := signArtifact(context.Background(), "ghcr.io/org/s", "sha256:d", "/nonexistent/cosign.key", false)
+	err := Sign(context.Background(), "ghcr.io/org/s", "sha256:d", "/nonexistent/cosign.key", false)
 	if err == nil {
 		t.Fatal("expected an error for a missing signing key")
 	}
@@ -67,7 +67,7 @@ func TestSignArtifact_MissingKeyFails(t *testing.T) {
 	}
 }
 
-func TestSignArtifact_InvokesCosignWithDigest(t *testing.T) {
+func TestSign_InvokesCosignWithDigest(t *testing.T) {
 	dir := t.TempDir()
 	key := filepath.Join(dir, "cosign.key")
 	if err := os.WriteFile(key, []byte("dummy"), 0o600); err != nil {
@@ -75,11 +75,11 @@ func TestSignArtifact_InvokesCosignWithDigest(t *testing.T) {
 	}
 
 	var gotArgs []string
-	orig := cosignRun
-	cosignRun = func(_ context.Context, args []string) error { gotArgs = args; return nil }
-	defer func() { cosignRun = orig }()
+	orig := CosignRun
+	CosignRun = func(_ context.Context, args []string) error { gotArgs = args; return nil }
+	defer func() { CosignRun = orig }()
 
-	if err := signArtifact(context.Background(), "ghcr.io/org/s", "sha256:deadbeef", key, false); err != nil {
+	if err := Sign(context.Background(), "ghcr.io/org/s", "sha256:deadbeef", key, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(gotArgs) == 0 || gotArgs[0] != "sign" {
