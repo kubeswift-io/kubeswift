@@ -132,12 +132,16 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 			now := metav1.Now()
-			// Preserve the full-state disk ref (P4 includeDisk): the disk is
-			// captured before this memory push, so status.OCI.Disk is already set
-			// and must survive this (re)assignment of status.OCI.
+			// Preserve the full-state disk refs (P4 includeDisk + v1.1 data disks):
+			// the disks are captured BEFORE this memory push, so status.OCI.Disk
+			// and status.OCI.DataDisks are already stamped and must survive this
+			// (re)assignment of status.OCI. Dropping DataDisks here is what made a
+			// captured data-disk artifact invisible to import (cluster-caught).
 			var disk *snapshotv1alpha1.OCIDiskArtifact
+			var dataDisks []snapshotv1alpha1.OCIDataDiskArtifact
 			if status.OCI != nil {
 				disk = status.OCI.Disk
+				dataDisks = status.OCI.DataDisks
 			}
 			status.OCI = &snapshotv1alpha1.OCISnapshotStatus{
 				Reference: ociReference(snap),
@@ -145,8 +149,9 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 				// A completed push Job with signing requested is signed (strict:
 				// a signing failure fails the Job). Robust against a missing byte
 				// report (which would leave rep.Signed false).
-				Signed: ociSigningRequested(snap),
-				Disk:   disk,
+				Signed:    ociSigningRequested(snap),
+				Disk:      disk,
+				DataDisks: dataDisks,
 			}
 			// Read the push Job's byte report (best-effort; a missing report leaves
 			// bytes/digest empty and is not a failure). status carries the registry
