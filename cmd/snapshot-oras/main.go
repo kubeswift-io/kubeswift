@@ -29,6 +29,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/kubeswift-io/kubeswift/internal/oci"
 )
 
 // terminationMessagePath is the default Kubernetes terminationMessagePath. On a
@@ -126,7 +128,7 @@ func run(a runArgs) error {
 	if err := a.validate(); err != nil {
 		return err
 	}
-	repo, err := newRepository(a.repository, a.insecure)
+	repo, err := oci.NewRepository(a.repository, a.insecure)
 	if err != nil {
 		return err
 	}
@@ -141,10 +143,9 @@ func run(a runArgs) error {
 		}
 		stats.Reference = ref
 		if a.signKey != "" {
-			// Sign the pushed digest as an OCI referrer. Strict: a signing
-			// failure fails the Job (and the snapshot) — never report an
-			// unsigned artifact as signed.
-			if err := signArtifact(ctx, a.repository, stats.ManifestDigest, a.signKey, a.insecure); err != nil {
+			// Sign the pushed digest. Strict: a signing failure fails the Job
+			// (and the snapshot) — never report an unsigned artifact as signed.
+			if err := oci.Sign(ctx, a.repository, stats.ManifestDigest, a.signKey, a.insecure); err != nil {
 				return err
 			}
 			stats.Signed = true
@@ -167,18 +168,23 @@ func run(a runArgs) error {
 		if format == "" {
 			format = "raw"
 		}
-		_, stats, err := chunkAndPush(ctx, a.file, repo, a.tag, int64(a.chunkSizeMiB)*1024*1024, format, a.osType)
+		_, r, err := oci.ChunkAndPush(ctx, a.file, repo, a.tag, int64(a.chunkSizeMiB)*1024*1024, format, a.osType)
 		if err != nil {
 			return err
 		}
-		stats.Reference = ref
-		reportTransfer(stats)
+		reportTransfer(transferStats{
+			TransferredBytes: r.TransferredBytes,
+			SkippedBytes:     r.SkippedBytes,
+			TotalBytes:       r.TotalBytes,
+			Reference:        ref,
+			ManifestDigest:   r.ManifestDigest,
+		})
 	case "download-image":
 		pullRef := a.tag
 		if a.digest != "" {
 			pullRef = a.digest // pinned pull by digest
 		}
-		desc, err := pullAndReassemble(ctx, repo, pullRef, a.file)
+		desc, err := oci.PullAndReassemble(ctx, repo, pullRef, a.file)
 		if err != nil {
 			return err
 		}

@@ -14,9 +14,6 @@ import (
 	"oras.land/oras-go/v2/content/file"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote"
-	"oras.land/oras-go/v2/registry/remote/auth"
-	"oras.land/oras-go/v2/registry/remote/credentials"
-	"oras.land/oras-go/v2/registry/remote/retry"
 )
 
 // artifactType tags the snapshot as a KubeSwift VM snapshot so a registry
@@ -167,24 +164,4 @@ func regularFiles(dir string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
-}
-
-// newRepository builds an authenticated ORAS remote for repoRef. Credentials
-// come from the Docker config (DOCKER_CONFIG / ~/.docker/config.json — the
-// dockerconfigjson pull-secret the controller mounts); anonymous when absent.
-// insecure switches to plaintext HTTP for an in-cluster / test registry.
-func newRepository(repoRef string, insecure bool) (*remote.Repository, error) {
-	repo, err := remote.NewRepository(repoRef)
-	if err != nil {
-		return nil, fmt.Errorf("repository %q: %w", repoRef, err)
-	}
-	repo.PlainHTTP = insecure
-	if credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{}); err == nil {
-		repo.Client = &auth.Client{
-			Client:     retry.DefaultClient,
-			Cache:      auth.NewCache(),
-			Credential: credentials.Credential(credStore),
-		}
-	}
-	return repo, nil
 }

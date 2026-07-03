@@ -1,4 +1,4 @@
-package main
+package oci
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ func TestChunkRoundTrip_ByteIdentical_ZeroSkip(t *testing.T) {
 	orig, _ := os.ReadFile(src)
 
 	store := memory.New()
-	_, stats, err := chunkAndPush(context.Background(), src, store, "v1", testChunk, "raw", "linux")
+	_, stats, err := ChunkAndPush(context.Background(), src, store, "v1", testChunk, "raw", "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestChunkRoundTrip_ByteIdentical_ZeroSkip(t *testing.T) {
 	}
 
 	dst := filepath.Join(dir, "out.raw")
-	if _, err := pullAndReassemble(context.Background(), store, "v1", dst); err != nil {
+	if _, err := PullAndReassemble(context.Background(), store, "v1", dst); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(dst)
@@ -77,7 +77,7 @@ func TestChunkDedup_ChangedChunkOnly(t *testing.T) {
 
 	v1 := filepath.Join(dir, "v1.raw")
 	writeDisk(t, v1, [][]byte{a, zero, b, zero, zero, short})
-	if _, _, err := chunkAndPush(context.Background(), v1, store, "v1", testChunk, "raw", "linux"); err != nil {
+	if _, _, err := ChunkAndPush(context.Background(), v1, store, "v1", testChunk, "raw", "linux"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +85,7 @@ func TestChunkDedup_ChangedChunkOnly(t *testing.T) {
 	bChanged := bytes.Repeat([]byte{0x12}, testChunk)
 	v2 := filepath.Join(dir, "v2.raw")
 	writeDisk(t, v2, [][]byte{a, zero, bChanged, zero, zero, short})
-	_, stats2, err := chunkAndPush(context.Background(), v2, store, "v11", testChunk, "raw", "linux")
+	_, stats2, err := ChunkAndPush(context.Background(), v2, store, "v11", testChunk, "raw", "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestChunkDedup_ChangedChunkOnly(t *testing.T) {
 
 	// v1.1 still reassembles correctly.
 	out := filepath.Join(dir, "v2out.raw")
-	if _, err := pullAndReassemble(context.Background(), store, "v11", out); err != nil {
+	if _, err := PullAndReassemble(context.Background(), store, "v11", out); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(out)
@@ -128,7 +128,7 @@ func TestChunkLargerThan32MiB_RoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, stats, err := chunkAndPush(context.Background(), src, store, "big", big, "raw", "linux")
+	_, stats, err := ChunkAndPush(context.Background(), src, store, "big", big, "raw", "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestChunkLargerThan32MiB_RoundTrips(t *testing.T) {
 		t.Errorf("transferred = %d, want %d", stats.TransferredBytes, big)
 	}
 	out := filepath.Join(dir, "big-out.raw")
-	if _, err := pullAndReassemble(context.Background(), store, "big", out); err != nil {
+	if _, err := PullAndReassemble(context.Background(), store, "big", out); err != nil {
 		t.Fatalf("reassemble of a >32MiB chunk failed (FetchAll cap regression?): %v", err)
 	}
 	got, _ := os.ReadFile(out)
@@ -153,7 +153,7 @@ func TestChunkAllZero_NoLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := memory.New()
-	_, stats, err := chunkAndPush(context.Background(), src, store, "z", testChunk, "raw", "linux")
+	_, stats, err := ChunkAndPush(context.Background(), src, store, "z", testChunk, "raw", "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestChunkAllZero_NoLayers(t *testing.T) {
 		t.Errorf("total = %d, want %d", stats.TotalBytes, 3*testChunk)
 	}
 	out := filepath.Join(dir, "zout.raw")
-	if _, err := pullAndReassemble(context.Background(), store, "z", out); err != nil {
+	if _, err := PullAndReassemble(context.Background(), store, "z", out); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(out)
@@ -173,7 +173,7 @@ func TestChunkAllZero_NoLayers(t *testing.T) {
 	}
 }
 
-// pullAndReassemble opens the destination without O_TRUNC (os.Create implies it)
+// PullAndReassemble opens the destination without O_TRUNC (os.Create implies it)
 // so a Block-mode PVC — where Truncate() returns EINVAL — is never truncated.
 // Guard the regular-file consequence: pulling over a PRE-EXISTING, LARGER stale
 // destination still yields byte-identical content (the explicit Truncate to
@@ -187,7 +187,7 @@ func TestPull_OverExistingStaleDestination_ByteIdentical(t *testing.T) {
 	orig, _ := os.ReadFile(src)
 
 	store := memory.New()
-	if _, _, err := chunkAndPush(context.Background(), src, store, "v1", testChunk, "raw", "linux"); err != nil {
+	if _, _, err := ChunkAndPush(context.Background(), src, store, "v1", testChunk, "raw", "linux"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,7 +196,7 @@ func TestPull_OverExistingStaleDestination_ByteIdentical(t *testing.T) {
 	if err := os.WriteFile(dst, bytes.Repeat([]byte{0x99}, 5*testChunk), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pullAndReassemble(context.Background(), store, "v1", dst); err != nil {
+	if _, err := PullAndReassemble(context.Background(), store, "v1", dst); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(dst)
