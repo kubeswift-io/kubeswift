@@ -8,6 +8,67 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.7.0] — 2026-07-03
+
+Brings **OCI-registry-native VM artifacts** to KubeSwift. VM snapshots, golden
+images, and cold / suspended-state migration can now live in any OCI registry
+(Harbor / Zot / a cloud registry) — content-addressed, deduplicated,
+cosign-signable, and portable across clusters and out to the edge. KubeSwift is a
+registry **client**, never a registry. Headliners: a new `oci` snapshot backend,
+golden-image `SwiftImage.spec.source.oci` with a first-party `swiftctl image
+publish` producer and cosign **verify-on-pull**, full-state (disk + memory) cold
+migration including a **source-independent cross-cluster** path, and
+secondary-data-disk snapshots.
+
+### Added
+
+**OCI at-rest VM-disk artifacts (ORAS)**
+- **`SwiftSnapshot.spec.backend.type: oci`** — capture / restore / cloneFromSnapshot
+  against any OCI registry, alongside the existing `local` / `s3` backends, via a
+  new `snapshot-oras` transfer image (embeds `oras-go/v2`). (#295–#299)
+- **Provenance signing** — `spec.backend.oci.signingKeySecretRef` cosign-signs the
+  pushed artifact; surfaced as `status.oci.signed`. (#300)
+- **Golden-image `SwiftImage.spec.source.oci`** — pull a golden VM disk from an OCI
+  registry, stored as sparse, zero-skipping, content-addressed **chunks** that
+  dedup zero regions and unchanged cross-version blocks. (#301–#303)
+- **`swiftctl image publish`** — first-party, client-side producer: chunk a local
+  raw/qcow2 golden disk and push it (qcow2 auto-converted via qemu-img; optional
+  `--sign-key`). (#324)
+- **cosign verify-on-pull** — `SwiftImage.spec.source.oci.verifyKeySecretRef` fails
+  the import if the signature is missing/invalid, so no unsigned/tampered disk is
+  ever materialized. (#325)
+- **Cold / suspended-state migration** — full-state (disk + memory)
+  capture-then-terminate plus `cloneFromSnapshot` import; `swiftctl guest
+  export/import`. (#304–#309)
+- **Source-independent (cross-cluster) full-state clones** — resume from the
+  captured launcher-sufficient surface even when the source guest / image / seed
+  are gone. (#310–#315)
+- **Secondary data-disk snapshots (SI v1.1)** — full-state capture + import of a
+  guest's `blank` / `pvcRef` data disks; `swiftctl snapshot export-manifest /
+  import-manifest` for cross-cluster object transfer. (#317–#320)
+- **Edge registry profile** — per-site Zot mirroring of VM artifacts from a hub via
+  `zot sync` (docs + samples). (#316)
+
+### Fixed
+- **cloneFromSnapshot reboot ("firmware hang")** — a memory-clone's root disk is now
+  a CSI clone of the SOURCE guest's disk (matching grown geometry + real data),
+  not the pristine image. The previous filesystem-larger-than-partition mismatch
+  dropped the clone into the initramfs on its next reboot. (#323)
+- **SwiftRestore** — the clone target no longer inherits a stopped source's
+  `runPolicy` (restoring from a stopped source is the natural DR flow); resolves
+  the in-guest `RemoveIPC` probe finding. (#315)
+- **Nightly cluster E2E** — the snapshot scenario's guest PVC now provisions on a
+  CSI (snapshot-capable) StorageClass; the hosted-runner nightly runs the disk-boot
+  smoke, with the CSI-snapshot and local memory-snapshot scenarios available via
+  `workflow_dispatch` and validated on the dev cluster. (#326)
+
+### Changed
+- The `snapshot-oras` transfer core (chunk / push / registry / cosign) is now a
+  shared `internal/oci` package used by both the in-cluster `snapshot-oras` Job and
+  the client-side `swiftctl image publish`.
+
+---
+
 ## [v0.6.1] — 2026-06-30
 
 Project rehomed to the **kubeswift-io** GitHub organization. **No functional
