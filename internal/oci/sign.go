@@ -53,3 +53,31 @@ func Sign(ctx context.Context, repository, digest, keyPath string, insecure bool
 	}
 	return nil
 }
+
+// VerifyArgs builds the argv for verifying a public-key signature against
+// Repository@Digest. `--insecure-ignore-tlog=true` is required because Sign uses
+// `--tlog-upload=false` (no Rekor entry), so verify must not demand a tlog entry.
+// There is no plaintext-registry option: cosign verify speaks HTTPS only and does
+// NOT honor `--allow-http-registry` on the registry ping — an insecure registry
+// is rejected at admission before this runs.
+func VerifyArgs(repository, digest, keyPath string) []string {
+	return []string{
+		"verify",
+		"--key", keyPath,
+		"--insecure-ignore-tlog=true",
+		repository + "@" + digest,
+	}
+}
+
+// Verify checks a cosign public-key signature on Repository@Digest. Strict: any
+// error (unreadable key, missing/invalid signature) is returned so the caller
+// fails loudly — a golden disk whose signature does not verify is never trusted.
+func Verify(ctx context.Context, repository, digest, keyPath string) error {
+	if _, err := os.Stat(keyPath); err != nil {
+		return fmt.Errorf("verify key %q not readable: %w", keyPath, err)
+	}
+	if err := CosignRun(ctx, VerifyArgs(repository, digest, keyPath)); err != nil {
+		return fmt.Errorf("cosign verify %s@%s: %w", repository, digest, err)
+	}
+	return nil
+}

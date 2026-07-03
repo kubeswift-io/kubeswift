@@ -91,6 +91,41 @@ func TestValidateSource_OCI_NamelessCreds_Rejected(t *testing.T) {
 	}
 }
 
+func TestValidateSource_OCI_NamelessVerifyKey_Rejected(t *testing.T) {
+	v := &Validator{}
+	_, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{
+		Repository: "ghcr.io/org/golden", Tag: "noble",
+		VerifyKeySecretRef: &imagev1alpha1.SecretObjectReference{},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "verifyKeySecretRef.name is required") {
+		t.Errorf("nameless verifyKeySecretRef must be rejected; got %v", err)
+	}
+}
+
+func TestValidateSource_OCI_VerifyKeyPlusInsecure_Rejected(t *testing.T) {
+	v := &Validator{}
+	// cosign verify is HTTPS-only, so verifyKeySecretRef + insecure can never work
+	// — reject at admission rather than fail the import opaquely.
+	_, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{
+		Repository: "zot.svc:5000/golden", Tag: "noble", Insecure: true,
+		VerifyKeySecretRef: &imagev1alpha1.SecretObjectReference{Name: "cosign-pub"},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "requires a TLS registry") {
+		t.Errorf("verifyKeySecretRef + insecure must be rejected; got %v", err)
+	}
+}
+
+func TestValidateSource_OCI_VerifyKeyTLS_OK(t *testing.T) {
+	v := &Validator{}
+	if _, err := v.ValidateCreate(context.Background(), ociImage(imagev1alpha1.OCIImageSource{
+		Repository:         "ghcr.io/org/golden",
+		Tag:                "noble",
+		VerifyKeySecretRef: &imagev1alpha1.SecretObjectReference{Name: "cosign-pub"},
+	})); err != nil {
+		t.Errorf("verifyKeySecretRef on a TLS (non-insecure) registry must be allowed; got %v", err)
+	}
+}
+
 func TestValidateSource_OCI_PlusHTTP_Rejected(t *testing.T) {
 	img := ociImage(imagev1alpha1.OCIImageSource{Repository: "ghcr.io/org/golden", Tag: "noble"})
 	img.Spec.Source.HTTP = &imagev1alpha1.HTTPSource{URL: "https://example.com/i.raw"}

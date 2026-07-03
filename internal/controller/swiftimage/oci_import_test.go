@@ -119,6 +119,75 @@ func TestStartImport_OCISourceInsecureTagAndCreds(t *testing.T) {
 	}
 }
 
+func TestStartImport_OCIVerifyKeyMountsKeyAndFlag(t *testing.T) {
+	scheme := testScheme()
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &SwiftImageReconciler{Client: client, Scheme: scheme, SnapshotORASImage: "img:test"}
+	img := ociImageResource(imagev1alpha1.OCIImageSource{
+		Repository:         "ghcr.io/org/golden",
+		Tag:                "noble",
+		VerifyKeySecretRef: &imagev1alpha1.SecretObjectReference{Name: "cosign-pub"},
+	})
+	if _, err := r.StartImport(context.Background(), img); err != nil {
+		t.Fatalf("StartImport: %v", err)
+	}
+	var job batchv1.Job
+	if err := client.Get(context.Background(), types.NamespacedName{Name: importJobNamePrefix + "gold", Namespace: "default"}, &job); err != nil {
+		t.Fatalf("Job not created: %v", err)
+	}
+	pull := job.Spec.Template.Spec.InitContainers[0]
+
+	if !strings.Contains(strings.Join(pull.Args, " "), "--verify-key=/verify-key/cosign.pub") {
+		t.Errorf("puller must carry --verify-key; got %q", strings.Join(pull.Args, " "))
+	}
+	// cosign needs a writable HOME/TMPDIR (the puller has a read-only rootfs).
+	var home, tmp bool
+	for _, e := range pull.Env {
+		if e.Name == "HOME" && e.Value == "/cosign-home" {
+			home = true
+		}
+		if e.Name == "TMPDIR" && e.Value == "/cosign-home" {
+			tmp = true
+		}
+	}
+	if !home || !tmp {
+		t.Errorf("puller must set HOME+TMPDIR to a writable dir for cosign; env=%+v", pull.Env)
+	}
+	// verify-key mounted read-only; cosign-home writable emptyDir mounted.
+	var keyMount, homeMount bool
+	for _, m := range pull.VolumeMounts {
+		if m.Name == "verify-key" && m.MountPath == "/verify-key" && m.ReadOnly {
+			keyMount = true
+		}
+		if m.Name == "cosign-home" && m.MountPath == "/cosign-home" {
+			homeMount = true
+		}
+	}
+	if !keyMount || !homeMount {
+		t.Errorf("puller must mount verify-key (ro) + cosign-home (rw); mounts=%+v", pull.VolumeMounts)
+	}
+	// The verify-key volume projects the Secret's cosign.pub; cosign-home is an emptyDir.
+	var keyVol, homeVol bool
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		if v.Name == "verify-key" && v.Secret != nil && v.Secret.SecretName == "cosign-pub" {
+			for _, it := range v.Secret.Items {
+				if it.Key == "cosign.pub" && it.Path == "cosign.pub" {
+					keyVol = true
+				}
+			}
+		}
+		if v.Name == "cosign-home" && v.EmptyDir != nil {
+			homeVol = true
+		}
+	}
+	if !keyVol {
+		t.Error("verify-key volume must project the Secret's cosign.pub")
+	}
+	if !homeVol {
+		t.Error("cosign-home emptyDir volume missing")
+	}
+}
+
 func TestStartImport_OCINoImageConfigured_Failed(t *testing.T) {
 	scheme := testScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()

@@ -303,6 +303,32 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 			},
 		})
 	}
+	if oci.VerifyKeySecretRef != nil && oci.VerifyKeySecretRef.Name != "" {
+		// cosign-verify the artifact before pulling. The public key is mounted
+		// read-only at /verify-key/cosign.pub; cosign needs a writable HOME/TMPDIR
+		// (the puller runs with a read-only rootfs), served by an emptyDir.
+		pullArgs = append(pullArgs, "--verify-key=/verify-key/cosign.pub")
+		pullEnv = append(pullEnv,
+			corev1.EnvVar{Name: "HOME", Value: "/cosign-home"},
+			corev1.EnvVar{Name: "TMPDIR", Value: "/cosign-home"},
+		)
+		pullMounts = append(pullMounts,
+			corev1.VolumeMount{Name: "verify-key", MountPath: "/verify-key", ReadOnly: true},
+			corev1.VolumeMount{Name: "cosign-home", MountPath: "/cosign-home"},
+		)
+		volumes = append(volumes,
+			corev1.Volume{
+				Name: "verify-key",
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: oci.VerifyKeySecretRef.Name,
+						Items:      []corev1.KeyToPath{{Key: "cosign.pub", Path: "cosign.pub"}},
+					},
+				},
+			},
+			corev1.Volume{Name: "cosign-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		)
+	}
 
 	script := importScriptOCI(string(img.Spec.Format), string(img.Spec.OSType))
 	// Privileged only for the Linux GRUB-patch loop-mount (Windows skips it).

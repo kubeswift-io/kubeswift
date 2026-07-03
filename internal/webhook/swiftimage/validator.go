@@ -85,6 +85,18 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 		if src.OCI.CredentialsSecretRef != nil && src.OCI.CredentialsSecretRef.Name == "" {
 			return fmt.Errorf("spec.source.oci.credentialsSecretRef.name is required when credentialsSecretRef is set")
 		}
+		if src.OCI.VerifyKeySecretRef != nil {
+			if src.OCI.VerifyKeySecretRef.Name == "" {
+				return fmt.Errorf("spec.source.oci.verifyKeySecretRef.name is required when verifyKeySecretRef is set")
+			}
+			// cosign verify speaks HTTPS only and does not honor --allow-http-registry
+			// on the registry ping, so signature verification over a plaintext
+			// registry can never succeed — reject the combination at admission
+			// rather than let the import fail opaquely.
+			if src.OCI.Insecure {
+				return fmt.Errorf("spec.source.oci: verifyKeySecretRef requires a TLS registry; cosign verify does not support insecure (plaintext http)")
+			}
+		}
 	}
 	if n == 0 {
 		return fmt.Errorf("spec.source: exactly one of http, pvcClone, upload, or oci must be specified")
