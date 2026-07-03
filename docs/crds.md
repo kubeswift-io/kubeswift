@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **12 CRDs across 7 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, and pool CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **13 CRDs across 8 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -16,6 +16,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **12 CRDs across 7 API groups
 | SwiftRestore | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftrestore) |
 | SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshotschedule) |
 | SwiftMigration | — | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
+| Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 
 ## Mutual exclusivity rules
 
@@ -515,3 +516,24 @@ Moves a SwiftGuest between nodes — offline (any storage) or live (sub-second d
 | `reason` | string | Free-text operator note (e.g. `"node maintenance"`). |
 
 Full reference: [Migration overview](migration/overview.md).
+
+---
+
+## Cluster
+
+**Group:** `fleet.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `ksc`
+**Subresource:** status
+
+A member cluster federated by the kubeswift-gateway hub. The gateway (not the controller-manager) reconciles it: it watches Cluster objects, builds an impersonation-capable client per member, and fans out the read/action/telemetry planes across the fleet. Objects live in the hub cluster alongside their credential Secret.
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `credentialSecretRef` | SecretReference | Secret (same namespace) with a `kubeconfig` or `token` (+ optional `ca.crt`). Required. The credential must be able to impersonate users. |
+| `server` | string | Member API server URL. Optional when the credential Secret's kubeconfig names the server. |
+| `displayName` | string | Human-readable name for the UI's cluster selector. Falls back to `metadata.name`. |
+| `prometheusEndpoint` | string | Base URL of the member's Prometheus for per-VM telemetry. Empty degrades the telemetry panel rather than failing the view. |
+| `insecureSkipTLSVerify` | bool | Disable API server cert verification for this member (UNSAFE; dev only). |
+
+Full reference: [Gateway](ui/gateway.md).

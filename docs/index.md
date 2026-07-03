@@ -57,11 +57,42 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 - [SR-IOV NIC Passthrough](networking/sriov.md) -- VFIO passthrough for GPUDirect RDMA, DPDK
 - [Multi-node L2 (IP-preserving guests)](networking/multi-node-l2.md) -- primary-on-NAD, kube-ovn IP-preserving live migration
 - [kube-ovn L2 install guide](networking/ovn-l2-install.md) -- Deploy kube-ovn + a primary NAD for zero-touch IP-preserving guests
+- [Primary-UDN tenancy (Model A)](networking/udn-primary-tenancy.md) -- Guests on a namespace primary UDN: native UDN IP, cross-node, tenant-isolated
 
 ### Fleet Management
 
 - [SwiftGuestPool Guide](swiftguestpool-guide.md) -- Scaling, rolling updates, spread, PVCs, monitoring
 - [SwiftGuestPool Use Cases](swiftguestpool-use-cases.md) -- GPU inference, CI/CD runners, VDI, telco NFV, batch/HPC
+
+### Snapshots & clones
+
+- [Snapshots & fast VMs](snapshots/fast-vms.md) — snapshots, restore, and instant clones overview
+- [CSI snapshots](snapshots/csi-snapshots.md) — disk-only backup/restore via CSI VolumeSnapshot
+- [Local snapshots](snapshots/local-snapshots.md) — Tier B local memory+disk snapshots
+- [S3 snapshots](snapshots/s3-snapshots.md) — Tier C cluster-portable snapshots on object storage
+- [Scheduled snapshots](snapshots/scheduled-snapshots.md) — cron schedule + keep-N retention
+- [clone-from-snapshot](snapshots/clone-from-snapshot.md) — fan out N VMs from one snapshot
+- [Identity regeneration](snapshots/identity-regeneration.md) — regenerate a clone's identity in place (vsock agent)
+
+The `oci` snapshot backend (`SwiftSnapshot.spec.backend.type: oci`) pushes memory+disk state to an OCI registry; it underpins cold migration. See [cold migration](snapshots/cold-migration.md).
+
+### Migration
+
+- [Migration overview](migration/overview.md) — offline and live migration model
+- [Migratable guests](migration/migratable-guests.md) — RWX+Block storage for live migration
+- [Cold migration](snapshots/cold-migration.md) — move a suspended VM's full state between nodes/clusters via an OCI registry (`swiftctl guest export`/`import`)
+- [Networking requirements](migration/networking-requirements.md) — IP preservation vs `allowIPChange`
+- [Troubleshooting](migration/troubleshooting.md) — migration failure modes
+
+### Registry / golden images
+
+- [Golden images](registry/golden-images.md) — publish VM images to an OCI registry (`swiftctl image publish`, `SwiftImage.spec.source.oci`)
+- [Edge Zot registry](registry/edge-zot.md) — per-site Zot mirroring VM artifacts from a hub (`zot sync`), including air-gap feeding
+
+### Gateway & Web UI
+
+- [Gateway](ui/gateway.md) — read/action API for the web UI; multi-cluster fleet federation
+- [Gateway auth](ui/auth.md) — user authentication and RBAC impersonation
 
 ### Operator
 
@@ -111,6 +142,9 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 | Validate worker node | [Worker-node preflight](operator/worker-node-preflight.md) |
 | Connect VMs to physical networks | [Networking Operations Guide](networking/operations-guide.md) |
 | Pass a GPU through to a VM | [GPU Passthrough](gpu-passthrough.md) / [via DRA](gpu/dra-allocation.md) |
+| Snapshot or clone a VM | [Snapshots & fast VMs](snapshots/fast-vms.md) |
+| Migrate a VM between nodes | [Migration overview](migration/overview.md) |
+| Publish a golden VM image | [Golden images](registry/golden-images.md) |
 | Migrate from VMware/Proxmox | [Virtualization Comparison](networking/virtualization-comparison.md) |
 | Build locally | [Build](developer/build.md) |
 | Understand CRDs | [API overview](api/overview.md) |

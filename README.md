@@ -1,6 +1,6 @@
 # KubeSwift
 
-KubeSwift runs virtual machines as first-class Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the hypervisor for nearly every workload — Linux and Windows guests, disk and kernel boot, PCIe GPU passthrough, snapshots, and live migration. QEMU is a secondary runtime used only for HGX SXM (multi-GPU NVSwitch) topologies, where CUDA requires a full PCIe hierarchy that Cloud Hypervisor's flat model does not provide.
+KubeSwift runs virtual machines as Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the hypervisor for nearly every workload — Linux and Windows guests, disk and kernel boot, PCIe GPU passthrough, snapshots, and live migration. QEMU is a secondary runtime used only for HGX SXM (multi-GPU NVSwitch) topologies, where CUDA requires a full PCIe hierarchy that Cloud Hypervisor's flat model does not provide.
 
 It is **not** a container sandbox (not Kata Containers) — each guest is a real VM, one per pod.
 
@@ -8,7 +8,8 @@ It is **not** a container sandbox (not Kata Containers) — each guest is a real
 
 - **Boot paths** — disk boot from cloud images (Ubuntu, Rocky, Debian, Fedora) and direct kernel boot from OCI artifacts (sub-second microVMs). Windows guests via `osType: windows`.
 - **GPU passthrough** — whole-GPU VFIO passthrough with two allocation backends: the native SwiftGPU model (discovery DaemonSet + profiles) or Kubernetes [DRA](docs/gpu/dra-allocation.md) ResourceClaims. PCIe GPUs on Cloud Hypervisor; HGX SXM on QEMU.
-- **Networking** — tap + bridge + DHCP with the guest IP surfaced in status; multi-NIC via Multus; SR-IOV NIC passthrough; OVN-Kubernetes and multi-node L2 with **IP-preserving cross-node live migration** (kube-ovn primary-on-NAD — see [`docs/networking/ovn-l2-install.md`](docs/networking/ovn-l2-install.md)). Expose guest ports as Kubernetes Services with `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
+- **Networking** — tap + bridge + DHCP with the guest IP surfaced in status; multi-NIC via Multus; SR-IOV NIC passthrough; OVN-Kubernetes and multi-node L2 with IP-preserving cross-node live migration (kube-ovn primary-on-NAD — see [`docs/networking/ovn-l2-install.md`](docs/networking/ovn-l2-install.md)).
+- **Services** — expose guest ports as Kubernetes Services via `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
 - **Storage** — per-guest root-disk cloning sized from a class; optional data disks (blank/sized, image-backed, or attached PVC); RWX+Block for live-migration-capable volumes.
 - **Snapshots & clones** — disk-only (CSI) and memory+disk (local/S3) snapshots, scheduled snapshots, and `cloneFromSnapshot` for fast VM fan-out.
 - **Migration** — offline migration on any storage, and live migration (sub-second downtime) with optional mTLS transport and `kubectl drain` integration.
@@ -31,8 +32,9 @@ It is **not** a container sandbox (not Kata Containers) — each guest is a real
 | SwiftRestore | — | `snapshot.kubeswift.io` | Namespaced | Restore from a snapshot |
 | SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | Cron-scheduled snapshots + keep-N |
 | SwiftMigration | — | `migration.kubeswift.io` | Namespaced | Move a guest between nodes |
+| Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | Member cluster federated by the gateway hub |
 
-12 CRDs, all `v1alpha1`.
+13 CRDs, all `v1alpha1`.
 
 ## Documentation
 
