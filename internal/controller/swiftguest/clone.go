@@ -178,8 +178,14 @@ func (r *SwiftGuestReconciler) prepareSourceIndependentClone(
 		// pre-source-independence contract applies.
 		return nil, nil, "source SwiftGuest " + snap.Spec.GuestRef.Name + " no longer exists; cloneFromSnapshot needs the source spec (only a full-state oci snapshot with a captured guest spec clones source-independently)", false, nil
 	}
-	if captured.HasDataDisks {
-		return nil, nil, "source-independent clone: snapshot " + snap.Name + "'s source had data disks, which full-state capture does not carry (v1 is root-disk-only); the source spec is required", false, nil
+	// v1.1: a full-state snapshot may carry the source's data disks as their own
+	// oci artifacts (status.oci.dataDisks). If the source HAD data disks but the
+	// capture produced no such artifacts, it is a pre-v1.1 (root-disk-only)
+	// snapshot — reject, the source spec is required. When artifacts are present
+	// the import path (ensureCloneDataDisks) materializes + attaches them, so the
+	// clone is fully source-independent.
+	if captured.HasDataDisks && len(snap.Status.OCI.DataDisks) == 0 {
+		return nil, nil, "source-independent clone: snapshot " + snap.Name + "'s source had data disks but the capture carries none (pre-v1.1 root-disk-only snapshot); the source spec is required", false, nil
 	}
 	var class swiftv1alpha1.SwiftGuestClass
 	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
