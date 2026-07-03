@@ -56,6 +56,19 @@ func chunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 		return zero, transferStats{}, err
 	}
 	totalSize := fi.Size()
+	if fi.Mode()&os.ModeDevice != 0 {
+		// A block device (a raw Block-mode PVC — the W9 root path or a v1.1
+		// data disk) reports Size()==0 from Stat(); its real size comes from
+		// seeking to the end. The read loop below already reads the whole device
+		// to EOF, so the chunks are correct either way — this only fixes the
+		// recorded TotalSize so the download side can size a Filesystem target.
+		if end, serr := f.Seek(0, io.SeekEnd); serr == nil {
+			totalSize = end
+			if _, serr := f.Seek(0, io.SeekStart); serr != nil {
+				return zero, transferStats{}, fmt.Errorf("seek to start after sizing %s: %w", filePath, serr)
+			}
+		}
+	}
 
 	buf := make([]byte, chunkSize)
 	zeros := make([]byte, chunkSize)
@@ -156,13 +169,33 @@ func pullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 		return zero, fmt.Errorf("parse config: %w", err)
 	}
 
-	f, err := os.Create(filePath)
+	// Zero windows are never stored (chunkAndPush skips them), so the destination
+	// must read as zero wherever no chunk lands. Two destination kinds:
+	//   - regular file (Filesystem image.raw): os.Create's O_TRUNC zeroes it, then
+	//     Truncate sizes the sparse file so the tail beyond the last chunk is zero.
+	//   - block device (a raw Block-mode PVC, W9 / v1.1 data disk): Truncate()
+	//     returns EINVAL and O_TRUNC is a no-op, so we CANNOT re-zero it here — we
+	//     rely on the destination PVC being freshly provisioned (Longhorn zeroes
+	//     new volumes), so a skipped zero window correctly reads back as zero.
+	// (A device is detected by Stat; the node exists whether or not it's a device.)
+	isBlockDev := false
+	if info, serr := os.Stat(filePath); serr == nil && info.Mode()&os.ModeDevice != 0 {
+		isBlockDev = true
+	}
+	var f *os.File
+	if isBlockDev {
+		f, err = os.OpenFile(filePath, os.O_RDWR, 0o644)
+	} else {
+		f, err = os.Create(filePath) // O_RDWR|O_CREATE|O_TRUNC — zeroes a stale file
+	}
 	if err != nil {
 		return zero, err
 	}
 	defer f.Close()
-	if err := f.Truncate(cfg.TotalSize); err != nil {
-		return zero, fmt.Errorf("truncate to %d: %w", cfg.TotalSize, err)
+	if !isBlockDev {
+		if err := f.Truncate(cfg.TotalSize); err != nil {
+			return zero, fmt.Errorf("truncate to %d: %w", cfg.TotalSize, err)
+		}
 	}
 	for _, layer := range manifest.Layers {
 		// Skip non-chunk layers — oras.PackManifest injects an OCI "empty"
