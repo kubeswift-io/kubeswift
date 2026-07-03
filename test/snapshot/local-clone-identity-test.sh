@@ -126,10 +126,32 @@ identity_of() {
 epoch_now() { date +%s; }
 elapsed_since() { echo $(($(epoch_now) - $1)); }
 
+# apply_seed_profile renders 01-seed-profile.yaml with THIS operator's SSH
+# public key spliced into ssh_authorized_keys, then applies it. The sample
+# ships a fixed pubkey; overriding it at apply time lets the test run with
+# ANY keypair — CI generates an ephemeral one, operators use their own —
+# instead of requiring the private key that matches the sample's baked-in
+# key. Prefer the .pub sidecar (needs no passphrase); fall back to deriving
+# the pubkey from the private $IDENTITY.
+apply_seed_profile() {
+  local pubkey
+  pubkey="$(cat "${IDENTITY}.pub" 2>/dev/null || ssh-keygen -y -f "$IDENTITY")"
+  # Keep only "type base64" (drop any trailing comment) so the value has no
+  # sed-special characters when spliced into the manifest.
+  pubkey="$(printf '%s' "$pubkey" | awk '{print $1, $2}')"
+  if [[ -z "$pubkey" ]]; then
+    echo "ERROR: could not derive an SSH public key from $IDENTITY" >&2
+    exit 2
+  fi
+  sed -E "s|^([[:space:]]*- )ssh-[^ ]+ .*|\1${pubkey}|" \
+    "$SAMPLES_DIR/01-seed-profile.yaml" \
+    | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+}
+
 # 1. Source VM with the combined seed profile (kubeswift user for
 #    swiftctl ssh + clone-identity-regen bootcmd).
 echo "--- Step 1: Apply source manifests + seed profile ---"
-kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/01-seed-profile.yaml" >/dev/null
+apply_seed_profile
 kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/02-source-guest.yaml" >/dev/null
 
 if ! kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" >/dev/null 2>&1; then
@@ -212,10 +234,17 @@ wait_guest_running() {
   return 1
 }
 
+# Map each clone to its numbered SwiftRestore manifest. The samples were
+# renamed swiftrestore-clone-{a,b}.yaml -> 0{5,6}-restore-clone-{a,b}.yaml
+# for the numbered walkthrough ordering; keep this map in step with them.
+declare -A RESTORE_MANIFEST=(
+  [snapshot-local-clone-a]=05-restore-clone-a.yaml
+  [snapshot-local-clone-b]=06-restore-clone-b.yaml
+)
 for clone in snapshot-local-clone-a snapshot-local-clone-b; do
   T_RESTORE_CREATED[$clone]=$(epoch_now)
   echo "  [$clone] Apply SwiftRestore (clone path)"
-  kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/swiftrestore-${clone#snapshot-local-}.yaml" >/dev/null
+  kubectl apply -n "$NAMESPACE" -f "$SAMPLES_DIR/${RESTORE_MANIFEST[$clone]}" >/dev/null
 done
 
 # Track each milestone independently.
