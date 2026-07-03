@@ -443,3 +443,35 @@ func TestBuildRestorePod_StagerHasNoPrivilege(t *testing.T) {
 		t.Errorf("stager must drop ALL capabilities; got %+v", sc.Capabilities)
 	}
 }
+
+// A full-state clone (v1.1) whose source had a data disk must attach that disk to
+// the restore-receive pod at the SAME path the launcher used at capture — CH
+// --restore re-opens every disk in the captured config.json, so a missing data
+// disk fails the restore with "Cannot open disk /dev/kubeswift-data-<name>"
+// (cluster-caught). rg.DataDisks is overridden to the clone-owned PVC by
+// ensureCloneDataDisks before this pod is built.
+func TestBuildRestorePod_AttachesDataDisks(t *testing.T) {
+	guest := minimalGuest()
+	rg := minimalResolved()
+	rg.DataDisks = []resolved.ResolvedDataDisk{
+		{Name: "scratch", PVCName: "g1-data-scratch", Block: true, HostPath: "/dev/kubeswift-data-scratch", Format: "raw", Ready: true},
+	}
+	params := RestoreParams{SnapshotPath: "/snap", NodeName: "boba", Mode: RestoreModeInPlace}
+
+	pod := BuildRestorePod(guest, rg, "", "g1-runtime-intent", nil, params)
+
+	vol := findVolume(pod, dataDiskVolumeName("scratch"))
+	if vol == nil || vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "g1-data-scratch" {
+		t.Fatalf("restore pod must carry the data-disk PVC volume; got %+v", pod.Spec.Volumes)
+	}
+	launcher := pod.Spec.Containers[0]
+	var dev *corev1.VolumeDevice
+	for i := range launcher.VolumeDevices {
+		if launcher.VolumeDevices[i].Name == dataDiskVolumeName("scratch") {
+			dev = &launcher.VolumeDevices[i]
+		}
+	}
+	if dev == nil || dev.DevicePath != "/dev/kubeswift-data-scratch" {
+		t.Fatalf("Block data disk must attach as a device at the captured path; got %+v", launcher.VolumeDevices)
+	}
+}

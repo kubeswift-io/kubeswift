@@ -172,3 +172,35 @@ func TestChunkAllZero_NoLayers(t *testing.T) {
 		t.Error("all-zero reassembly is not all-zero / wrong size")
 	}
 }
+
+// pullAndReassemble opens the destination without O_TRUNC (os.Create implies it)
+// so a Block-mode PVC — where Truncate() returns EINVAL — is never truncated.
+// Guard the regular-file consequence: pulling over a PRE-EXISTING, LARGER stale
+// destination still yields byte-identical content (the explicit Truncate to
+// TotalSize discards the stale tail). This is the file-path half of the
+// Block-device fix (the block half is cluster-validated — no loop device in CI).
+func TestPull_OverExistingStaleDestination_ByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "image.raw")
+	a, b, _, zero := mkWindows()
+	writeDisk(t, src, [][]byte{a, zero, b}) // 3 windows, middle zero-skipped
+	orig, _ := os.ReadFile(src)
+
+	store := memory.New()
+	if _, _, err := chunkAndPush(context.Background(), src, store, "v1", testChunk, "raw", "linux"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-create the destination LARGER than the disk with stale non-zero bytes.
+	dst := filepath.Join(dir, "out.raw")
+	if err := os.WriteFile(dst, bytes.Repeat([]byte{0x99}, 5*testChunk), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pullAndReassemble(context.Background(), store, "v1", dst); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dst)
+	if !bytes.Equal(got, orig) {
+		t.Errorf("pull over a stale destination must be byte-identical to source (len got=%d orig=%d); the stale tail must be truncated away", len(got), len(orig))
+	}
+}
