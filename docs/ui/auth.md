@@ -4,7 +4,7 @@ This is the operator runbook for turning the KubeSwift console from the dev
 default (no login) into a multi-user, single-sign-on deployment where each
 person's **Kubernetes RBAC** decides what they can see and do.
 
-> Two decisions shape it (see [`docs/design/ui-phase-2-explorer-and-auth.md`](../design/ui-phase-2-explorer-and-auth.md)):
+> Two decisions shape it:
 > **A1 — gateway-side OIDC**: the gateway verifies the IdP token itself, so the
 > member API servers need *not* be OIDC-wired. **A2 — Kubernetes RBAC is the
 > permission model**: the gateway impersonates the signed-in user, so their k8s

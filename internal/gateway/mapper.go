@@ -1,6 +1,5 @@
 // Package gateway implements the kubeswift-gateway: the browser-facing Connect
-// hub that fronts the KubeSwift operator across a fleet of member clusters. See
-// docs/design/ui-backend-enablement.md.
+// hub that fronts the KubeSwift operator across a fleet of member clusters.
 package gateway
 
 import (

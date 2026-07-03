@@ -47,7 +47,7 @@ pub struct VmConfig {
     pub cpus: u32,
     /// When true, append `,kvm_hyperv=on` to `--cpus`. Set for Windows guests:
     /// the spike proved Windows hangs in early MP/HAL init on CH without the
-    /// KVM Hyper-V enlightenments (docs/design/windows-guest-support-spike.md).
+    /// KVM Hyper-V enlightenments.
     /// Harmless/unused for Linux guests (default false).
     pub kvm_hyperv: bool,
     /// vCPU core-scheduling policy ("vm"/"vcpu"), appended to --cpus as
@@ -101,7 +101,7 @@ pub struct VmConfig {
     /// vsock device WITHOUT --vsock on the restore command (the clone path uses
     /// `spawn_ch_restore`, which reopens the device from config.json; the Go
     /// controller's configjson patcher rewrites only the socket PATH to the
-    /// clone runtime dir). See docs/design/clone-identity-vsock-agent.md.
+    /// clone runtime dir).
     pub vsock: Option<VsockConfig>,
 }
 
@@ -140,8 +140,7 @@ pub struct FsMount {
 
 impl VmConfig {
     /// Returns the API socket path. Used by spawn paths to clean up
-    /// stale sockets before invoking CH (W2 walkthrough finding —
-    /// `docs/design/live-migration-phase-2.md` §4.3.3).
+    /// stale sockets before invoking CH (W2 walkthrough finding).
     pub fn api_socket(&self) -> &str {
         &self.api_socket
     }

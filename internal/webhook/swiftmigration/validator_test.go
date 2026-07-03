@@ -1161,8 +1161,7 @@ func TestGateLiveModeStorage_MissingClassDoesNotDoubleReject(t *testing.T) {
 // rejected by the cluster-state storage gate when the guest's storage
 // is not live-migration-capable. Disk-boot guests with default
 // RWO+Filesystem storage hit gateLiveModeStorage's RWX+Block
-// requirement; operators see the storage capability error with a
-// pointer to docs/design/storage-access-mode.md.
+// requirement; operators see the storage capability error.
 //
 // The Phase 1 ancestor of this test asserted shape-level rejection
 // ("not yet shipped"); Phase 3a removed that gate — the docstring
@@ -1323,8 +1322,7 @@ func TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk(t *testing.T) {
 }
 
 // Node-local virtio backend gate (virtiofs / vhost-user → offline-only, like
-// VFIO). See docs/design/vhost-user-devices.md §7 and live-migration.md
-// Constraint 3.
+// VFIO).
 
 func TestValidateClusterState_VirtiofsLiveRejected(t *testing.T) {
 	scheme := migrationScheme(t)

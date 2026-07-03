@@ -61,7 +61,7 @@ spec:
               federates. The hub watches Cluster objects, builds an impersonation-capable
               client + informer cache per member (the client pool), and fans out the
               read/write/telemetry/console planes across the fleet, stamping a `cluster`
-              dimension on every result. See docs/design/ui-backend-enablement.md (D2/D2a).
+              dimension on every result.
 
               Cluster objects are namespaced and live in the hub cluster alongside their
               credential Secret (the Cluster API model). The kubeswift-gateway — NOT the

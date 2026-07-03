@@ -75,7 +75,7 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 	// and reopen the captured vsock device from config.json instead of adding a
 	// second --vsock. Linux only — the v1 agent is a Linux binary; a Windows
 	// guest gets no device (the GuestAgentUnreachable fallback would otherwise
-	// fire pointlessly). See docs/design/clone-identity-vsock-agent.md.
+	// fire pointlessly).
 	rg.GuestAgentEnabled = guest.Spec.GuestAgent != nil && guest.Spec.GuestAgent.Enabled && !rg.IsWindows()
 
 	// Model A: a guest in a namespace carrying the OVN-Kubernetes primary-UDN

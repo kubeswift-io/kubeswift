@@ -16,8 +16,7 @@ import (
 // Phase 3a PR 1 minimum-viable scope: this helper lands at the
 // SwiftGuest reconcile loop's three pod-Get sites in controller.go,
 // the minimum surface required for live-mode cluster integration
-// testing. Per docs/design/live-migration-phase-3a.md §3.3,
-// PR 2 expands the resolution to swiftctl logs/console/ssh and
+// testing. PR 2 expands the resolution to swiftctl logs/console/ssh and
 // adds a comprehensive call-site audit + edge cases (defense-in-
 // depth label/ownerRef verification per security-engineer review).
 //

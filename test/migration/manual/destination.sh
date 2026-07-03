@@ -30,8 +30,6 @@
 #   * Destination launcher pod is running on $TARGET_NODE.
 #   * swiftletd has spawned CH with --api-socket only (receiver mode).
 #   * STATE_FILE is updated with DST_POD, TARGET_NODE.
-#
-# See `docs/design/live-migration-phase-2.md` §7.2 step 2.
 
 set -euo pipefail
 

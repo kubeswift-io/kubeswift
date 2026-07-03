@@ -185,5 +185,4 @@ networking, live-migration mTLS enabled:
 
 ## See also
 
-- Design: [`docs/design/live-migration-phase-4.md`](../design/live-migration-phase-4.md)
 - Live migration (Phase 3a/b/c): [`phase-3a.md`](phase-3a.md), [`phase-3b.md`](phase-3b.md), [`phase-3c.md`](phase-3c.md)

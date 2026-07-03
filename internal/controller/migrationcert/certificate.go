@@ -1,7 +1,7 @@
 // Package migrationcert provisions the per-node TLS identities used by
 // the Phase 3c live-migration mTLS transport (stunnel sidecar).
 //
-// Design contract: docs/design/live-migration-phase-3c.md, Option B
+// Design contract: Option B
 // (per-node identity + SAN pinning). Each worker node gets one
 // cert-manager Certificate whose SAN (and CN) is the node name; the
 // stunnel sidecar on a migration's source/destination pod presents
@@ -11,8 +11,7 @@
 // is the legitimate src/dst node for THIS migration", not merely "the
 // peer holds a CA-signed cert". (Not literal stunnel `verify = 4`,
 // which ignores the CA chain and pins the exact leaf, breaking
-// cert-manager rotation — see docs/design/live-migration-phase-3c.md
-// §3 directive note.)
+// cert-manager rotation.)
 //
 // This file owns the per-node Certificate lifecycle:
 //   - newNodeCertificate builds the cert-manager Certificate object,

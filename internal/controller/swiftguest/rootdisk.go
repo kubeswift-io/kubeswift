@@ -109,8 +109,7 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 	// resumed RAM), NOT the pristine SwiftImage. Copying the image gives the clone
 	// a small (original-image) partition while the resumed guest's in-RAM ext4 is
 	// the source's grown fs — fs > partition — which reboots straight into the
-	// initramfs ("EXT4-fs: bad geometry"). See
-	// docs/design/known-issues-clone-reboot-firmware-hang.md.
+	// initramfs ("EXT4-fs: bad geometry").
 	if handled, res, err := r.maybeRootDiskFromSourceClone(ctx, guest, rg); handled {
 		return res, err
 	}

@@ -3,7 +3,7 @@
 # Minimal first-party image: alpine + stunnel + a role-selecting entrypoint.
 # It owns the cross-pod TLS hop so Cloud Hypervisor and swiftletd stay
 # plaintext-on-localhost and unaware of TLS (the spike's load-bearing
-# non-change). See docs/design/live-migration-phase-3c.md.
+# non-change).
 #
 # The stunnel server/client configs are NOT baked into this image: they
 # arrive via a mounted ConfigMap (ONE ConfigMap, BOTH configs). The

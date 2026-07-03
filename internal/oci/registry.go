@@ -3,7 +3,7 @@
 // in-cluster snapshot-oras transfer Job and the client-side `swiftctl image
 // publish` command. It is an importable package precisely so both `package
 // main` binaries can share one implementation (Go forbids importing one main
-// from another). See docs/design/oras-golden-image.md.
+// from another).
 package oci
 
 import (

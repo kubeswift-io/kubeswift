@@ -292,8 +292,7 @@ func rewriteMACs(cfg map[string]any, macsByIndex []string) ([]string, error) {
 //   - vsock.socket  (e.g. .../run/<source>/vsock.sock → .../run/<clone>/vsock.sock) —
 //     the in-guest identity agent's host-side socket. The CID is captured guest
 //     state and is NOT rewritten (the guest kernel's vsock is bound to it); only
-//     the host-side socket path moves to the clone's runtime dir. See
-//     docs/design/clone-identity-vsock-agent.md.
+//     the host-side socket path moves to the clone's runtime dir.
 //
 // disks[].path that does NOT start with `from` is left alone — the
 // root disk PVC ("/var/lib/kubeswift/disks/root/image.raw") is mounted

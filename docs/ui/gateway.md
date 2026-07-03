@@ -8,7 +8,6 @@ sees every cluster's VMs.
 
 > Status: **v1alpha1**, opt-in. P0 ships the read plane (cluster selector + a
 > cross-cluster SwiftGuest inventory). Write, telemetry, and consoles follow.
-> Design: [`docs/design/ui-backend-enablement.md`](../design/ui-backend-enablement.md).
 
 ## Architecture
 
@@ -177,5 +176,4 @@ In `insecure` mode these work with no token; in `token` mode add
 
 ## See also
 
-- [`docs/design/ui-backend-enablement.md`](../design/ui-backend-enablement.md) — the design + the resolved decisions.
 - `config/samples/gateway/` — runnable Secret + Cluster samples.

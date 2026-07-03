@@ -11,10 +11,9 @@
 > booted reachable cross-node and live-migrated with its IP preserved in **2.806 s**
 > on a dedicated OVN-K-primary cluster (see [Verify](#step-5--verify-boot-cross-node-reach-ip-preserving-migration)).
 >
-> See [Multi-node L2 networking](multi-node-l2.md) for the feature/CRD reference,
-> the [OVN-Kubernetes Integration Guide](ovn-kubernetes.md) for secondary-network
-> use cases (storage / GPU data plane / VLAN / UDN), and the
-> [RFC](../design/ovn-cni-backends.md) for the pluggable `ovnBackend` design.
+> See [Multi-node L2 networking](multi-node-l2.md) for the feature/CRD reference
+> and the [OVN-Kubernetes Integration Guide](ovn-kubernetes.md) for
+> secondary-network use cases (storage / GPU data plane / VLAN / UDN).
 
 ---
 
@@ -333,5 +332,3 @@ kubectl get swiftguest -n default ovnk-vm \
   validation matrix.
 - [OVN-Kubernetes Integration Guide](ovn-kubernetes.md) — OVN-K secondary-network
   use cases (storage, GPU data plane, VLAN/localnet, UDN).
-- [RFC: Pluggable OVN CNI backends](../design/ovn-cni-backends.md) — the
-  `ovnBackend` design and the P0/P3 validation evidence.

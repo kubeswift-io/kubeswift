@@ -97,8 +97,7 @@ spec:
                   the controller surfaces a CancelIgnored condition with reason
                   PastCutover and the migration completes normally — the cutover
                   cannot be reversed once status.podRef.name has swapped to the dst
-                  pod and the src pod is deleted. See
-                  docs/design/live-migration-phase-3a.md §5.3 for the rationale.
+                  pod and the src pod is deleted.
 
                   Operators using mode=live should prefer spec.cancelRequested over
                   `kubectl delete pod <dst>` for cancellation: force-delete of the
@@ -364,8 +363,7 @@ spec:
                   Phase 3a shipped the first five codes; Phase 3b PR 2 extends the
                   taxonomy with seven additional codes that classify live-mode
                   failures more precisely. See the per-constant docstrings at the
-                  top of this file for fire conditions; cross-reference
-                  docs/design/live-migration-phase-3b.md §4.7 for the
+                  top of this file for fire conditions and the
                   failure-mode-to-reason mapping.
 
                   Phase 3a codes (carried through unchanged):
@@ -382,7 +380,7 @@ spec:
                       disconnect during transfer.
                     - RpcError — CH HTTP RPC error not otherwise classified.
                     - ImageTagMismatch — LBA-1 trip-wire (defensive; should never
-                      fire). See docs/design/live-migration-phase-3b.md LBA-1.
+                      fire).
                     - DstPodConflict — dst pod name collision with foreign state.
 
                   Phase 1 offline mode does not populate this field — its failure

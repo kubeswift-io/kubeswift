@@ -27,7 +27,7 @@ var CosignRun = func(ctx context.Context, args []string) error {
 // `cosign verify --key`. The tag form is also the most registry-portable
 // (GHCR/ECR/Harbor all support it). insecure adds --allow-http-registry for a
 // plaintext registry (the sig still lands; cosign VERIFY over plaintext is
-// unsupported — see docs/design/oras-provenance-signing.md).
+// unsupported).
 func SignArgs(repository, digest, keyPath string, insecure bool) []string {
 	args := []string{
 		"sign",

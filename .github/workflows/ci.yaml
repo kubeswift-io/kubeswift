@@ -186,7 +186,7 @@ jobs:
       # a defaulted `datasource` templating variable. Import-style JSON
       # renders on manual import but silently shows "no data" under
       # sidecar/ConfigMap provisioning (the Helm monitoring.dashboards
-      # path) — see docs/design/observability.md D6.
+      # path).
       - name: Lint Grafana dashboards
         run: make verify-dashboards
 

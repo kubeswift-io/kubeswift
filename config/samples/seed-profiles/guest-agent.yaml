@@ -7,10 +7,9 @@
 #
 # The old approach regenerated a clone's identity from a cloud-init `bootcmd`
 # that fired on the clone's first REBOOT. That is BROKEN on Cloud Hypervisor v52:
-# a `--restore`d guest hangs in EDK2 firmware on reboot
-# (docs/design/known-issues-clone-reboot-firmware-hang.md). This agent
+# a `--restore`d guest hangs in EDK2 firmware on reboot. This agent
 # regenerates identity + re-DHCPs IN PLACE over vsock — no reboot — so it works
-# on CH v52. See docs/design/clone-identity-vsock-agent.md.
+# on CH v52.
 #
 # # THE load-bearing constraint
 #

@@ -104,7 +104,6 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 	// pod — the dst eth0 is infrastructure-locked, dropping pod-to-pod traffic). Auto
 	// resolves to offline, which works: the target acquires a fresh UDN IP. The webhook
 	// rejects explicit mode=live for these guests. Mirrors the VFIO rule above.
-	// See docs/design/udn-primary-integration.md.
 	if modelA, err := resolved.NamespaceHasPrimaryUDN(ctx, r.Client, mig.Namespace); err != nil {
 		return phaseTransient(fmt.Errorf("checking primary-UDN namespace for auto-resolution: %w", err))
 	} else if modelA {

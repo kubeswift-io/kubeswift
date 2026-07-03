@@ -59,7 +59,6 @@ type ResolvedGuest struct {
 	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// NetworkSpec is the SwiftGuest spec.network block (binding + declarative
 	// service ports). Nil preserves today's behavior (nat, no exposure).
-	// See docs/design/service-exposure.md.
 	NetworkSpec *swiftv1alpha1.GuestNetworkSpec `json:"networkSpec,omitempty"`
 	// Filesystems from SwiftGuest spec — virtiofs (vhost-user-fs) shares.
 	// Nil or empty means no virtiofs mounts. CH path only.
@@ -80,7 +79,7 @@ type ResolvedGuest struct {
 	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
 	// The resolver sets it false for a clone (cloneFromSnapshot): a clone
 	// reopens the captured vsock device from config.json, so it must not also
-	// add --vsock. See docs/design/clone-identity-vsock-agent.md.
+	// add --vsock.
 	GuestAgentEnabled bool `json:"guestAgentEnabled,omitempty"`
 }
 
@@ -108,7 +107,7 @@ type RootDisk struct {
 	// artifact rather than cloned from a base SwiftImage — a source-independent
 	// full-state clone (FromCapturedSpec). The controller runs EnsureRootDiskClone
 	// (→ maybeRootDiskFromOCI) on this even though PreparedImage is empty (no
-	// image was resolved). See docs/design/oras-cold-migration-source-independent.md.
+	// image was resolved).
 	FromOCI bool `json:"fromOCI,omitempty"`
 }
 
@@ -465,7 +464,7 @@ func (r *ResolvedGuest) GetPrimaryUDNInterface() string {
 // GetExposedPorts builds the PortIntent list from spec.network.ports for a
 // nat-bound guest (the in-pod DNAT targets). Returns nil for a bridge-bound
 // guest (its ports reach the NAD IP, not via in-pod DNAT) and when no ports
-// are declared. See docs/design/service-exposure.md.
+// are declared.
 func (r *ResolvedGuest) GetExposedPorts() []runtimeintent.PortIntent {
 	if r.NetworkSpec == nil || len(r.NetworkSpec.Ports) == 0 {
 		return nil

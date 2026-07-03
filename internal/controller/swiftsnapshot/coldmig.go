@@ -6,7 +6,6 @@
 // handlePendingLocal), so it stays paused; this file then TERMINATES the launcher
 // to release the RWO root PVC (frozen at the snapshot instant) and chunks the
 // released disk to the registry via snapshot-oras --mode=upload-image (P3).
-// See docs/design/oras-cold-migration.md.
 package swiftsnapshot
 
 import (

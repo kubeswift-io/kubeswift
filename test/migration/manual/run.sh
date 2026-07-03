@@ -20,7 +20,7 @@
 #
 # W1 invariant: this script gates on BOTH terminal statuses, NOT on
 # `migration-action-id-mirror` alone (the W1 walkthrough finding from
-# the Phase 2 spike — `docs/design/live-migration-phase-2-spike.md`).
+# the Phase 2 spike).
 #
 # Optional env:
 #   STATE_FILE — defaults to /tmp/kubeswift-migration-phase2-manual/state.env

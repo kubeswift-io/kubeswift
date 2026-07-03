@@ -347,8 +347,8 @@ func guestRootDiskPopulated(guest *swiftv1alpha1.SwiftGuest) bool {
 // capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs. When
 // rg is non-nil (a full-state oci capture, where the source is live at capture
 // time so it resolves cleanly), it also freezes the launcher-sufficient surface a
-// source-independent clone needs when the source guest/image/seedProfile are gone
-// (docs/design/oras-cold-migration-source-independent.md). A nil rg (CSI/local
+// source-independent clone needs when the source guest/image/seedProfile are gone.
+// A nil rg (CSI/local
 // captures, or a resolve failure) leaves the expanded fields empty — such a clone
 // still needs the live source spec (the pre-source-independence behaviour).
 func capturedGuestSpec(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) *snapshotv1alpha1.CapturedGuestSpec {

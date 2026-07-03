@@ -7,10 +7,8 @@ DNAT `podIP:port → vmIP:targetPort` makes a VM port a normal Kubernetes
 ecosystem (ClusterIP/NodePort/LoadBalancer, Gateway API, NetworkPolicy, service
 mesh, Tailscale) composes on top of it.
 
-This is the KubeVirt masquerade + `virtctl expose` model. For the architecture
-and rationale see [`docs/design/service-exposure.md`](../design/service-exposure.md);
-for third-party integrations see
-[Ecosystem integrations](ecosystem-integrations.md).
+This is the KubeVirt masquerade + `virtctl expose` model. For third-party
+integrations see [Ecosystem integrations](ecosystem-integrations.md).
 
 ---
 

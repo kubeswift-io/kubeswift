@@ -2,8 +2,7 @@
 
 KubeSwift ships two [vhost-user](https://www.qemu.org/docs/master/interop/vhost-user.html)
 devices: **virtiofs** (shared filesystems) and **vhost-user-net** (operator
-DPDK fast-path networking). The architecture and roadmap live in
-[`docs/design/vhost-user-devices.md`](design/vhost-user-devices.md). Both rely on
+DPDK fast-path networking). Both rely on
 shared guest memory, which KubeSwift already maps by default (`--memory shared=on`).
 
 ---

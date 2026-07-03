@@ -10,7 +10,7 @@
       console-less VMM (CH) boots straight to the OS instead of a graphical
       recovery screen that hangs.
 
-  Validated end-to-end in the boot spike (docs/design/windows-guest-support-spike.md):
+  Validated end-to-end in the boot spike:
   the produced image boots cleanly on Cloud Hypervisor v52.0 (with the
   `kvm_hyperv=on` CPU enlightenment, which the KubeSwift runtime adds for
   osType: windows).

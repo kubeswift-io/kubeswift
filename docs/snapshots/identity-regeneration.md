@@ -17,14 +17,10 @@ workarounds operators have today.
 
 > The reboot-based remedy further down (`clone-identity-regen.yaml` +
 > a cloud-init `bootcmd`) is **broken on Cloud Hypervisor v52**: a
-> `--restore`d guest hangs in EDK2 firmware on reboot
-> ([`../design/known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md)).
+> `--restore`d guest hangs in EDK2 firmware on reboot (a known issue).
 > The replacement is the **in-guest identity agent** — it regenerates
 > machine-id / SSH host keys / hostname / MAC and re-DHCPs **in place,
-> with no reboot**, over a host-only vsock channel. Design + validated
-> spike:
-> [`../design/clone-identity-vsock-agent.md`](../design/clone-identity-vsock-agent.md),
-> [`../design/clone-identity-vsock-agent-spike.md`](../design/clone-identity-vsock-agent-spike.md).
+> with no reboot**, over a host-only vsock channel.
 
 KubeSwift ships `kubeswift-guest-agent` (a tiny static binary) plus a
 `kubeswift-guest-agent.service` systemd unit inside the `swiftletd`

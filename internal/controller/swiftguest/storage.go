@@ -113,7 +113,7 @@ func (r *SwiftGuestReconciler) checkStorageReady(ctx context.Context, rg *resolv
 			fmt.Sprintf(
 				"Longhorn StorageClass %q is missing parameters.migratable=\"true\"; "+
 					"RWX+Block guests on this class will provision but cannot be live-migrated. "+
-					"Cluster admin: apply a Longhorn StorageClass with migratable=true (see docs/design/storage-access-mode.md).",
+					"Cluster admin: apply a Longhorn StorageClass with migratable=true.",
 				scName,
 			),
 			false

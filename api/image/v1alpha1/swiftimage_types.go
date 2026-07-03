@@ -20,7 +20,7 @@ const (
 )
 
 // CloneStrategy controls how per-guest root disk PVCs are created from a
-// SwiftImage. See docs/design/snapshots.md "SwiftImage Clone Strategy".
+// SwiftImage.
 // +kubebuilder:validation:Enum=copy;snapshot
 type CloneStrategy string
 
@@ -92,7 +92,6 @@ type SecretObjectReference struct {
 // application/vnd.kubeswift.vmimage.v1, layer title image.raw); the import
 // materializes it into the import PVC and runs the shared resize + sgdisk +
 // GRUB/serial patch tail — identical to the http path minus the download step.
-// See docs/design/oras-golden-image.md.
 type OCIImageSource struct {
 	// Repository is the OCI repository WITHOUT a tag
 	// (e.g. ghcr.io/org/golden-ubuntu-noble).
@@ -186,7 +185,7 @@ type SwiftImageSpec struct {
 	// OSType is the OS family this image contains: "linux" (default) or
 	// "windows". Gates the Linux-only import steps (GRUB/serial patch,
 	// growpart resize expectation). Default linux; existing images are
-	// unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+	// unaffected. (Windows guest support.)
 	// +kubebuilder:default=linux
 	// +optional
 	OSType OSType `json:"osType,omitempty"`

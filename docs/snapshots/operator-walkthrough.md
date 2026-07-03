@@ -5,7 +5,7 @@
 > the output you should see when you run it. Copy-paste-ready.
 
 This walkthrough exercises every snapshot/restore feature shipped
-through Phases 0/1/2 of the [snapshots design](../design/snapshots.md):
+through Phases 0/1/2 of the snapshots design:
 
 - **Tier A** — disk-only snapshots backed by CSI VolumeSnapshot
   ([csi-snapshots.md](csi-snapshots.md))
@@ -1018,8 +1018,8 @@ not a working flow.
 
 ### What's missing — Phase 4 design
 
-Per [`docs/design/snapshots.md`](../design/snapshots.md) §"Phase 4
-— Cloning ergonomics", these API surfaces are deferred:
+The Phase 4 snapshot design (Cloning ergonomics) deferred these API
+surfaces:
 
 1. **`spec.cloneFromSnapshot` on SwiftGuest.** A SwiftGuest spec
    would reference a SwiftSnapshot (memory snapshot) as the boot

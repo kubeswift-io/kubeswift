@@ -159,8 +159,6 @@ impl ApiClient {
     ///   - F3: network drop — same shape as F2 once the destination
     ///     listener gives up (a few seconds).
     ///
-    /// See `docs/design/live-migration-phase-2.md` §4.1 for the full
-    /// blocking-semantics rationale.
     /// `downtime_ms`, when `Some`, sets CH's `downtime_ms` target (CH >=
     /// v52): CH runs pre-copy iterations until the estimated final
     /// stop-and-copy fits under this vCPU-pause budget, then commits —
@@ -240,8 +238,6 @@ impl ApiClient {
     ///   compatibility check post-receive, and aborts pre-resume (F12
     ///   finding). This method returns `ApiError::Status` with detail
     ///   `cpu_incompat` or similar.
-    ///
-    /// See `docs/design/live-migration-phase-2.md` §4.1.
     pub fn receive_migration(&self, receiver_url: &str) -> Result<(), ApiError> {
         let body = serde_json::to_vec(&serde_json::json!({
             "receiver_url": receiver_url,

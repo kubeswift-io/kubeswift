@@ -53,7 +53,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/snapshot-stager ./cmd/sn
 # INSIDE a source guest (via the guest-agent SwiftSeedProfile's NoCloud seed
 # disk, or a golden-image bake) and captured into the memory snapshot. CGO off
 # so it runs on any glibc/musl guest; -X main.version stamps the release version
-# (reported back on the agent's ping). See docs/design/clone-identity-vsock-agent.md.
+# (reported back on the agent's ping).
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags "-X main.version=${VERSION}" \
     -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
@@ -102,9 +102,8 @@ COPY --from=builder /usr/local/bin/virtiofsd /usr/libexec/virtiofsd
 
 # Cloud Hypervisor static binary (v52.0)
 # Bumped v51.1 -> v52.0: v51.1's virtio-blk has a bug that bugchecks Windows'
-# viostor driver (0xD1); v52.0 fixes it and boots Windows cleanly. See
-# docs/design/windows-guest-support-spike.md sec 4.1. The CLOUDHV.fd firmware
-# below (ch-13b4963ec4) is the spike-validated pairing with the v52.0 binary.
+# viostor driver (0xD1); v52.0 fixes it and boots Windows cleanly. The CLOUDHV.fd
+# firmware below (ch-13b4963ec4) is the spike-validated pairing with the v52.0 binary.
 ARG CH_VERSION=52.0
 ARG TARGETARCH=amd64
 RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
@@ -129,7 +128,7 @@ COPY --from=go-builder /out/snapshot-stager /usr/local/bin/snapshot-stager
 # launcher PATH — the agent runs INSIDE the guest, not in the launcher pod. The
 # guest-agent SwiftSeedProfile (PR 2) bind-mounts this dir read-only into a
 # source guest to install the agent before the snapshot; a golden image can bake
-# it instead. See docs/design/clone-identity-vsock-agent.md §6.1.
+# it instead.
 COPY --from=go-builder /out/kubeswift-guest-agent /usr/local/share/kubeswift/guest-agent/kubeswift-guest-agent
 COPY cmd/kubeswift-guest-agent/kubeswift-guest-agent.service /usr/local/share/kubeswift/guest-agent/kubeswift-guest-agent.service
 COPY rust/swiftletd/scripts/network-init.sh /usr/local/bin/network-init.sh

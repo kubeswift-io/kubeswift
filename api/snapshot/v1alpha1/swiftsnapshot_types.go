@@ -8,7 +8,7 @@ import (
 // csi-volume-snapshot (Tier A, disk-only), local (Tier B, node-hostPath
 // memory+state), and s3 (Tier C, object-storage export) are shipped; oci
 // packages the snapshot as an OCI artifact and pushes it to a registry via
-// ORAS (see docs/design/oras-vm-disk-artifacts.md). The spec is structured so
+// ORAS. The spec is structured so
 // adding a backend does not require a breaking change.
 // +kubebuilder:validation:Enum=csi-volume-snapshot;local;s3;oci
 type SnapshotBackendType string
@@ -115,7 +115,7 @@ type S3Backend struct {
 // a cloud registry), never embedded — KubeSwift is a registry client. Compared
 // to the s3 backend this adds content-addressed layer dedup (strongest for a
 // shared golden base), cosign/SBOM provenance as OCI referrers, and a single
-// artifact store for the edge. See docs/design/oras-vm-disk-artifacts.md.
+// artifact store for the edge.
 type OCIBackend struct {
 	// Repository is the target OCI repository WITHOUT a tag, e.g.
 	// "ghcr.io/kubeswift-io/vm-snapshots" or "zot.registry.svc:5000/snapshots".
@@ -196,8 +196,7 @@ type SwiftSnapshotSpec struct {
 	// coherent via capture-then-terminate: the guest is paused, memory
 	// snapshotted, NOT resumed, then terminated so the disk is frozen at the
 	// snapshot instant before it is chunked to the registry — so this IMPLIES the
-	// guest is migrated away, not a live backup. See
-	// docs/design/oras-cold-migration.md (P4).
+	// guest is migrated away, not a live backup.
 	// +optional
 	IncludeDisk bool `json:"includeDisk,omitempty"`
 	// ResumeAfterSnapshot controls whether the source SwiftGuest is resumed
@@ -263,8 +262,7 @@ type CapturedGuestSpec struct {
 	// while the source is live so a clone can resume when the source
 	// SwiftGuest / SwiftImage / SwiftSeedProfile are gone. Populated only for
 	// full-state (includeDisk oci) captures; a memory-only snapshot leaves
-	// them empty and its clone still needs the live source spec. See
-	// docs/design/oras-cold-migration-source-independent.md.
+	// them empty and its clone still needs the live source spec.
 
 	// Storage is the resolved storage settings for the clone's root PVC
 	// (materialized from the oci disk artifact).
@@ -420,7 +418,7 @@ type OCISnapshotStatus struct {
 	// Disk is the chunked disk artifact pushed alongside memory for a full-state
 	// (cold-migration) snapshot — populated only when spec.includeDisk is true.
 	// The import materializes the disk from this ref, then CH --restore's the
-	// memory (the fields above) against it. See docs/design/oras-cold-migration.md.
+	// memory (the fields above) against it.
 	// +optional
 	Disk *OCIDiskArtifact `json:"disk,omitempty"`
 	// DataDisks records the chunked artifacts of the source's secondary VM

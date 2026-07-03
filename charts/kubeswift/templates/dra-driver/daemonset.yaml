@@ -8,7 +8,7 @@
 # Node prerequisites: CDI enabled in the container runtime (e.g. k0s:
 # /etc/k0s/containerd.d/99-cdi.toml with enable_cdi=true + restart) and the
 # vfio-pci module loaded (same prerequisite as native GPU nodes).
-# See docs/gpu/dra-allocation.md and docs/design/dra-gpu-integration.md.
+# See docs/gpu/dra-allocation.md.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

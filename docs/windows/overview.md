@@ -11,8 +11,7 @@ This page is the operator entry point; the deep dives are linked inline.
 > NetKVM brings up the NIC and the guest gets a DHCP IP; and **cloudbase-init
 > reads the NoCloud `cidata` seed and runs the first-boot user-data** (RDP
 > enabled), reaching `Running` with an IP — the last previously-untested piece
-> (in-cluster cloudbase-init provisioning) is now closed. See the
-> [design doc](../design/windows-guest-support.md).
+> (in-cluster cloudbase-init provisioning) is now closed.
 
 ## How it works — `osType: windows`
 
@@ -91,4 +90,3 @@ kubectl get swiftguest win-guest -o wide    # watch phase + primaryIP
 
 - [Windows image prep runbook](image-prep.md)
 - [Windows samples](../../config/samples/windows/)
-- [Design doc](../design/windows-guest-support.md)

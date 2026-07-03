@@ -51,7 +51,7 @@ if network_enabled; then
     lease_dir="$RUN_DIR/$safe_id"
     mkdir -p "$lease_dir"
 
-    # Model A (docs/design/udn-primary-integration.md): network-init persisted the
+    # Model A: network-init persisted the
     # OVN-K primary-UDN-assigned IP + the OVN-derived MAC the guest MUST adopt (the LSP
     # port_security pins MAC+IP). Hand exactly that IP to the guest (matched by MAC) via
     # a fixed dnsmasq lease, and export the MAC so swiftletd uses it for the CH
@@ -129,7 +129,6 @@ if network_enabled; then
     # Service exposure: network-init pinned the primary VM IP and installed the
     # in-pod DNAT against it. Narrow the DHCP range to that single address so the
     # VM deterministically gets the DNAT target IP (no silent failure).
-    # See docs/design/service-exposure.md.
     if [ -f "$lease_dir/expose.env" ]; then
         # shellcheck disable=SC1090
         . "$lease_dir/expose.env"   # EXPOSE_VM_IP
@@ -147,7 +146,7 @@ if network_enabled; then
     # On kube-proxy clusters this reflects the VM's egress (same host kube-proxy
     # path); on eBPF kube-proxy-free clusters the VM's FORWARDED traffic can
     # bypass the eth0 ClusterIP hook (the Track-2b roadmap item), so treat this
-    # as the pod-netns signal there. See docs/design/service-exposure.md.
+    # as the pod-netns signal there.
     if timeout 3 bash -c "echo > /dev/tcp/$dns/53" 2>/dev/null; then
         echo "EGRESS_CLUSTER_REACHABLE=true" > "$lease_dir/egress.env"
     else

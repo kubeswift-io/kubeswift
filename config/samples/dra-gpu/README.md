@@ -7,7 +7,6 @@ identical — VFIO whole-GPU passthrough into Cloud Hypervisor (or QEMU for
 `hgx-*` tiers).
 
 Full operator guide: [docs/gpu/dra-allocation.md](../../../docs/gpu/dra-allocation.md).
-Design + cluster-validation evidence: [docs/design/dra-gpu-integration.md](../../../docs/design/dra-gpu-integration.md).
 
 ## Files
 

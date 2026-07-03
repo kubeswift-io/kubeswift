@@ -12,8 +12,7 @@
 Operators MUST NOT route production traffic through this path. The
 `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation must
 be present on both source and destination launcher pods; the scripts
-set it for you. Phase 3c+ adds mTLS for production use. See
-[`docs/design/THREAT-MODEL.md`](../../../docs/design/THREAT-MODEL.md).
+set it for you. Phase 3c+ adds mTLS for production use.
 
 ---
 

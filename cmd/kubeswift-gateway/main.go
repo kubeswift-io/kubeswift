@@ -2,7 +2,6 @@
 // UI. It runs in a hub cluster, watches fleet.kubeswift.io Cluster objects, and
 // (PR C2) fans the read/write/telemetry/console planes out across the fleet.
 // This binary (PR C1) serves the ClusterService — the UI's cluster selector.
-// See docs/design/ui-backend-enablement.md.
 package main
 
 import (

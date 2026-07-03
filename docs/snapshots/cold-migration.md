@@ -252,7 +252,6 @@ kubectl delete swiftsnapshot db-export  # optional; oci objects are purged if
 
 ## See also
 
-- [../design/oras-cold-migration.md](../design/oras-cold-migration.md) — design + decisions
 - [clone-from-snapshot.md](clone-from-snapshot.md) — fan out fresh clones from a snapshot
 - [s3-snapshots.md](s3-snapshots.md) — the S3 equivalent of the OCI backend
 - [../migration/overview.md](../migration/overview.md) — live migration (same-cluster, IP-preserving)

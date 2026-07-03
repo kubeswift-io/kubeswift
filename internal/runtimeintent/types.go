@@ -37,7 +37,7 @@ type RuntimeIntent struct {
 	// the swiftletd->apiserver control path. Empty for every other networking mode.
 	PrimaryUDNInterface string `json:"primaryUDNInterface,omitempty"`
 	// Ports declares service ports to expose from the guest's primary NIC
-	// (service exposure — docs/design/service-exposure.md). When non-empty,
+	// (service exposure). When non-empty,
 	// network-init.sh pins the primary VM IP and installs an in-pod DNAT
 	// podIP:port -> vmIP:targetPort for each entry. nat binding only.
 	Ports []PortIntent `json:"ports,omitempty"`
@@ -65,7 +65,7 @@ type RuntimeIntent struct {
 	// under the runtime dir and emits `--vsock cid=<N>,socket=<path>`. A clone
 	// (cloneFromSnapshot) leaves this nil — CH reopens the captured vsock device
 	// from config.json on restore (the configjson patcher rewrites only the
-	// socket path). See docs/design/clone-identity-vsock-agent.md.
+	// socket path).
 	Vsock *VsockIntent `json:"vsock,omitempty"`
 }
 

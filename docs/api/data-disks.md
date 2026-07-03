@@ -52,7 +52,7 @@ devicePath, bound}`. The blank PVC is garbage-collected when the guest is delete
 
 - **Block** (default) is the recommended path: the raw device is handed to the
   guest, which runs `mkfs`. It is the live-migration-capable mode (RWX+Block is
-  the migratable combination — see [storage](../design/storage-rwx-block-runtime.md)).
+  the migratable combination).
   Requires a Block-capable StorageClass (e.g. Longhorn).
 - **Filesystem** is an escape hatch for Block-incapable clusters: the controller
   creates a Filesystem PVC and a one-shot Job truncates a blank `image.raw` of the

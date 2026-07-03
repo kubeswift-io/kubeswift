@@ -29,8 +29,7 @@ setup_primary_nic() {
     # VM-internal subnet (per launcher-pod network namespace; must NOT
     # collide with the cluster pod-CIDR pool or any per-node Calico
     # allocation, otherwise SYN-ACK replies to cross-node traffic
-    # routed via this br0 (linkdown) instead of eth0 -- see
-    # docs/design/live-migration-phase-3a-spike.md B0 finding.
+    # routed via this br0 (linkdown) instead of eth0.
     local bridge_ip="${BRIDGE_IP:-192.168.99.1/24}"
 
     # Derive the network address from bridge_ip for iptables MASQUERADE.
@@ -79,7 +78,7 @@ setup_primary_nic() {
 # the launcher entrypoint's dnsmasq range_start). It hands that pinned IP to the
 # entrypoint via expose.env so dnsmasq serves a single-address lease (the IP is
 # then deterministic, so the DNAT target is correct -- no silent failure).
-# See docs/design/service-exposure.md. No-op when intent has no ports.
+# No-op when intent has no ports.
 setup_exposed_ports() {
     bridge="$1"
     command -v python3 >/dev/null 2>&1 || return 0
@@ -254,7 +253,7 @@ setup_primary_nad_nic() {
 }
 
 # setup_primary_udn_nic -- multi-node L2, guest on the namespace PRIMARY OVN-K UDN
-# (Model A; docs/design/udn-primary-integration.md). OVN-Kubernetes attaches the pod
+# (Model A). OVN-Kubernetes attaches the pod
 # to its namespace primary UserDefinedNetwork as `ovn-udn1` (e.g. 10.50.0.10/16)
 # automatically, driven by the namespace label; eth0 stays on the cluster default
 # (role infrastructure-locked) for the swiftletd->apiserver control path + egress.
@@ -363,7 +362,7 @@ has_nics() {
     return 0
 }
 
-# Model A (docs/design/udn-primary-integration.md): the top-level primaryUDNInterface
+# Model A: the top-level primaryUDNInterface
 # signal (ovn-udn1) applies to the PRIMARY NIC -- whether the guest has explicit
 # interfaces or the default single NIC -- so it is read once here, not per-NIC. Empty
 # for every other networking mode.

@@ -10,7 +10,7 @@ import (
 // full-state clone needs, mapped from a SwiftSnapshot's status.capturedGuestSpec
 // by the caller (so this package stays free of the snapshot API). It is the
 // resume-specific configuration that overrides the guestClass shell in
-// FromCapturedSpec. See docs/design/oras-cold-migration-source-independent.md.
+// FromCapturedSpec.
 type CapturedInput struct {
 	CPU              int // cores (from the captured/resumed VM, not the clone's class)
 	MemoryMi         int // MiB

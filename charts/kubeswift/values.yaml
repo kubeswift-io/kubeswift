@@ -115,7 +115,7 @@ dra:
 # UI backend gateway (the browser-facing Connect hub for a separate kubeswift-ui
 # app). Opt-in. Runs in a hub cluster, watches fleet.kubeswift.io Cluster
 # objects, and fans the read plane across the registered member clusters.
-# See docs/ui/gateway.md and docs/design/ui-backend-enablement.md.
+# See docs/ui/gateway.md.
 gateway:
   enabled: false
   image:
@@ -246,7 +246,7 @@ webhook:
 # (monitoring.coreos.com — e.g. kube-prometheus-stack) when enabled; the
 # dashboards additionally need a Grafana with the dashboard sidecar (the
 # kube-prometheus-stack default). Off by default — default installs incur
-# no monitoring CRD dependency. See docs/design/observability.md.
+# no monitoring CRD dependency.
 monitoring:
   enabled: false
   # ServiceMonitor scraping the controller-manager /metrics endpoint.

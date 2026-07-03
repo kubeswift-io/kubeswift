@@ -54,8 +54,7 @@ When NOT to use it:
   attach the disk while the source pod still holds it; live
   migration's source-running-during-pre-copy semantic is
   incompatible. Use RWX+Block per the storage access mode CRD
-  (`docs/design/storage-access-mode.md`) or fall back to
-  `mode=offline`.
+  or fall back to `mode=offline`.
 - Filesystem RWX storage (Longhorn Generic, NFS-based). The
   CRD admission rejects RWX+Filesystem; the SwiftGuest cannot
   exist with this combination. The `liveMigrationCapable`
@@ -374,15 +373,6 @@ across all such upgrades.
 
 ## See also
 
-- `docs/design/live-migration.md` — overall live migration design
-- `docs/design/live-migration-phase-3a.md` — Phase 3a controller
-  design (state machine, cutover ordering, failure modes)
-- `docs/design/live-migration-phase-3a-spike.md` — Phase 3a spike
-  findings (cluster-validated empirical evidence)
-- `docs/design/live-migration-phase-2.md` — Phase 2 swiftletd
-  plumbing reference
-- `docs/design/storage-access-mode.md` — RWX+Block storage
-  selection
 - `docs/migration/troubleshooting.md` — general migration
   debugging
 - `docs/migration/phase-2.md` — manual demo path (Phase 2;

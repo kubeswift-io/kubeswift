@@ -1,20 +1,16 @@
-# Go
 *.exe
 *.test
 *.out
 vendor/
 
-# Rust
 /target/
 **/target/
 
-# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# Built binaries (top-level only — never the cmd/swiftctl/ source)
 /swiftctl
 /bin/swiftctl
 /controller-manager
@@ -24,9 +20,6 @@ vendor/
 /snapshot-stager
 /snapshot-s3
 
-# --- Kept local, never published ---------------------------------------------
-# AI-assisted-development tooling and the internal working/context docs. These
-# drive local development but are not part of the published project.
 .claude/
 .cursor/
 CLAUDE.md
@@ -34,9 +27,11 @@ CLAUDE.md
 /swiftgpu_design_sketch.md
 /kubeswift_architecture.rtf
 
-# Spike scratch (scripts, run logs, throwaway manifests) and the spike notes.
-# Spikes are exploratory; what matters is folded into the committed design docs
-# and code. (Does not match build/.../board/spike — a buildroot board dir.)
 /spike/
 /hack/snapshot-spike/
 docs/design/*spike*.md
+/field-testing/
+/docs/design/
+/docs/reports/
+/bin/
+snapshot-oras
