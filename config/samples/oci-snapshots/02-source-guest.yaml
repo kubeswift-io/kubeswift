@@ -1,0 +1,29 @@
+# Source SwiftGuest for the oci-backend snapshot round-trip.
+#
+# Reuses the snapshot-local-test-seed SwiftSeedProfile (config/samples/
+# local-snapshots/01-seed-profile.yaml) so a clone restored from this
+# snapshot regenerates machine-id / SSH host keys / hostname on its first
+# reboot — apply that seed profile first.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: snapshot-oci-class
+spec:
+  cpu: 2
+  memory: "2Gi"
+  rootDisk:
+    size: "10Gi"
+    format: raw
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: snapshot-oci-source
+spec:
+  imageRef:
+    name: ubuntu-noble
+  guestClassRef:
+    name: snapshot-oci-class
+  seedProfileRef:
+    name: snapshot-local-test-seed
+  runPolicy: Running

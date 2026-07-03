@@ -1,0 +1,34 @@
+# oci-backend SwiftSnapshot of snapshot-oci-source.
+#
+# Capture-then-push: the launcher captures the VM state node-locally (exactly
+# like the local backend, into a controller-derived dir under
+# /var/lib/kubeswift/snapshots/) and then a node-pinned Job packages the
+# artifacts as an OCI artifact and pushes it to the registry via ORAS.
+# status.oci records the pushed reference + manifest digest on Ready.
+#
+# The registry is an external dependency (Harbor / Zot / distribution / a cloud
+# registry) — KubeSwift is a registry client, it does not run one. See the
+# golden-image and edge-zot samples for an in-cluster Zot.
+#
+# includeMemory: true captures RAM (the artifact then includes memory state).
+# Set false for a disk-only export.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: snapshot-oci-mem
+  namespace: default
+spec:
+  guestRef:
+    name: snapshot-oci-source
+  backend:
+    type: oci
+    oci:
+      repository: zot.registry.svc:5000/vm-snapshots
+      # tag: empty defaults to "<namespace>-<snapshot>", pinned by digest on restore
+      insecure: true            # plaintext in-cluster/test registry ONLY — drop for TLS
+      # credentialsSecretRef:    # kubernetes.io/dockerconfigjson, same namespace
+      #   name: regcreds
+      # signingKeySecretRef:     # cosign keypair (cosign.key + cosign.password) to sign the push
+      #   name: cosign-key
+  includeMemory: true
+  resumeAfterSnapshot: true

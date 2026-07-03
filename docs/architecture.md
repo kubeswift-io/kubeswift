@@ -312,8 +312,9 @@ Key facts:
 | `gpu.kubeswift.io/v1alpha1` | SwiftGPUProfile, SwiftGPUNode | GPU passthrough |
 | `snapshot.kubeswift.io/v1alpha1` | SwiftSnapshot, SwiftRestore, SwiftSnapshotSchedule | Snapshot, restore, scheduled snapshots |
 | `migration.kubeswift.io/v1alpha1` | SwiftMigration | Offline + live migration between nodes |
+| `fleet.kubeswift.io/v1alpha1` | Cluster | Member cluster federated by the gateway hub |
 
-12 CRDs across 7 API groups, all `v1alpha1`.
+13 CRDs across 8 API groups, all `v1alpha1`.
 
 ## Design principles
 

@@ -1,0 +1,33 @@
+# Cross-node clone restore from the oci-backend snapshot.
+#
+# Because the artifact lives in the registry, this restore can land on ANY node
+# — set spec.targetNode to the node you want the clone to run on (here "boba";
+# change to a node in your cluster). A node-pinned Job pulls the OCI artifact
+# (pinned by the digest in status.oci.manifestDigest) into that node's local
+# cache, then the standard restore path boots the clone.
+#
+# Different target name => clone path => macAddresses regeneration is REQUIRED
+# (two clones sharing a MAC collide on L2). The other identity items fire on the
+# clone's first reboot (CH --restore resumes byte-for-byte; cloud-init does not
+# re-run on resume — see docs/snapshots/identity-regeneration.md).
+#
+# For an IN-PLACE restore instead (same target name as the source), omit
+# spec.targetNode and set targetGuest.overwriteExisting: true.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftRestore
+metadata:
+  name: snapshot-oci-clone
+  namespace: default
+spec:
+  snapshotRef:
+    name: snapshot-oci-mem
+  targetGuest:
+    name: snapshot-oci-clone            # different from source => clone
+  targetNode: boba                      # pin the restore to this node
+  resumeAfterRestore: true
+  identity:
+    regenerate:
+      - macAddresses                    # required for clones (L2 collision)
+      - hostname
+      - machineId
+      - sshHostKeys
