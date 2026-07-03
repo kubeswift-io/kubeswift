@@ -107,8 +107,7 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 		if hasKernel {
 			return fmt.Errorf("spec.osType: windows requires disk boot (spec.imageRef); kernel boot (spec.kernelRef) is Linux-only")
 		}
-		// GPU passthrough to Windows is out of scope for v1 (a non-goal in
-		// docs/design/windows-guest-support.md).
+		// GPU passthrough to Windows is out of scope for v1.
 		if usesGPU(spec) {
 			return fmt.Errorf("spec.osType: windows with GPU passthrough (spec.gpuProfileRef / spec.gpuResourceClaim) is not supported in v1 (GPU passthrough to Windows is out of scope)")
 		}
@@ -134,8 +133,7 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 
 // validateDataDisks enforces the secondary-data-disk shape rules
 // (per-operation discipline — pure spec shape). This closes a pre-existing
-// gap: spec.dataDiskRefs was previously not validated at all. See
-// docs/design/blank-vm-data-disks.md.
+// gap: spec.dataDiskRefs was previously not validated at all.
 //   - exactly one of imageRef/pvcRef/blank per entry,
 //   - blank.size must be > 0; blank.volumeMode (if set) Block or Filesystem,
 //   - attachAsDisk is only valid with pvcRef (imageRef/blank are always VM disks),
@@ -199,7 +197,7 @@ func validateDataDisks(spec *swiftv1alpha1.SwiftGuestSpec) error {
 }
 
 // validateNetworkPorts enforces the service-exposure rules (per-operation
-// discipline — these are shape rules on the spec). See docs/design/service-exposure.md.
+// discipline — these are shape rules on the spec).
 //   - name is required when more than one port is declared (Service port naming),
 //   - port names and protocol/port pairs must be unique,
 //   - expose is rejected for a bridge-bound guest (a NAD-bound VM is not

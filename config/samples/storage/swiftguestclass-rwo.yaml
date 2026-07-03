@@ -4,7 +4,7 @@
 # explicit form is provided here for documentation clarity. RWO storage
 # is suitable for offline migration (Phase 1) but NOT for live migration
 # of disk-boot guests (Phase 3 work pending RWO-handoff choreography or
-# RWX adoption — see docs/design/storage-access-mode.md).
+# RWX adoption).
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuestClass
 metadata:

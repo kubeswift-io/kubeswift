@@ -101,8 +101,7 @@ The load-bearing part is the sync extension in the Zot config:
   ~guest-RAM + the deduped disk chunks).
 - TLS: front the edge Zot with your usual ingress/cert. A plaintext in-cluster
   edge works for KubeSwift pulls (`insecure: true` on the specs) but **cosign
-  verification requires TLS** (see
-  [`../design/oras-provenance-signing.md`](../design/oras-provenance-signing.md)).
+  verification requires TLS**.
 
 ## Pointing KubeSwift at the edge
 
@@ -158,6 +157,5 @@ mirroring uses the same config block per the
 
 ## See also
 
-- [`../design/oras-vm-disk-artifacts.md`](../design/oras-vm-disk-artifacts.md) — the ADR (registry as a declared dependency)
 - [`../snapshots/cold-migration.md`](../snapshots/cold-migration.md) — cross-cluster full-state moves
 - [`../snapshots/s3-snapshots.md`](../snapshots/s3-snapshots.md) — the S3 alternative backend

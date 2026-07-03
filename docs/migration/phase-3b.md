@@ -2,9 +2,7 @@
 
 > Phase 3b lights up `mode: live` for SwiftMigration: guest memory and
 > device state stream to the target node while the VM keeps running, with
-> sub-3s operator-visible downtime. This runbook is the operator-facing
-> companion to the design doc
-> [`docs/design/live-migration-phase-3b.md`](../design/live-migration-phase-3b.md).
+> sub-3s operator-visible downtime.
 >
 > Phase 3a (offline mode) runbook: [`phase-3a.md`](phase-3a.md).
 

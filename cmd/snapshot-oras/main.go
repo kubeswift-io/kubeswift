@@ -14,7 +14,7 @@
 //
 // It also chunks/reassembles a golden raw VM disk (P3 — sparse, zero-skipping,
 // content-addressed chunks that dedup zero regions + unchanged cross-version
-// blocks; see docs/design/oras-golden-image.md):
+// blocks):
 //
 //	snapshot-oras --mode=upload-image   --file=/data/image.raw --repository=REPO --tag=TAG [--chunk-size-mib=64] [--os-type=linux] [--insecure]
 //	snapshot-oras --mode=download-image --file=/data/image.raw --repository=REPO --tag=TAG [--digest=sha256:...] [--insecure]

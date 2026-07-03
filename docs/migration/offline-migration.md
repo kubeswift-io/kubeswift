@@ -99,9 +99,6 @@ this wait is normal.
 
 ## Reference
 
-- `docs/design/live-migration.md` — full design (all five phases)
-- `docs/design/live-migration-phase-1-spike.md` — empirical findings
-  that drove the direct-PVC-reuse decision
 - `docs/migration/networking-requirements.md` — storage and network
   attachment requirements
 - `docs/migration/troubleshooting.md` — common issues

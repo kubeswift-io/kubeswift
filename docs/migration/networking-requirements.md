@@ -40,10 +40,6 @@ writes the `IPWillChange=True` warning condition.
 
 ### Networks that preserve IPs cross-node
 
-> Framework + recommendation for the multi-node-L2 options (and the code
-> gaps to close):
-> [`../design/network-architecture-requirements.md`](../design/network-architecture-requirements.md).
-
 For IP preservation, attach the guest to a multi-node network. The
 SwiftGuest's `spec.interfaces[*].networkRef` references a Multus
 NetworkAttachmentDefinition. Compatible NAD types:

@@ -43,8 +43,7 @@ import (
 // download path. When the source guest still exists its live spec is used (the
 // validated same-cluster path). When it is GONE and the snapshot is a full-state
 // oci snapshot carrying the captured launcher-sufficient surface (SI PR1), the
-// clone resolves source-independently — the fully cross-cluster path
-// (docs/design/oras-cold-migration-source-independent.md).
+// clone resolves source-independently — the fully cross-cluster path.
 func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 	ctx context.Context, guest *swiftv1alpha1.SwiftGuest,
 ) (*swiftv1alpha1.SwiftGuest, *resolved.ResolvedGuest, string, bool, error) {
@@ -152,8 +151,7 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 }
 
 // prepareSourceIndependentClone handles a cloneFromSnapshot whose SOURCE guest no
-// longer exists — the fully cross-cluster path
-// (docs/design/oras-cold-migration-source-independent.md). It requires a
+// longer exists — the fully cross-cluster path. It requires a
 // FULL-STATE oci snapshot (status.oci.disk — the frozen runtime disk is in the
 // registry, so no SwiftImage is needed) carrying the captured
 // launcher-sufficient surface (status.guestSpec.storage — SI PR1); anything else
@@ -516,8 +514,7 @@ func cloneOCITag(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // already-grown filesystem; synced onto the small-partition image copy it leaves
 // fs > partition, which the next reboot's initramfs rejects ("EXT4-fs: bad
 // geometry"), dropping the guest to the emergency shell (looked like a firmware
-// hang). Cloning the source's real disk keeps geometry consistent. See
-// docs/design/known-issues-clone-reboot-firmware-hang.md.
+// hang). Cloning the source's real disk keeps geometry consistent.
 func (r *SwiftGuestReconciler) maybeRootDiskFromSourceClone(
 	ctx context.Context, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest,
 ) (bool, *RootDiskCloneResult, error) {

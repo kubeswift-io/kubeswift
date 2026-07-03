@@ -20,7 +20,7 @@ import corev1 "k8s.io/api/core/v1"
 // deliver. This ships the live-migration semantic gap directly into the
 // CRD schema, which kubectl-side dry-run catches offline.
 //
-// +kubebuilder:validation:XValidation:rule="!(self.accessMode == 'ReadWriteMany' && (!has(self.volumeMode) || self.volumeMode == 'Filesystem'))",message="accessMode=ReadWriteMany requires volumeMode=Block; Filesystem RWX is not live-migration-capable (see docs/design/storage-access-mode.md)"
+// +kubebuilder:validation:XValidation:rule="!(self.accessMode == 'ReadWriteMany' && (!has(self.volumeMode) || self.volumeMode == 'Filesystem'))",message="accessMode=ReadWriteMany requires volumeMode=Block; Filesystem RWX is not live-migration-capable"
 type StorageSpec struct {
 	// AccessMode is the PVC accessMode. Defaults to ReadWriteOnce.
 	// ReadWriteOnce is security-conservative and matches Phase 1 offline

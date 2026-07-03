@@ -17,8 +17,7 @@ import (
 
 // Golden-image (P3) artifact types. A golden VM disk is stored CHUNKED so
 // identical chunks dedup by content address: zero windows are never stored, and
-// unchanged blocks across versions (v1 -> v1.1) are shared. See
-// docs/design/oras-golden-image.md.
+// unchanged blocks across versions (v1 -> v1.1) are shared.
 const (
 	VMImageArtifactType = "application/vnd.kubeswift.vmimage.v1"
 	VMImageConfigType   = "application/vnd.kubeswift.vmimage.config.v1+json"

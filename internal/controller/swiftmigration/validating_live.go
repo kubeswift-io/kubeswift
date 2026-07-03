@@ -129,8 +129,6 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	// common path always passes. If it ever fires, the migration
 	// enters Failed with ImageTagMismatch reason code, pointing
 	// operators at LBA-1.
-	//
-	// See docs/design/live-migration-phase-3b.md §4.1 + LBA-1.
 	if err := checkImageTagMatch(&srcPod); err != nil {
 		return phaseFailure(err.Error(), migrationv1alpha1.FailureReasonImageTagMismatch)
 	}
@@ -310,9 +308,7 @@ func srcPodLookupName(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alpha
 // default launcher image OR when either value is empty (defensive
 // skip — the trip-wire is not load-bearing for correctness).
 //
-// See handleValidatingLive's wire site for the rationale and
-// docs/design/live-migration-phase-3b.md LBA-1 for the architectural
-// property this trip-wire guards.
+// See handleValidatingLive's wire site for the rationale.
 func checkImageTagMatch(srcPod *corev1.Pod) error {
 	expected := swiftguest.LauncherImage()
 	actual := launcherContainerImage(srcPod)
@@ -323,7 +319,7 @@ func checkImageTagMatch(srcPod *corev1.Pod) error {
 	if actual != expected {
 		return fmt.Errorf(
 			"image tag mismatch: source pod uses %q, controller default is %q "+
-				"(LBA-1 trip-wire — see docs/design/live-migration-phase-3b.md §9)",
+				"(LBA-1 trip-wire)",
 			actual, expected,
 		)
 	}

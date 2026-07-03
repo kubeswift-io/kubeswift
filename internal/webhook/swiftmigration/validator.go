@@ -238,7 +238,7 @@ func validateShape(mig *migrationv1alpha1.SwiftMigration) error {
 	}
 
 	// Phase 3a live-mode shape rule: guest name length cap.
-	// Per docs/design/live-migration-phase-3a.md §3.2, the destination
+	// The destination
 	// pod is named `<guest>-mig-<short-uid>` (5 + 6 = 11 chars suffix);
 	// Kubernetes pod names are bounded at 253 chars (DNS-1123 subdomain
 	// rule). Cap guest name at 242 to leave headroom. Phase 1 offline
@@ -458,7 +458,7 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	// the swiftletd<->swiftletd migration channel from the pod (the destination pod's
 	// eth0 is infrastructure-locked, dropping pod-to-pod traffic). Offline migration
 	// works (the target acquires a fresh UDN IP); auto resolves to offline
-	// (auto_mode.go), mirroring VFIO. See docs/design/udn-primary-integration.md.
+	// (auto_mode.go), mirroring VFIO.
 	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive {
 		modelA, err := resolved.NamespaceHasPrimaryUDN(ctx, v.Client, mig.Namespace)
 		if err != nil {
@@ -493,7 +493,7 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	}
 
 	// Phase 3a per-source-node concurrency rule (live mode).
-	// Per docs/design/live-migration-phase-3a.md §5.4: at most one
+	// At most one
 	// in-flight live migration per source node. The controller observes
 	// both source and destination pods via the labeled-watch (§5.1);
 	// concurrent migrations from the same source node would race on
@@ -586,15 +586,14 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 	}
 	return fmt.Errorf(
 		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (KubeVirt-style live migration; Filesystem RWX is not live-migration-capable). "+
-			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline. See docs/design/storage-access-mode.md.",
+			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline.",
 		guest.Name, storage.AccessMode, storage.VolumeMode,
 	)
 }
 
 // checkPerSourceNodeConcurrency rejects a live-mode SwiftMigration
 // when another non-terminal live SwiftMigration is already in flight
-// from the same source node. Per docs/design/live-migration-phase-3a.md
-// §5.4.
+// from the same source node.
 //
 // Reading peer SwiftMigrations' status is allowed under the
 // per-operation discipline (PR #26): the rule prohibits reading

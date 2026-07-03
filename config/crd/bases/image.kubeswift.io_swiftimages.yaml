@@ -90,7 +90,7 @@ spec:
                   OSType is the OS family this image contains: "linux" (default) or
                   "windows". Gates the Linux-only import steps (GRUB/serial patch,
                   growpart resize expectation). Default linux; existing images are
-                  unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+                  unaffected. (Windows guest support.)
                 enum:
                 - linux
                 - windows

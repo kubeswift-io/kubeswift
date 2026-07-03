@@ -1,14 +1,11 @@
 # A Windows SwiftImage. `osType: windows` gates the Linux-only import steps (the
 # GRUB/serial-console patch) -- the import keeps only qcow2->raw + size
-# measurement, and the import Job runs unprivileged (no loop-mount needed). See
-# PR 3 / docs/design/windows-guest-support.md.
+# measurement, and the import Job runs unprivileged (no loop-mount needed).
 #
 # IMPORTANT: the source must be an OPERATOR-PREPARED, virtio-ready Windows image:
 #   - virtio drivers pre-installed (viostor for the boot disk, NetKVM for the NIC)
 #   - headless BCD prep (EMS/SAC on serial + Automatic Repair disabled)
-# A stock Windows ISO will NOT boot on virtio. See the image-prep runbook (PR 6)
-# and docs/design/windows-guest-support-spike.md (the spike's autounattend.xml +
-# run-install.sh are the seed for that tooling).
+# A stock Windows ISO will NOT boot on virtio. See the image-prep runbook (PR 6).
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
 metadata:

@@ -41,7 +41,7 @@ const PodAnnotationEgress = "kubeswift.io/egress-cluster-reachable"
 // (ovn-udn1). The pod-builder stamps it. swiftletd cannot reach the apiserver from a
 // primary-UDN pod (the UDN is bridged to the guest and eth0 is infrastructure-locked),
 // so the controller derives status for these guests from the OVN annotation + launcher
-// readiness instead of swiftletd's annotations. See docs/design/udn-primary-integration.md.
+// readiness instead of swiftletd's annotations.
 const PodAnnotationPrimaryUDNIface = "kubeswift.io/primary-udn-interface"
 
 // OVNPodNetworksAnnotation is OVN-Kubernetes' status annotation carrying each attached

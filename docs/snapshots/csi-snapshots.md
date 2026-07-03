@@ -126,5 +126,4 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 
 ## Reference
 
-- Source design: [`docs/design/snapshots.md`](../design/snapshots.md)
 - Clone-strategy bundling (uses the same VolumeSnapshot machinery internally): [`docs/images/clone-strategies.md`](../images/clone-strategies.md)

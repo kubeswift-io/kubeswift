@@ -394,7 +394,7 @@ spec:
                           mounts it with `mount -t virtiofs <tag> <mountpoint>`. Backed by a
                           virtiofsd process the launcher runs alongside Cloud Hypervisor (CH path
                           only in v1; the QEMU/GPU path rejects this). Works with disk-boot,
-                          kernel-boot, and clones. See docs/design/vhost-user-devices.md.
+                          kernel-boot, and clones.
                         items:
                           description: Filesystem is a virtiofs (vhost-user-fs) share
                             mounted into the guest.
@@ -522,8 +522,7 @@ spec:
                           cloneFromSnapshot clone's identity (machine-id / SSH keys / hostname / MAC)
                           and re-DHCP in place, with no reboot. Nil/false attaches no device.
                           The device must be present on the SOURCE: CH captures it into the memory
-                          snapshot and the clone reopens it on restore. See
-                          docs/design/clone-identity-vsock-agent.md.
+                          snapshot and the clone reopens it on restore.
                         properties:
                           enabled:
                             description: |-
@@ -612,8 +611,8 @@ spec:
                                 tap0+br0 NAT + node-local dnsmasq for it, the guest's IP comes from the
                                 NAD's IPAM, and the IP is discovered by snooping the bridge neighbor
                                 table (there is no node-local DHCP lease). This is what makes the guest's
-                                primary IP portable across nodes (e.g. for IP-preserving live migration —
-                                see docs/design/network-architecture-requirements.md). The operator
+                                primary IP portable across nodes (e.g. for IP-preserving live migration).
+                                The operator
                                 putting the primary on a NAD is also the attestation that the NAD is a
                                 genuine multi-node L2 (the SwiftMigration webhook treats such a guest as
                                 IP-preserving).
@@ -715,7 +714,7 @@ spec:
                       network:
                         description: |-
                           Network configures pod-network binding and declarative service ports
-                          (service exposure — see docs/design/service-exposure.md). nil preserves
+                          (service exposure). nil preserves
                           today's behavior (nat binding, no Service). The binding/ports here apply
                           to the guest's PRIMARY interface.
                         properties:
@@ -830,7 +829,7 @@ spec:
                           field, when set, must agree with it (the resolver cross-checks). windows
                           requires disk boot (imageRef) — kernel boot is Linux-only — and is not
                           supported with gpuProfileRef in v1. Default linux; existing guests are
-                          unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+                          unaffected. (Windows guest support.)
                         enum:
                         - linux
                         - windows
@@ -924,7 +923,7 @@ spec:
                         type: object
                         x-kubernetes-validations:
                         - message: accessMode=ReadWriteMany requires volumeMode=Block;
-                            Filesystem RWX is not live-migration-capable (see docs/design/storage-access-mode.md)
+                            Filesystem RWX is not live-migration-capable
                           rule: '!(self.accessMode == ''ReadWriteMany'' && (!has(self.volumeMode)
                             || self.volumeMode == ''Filesystem''))'
                       topologySpreadConstraints:
@@ -1111,7 +1110,7 @@ spec:
                           backend's node socket into the launcher and points Cloud Hypervisor at it
                           (the same operator-provides-the-datapath model as SR-IOV and
                           vhost-user-net). Cloud Hypervisor path only in v1; the QEMU/GPU path
-                          rejects this. See docs/design/vhost-user-devices.md.
+                          rejects this.
                         items:
                           description: |-
                             VhostUserDevice is an operator-backed vhost-user device. The operator runs

@@ -20,7 +20,7 @@
 // The control-flow differs fundamentally (controller-time vs scheduler-time), so
 // the Backend interface is TWO-PHASE: Prepare (before the pod) then Resolve
 // (after the pod is scheduled). The native backend resolves entirely in Prepare;
-// the DRA backend defers to Resolve. See docs/design/dra-gpu-integration.md.
+// the DRA backend defers to Resolve.
 package gpualloc
 
 import (

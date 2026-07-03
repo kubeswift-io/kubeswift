@@ -28,8 +28,6 @@
 # Approach: socat to the guest's serial socket inside the dst launcher
 # container. Write a `cat /root/sentinel.txt && md5sum /root/sentinel.txt`
 # command, capture the response.
-#
-# See `docs/design/live-migration-phase-2.md` §7.2 step 9.
 
 set -euo pipefail
 

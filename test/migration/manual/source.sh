@@ -19,9 +19,6 @@
 #     SWIFTGUEST.
 #   * The source pod's full YAML is dumped at $WORKDIR/src-pod.yaml so
 #     destination.sh can use it as a template.
-#
-# See `docs/design/live-migration-phase-2.md` §7.2 for the full
-# step-by-step operator workflow this script implements step 1 of.
 
 set -euo pipefail
 

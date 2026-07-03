@@ -114,8 +114,6 @@ Full sample set: [`config/samples/model-a/`](../../config/samples/model-a/).
   annotation, `GuestRunning` from a launcher CH-socket readiness probe. swiftletd skips
   all apiserver calls for these guests.
 
-Design detail: [`docs/design/udn-primary-integration.md`](../design/udn-primary-integration.md).
-
 ## Troubleshooting
 
 | Symptom | Cause / fix |

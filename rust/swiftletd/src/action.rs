@@ -215,7 +215,7 @@ pub const PROGRESS_BASELINE_MBPS: f64 = 108.0;
 
 /// Phase 2 unsafe-plaintext acknowledgement annotation. Required on
 /// the launcher pod for swiftletd to accept any migration action — the
-/// S2 mitigation gate from `docs/design/live-migration-phase-2.md` §8.2.1.
+/// S2 mitigation gate.
 /// Set to the literal string `ack` by the operator to acknowledge that
 /// Phase 2 carries unauthenticated guest state in cleartext. Phase 3
 /// removes this annotation entirely once mTLS lands.
@@ -223,8 +223,7 @@ pub const MIGRATION_PHASE2_ACK_KEY: &str = "kubeswift.io/migration-phase2-unsafe
 
 // Identity namespace — controller writes (read by swiftletd). Drives the
 // in-guest identity agent over vsock (regenerate machine-id / SSH keys /
-// hostname / MAC + re-DHCP on a cloneFromSnapshot clone). See
-// docs/design/clone-identity-vsock-agent.md.
+// hostname / MAC + re-DHCP on a cloneFromSnapshot clone).
 pub const IDENTITY_ACTION_KEY: &str = "kubeswift.io/identity-action";
 pub const IDENTITY_ACTION_ID_KEY: &str = "kubeswift.io/identity-action-id";
 pub const IDENTITY_ACTION_ARGS_KEY: &str = "kubeswift.io/identity-action-args";
@@ -279,8 +278,7 @@ pub static SNAPSHOT_KEYS: KeySet = KeySet {
 
 /// Migration namespace key set. Used by `dispatch_migration_send`,
 /// `dispatch_migration_receive`, `dispatch_migration_cancel`. The ack-key
-/// gate enforces the Phase 2 plaintext-transport acknowledgement
-/// (`docs/design/live-migration-phase-2.md` §8.2.1).
+/// gate enforces the Phase 2 plaintext-transport acknowledgement.
 pub static MIGRATION_KEYS: KeySet = KeySet {
     action_key: MIGRATION_ACTION_KEY,
     action_id_key: MIGRATION_ACTION_ID_KEY,
@@ -295,7 +293,7 @@ pub static MIGRATION_KEYS: KeySet = KeySet {
 
 /// Identity namespace key set. Used by `dispatch_identity_regenerate`. No
 /// ack-gate (the transport is intra-pod host<->guest vsock, not a cross-pod
-/// channel — see docs/design/clone-identity-vsock-agent.md §Q5).
+/// channel).
 pub static IDENTITY_KEYS: KeySet = KeySet {
     action_key: IDENTITY_ACTION_KEY,
     action_id_key: IDENTITY_ACTION_ID_KEY,
@@ -447,21 +445,17 @@ pub enum ActionKind {
     // Ships in PR-B / PR-C of live-migration Phase 2.
     /// Source-side: invoke `vm.send-migration` to stream guest state to
     /// the destination CH. Long-lived (tens of seconds typical).
-    /// `docs/design/live-migration-phase-2.md` §2 row 3.
     MigrationSend,
     /// Destination-side: invoke `vm.receive-migration` to await the
     /// source's connection and restore guest state. Long-lived.
-    /// `docs/design/live-migration-phase-2.md` §2 row 2.
     MigrationReceive,
     /// Destination-side cancel primitive: SIGKILL the local CH child.
     /// The source CH automatically resumes on the dst-kill (Q1d-F2).
-    /// `docs/design/live-migration-phase-2.md` §2 row 7.
     MigrationCancel,
 
     // Identity namespace — `kubeswift.io/identity-action` verbs.
     /// Regenerate a cloneFromSnapshot clone's identity in place over vsock:
     /// machine-id / SSH host keys / hostname / MAC + re-DHCP, with no reboot.
-    /// See docs/design/clone-identity-vsock-agent.md.
     IdentityRegenerate,
 
     /// Anything else — surfaces as a malformed-rejection so the
@@ -531,7 +525,7 @@ pub enum StatusKind {
     Rejected,
     /// Namespace-specific status verb override. Used by migration to
     /// emit `"complete"` (source success) and `"running"` (destination
-    /// success) per `docs/design/live-migration-phase-2.md` §3.1; the
+    /// success); the
     /// shared `Ready` variant ("ready") stays the snapshot success
     /// verb to avoid breaking SwiftSnapshot/SwiftRestore controllers.
     Custom(&'static str),
@@ -622,8 +616,7 @@ pub fn decide(
     }
     let kind = (keys.parse_verb)(verb);
     // Cancel verbs bypass the in-flight gate so they can interrupt an
-    // in-flight migration (see `docs/design/live-migration-phase-2.md`
-    // §2 row 7 + Q1d-F2). All other verbs follow the normal
+    // in-flight migration (Q1d-F2). All other verbs follow the normal
     // RejectInFlight rule.
     let is_cancel = matches!(kind, ActionKind::MigrationCancel);
     if let Some(current) = in_flight_id {
@@ -643,7 +636,6 @@ pub fn decide(
     // be present on any namespace that requires it. Run AFTER action-id
     // parsing so the rejection's status-id can be correlated by the
     // controller — RejectAckMissing carries the incoming action-id.
-    // `docs/design/live-migration-phase-2.md` §8.2.1.
     if let Some(ack_key) = keys.ack_key {
         let acked = matches!(annotations.get(ack_key).map(|s| s.as_str()), Some("ack"));
         if !acked {
@@ -677,8 +669,7 @@ pub struct ActionOutcome {
     /// uses `Some("running")`. The string is written verbatim to the
     /// status annotation; the controller (or operator, in Phase 2
     /// manual demo) reads the matching value to detect terminal
-    /// success. See `docs/design/live-migration-phase-2.md` §3.1
-    /// for the per-direction status enum.
+    /// success.
     pub success_status: Option<&'static str>,
 }
 
@@ -872,8 +863,7 @@ struct MigrationReceiveArgs {
     /// guest does NOT re-DHCP on resume, so the dst pod cannot
     /// re-discover the IP locally. The controller reads the src
     /// pod's existing `kubeswift.io/guest-ip` annotation and forwards
-    /// it here. See `docs/design/live-migration-phase-3a.md` §3.6
-    /// + §7.2 D3.
+    /// it here.
     ///
     // SECURITY-S1: guest_ip is read from operator-set pod annotation
     // args (Phase 2 manual path; Phase 3a controller-mediated). Phase
@@ -886,8 +876,6 @@ struct MigrationReceiveArgs {
 
 /// Source-side migration handler. Invokes `vm.send-migration` against
 /// the local CH and returns the outcome.
-///
-/// `docs/design/live-migration-phase-2.md` §2 row 3 + §4.3.1.
 ///
 /// Blocking semantics: the underlying `send_migration` call blocks for
 /// the entire pre-copy + stop-and-copy duration (tens of seconds for
@@ -1038,7 +1026,7 @@ async fn dispatch_migration_send(
     // remote URL is rejected, not dialed) rather than reading from the
     // SwiftMigration CR — under the sidecar architecture the URL is always
     // the local stunnel proxy, so loopback-validation is the equivalent and
-    // simpler mitigation. See docs/design/live-migration-phase-3c.md §6.1.
+    // simpler mitigation.
     let args: MigrationSendArgs = serde_json::from_value(action.args.clone())
         .map_err(|e| format!("parse migration_send args: {}", e))?;
 
@@ -1086,8 +1074,6 @@ async fn dispatch_migration_send(
     // CH is gone (the expected post-success state). If it returns
     // Running, send-migration claimed success but the guest is
     // still here — abnormal, treat as failure.
-    //
-    // `docs/design/live-migration-phase-2.md` §6.1.
     match client.vm_info() {
         Err(_) => {
             // CH is gone — the expected outcome on success.
@@ -1131,8 +1117,6 @@ async fn dispatch_migration_send(
 /// Destination-side migration handler. Invokes `vm.receive-migration`
 /// against the local empty CH and returns the outcome.
 ///
-/// `docs/design/live-migration-phase-2.md` §2 row 2 + §4.3.2.
-///
 /// Blocking semantics: blocks until source connects + transfers state,
 /// or until CH's TCP retransmit timeout (~3-5 s of network silence —
 /// F4 finding). The action loop's current-thread runtime cannot
@@ -1146,8 +1130,7 @@ async fn dispatch_migration_receive(
 ) -> Result<ActionOutcome, String> {
     // SECURITY-S1: listen_url is read from the operator-writable pod
     // annotation args. Phase 3c PR 4 validates it is loopback below under
-    // secured mode (same mitigation as the send path). See
-    // docs/design/live-migration-phase-3c.md §6.1.
+    // secured mode (same mitigation as the send path).
     let args: MigrationReceiveArgs = serde_json::from_value(action.args.clone())
         .map_err(|e| format!("parse migration_receive args: {}", e))?;
 
@@ -1183,8 +1166,6 @@ async fn dispatch_migration_receive(
     // `receive_migration` exit=0 is necessary but not sufficient;
     // the destination CH must actually be Running (Q1c — auto-resume
     // on receive completion). Probe vm_info; require state=Running.
-    //
-    // `docs/design/live-migration-phase-2.md` §6.1.
     match client.vm_info() {
         Ok(info) if info.state == "Running" => {
             let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
@@ -1197,8 +1178,7 @@ async fn dispatch_migration_receive(
             // Best-effort; failure is non-fatal — the migration itself
             // succeeded and the controller has a fallback path
             // (post-Resuming reconcile reads src pod's guest-ip if
-            // dst's is absent). See `docs/design/live-migration-phase-3a.md`
-            // §7.2 D3.
+            // dst's is absent).
             if let Some(ip) = &args.guest_ip {
                 propagate_guest_ip_annotation(ip).await;
             }
@@ -1256,8 +1236,7 @@ async fn dispatch_migration_receive(
     }
 }
 
-/// Destination-side cancel handler — Phase 3a D1
-/// (`docs/design/live-migration-phase-3a.md` §7.2).
+/// Destination-side cancel handler — Phase 3a D1.
 ///
 /// Cancel primitive on the destination is **SIGKILL the receiver CH**.
 /// Cloud Hypervisor v51.1 has no `vm.cancel-migration` API (Phase 2
@@ -1381,7 +1360,7 @@ fn sigkill(pid: i32) -> Result<(), String> {
     }
 }
 
-/// Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2): write
+/// Phase 3a D3: write
 /// the migrated guest's IP to the dst pod's `kubeswift.io/guest-ip`
 /// annotation post-resume. Reuses the same annotation key Phase 1's
 /// first-boot lease discovery uses (`lease::ANNOTATION_GUEST_IP`).
@@ -1530,8 +1509,6 @@ fn extract_guest_name_from_labels(
 /// error strings — Phase 2 spike S3 finding. Conservative default:
 /// pattern-match on the leading error variant; collapse longer
 /// messages into a category token.
-///
-/// `docs/design/live-migration-phase-2.md` §3.1 + §6.2.
 fn sanitize_ch_error(raw: &str) -> &'static str {
     // Match against the leading variant produced by ApiError's
     // Debug impl. The variants are stable in swift-ch-client.
@@ -1745,9 +1722,8 @@ async fn dispatch_resume(
 /// prior status. The pause-window key is snapshot-specific.
 ///
 /// The migration namespace has its own writer
-/// ([`write_migration_status`]) per `docs/design/live-migration-phase-2.md`
-/// §4.5 — keeping the writers separate avoids parameterizing across
-/// namespace-specific status fields.
+/// ([`write_migration_status`]) — keeping the writers separate avoids
+/// parameterizing across namespace-specific status fields.
 pub async fn write_status(
     client: &Client,
     namespace: &str,
@@ -1787,8 +1763,8 @@ pub async fn write_status(
 /// (action-id-mirror, status, status-detail, pause-window-ms in the
 /// migration namespace).
 ///
-/// Status-id-paired-write discipline (`docs/design/live-migration-phase-2.md`
-/// §3.2): all four annotations land in a single Patch::Merge call, so
+/// Status-id-paired-write discipline: all four annotations land in a
+/// single Patch::Merge call, so
 /// the controller never observes a `migration-status` without its
 /// associated `migration-status-id`. This is the snapshot Phase 2
 /// Bug 14 precedent applied prophylactically.
@@ -1859,7 +1835,7 @@ pub async fn write_identity_status(
     Ok(())
 }
 
-// ─── Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────────
+// ─── Phase 3a D2 ─────────────────────────────────────────────────────────────
 //
 // Auto-write `migration-status: failed` on abnormal CH listener exit.
 //
@@ -1871,8 +1847,7 @@ pub async fn write_identity_status(
 // dst pod's migration-status to `failed` paired with the last-observed
 // migration-action-id and a detail string describing the exit.
 //
-// D2 is the canonical write-once guard for the D1+D2 race
-// (`docs/design/live-migration-phase-3a.md` §7.2 D1 commentary): D1's
+// D2 is the canonical write-once guard for the D1+D2 race: D1's
 // SIGKILL-then-Err path also produces a `migration-status: failed`
 // write, and the two writes race on the apiserver. D2's `decide_watchdog`
 // inspects the freshly-fetched annotations and skips when a terminal
@@ -1900,7 +1875,7 @@ pub enum WatchdogDecision {
 /// `exit_detail` is appended to the human-readable detail string
 /// (typically the `exit_status.code()` or launch::run error message).
 ///
-/// Skip rules (`docs/design/live-migration-phase-3a.md` §7.2 D2):
+/// Skip rules:
 ///
 /// 1. No `migration-action-id` annotation, or empty — there's no
 ///    active migration action to fail. Skip.
@@ -2092,8 +2067,8 @@ async fn handle_pod_state(
     let snap_active = is_namespace_active(annotations, &SNAPSHOT_KEYS);
     let mig_active = is_namespace_active(annotations, &MIGRATION_KEYS);
 
-    // Mutual rejection across namespaces (`docs/design/live-migration-phase-2.md`
-    // §4.2.1): if both namespaces have non-empty action annotations
+    // Mutual rejection across namespaces: if both namespaces have
+    // non-empty action annotations
     // AND neither has an in-flight action of its own (which would
     // mean we already accepted one before the other arrived), reject
     // BOTH. The controller learns immediately that one operation
@@ -3491,7 +3466,7 @@ mod tests {
         assert!(err.contains("state=Paused"), "got {}", err);
     }
 
-    // ─── Phase 3a D1 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    // ─── Phase 3a D1 ─────────────────────────────────────────────────────────
     //
     // Cancel handler tests: the placeholder shipped in Phase 2 PR-B is
     // now the real SIGKILL-via-PID-file implementation. Tests cover the
@@ -3600,7 +3575,7 @@ mod tests {
         assert!(err.contains("readlink"), "got {}", err);
     }
 
-    // ─── Phase 3a D2 watchdog (`docs/design/live-migration-phase-3a.md` §7.2) ─
+    // ─── Phase 3a D2 watchdog ──────────────────────────────────────────────────
 
     #[test]
     fn watchdog_skips_when_no_action_id() {
@@ -3750,7 +3725,7 @@ mod tests {
         assert!(err.contains("parse migration_receive args"), "got {}", err);
     }
 
-    // ─── Phase 3a D3 (`docs/design/live-migration-phase-3a.md` §7.2) ─────────
+    // ─── Phase 3a D3 ─────────────────────────────────────────────────────────
     //
     // Args-parsing tests for the new `guest_ip` field. The actual
     // `propagate_guest_ip_annotation` kube write is exercised by the

@@ -27,7 +27,7 @@ import (
 // The bar is TWO implementations, not a framework (design principle #1): a slice
 // of backends, first-match-wins on Detect — no registry, loader, or config. Today
 // the slice holds only kubeOVNBackend (shipped #239/#240); ovnKubernetesBackend
-// lands in P2 (docs/design/ovn-cni-backends.md). The datapath stays single-sourced
+// lands in P2. The datapath stays single-sourced
 // in network-init.sh (CNI-agnostic); nothing here touches Rust/RuntimeIntent.
 
 // ovnIdentity is what an ovnBackend computes for a guest whose primary rides one

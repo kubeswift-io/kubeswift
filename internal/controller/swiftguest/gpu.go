@@ -34,8 +34,7 @@ func isGPUAllocated(guest *swiftv1alpha1.SwiftGuest) bool {
 // it writes the intent — the scheduler + DRA driver allocate at pod-schedule
 // time and the reference driver's CDI containerEdits inject GPU_PCI_ADDRESSES
 // into the containers. deviceSource: "env" tells swiftletd to synthesize the
-// device list from that env var (clique -1, NUMA 0 in v1). See
-// docs/design/dra-gpu-integration.md §A2.
+// device list from that env var (clique -1, NUMA 0 in v1).
 func buildDRAGPUIntent(rc *swiftv1alpha1.GPUResourceClaimSpec) *runtimeintent.GPUIntent {
 	firmware := "cloudhv"
 	if rc.Tier == "hgx-shared" || rc.Tier == "hgx-full" {

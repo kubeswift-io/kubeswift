@@ -36,7 +36,7 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	// primary-UDN pod (the UDN is bridged to the guest; eth0 is infrastructure-locked),
 	// so it never writes the guest-ip annotation. The guest's IP IS the pod's
 	// OVN-assigned UDN IP — derive it from the OVN pod-networks annotation when swiftletd
-	// has not (and cannot) provide one. See docs/design/udn-primary-integration.md.
+	// has not (and cannot) provide one.
 	if udn := pod.Annotations[PodAnnotationPrimaryUDNIface]; udn != "" {
 		if status.Network == nil || status.Network.PrimaryIP == "" {
 			if ip := primaryUDNIPFromPod(pod); ip != "" {
@@ -296,7 +296,7 @@ func SetDataDisksReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool,
 // MAC + re-DHCP), False with reason GuestAgentUnreachable when the agent does
 // not answer (the clone still runs as a warm replica sharing the source's
 // identity — a loud, never-silent fallback). Absent when the guest is not an
-// agent-enabled clone. See docs/design/clone-identity-vsock-agent.md.
+// agent-enabled clone.
 const ConditionCloneIdentityRegenerated = "CloneIdentityRegenerated"
 
 // SetCloneIdentityRegeneratedCondition sets CloneIdentityRegenerated.

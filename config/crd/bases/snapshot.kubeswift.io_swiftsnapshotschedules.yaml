@@ -252,7 +252,7 @@ spec:
                               csi-volume-snapshot (Tier A, disk-only), local (Tier B, node-hostPath
                               memory+state), and s3 (Tier C, object-storage export) are shipped; oci
                               packages the snapshot as an OCI artifact and pushes it to a registry via
-                              ORAS (see docs/design/oras-vm-disk-artifacts.md). The spec is structured so
+                              ORAS. The spec is structured so
                               adding a backend does not require a breaking change.
                             enum:
                             - csi-volume-snapshot
@@ -293,8 +293,7 @@ spec:
                           coherent via capture-then-terminate: the guest is paused, memory
                           snapshotted, NOT resumed, then terminated so the disk is frozen at the
                           snapshot instant before it is chunked to the registry — so this IMPLIES the
-                          guest is migrated away, not a live backup. See
-                          docs/design/oras-cold-migration.md (P4).
+                          guest is migrated away, not a live backup.
                         type: boolean
                       includeMemory:
                         default: true

@@ -49,8 +49,7 @@ cross-node migration channel (isolation: plain↔plain, plain↔NAD, NAD↔plain
 work; only NAD↔NAD fails). A real **OVN** secondary network (kube-ovn / OVN-K)
 manages the attachment *inside the CNI* and never multi-homes a pod across two
 overlays, so it does not hit this — which is why live-migration IP-preservation is
-validated on **kube-ovn**, not the lab mesh. See
-[`../design/network-architecture-requirements.md`](../design/network-architecture-requirements.md) §6.
+validated on **kube-ovn**, not the lab mesh.
 
 ## The `primary` field
 

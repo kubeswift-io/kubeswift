@@ -1,5 +1,5 @@
-# KubeSwift reference DRA GPU driver (gpu.kubeswift.io) — design doc
-# docs/design/dra-gpu-integration.md §A4. Runs on kubeswift.io/gpu-node=true
+# KubeSwift reference DRA GPU driver (gpu.kubeswift.io). Runs on
+# kubeswift.io/gpu-node=true
 # nodes; publishes the node's GPUs as ResourceSlices and serves the kubelet DRA
 # plugin (per-claim CDI specs injecting GPU_PCI_ADDRESSES).
 #

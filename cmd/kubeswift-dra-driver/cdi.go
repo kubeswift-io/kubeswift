@@ -17,7 +17,7 @@ const (
 
 // cdiSpec is the minimal CDI spec JSON shape the driver writes. Deliberately
 // hand-rolled (no tags.cncf.io dependency): env-only edits, one device per
-// claim. See docs/design/dra-gpu-integration.md §A2/§A4.
+// claim.
 type cdiSpec struct {
 	CDIVersion string      `json:"cdiVersion"`
 	Kind       string      `json:"kind"`

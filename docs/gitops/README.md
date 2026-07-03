@@ -8,5 +8,4 @@
 - [troubleshooting.md](troubleshooting.md) — common failure modes
 
 Reference repository: [`examples/gitops-flux/`](../../examples/gitops-flux/) —
-every snippet in these docs comes from there. Design rationale:
-[`docs/design/gitops-flux.md`](../design/gitops-flux.md).
+every snippet in these docs comes from there.

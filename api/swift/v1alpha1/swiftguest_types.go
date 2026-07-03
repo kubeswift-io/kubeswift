@@ -35,7 +35,7 @@ const (
 // OSType is the guest operating-system family. It gates the Linux-only
 // provisioning datasource and, for windows, the Cloud Hypervisor runtime
 // settings (kvm_hyperv on the disk-boot path). Default "linux" — existing
-// guests are unaffected. See docs/design/windows-guest-support.md.
+// guests are unaffected.
 // +kubebuilder:validation:Enum=linux;windows
 type OSType string
 
@@ -57,7 +57,7 @@ const ConditionGPUAllocated = "GPUAllocated"
 const ConditionGPUClaimPending = "GPUClaimPending"
 
 // ConditionPortsProgrammed reports whether swiftletd installed the in-pod DNAT
-// rules for spec.network.ports (service exposure — docs/design/service-exposure.md).
+// rules for spec.network.ports (service exposure).
 const ConditionPortsProgrammed = "PortsProgrammed"
 
 // ConditionServiceReady reports whether the per-guest Service and its endpoint
@@ -138,7 +138,7 @@ type SwiftGuestSpec struct {
 	// +optional
 	Interfaces []GuestInterface `json:"interfaces,omitempty"`
 	// Network configures pod-network binding and declarative service ports
-	// (service exposure — see docs/design/service-exposure.md). nil preserves
+	// (service exposure). nil preserves
 	// today's behavior (nat binding, no Service). The binding/ports here apply
 	// to the guest's PRIMARY interface.
 	// +optional
@@ -156,7 +156,7 @@ type SwiftGuestSpec struct {
 	// mounts it with `mount -t virtiofs <tag> <mountpoint>`. Backed by a
 	// virtiofsd process the launcher runs alongside Cloud Hypervisor (CH path
 	// only in v1; the QEMU/GPU path rejects this). Works with disk-boot,
-	// kernel-boot, and clones. See docs/design/vhost-user-devices.md.
+	// kernel-boot, and clones.
 	// +optional
 	Filesystems []Filesystem `json:"filesystems,omitempty"`
 	// VhostUserDevices is a list of operator-backed vhost-user devices attached
@@ -165,7 +165,7 @@ type SwiftGuestSpec struct {
 	// backend's node socket into the launcher and points Cloud Hypervisor at it
 	// (the same operator-provides-the-datapath model as SR-IOV and
 	// vhost-user-net). Cloud Hypervisor path only in v1; the QEMU/GPU path
-	// rejects this. See docs/design/vhost-user-devices.md.
+	// rejects this.
 	// +optional
 	VhostUserDevices []VhostUserDevice `json:"vhostUserDevices,omitempty"`
 	// NodeName pins the launcher pod to a specific Kubernetes node by
@@ -196,7 +196,7 @@ type SwiftGuestSpec struct {
 	// field, when set, must agree with it (the resolver cross-checks). windows
 	// requires disk boot (imageRef) — kernel boot is Linux-only — and is not
 	// supported with gpuProfileRef in v1. Default linux; existing guests are
-	// unaffected. (Windows guest support — see docs/design/windows-guest-support.md.)
+	// unaffected. (Windows guest support.)
 	// +kubebuilder:default=linux
 	// +optional
 	OSType OSType `json:"osType,omitempty"`
@@ -219,8 +219,7 @@ type SwiftGuestSpec struct {
 	// cloneFromSnapshot clone's identity (machine-id / SSH keys / hostname / MAC)
 	// and re-DHCP in place, with no reboot. Nil/false attaches no device.
 	// The device must be present on the SOURCE: CH captures it into the memory
-	// snapshot and the clone reopens it on restore. See
-	// docs/design/clone-identity-vsock-agent.md.
+	// snapshot and the clone reopens it on restore.
 	// +optional
 	GuestAgent *GuestAgentSpec `json:"guestAgent,omitempty"`
 }
@@ -343,7 +342,6 @@ const (
 // the sources and swiftletd respawns/reconnects the backends (for hostPath
 // sources and operator sockets, provisioning equivalent content on the target
 // is the operator's documented responsibility).
-// See docs/design/vhost-user-devices.md §7.
 func (g *SwiftGuest) HasNodeLocalVirtioBackends() bool {
 	if len(g.Spec.Filesystems) > 0 || len(g.Spec.VhostUserDevices) > 0 {
 		return true
@@ -427,8 +425,7 @@ func (g *SwiftGuest) PrimaryInterface() *GuestInterface {
 //
 // This replaces the earlier "any interface with networkRef is multi-node"
 // heuristic (which let a node-local-primary + secondary-NAD guest skip
-// allowIPChange even though its primary IP changed). See
-// docs/design/network-architecture-requirements.md §7.
+// allowIPChange even though its primary IP changed).
 func (g *SwiftGuest) PrimaryIPPreservedCrossNode() bool {
 	p := g.PrimaryInterface()
 	return p != nil && p.NetworkRef != nil
@@ -635,8 +632,8 @@ type GuestInterface struct {
 	// tap0+br0 NAT + node-local dnsmasq for it, the guest's IP comes from the
 	// NAD's IPAM, and the IP is discovered by snooping the bridge neighbor
 	// table (there is no node-local DHCP lease). This is what makes the guest's
-	// primary IP portable across nodes (e.g. for IP-preserving live migration —
-	// see docs/design/network-architecture-requirements.md). The operator
+	// primary IP portable across nodes (e.g. for IP-preserving live migration).
+	// The operator
 	// putting the primary on a NAD is also the attestation that the NAD is a
 	// genuine multi-node L2 (the SwiftMigration webhook treats such a guest as
 	// IP-preserving).
@@ -689,7 +686,6 @@ type GuestNetworkInterface struct {
 
 // GuestNetworkSpec configures the primary interface's pod-network binding and
 // the declarative service ports exposed from the guest.
-// See docs/design/service-exposure.md.
 type GuestNetworkSpec struct {
 	// Binding selects the primary interface's relationship to the pod network:
 	//   nat    (default) — VM behind the pod IP; ports are Service-exposable via
@@ -759,7 +755,7 @@ type GuestNetworkStatus struct {
 	Ready      bool                    `json:"ready,omitempty"`
 	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
 	// Egress reports verified VM->cluster-service reachability (populated by a
-	// later phase; "" until probed). See docs/design/service-exposure.md §4.
+	// later phase; "" until probed).
 	// +optional
 	Egress string `json:"egress,omitempty"`
 	// ExposedPorts echoes the service ports programmed for this guest.

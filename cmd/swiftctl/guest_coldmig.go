@@ -19,8 +19,7 @@ import (
 // SwiftSnapshot (capture-then-terminate: the source is stopped at the snapshot
 // instant); "guest import" resumes it elsewhere as a cloneFromSnapshot guest.
 // Thin wrappers over the SwiftSnapshot(oci,includeDisk) + cloneFromSnapshot
-// mechanism — see docs/snapshots/cold-migration.md and
-// docs/design/oras-cold-migration.md.
+// mechanism — see docs/snapshots/cold-migration.md.
 
 var (
 	exportRepo        string

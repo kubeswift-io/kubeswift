@@ -125,8 +125,7 @@ both different from the source's `.11`) — no reboot.
 > The agent is the fix for the **CH v52 clone-reboot firmware hang**: rebooting a
 > `--restore`d guest hangs in EDK2 firmware (freezes after
 > `MpInitChangeApLoopCallback`), so the legacy "reboot to regenerate" path does
-> not complete on CH v52
-> ([`known-issues-clone-reboot-firmware-hang.md`](../design/known-issues-clone-reboot-firmware-hang.md)).
+> not complete on CH v52.
 > The agent sidesteps the reboot entirely.
 
 **Without the agent** (no `guestAgent.enabled`, or a stock image), the clone keeps

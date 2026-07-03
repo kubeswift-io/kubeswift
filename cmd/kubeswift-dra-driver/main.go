@@ -1,5 +1,5 @@
 // kubeswift-dra-driver is KubeSwift's REFERENCE DRA driver for VM GPU
-// passthrough (design doc docs/design/dra-gpu-integration.md §A4). It runs as
+// passthrough. It runs as
 // a DaemonSet on kubeswift.io/gpu-node=true nodes and:
 //
 //  1. publishes the node's GPUs as a ResourceSlice (driver gpu.kubeswift.io;

@@ -6,9 +6,8 @@
 > path KubeSwift's primary-on-NAD live migration is **validated end-to-end** on
 > (cross-node `mode: live`, no `allowIPChange`, ~3.2 s downtime, IP preserved).
 >
-> See [Multi-node L2 networking](multi-node-l2.md) for the feature/CRD reference
-> and [Network Architecture Requirements](../design/network-architecture-requirements.md)
-> for the framework. Runnable manifests:
+> See [Multi-node L2 networking](multi-node-l2.md) for the feature/CRD reference.
+> Runnable manifests:
 > [`config/samples/multi-node-l2/`](../../config/samples/multi-node-l2/).
 
 ---

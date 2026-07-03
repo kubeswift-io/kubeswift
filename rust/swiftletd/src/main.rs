@@ -84,8 +84,7 @@ fn main() {
 
     // Live-migration role (Phase 2). KUBESWIFT_MIGRATION_ROLE=receiver
     // signals destination-receive mode; absent / any other value means
-    // normal startup (source-side or unrelated to migration). See
-    // `docs/design/live-migration-phase-2.md` §4.3.2 for why this is an
+    // normal startup (source-side or unrelated to migration). This is an
     // env var rather than a field in the intent JSON: keeps the intent
     // JSON shape unchanged and isolates the receiver branch from the
     // Phase 1 pod-builder logic.
@@ -166,8 +165,7 @@ fn main() {
                 // hand-rolled launcher pod YAML mounts the same PVCs
                 // and the seed.iso below is rebuilt for path-equality
                 // (CH re-opens every disk listed in config.json on
-                // receive completion). See
-                // `docs/design/live-migration-phase-2.md` §4.3.2.
+                // receive completion).
                 log::info!("migration_receiver_mode");
             }
             if intent.has_seed() && !intent.has_kernel() {
@@ -183,7 +181,7 @@ fn main() {
                 // the source spec — keeps both seed.isos byte-identical, which the
                 // clone restore needs). Drop the agent binary onto the seed disk so
                 // the source's first-boot cloud-init (guest-agent SwiftSeedProfile)
-                // installs it. See docs/design/clone-identity-vsock-agent.md.
+                // installs it.
                 if intent.vsock.is_some() && Path::new(GUEST_AGENT_IMAGE_BINARY).exists() {
                     let dst = nocloud_output.join(GUEST_AGENT_SEED_FILE);
                     match std::fs::copy(GUEST_AGENT_IMAGE_BINARY, &dst) {
@@ -218,7 +216,6 @@ fn main() {
             // poller, action loop, GuestRunning/runtime reports); the controller derives
             // status from the OVN pod annotation + launcher readiness instead. Without
             // this gate swiftletd would spam "client error (Connect)" forever.
-            // See docs/design/udn-primary-integration.md.
             let is_primary_udn = intent.primary_udn_interface.is_some();
             if is_primary_udn {
                 log::info!(
@@ -264,8 +261,7 @@ fn main() {
             // in flight would race the action handler's status
             // writes). A future PR-D may add an
             // on-receive-completion lease report driven by the
-            // action loop. See `docs/design/live-migration-phase-2.md`
-            // §4.3.2 + §3.4 (poll-info-API).
+            // action loop.
             if intent.has_network() && !intent.is_migration_receiver() && !is_primary_udn {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let lease_path = runtime_dir.root().join("dnsmasq.leases");
@@ -362,8 +358,7 @@ fn main() {
                 })
             };
 
-            // Phase 3a D2 (`docs/design/live-migration-phase-3a.md` §7.2):
-            // on abnormal exit while we were a migration receiver, write
+            // Phase 3a D2: on abnormal exit while we were a migration receiver, write
             // `migration-status: failed` paired with the last-observed
             // action-id so the controller doesn't stall on a never-
             // arriving terminal status. The watchdog's `decide_watchdog`

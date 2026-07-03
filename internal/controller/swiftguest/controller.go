@@ -570,7 +570,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Service exposure (S1): mint/GC the per-guest Service and echo it in status
-	// before the patch. See docs/design/service-exposure.md.
+	// before the patch.
 	svcName, err := r.ensureExposedService(ctx, &guest)
 	if err != nil {
 		return ctrl.Result{}, err

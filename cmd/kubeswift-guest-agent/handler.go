@@ -10,15 +10,14 @@
 // cloud-init does not re-run — so every clone inherits the source's
 // /etc/machine-id, /etc/ssh/ssh_host_*, hostname, and the cached eth0 MAC + IP.
 // The old remedy ("reboot the clone once") is BROKEN on Cloud Hypervisor v52: a
-// restored guest's reboot hangs in EDK2 firmware (see
-// docs/design/known-issues-clone-reboot-firmware-hang.md). This agent is the
+// restored guest's reboot hangs in EDK2 firmware. This agent is the
 // real fix — it regenerates identity without a reboot.
 //
 // THE LOAD-BEARING CONSTRAINT: because a clone never boots, this agent must
 // already be RUNNING in the SOURCE guest at snapshot-capture time so it is part
 // of the captured RAM and resumes — alive and listening — in every clone.
 // Installing/starting it on the clone is impossible (nothing new starts on a
-// resume). See docs/design/clone-identity-vsock-agent.md §6.1 (LBA-1).
+// resume).
 //
 // SECURITY: the command surface is exactly two ops (ping, regenerate-identity)
 // with a fixed schema — NO exec, no path argument, no file transfer. Inputs
@@ -302,7 +301,7 @@ func (h *handler) setMAC(mac string) error {
 	}
 	// down -> set address -> up on the LIVE virtio-net link. The PR-0 spike
 	// confirmed this does not wedge the resumed link (ping/fdb/ARP all recover
-	// on the new MAC). See docs/design/clone-identity-vsock-agent-spike.md.
+	// on the new MAC).
 	_, _ = h.sys.run("ip", "link", "set", ifc, "down")
 	if _, err := h.sys.run("ip", "link", "set", ifc, "address", mac); err != nil {
 		_, _ = h.sys.run("ip", "link", "set", ifc, "up")

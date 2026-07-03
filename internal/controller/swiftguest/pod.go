@@ -58,7 +58,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 //     and takes precedence — the CH-socket probe is added only when none exists.
 //
 // No-op for every non-Model-A guest. Runs after applyExposedPorts so it sees that
-// probe. See docs/design/udn-primary-integration.md.
+// probe.
 func applyPrimaryUDN(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) {
 	udnIface := rg.GetPrimaryUDNInterface()
 	if udnIface == "" {
@@ -95,7 +95,7 @@ func applyPrimaryUDN(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest, rg *resol
 // pod IP:port, which the in-pod DNAT (network-init.sh) forwards to the VM, so the
 // launcher pod is Ready — and thus the per-guest Service endpoint is Ready — only
 // once the in-guest service is actually listening. nat binding only; no-op
-// otherwise. See docs/design/service-exposure.md.
+// otherwise.
 func applyExposedPorts(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	if guest.Spec.Network == nil || len(guest.Spec.Network.Ports) == 0 {
 		return

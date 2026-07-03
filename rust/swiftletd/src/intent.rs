@@ -32,7 +32,7 @@ pub struct RuntimeIntent {
     /// Guest OS family: "windows" or "linux"/absent (default). When "windows",
     /// the CH disk-boot path adds `kvm_hyperv=on` to `--cpus` (the one runtime
     /// setting the spike proved Windows needs — without it the kernel hangs in
-    /// early MP/HAL init). See docs/design/windows-guest-support-spike.md.
+    /// early MP/HAL init).
     #[serde(default)]
     pub os_type: Option<String>,
     /// vCPU core-scheduling policy ("vm"/"vcpu"); absent/empty = off. When set,
@@ -97,16 +97,14 @@ pub struct RuntimeIntent {
     /// ONLY for a SOURCE guest that opted into the agent; carries just the CID
     /// (swiftletd computes the socket path from the runtime dir). On `--restore`
     /// the clone reopens the captured vsock device from config.json, so this is
-    /// absent on a clone's intent. See docs/design/clone-identity-vsock-agent.md.
+    /// absent on a clone's intent.
     #[serde(default)]
     pub vsock: Option<VsockIntent>,
     /// Live-migration role (Phase 2). Constructed at startup in
     /// `main.rs` from the `KUBESWIFT_MIGRATION_ROLE` env var, NOT
     /// deserialized from the intent JSON file — env-var-driven keeps
     /// the existing intent JSON shape unchanged and isolates the
-    /// receiver branch from the Phase 1 pod-builder logic. See
-    /// `docs/design/live-migration-phase-2.md` §4.3.2 for the
-    /// rationale.
+    /// receiver branch from the Phase 1 pod-builder logic.
     #[serde(skip)]
     pub migration: Option<MigrationIntent>,
 }
@@ -495,8 +493,7 @@ impl RuntimeIntent {
     }
 
     /// Returns true when this launcher pod is meant to start in
-    /// migration-receiver mode (Phase 2 — `docs/design/live-migration-phase-2.md`
-    /// §4.3.2). swiftletd spawns CH with `--api-socket` only via
+    /// migration-receiver mode (Phase 2). swiftletd spawns CH with `--api-socket` only via
     /// `spawn_ch_receive`; the action loop dispatches
     /// `vm.receive-migration` over the API socket once the
     /// destination launcher pod's `migration-action: receive`

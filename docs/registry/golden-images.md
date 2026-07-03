@@ -9,8 +9,7 @@ command produces one.
 This is the **golden-image** use of the registry — the immutable, reusable base
 disk. It is distinct from **snapshots** (`SwiftSnapshot backend.type: oci`, a
 VM's captured memory + disk state); see [OCI snapshots](../snapshots/s3-snapshots.md)
-and the [cold-migration runbook](../snapshots/cold-migration.md). Design and
-rationale: [`docs/design/oras-golden-image.md`](../design/oras-golden-image.md).
+and the [cold-migration runbook](../snapshots/cold-migration.md).
 
 ## How it is stored (sparse, chunked, deduplicated)
 
@@ -164,6 +163,5 @@ registry.
 
 ## See also
 
-- [`docs/design/oras-golden-image.md`](../design/oras-golden-image.md) — design, chunking, dedup analysis
 - [Edge Zot profile](edge-zot.md) — mirroring golden images to edge/air-gapped sites
 - [OCI snapshots](../snapshots/s3-snapshots.md) and [cold migration](../snapshots/cold-migration.md) — the *stateful* registry use

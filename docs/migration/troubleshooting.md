@@ -43,5 +43,3 @@ swiftctl migration cancel <name>
 - [offline-migration.md](offline-migration.md) — operator guide
 - [networking-requirements.md](networking-requirements.md) — storage
   and networking constraints
-- `docs/design/live-migration.md` — full design
-- `docs/design/live-migration-phase-1-spike.md` — empirical baseline

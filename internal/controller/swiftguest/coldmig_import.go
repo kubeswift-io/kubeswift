@@ -4,8 +4,7 @@
 // that oci artifact — the source's frozen runtime disk — rather than cloned from
 // the base SwiftImage. The materialized disk lands in a RestoreSeeded PVC, so
 // EnsureRootDiskClone's copy path skips it, and the restore-receive launcher
-// then CH --restore's the memory against it and resumes. See
-// docs/design/oras-cold-migration.md.
+// then CH --restore's the memory against it and resumes.
 package swiftguest
 
 import (

@@ -165,8 +165,7 @@ secondary-UDN) path.
   `GuestRunning` from a launcher CH-API-socket readiness probe; swiftletd skips all
   apiserver calls for these guests. Operator guide:
   [`docs/networking/udn-primary-tenancy.md`](docs/networking/udn-primary-tenancy.md);
-  sample: [`config/samples/model-a/`](config/samples/model-a/); design:
-  [`docs/design/udn-primary-integration.md`](docs/design/udn-primary-integration.md).
+  sample: [`config/samples/model-a/`](config/samples/model-a/).
   (PRs #252–#256.)
 
 ### Limitations
@@ -211,7 +210,7 @@ multi-tenancy recipes for both OVN substrates).
   **2.8 s** with the IP preserved and reachable from a third node. Operator guide:
   [`docs/networking/ovn-kubernetes-install.md`](docs/networking/ovn-kubernetes-install.md).
   UDN-*secondary* networks ride this backend transparently (a generated `layer2` NAD);
-  UDN-*primary* multi-tenancy is a separate later phase. ([RFC](docs/design/ovn-cni-backends.md))
+  UDN-*primary* multi-tenancy is a separate later phase.
 
 ### Changed
 - **Internal: pluggable OVN CNI backend seam (OVN-K arc P1).** Lifted the kube-ovn
@@ -222,8 +221,7 @@ multi-tenancy recipes for both OVN substrates).
   dispatch through the seam, so additional OVN-based CNIs (OVN-Kubernetes next)
   plug in without touching the controller. **Behavior-preserving** — no
   user-facing change; the shipped kube-ovn IP-preserving live-migration path is
-  identical and its tests pass unchanged. Foundation for OVN-Kubernetes support
-  ([RFC](docs/design/ovn-cni-backends.md)).
+  identical and its tests pass unchanged. Foundation for OVN-Kubernetes support.
 
 ### Fixed
 - **Controller no longer crash-loops on a cluster without the CSI VolumeSnapshot
@@ -354,8 +352,7 @@ clone-reboot firmware hang documented in v0.4.3. Cluster-validated end-to-end.
   - New `rust/swift-vsock-client` crate (the host-side CONNECT-handshake client)
     + a swiftletd `identity` action namespace driving it.
   - `SwiftGuest.spec.guestAgent.enabled` (opt-in on the source; Linux only).
-  - Design: [`docs/design/clone-identity-vsock-agent.md`](docs/design/clone-identity-vsock-agent.md);
-    operator guide:
+  - Operator guide:
     [`docs/snapshots/identity-regeneration.md`](docs/snapshots/identity-regeneration.md)
     + [`docs/snapshots/clone-from-snapshot.md`](docs/snapshots/clone-from-snapshot.md).
   - Cluster-validated on **Tier B** (local) memory snapshots — a 2-clone fan-out
@@ -405,9 +402,7 @@ flow.
   warm, read-mostly replicas (collision-safe via per-pod network namespaces). It
   is a CH-`--restore`+reboot firmware interaction, not a KubeSwift defect; the
   in-guest vsock identity agent (regenerate without a reboot) is the planned real
-  fix. Investigation:
-  [`docs/design/known-issues-clone-reboot-firmware-hang.md`](docs/design/known-issues-clone-reboot-firmware-hang.md);
-  operator note in
+  fix. Operator note in
   [`docs/snapshots/clone-from-snapshot.md`](docs/snapshots/clone-from-snapshot.md).
 
 ---
@@ -701,9 +696,8 @@ major feature arcs, each shipped with on-cluster validation walkthroughs.
   ride a multi-node NAD (IP-preserving migration); corrected
   IP-preservation gate keyed on the primary interface; primary-on-NAD
   launcher runtime (EXPERIMENTAL — datapath pending validation on a
-  multi-node L2 cluster); design + operator docs
-  (`docs/design/network-architecture-requirements.md`,
-  `docs/networking/multi-node-l2.md`).
+  multi-node L2 cluster); operator docs
+  (`docs/networking/multi-node-l2.md`).
 - Networking operations guide, OVN-Kubernetes integration guide, ESXi/
   Proxmox concept mapping.
 
@@ -820,5 +814,4 @@ major feature arcs, each shipped with on-cluster validation walkthroughs.
 
 ### Known Issues
 
-See the per-release notes below and the design docs under `docs/design/` for
-known issues and their resolutions.
+See the per-release notes below for known issues and their resolutions.

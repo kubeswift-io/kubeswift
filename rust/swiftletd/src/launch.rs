@@ -109,11 +109,9 @@ where
 ///   - Spawns via [`spawn_ch_receive`] which emits `--api-socket=<path>`
 ///     ONLY. CH starts without any VM created; the entire VM
 ///     configuration arrives over the migration wire from the source
-///     CH (Q1c finding from
-///     `docs/design/live-migration-phase-2-spike.md`).
+///     CH.
 ///   - The migrated VM's disk paths must exist on this pod's
-///     filesystem at the SAME paths the source used (Constraint 4
-///     from `docs/design/live-migration.md`). Phase 2 manual demo
+///     filesystem at the SAME paths the source used. Phase 2 manual demo
 ///     handles this by mounting the same PVC at the same path in
 ///     the hand-rolled launcher pod YAML.
 ///   - on_socket_ready callback intentionally fires with the CH PID
@@ -143,7 +141,7 @@ where
     // SIGKILL this process when the controller writes
     // `migration-action: cancel`. CH v51.1 has no `vm.cancel-migration`
     // API (Phase 2 spike F4); SIGKILL on the dst CH is the cancel
-    // primitive (`docs/design/live-migration-phase-3a.md` §7.2 D1).
+    // primitive.
     //
     // Write best-effort: a missing PID file just means the cancel
     // handler returns "cancel kill failed: pid file not found" and the
@@ -552,7 +550,7 @@ fn build_ch_nics(
     // captured OVN's IP-derived MAC (the LSP port_security pins MAC+IP) and the launcher
     // entrypoint exported it here. The PRIMARY NIC must source frames with this MAC or
     // OVN drops them. Gated on the intent's primary_udn_interface signal so a stray env
-    // var never rewrites a non-Model-A guest's MAC. See docs/design/udn-primary-integration.md.
+    // var never rewrites a non-Model-A guest's MAC.
     let primary_udn_mac = if intent.primary_udn_interface.is_some() {
         std::env::var("KUBESWIFT_PRIMARY_UDN_MAC")
             .ok()

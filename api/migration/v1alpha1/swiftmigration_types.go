@@ -72,8 +72,7 @@ const (
 	// which is operationally useful when debugging a CancelIgnored
 	// outcome (operator cancel arriving after this point cannot
 	// reverse the cutover). The isPostCutover helper checks for
-	// PodRefSwapped=True to gate cancel honoring per
-	// docs/design/live-migration-phase-3a.md §5.3. Live mode only;
+	// PodRefSwapped=True to gate cancel honoring. Live mode only;
 	// offline mode does not set this condition.
 	SwiftMigrationConditionPodRefSwapped = "PodRefSwapped"
 	// ConditionCancelIgnored is True when the operator set
@@ -185,7 +184,7 @@ const (
 	// image. This should NEVER fire in practice because newDstPod uses
 	// srcPod.DeepCopy() which clones the source image atomically; if
 	// this code surfaces, a refactor has regressed the clone-src
-	// guarantee. See docs/design/live-migration-phase-3b.md LBA-1.
+	// guarantee (LBA-1).
 	FailureReasonImageTagMismatch FailureReasonCode = "ImageTagMismatch"
 	// FailureReasonDstPodConflict — set when the controller observes a
 	// dst pod with the deterministic dst-pod name already present at
@@ -216,7 +215,7 @@ const (
 )
 
 // Phase 3a phaseDetail vocabulary additions (live mode only). These
-// strings are stable per docs/design/live-migration-phase-3a.md §6.4
+// strings are stable per the phaseDetail
 // stability discipline: additions are non-breaking; renames go through
 // one-minor-release deprecation cycles with both forms emitted in
 // parallel; semantic changes require a NEW value rather than
@@ -335,8 +334,7 @@ type SwiftMigrationSpec struct {
 	// the controller surfaces a CancelIgnored condition with reason
 	// PastCutover and the migration completes normally — the cutover
 	// cannot be reversed once status.podRef.name has swapped to the dst
-	// pod and the src pod is deleted. See
-	// docs/design/live-migration-phase-3a.md §5.3 for the rationale.
+	// pod and the src pod is deleted.
 	//
 	// Operators using mode=live should prefer spec.cancelRequested over
 	// `kubectl delete pod <dst>` for cancellation: force-delete of the
@@ -494,8 +492,7 @@ type SwiftMigrationStatus struct {
 	// Phase 3a shipped the first five codes; Phase 3b PR 2 extends the
 	// taxonomy with seven additional codes that classify live-mode
 	// failures more precisely. See the per-constant docstrings at the
-	// top of this file for fire conditions; cross-reference
-	// docs/design/live-migration-phase-3b.md §4.7 for the
+	// top of this file for fire conditions and the
 	// failure-mode-to-reason mapping.
 	//
 	// Phase 3a codes (carried through unchanged):
@@ -512,7 +509,7 @@ type SwiftMigrationStatus struct {
 	//     disconnect during transfer.
 	//   - RpcError — CH HTTP RPC error not otherwise classified.
 	//   - ImageTagMismatch — LBA-1 trip-wire (defensive; should never
-	//     fire). See docs/design/live-migration-phase-3b.md LBA-1.
+	//     fire).
 	//   - DstPodConflict — dst pod name collision with foreign state.
 	//
 	// Phase 1 offline mode does not populate this field — its failure

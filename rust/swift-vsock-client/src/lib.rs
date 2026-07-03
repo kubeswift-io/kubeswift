@@ -5,8 +5,7 @@
 //! (`--vsock cid=<N>,socket=<rt>/vsock.sock`). To reach a guest AF_VSOCK
 //! listener the host connects that Unix socket and performs CH's hybrid-vsock
 //! handshake — writes `CONNECT <port>\n`, reads `OK <port>\n`, then the stream
-//! is bridged to the guest's listener on `<port>`. (PR-0 spike pinned this; see
-//! docs/design/clone-identity-vsock-agent-spike.md.)
+//! is bridged to the guest's listener on `<port>`. (PR-0 spike pinned this.)
 //!
 //! Synchronous on purpose — one request/response per connection, no tokio,
 //! mirroring `swift-qemu-client`'s QMP choice. swiftletd runs the call on a

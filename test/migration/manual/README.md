@@ -12,8 +12,6 @@
 
 The `kubeswift.io/migration-phase2-unsafe-plaintext: ack` annotation is required on both source and destination launcher pods for swiftletd to accept any migration action. The annotation must be set to the literal string `ack`.
 
-See [`docs/design/THREAT-MODEL.md`](../../../docs/design/THREAT-MODEL.md) and [`docs/design/live-migration-phase-2.md`](../../../docs/design/live-migration-phase-2.md) §8 for the complete threat model.
-
 ---
 
 ## What this is

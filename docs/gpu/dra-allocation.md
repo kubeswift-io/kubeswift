@@ -13,9 +13,7 @@ the guest by Cloud Hypervisor (`tier: pcie`) or QEMU (`tier: hgx-*`). DRA only
 changes *who decides which GPU on which node*.
 
 This guide covers the operator workflow with KubeSwift's **reference DRA
-driver** (`kubeswift-dra-driver`, driver name `gpu.kubeswift.io`). The design,
-rationale, and cluster-validation evidence live in
-[docs/design/dra-gpu-integration.md](../design/dra-gpu-integration.md).
+driver** (`kubeswift-dra-driver`, driver name `gpu.kubeswift.io`).
 
 ## Choosing a backend
 
@@ -328,8 +326,7 @@ want VFIO GPU allocation without the NVIDIA software stack. Using NVIDIA's
 `k8s-dra-driver-gpu` instead requires pinning its device-status/CDI schema —
 isolated to a single adapter function in KubeSwift's claim read-back — and
 deciding binding ownership (the reference driver leaves vfio binding to
-gpu-init). That work is hardware-gated; status is tracked in
-[the design doc](../design/dra-gpu-integration.md) (§A6/§A8).
+gpu-init). That work is hardware-gated.
 
 ## See also
 
@@ -337,4 +334,3 @@ gpu-init). That work is hardware-gated; status is tracked in
   DaemonSet, SwiftGPUProfile reference, Fabric Manager
 - [Samples](../../config/samples/dra-gpu/) — apply-ready manifests for
   everything above
-- [Design doc + cluster-validation evidence](../design/dra-gpu-integration.md)

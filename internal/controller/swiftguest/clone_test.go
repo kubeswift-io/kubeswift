@@ -392,9 +392,9 @@ func poolCloneReconciler(t *testing.T, objs ...client.Object) *SwiftGuestReconci
 }
 
 // ── Source-independent (cross-cluster) full-state clone ──────────────────────
-// docs/design/oras-cold-migration-source-independent.md: when the SOURCE guest
-// is gone, a full-state oci snapshot carrying the captured launcher-sufficient
-// surface resolves via FromCapturedSpec instead of the live source spec.
+// When the SOURCE guest is gone, a full-state oci snapshot carrying the captured
+// launcher-sufficient surface resolves via FromCapturedSpec instead of the live
+// source spec.
 
 func fullStateSnap() *snapshotv1alpha1.SwiftSnapshot {
 	s := ociCloneSnap() // ns/snap, guestRef src, repo zot.svc:5000/vmsnap

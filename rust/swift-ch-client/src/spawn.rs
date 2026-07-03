@@ -16,8 +16,7 @@ use crate::VmConfig;
 /// invocation fails with `Address in use` and exits immediately —
 /// silent failure with confusing downstream symptoms.
 ///
-/// This is the W2 walkthrough finding from
-/// `docs/design/live-migration-phase-2-spike.md` — the most-replicated
+/// This is the W2 walkthrough finding — the most-replicated
 /// failure mode in the spike (recurred in Q1, Q1d, Q1e, Q2, Q4, and the
 /// walkthrough run #1). The cleanup is co-located with each spawn call
 /// site so future spawn variants inherit the protection automatically.
@@ -93,11 +92,6 @@ pub fn spawn_ch_restore(
 /// The receive listener is opened only when the action handler invokes
 /// [`crate::ApiClient::receive_migration`]; spawning CH alone does not
 /// bind the migration TCP listener.
-///
-/// See `docs/design/live-migration-phase-2.md` §4.3.2 for the full
-/// destination-pod startup sequence and §4.1 for the rationale on
-/// keeping `spawn_ch_receive` as a sibling of `spawn_ch_restore`
-/// (rather than special-casing `spawn_ch`).
 pub fn spawn_ch_receive(api_socket: &Path) -> Result<Child, std::io::Error> {
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());

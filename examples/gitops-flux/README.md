@@ -1,8 +1,7 @@
 # KubeSwift GitOps reference (FluxCD)
 
 A fork-and-adapt starting point for managing KubeSwift declaratively with
-[FluxCD](https://fluxcd.io/), implementing the three-layer model from
-[`docs/design/gitops-flux.md`](../../docs/design/gitops-flux.md). Operator
+[FluxCD](https://fluxcd.io/), implementing the three-layer model. Operator
 documentation lives in [`docs/gitops/`](../../docs/gitops/).
 
 ```
