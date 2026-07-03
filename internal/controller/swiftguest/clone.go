@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -492,4 +493,110 @@ func cloneOCITag(snap *snapshotv1alpha1.SwiftSnapshot) string {
 		return snap.Spec.Backend.OCI.Tag
 	}
 	return snap.Namespace + "-" + snap.Name
+}
+
+// maybeRootDiskFromSourceClone materializes the root disk for a MEMORY-ONLY
+// cloneFromSnapshot (Tier B local, or Tier C s3 without includeDisk) as a CSI
+// clone (spec.dataSource) of the SOURCE guest's live root PVC — a byte copy of
+// the source's actual disk, so its on-disk partition+filesystem geometry (and
+// data) match the RAM the clone resumes.
+//
+// Returns (handled, result, err), mirroring maybeRootDiskFromOCI:
+//   - handled=false  → not a memory-only clone (no cloneFromSnapshot, or a
+//     full-state oci clone maybeRootDiskFromOCI already took); the caller falls
+//     through to the image-clone paths.
+//   - handled=true, err=nil, result set → the CSI clone is Bound and ready.
+//   - handled=true, err!=nil → transient "requeue and retry" progress signal
+//     (PVC just created / not yet Bound) OR a terminal failure (source disk gone).
+//
+// WHY (the bug this fixes): the legacy path copies the pristine SwiftImage, whose
+// partition is the original (small) cloud-image size. A normal guest grows it via
+// cloud-init growpart/resize2fs on FIRST BOOT — but a clone RESUMES captured RAM,
+// so cloud-init never re-runs. The resumed guest's in-RAM ext4 is the source's
+// already-grown filesystem; synced onto the small-partition image copy it leaves
+// fs > partition, which the next reboot's initramfs rejects ("EXT4-fs: bad
+// geometry"), dropping the guest to the emergency shell (looked like a firmware
+// hang). Cloning the source's real disk keeps geometry consistent. See
+// docs/design/known-issues-clone-reboot-firmware-hang.md.
+func (r *SwiftGuestReconciler) maybeRootDiskFromSourceClone(
+	ctx context.Context, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest,
+) (bool, *RootDiskCloneResult, error) {
+	if guest.Spec.CloneFromSnapshot == nil {
+		return false, nil, nil
+	}
+	var snap snapshotv1alpha1.SwiftSnapshot
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.CloneFromSnapshot.SnapshotRef.Name, Namespace: guest.Namespace}, &snap); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil, nil // prepareCloneFromSnapshot surfaces the missing snapshot
+		}
+		return true, nil, err
+	}
+	// Full-state (includeDisk oci) clones carry their disk in the registry and are
+	// handled by maybeRootDiskFromOCI (called before this). Only memory-only
+	// snapshots reach here needing the source guest's disk.
+	if snap.Status.OCI != nil && snap.Status.OCI.Disk != nil && snap.Status.OCI.Disk.ManifestDigest != "" {
+		return false, nil, nil
+	}
+
+	sourceRootPVC := RootDiskCloneName(snap.Spec.GuestRef.Name)
+	cloneName := RootDiskCloneName(guest.Name)
+
+	// The source guest's root PVC supplies the disk. A memory-only clone is
+	// same-cluster and needs the live source (its RAM references that disk). If it
+	// is gone, we cannot build a consistent disk — fail loudly (Principle #6).
+	var srcPVC corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, client.ObjectKey{Name: sourceRootPVC, Namespace: guest.Namespace}, &srcPVC); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil, fmt.Errorf("cloneFromSnapshot: source root PVC %s not found — a memory-only clone needs the source guest's disk (use a full-state includeDisk snapshot for source-independent clones)", sourceRootPVC)
+		}
+		return true, nil, err
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	perr := r.Get(ctx, client.ObjectKey{Name: cloneName, Namespace: guest.Namespace}, &pvc)
+	if apierrors.IsNotFound(perr) {
+		// CSI-clone the source's live disk. Same size/class/mode as the source so
+		// it is a byte clone (CSI cloning requires matching capacity + class);
+		// Longhorn clones an attached source volume without detaching it.
+		// RestoreSeeded so the copy path (ensureRootDiskCloneFromCopy) skips it.
+		newPVC := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cloneName,
+				Namespace: guest.Namespace,
+				Labels: map[string]string{
+					"swift.kubeswift.io/guest": guest.Name,
+					"swift.kubeswift.io/role":  "root-disk",
+					RestoreSeededLabel:         "true",
+				},
+				OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(guest, swiftGuestGVK)},
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      srcPVC.Spec.AccessModes,
+				VolumeMode:       srcPVC.Spec.VolumeMode,
+				StorageClassName: srcPVC.Spec.StorageClassName,
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: srcPVC.Spec.Resources.Requests[corev1.ResourceStorage],
+					},
+				},
+				DataSource: &corev1.TypedLocalObjectReference{
+					Kind: "PersistentVolumeClaim",
+					Name: sourceRootPVC,
+				},
+			},
+		}
+		if err := r.Create(ctx, newPVC); err != nil && !apierrors.IsAlreadyExists(err) {
+			return true, nil, fmt.Errorf("create clone-from-source PVC %s: %w", cloneName, err)
+		}
+		return true, nil, fmt.Errorf("clone-from-source PVC %s created (CSI clone of %s), waiting for Bound", cloneName, sourceRootPVC)
+	}
+	if perr != nil {
+		return true, nil, perr
+	}
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return true, nil, fmt.Errorf("clone-from-source PVC %s not yet Bound (phase=%s)", cloneName, pvc.Status.Phase)
+	}
+	// Byte clone of the source's already-grown disk → geometry is consistent;
+	// never grow-init (that would desync partition vs the resumed fs).
+	return true, &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 }
