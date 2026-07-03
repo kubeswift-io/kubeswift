@@ -1,8 +1,13 @@
 # Known issue — cloneFromSnapshot guests hang in firmware on reboot (CH v52)
 
-> Status: OPEN (investigation). Surfaced 2026-06-15 validating demo 06 (instant
-> clones) on the v0.4.2 cluster. Severity: MEDIUM (blocks identity/IP divergence
-> for memory-snapshot clones; does not affect normal guests or the source).
+> Status: OPEN. Surfaced 2026-06-15 validating demo 06 (instant clones) on the
+> v0.4.2 cluster. An off-cluster reproduction attempt (2026-07-03, see
+> "Off-cluster investigation" below) was **inconclusive** — restore/resume is
+> solid but a deterministic reboot-hang could not be reproduced, and it produced
+> one correction to the diagnosis. Severity: MEDIUM (blocks identity/IP
+> divergence for memory-snapshot clones; does not affect normal guests or the
+> source) — but effectively **mitigated** by the shipped in-guest vsock identity
+> agent (v0.4.4), which regenerates identity + re-DHCPs with no reboot.
 > Layer: **Cloud Hypervisor v52 `--restore` + guest reboot + EDK2 firmware** —
 > NOT KubeSwift Go/Rust code.
 
@@ -61,7 +66,7 @@ ACPI/firmware state that makes EDK2 believe it is resuming from S3 — and then
   restore guests, so the IP **would** surface automatically the moment a clone
   re-DHCPs — it just never gets the chance while the reboot is wedged.
 
-## Hypotheses / next steps (not yet attempted)
+## Hypotheses (original; see "Off-cluster investigation" below for what the 2026-07-03 attempt found)
 
 1. **Disable guest S3 / ACPI sleep so the warm reset takes the cold-boot path.**
    Investigate whether CH or the firmware can be told the guest has no S3 (e.g. a
@@ -77,6 +82,58 @@ ACPI/firmware state that makes EDK2 believe it is resuming from S3 — and then
    agent** regenerates machine-id / SSH keys / hostname and renews DHCP *without*
    a reboot. That is the real fix for clone identity/IP and makes the reboot path
    unnecessary; prioritize it over chasing the firmware hang.
+
+## Off-cluster investigation (2026-07-03) — inconclusive; two corrections
+
+An off-cluster reproduction harness was built with the **real CH v52.0 binary +
+`CLOUDHV.fd`** (extracted from the `swiftletd` image) and a Noble guest, driving
+`boot → snapshot → --restore (resume) → reboot` directly. Findings:
+
+- **Restore + resume is rock-solid.** Every `--restore` (eager and `ondemand`/
+  userfaultfd) reached `state=Running`; the vsock-agent-survives-restore property
+  (PR-0 spike) holds.
+- **A deterministic hang could NOT be reproduced.** Restored clones were driven
+  through `sudo reboot` and CH `vm.reboot` dozens of times across
+  eager/`ondemand` restore modes, with and without a virtio-net device. Some
+  trials clearly rebooted to multi-user (e.g. `vm.reboot` on a no-net clone
+  produced a full boot — 19 `Reached target` lines on the guest serial); others
+  looked wedged. **The same configuration produced both "rebooted" and "hung"
+  verdicts on different runs**, so the result is measurement-limited, not a clean
+  repro. Root cause off-cluster is **unconfirmed**.
+- **Methodology caveat (why the verdicts are noisy):** observing reboot outcome
+  over a `--serial socket=` connection is unreliable — the guest resets the
+  serial device on warm reset, so a held connection goes silent (looks hung) and
+  intermittent fresh probes race the boot. A trustworthy repro needs a
+  **connection-independent liveness signal** — the **vsock agent ping** (responds
+  only once the guest reaches multi-user) is the right instrument; the serial
+  console is not.
+
+**Correction to the diagnosis above:** the "froze after
+`MpInitChangeApLoopCallback() done!`" evidence was over-read. In the off-cluster
+harness that line is the firmware's **normal** hand-off point — the firmware
+debug port goes quiet there on **every** boot (successful or not) because the
+kernel takes over the console. So "last line is `MpInit...done`" is **not**, by
+itself, evidence of an AP-init firmware hang; the true stall point (when the
+hang does occur on the cluster) is at or after the firmware→kernel hand-off and
+remains unconfirmed. The "Evidence pointing at the EDK2 S3-resume / AP-init path"
+section above should be read as a *hypothesis*, not a conclusion.
+
+**Recommendation / next steps (revised):**
+1. **Reproduce on the cluster** (where it was actually observed) using the
+   **vsock agent ping** as the boot-completion signal — the only reliable way to
+   separate "hung" from "slow/at-an-unresponsive-prompt".
+2. **CH version bisect (v52 → v53+)** against a cluster repro; the intermittency
+   is most consistent with a timing-sensitive upstream firmware/KVM interaction,
+   not KubeSwift code — so this is the strongest lead for a real fix.
+3. **Accept the in-guest vsock identity agent (shipped v0.4.4) as the resolution
+   for the primary need.** It regenerates identity + renews DHCP *in place, no
+   reboot*, so the reboot path is unnecessary for clone identity/IP. The
+   reboot-hang then only affects *other* reboots (kernel updates, etc.) of a
+   restored clone — a lower-severity, upstream-watch item.
+
+The single-vCPU (Lead 2) and S3-disable (Lead 1) experiments were **not run to a
+firm conclusion** — they depend on a reliable repro, which the off-cluster
+harness could not provide.
 
 ## Related
 
