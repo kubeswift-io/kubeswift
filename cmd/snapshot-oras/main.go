@@ -62,6 +62,7 @@ func main() {
 	snapName := flag.String("snapshot", "", "ns/name of the SwiftSnapshot, recorded in the manifest annotations (upload only)")
 	includeMemory := flag.Bool("include-memory", false, "record includeMemory=true in the manifest (upload only)")
 	signKey := flag.String("sign-key", "", "path to a cosign private key; when set, cosign-sign the pushed artifact as an OCI referrer (upload only; COSIGN_PASSWORD from env)")
+	verifyKey := flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify the artifact before pulling (download-image only; requires a TLS registry)")
 	file := flag.String("file", "", "raw disk image path — golden-image chunking (upload-image: source; download-image: destination)")
 	chunkSizeMiB := flag.Int("chunk-size-mib", 64, "chunk size in MiB for golden-image chunking (upload-image only)")
 	osType := flag.String("os-type", "linux", "os family recorded in the golden-image config: linux | windows (upload-image only)")
@@ -71,7 +72,7 @@ func main() {
 	if err := run(runArgs{
 		mode: *mode, dir: *dir, repository: *repository, tag: *tag, digest: *digest,
 		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory, signKey: *signKey,
-		file: *file, chunkSizeMiB: *chunkSizeMiB, osType: *osType, format: *format,
+		verifyKey: *verifyKey, file: *file, chunkSizeMiB: *chunkSizeMiB, osType: *osType, format: *format,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
 		os.Exit(1)
@@ -80,7 +81,7 @@ func main() {
 
 type runArgs struct {
 	mode, dir, repository, tag, digest, snapName, signKey string
-	file, osType, format                                  string
+	verifyKey, file, osType, format                       string
 	chunkSizeMiB                                          int
 	insecure, includeMemory                               bool
 }
@@ -183,6 +184,20 @@ func run(a runArgs) error {
 		pullRef := a.tag
 		if a.digest != "" {
 			pullRef = a.digest // pinned pull by digest
+		}
+		if a.verifyKey != "" {
+			// Verify BEFORE trusting any bytes: resolve the ref to a digest,
+			// cosign-verify that digest, then pull by the SAME digest — TOCTOU-safe
+			// (a tag can't be swapped between the verify and the pull). A failed
+			// verify returns here, so nothing is reassembled into the PVC.
+			vdesc, verr := repo.Resolve(ctx, pullRef)
+			if verr != nil {
+				return fmt.Errorf("resolve %s for verify: %w", pullRef, verr)
+			}
+			if verr := oci.Verify(ctx, a.repository, vdesc.Digest.String(), a.verifyKey); verr != nil {
+				return verr
+			}
+			pullRef = vdesc.Digest.String()
 		}
 		desc, err := oci.PullAndReassemble(ctx, repo, pullRef, a.file)
 		if err != nil {

@@ -135,8 +135,32 @@ cosign verify --key cosign.pub ghcr.io/acme/vm-images@sha256:1a2b...
 > be verified until the registry is fronted with TLS. Use a TLS registry on the
 > production path.
 
-Automatic **verify-on-pull** (the SwiftImage import refusing an artifact whose
-signature does not verify) is a follow-up — see the design doc.
+### Verify-on-pull
+
+Point a SwiftImage at a **cosign public key** and the import verifies the
+signature **before** trusting any bytes — a golden disk whose signature is
+missing or does not verify **fails the import** (no unsigned/tampered image is
+ever materialized):
+
+```bash
+kubectl create secret generic golden-verify-key --from-file=cosign.pub
+```
+
+```yaml
+spec:
+  source:
+    oci:
+      repository: ghcr.io/acme/vm-images
+      digest: sha256:1a2b...            # pin the digest you signed
+      verifyKeySecretRef:
+        name: golden-verify-key         # Secret with key "cosign.pub"
+```
+
+The import resolves the reference to a digest, `cosign verify`s **that digest**,
+then pulls by the **same** digest (so a tag can't be swapped between verify and
+pull). Because `cosign verify` is HTTPS-only, `verifyKeySecretRef` together with
+`insecure: true` is **rejected at admission** — verify-on-pull requires a TLS
+registry.
 
 ## See also
 

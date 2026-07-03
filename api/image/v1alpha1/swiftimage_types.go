@@ -112,6 +112,16 @@ type OCIImageSource struct {
 	// (same namespace) for registry auth. Empty = anonymous.
 	// +optional
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
+	// VerifyKeySecretRef references a Secret (same namespace) holding a cosign
+	// PUBLIC key under the key "cosign.pub". When set, the import verifies the
+	// artifact's cosign signature (as produced by `swiftctl image publish
+	// --sign-key`) BEFORE trusting its bytes, and FAILS the import if the
+	// signature does not verify — no unsigned/tampered golden disk is imported.
+	// Requires a TLS registry: cosign verify does not support a plaintext (http)
+	// registry, so verifyKeySecretRef together with insecure is rejected at
+	// admission.
+	// +optional
+	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
 }
 
 // ImageSource defines the source of an image.
