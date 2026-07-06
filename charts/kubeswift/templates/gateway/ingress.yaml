@@ -12,9 +12,10 @@ metadata:
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: gateway
-  {{- with .Values.gateway.ingress.annotations }}
+  {{- $ann := include "kubeswift.ingress.annotations" .Values.gateway.ingress | fromYaml }}
+  {{- if $ann }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $ann | nindent 4 }}
   {{- end }}
 spec:
   {{- with .Values.gateway.ingress.className }}
@@ -31,8 +32,9 @@ spec:
                 name: kubeswift-gateway
                 port:
                   name: http
-  {{- with .Values.gateway.ingress.tls }}
+  {{- $tls := include "kubeswift.ingress.tls" .Values.gateway.ingress }}
+  {{- if trim $tls }}
   tls:
-    {{- toYaml . | nindent 4 }}
+    {{- $tls | nindent 4 }}
   {{- end }}
 {{- end }}

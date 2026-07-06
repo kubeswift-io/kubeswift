@@ -43,6 +43,13 @@ UI with `gateway.ingress.enabled=true` (+ `gateway.ingress.host`/`annotations`),
 or a Service of `type: LoadBalancer`. The gateway serves Connect/gRPC-Web over
 **h2c** — terminate TLS at the ingress and allow HTTP/2 to the backend.
 
+For cert-manager TLS without hand-writing the `tls[]` block, set
+`ingress.tlsAuto.enabled=true` + one of `ingress.tlsAuto.clusterIssuer` /
+`ingress.tlsAuto.issuer` (on either `ui.ingress` or `gateway.ingress`); the chart
+emits the `tls[]` entry (Secret `<host>-tls`, overridable) and the cert-manager
+annotation. The raw `annotations`/`tls[]` fields stay as escape hatches
+(`tlsAuto` wins on the issuer annotation when both are set).
+
 ## Register a member cluster
 
 For each member, create — **in the gateway's namespace** — a credential Secret

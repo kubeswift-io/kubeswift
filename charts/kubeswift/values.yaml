@@ -164,8 +164,16 @@ gateway:
     enabled: false
     className: ""
     host: kubeswift-gateway.example.com
-    annotations: {}
-    tls: []
+    # TLS the easy way (cert-manager): set tlsAuto.enabled + ONE issuer, and the
+    # chart emits the tls[] block + the cert-manager annotation for you. Leave it
+    # off and hand-write annotations/tls[] below for full control.
+    tlsAuto:
+      enabled: false
+      clusterIssuer: "" # cert-manager ClusterIssuer name -> cert-manager.io/cluster-issuer
+      issuer: "" # namespaced Issuer name -> cert-manager.io/issuer (mutually exclusive with clusterIssuer)
+      secretName: "" # cert Secret name; defaults to "<host>-tls"
+    annotations: {} # advanced: extra ingress annotations (merged with tlsAuto's; tlsAuto wins on the issuer key)
+    tls: [] # advanced: raw tls[] escape hatch, honored only when tlsAuto.enabled=false
   resources:
     requests:
       cpu: 50m
@@ -228,8 +236,16 @@ ui:
     enabled: false
     className: ""
     host: kubeswift-ui.example.com
-    annotations: {}
-    tls: []
+    # TLS the easy way (cert-manager): set tlsAuto.enabled + ONE issuer, and the
+    # chart emits the tls[] block + the cert-manager annotation for you. Leave it
+    # off and hand-write annotations/tls[] below for full control.
+    tlsAuto:
+      enabled: false
+      clusterIssuer: "" # cert-manager ClusterIssuer name -> cert-manager.io/cluster-issuer
+      issuer: "" # namespaced Issuer name -> cert-manager.io/issuer (mutually exclusive with clusterIssuer)
+      secretName: "" # cert Secret name; defaults to "<host>-tls"
+    annotations: {} # advanced: extra ingress annotations (merged with tlsAuto's; tlsAuto wins on the issuer key)
+    tls: [] # advanced: raw tls[] escape hatch, honored only when tlsAuto.enabled=false
   resources:
     requests:
       cpu: 10m
