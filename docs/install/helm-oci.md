@@ -36,6 +36,10 @@ helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   --create-namespace
 ```
 
+For every configurable value and its default, see the [chart values
+reference](../../charts/kubeswift/README.md#values) (also rendered on the chart's
+registry page).
+
 ## Version selection (dev / RC / stable)
 
 | Release type | When | Chart version | Example |
