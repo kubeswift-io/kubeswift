@@ -75,12 +75,21 @@ spec:
   server: https://boba.example.com:6443       # optional if the kubeconfig has it
   credentialSecretRef:
     name: boba-kubeconfig
-  prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (telemetry)
+  prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (see below)
   displayName: Boba (lab)
 ```
 
 Alternatively the Secret may carry a `token` (+ optional `ca.crt`) instead of a
 `kubeconfig`, paired with `spec.server`.
+
+`prometheusEndpoint` is **optional**: leave it empty and the gateway discovers an
+in-cluster Prometheus on the member (the kube-prometheus-stack `prometheus-operated`
+Service or any Service labeled `app.kubernetes.io/name=prometheus`, scanned in
+`gateway.prometheusDiscovery.namespaces`) and publishes the result to
+`status.prometheusEndpoint` + the `PrometheusEndpointResolved` condition. An
+explicit `spec.prometheusEndpoint` always wins. Discovery needs the member
+credential to read Services (`config/samples/gateway/member-rbac.yaml` grants it);
+set `gateway.prometheusDiscovery.namespaces: []` to disable it.
 
 The gateway picks the member up immediately, probes it, and writes status:
 

@@ -86,3 +86,36 @@ subjects:
   - kind: Group
     name: kubeswift-operators
     apiGroup: rbac.authorization.k8s.io
+---
+# 3) Let the gateway CREDENTIAL (the SA the kubeconfig authenticates as, NOT the
+#    impersonated user) discover this member's in-cluster Prometheus Service for
+#    per-VM telemetry — used when the member's Cluster.spec.prometheusEndpoint is
+#    empty. Read-only, low-sensitivity: a Prometheus Service is a fleet fact, not
+#    a user view (the telemetry data query itself still runs as the impersonated
+#    user). Omit this to require an explicit spec.prometheusEndpoint instead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-discovery
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  # Optional: derive the endpoint from the Prometheus CR when the operator CRDs
+  # are present. Drop this rule if monitoring.coreos.com is not installed.
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheuses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-discovery
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: kubeswift-system

@@ -36,6 +36,7 @@ spec:
             - --clusters-namespace={{ .Values.namespace }}
             - --auth-mode={{ .Values.gateway.authMode }}
             - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}
+            - --prometheus-discovery-namespaces={{ join "," .Values.gateway.prometheusDiscovery.namespaces }}
             {{- if eq .Values.gateway.authMode "oidc" }}
             - --oidc-issuer-url={{ required "gateway.oidc.issuerURL is required when gateway.authMode=oidc" .Values.gateway.oidc.issuerURL }}
             - --oidc-client-id={{ required "gateway.oidc.clientID is required when gateway.authMode=oidc" .Values.gateway.oidc.clientID }}

@@ -67,6 +67,13 @@ const (
 	// the member is unreachable, so the UI surfaces a per-cluster error rather
 	// than failing the whole-fleet query (no silent failures).
 	ClusterConditionReachable = "Reachable"
+	// ClusterConditionPrometheusEndpointResolved reports how status.prometheusEndpoint
+	// was resolved: True with reason Explicit (operator-set spec.prometheusEndpoint)
+	// or Discovered (gateway found an in-cluster Prometheus on the member); False
+	// with reason NotFound (none found / discovery disabled / member down) or
+	// DiscoveryError (the member API errored). Surfaced so telemetry never fails
+	// on a silent guess (no silent failures).
+	ClusterConditionPrometheusEndpointResolved = "PrometheusEndpointResolved"
 )
 
 // ClusterStatus is populated by the kubeswift-gateway as it connects to and
@@ -85,6 +92,14 @@ type ClusterStatus struct {
 	// (e.g. "v1.34.3"), shown in the UI's cluster detail.
 	// +optional
 	KubernetesVersion string `json:"kubernetesVersion,omitempty"`
+
+	// PrometheusEndpoint is the effective per-VM telemetry endpoint the gateway
+	// resolved for this member: spec.prometheusEndpoint when set, else a
+	// gateway-discovered in-cluster Prometheus, else empty. Read the
+	// PrometheusEndpointResolved condition for how it was derived. Surfaced so
+	// the UI and kubectl reflect the real derived state (never a silent guess).
+	// +optional
+	PrometheusEndpoint string `json:"prometheusEndpoint,omitempty"`
 
 	// GuestCount is the number of SwiftGuests observed on this member at the
 	// last sync — a cheap roll-up for the cluster selector. Omitted until the
@@ -106,6 +121,7 @@ type ClusterStatus struct {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="K8s",type=string,JSONPath=`.status.kubernetesVersion`
 // +kubebuilder:printcolumn:name="Guests",type=integer,JSONPath=`.status.guestCount`
+// +kubebuilder:printcolumn:name="Prometheus",type=string,JSONPath=`.status.prometheusEndpoint`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type Cluster struct {
 	metav1.TypeMeta   `json:",inline"`
