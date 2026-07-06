@@ -13,9 +13,10 @@ metadata:
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: ui
-  {{- with .Values.ui.ingress.annotations }}
+  {{- $ann := include "kubeswift.ingress.annotations" .Values.ui.ingress | fromYaml }}
+  {{- if $ann }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $ann | nindent 4 }}
   {{- end }}
 spec:
   {{- with .Values.ui.ingress.className }}
@@ -32,8 +33,9 @@ spec:
                 name: kubeswift-ui
                 port:
                   name: http
-  {{- with .Values.ui.ingress.tls }}
+  {{- $tls := include "kubeswift.ingress.tls" .Values.ui.ingress }}
+  {{- if trim $tls }}
   tls:
-    {{- toYaml . | nindent 4 }}
+    {{- $tls | nindent 4 }}
   {{- end }}
 {{- end }}
