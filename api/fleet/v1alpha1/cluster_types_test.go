@@ -35,7 +35,7 @@ func TestClusterDeepCopy(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"},
 		Spec: ClusterSpec{
 			Server:              "https://10.0.0.1:6443",
-			CredentialSecretRef: corev1.LocalObjectReference{Name: "boba-kubeconfig"},
+			CredentialSecretRef: &corev1.LocalObjectReference{Name: "boba-kubeconfig"},
 			PrometheusEndpoint:  "http://prometheus.boba:9090",
 			DisplayName:         "Boba (lab)",
 		},

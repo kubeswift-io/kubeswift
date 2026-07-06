@@ -116,6 +116,42 @@ dra:
 # app). Opt-in. Runs in a hub cluster, watches fleet.kubeswift.io Cluster
 # objects, and fans the read plane across the registered member clusters.
 # See docs/ui/gateway.md.
+# Federation role (multi-cluster hub/edge). Presets the component toggles below;
+# an explicit gateway.enabled / ui.enabled always ADDS a component in any role.
+#   standalone (default): today's behavior — a single controller cluster, no hub,
+#     nothing federation-related created (byte-identical to a pre-role install).
+#   hub: the management plane — presets gateway.enabled + ui.enabled AND
+#     self-registers THIS cluster as a local fleet member (federation.selfRegister)
+#     so the UI lists the hub's own VMs with no hand-made credential Secret.
+#   edge: a federated member cluster (edge onboarding lands in a follow-up PR).
+federation:
+  role: standalone # standalone | hub | edge
+  # Self-register this cluster as a local fleet member. Applies only to role=hub.
+  # Uses the gateway's in-cluster ServiceAccount (a Cluster with spec.local: true)
+  # — no credential Secret is persisted for the self entry. Under
+  # gateway.authMode oidc/token the chart also grants the hub SA impersonate-on-
+  # itself so a signed-in user can see the hub's own VMs.
+  selfRegister:
+    enabled: true # default-on for role=hub; ignored in other roles
+    displayName: "" # UI label for the self entry; defaults to the release name
+    prometheusEndpoint: "" # optional explicit telemetry endpoint (else auto-discovered)
+  # Edge onboarding (role=edge). The chart mints a least-privilege member
+  # ServiceAccount + a long-lived token Secret + the member-RBAC the hub needs to
+  # impersonate users and read VMs, then prints (helm NOTES) the apply-ready
+  # Cluster + Secret to run on the HUB — so joining a cluster is install-then-
+  # copy-one-manifest. The token is NEVER printed by Helm; NOTES prints the
+  # kubectl commands to extract it. Ignored in other roles.
+  edge:
+    # Apply the member-RBAC (impersonator + vm-reader + Prometheus-discovery) on
+    # this edge at install. false => apply config/samples/gateway/member-rbac.yaml
+    # yourself.
+    applyMemberRBAC: true
+    # IdP groups (the subjects the hub impersonates) to bind to the VM-reader role
+    # on this edge. Empty => the role is created but no group is bound (bind later).
+    operatorGroups: []
+    # UI label the hub shows for this edge; defaults to the release name.
+    displayName: ""
+
 gateway:
   enabled: false
   image:
@@ -157,6 +193,20 @@ gateway:
   # for a hardened install. With ui.gateway.mode=proxy the browser is same-origin,
   # so CORS does not apply.
   corsAllowOrigin: "*"
+  # Per-VM telemetry endpoint discovery. When a member's
+  # Cluster.spec.prometheusEndpoint is empty, the gateway scans these namespaces
+  # ON THAT MEMBER for an in-cluster Prometheus (the kube-prometheus-stack
+  # `prometheus-operated` Service or any Service labeled
+  # app.kubernetes.io/name=prometheus) and uses it; the result is published to
+  # Cluster.status.prometheusEndpoint + the PrometheusEndpointResolved condition.
+  # An explicit spec.prometheusEndpoint always wins. Set namespaces: [] to
+  # disable discovery (explicit endpoints only).
+  prometheusDiscovery:
+    namespaces:
+      - monitoring
+      - kube-prometheus-stack
+      - observability
+      - prometheus
   service:
     type: ClusterIP
     port: 8080

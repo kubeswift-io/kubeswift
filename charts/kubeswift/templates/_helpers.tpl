@@ -18,6 +18,46 @@ Override with controllerManager.image.tag / swiftletd.image.tag when using local
 {{- end -}}
 
 {{/*
+kubeswift.role — the effective federation role: federation.role, defaulting to
+"standalone". standalone = today (no federation); hub = management plane
+(gateway + UI + self-registration); edge = a federated member (onboarding).
+*/}}
+{{- define "kubeswift.role" -}}
+{{- default "standalone" .Values.federation.role -}}
+{{- end -}}
+
+{{/*
+kubeswift.gatewayEnabled / kubeswift.uiEnabled — "true" when the component runs.
+role=hub PRESETS both on; an explicit gateway.enabled / ui.enabled adds them in
+any role. (A hub always carries its own gateway+UI; to run these standalone,
+leave role=standalone and set the toggles.) Emits "true" or "".
+*/}}
+{{- define "kubeswift.gatewayEnabled" -}}
+{{- if or .Values.gateway.enabled (eq (include "kubeswift.role" .) "hub") -}}true{{- end -}}
+{{- end -}}
+{{- define "kubeswift.uiEnabled" -}}
+{{- if or .Values.ui.enabled (eq (include "kubeswift.role" .) "hub") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+kubeswift.selfRegisterEnabled — "true" when the chart should self-register this
+cluster as a local fleet member: role=hub with federation.selfRegister.enabled
+(default true for a hub). Emits "true" or "".
+*/}}
+{{- define "kubeswift.selfRegisterEnabled" -}}
+{{- if and (eq (include "kubeswift.role" .) "hub") (ne (toString (dig "selfRegister" "enabled" true .Values.federation)) "false") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+kubeswift.edgeRBAC — "true" when the chart should apply edge onboarding on this
+cluster: role=edge with federation.edge.applyMemberRBAC (default true). Emits
+"true" or "".
+*/}}
+{{- define "kubeswift.edgeRBAC" -}}
+{{- if and (eq (include "kubeswift.role" .) "edge") (ne (toString (dig "edge" "applyMemberRBAC" true .Values.federation)) "false") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 kubeswift.ingress.annotations — the merged annotation map for an Ingress: the
 raw .annotations, plus (when .tlsAuto.enabled) the cert-manager issuer
 annotation. Input: an ingress config dict (e.g. .Values.ui.ingress). Returns

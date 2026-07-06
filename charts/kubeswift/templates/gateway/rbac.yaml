@@ -1,4 +1,4 @@
-{{- if .Values.gateway.enabled }}
+{{- if eq (include "kubeswift.gatewayEnabled" .) "true" }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -80,4 +80,40 @@ subjects:
   - kind: ServiceAccount
     name: kubeswift-gateway
     namespace: {{ .Values.namespace }}
+{{- if and (eq (include "kubeswift.selfRegisterEnabled" .) "true") (ne .Values.gateway.authMode "insecure") }}
+---
+# Self-registration under auth-mode oidc/token: the hub federates ITSELF via the
+# gateway SA (Cluster spec.local: true), so that SA must be able to impersonate
+# the signed-in user to act on the hub's own VMs as them. Granted ONLY for a
+# self-registering, non-insecure hub (least privilege — a standalone or insecure
+# hub never gets impersonate). The impersonated user still needs a role binding
+# on the hub (config/samples/gateway/member-rbac.yaml), same as any member.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-self-impersonator
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+rules:
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-self-impersonator
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-self-impersonator
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+{{- end }}
 {{- end }}

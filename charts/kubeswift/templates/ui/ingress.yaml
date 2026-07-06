@@ -1,4 +1,4 @@
-{{- if and .Values.ui.enabled .Values.ui.ingress.enabled }}
+{{- if and (eq (include "kubeswift.uiEnabled" .) "true") .Values.ui.ingress.enabled }}
 # Optional Ingress for the web console. Plain HTTP/1.1 static assets (plus, in
 # ui.gateway.mode=proxy, the gateway's Connect RPCs and the /console WebSocket
 # forwarded by the UI's nginx) — so no gRPC backend-protocol annotation is

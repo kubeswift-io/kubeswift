@@ -43,6 +43,15 @@ UI with `gateway.ingress.enabled=true` (+ `gateway.ingress.host`/`annotations`),
 or a Service of `type: LoadBalancer`. The gateway serves Connect/gRPC-Web over
 **h2c** — terminate TLS at the ingress and allow HTTP/2 to the backend.
 
+**Shortcut — `--set federation.role=hub`** presets `gateway.enabled` + `ui.enabled`
+**and** self-registers this cluster as a fleet member (a `Cluster` with
+`spec.local: true`, using the gateway's own in-cluster ServiceAccount — no
+credential Secret), so the UI lists the hub's own VMs out of the box. Under
+`gateway.authMode` `oidc`/`token` it also grants the gateway SA
+impersonate-on-itself (skipped for `insecure`). Toggle the self entry with
+`federation.selfRegister.enabled`. `federation.role=standalone` (the default) is
+unchanged from today. Register *remote* members as below.
+
 For cert-manager TLS without hand-writing the `tls[]` block, set
 `ingress.tlsAuto.enabled=true` + one of `ingress.tlsAuto.clusterIssuer` /
 `ingress.tlsAuto.issuer` (on either `ui.ingress` or `gateway.ingress`); the chart
@@ -75,12 +84,29 @@ spec:
   server: https://boba.example.com:6443       # optional if the kubeconfig has it
   credentialSecretRef:
     name: boba-kubeconfig
-  prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (telemetry)
+  prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (see below)
   displayName: Boba (lab)
 ```
 
 Alternatively the Secret may carry a `token` (+ optional `ca.crt`) instead of a
 `kubeconfig`, paired with `spec.server`.
+
+**Shortcut — install the member with `--set federation.role=edge`.** The chart
+then mints a least-privilege member ServiceAccount + a long-lived token Secret +
+the member-RBAC (impersonator + `kubeswift-vm-reader` + Prometheus-discovery), and
+its Helm NOTES print the ready-to-apply `Cluster` + `Secret` to run on the hub —
+so joining is install-then-copy-one-manifest, with no hand-crafted admin
+kubeconfig. The token is never printed by Helm (NOTES prints the `kubectl`
+extraction). Bind your IdP groups with `--set 'federation.edge.operatorGroups={grp}'`.
+
+`prometheusEndpoint` is **optional**: leave it empty and the gateway discovers an
+in-cluster Prometheus on the member (the kube-prometheus-stack `prometheus-operated`
+Service or any Service labeled `app.kubernetes.io/name=prometheus`, scanned in
+`gateway.prometheusDiscovery.namespaces`) and publishes the result to
+`status.prometheusEndpoint` + the `PrometheusEndpointResolved` condition. An
+explicit `spec.prometheusEndpoint` always wins. Discovery needs the member
+credential to read Services (`config/samples/gateway/member-rbac.yaml` grants it);
+set `gateway.prometheusDiscovery.namespaces: []` to disable it.
 
 The gateway picks the member up immediately, probes it, and writes status:
 
