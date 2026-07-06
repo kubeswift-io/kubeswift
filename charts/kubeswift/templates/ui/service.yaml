@@ -1,4 +1,4 @@
-{{- if .Values.ui.enabled }}
+{{- if eq (include "kubeswift.uiEnabled" .) "true" }}
 apiVersion: v1
 kind: Service
 metadata:

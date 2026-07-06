@@ -1,4 +1,4 @@
-{{- if .Values.gateway.enabled }}
+{{- if eq (include "kubeswift.gatewayEnabled" .) "true" }}
 # kubeswift-gateway: the browser-facing Connect hub for the KubeSwift UI. Runs
 # in this (hub) cluster, watches fleet.kubeswift.io Cluster objects, and fans
 # the read plane out across the registered member clusters. See

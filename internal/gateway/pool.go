@@ -278,8 +278,16 @@ func (p *ClientPool) remove(obj any) {
 // a `kubeconfig` key (preferred) or a `token` (+ optional `ca.crt`) paired with
 // spec.server.
 func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) (*rest.Config, error) {
-	if c.Spec.CredentialSecretRef.Name == "" {
-		return nil, errors.New("spec.credentialSecretRef.name is empty")
+	// local:true federates the hub's OWN cluster via the gateway pod's
+	// in-cluster ServiceAccount — no credential Secret is read or persisted.
+	if c.Spec.Local {
+		if c.Spec.CredentialSecretRef != nil {
+			return nil, errors.New("spec.local and spec.credentialSecretRef are mutually exclusive")
+		}
+		return rest.InClusterConfig()
+	}
+	if c.Spec.CredentialSecretRef == nil || c.Spec.CredentialSecretRef.Name == "" {
+		return nil, errors.New("spec.credentialSecretRef.name is required (or set spec.local: true for the hub's own cluster)")
 	}
 	var sec corev1.Secret
 	key := types.NamespacedName{Namespace: c.Namespace, Name: c.Spec.CredentialSecretRef.Name}
