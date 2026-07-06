@@ -157,6 +157,20 @@ gateway:
   # for a hardened install. With ui.gateway.mode=proxy the browser is same-origin,
   # so CORS does not apply.
   corsAllowOrigin: "*"
+  # Per-VM telemetry endpoint discovery. When a member's
+  # Cluster.spec.prometheusEndpoint is empty, the gateway scans these namespaces
+  # ON THAT MEMBER for an in-cluster Prometheus (the kube-prometheus-stack
+  # `prometheus-operated` Service or any Service labeled
+  # app.kubernetes.io/name=prometheus) and uses it; the result is published to
+  # Cluster.status.prometheusEndpoint + the PrometheusEndpointResolved condition.
+  # An explicit spec.prometheusEndpoint always wins. Set namespaces: [] to
+  # disable discovery (explicit endpoints only).
+  prometheusDiscovery:
+    namespaces:
+      - monitoring
+      - kube-prometheus-stack
+      - observability
+      - prometheus
   service:
     type: ClusterIP
     port: 8080

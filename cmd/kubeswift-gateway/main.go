@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"k8s.io/client-go/kubernetes"
@@ -41,6 +42,7 @@ func main() {
 	oidcUsernamePrefix := flag.String("oidc-username-prefix", "", "prefix prepended to the OIDC username (mirrors apiserver --oidc-username-prefix)")
 	oidcGroupsPrefix := flag.String("oidc-groups-prefix", "", "prefix prepended to each OIDC group")
 	oidcCAFile := flag.String("oidc-ca-file", "", "PEM CA bundle to trust when fetching the OIDC issuer's discovery/JWKS (for a private-CA IdP, e.g. a self-signed Keycloak); empty = system roots")
+	promDiscoveryNS := flag.String("prometheus-discovery-namespaces", "monitoring,kube-prometheus-stack,observability,prometheus", "comma-separated namespaces scanned on each member for an in-cluster Prometheus when spec.prometheusEndpoint is empty; empty disables discovery")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -90,8 +92,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The per-member client pool backing the guest read plane.
-	pool := gateway.NewClientPool(mgr.GetCache(), mgr.GetClient(), *clustersNS)
+	// The per-member client pool backing the guest read plane. It also resolves
+	// each member's telemetry endpoint, discovering an in-cluster Prometheus in
+	// the given namespaces when spec.prometheusEndpoint is empty.
+	pool := gateway.NewClientPool(mgr.GetCache(), mgr.GetClient(), *clustersNS, splitCSV(*promDiscoveryNS))
 	if err := mgr.Add(pool); err != nil {
 		log.Error(err, "unable to add client pool")
 		os.Exit(1)
@@ -163,6 +167,17 @@ func clustersNamespace() string {
 		return ns
 	}
 	return defaultClustersNamespace
+}
+
+// splitCSV parses a comma-separated flag into a trimmed, empty-dropped slice.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // oidcOptions carries the auth-mode=oidc flags into buildAuthenticator.
