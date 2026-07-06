@@ -1,4 +1,4 @@
-{{- if .Values.gateway.enabled }}
+{{- if eq (include "kubeswift.gatewayEnabled" .) "true" }}
 apiVersion: v1
 kind: Service
 metadata:

@@ -85,6 +85,9 @@ spec:
                   authorize uniformly across the fleet, the members should share an
                   identity provider; where they do not, impersonation is only valid where
                   the subject is bound (documented degradation, surfaced per-cluster).
+
+                  Required for a remote member; omit it (with local: true) for the hub's
+                  own cluster.
                 properties:
                   name:
                     default: ""
@@ -109,6 +112,15 @@ spec:
                   whose CA is not yet wired. Prefer shipping a `ca.crt` key in the
                   credential Secret.
                 type: boolean
+              local:
+                description: |-
+                  Local federates the hub's OWN cluster: the gateway uses its in-cluster
+                  ServiceAccount (rest.InClusterConfig) instead of a credential Secret, so
+                  no credential is persisted for the self entry. Mutually exclusive with
+                  credentialSecretRef. Under auth-mode oidc/token the hub ServiceAccount
+                  must additionally hold the impersonate verb on itself (the chart grants
+                  this only when it self-registers a non-insecure hub).
+                type: boolean
               prometheusEndpoint:
                 description: |-
                   PrometheusEndpoint is the base URL of this member's Prometheus (or a
@@ -124,8 +136,6 @@ spec:
                   Optional when the credential Secret carries a full kubeconfig whose
                   current-context already names the server.
                 type: string
-            required:
-            - credentialSecretRef
             type: object
           status:
             description: |-

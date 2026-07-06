@@ -43,6 +43,15 @@ UI with `gateway.ingress.enabled=true` (+ `gateway.ingress.host`/`annotations`),
 or a Service of `type: LoadBalancer`. The gateway serves Connect/gRPC-Web over
 **h2c** — terminate TLS at the ingress and allow HTTP/2 to the backend.
 
+**Shortcut — `--set federation.role=hub`** presets `gateway.enabled` + `ui.enabled`
+**and** self-registers this cluster as a fleet member (a `Cluster` with
+`spec.local: true`, using the gateway's own in-cluster ServiceAccount — no
+credential Secret), so the UI lists the hub's own VMs out of the box. Under
+`gateway.authMode` `oidc`/`token` it also grants the gateway SA
+impersonate-on-itself (skipped for `insecure`). Toggle the self entry with
+`federation.selfRegister.enabled`. `federation.role=standalone` (the default) is
+unchanged from today. Register *remote* members as below.
+
 For cert-manager TLS without hand-writing the `tls[]` block, set
 `ingress.tlsAuto.enabled=true` + one of `ingress.tlsAuto.clusterIssuer` /
 `ingress.tlsAuto.issuer` (on either `ui.ingress` or `gateway.ingress`); the chart

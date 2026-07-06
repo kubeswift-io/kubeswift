@@ -1,4 +1,4 @@
-{{- if and .Values.gateway.enabled .Values.gateway.ingress.enabled }}
+{{- if and (eq (include "kubeswift.gatewayEnabled" .) "true") .Values.gateway.ingress.enabled }}
 # Optional Ingress. The gateway serves Connect/gRPC-Web over h2c (cleartext
 # HTTP/2); terminate TLS at the ingress. For gRPC-Web streaming, the ingress
 # controller must allow HTTP/2 to the backend (e.g. nginx:

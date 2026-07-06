@@ -1,0 +1,23 @@
+{{- if eq (include "kubeswift.selfRegisterEnabled" .) "true" }}
+# Self-registration (federation.role=hub + federation.selfRegister.enabled):
+# federate THIS cluster as a local fleet member so the UI lists the hub's own
+# VMs. spec.local: true makes the gateway use its in-cluster ServiceAccount
+# instead of a credential Secret — nothing is persisted for the self entry.
+# Under gateway.authMode oidc/token the hub SA is additionally granted
+# impersonate-on-itself (see gateway/rbac.yaml); the operator still binds their
+# IdP subjects to a role on the hub (config/samples/gateway/member-rbac.yaml).
+apiVersion: fleet.kubeswift.io/v1alpha1
+kind: Cluster
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+spec:
+  local: true
+  displayName: {{ .Values.federation.selfRegister.displayName | default .Release.Name | quote }}
+  {{- with .Values.federation.selfRegister.prometheusEndpoint }}
+  prometheusEndpoint: {{ . | quote }}
+  {{- end }}
+{{- end }}
