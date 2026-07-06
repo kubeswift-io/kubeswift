@@ -80,6 +80,42 @@ subjects:
   - kind: ServiceAccount
     name: kubeswift-gateway
     namespace: {{ .Values.namespace }}
+{{- if eq (include "kubeswift.selfRegisterEnabled" .) "true" }}
+---
+# Self-registration: the gateway SA discovers the hub's OWN in-cluster Prometheus
+# for the spec.local self entry (Cluster.status.prometheusEndpoint). Read-only
+# Services list; gated on self-registration so a gateway that federates only
+# remote members never gets it. Independent of authMode — which Prometheus a
+# cluster has is a fleet fact, not a per-user view (mirrors the member-rbac
+# sample's discovery grant for remote members).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-self-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-self-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-self-discovery
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+{{- end }}
 {{- if and (eq (include "kubeswift.selfRegisterEnabled" .) "true") (ne .Values.gateway.authMode "insecure") }}
 ---
 # Self-registration under auth-mode oidc/token: the hub federates ITSELF via the
