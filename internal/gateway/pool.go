@@ -4,15 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -57,6 +61,11 @@ type ClientPool struct {
 	hub       client.Client // reads credential Secrets, writes Cluster status
 	namespace string
 
+	// discoveryNamespaces are scanned on each member for an in-cluster
+	// Prometheus when the Cluster's spec.prometheusEndpoint is empty. Empty
+	// slice = discovery disabled (only explicit endpoints resolve).
+	discoveryNamespaces []string
+
 	mu      sync.RWMutex
 	members map[string]*member
 }
@@ -67,9 +76,25 @@ type member struct {
 	prometheus string
 }
 
+// Prometheus endpoint resolution reasons — the reason on the
+// PrometheusEndpointResolved condition and the discriminator the telemetry
+// plane's degrade-vs-serve decision is derived from.
+const (
+	prometheusReasonExplicit       = "Explicit"       // operator-set spec.prometheusEndpoint
+	prometheusReasonDiscovered     = "Discovered"     // gateway found an in-cluster Prometheus
+	prometheusReasonNotFound       = "NotFound"       // none found / discovery disabled / member down
+	prometheusReasonDiscoveryError = "DiscoveryError" // the member API errored during discovery
+)
+
+// prometheusDefaultPort is the operated Service's web port when no named
+// web/http port is present.
+const prometheusDefaultPort int32 = 9090
+
 // NewClientPool builds the pool over the hub cache + a read/write hub client.
-func NewClientPool(c ctrlcache.Cache, hub client.Client, namespace string) *ClientPool {
-	return &ClientPool{cache: c, hub: hub, namespace: namespace, members: map[string]*member{}}
+// discoveryNamespaces are scanned per member for an in-cluster Prometheus when
+// the member's spec.prometheusEndpoint is empty (nil/empty disables discovery).
+func NewClientPool(c ctrlcache.Cache, hub client.Client, namespace string, discoveryNamespaces []string) *ClientPool {
+	return &ClientPool{cache: c, hub: hub, namespace: namespace, discoveryNamespaces: discoveryNamespaces, members: map[string]*member{}}
 }
 
 // NeedLeaderElection keeps the pool running on every replica.
@@ -102,23 +127,143 @@ func (p *ClientPool) upsert(ctx context.Context, obj any) {
 		p.mu.Lock()
 		delete(p.members, c.Name)
 		p.mu.Unlock()
-		p.setStatus(ctx, c, false, "", err.Error())
+		p.setStatus(ctx, c, false, "", err.Error(), "", prometheusReasonNotFound, "member credential invalid; telemetry endpoint unresolved")
 		return
 	}
 	p.mu.Lock()
 	p.members[c.Name] = &member{name: c.Name, config: cfg, prometheus: c.Spec.PrometheusEndpoint}
 	p.mu.Unlock()
 
-	// Probe reachability + version off the informer goroutine so a slow or
-	// unreachable member never stalls the shared handler.
+	// Probe reachability + version AND resolve the telemetry endpoint off the
+	// informer goroutine so a slow or unreachable member never stalls the
+	// shared handler.
 	cl := c.DeepCopy()
 	go func() {
-		if ver, perr := serverVersion(cfg); perr != nil {
-			p.setStatus(ctx, cl, false, "", perr.Error())
-		} else {
-			p.setStatus(ctx, cl, true, ver, "")
+		ver, verr := serverVersion(cfg)
+		reachable := verr == nil
+		reachMsg := ""
+		if verr != nil {
+			reachMsg = verr.Error()
 		}
+		endpoint, promReason, promMsg := p.resolvePrometheus(ctx, cfg, cl.Spec.PrometheusEndpoint, reachable)
+		p.mu.Lock()
+		if m := p.members[cl.Name]; m != nil {
+			m.prometheus = endpoint
+		}
+		p.mu.Unlock()
+		p.setStatus(ctx, cl, reachable, ver, reachMsg, endpoint, promReason, promMsg)
 	}()
+}
+
+// resolvePrometheus determines the member's effective telemetry endpoint:
+// an explicit spec.prometheusEndpoint always wins (reason Explicit); otherwise,
+// when the member is reachable and discovery is enabled, it scans the member for
+// an in-cluster Prometheus (reason Discovered); else empty (reason NotFound or
+// DiscoveryError). It never guesses silently — the reason + message are surfaced
+// on the Cluster's PrometheusEndpointResolved condition (Principle #6).
+func (p *ClientPool) resolvePrometheus(ctx context.Context, cfg *rest.Config, specEndpoint string, reachable bool) (endpoint, reason, msg string) {
+	if specEndpoint != "" {
+		return specEndpoint, prometheusReasonExplicit, "operator-set spec.prometheusEndpoint"
+	}
+	if !reachable {
+		return "", prometheusReasonNotFound, "member unreachable; Prometheus discovery skipped"
+	}
+	if len(p.discoveryNamespaces) == 0 {
+		return "", prometheusReasonNotFound, "spec.prometheusEndpoint empty and Prometheus discovery is disabled"
+	}
+	cs, cerr := kubernetes.NewForConfig(cfg)
+	if cerr != nil {
+		return "", prometheusReasonDiscoveryError, fmt.Sprintf("Prometheus discovery client: %v", cerr)
+	}
+	ep, detail, derr := discoverPrometheus(ctx, cs, p.discoveryNamespaces)
+	if derr != nil {
+		return "", prometheusReasonDiscoveryError, fmt.Sprintf("Prometheus discovery failed: %v", derr)
+	}
+	if ep == "" {
+		return "", prometheusReasonNotFound, fmt.Sprintf("no Prometheus Service found in namespaces %v", p.discoveryNamespaces)
+	}
+	return ep, prometheusReasonDiscovered, detail
+}
+
+// discoverPrometheus scans the given namespaces on the member (via the member
+// credential in cfg) for a kube-prometheus-stack Prometheus Service — the
+// governing "prometheus-operated" Service or any Service labeled
+// app.kubernetes.io/name=prometheus — and returns its base URL. The pick is
+// deterministic (namespace order, then Service name); when more than one is
+// found the detail names the others so an operator can override via
+// spec.prometheusEndpoint. Empty endpoint + nil error means none found.
+func discoverPrometheus(ctx context.Context, cs kubernetes.Interface, namespaces []string) (endpoint, detail string, err error) {
+	type cand struct {
+		ns, name string
+		port     int32
+	}
+	var cands []cand
+	seen := map[string]bool{}
+	add := func(s *corev1.Service) {
+		key := s.Namespace + "/" + s.Name
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		cands = append(cands, cand{ns: s.Namespace, name: s.Name, port: prometheusServicePort(s)})
+	}
+	for _, ns := range namespaces {
+		// The operator's governing Service, stable across kps releases.
+		if s, gerr := cs.CoreV1().Services(ns).Get(ctx, "prometheus-operated", metav1.GetOptions{}); gerr == nil {
+			add(s)
+		} else if !apierrors.IsNotFound(gerr) {
+			return "", "", gerr
+		}
+		// Any Service the operator labels as a Prometheus (the *-kube-prometheus-
+		// prometheus ClusterIP Service and the operated Service both carry it).
+		list, lerr := cs.CoreV1().Services(ns).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=prometheus"})
+		if lerr != nil {
+			return "", "", lerr
+		}
+		for i := range list.Items {
+			add(&list.Items[i])
+		}
+	}
+	if len(cands) == 0 {
+		return "", "", nil
+	}
+	nsIndex := map[string]int{}
+	for i, ns := range namespaces {
+		nsIndex[ns] = i
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if nsIndex[cands[i].ns] != nsIndex[cands[j].ns] {
+			return nsIndex[cands[i].ns] < nsIndex[cands[j].ns]
+		}
+		return cands[i].name < cands[j].name
+	})
+	pick := cands[0]
+	endpoint = fmt.Sprintf("http://%s.%s.svc:%d", pick.name, pick.ns, pick.port)
+	detail = fmt.Sprintf("discovered %s.%s:%d", pick.name, pick.ns, pick.port)
+	if len(cands) > 1 {
+		others := make([]string, 0, len(cands)-1)
+		for _, c := range cands[1:] {
+			others = append(others, fmt.Sprintf("%s.%s", c.name, c.ns))
+		}
+		detail += fmt.Sprintf(" (also saw %s; set spec.prometheusEndpoint to override)", strings.Join(others, ", "))
+	}
+	return endpoint, detail, nil
+}
+
+// prometheusServicePort returns the Service's web/http port, preferring a named
+// "web"/"http" port, then a 9090 port, else the 9090 default.
+func prometheusServicePort(s *corev1.Service) int32 {
+	for _, p := range s.Spec.Ports {
+		if p.Name == "web" || p.Name == "http" {
+			return p.Port
+		}
+	}
+	for _, p := range s.Spec.Ports {
+		if p.Port == prometheusDefaultPort {
+			return p.Port
+		}
+	}
+	return prometheusDefaultPort
 }
 
 func (p *ClientPool) remove(obj any) {
@@ -224,10 +369,12 @@ func serverVersion(cfg *rest.Config) (string, error) {
 	return v.GitVersion, nil
 }
 
-// setStatus best-effort patches the Cluster's Ready/Reachable conditions,
-// version, and lastConnected. It re-reads the object to avoid clobbering a
-// concurrent writer; failures are swallowed (status is advisory).
-func (p *ClientPool) setStatus(ctx context.Context, c *fleetv1alpha1.Cluster, reachable bool, version, msg string) {
+// setStatus best-effort patches the Cluster's Ready/Reachable conditions, the
+// resolved telemetry endpoint (spec/discovered/none) + its
+// PrometheusEndpointResolved condition, version, and lastConnected. It re-reads
+// the object to avoid clobbering a concurrent writer; failures are swallowed
+// (status is advisory).
+func (p *ClientPool) setStatus(ctx context.Context, c *fleetv1alpha1.Cluster, reachable bool, version, msg, promEndpoint, promReason, promMsg string) {
 	var cur fleetv1alpha1.Cluster
 	if err := p.hub.Get(ctx, types.NamespacedName{Namespace: c.Namespace, Name: c.Name}, &cur); err != nil {
 		return
@@ -236,6 +383,9 @@ func (p *ClientPool) setStatus(ctx context.Context, c *fleetv1alpha1.Cluster, re
 	now := metav1.Now()
 	setCondition(&cur.Status.Conditions, fleetv1alpha1.ClusterConditionReachable, reachable, "Reachable", "Unreachable", msg, now)
 	setCondition(&cur.Status.Conditions, fleetv1alpha1.ClusterConditionReady, reachable, "Ready", "NotReady", msg, now)
+	promOK := promReason == prometheusReasonExplicit || promReason == prometheusReasonDiscovered
+	setCondition(&cur.Status.Conditions, fleetv1alpha1.ClusterConditionPrometheusEndpointResolved, promOK, promReason, promReason, promMsg, now)
+	cur.Status.PrometheusEndpoint = promEndpoint
 	if version != "" {
 		cur.Status.KubernetesVersion = version
 	}

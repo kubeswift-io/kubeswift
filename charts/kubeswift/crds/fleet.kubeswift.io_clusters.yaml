@@ -29,6 +29,10 @@ spec:
     - jsonPath: .status.guestCount
       name: Guests
       type: integer
+    - jsonPath: .status.prometheusEndpoint
+      name: Prometheus
+      priority: 1
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -209,6 +213,14 @@ spec:
                   last reconciled.
                 format: int64
                 type: integer
+              prometheusEndpoint:
+                description: |-
+                  PrometheusEndpoint is the effective per-VM telemetry endpoint the gateway
+                  resolved for this member: spec.prometheusEndpoint when set, else a
+                  gateway-discovered in-cluster Prometheus, else empty. Read the
+                  PrometheusEndpointResolved condition for how it was derived. Surfaced so
+                  the UI and kubectl reflect the real derived state (never a silent guess).
+                type: string
             type: object
         type: object
     served: true
