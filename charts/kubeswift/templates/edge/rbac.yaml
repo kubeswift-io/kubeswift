@@ -1,0 +1,143 @@
+{{- if eq (include "kubeswift.edgeRBAC" .) "true" }}
+# Edge onboarding (federation.role=edge). The least-privilege member credential a
+# hub impersonates THROUGH, plus its RBAC. The hub connects to THIS cluster as
+# this ServiceAccount (the token in the Secret below) and impersonates end users;
+# the member RBAC then authorizes those users. See the helm NOTES for the
+# ready-to-apply hub-side Cluster + Secret. Least privilege: this SA can
+# impersonate + read VMs/services, NOT cluster-admin.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubeswift-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+---
+# A long-lived token for the member SA — the credential the hub stores. Rotate by
+# deleting this Secret (the token controller reissues) and updating the hub's copy.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-edge-token
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/service-account.name: kubeswift-gateway
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+type: kubernetes.io/service-account-token
+---
+# Let the member credential impersonate end users + groups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-impersonator
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+rules:
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-impersonator
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-impersonator
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+---
+# Let the member credential discover this edge's Prometheus for telemetry.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["prometheuses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-discovery
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-discovery
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+---
+# What the (impersonated) end users may do — the UI's read + lifecycle + console +
+# migrate surface. Bind IdP groups to it via federation.edge.operatorGroups.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-vm-reader
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+rules:
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests", "swiftguestclasses", "swiftguestpools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["image.kubeswift.io", "kernel.kubeswift.io", "seed.kubeswift.io", "snapshot.kubeswift.io", "gpu.kubeswift.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["migration.kubeswift.io"]
+    resources: ["swiftmigrations"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: [""]
+    resources: ["nodes", "namespaces"]
+    verbs: ["get", "list"]
+{{- with .Values.federation.edge.operatorGroups }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-vm-reader
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: edge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-vm-reader
+subjects:
+  {{- range . }}
+  - kind: Group
+    name: {{ . | quote }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- end }}

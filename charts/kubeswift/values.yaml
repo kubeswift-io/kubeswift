@@ -135,6 +135,22 @@ federation:
     enabled: true # default-on for role=hub; ignored in other roles
     displayName: "" # UI label for the self entry; defaults to the release name
     prometheusEndpoint: "" # optional explicit telemetry endpoint (else auto-discovered)
+  # Edge onboarding (role=edge). The chart mints a least-privilege member
+  # ServiceAccount + a long-lived token Secret + the member-RBAC the hub needs to
+  # impersonate users and read VMs, then prints (helm NOTES) the apply-ready
+  # Cluster + Secret to run on the HUB — so joining a cluster is install-then-
+  # copy-one-manifest. The token is NEVER printed by Helm; NOTES prints the
+  # kubectl commands to extract it. Ignored in other roles.
+  edge:
+    # Apply the member-RBAC (impersonator + vm-reader + Prometheus-discovery) on
+    # this edge at install. false => apply config/samples/gateway/member-rbac.yaml
+    # yourself.
+    applyMemberRBAC: true
+    # IdP groups (the subjects the hub impersonates) to bind to the VM-reader role
+    # on this edge. Empty => the role is created but no group is bound (bind later).
+    operatorGroups: []
+    # UI label the hub shows for this edge; defaults to the release name.
+    displayName: ""
 
 gateway:
   enabled: false

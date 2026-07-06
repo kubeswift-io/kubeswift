@@ -49,6 +49,15 @@ cluster as a local fleet member: role=hub with federation.selfRegister.enabled
 {{- end -}}
 
 {{/*
+kubeswift.edgeRBAC — "true" when the chart should apply edge onboarding on this
+cluster: role=edge with federation.edge.applyMemberRBAC (default true). Emits
+"true" or "".
+*/}}
+{{- define "kubeswift.edgeRBAC" -}}
+{{- if and (eq (include "kubeswift.role" .) "edge") (ne (toString (dig "edge" "applyMemberRBAC" true .Values.federation)) "false") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 kubeswift.ingress.annotations — the merged annotation map for an Ingress: the
 raw .annotations, plus (when .tlsAuto.enabled) the cert-manager issuer
 annotation. Input: an ingress config dict (e.g. .Values.ui.ingress). Returns

@@ -1,0 +1,39 @@
+{{- if eq (include "kubeswift.role" .) "edge" }}
+KubeSwift installed as a federated EDGE member: {{ .Release.Name }}
+
+This cluster minted a least-privilege member credential + RBAC. To JOIN it to your
+hub, extract the credential here, then apply the Cluster + Secret on the HUB.
+
+1) On THIS (edge) cluster, grab the token + CA (the token is not printed above):
+
+   TOKEN=$(kubectl -n {{ .Values.namespace }} get secret {{ .Release.Name }}-edge-token -o jsonpath='{.data.token}' | base64 -d)
+   kubectl -n {{ .Values.namespace }} get secret {{ .Release.Name }}-edge-token -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/{{ .Release.Name }}-ca.crt
+   SERVER=<this cluster's API server URL, e.g. https://edge.example.com:6443>
+
+2) On the HUB cluster (in the gateway's namespace, e.g. kubeswift-system):
+
+   kubectl -n kubeswift-system create secret generic {{ .Release.Name }}-cred \
+     --from-literal=token="$TOKEN" --from-file=ca.crt=/tmp/{{ .Release.Name }}-ca.crt
+
+   kubectl -n kubeswift-system apply -f - <<'EOF'
+   apiVersion: fleet.kubeswift.io/v1alpha1
+   kind: Cluster
+   metadata:
+     name: {{ .Release.Name }}
+   spec:
+     server: <SERVER from step 1>
+     credentialSecretRef:
+       name: {{ .Release.Name }}-cred
+     displayName: {{ .Values.federation.edge.displayName | default .Release.Name | quote }}
+   EOF
+
+The token is a long-lived ServiceAccount token: rotate by deleting the
+{{ .Release.Name }}-edge-token Secret here (reissued) and updating the hub's copy.
+{{- if not .Values.federation.edge.operatorGroups }}
+
+NOTE: no federation.edge.operatorGroups were set, so hub users have NO VM
+permissions on this edge yet. Bind your IdP groups to the kubeswift-vm-reader
+ClusterRole here (see config/samples/gateway/member-rbac.yaml), or reinstall with
+--set 'federation.edge.operatorGroups={your-group}'.
+{{- end }}
+{{- end }}

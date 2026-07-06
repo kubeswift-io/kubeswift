@@ -91,6 +91,14 @@ spec:
 Alternatively the Secret may carry a `token` (+ optional `ca.crt`) instead of a
 `kubeconfig`, paired with `spec.server`.
 
+**Shortcut — install the member with `--set federation.role=edge`.** The chart
+then mints a least-privilege member ServiceAccount + a long-lived token Secret +
+the member-RBAC (impersonator + `kubeswift-vm-reader` + Prometheus-discovery), and
+its Helm NOTES print the ready-to-apply `Cluster` + `Secret` to run on the hub —
+so joining is install-then-copy-one-manifest, with no hand-crafted admin
+kubeconfig. The token is never printed by Helm (NOTES prints the `kubectl`
+extraction). Bind your IdP groups with `--set 'federation.edge.operatorGroups={grp}'`.
+
 `prometheusEndpoint` is **optional**: leave it empty and the gateway discovers an
 in-cluster Prometheus on the member (the kube-prometheus-stack `prometheus-operated`
 Service or any Service labeled `app.kubernetes.io/name=prometheus`, scanned in
