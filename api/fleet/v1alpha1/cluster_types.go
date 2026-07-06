@@ -33,7 +33,20 @@ type ClusterSpec struct {
 	// authorize uniformly across the fleet, the members should share an
 	// identity provider; where they do not, impersonation is only valid where
 	// the subject is bound (documented degradation, surfaced per-cluster).
-	CredentialSecretRef corev1.LocalObjectReference `json:"credentialSecretRef"`
+	//
+	// Required for a remote member; omit it (with local: true) for the hub's
+	// own cluster.
+	// +optional
+	CredentialSecretRef *corev1.LocalObjectReference `json:"credentialSecretRef,omitempty"`
+
+	// Local federates the hub's OWN cluster: the gateway uses its in-cluster
+	// ServiceAccount (rest.InClusterConfig) instead of a credential Secret, so
+	// no credential is persisted for the self entry. Mutually exclusive with
+	// credentialSecretRef. Under auth-mode oidc/token the hub ServiceAccount
+	// must additionally hold the impersonate verb on itself (the chart grants
+	// this only when it self-registers a non-insecure hub).
+	// +optional
+	Local bool `json:"local,omitempty"`
 
 	// PrometheusEndpoint is the base URL of this member's Prometheus (or a
 	// query frontend / Thanos) used for per-VM telemetry (decision D4). The

@@ -1,4 +1,4 @@
-{{- if .Values.ui.enabled }}
+{{- if eq (include "kubeswift.uiEnabled" .) "true" }}
 # kubeswift-ui: the KubeSwift web console (an Angular SPA served by nginx),
 # released from the separate kubeswift-io/kubeswift-ui repo. It talks to the
 # gateway above; in the default ui.gateway.mode=proxy the UI's nginx
