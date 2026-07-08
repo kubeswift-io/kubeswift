@@ -6,10 +6,50 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
-### Changed
+---
 
+## [v0.8.0] — 2026-07-08
+
+Makes multi-cluster **federation near-zero-config** and **relicenses the project to
+the Apache License 2.0**. Registering the hub and its members, and wiring per-VM
+telemetry, now come from Helm values and auto-discovery instead of hand-written
+`Cluster` objects and credential Secrets: a `federation.role` (hub / edge) preset,
+hub **self-registration**, **edge onboarding** that mints its own join credential,
+gateway **Prometheus auto-discovery**, and cert-manager **`ingress.tlsAuto`**.
+
+### Added
+- **`federation.role: standalone | hub | edge`** — `hub` presets `gateway.enabled` +
+  `ui.enabled` and **self-registers** this cluster as a local fleet member (a
+  `Cluster` with `spec.local: true` using the gateway's own in-cluster
+  ServiceAccount, no credential Secret). `edge` mints a least-privilege member
+  ServiceAccount + a long-lived token Secret + the member-RBAC, and its Helm NOTES
+  print the ready-to-apply hub-side `Cluster` + `Secret` (the token is never printed
+  by Helm). `standalone` (the default) is unchanged. (#335)
+- **Gateway Prometheus auto-discovery** — when `Cluster.spec.prometheusEndpoint` is
+  empty, the gateway discovers an in-cluster Prometheus on the member (the
+  kube-prometheus-stack `prometheus-operated` Service, or any Service labeled
+  `app.kubernetes.io/name=prometheus`, scanned in
+  `gateway.prometheusDiscovery.namespaces`) and publishes it to
+  `status.prometheusEndpoint` + a `PrometheusEndpointResolved` condition. An explicit
+  endpoint always wins. (#335)
+- **`ingress.tlsAuto`** — cert-manager TLS on the UI / gateway ingress from a single
+  issuer value (`clusterIssuer` or `issuer`), without hand-writing the `tls[]` block
+  and the cert-manager annotation. (#332)
+- **Chart values reference** — `charts/kubeswift/README.md` documents every Helm
+  value (and renders on the OCI registry / Artifact Hub page). (#337)
+
+### Changed
 - **Relicensed from AGPL-3.0 to the Apache License 2.0.** The `LICENSE` file now
-  carries the Apache 2.0 text, and a `NOTICE` file was added.
+  carries the canonical Apache 2.0 text; a `NOTICE` file was added. (#338)
+- **`fleet.kubeswift.io` Cluster CRD**: `spec.credentialSecretRef` is now optional,
+  and a new `spec.local` field boots the gateway's client from its own in-cluster
+  ServiceAccount (the hub self entry). (#335)
+
+### Fixed
+- **Hub self-registration telemetry** — the gateway ServiceAccount now has
+  `services get,list`, so a self-registered (`spec.local`) hub can discover its own
+  in-cluster Prometheus. Previously the self entry reported
+  `PrometheusEndpointResolved=DiscoveryError`. (#336)
 
 ---
 
