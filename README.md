@@ -64,4 +64,4 @@ Pre-1.0; the `v1alpha1` API may change between releases. **Host requirement:** x
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+Licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).

@@ -10,8 +10,8 @@ All notable changes to KubeSwift are documented here.
 
 ## [v0.8.0] — 2026-07-08
 
-Makes multi-cluster **federation near-zero-config** and **relicenses the project to
-the Apache License 2.0**. Registering the hub and its members, and wiring per-VM
+Makes multi-cluster **federation near-zero-config**. Registering the hub and its
+members, and wiring per-VM
 telemetry, now come from Helm values and auto-discovery instead of hand-written
 `Cluster` objects and credential Secrets: a `federation.role` (hub / edge) preset,
 hub **self-registration**, **edge onboarding** that mints its own join credential,
@@ -39,8 +39,6 @@ gateway **Prometheus auto-discovery**, and cert-manager **`ingress.tlsAuto`**.
   value (and renders on the OCI registry / Artifact Hub page). (#337)
 
 ### Changed
-- **Relicensed from AGPL-3.0 to the Apache License 2.0.** The `LICENSE` file now
-  carries the canonical Apache 2.0 text; a `NOTICE` file was added. (#338)
 - **`fleet.kubeswift.io` Cluster CRD**: `spec.credentialSecretRef` is now optional,
   and a new `spec.local` field boots the gateway's client from its own in-cluster
   ServiceAccount (the hub self entry). (#335)
