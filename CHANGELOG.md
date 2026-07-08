@@ -6,6 +6,11 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Relicensed from AGPL-3.0 to the Apache License 2.0.** The `LICENSE` file now
+  carries the Apache 2.0 text, and a `NOTICE` file was added.
+
 ---
 
 ## [v0.7.0] — 2026-07-03
