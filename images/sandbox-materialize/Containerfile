@@ -1,0 +1,42 @@
+# Multi-stage build for sandbox-materialize (the SwiftSandbox rootfs init
+# container: OCI image -> node-local read-only ext4 / unpacked tree, keyed by
+# digest). See docs/design/swiftsandbox-design.md and cmd/sandbox-materialize.
+FROM golang:1.25-bookworm AS builder
+WORKDIR /build
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+# Module files first for layer caching.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Static build (pure-Go go-containerregistry, no cgo) with version stamping.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/kubeswift-io/kubeswift/internal/version.Version=${VERSION} -X github.com/kubeswift-io/kubeswift/internal/version.GitCommit=${GIT_COMMIT} -X github.com/kubeswift-io/kubeswift/internal/version.BuildDate=${BUILD_DATE}" \
+    -o sandbox-materialize ./cmd/sandbox-materialize
+
+# Runtime stage. Needs:
+#   - e2fsprogs   -> mkfs.ext4 -d (populate the RO ext4 from the flattened tree)
+#   - tar         -> faithful rootfs extraction (ownership/mode/setuid/nodes)
+#   - ca-certificates -> TLS to the registry
+FROM debian:bookworm-slim
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    e2fsprogs \
+    tar \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/sandbox-materialize /sandbox-materialize
+
+# NB: runs as ROOT (no USER). Flattening a container rootfs must preserve
+# ownership/mode/setuid/device-nodes, and mkfs.ext4 -d populates the image — both
+# require root (mirrors the snapshot-s3 root lesson). The SwiftSandbox controller
+# pins RunAsUser 0 on this init container (P4).
+ENTRYPOINT ["/sandbox-materialize"]
