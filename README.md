@@ -1,6 +1,6 @@
 # KubeSwift
 
-KubeSwift runs virtual machines as Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the hypervisor for nearly every workload — Linux and Windows guests, traditiona disk VMs and kernel boot (microVMs), PCIe GPU passthrough, snapshots, and live migration. QEMU is used for the moment as a secondary runtime only for HGX SXM (multi-GPU NVSwitch) topologies, where CUDA requires a full PCIe hierarchy that Cloud Hypervisor's flat model does not currently provide. We are tracking upstream for this capability.
+KubeSwift runs virtual machines as Kubernetes workloads. You define a VM with a custom resource; controllers reconcile it into a pod; inside that pod, `swiftletd` launches a hypervisor. [Cloud Hypervisor](https://www.cloudhypervisor.org/) is the hypervisor for nearly every workload — Linux and Windows guests, traditiona disk VMs and kernel boot (microVMs), PCIe GPU passthrough, snapshots, and live migration. QEMU is used for the moment as a secondary runtime only for HGX SXM (multi-GPU NVSwitch) topologies, where CUDA requires a full PCIe hierarchy that Cloud Hypervisor's flat model does not currently provide. We are tracking upstream for this capability.
 
 ## Capabilities
 
