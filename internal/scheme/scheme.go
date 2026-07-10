@@ -7,6 +7,7 @@ import (
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -43,6 +44,9 @@ func init() {
 	gvMigration := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
 	metav1.AddToGroupVersion(Scheme, gvMigration)
+	gvSandbox := schema.GroupVersion{Group: "sandbox.kubeswift.io", Version: "v1alpha1"}
+	Scheme.AddKnownTypes(gvSandbox, &sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxList{})
+	metav1.AddToGroupVersion(Scheme, gvSandbox)
 	// fleet.kubeswift.io/v1alpha1 (UI backend): the kubeswift-gateway hub's
 	// registry of federated member clusters. Registered for serialization;
 	// the gateway (not the controller-manager) reconciles Cluster objects.

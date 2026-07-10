@@ -19,3 +19,4 @@ resources:
   - bases/snapshot.kubeswift.io_swiftsnapshotschedules.yaml
   - bases/migration.kubeswift.io_swiftmigrations.yaml
   - bases/fleet.kubeswift.io_clusters.yaml
+  - bases/sandbox.kubeswift.io_swiftsandboxes.yaml
