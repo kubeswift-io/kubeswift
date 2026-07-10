@@ -35,6 +35,12 @@ func privilegedContext() *corev1.SecurityContext {
 // All pod builders that add this init container (disk-boot, kernel-boot, GPU,
 // restore) define both the "runtime-intent" and "run" volumes, so referencing
 // them here is safe.
+// NetworkInitContainer returns the shared network-init container (br0/tap0 +
+// dnsmasq setup, driven by the runtime intent). Exported so the SwiftSandbox
+// controller reuses it for networked sandboxes; it is self-contained
+// (LauncherImage + network-init.sh, mounting only runtime-intent + run).
+func NetworkInitContainer() corev1.Container { return networkInitContainer() }
+
 func networkInitContainer() corev1.Container {
 	return corev1.Container{
 		Name:            "network-init",

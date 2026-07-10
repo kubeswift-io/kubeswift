@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,6 +102,15 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	}
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 		return ctrl.Result{}, err
+	}
+	if networked(sb) {
+		np := buildNetworkPolicy(sb)
+		if err := controllerutil.SetControllerReference(sb, np, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, np); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, err
+		}
 	}
 	sb.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
@@ -218,6 +228,7 @@ func (r *SwiftSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&sandboxv1alpha1.SwiftSandbox{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
 }
 

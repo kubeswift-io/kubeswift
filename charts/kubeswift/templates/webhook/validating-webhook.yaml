@@ -109,6 +109,20 @@ webhooks:
         apiGroups: ["migration.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftmigrations"]
+  - name: vswiftsandbox.sandbox.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-sandbox-kubeswift-io-v1alpha1-swiftsandbox
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["sandbox.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftsandboxes"]
   # Phase 4 drain integration. Fires on EVERY pod eviction cluster-wide; the
   # handler fast-allows any pod that is not a SwiftGuest launcher pod.
   # failurePolicy: Ignore so a webhook outage never breaks evictions (the

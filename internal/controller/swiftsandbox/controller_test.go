@@ -52,8 +52,14 @@ func TestBuildIntent(t *testing.T) {
 	if intent.SandboxRootfs == nil || intent.SandboxRootfs.Path != "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4" {
 		t.Errorf("sandboxRootfs: %+v", intent.SandboxRootfs)
 	}
-	if intent.Network {
-		t.Error("v1 sandbox intent must be network-isolated (Network=false)")
+	// Default/restricted mode -> networked; mode=none -> network-isolated.
+	if !intent.Network {
+		t.Error("default (restricted) sandbox should be networked")
+	}
+	sbNone := sb.DeepCopy()
+	sbNone.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkNone
+	if buildIntent(sbNone, "sandbox", "/x.ext4", "").Network {
+		t.Error("mode=none sandbox must be network-isolated")
 	}
 	if intent.CPU != 2 || intent.Memory != 1024 {
 		t.Errorf("cpu/mem: %d/%d (want 2/1024)", intent.CPU, intent.Memory)

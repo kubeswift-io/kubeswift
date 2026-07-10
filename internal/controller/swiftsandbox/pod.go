@@ -30,6 +30,11 @@ func privileged() *corev1.SecurityContext {
 	return &corev1.SecurityContext{Privileged: ptr.To(true)}
 }
 
+// networked reports whether the sandbox gets a network (every mode except "none").
+func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkNone
+}
+
 // buildIntent constructs the mode-3 sandbox RuntimeIntent: kernel boot + the RO
 // OCI rootfs disk + the bridge cmdline (rootfs selector + entrypoint).
 func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entrypoint string) *runtimeintent.RuntimeIntent {
@@ -57,9 +62,10 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entry
 		Memory:        memMiB,
 		Lifecycle:     "start",
 		GuestID:       sb.Namespace + "/" + sb.Name,
-		// P4c: restricted-mode networking (network-init + NetworkPolicy) is not yet
-		// wired; v1 sandboxes boot network-isolated regardless of spec.network.mode.
-		Network:    false,
+		// Networked unless mode=none: network-init sets up br0/tap0 and the
+		// launcher-entrypoint starts dnsmasq; a deny-ingress NetworkPolicy enforces
+		// the "restricted" posture (built by the controller).
+		Network:    networked(sb),
 		Hypervisor: "cloud-hypervisor",
 	}
 }
@@ -91,7 +97,20 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		"--mode", "block",
 		"--result-file", "/dev/termination-log",
 	}
-	// (P4c: --pull-secret mount when spec.imagePullSecret is set.)
+	// (--pull-secret mount when spec.imagePullSecret is set — follow-up.)
+
+	initContainers := []corev1.Container{{
+		Name:            materializeInitName,
+		Image:           SandboxMaterializeImage(),
+		Args:            matArgs,
+		SecurityContext: privileged(),
+		VolumeMounts:    []corev1.VolumeMount{{Name: "rootfs-cache", MountPath: rootfsCacheDir}},
+	}}
+	if networked(sb) {
+		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
+		// runtime-intent + run volumes the launcher uses.
+		initContainers = append([]corev1.Container{swiftguest.NetworkInitContainer()}, initContainers...)
+	}
 
 	dirCreate := corev1.HostPathDirectoryOrCreate
 	charDev := corev1.HostPathCharDev
@@ -103,17 +122,9 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			Labels:    map[string]string{SandboxLabelKey: sb.Name},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			NodeSelector:  nodeSelector,
-			InitContainers: []corev1.Container{{
-				Name:            materializeInitName,
-				Image:           SandboxMaterializeImage(),
-				Args:            matArgs,
-				SecurityContext: privileged(),
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: "rootfs-cache", MountPath: rootfsCacheDir},
-				},
-			}},
+			RestartPolicy:  corev1.RestartPolicyNever,
+			NodeSelector:   nodeSelector,
+			InitContainers: initContainers,
 			Containers: []corev1.Container{{
 				Name:            launcherName,
 				Image:           swiftguest.LauncherImage(),

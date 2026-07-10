@@ -40,11 +40,13 @@ import (
 	swiftimagewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftimage"
 	swiftmigrationwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftmigration"
 	swiftrestorewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftrestore"
+	swiftsandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 	swiftseedprofilewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 	swiftsnapshotschedulewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshotschedule"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
 const (
@@ -330,6 +332,12 @@ func main() {
 			WithCustomValidator(&swiftmigrationwebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftMigration webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &sandboxv1alpha1.SwiftSandbox{}).
+			WithCustomValidator(&swiftsandboxwebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftSandbox webhook")
 			os.Exit(1)
 		}
 		// Phase 4 drain integration: raw admission handler on pods/eviction
