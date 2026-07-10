@@ -49,6 +49,14 @@ snapshotS3:
     # Same as controllerManager; use tag: latest for local build+load.
     tag: latest
 
+# sandbox-materialize is the SwiftSandbox rootfs init container (OCI image ->
+# node-local ext4). The controller injects it into every sandbox pod via
+# KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE.
+sandboxMaterialize:
+  image:
+    registry: ghcr.io/kubeswift-io/kubeswift
+    tag: latest
+
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and
 # the per-restore download Job) via the KUBESWIFT_SNAPSHOT_ORAS_IMAGE env var. No

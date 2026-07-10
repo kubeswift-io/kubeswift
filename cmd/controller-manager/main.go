@@ -29,6 +29,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftkernel"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftmigration"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftrestore"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsandbox"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshotschedule"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
@@ -241,6 +242,15 @@ func main() {
 		SystemNamespace:      leaderElectionNS,
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftMigration controller")
+		os.Exit(1)
+	}
+
+	if err = (&swiftsandbox.SwiftSandboxReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftsandbox-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSandbox controller")
 		os.Exit(1)
 	}
 

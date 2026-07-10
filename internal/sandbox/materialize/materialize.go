@@ -101,6 +101,11 @@ func ext4SizeBytes(treeBytes int64) int64 {
 	return ((sz + mib - 1) / mib) * mib
 }
 
+// ConfigFromImage extracts the launch-relevant config from an image. Exported so
+// the SwiftSandbox controller can resolve the entrypoint upfront (a cheap
+// manifest+config read, no layers) alongside RemotePull's digest.
+func ConfigFromImage(img v1.Image) (ImageConfig, error) { return configFromImage(img) }
+
 // configFromImage extracts the launch-relevant config from an image.
 func configFromImage(img v1.Image) (ImageConfig, error) {
 	cf, err := img.ConfigFile()

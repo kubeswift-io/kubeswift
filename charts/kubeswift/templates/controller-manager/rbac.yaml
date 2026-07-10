@@ -147,6 +147,11 @@ rules:
   - apiGroups: ["migration.kubeswift.io"]
     resources: ["swiftmigrations", "swiftmigrations/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftSandbox (sandbox.kubeswift.io). Owns launcher pods + intent ConfigMaps
+  # (granted via the core "" group); status via the /status subresource.
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes", "swiftsandboxes/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # storage.k8s.io VolumeAttachment — read-only. The SwiftMigration
   # controller's Preparing phase polls VolumeAttachments to verify
   # the source-node CSI ControllerUnpublishVolume has completed
