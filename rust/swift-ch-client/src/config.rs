@@ -73,6 +73,12 @@ pub struct VmConfig {
     pub initramfs_path: Option<String>,
     /// Kernel command line. Only used when kernel_path is set.
     pub kernel_cmdline: Option<String>,
+    /// Mode-3 sandbox: the OCI image as a READ-ONLY root block device. Set only
+    /// with kernel_path. Emitted as the FIRST --disk in the kernel-boot branch
+    /// (path=<p>,readonly=on,image_type=raw — buffered, NOT direct=on, so
+    /// co-located sandboxes of the same image share the host page cache), so it
+    /// is /dev/vda for the bridge-initramfs to mount RO under a tmpfs overlay.
+    pub sandbox_rootfs: Option<String>,
     /// Secondary data disk paths, in order. Empty = no data disks. Each
     /// produces a `--disk path=<p>,image_type=raw,direct=on` argument
     /// after the root (and seed) disk, appearing as the next virtio-blk
@@ -197,6 +203,16 @@ impl VmConfig {
                     args.push("--cmdline".to_string());
                     args.push(cl.clone());
                 }
+            }
+
+            // Mode-3 sandbox: the OCI image as the READ-ONLY root disk. Emitted
+            // FIRST so it is /dev/vda (the bridge-initramfs mounts it as the
+            // overlay lower). Buffered (no direct=on) so co-located sandboxes of
+            // the same image share the host page cache for the RO base; the
+            // bridge layers a tmpfs upper so the signed image is never mutated.
+            if let Some(ref rp) = self.sandbox_rootfs {
+                args.push("--disk".to_string());
+                args.push(format!("path={},readonly=on,image_type=raw", rp));
             }
 
             if !self.seed_path.is_empty() {
@@ -368,6 +384,7 @@ mod tests {
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
+            sandbox_rootfs: None,
             data_disk_paths: vec![],
             vfio_devices: vec![],
             fs_mounts: vec![],
@@ -679,6 +696,67 @@ mod tests {
             !joined.contains("extra.raw"),
             "unexpected data disk in kernel boot args: {}",
             joined
+        );
+    }
+
+    /// Mode-3 sandbox: kernel boot + an OCI rootfs produces the RO root --disk as
+    /// the FIRST disk (/dev/vda), no firmware — matching the CH invocation the P1
+    /// boot validated (`--kernel + --initramfs + --disk path=...,readonly=on,image_type=raw`).
+    #[test]
+    fn test_kernel_boot_sandbox_rootfs() {
+        let mut cfg = make_disk_boot_config();
+        cfg.kernel_path = Some("/var/lib/kubeswift/kernels/default-sandbox/bzImage".to_string());
+        cfg.initramfs_path =
+            Some("/var/lib/kubeswift/kernels/default-sandbox/rootfs.cpio.gz".to_string());
+        cfg.kernel_cmdline =
+            Some("console=ttyS0 kubeswift.rootfs=block kubeswift.entrypoint=/bin/sh".to_string());
+        cfg.firmware_path = None;
+        cfg.seed_path = String::new(); // sandboxes carry no cloud-init seed
+        cfg.sandbox_rootfs = Some("/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4".to_string());
+        let args = cfg.to_args();
+        let joined = args.join(" ");
+        // kernel + initramfs, and NO firmware (mode-3 is firmware-less).
+        assert!(joined.contains("--kernel /var/lib/kubeswift/kernels/default-sandbox/bzImage"));
+        assert!(joined
+            .contains("--initramfs /var/lib/kubeswift/kernels/default-sandbox/rootfs.cpio.gz"));
+        assert!(
+            !joined.contains("CLOUDHV.fd"),
+            "sandbox boot must not load firmware: {}",
+            joined
+        );
+        // the OCI rootfs is a READ-ONLY raw disk, buffered (no direct=on).
+        assert!(
+            joined.contains(
+                "--disk path=/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4,readonly=on,image_type=raw"
+            ),
+            "sandbox rootfs must be the RO root disk: {}",
+            joined
+        );
+        assert!(
+            !joined.contains("sha256-abc.ext4,readonly=on,image_type=raw,direct=on"),
+            "sandbox RO base must be buffered (no direct=on) for page-cache sharing: {}",
+            joined
+        );
+        // it must be the FIRST --disk value -> /dev/vda for the bridge.
+        let disk_idx = args
+            .iter()
+            .position(|a| a == "--disk")
+            .expect("--disk missing");
+        assert_eq!(
+            args[disk_idx + 1],
+            "path=/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4,readonly=on,image_type=raw",
+            "sandbox rootfs must be the first disk (/dev/vda); args: {:?}",
+            args
+        );
+        // A normal faas kernel boot (no sandbox_rootfs, no seed/data) emits NO --disk.
+        let mut faas = make_disk_boot_config();
+        faas.kernel_path = Some("/k/bzImage".to_string());
+        faas.initramfs_path = Some("/k/rootfs.cpio.gz".to_string());
+        faas.firmware_path = None;
+        faas.seed_path = String::new();
+        assert!(
+            !faas.to_args().iter().any(|a| a == "--disk"),
+            "faas kernel boot without sandbox_rootfs must emit no --disk"
         );
     }
 

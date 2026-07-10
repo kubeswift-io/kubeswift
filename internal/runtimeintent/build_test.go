@@ -319,6 +319,58 @@ func TestSerializeParseRoundtrip(t *testing.T) {
 	}
 }
 
+// TestSerializeParseRoundtrip_WithSandboxRootfs pins the mode-3 wire contract:
+// a kernel-boot intent carrying sandboxRootfs.path round-trips, and the key is
+// omitted (omitempty) for every non-sandbox intent so swiftletd's #[serde(default)]
+// leaves it None.
+func TestSerializeParseRoundtrip_WithSandboxRootfs(t *testing.T) {
+	const rootfs = "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4"
+	intent := &RuntimeIntent{
+		KernelBoot: &KernelBootSpec{
+			KernelPath:    "/var/lib/kubeswift/kernels/default-sandbox/bzImage",
+			InitramfsPath: "/var/lib/kubeswift/kernels/default-sandbox/rootfs.cpio.gz",
+			Cmdline:       "console=ttyS0 kubeswift.rootfs=block",
+		},
+		SandboxRootfs: &SandboxRootfsSpec{Path: rootfs},
+		CPU:           2,
+		Memory:        2048,
+		Lifecycle:     "start",
+		GuestID:       "default/sbx",
+	}
+	data, err := Serialize(intent)
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	// Wire contract: swiftletd reads sandboxRootfs.path.
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("Unmarshal map: %v", err)
+	}
+	if _, ok := m["sandboxRootfs"]; !ok {
+		t.Fatalf("sandboxRootfs key missing from serialized intent: %s", data)
+	}
+	var parsed RuntimeIntent
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if parsed.SandboxRootfs == nil || parsed.SandboxRootfs.Path != rootfs {
+		t.Errorf("parsed sandboxRootfs = %+v, want path %q", parsed.SandboxRootfs, rootfs)
+	}
+
+	// omitempty: a non-sandbox intent must NOT carry the key.
+	plain, err := Serialize(&RuntimeIntent{GuestID: "x", Lifecycle: "start"})
+	if err != nil {
+		t.Fatalf("Serialize plain: %v", err)
+	}
+	var pm map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &pm); err != nil {
+		t.Fatalf("Unmarshal plain: %v", err)
+	}
+	if _, ok := pm["sandboxRootfs"]; ok {
+		t.Errorf("sandboxRootfs must be omitted when nil: %s", plain)
+	}
+}
+
 func TestBuild_WithDataDisk_DiskBoot(t *testing.T) {
 	wantPath := DisksDataPath + "/" + DataDiskImageFile
 	rg := &mockResolvedGuest{

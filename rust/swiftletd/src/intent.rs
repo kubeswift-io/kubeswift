@@ -25,6 +25,12 @@ pub struct RuntimeIntent {
     /// When set, boot via --kernel + --initramfs instead of --disk for root.
     #[serde(default)]
     pub kernel_boot: Option<KernelBoot>,
+    /// Set alongside `kernel_boot` for a mode-3 sandbox: the OCI image as the
+    /// VM's READ-ONLY root block device. swiftletd emits it as the first --disk
+    /// (readonly, buffered) so it is /dev/vda; the bridge-initramfs overlays a
+    /// tmpfs upper. Block path only. None for a normal SwiftGuest kernel boot.
+    #[serde(default)]
+    pub sandbox_rootfs: Option<SandboxRootfs>,
     /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
@@ -432,6 +438,14 @@ pub struct KernelBoot {
     pub cmdline: String,
 }
 
+/// The OCI image as a read-only root block device for a mode-3 sandbox boot.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxRootfs {
+    /// Node-local RO OCI rootfs — opaque (a cached ext4 file or a block device).
+    pub path: String,
+}
+
 impl RuntimeIntent {
     /// Returns the disk path from intent (no hardcoded path).
     pub fn disk_path(&self) -> &str {
@@ -456,6 +470,12 @@ impl RuntimeIntent {
     /// Returns true if guest boots via direct kernel (not disk).
     pub fn has_kernel(&self) -> bool {
         self.kernel_boot.is_some()
+    }
+
+    /// Returns the mode-3 sandbox RO rootfs disk path when set (kernel boot +
+    /// an OCI rootfs), else None.
+    pub fn sandbox_rootfs_path(&self) -> Option<&str> {
+        self.sandbox_rootfs.as_ref().map(|s| s.path.as_str())
     }
 
     /// Returns the ordered list of secondary data-disk paths.
@@ -811,6 +831,45 @@ mod tests {
         assert!(!intent.is_restore());
         assert!(intent.restore_snapshot_path().is_empty());
         assert!(intent.restore_source_url().is_empty());
+    }
+
+    #[test]
+    fn test_intent_sandbox_rootfs_go_wire_contract() {
+        // The exact JSON the Go SwiftSandbox controller emits for a mode-3 boot:
+        // kernelBoot + sandboxRootfs, no root disk, no seed. Pins the wire
+        // contract (camelCase keys; #[serde(default)] absence -> None) — the
+        // class of bug that bit primaryUDNInterface and the DRA null-vs-missing.
+        let json = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 2, "memory": 512,
+            "lifecycle": "start",
+            "guestId": "default/agent-123",
+            "kernelBoot": {
+                "kernelPath": "/var/lib/kubeswift/kernels/default-sandbox/bzImage",
+                "initramfsPath": "/var/lib/kubeswift/kernels/default-sandbox/rootfs.cpio.gz",
+                "cmdline": "console=ttyS0 kubeswift.rootfs=block kubeswift.entrypoint=/bin/sh"
+            },
+            "sandboxRootfs": {"path": "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4"}
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(intent.has_kernel());
+        assert_eq!(
+            intent.sandbox_rootfs_path(),
+            Some("/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4")
+        );
+        // Absent sandboxRootfs -> None (a plain faas kernel boot).
+        let faas = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 1, "memory": 256,
+            "lifecycle": "start",
+            "guestId": "default/faas",
+            "kernelBoot": {"kernelPath": "/k/bzImage", "initramfsPath": "/k/rootfs.cpio.gz", "cmdline": "console=ttyS0"}
+        }"#;
+        let f: RuntimeIntent = serde_json::from_str(faas).unwrap();
+        assert!(f.has_kernel());
+        assert_eq!(f.sandbox_rootfs_path(), None);
     }
 
     #[test]

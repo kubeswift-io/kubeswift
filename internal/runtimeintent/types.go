@@ -67,6 +67,17 @@ type RuntimeIntent struct {
 	// from config.json on restore (the configjson patcher rewrites only the
 	// socket path).
 	Vsock *VsockIntent `json:"vsock,omitempty"`
+
+	// SandboxRootfs, when set alongside KernelBoot, is the OCI image as the VM's
+	// READ-ONLY root block device — the mode-3 sandbox boot (docs/design/
+	// swiftsandbox-design.md). swiftletd emits it as the FIRST --disk
+	// (readonly=on,image_type=raw, buffered — NOT direct=on — so co-located
+	// sandboxes of the same image share the host page cache), so it enumerates as
+	// /dev/vda; the sandbox bridge-initramfs mounts it read-only as the overlay
+	// lower and layers a tmpfs upper (the signed image is never mutated). Block
+	// path only (a virtio-fs sandbox rootfs rides Filesystems). Set by the
+	// SwiftSandbox controller; the SwiftGuest path always leaves it nil.
+	SandboxRootfs *SandboxRootfsSpec `json:"sandboxRootfs,omitempty"`
 }
 
 // VsockIntent is the vsock device for the in-guest identity agent.
@@ -192,6 +203,14 @@ type SRIOVDeviceIntent struct {
 type RootDiskSpec struct {
 	Path   string `json:"path"`
 	Format string `json:"format"` // "raw" or "qcow2"
+}
+
+// SandboxRootfsSpec is the OCI image materialized as a read-only root block
+// device for a mode-3 sandbox boot (kernel boot + this + a tmpfs overlay in the
+// bridge-initramfs). Path is opaque to swiftletd (a node-local cached ext4 file
+// or a block device — the W9 opacity contract).
+type SandboxRootfsSpec struct {
+	Path string `json:"path"`
 }
 
 // DataDiskSpec specifies one secondary VM disk for swiftletd. Path is opaque

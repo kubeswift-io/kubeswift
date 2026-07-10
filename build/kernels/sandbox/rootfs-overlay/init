@@ -1,0 +1,76 @@
+#!/bin/sh
+# KubeSwift sandbox bridge-initramfs — PID 1.
+#
+# A stock OCI image has no init and expects a container runtime to have set up
+# /proc, /sys, /dev and its root. Here the kernel hands us only devtmpfs /dev and
+# this initramfs. This bridge mounts the OCI rootfs READ-ONLY as an overlay lower,
+# layers a tmpfs upper (so the signed image is never mutated), and switch_roots
+# into the merged tree to exec the workload.
+#
+# Rootfs source is selected by the kernel cmdline the launcher builds:
+#   kubeswift.rootfs=block   -> mount /dev/vda (RO OCI ext4) as the lower
+#   kubeswift.rootfs=virtiofs -> mount the "sandboxroot" virtio-fs tag as the lower
+# Entrypoint: kubeswift.entrypoint=/path (default /sbin/init, then /bin/sh).
+#
+# After any change here: rebuild the initramfs (make build) and re-push the
+# SwiftKernel OCI artifact (bzImage + rootfs.cpio.gz).
+
+set -u
+
+mount -t proc     none /proc  2>/dev/null
+mount -t sysfs    none /sys   2>/dev/null
+mount -t devtmpfs none /dev   2>/dev/null || mount -t tmpfs none /dev
+mkdir -p /dev/pts
+mount -t devpts   none /dev/pts 2>/dev/null || true
+
+# --- parse kernel cmdline ---
+ROOTFS_KIND=block
+ENTRYPOINT=""
+for arg in $(cat /proc/cmdline); do
+	case "$arg" in
+		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
+		kubeswift.entrypoint=*) ENTRYPOINT="${arg#kubeswift.entrypoint=}" ;;
+	esac
+done
+
+fail() {
+	echo "sandbox-bridge: FATAL: $1" >&2
+	echo o >/proc/sysrq-trigger 2>/dev/null
+	exec /bin/sh
+}
+
+mkdir -p /lower /over /newroot
+
+# --- mount the OCI rootfs READ-ONLY as the overlay lower ---
+case "$ROOTFS_KIND" in
+	block)
+		mount -o ro -t ext4 /dev/vda /lower \
+			|| fail "cannot mount /dev/vda (OCI ext4) read-only" ;;
+	virtiofs)
+		mount -t virtiofs sandboxroot /lower \
+			|| fail "cannot mount virtio-fs tag 'sandboxroot'" ;;
+	*)
+		fail "unknown kubeswift.rootfs=$ROOTFS_KIND" ;;
+esac
+
+# --- writable tmpfs upper; overlay merged; the OCI image stays pristine ---
+mount -t tmpfs tmpfs /over
+mkdir -p /over/up /over/work
+mount -t overlay overlay \
+	-o lowerdir=/lower,upperdir=/over/up,workdir=/over/work /newroot \
+	|| fail "overlay mount failed (kernel lacks OVERLAY_FS?)"
+
+# carry the pseudo-filesystems into the new root
+mkdir -p /newroot/proc /newroot/sys /newroot/dev
+mount --move /proc /newroot/proc 2>/dev/null || mount -t proc none /newroot/proc
+mount --move /sys  /newroot/sys  2>/dev/null || mount -t sysfs none /newroot/sys
+mount --move /dev  /newroot/dev  2>/dev/null || mount -t devtmpfs none /newroot/dev
+
+# --- resolve entrypoint and hand off ---
+if [ -z "$ENTRYPOINT" ]; then
+	if [ -x /newroot/sbin/init ]; then ENTRYPOINT=/sbin/init
+	else ENTRYPOINT=/bin/sh; fi
+fi
+
+echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) mounted RO + tmpfs overlay; exec $ENTRYPOINT"
+exec switch_root /newroot "$ENTRYPOINT"

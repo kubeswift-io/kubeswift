@@ -1,0 +1,19 @@
+# The sandbox kernel profile: a direct-boot kernel + bridge-initramfs that boots
+# an OCI image as the VM root filesystem (RO base + tmpfs overlay). Consumed by a
+# SwiftSandbox (see docs/design/swiftsandbox-design.md, P4), NOT bootable as a
+# plain kernelRef SwiftGuest — the bridge needs an OCI rootfs disk the sandbox
+# controller supplies.
+#
+# Prereq: a node labeled kubeswift.io/kernel-node=true (the per-node ORAS pull).
+# The kernelCmdline here is a default; the SwiftSandbox controller appends the
+# rootfs selector (kubeswift.rootfs=block|virtiofs) and entrypoint at launch.
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: sandbox
+  namespace: default
+spec:
+  ociRef:
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.1
+  kernelCmdline: "console=ttyS0"
+  profile: sandbox
