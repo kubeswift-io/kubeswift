@@ -35,6 +35,15 @@ func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
 	return sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkNone
 }
 
+// egressMode is the effective egress posture for a networked sandbox. The CRD
+// default is restricted; the fallthrough also covers a pre-admission empty value.
+func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetworkMode {
+	if sb.Spec.Network.Mode == sandboxv1alpha1.SandboxNetworkOpen {
+		return sandboxv1alpha1.SandboxNetworkOpen
+	}
+	return sandboxv1alpha1.SandboxNetworkRestricted
+}
+
 // buildIntent constructs the mode-3 sandbox RuntimeIntent: kernel boot + the RO
 // OCI rootfs disk + the bridge cmdline (rootfs selector + entrypoint).
 func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entrypoint string) *runtimeintent.RuntimeIntent {
@@ -117,8 +126,16 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}}
 	if networked(sb) {
 		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
-		// runtime-intent + run volumes the launcher uses.
-		initContainers = append([]corev1.Container{swiftguest.NetworkInitContainer()}, initContainers...)
+		// runtime-intent + run volumes the launcher uses. KUBESWIFT_SANDBOX_EGRESS
+		// tells it whether to install the restricted-egress FORWARD iptables. This is
+		// the ONLY layer that can filter the VM's egress precisely: a pod-level
+		// NetworkPolicy can't, because after MASQUERADE the VM's traffic and
+		// swiftletd's own API-server traffic share the pod IP — a NetworkPolicy that
+		// blocked cluster egress would also cut swiftletd's status reporting (#347).
+		// The FORWARD chain matches the VM's pre-NAT source (bridge subnet) only.
+		ni := swiftguest.NetworkInitContainer()
+		ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(egressMode(sb))})
+		initContainers = append([]corev1.Container{ni}, initContainers...)
 	}
 
 	dirCreate := corev1.HostPathDirectoryOrCreate

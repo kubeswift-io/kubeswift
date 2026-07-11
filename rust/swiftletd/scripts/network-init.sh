@@ -23,6 +23,42 @@ guest_run_dir() {
     echo "$RUN_DIR/$(echo "$gid" | tr '/' '-')"
 }
 
+# apply_restricted_egress hardens a sandbox guest's outbound traffic (untrusted
+# code). Gated on KUBESWIFT_SANDBOX_EGRESS=restricted (set only by the SwiftSandbox
+# pod builder -- SwiftGuests never set it, so their egress is untouched).
+#
+# The guest's traffic is FORWARDed (VM -> br0 -> eth0, MASQUERADEd), so a FORWARD
+# filter is the precise, CNI-independent hard control (a NetworkPolicy is only
+# enforced if the CNI supports egress policy -- silent no-op otherwise). Rules live
+# in a dedicated chain jumped to from the TOP of FORWARD (before any CNI ACCEPT) for
+# VM-sourced traffic only:
+#   - ESTABLISHED/RELATED return traffic and DNS to the cluster resolver(s) RETURN
+#     (allowed) -- the guest queries kube-dns directly (dnsmasq hands it as the
+#     resolver), so :53 must be punched through the cluster block or DNS breaks;
+#   - 169.254.0.0/16 (cloud metadata -> node creds) and RFC1918 (pod + service
+#     CIDRs -> lateral movement) DROP;
+#   - everything else (public internet) falls through -> ACCEPT -> MASQUERADE.
+# Node public IPs are NOT blocked (same exposure as any pod); documented.
+apply_restricted_egress() {
+    src_net="$1"
+    [ "${KUBESWIFT_SANDBOX_EGRESS:-}" = "restricted" ] || return 0
+    chain="KUBESWIFT_SBX_EGRESS"
+    iptables -N "$chain" 2>/dev/null || iptables -F "$chain"
+    iptables -A "$chain" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+    for d in $(grep '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{print $2}'); do
+        iptables -A "$chain" -d "$d" -p udp --dport 53 -j RETURN
+        iptables -A "$chain" -d "$d" -p tcp --dport 53 -j RETURN
+    done
+    iptables -A "$chain" -d 169.254.0.0/16 -j DROP
+    iptables -A "$chain" -d 10.0.0.0/8     -j DROP
+    iptables -A "$chain" -d 172.16.0.0/12  -j DROP
+    iptables -A "$chain" -d 192.168.0.0/16 -j DROP
+    # Idempotent jump at the top of FORWARD for the VM subnet.
+    iptables -C FORWARD -s "$src_net" -j "$chain" 2>/dev/null \
+        || iptables -I FORWARD 1 -s "$src_net" -j "$chain"
+    echo "Restricted egress: $src_net -> DNS + internet; DROP 169.254/16 + RFC1918 (chain $chain)"
+}
+
 setup_primary_nic() {
     local bridge="$1" tap="$2"
 
@@ -67,6 +103,9 @@ setup_primary_nic() {
     # Source/exclude derive from bridge_ip so any operator override
     # via BRIDGE_IP env stays internally consistent.
     iptables -t nat -A POSTROUTING -s "$bridge_net" ! -d "$bridge_net" -j MASQUERADE
+
+    # Sandbox restricted-egress hardening (no-op unless KUBESWIFT_SANDBOX_EGRESS=restricted).
+    apply_restricted_egress "$bridge_net"
 
     echo "Primary NIC: $bridge ($bridge_ip, net $bridge_net) with $tap"
 }

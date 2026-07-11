@@ -76,13 +76,19 @@ type SwiftSandboxSpec struct {
 }
 
 // SandboxNetworkMode selects the sandbox connectivity posture.
-// +kubebuilder:validation:Enum=restricted;none
+// +kubebuilder:validation:Enum=restricted;open;none
 type SandboxNetworkMode string
 
 const (
-	// SandboxNetworkRestricted attaches the pod network with a deny-ingress /
-	// limited-egress posture (the default).
+	// SandboxNetworkRestricted (the default) attaches the pod network with a
+	// deny-ingress posture AND hardened egress: the guest reaches DNS + the public
+	// internet but CANNOT reach cluster-internal pods/services or the cloud metadata
+	// endpoint (169.254.169.254). The right posture for untrusted code.
 	SandboxNetworkRestricted SandboxNetworkMode = "restricted"
+	// SandboxNetworkOpen attaches the pod network with deny-ingress but unrestricted
+	// egress (the guest can reach the whole cluster + internet). Opt-in for trusted
+	// workloads that must talk to in-cluster services; NOT for untrusted code.
+	SandboxNetworkOpen SandboxNetworkMode = "open"
 	// SandboxNetworkNone attaches no network (detonation / pure compute).
 	SandboxNetworkNone SandboxNetworkMode = "none"
 )
