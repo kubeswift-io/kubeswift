@@ -310,6 +310,12 @@ fn main() {
             // operators verify destination success via the
             // migration-status: ready annotation OR via vm_info
             // directly.
+            // Gate the SwiftGuest CR status patch (default on). A SwiftSandbox
+            // launcher sets KUBESWIFT_REPORT_GUEST_CR=false — there is no SwiftGuest
+            // CR to patch; the pod-annotation report + lease poller still run.
+            let report_cr = report::report_guest_cr_enabled(
+                env::var("KUBESWIFT_REPORT_GUEST_CR").ok().as_deref(),
+            );
             let on_socket_ready = if intent.is_migration_receiver() || is_primary_udn {
                 None
             } else {
@@ -332,12 +338,15 @@ fn main() {
                                     return;
                                 }
                             };
-                            if let Err(e) =
-                                report::report_guest_running(&client, &ns, &name, true, None).await
-                            {
-                                log::error!("report_running_failed: {}", e);
-                            } else {
-                                log::info!("guest_running_reported");
+                            if report_cr {
+                                if let Err(e) =
+                                    report::report_guest_running(&client, &ns, &name, true, None)
+                                        .await
+                                {
+                                    log::error!("report_running_failed: {}", e);
+                                } else {
+                                    log::info!("guest_running_reported");
+                                }
                             }
                             if let Err(e) = report::report_guest_runtime(
                                 &client,

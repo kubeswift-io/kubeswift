@@ -3,6 +3,8 @@ package swiftsandbox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -152,9 +154,10 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		sb.Status.NodeName = pod.Spec.NodeName
 		sb.Status.PodRef = pod.Name
 		applyMaterializeResult(sb, pod)
+		applyGuestAnnotations(sb, pod)
 		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 			Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
-			Reason: "GuestRunning", Message: "launcher ready", ObservedGeneration: sb.Generation,
+			Reason: "GuestRunning", Message: guestRunningMessage(sb), ObservedGeneration: sb.Generation,
 		})
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "guest running")
 	}
@@ -295,6 +298,41 @@ func applyMaterializeResult(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
 		sb.Status.Rootfs.SizeBytes = res.SizeBytes
 		return
 	}
+}
+
+// applyGuestAnnotations maps swiftletd's launcher-pod annotations onto the sandbox
+// status — the same reporting path SwiftGuest uses (see
+// internal/controller/swiftguest/status.go::MapPodToStatus). swiftletd writes these
+// once CH reaches socket-ready (runtime) and once the guest DHCPs (network).
+// Best-effort: a missing/blank annotation leaves the field untouched, so a
+// network:none sandbox (no lease) simply keeps status.network nil.
+func applyGuestAnnotations(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
+	if pidStr := pod.Annotations[swiftguest.PodAnnotationGuestRuntimePID]; pidStr != "" {
+		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+			hypervisor := pod.Annotations[swiftguest.PodAnnotationGuestHypervisor]
+			if hypervisor == "" {
+				hypervisor = "cloud-hypervisor"
+			}
+			sb.Status.Runtime = &sandboxv1alpha1.SandboxRuntimeStatus{PID: pid, Hypervisor: hypervisor}
+		}
+	}
+	if ip := pod.Annotations[swiftguest.PodAnnotationGuestIP]; ip != "" {
+		sb.Status.Network = &sandboxv1alpha1.SandboxNetworkStatus{PrimaryIP: ip}
+	}
+}
+
+// guestRunningMessage describes the GuestRunning=True condition. It prefers the
+// swiftletd-reported runtime (real guest confirmation) over the bare
+// launcher-readiness proxy, so `kubectl describe` shows the pid/IP when known.
+func guestRunningMessage(sb *sandboxv1alpha1.SwiftSandbox) string {
+	if sb.Status.Runtime != nil && sb.Status.Runtime.PID > 0 {
+		msg := fmt.Sprintf("cloud-hypervisor running (pid %d)", sb.Status.Runtime.PID)
+		if sb.Status.Network != nil && sb.Status.Network.PrimaryIP != "" {
+			msg += ", ip " + sb.Status.Network.PrimaryIP
+		}
+		return msg
+	}
+	return "launcher ready (guest starting)"
 }
 
 func firstNonEmpty(vals ...string) string {

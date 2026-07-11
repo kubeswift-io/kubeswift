@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -49,6 +50,10 @@ func TestBuildIntent(t *testing.T) {
 		!strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.entrypoint=/bin/sh") {
 		t.Errorf("cmdline: %s", intent.KernelBoot.Cmdline)
 	}
+	// A networked sandbox gets kernel IP autoconfig so the guest actually DHCPs.
+	if !strings.Contains(intent.KernelBoot.Cmdline, "ip=dhcp") {
+		t.Errorf("networked sandbox cmdline should include ip=dhcp: %s", intent.KernelBoot.Cmdline)
+	}
 	if intent.SandboxRootfs == nil || intent.SandboxRootfs.Path != "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4" {
 		t.Errorf("sandboxRootfs: %+v", intent.SandboxRootfs)
 	}
@@ -58,8 +63,13 @@ func TestBuildIntent(t *testing.T) {
 	}
 	sbNone := sb.DeepCopy()
 	sbNone.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkNone
-	if buildIntent(sbNone, "sandbox", "/x.ext4", "").Network {
+	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", "")
+	if iNone.Network {
 		t.Error("mode=none sandbox must be network-isolated")
+	}
+	// network:none has no dnsmasq -> ip=dhcp would only stall the boot; it must be absent.
+	if strings.Contains(iNone.KernelBoot.Cmdline, "ip=dhcp") {
+		t.Errorf("network:none must omit ip=dhcp: %s", iNone.KernelBoot.Cmdline)
 	}
 	if intent.CPU != 2 || intent.Memory != 1024 {
 		t.Errorf("cpu/mem: %d/%d (want 2/1024)", intent.CPU, intent.Memory)
@@ -71,6 +81,72 @@ func TestBuildIntent(t *testing.T) {
 	i2 := buildIntent(sb, "sandbox", "/x.ext4", "")
 	if strings.Contains(i2.KernelBoot.Cmdline, "kubeswift.entrypoint") {
 		t.Errorf("empty entrypoint should omit the arg: %s", i2.KernelBoot.Cmdline)
+	}
+}
+
+// The annotation keys are asserted as literals (not via the swiftguest
+// constants) on purpose: they pin the wire contract swiftletd hard-codes in
+// rust/swiftletd/src/report.rs — the Go side must not drift from it.
+func TestApplyGuestAnnotations(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		"kubeswift.io/guest-runtime-pid": "4242",
+		"kubeswift.io/guest-hypervisor":  "cloud-hypervisor",
+		"kubeswift.io/guest-ip":          "192.168.99.12",
+	}}}
+	applyGuestAnnotations(sb, pod)
+	if sb.Status.Runtime == nil || sb.Status.Runtime.PID != 4242 || sb.Status.Runtime.Hypervisor != "cloud-hypervisor" {
+		t.Fatalf("runtime not mapped: %+v", sb.Status.Runtime)
+	}
+	if sb.Status.Network == nil || sb.Status.Network.PrimaryIP != "192.168.99.12" {
+		t.Fatalf("network not mapped: %+v", sb.Status.Network)
+	}
+	if msg := guestRunningMessage(sb); !strings.Contains(msg, "pid 4242") || !strings.Contains(msg, "192.168.99.12") {
+		t.Errorf("guestRunningMessage = %q", msg)
+	}
+
+	// No annotations (e.g. network:none, or before socket-ready) -> untouched,
+	// message falls back to the launcher-readiness proxy.
+	none := &sandboxv1alpha1.SwiftSandbox{}
+	applyGuestAnnotations(none, &corev1.Pod{})
+	if none.Status.Runtime != nil || none.Status.Network != nil {
+		t.Errorf("no annotations should leave status untouched: %+v %+v", none.Status.Runtime, none.Status.Network)
+	}
+	if msg := guestRunningMessage(none); msg != "launcher ready (guest starting)" {
+		t.Errorf("fallback message = %q", msg)
+	}
+}
+
+func TestBuildPod_LauncherReportEnv(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "ns"}}
+	pod := buildPod(sb, "sandbox")
+	var launcher *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == launcherName {
+			launcher = &pod.Spec.Containers[i]
+		}
+	}
+	if launcher == nil {
+		t.Fatal("no launcher container")
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range launcher.Env {
+		env[e.Name] = e
+	}
+	// Without POD_NAME/POD_NAMESPACE (downward API) swiftletd skips the report +
+	// lease paths entirely, so pid/hypervisor/IP never reach the sandbox status.
+	for _, name := range []string{"POD_NAME", "POD_NAMESPACE"} {
+		e, ok := env[name]
+		if !ok || e.ValueFrom == nil || e.ValueFrom.FieldRef == nil {
+			t.Errorf("%s must be a downward-API fieldRef, got %+v (present=%v)", name, e, ok)
+		}
+	}
+	if fr := env["POD_NAME"].ValueFrom; fr != nil && fr.FieldRef.FieldPath != "metadata.name" {
+		t.Errorf("POD_NAME fieldPath = %q", fr.FieldRef.FieldPath)
+	}
+	// Sandbox has no SwiftGuest CR to patch -> suppress that report path.
+	if env["KUBESWIFT_REPORT_GUEST_CR"].Value != "false" {
+		t.Errorf("KUBESWIFT_REPORT_GUEST_CR = %q, want false", env["KUBESWIFT_REPORT_GUEST_CR"].Value)
 	}
 }
 
