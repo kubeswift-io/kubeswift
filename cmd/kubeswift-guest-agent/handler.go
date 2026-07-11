@@ -78,6 +78,10 @@ type Request struct {
 	Env    []string `json:"env,omitempty"`
 	Cwd    string   `json:"cwd,omitempty"`
 	Stream bool     `json:"stream,omitempty"` // stream stdout/stderr/exit as frames (see internal/guestagent); dispatched in serve(), not handle()
+	Stdin  bool     `json:"stdin,omitempty"`  // read host FrameStdin frames into the command's stdin
+	TTY    bool     `json:"tty,omitempty"`    // allocate a PTY (interactive attach); implies stdin
+	Rows   uint16   `json:"rows,omitempty"`   // initial TTY rows (tty only)
+	Cols   uint16   `json:"cols,omitempty"`   // initial TTY cols (tty only)
 }
 
 // Response is the guest->host reply.

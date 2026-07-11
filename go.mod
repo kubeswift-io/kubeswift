@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	connectrpc.com/connect v1.20.0
 	github.com/coreos/go-oidc/v3 v3.19.0
+	github.com/creack/pty v1.1.24
 	github.com/go-logr/logr v1.4.3
 	github.com/google/go-containerregistry v0.21.7
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674

@@ -47,7 +47,13 @@ Notes:
   - `swiftctl sandbox exec <name> -- cmd args...` runs a command inside the sandbox's
     OCI rootfs over a host↔guest vsock channel (an in-guest agent). stdout/stderr
     stream back live (no output cap) and the exit code is propagated. `-e KEY=VALUE`
-    (repeatable) and `-w DIR` set environment variables and the working directory.
-    Non-interactive (no stdin/TTY yet) — interactive `attach` is a follow-up.
+    (repeatable) and `-w DIR` set environment variables and the working directory;
+    `-i` forwards stdin (e.g. `exec -i <name> -- sh < script.sh`) and `-t` allocates
+    an interactive TTY.
+  - `swiftctl sandbox attach <name>` opens an interactive shell (shorthand for
+    `exec -it -- /bin/sh`; pass `-- <cmd>` to run something else). Window resizes
+    propagate; exit with Ctrl-D or `exit`. (The guest `tty` command may print
+    "not a tty" — a chroot/devpts cosmetic quirk; the session is a real TTY, so
+    shells, editors, and `top` behave interactively.)
 - `spec.timeout` force-terminates a runaway sandbox; `spec.ttl` deletes the
   finished record (and frees the node rootfs cache reference) after it elapses.
