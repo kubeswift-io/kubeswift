@@ -24,12 +24,17 @@ mkdir -p /dev/pts
 mount -t devpts   none /dev/pts 2>/dev/null || true
 
 # --- parse kernel cmdline ---
+# kubeswift.config=/dev/vdX points at the per-sandbox config disk carrying the full
+# workload exec (argv/env/cwd, base64-encoded values). kubeswift.entrypoint is the
+# legacy single-path fallback (a current controller emits kubeswift.config instead).
 ROOTFS_KIND=block
 ENTRYPOINT=""
+CONFIG_DEV=""
 for arg in $(cat /proc/cmdline); do
 	case "$arg" in
 		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
 		kubeswift.entrypoint=*) ENTRYPOINT="${arg#kubeswift.entrypoint=}" ;;
+		kubeswift.config=*)     CONFIG_DEV="${arg#kubeswift.config=}" ;;
 	esac
 done
 
@@ -42,10 +47,17 @@ fail() {
 mkdir -p /lower /over /newroot
 
 # --- mount the OCI rootfs READ-ONLY as the overlay lower ---
+# The virtio-blk probe is asynchronous and can lag PID 1, so an immediate mount of
+# /dev/vda can fail ("Can't lookup blockdev") before the device node appears. Retry
+# the mount (bounded) until the block device enumerates, rather than mounting once.
 case "$ROOTFS_KIND" in
 	block)
-		mount -o ro -t ext4 /dev/vda /lower \
-			|| fail "cannot mount /dev/vda (OCI ext4) read-only" ;;
+		n=0
+		until mount -o ro -t ext4 /dev/vda /lower 2>/dev/null; do
+			n=$((n + 1))
+			[ "$n" -ge 30 ] && fail "cannot mount /dev/vda (OCI ext4) read-only after ${n}s"
+			sleep 1
+		done ;;
 	virtiofs)
 		mount -t virtiofs sandboxroot /lower \
 			|| fail "cannot mount virtio-fs tag 'sandboxroot'" ;;
@@ -60,17 +72,67 @@ mount -t overlay overlay \
 	-o lowerdir=/lower,upperdir=/over/up,workdir=/over/work /newroot \
 	|| fail "overlay mount failed (kernel lacks OVERLAY_FS?)"
 
-# carry the pseudo-filesystems into the new root
+# The config disk (/dev/vdX) and /proc/net/pnp are read HERE — BEFORE the pseudo-
+# filesystems are moved into /newroot below. After the move they are gone from this
+# root, so reading them afterwards silently fails and the exec falls back to
+# /sbin/init (the config disk is never applied). /newroot (the overlay) is already
+# mounted, so writes into it work now.
+
+# --- guest resolver: kernel ip=dhcp autoconfig sets the IP but NOT the userspace
+# /etc/resolv.conf, so a workload can't resolve names without this. /proc/net/pnp
+# carries the DHCP-provided nameserver(s); write the resolver directives into the
+# guest (the tmpfs overlay upper is writable, so the signed image is untouched).
+mkdir -p /newroot/etc
+if [ -r /proc/net/pnp ]; then
+	grep -E '^(nameserver|domain|search)' /proc/net/pnp > /newroot/etc/resolv.conf 2>/dev/null || true
+fi
+
+# --- resolve the workload exec ---
+# Primary: the config disk (kubeswift.config) carries the full argv/env/cwd with
+# base64-encoded values (so a multi-line `sh -c` script survives). Fall back to the
+# legacy single entrypoint, then /sbin/init, then /bin/sh.
+set --                         # positional params accumulate argv
+if [ -n "$CONFIG_DEV" ]; then
+	# Wait (bounded) for the config-disk node — same async virtio-blk enumeration as
+	# the rootfs above.
+	n=0
+	while [ ! -b "$CONFIG_DEV" ] && [ "$n" -lt 30 ]; do
+		n=$((n + 1)); sleep 1
+	done
+fi
+if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
+	# Slurp the whole config disk (a small raw blob padded with NULs) in ONE read and
+	# strip the padding, then parse the lines. Reading a block device line-by-line
+	# with `read` hangs (device EOF/size semantics differ from a regular file).
+	blob=$(dd if="$CONFIG_DEV" bs=65536 count=1 2>/dev/null | tr -d '\000')
+	oldifs=$IFS
+	IFS='
+'
+	for line in $blob; do
+		key=${line%%	*}    # up to the first tab
+		val=${line#*	}     # after the first tab
+		case "$key" in
+			KUBESWIFT-EXEC-END) break ;;
+			ARGV) set -- "$@" "$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
+			ENV)  export "$(printf '%s' "$val" | base64 -d 2>/dev/null)" 2>/dev/null || true ;;
+		esac
+	done
+	IFS=$oldifs
+fi
+
+# carry the pseudo-filesystems into the new root (AFTER the reads above)
 mkdir -p /newroot/proc /newroot/sys /newroot/dev
 mount --move /proc /newroot/proc 2>/dev/null || mount -t proc none /newroot/proc
 mount --move /sys  /newroot/sys  2>/dev/null || mount -t sysfs none /newroot/sys
 mount --move /dev  /newroot/dev  2>/dev/null || mount -t devtmpfs none /newroot/dev
 
-# --- resolve entrypoint and hand off ---
-if [ -z "$ENTRYPOINT" ]; then
-	if [ -x /newroot/sbin/init ]; then ENTRYPOINT=/sbin/init
-	else ENTRYPOINT=/bin/sh; fi
+if [ "$#" -eq 0 ]; then
+	if [ -n "$ENTRYPOINT" ]; then set -- "$ENTRYPOINT"
+	elif [ -x /newroot/sbin/init ]; then set -- /sbin/init
+	else set -- /bin/sh; fi
 fi
 
-echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) mounted RO + tmpfs overlay; exec $ENTRYPOINT"
-exec switch_root /newroot "$ENTRYPOINT"
+echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; exec $1 ($# arg(s))"
+# NOTE: spec.workingDir is NOT honored in v1 — switch_root resets cwd to /, and a
+# shell wrapper to chdir is unreliable across images. The workload starts in /.
+exec switch_root /newroot "$@"

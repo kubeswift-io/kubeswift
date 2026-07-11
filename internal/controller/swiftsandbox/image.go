@@ -2,6 +2,9 @@ package swiftsandbox
 
 import (
 	"os"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
@@ -30,7 +33,23 @@ func SandboxMaterializeImage() string {
 type resolvedImage struct {
 	Digest     string
 	RootfsPath string // <cache>/<digest>.ext4 — deterministic, matches what the init produces
-	Entrypoint string // resolved single entrypoint path (v1: [0] only; see note below)
+	Exec       execSpec
+}
+
+// execSpec is the full workload exec (argv + env + cwd), delivered to the guest
+// via the per-sandbox config disk (NOT the kernel cmdline — that would leak env to
+// /proc/cmdline + the host's ps/logs and cap at ~2-4KB).
+type execSpec struct {
+	Argv []string // full argv (command/args merged over the image entrypoint/cmd)
+	Env  []string // "KEY=VAL", image env overlaid by spec.env
+	Cwd  string   // working dir (v1: best-effort; the bridge defaults to /)
+}
+
+// nonTrivial reports whether the exec spec carries anything worth a config disk.
+// A bare scratch image with no overrides yields an empty spec — the bridge then
+// falls back to /sbin/init -> /bin/sh with no config disk.
+func (e execSpec) nonTrivial() bool {
+	return len(e.Argv) > 0 || len(e.Env) > 0 || e.Cwd != ""
 }
 
 // resolveImage does a cheap registry resolve (manifest + config, no layers) so
@@ -50,25 +69,64 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox) (resolvedImage, error) {
 	return resolvedImage{
 		Digest:     digest,
 		RootfsPath: materialize.CachePathFor(rootfsCacheDir, digest, materialize.ModeBlock),
-		Entrypoint: resolveEntrypoint(sb, cfg),
+		Exec:       resolveExec(sb, cfg),
 	}, nil
 }
 
-// resolveEntrypoint picks the entrypoint path the bridge-initramfs execs.
+// resolveExec computes the full workload exec spec using k8s/OCI semantics, the
+// SwiftSandbox spec merged over the image config:
 //
-// v1 limitation: the bridge execs a single path (switch_root <root> <entrypoint>),
-// so only the first token is passed; args beyond it (e.g. an image CMD after its
-// ENTRYPOINT) are not yet threaded through the cmdline. spec.command[0] wins;
-// else the image ENTRYPOINT[0]/CMD[0]; else empty (the bridge falls back to
-// /sbin/init then /bin/sh). Passing a full command line is a follow-up.
-func resolveEntrypoint(sb *sandboxv1alpha1.SwiftSandbox, cfg materialize.ImageConfig) string {
-	switch {
-	case len(sb.Spec.Command) > 0:
-		return sb.Spec.Command[0]
-	case len(cfg.Entrypoint) > 0:
-		return cfg.Entrypoint[0]
-	case len(cfg.Cmd) > 0:
-		return cfg.Cmd[0]
+//   - argv: spec.command overrides the image ENTRYPOINT; spec.args overrides the
+//     image CMD. Per the k8s rule, setting command suppresses the image CMD unless
+//     args are also given.
+//   - env: the image env, then spec.env overrides by key (v1: literal Value only —
+//     ValueFrom needs a downward-API/secret path not available in a microVM).
+//   - cwd: spec.workingDir, else the image WorkingDir.
+func resolveExec(sb *sandboxv1alpha1.SwiftSandbox, cfg materialize.ImageConfig) execSpec {
+	var argv []string
+	if len(sb.Spec.Command) > 0 {
+		argv = append(argv, sb.Spec.Command...)
+		argv = append(argv, sb.Spec.Args...)
+	} else {
+		argv = append(argv, cfg.Entrypoint...)
+		if len(sb.Spec.Args) > 0 {
+			argv = append(argv, sb.Spec.Args...)
+		} else {
+			argv = append(argv, cfg.Cmd...)
+		}
 	}
-	return ""
+	cwd := sb.Spec.WorkingDir
+	if cwd == "" {
+		cwd = cfg.WorkingDir
+	}
+	return execSpec{Argv: argv, Env: mergeEnv(cfg.Env, sb.Spec.Env), Cwd: cwd}
+}
+
+// mergeEnv overlays spec.env (literal values) onto the image env, preserving the
+// image order and appending new keys. Both are "KEY=VAL" on output.
+func mergeEnv(imageEnv []string, specEnv []corev1.EnvVar) []string {
+	val := map[string]string{}
+	var order []string
+	seen := func(k string) bool { _, ok := val[k]; return ok }
+	for _, e := range imageEnv {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		if !seen(k) {
+			order = append(order, k)
+		}
+		val[k] = v
+	}
+	for _, e := range specEnv {
+		if !seen(e.Name) {
+			order = append(order, e.Name)
+		}
+		val[e.Name] = e.Value
+	}
+	out := make([]string, 0, len(order))
+	for _, k := range order {
+		out = append(out, k+"="+val[k])
+	}
+	return out
 }

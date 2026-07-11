@@ -79,6 +79,12 @@ pub struct VmConfig {
     /// co-located sandboxes of the same image share the host page cache), so it
     /// is /dev/vda for the bridge-initramfs to mount RO under a tmpfs overlay.
     pub sandbox_rootfs: Option<String>,
+    /// Mode-3 sandbox config disk: the workload exec spec (argv/env/cwd) blob.
+    /// Emitted as a read-only raw disk immediately AFTER sandbox_rootfs (before any
+    /// seed/data disk), so it is /dev/vdb — the bridge-initramfs reads it (pointed
+    /// there by the `kubeswift.config=/dev/vdb` cmdline) to exec the workload. Path
+    /// is opaque (a node-local blob file swiftletd wrote). None = no config disk.
+    pub sandbox_config: Option<String>,
     /// Secondary data disk paths, in order. Empty = no data disks. Each
     /// produces a `--disk path=<p>,image_type=raw,direct=on` argument
     /// after the root (and seed) disk, appearing as the next virtio-blk
@@ -205,30 +211,44 @@ impl VmConfig {
                 }
             }
 
-            // Mode-3 sandbox: the OCI image as the READ-ONLY root disk. Emitted
-            // FIRST so it is /dev/vda (the bridge-initramfs mounts it as the
-            // overlay lower). Buffered (no direct=on) so co-located sandboxes of
-            // the same image share the host page cache for the RO base; the
-            // bridge layers a tmpfs upper so the signed image is never mutated.
+            // Mode-3 sandbox disks. CH's `--disk` takes MULTIPLE values under a single
+            // flag (`--disk path=A path=B ...`); a REPEATED `--disk` flag does NOT
+            // append — CH keeps only one value and silently drops the rest (confirmed
+            // on cluster: a repeated form attached only 1 of 2 disks). Collect every
+            // sandbox disk and emit them as ONE multi-value `--disk`, in enumeration
+            // order (vda, vdb, ...). Mirrors the disk-boot branch below.
+            let mut sandbox_disks: Vec<String> = Vec::new();
+
+            // OCI image as the READ-ONLY root disk (/dev/vda) — the bridge-initramfs
+            // mounts it as the overlay lower. Buffered (no direct=on) so co-located
+            // sandboxes of the same image share the host page cache for the RO base;
+            // the bridge layers a tmpfs upper so the signed image is never mutated.
             if let Some(ref rp) = self.sandbox_rootfs {
-                args.push("--disk".to_string());
-                args.push(format!("path={},readonly=on,image_type=raw", rp));
+                sandbox_disks.push(format!("path={},readonly=on,image_type=raw", rp));
+            }
+
+            // Config disk (/dev/vdb): the workload exec blob (argv/env/cwd). The
+            // bridge-initramfs reads it via the kubeswift.config=/dev/vdb cmdline.
+            if let Some(ref cp) = self.sandbox_config {
+                sandbox_disks.push(format!("path={},readonly=on,image_type=raw", cp));
             }
 
             if !self.seed_path.is_empty() {
                 // No direct=on: emptyDir/tmpfs-backed; tmpfs rejects O_DIRECT.
-                args.push("--disk".to_string());
-                args.push(format!("path={},image_type=raw", self.seed_path));
+                sandbox_disks.push(format!("path={},image_type=raw", self.seed_path));
             }
             // direct=on: PVC-backed data disks, O_DIRECT-capable (see the
             // disk-boot branch comment for why root/data bypass the cache).
-            // One --disk per data disk, in order.
             for p in &self.data_disk_paths {
                 if p.is_empty() {
                     continue;
                 }
+                sandbox_disks.push(format!("path={},image_type=raw,direct=on", p));
+            }
+
+            if !sandbox_disks.is_empty() {
                 args.push("--disk".to_string());
-                args.push(format!("path={},image_type=raw,direct=on", p));
+                args.extend(sandbox_disks);
             }
         } else {
             // --kernel (CLOUDHV.fd UEFI firmware) required for disk boot.
@@ -385,6 +405,7 @@ mod tests {
             initramfs_path: None,
             kernel_cmdline: None,
             sandbox_rootfs: None,
+            sandbox_config: None,
             data_disk_paths: vec![],
             vfio_devices: vec![],
             fs_mounts: vec![],
@@ -757,6 +778,44 @@ mod tests {
         assert!(
             !faas.to_args().iter().any(|a| a == "--disk"),
             "faas kernel boot without sandbox_rootfs must emit no --disk"
+        );
+    }
+
+    #[test]
+    fn test_kernel_boot_sandbox_config_disk_is_vdb() {
+        let mut cfg = make_disk_boot_config();
+        cfg.kernel_path = Some("/k/bzImage".to_string());
+        cfg.initramfs_path = Some("/k/rootfs.cpio.gz".to_string());
+        cfg.firmware_path = None;
+        cfg.seed_path = String::new();
+        cfg.sandbox_rootfs = Some("/cache/x.ext4".to_string());
+        cfg.sandbox_config = Some("/run/exec.config".to_string());
+        let args = cfg.to_args();
+        // CH keeps only one disk from a REPEATED --disk flag, so all sandbox disks
+        // must ride a SINGLE multi-value --disk: exactly one --disk token, then the
+        // rootfs (/dev/vda) and the config (/dev/vdb) as consecutive path= values.
+        assert_eq!(
+            args.iter().filter(|a| *a == "--disk").count(),
+            1,
+            "sandbox disks must be ONE multi-value --disk (repeated --disk drops disks in CH): {:?}",
+            args
+        );
+        let disk_idx = args
+            .iter()
+            .position(|a| a == "--disk")
+            .expect("--disk missing");
+        let disks: Vec<&String> = args[disk_idx + 1..]
+            .iter()
+            .take_while(|a| a.starts_with("path="))
+            .collect();
+        assert_eq!(
+            disks,
+            vec![
+                "path=/cache/x.ext4,readonly=on,image_type=raw",
+                "path=/run/exec.config,readonly=on,image_type=raw",
+            ],
+            "config disk must be the 2nd disk (/dev/vdb), after the rootfs: {:?}",
+            args
         );
     }
 

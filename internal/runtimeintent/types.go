@@ -78,6 +78,14 @@ type RuntimeIntent struct {
 	// path only (a virtio-fs sandbox rootfs rides Filesystems). Set by the
 	// SwiftSandbox controller; the SwiftGuest path always leaves it nil.
 	SandboxRootfs *SandboxRootfsSpec `json:"sandboxRootfs,omitempty"`
+
+	// SandboxExec, when set, is the mode-3 workload exec spec (full argv + env +
+	// cwd). swiftletd serializes it to a per-sandbox READ-ONLY config disk (emitted
+	// right after SandboxRootfs, so /dev/vdb) that the bridge-initramfs reads to exec
+	// the workload. It rides a DISK, never the kernel cmdline — so env (secrets)
+	// never reach /proc/cmdline or the host's ps/logs. Set by the SwiftSandbox
+	// controller; nil on the SwiftGuest path.
+	SandboxExec *SandboxExecSpec `json:"sandboxExec,omitempty"`
 }
 
 // VsockIntent is the vsock device for the in-guest identity agent.
@@ -211,6 +219,16 @@ type RootDiskSpec struct {
 // or a block device — the W9 opacity contract).
 type SandboxRootfsSpec struct {
 	Path string `json:"path"`
+}
+
+// SandboxExecSpec is the workload exec for a mode-3 sandbox: the full argv, the
+// merged env ("KEY=VAL"), and the working directory. swiftletd writes it to the
+// per-sandbox config disk in the bridge's line format; the bridge execs argv with
+// env exported (cwd is best-effort in v1).
+type SandboxExecSpec struct {
+	Argv []string `json:"argv,omitempty"`
+	Env  []string `json:"env,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
 }
 
 // DataDiskSpec specifies one secondary VM disk for swiftletd. Path is opaque

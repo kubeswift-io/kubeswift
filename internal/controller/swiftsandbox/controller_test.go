@@ -12,24 +12,41 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
-func TestResolveEntrypoint(t *testing.T) {
-	cfg := materialize.ImageConfig{Entrypoint: []string{"/ep"}, Cmd: []string{"/cmd"}}
-	// spec.command wins (only [0]; v1 limitation).
-	sb := &sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{Command: []string{"/mine", "arg"}}}
-	if got := resolveEntrypoint(sb, cfg); got != "/mine" {
-		t.Errorf("command should win: %q", got)
+func TestResolveExec(t *testing.T) {
+	cfg := materialize.ImageConfig{
+		Entrypoint: []string{"/ep"}, Cmd: []string{"--serve"},
+		Env: []string{"PATH=/bin", "A=1"}, WorkingDir: "/img",
 	}
-	// else image entrypoint.
-	if got := resolveEntrypoint(&sandboxv1alpha1.SwiftSandbox{}, cfg); got != "/ep" {
-		t.Errorf("entrypoint: %q", got)
+	// spec.command overrides ENTRYPOINT, spec.args overrides CMD, spec.env overrides
+	// by key + appends, spec.workingDir wins.
+	sb := &sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{
+		Command:    []string{"/bin/sh", "-c"},
+		Args:       []string{"echo hi"},
+		Env:        []corev1.EnvVar{{Name: "A", Value: "2"}, {Name: "B", Value: "3"}},
+		WorkingDir: "/work",
+	}}
+	e := resolveExec(sb, cfg)
+	if strings.Join(e.Argv, " ") != "/bin/sh -c echo hi" {
+		t.Errorf("argv = %v", e.Argv)
 	}
-	// else image cmd.
-	if got := resolveEntrypoint(&sandboxv1alpha1.SwiftSandbox{}, materialize.ImageConfig{Cmd: []string{"/cmd"}}); got != "/cmd" {
-		t.Errorf("cmd: %q", got)
+	if e.Cwd != "/work" {
+		t.Errorf("cwd = %q", e.Cwd)
 	}
-	// else empty (bridge default /sbin/init -> /bin/sh).
-	if got := resolveEntrypoint(&sandboxv1alpha1.SwiftSandbox{}, materialize.ImageConfig{}); got != "" {
-		t.Errorf("empty: %q", got)
+	envs := strings.Join(e.Env, ",")
+	if !strings.Contains(envs, "PATH=/bin") || !strings.Contains(envs, "A=2") || !strings.Contains(envs, "B=3") {
+		t.Errorf("env = %v (want PATH kept, A overridden to 2, B appended)", e.Env)
+	}
+	// No spec command: image ENTRYPOINT + CMD; image cwd.
+	if e2 := resolveExec(&sandboxv1alpha1.SwiftSandbox{}, cfg); strings.Join(e2.Argv, " ") != "/ep --serve" || e2.Cwd != "/img" {
+		t.Errorf("image defaults: argv=%v cwd=%q", e2.Argv, e2.Cwd)
+	}
+	// command set, no args: the image CMD is suppressed (k8s rule).
+	if e3 := resolveExec(&sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{Command: []string{"/only"}}}, cfg); strings.Join(e3.Argv, " ") != "/only" {
+		t.Errorf("command should suppress image CMD: %v", e3.Argv)
+	}
+	// bare image, no overrides: empty argv+env+cwd -> not worth a config disk.
+	if bare := resolveExec(&sandboxv1alpha1.SwiftSandbox{}, materialize.ImageConfig{}); bare.nonTrivial() {
+		t.Errorf("bare spec should be trivial: %+v", bare)
 	}
 }
 
@@ -38,7 +55,7 @@ func TestBuildIntent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "default"},
 		Spec:       sandboxv1alpha1.SwiftSandboxSpec{CPU: 2, Memory: resource.MustParse("1Gi")},
 	}
-	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", "/bin/sh")
+	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", execSpec{Argv: []string{"/bin/sh"}})
 	if intent.KernelBoot == nil {
 		t.Fatal("kernelBoot nil")
 	}
@@ -46,9 +63,14 @@ func TestBuildIntent(t *testing.T) {
 		!strings.HasSuffix(intent.KernelBoot.InitramfsPath, "/rootfs.cpio.gz") {
 		t.Errorf("kernel paths: %s / %s", intent.KernelBoot.KernelPath, intent.KernelBoot.InitramfsPath)
 	}
+	// The exec spec rides the config disk: cmdline points the bridge at it (no argv
+	// on the cmdline), and intent.SandboxExec carries the argv.
 	if !strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.rootfs=block") ||
-		!strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.entrypoint=/bin/sh") {
+		!strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.config=/dev/vdb") {
 		t.Errorf("cmdline: %s", intent.KernelBoot.Cmdline)
+	}
+	if intent.SandboxExec == nil || strings.Join(intent.SandboxExec.Argv, " ") != "/bin/sh" {
+		t.Errorf("sandboxExec: %+v", intent.SandboxExec)
 	}
 	// A networked sandbox gets kernel IP autoconfig so the guest actually DHCPs.
 	if !strings.Contains(intent.KernelBoot.Cmdline, "ip=dhcp") {
@@ -63,7 +85,7 @@ func TestBuildIntent(t *testing.T) {
 	}
 	sbNone := sb.DeepCopy()
 	sbNone.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkNone
-	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", "")
+	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}})
 	if iNone.Network {
 		t.Error("mode=none sandbox must be network-isolated")
 	}
@@ -77,10 +99,10 @@ func TestBuildIntent(t *testing.T) {
 	if intent.Hypervisor != "cloud-hypervisor" {
 		t.Errorf("hypervisor: %s", intent.Hypervisor)
 	}
-	// No entrypoint -> the cmdline omits kubeswift.entrypoint (bridge default).
-	i2 := buildIntent(sb, "sandbox", "/x.ext4", "")
-	if strings.Contains(i2.KernelBoot.Cmdline, "kubeswift.entrypoint") {
-		t.Errorf("empty entrypoint should omit the arg: %s", i2.KernelBoot.Cmdline)
+	// Trivial exec (bare image, no overrides) -> no config disk, no SandboxExec.
+	i2 := buildIntent(sb, "sandbox", "/x.ext4", execSpec{})
+	if strings.Contains(i2.KernelBoot.Cmdline, "kubeswift.config") || i2.SandboxExec != nil {
+		t.Errorf("trivial exec should omit the config disk: cmdline=%s exec=%+v", i2.KernelBoot.Cmdline, i2.SandboxExec)
 	}
 }
 
