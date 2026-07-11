@@ -66,6 +66,20 @@ webhooks:
         apiGroups: ["migration.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftmigrations"]
+  - name: vswiftsandbox.sandbox.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: kubeswift-system
+        name: kubeswift-webhook-service
+        path: /validate-sandbox-kubeswift-io-v1alpha1-swiftsandbox
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["sandbox.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftsandboxes"]
   - name: vswiftsnapshotschedule.snapshot.kubeswift.io
     admissionReviewVersions: ["v1"]
     sideEffects: None

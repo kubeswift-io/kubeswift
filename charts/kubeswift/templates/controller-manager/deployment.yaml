@@ -31,6 +31,8 @@ spec:
               value: {{ .Values.snapshotORAS.image.registry }}/snapshot-oras:{{ include "kubeswift.imageTag" (dict "tag" .Values.snapshotORAS.image.tag "appVersion" .Chart.AppVersion) }}
             - name: KUBESWIFT_MIGRATION_STUNNEL_IMAGE
               value: {{ .Values.migrationStunnel.image.registry }}/migration-stunnel:{{ include "kubeswift.imageTag" (dict "tag" .Values.migrationStunnel.image.tag "appVersion" .Chart.AppVersion) }}
+            - name: KUBESWIFT_SANDBOX_MATERIALIZE_IMAGE
+              value: {{ .Values.sandboxMaterialize.image.registry }}/sandbox-materialize:{{ include "kubeswift.imageTag" (dict "tag" .Values.sandboxMaterialize.image.tag "appVersion" .Chart.AppVersion) }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

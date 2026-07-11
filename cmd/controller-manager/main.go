@@ -29,6 +29,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftkernel"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftmigration"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftrestore"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsandbox"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshotschedule"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
@@ -39,11 +40,13 @@ import (
 	swiftimagewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftimage"
 	swiftmigrationwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftmigration"
 	swiftrestorewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftrestore"
+	swiftsandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 	swiftseedprofilewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 	swiftsnapshotschedulewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshotschedule"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
 const (
@@ -244,6 +247,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&swiftsandbox.SwiftSandboxReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftsandbox-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSandbox controller")
+		os.Exit(1)
+	}
+
 	// Phase 4 drain controller: the "controller creates" half of drain
 	// integration. Watches SwiftGuests for the kubeswift.io/drain-requested
 	// marker (stamped by the eviction webhook) and creates a SwiftMigration to
@@ -320,6 +332,12 @@ func main() {
 			WithCustomValidator(&swiftmigrationwebhook.Validator{Client: mgr.GetClient()}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftMigration webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &sandboxv1alpha1.SwiftSandbox{}).
+			WithCustomValidator(&swiftsandboxwebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftSandbox webhook")
 			os.Exit(1)
 		}
 		// Phase 4 drain integration: raw admission handler on pods/eviction

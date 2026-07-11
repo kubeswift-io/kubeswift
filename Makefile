@@ -11,6 +11,7 @@ MIGRATION_STUNNEL_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/migration-stunnel:$(IM
 SNAPSHOT_S3_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/snapshot-s3:$(IMAGE_TAG)
 SNAPSHOT_ORAS_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/snapshot-oras:$(IMAGE_TAG)
 GATEWAY_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:$(IMAGE_TAG)
+SANDBOX_MATERIALIZE_IMAGE ?= ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:$(IMAGE_TAG)
 IMAGE_REGISTRY ?= ghcr.io/kubeswift-io/kubeswift
 # Push destination: parent OCI repo only (Helm appends chart name from Chart.yaml)
 CHART_OCI_PUSH ?= oci://ghcr.io/kubeswift-io/charts
@@ -45,7 +46,7 @@ GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
-	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
+	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup e2e-tests \
 	verify-e2e-scripts \
@@ -95,7 +96,7 @@ build-go:
 build-rust:
 	cd rust && KUBESWIFT_VERSION="$(VERSION)" KUBESWIFT_GIT_COMMIT="$(GIT_COMMIT)" KUBESWIFT_BUILD_DATE="$(BUILD_DATE)" cargo build
 
-build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image
+build-images: build-controller-image build-swiftletd-image build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image
 
 build-controller-image:
 	docker build -f images/controller-manager/Containerfile . -t $(CONTROLLER_IMAGE) \
@@ -129,6 +130,10 @@ build-gateway-image:
 	docker build -f images/kubeswift-gateway/Containerfile . -t $(GATEWAY_IMAGE) \
 		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
 
+build-sandbox-materialize-image:
+	docker build -f images/sandbox-materialize/Containerfile . -t $(SANDBOX_MATERIALIZE_IMAGE) \
+		--build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) --build-arg BUILD_DATE=$(BUILD_DATE)
+
 push-images: build-images
 	docker push $(CONTROLLER_IMAGE)
 	docker push $(SWIFTLETD_IMAGE)
@@ -137,6 +142,7 @@ push-images: build-images
 	docker push $(SNAPSHOT_S3_IMAGE)
 	docker push $(DRA_DRIVER_IMAGE)
 	docker push $(GATEWAY_IMAGE)
+	docker push $(SANDBOX_MATERIALIZE_IMAGE)
 
 package-chart:
 	@CHART_VER="$${CHART_VERSION:-$$(./hack/chart-version.sh dev 2>/dev/null || echo "0.0.0-dev.unknown")}"; \

@@ -86,6 +86,15 @@ rules:
   - apiGroups: ["migration.kubeswift.io"]
     resources: ["swiftmigrations", "swiftmigrations/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftSandbox (sandbox.kubeswift.io). Owns launcher pods + intent ConfigMaps
+  # (granted via the core "" group above); status via the /status subresource.
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes", "swiftsandboxes/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # snapshot.storage.k8s.io VolumeSnapshots — owned by SwiftSnapshot/SwiftImage,
   # read by SwiftRestore. The CSI external-snapshotter owns VolumeSnapshotContent
   # and VolumeSnapshotClass; the controller-manager only needs read for class.
