@@ -41,8 +41,11 @@ Notes:
   honored in v1 — the workload starts in `/`.)
 - **Exit status**: the workload runs as a supervised child, so its real exit code
   is surfaced as `status.exitCode` — a non-zero exit terminates the sandbox `Failed`,
-  zero terminates it `Completed`. The guest console (workload stdout/stderr) is
-  written to a host file, not an interactive socket; live exec/attach is a vsock
-  follow-up.
+  zero terminates it `Completed`.
+- **Interacting** with a running sandbox:
+  - `swiftctl sandbox logs <name>` (`-f` to follow) streams the workload console.
+  - `swiftctl sandbox exec <name> -- cmd args...` runs a command inside the sandbox's
+    OCI rootfs over a host↔guest vsock channel (an in-guest agent; non-interactive;
+    stdout/stderr returned, exit code propagated). Interactive `attach` is a follow-up.
 - `spec.timeout` force-terminates a runaway sandbox; `spec.ttl` deletes the
   finished record (and frees the node rootfs cache reference) after it elapses.

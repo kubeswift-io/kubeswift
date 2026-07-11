@@ -154,6 +154,15 @@ fi
 # read, and power the VM off so CH exits and the launcher pod reaches a terminal state.
 # NOTE: spec.workingDir is NOT honored in v1 — chroot starts the workload at / and a
 # chdir wrapper needs a guest shell (deferred). The workload starts in /.
+# Start the vsock control agent (swiftctl sandbox exec/attach) in the background if it
+# was baked into the initramfs. It runs in the initramfs context (has AF_VSOCK) and
+# chroots into /newroot per exec request. Best-effort — a missing agent just means no
+# exec. Logs go to /dev/kmsg (kernel log) so they don't interleave the workload console
+# that swiftletd captures as the sandbox log.
+if [ -x /usr/local/bin/kubeswift-guest-agent ]; then
+	/usr/local/bin/kubeswift-guest-agent --exec-root=/newroot >/dev/kmsg 2>&1 &
+fi
+
 echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; run $1 ($# arg(s))"
 chroot /newroot "$@"
 code=$?

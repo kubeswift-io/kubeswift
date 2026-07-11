@@ -28,7 +28,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +38,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -68,6 +71,9 @@ type Request struct {
 	MAC        string   `json:"mac,omitempty"`
 	Hostname   string   `json:"hostname,omitempty"`
 	RenewLease bool     `json:"renewLease,omitempty"`
+	// exec op:
+	Argv []string `json:"argv,omitempty"`
+	Env  []string `json:"env,omitempty"`
 }
 
 // Response is the guest->host reply.
@@ -83,6 +89,10 @@ type Response struct {
 	MAC          string   `json:"mac,omitempty"`
 	IP           string   `json:"ip,omitempty"`
 	Error        string   `json:"error,omitempty"`
+	// exec op:
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode *int   `json:"exitCode,omitempty"`
 }
 
 var (
@@ -105,6 +115,10 @@ type system interface {
 type handler struct {
 	sys     system
 	version string
+	// execRoot is the chroot dir for the exec op (empty = run in the agent's own root).
+	// SwiftSandbox passes /newroot (the OCI overlay) so exec runs in the workload's
+	// filesystem; identity guests leave it empty.
+	execRoot string
 }
 
 // handle parses one request, dispatches it, and returns the JSON response bytes.
@@ -122,6 +136,8 @@ func (h *handler) handle(raw []byte) []byte {
 		resp = h.status()
 	case "regenerate-identity":
 		resp = h.regenerate(req)
+	case "exec":
+		resp = h.exec(req)
 	default:
 		resp = Response{OK: false, Error: "unknown op: " + req.Op}
 	}
@@ -410,3 +426,72 @@ func (realSystem) writeFile(p string, data []byte, perm os.FileMode) error {
 func (realSystem) remove(p string) error           { return os.Remove(p) }
 func (realSystem) glob(p string) ([]string, error) { return filepath.Glob(p) }
 func (realSystem) hostname() (string, error)       { return os.Hostname() }
+
+// execPathDirs is the PATH searched (inside the chroot) for a bare command name.
+var execPathDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// execOutputCap bounds each of stdout/stderr for the non-streaming exec op. Large or
+// long-running output is a streaming follow-up.
+const execOutputCap = 1 << 20 // 1 MiB
+
+// exec runs argv chrooted into the sandbox root (h.execRoot) and returns its stdout,
+// stderr and exit code in one response. The command binary is resolved against a PATH
+// INSIDE the chroot — Go's LookPath would search the agent's own (initramfs) root.
+func (h *handler) exec(req Request) Response {
+	if len(req.Argv) == 0 {
+		return Response{OK: false, Error: "exec: empty argv"}
+	}
+	root := h.execRoot
+	prog := req.Argv[0]
+	if !strings.Contains(prog, "/") {
+		for _, dir := range execPathDirs {
+			if fi, err := os.Stat(root + dir + "/" + prog); err == nil && !fi.IsDir() {
+				prog = dir + "/" + prog
+				break
+			}
+		}
+	}
+	cmd := exec.Command(prog, req.Argv[1:]...)
+	cmd.Path = prog // skip Go's parent-context LookPath (wrong filesystem)
+	if root != "" && root != "/" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: root}
+		cmd.Dir = "/"
+	}
+	cmd.Env = execEnv(req.Env)
+	stdout := &capBuffer{max: execOutputCap}
+	stderr := &capBuffer{max: execOutputCap}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			code = ee.ExitCode()
+		} else {
+			return Response{OK: false, Error: "exec: " + err.Error()}
+		}
+	}
+	return Response{OK: true, Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), ExitCode: &code}
+}
+
+func execEnv(reqEnv []string) []string {
+	env := []string{"PATH=" + strings.Join(execPathDirs, ":"), "HOME=/", "TERM=xterm"}
+	return append(env, reqEnv...)
+}
+
+// capBuffer accumulates up to max bytes then silently drops the rest, so a runaway
+// command can't OOM the agent while still running to completion.
+type capBuffer struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (c *capBuffer) Write(p []byte) (int, error) {
+	if rem := c.max - c.buf.Len(); rem > 0 {
+		if len(p) > rem {
+			c.buf.Write(p[:rem])
+		} else {
+			c.buf.Write(p)
+		}
+	}
+	return len(p), nil
+}
