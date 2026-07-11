@@ -19,12 +19,14 @@
 // Installing/starting it on the clone is impossible (nothing new starts on a
 // resume).
 //
-// SECURITY: the command surface is exactly two ops (ping, regenerate-identity)
-// with a fixed schema — NO exec, no path argument, no file transfer. Inputs
-// (MAC, hostname) are validated then passed as argv (never shell-interpolated).
-// The transport is vsock — host<->guest only, not network-reachable. An
-// attacker who somehow reached the port could only ask the guest to regenerate
-// its own identity (self-inflicted, non-escalating).
+// SECURITY: for identity guests the command surface is exactly two ops (ping,
+// regenerate-identity) with a fixed schema — inputs (MAC, hostname) are validated
+// then passed as argv (never shell-interpolated). The `exec` op (run an arbitrary
+// command in the guest) is ENABLED ONLY when the agent is started with --exec-root —
+// i.e. SwiftSandbox, which runs untrusted code the host already fully controls;
+// identity guests run WITHOUT --exec-root, so exec is unavailable there. The transport
+// is vsock — host<->guest only, not network-reachable — so only the (trusted) host can
+// reach any op.
 package main
 
 import (
@@ -74,6 +76,7 @@ type Request struct {
 	// exec op:
 	Argv []string `json:"argv,omitempty"`
 	Env  []string `json:"env,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
 }
 
 // Response is the guest->host reply.
@@ -438,6 +441,12 @@ const execOutputCap = 1 << 20 // 1 MiB
 // stderr and exit code in one response. The command binary is resolved against a PATH
 // INSIDE the chroot — Go's LookPath would search the agent's own (initramfs) root.
 func (h *handler) exec(req Request) Response {
+	// exec is enabled ONLY when the agent was started with --exec-root (SwiftSandbox).
+	// Identity guests run without it, so they keep the minimal two-op surface — no
+	// arbitrary command execution, even over the host-only vsock.
+	if h.execRoot == "" {
+		return Response{OK: false, Error: "exec is disabled (no --exec-root; SwiftSandbox only)"}
+	}
 	if len(req.Argv) == 0 {
 		return Response{OK: false, Error: "exec: empty argv"}
 	}
@@ -453,10 +462,14 @@ func (h *handler) exec(req Request) Response {
 	}
 	cmd := exec.Command(prog, req.Argv[1:]...)
 	cmd.Path = prog // skip Go's parent-context LookPath (wrong filesystem)
+	dir := req.Cwd
 	if root != "" && root != "/" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: root}
-		cmd.Dir = "/"
+		if dir == "" {
+			dir = "/" // cwd must exist in the new root; the chroot root always does
+		}
 	}
+	cmd.Dir = dir // "" inherits the agent's cwd (no-chroot case); otherwise relative to the chroot
 	cmd.Env = execEnv(req.Env)
 	stdout := &capBuffer{max: execOutputCap}
 	stderr := &capBuffer{max: execOutputCap}

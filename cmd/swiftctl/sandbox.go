@@ -58,8 +58,15 @@ stdout and stderr are returned and the command's exit code is propagated.`,
 	RunE:         runSandboxExec,
 }
 
+var (
+	sandboxExecEnv     []string
+	sandboxExecWorkdir string
+)
+
 func init() {
 	sandboxLogsCmd.Flags().BoolVarP(&sandboxLogsFollow, "follow", "f", false, "Follow the log output")
+	sandboxExecCmd.Flags().StringArrayVarP(&sandboxExecEnv, "env", "e", nil, "Environment variable KEY=VALUE (repeatable)")
+	sandboxExecCmd.Flags().StringVarP(&sandboxExecWorkdir, "workdir", "w", "", "Working directory inside the sandbox")
 	sandboxCmd.AddCommand(sandboxLogsCmd)
 	sandboxCmd.AddCommand(sandboxExecCmd)
 }
@@ -83,7 +90,14 @@ func runSandboxExec(cmd *cobra.Command, args []string) error {
 	}
 
 	vsockSock := "/var/lib/kubeswift/run/" + cli.GuestID(ns, name) + "/vsock.sock"
-	req, _ := json.Marshal(map[string]interface{}{"v": 1, "op": "exec", "argv": command})
+	reqObj := map[string]interface{}{"v": 1, "op": "exec", "argv": command}
+	if len(sandboxExecEnv) > 0 {
+		reqObj["env"] = sandboxExecEnv
+	}
+	if sandboxExecWorkdir != "" {
+		reqObj["cwd"] = sandboxExecWorkdir
+	}
+	req, _ := json.Marshal(reqObj)
 
 	resp, err := agentRequest(config, clientset, ns, name, vsockSock, req)
 	if err != nil {
