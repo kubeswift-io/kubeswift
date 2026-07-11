@@ -139,11 +139,31 @@ cross_node_tcp_probe() {
     launcher_ip=$(kubectl get pod "$SG_NAME" -n "$NS" -o jsonpath='{.status.podIP}')
     echo "  launcher pod IP: $launcher_ip"
     echo "  starting socat listener on launcher pod port $PORT..."
-    # Start listener in background; pipe a marker line for the probe to consume
+    # Listener notes:
+    #   - `-u` makes socat unidirectional (no bidirectional stdio EOF
+    #     propagation that would close the LISTEN side immediately).
+    #   - `,fork` lets the listener serve N probes and stay up; the
+    #     parent socat survives the connection and we tear it down
+    #     explicitly at the end of this function.
+    #   - `nohup ... </dev/null &` inside the container plus
+    #     backgrounding the kubectl exec on the host releases the
+    #     kubectl API channel; otherwise kubectl keeps the channel
+    #     open while any in-container FD-inheritor lives.
     kubectl exec "$SG_NAME" -n "$NS" -c launcher -- \
-        sh -c "(echo b0-probe-ack | socat -T 30 TCP-LISTEN:$PORT,reuseaddr - >/dev/null 2>&1) &" \
-        || { echo "ERROR: failed to start socat listener"; exit 1; }
-    sleep 1
+        sh -c "nohup socat -u TCP-LISTEN:$PORT,reuseaddr,fork SYSTEM:'echo b0-probe-ack' >/tmp/socat-b0.log 2>&1 </dev/null &" \
+        >/dev/null 2>&1 &
+    local exec_pid=$!
+    sleep 2
+    # Confirm the listener actually bound; if it didn't, fail fast
+    # rather than waste 30s on a probe that can't possibly connect.
+    if ! kubectl exec "$SG_NAME" -n "$NS" -c launcher -- \
+        sh -c "ss -tln 2>/dev/null | grep -q :$PORT"; then
+        echo "ERROR: socat listener did not bind on port $PORT"
+        kubectl exec "$SG_NAME" -n "$NS" -c launcher -- cat /tmp/socat-b0.log 2>&1 | tail -5
+        kill "$exec_pid" 2>/dev/null || true
+        exit 1
+    fi
+    echo "  socat listener bound on :$PORT"
     echo "  applying probe pod on $PROBE_NODE..."
     cat <<EOF | kubectl apply -f - >/dev/null
 apiVersion: v1
@@ -160,21 +180,28 @@ spec:
     command: ["sh","-c","nc -w 5 -v $launcher_ip $PORT"]
 EOF
     # Wait for the probe pod to terminate (success) or timeout
+    local rc=1
     local deadline=$(( $(date +%s) + 30 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local phase
         phase=$(kubectl get pod "$PROBE_POD" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
         case "$phase" in
-            Succeeded) echo "  probe pod Succeeded — TCP connection established"; return 0 ;;
+            Succeeded) echo "  probe pod Succeeded — TCP connection established"; rc=0; break ;;
             Failed) echo "ERROR: probe pod Failed"
                     kubectl logs "$PROBE_POD" -n "$NS" 2>&1 | tail -5
-                    exit 1 ;;
+                    break ;;
         esac
         sleep 1
     done
-    echo "ERROR: probe pod did not terminate within 30s"
-    kubectl describe pod "$PROBE_POD" -n "$NS" 2>&1 | tail -20
-    exit 1
+    if [ "$rc" -ne 0 ] && [ -z "${phase:-}" ]; then
+        echo "ERROR: probe pod did not terminate within 30s"
+        kubectl describe pod "$PROBE_POD" -n "$NS" 2>&1 | tail -20
+    fi
+    # Tear down the listener inside the launcher pod (best-effort).
+    kubectl exec "$SG_NAME" -n "$NS" -c launcher -- \
+        sh -c "pkill -f 'socat.*TCP-LISTEN:$PORT' 2>/dev/null; true" >/dev/null 2>&1 || true
+    kill "$exec_pid" 2>/dev/null || true
+    [ "$rc" -eq 0 ] || exit 1
 }
 
 cleanup() {

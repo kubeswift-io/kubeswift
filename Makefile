@@ -47,7 +47,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup e2e-tests \
 	verify-e2e-scripts \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -82,6 +82,7 @@ help:
 	@echo "  local-roundtrip-test  Run Tier B (local hostPath) memory snapshot+in-place restore e2e"
 	@echo "  local-clone-identity-test  Run Tier B clone-identity-collision e2e"
 	@echo "  b0-cross-node-tcp-test     Run B0 cross-node TCP regression test (requires 2+ kernel-nodes)"
+	@echo "  b0-cross-node-tcp-test-cleanup  Tear down b0-cross-node SwiftGuest + probe pod"
 	@echo "  e2e-tests             Run every cluster-side e2e in sequence"
 	@echo "  verify-e2e-scripts    Static check (bash -n) of every e2e script (fast, no cluster)"
 	@echo "  preflight             Run worker-node readiness preflight (host checks only)"
@@ -361,6 +362,9 @@ local-clone-identity-test:
 # See docs/design/live-migration-phase-3a-spike.md (B0 finding).
 b0-cross-node-tcp-test:
 	@test/networking/b0-cross-node-tcp.sh validate
+
+b0-cross-node-tcp-test-cleanup:
+	@test/networking/b0-cross-node-tcp.sh cleanup
 
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
