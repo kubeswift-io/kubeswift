@@ -28,6 +28,11 @@ Notes:
   - `open` — deny-ingress but unrestricted egress (guest can reach the whole cluster
     + internet). Opt-in for trusted workloads that must talk to in-cluster services.
   - `none` — no network at all (detonation / pure compute).
+- **DNS**: a networked guest resolves cluster service names (`kubernetes`, `svc.ns`,
+  FQDNs) *and* external names — the controller injects the namespace search domains +
+  `ndots:5` (matching a Kubernetes pod's resolver; `ip=dhcp` alone captures the
+  nameserver but not the search list). `restricted` still blocks *connecting* to
+  cluster IPs — names resolve, the egress rules decide reachability.
 - `spec.command` / `spec.args` / `spec.env` / `spec.workingDir` follow k8s/OCI
   semantics (command overrides the image ENTRYPOINT, args the CMD, env is merged
   over the image env), delivered to the guest on a per-sandbox read-only config

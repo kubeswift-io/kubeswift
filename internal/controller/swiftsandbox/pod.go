@@ -63,6 +63,12 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		// kernel DHCP eth0 at boot. Omitted for network:none — there is no dnsmasq,
 		// so kernel DHCP would only stall the boot.
 		cmdline += " ip=dhcp"
+		// The kernel ip=dhcp path captures the DHCP nameserver but NOT the search list
+		// (DHCP option 119), so cluster-internal SHORT names (e.g. kubernetes.default)
+		// would NXDOMAIN. Pass the standard k8s search domains for the sandbox's
+		// namespace; the bridge-init writes them into the guest's /etc/resolv.conf.
+		// (Cluster domain assumed cluster.local — the near-universal default.)
+		cmdline += " kubeswift.dns-search=" + sb.Namespace + ".svc.cluster.local,svc.cluster.local,cluster.local"
 	}
 	var sandboxExec *runtimeintent.SandboxExecSpec
 	if exec.nonTrivial() {

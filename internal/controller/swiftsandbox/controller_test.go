@@ -76,6 +76,11 @@ func TestBuildIntent(t *testing.T) {
 	if !strings.Contains(intent.KernelBoot.Cmdline, "ip=dhcp") {
 		t.Errorf("networked sandbox cmdline should include ip=dhcp: %s", intent.KernelBoot.Cmdline)
 	}
+	// ...and the k8s search domains for its namespace (ip=dhcp doesn't capture the
+	// DHCP search list, so cluster-internal short names would otherwise NXDOMAIN).
+	if !strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.dns-search=default.svc.cluster.local,svc.cluster.local,cluster.local") {
+		t.Errorf("networked sandbox cmdline should include the namespace search domains: %s", intent.KernelBoot.Cmdline)
+	}
 	if intent.SandboxRootfs == nil || intent.SandboxRootfs.Path != "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4" {
 		t.Errorf("sandboxRootfs: %+v", intent.SandboxRootfs)
 	}
@@ -89,8 +94,9 @@ func TestBuildIntent(t *testing.T) {
 	if iNone.Network {
 		t.Error("mode=none sandbox must be network-isolated")
 	}
-	// network:none has no dnsmasq -> ip=dhcp would only stall the boot; it must be absent.
-	if strings.Contains(iNone.KernelBoot.Cmdline, "ip=dhcp") {
+	// network:none has no dnsmasq -> ip=dhcp (and the DNS search domains) would only
+	// stall the boot / be meaningless; both must be absent.
+	if strings.Contains(iNone.KernelBoot.Cmdline, "ip=dhcp") || strings.Contains(iNone.KernelBoot.Cmdline, "kubeswift.dns-search=") {
 		t.Errorf("network:none must omit ip=dhcp: %s", iNone.KernelBoot.Cmdline)
 	}
 	if intent.CPU != 2 || intent.Memory != 1024 {

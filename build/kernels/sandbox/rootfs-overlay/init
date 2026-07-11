@@ -30,11 +30,13 @@ mount -t devpts   none /dev/pts 2>/dev/null || true
 ROOTFS_KIND=block
 ENTRYPOINT=""
 CONFIG_DEV=""
+DNS_SEARCH=""
 for arg in $(cat /proc/cmdline); do
 	case "$arg" in
 		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
 		kubeswift.entrypoint=*) ENTRYPOINT="${arg#kubeswift.entrypoint=}" ;;
 		kubeswift.config=*)     CONFIG_DEV="${arg#kubeswift.config=}" ;;
+		kubeswift.dns-search=*) DNS_SEARCH="${arg#kubeswift.dns-search=}" ;;
 	esac
 done
 
@@ -81,7 +83,17 @@ mount -t overlay overlay \
 # guest (the tmpfs overlay upper is writable, so the signed image is untouched).
 mkdir -p /newroot/etc
 if [ -r /proc/net/pnp ]; then
-	grep -E '^(nameserver|domain|search)' /proc/net/pnp > /newroot/etc/resolv.conf 2>/dev/null || true
+	grep -E '^(nameserver|domain)' /proc/net/pnp > /newroot/etc/resolv.conf 2>/dev/null || true
+fi
+# ip=dhcp captures the nameserver but not the DHCP search list, so cluster-internal
+# SHORT names (kubernetes.default) would NXDOMAIN. Add the k8s search domains the
+# controller passed on the cmdline (kubeswift.dns-search=, comma-separated).
+if [ -n "$DNS_SEARCH" ]; then
+	echo "search $(echo "$DNS_SEARCH" | tr ',' ' ')" >> /newroot/etc/resolv.conf
+	# Match the Kubernetes pod resolver: ndots:5 so a partially-qualified name like
+	# `svc.namespace` (1 dot) is tried against the search domains, not resolved absolute-
+	# only. Without it musl/glibc only search-expand names with fewer dots than ndots (1).
+	echo "options ndots:5" >> /newroot/etc/resolv.conf
 fi
 
 # --- resolve the workload exec ---
