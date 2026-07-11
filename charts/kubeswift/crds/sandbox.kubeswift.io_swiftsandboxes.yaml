@@ -283,6 +283,7 @@ spec:
                     description: Mode is "restricted" (default) or "none".
                     enum:
                     - restricted
+                    - open
                     - none
                     type: string
                 type: object

@@ -7,11 +7,19 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
-// buildNetworkPolicy builds the "restricted" NetworkPolicy for a networked
-// sandbox: deny ALL ingress to the launcher pod (nothing on the cluster can reach
-// the sandbox) while allowing egress (a CI/agent sandbox's outbound is the point).
-// mode=none has no pod network at all, so no policy is created there. Narrowing
-// egress to specific destinations is a follow-up; deny-ingress is the v1 floor.
+// buildNetworkPolicy builds the deny-ingress NetworkPolicy for a networked sandbox:
+// nothing on the cluster can reach the sandbox. Egress is left allow-all HERE on
+// purpose — the VM's egress hardening is done in-pod (the restricted-egress FORWARD
+// iptables in network-init.sh), NOT in this NetworkPolicy.
+//
+// Why not the NetworkPolicy: it applies to the whole launcher pod, and after
+// MASQUERADE the VM's traffic and swiftletd's own API-server traffic both source
+// from the pod IP — a NetworkPolicy that blocked cluster egress would also cut
+// swiftletd's status reporting (#347). Only the FORWARD chain can match the VM's
+// pre-NAT source (bridge subnet) and filter the VM alone. So this policy owns
+// ingress isolation; the iptables owns egress. mode=none has no pod network at all,
+// so no policy is created. Same policy for restricted and open (both deny-ingress);
+// the restricted/open difference is entirely the in-pod egress rules.
 func buildNetworkPolicy(sb *sandboxv1alpha1.SwiftSandbox) *networkingv1.NetworkPolicy {
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
