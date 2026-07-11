@@ -98,9 +98,24 @@ func TestPingReportsIdentity(t *testing.T) {
 
 func TestUnknownOp(t *testing.T) {
 	h, _ := newHandler()
-	r := decode(t, h.handle([]byte(`{"op":"exec","cmd":"rm -rf /"}`)))
+	r := decode(t, h.handle([]byte(`{"op":"bogus-op"}`)))
 	if r.OK || !strings.Contains(r.Error, "unknown op") {
 		t.Fatalf("unknown op should fail loudly: %+v", r)
+	}
+}
+
+func TestExec(t *testing.T) {
+	h, _ := newHandler() // execRoot="" -> no chroot; runs host commands in the test
+	if r := decode(t, h.handle([]byte(`{"op":"exec"}`))); r.OK {
+		t.Errorf("empty argv should fail: %+v", r)
+	}
+	r := decode(t, h.handle([]byte(`{"op":"exec","argv":["echo","hi"]}`)))
+	if !r.OK || r.Stdout != "hi\n" || r.ExitCode == nil || *r.ExitCode != 0 {
+		t.Errorf("echo: %+v", r)
+	}
+	r = decode(t, h.handle([]byte(`{"op":"exec","argv":["sh","-c","exit 3"]}`)))
+	if !r.OK || r.ExitCode == nil || *r.ExitCode != 3 {
+		t.Errorf("exit 3 should propagate: %+v", r)
 	}
 }
 

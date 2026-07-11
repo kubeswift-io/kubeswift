@@ -26,7 +26,19 @@ setup:
 		echo "buildroot already present at $(BUILDROOT_DIR)"; \
 	fi
 
-build: setup
+# The in-guest vsock control agent (swiftctl sandbox exec/attach) is baked into the
+# initramfs via the buildroot rootfs-overlay. Built static from source here (a build
+# artifact — gitignored, never committed). The bridge-init runs it in the background.
+REPO_ROOT := $(CURDIR)/../../..
+AGENT_BIN  := $(CURDIR)/rootfs-overlay/usr/local/bin/kubeswift-guest-agent
+
+agent:
+	@mkdir -p $(dir $(AGENT_BIN))
+	cd $(REPO_ROOT) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+		go build -ldflags="-s -w" -o $(AGENT_BIN) ./cmd/kubeswift-guest-agent
+	@echo "  guest-agent: $(AGENT_BIN) ($$(du -h $(AGENT_BIN) | cut -f1))"
+
+build: setup agent
 	$(MAKE) -C $(BUILDROOT_DIR) \
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \

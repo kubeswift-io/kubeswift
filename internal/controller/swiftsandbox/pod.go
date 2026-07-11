@@ -102,6 +102,11 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		// the "restricted" posture (built by the controller).
 		Network:    networked(sb),
 		Hypervisor: "cloud-hypervisor",
+		// vsock control channel for the in-guest agent (swiftctl sandbox exec/attach).
+		// The agent is baked into the sandbox initramfs and the bridge runs it; the host
+		// reaches it through CH's vsock unix socket. Always wired for sandboxes — vsock
+		// is host<->guest only (not network-reachable), so it costs nothing to have.
+		Vsock: &runtimeintent.VsockIntent{CID: runtimeintent.DeriveVsockCID(sb.Namespace, sb.Name)},
 	}
 }
 

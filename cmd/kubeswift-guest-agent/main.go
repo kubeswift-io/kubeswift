@@ -20,6 +20,7 @@ const (
 
 func main() {
 	port := flag.Int("port", DefaultPort, "AF_VSOCK port to listen on")
+	execRoot := flag.String("exec-root", "", "chroot dir for the exec op (empty = agent's own root; SwiftSandbox passes /newroot)")
 	flag.Parse()
 	if env := os.Getenv("KUBESWIFT_GUEST_AGENT_PORT"); env != "" {
 		if p, err := strconv.Atoi(env); err == nil {
@@ -27,7 +28,7 @@ func main() {
 		}
 	}
 
-	h := &handler{sys: realSystem{}, version: version}
+	h := &handler{sys: realSystem{}, version: version, execRoot: *execRoot}
 
 	lfd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
 	if err != nil {

@@ -1,2 +1,3 @@
 /buildroot/
 /output/
+/rootfs-overlay/usr/local/bin/kubeswift-guest-agent
