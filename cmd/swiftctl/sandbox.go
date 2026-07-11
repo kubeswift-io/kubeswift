@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/kubeswift-io/kubeswift/internal/cli"
+	"github.com/kubeswift-io/kubeswift/internal/guestagent"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
@@ -49,8 +50,8 @@ var sandboxExecCmd = &cobra.Command{
 	Use:   "exec [sandbox-name] -- command [args...]",
 	Short: "Run a command inside a running sandbox (over vsock)",
 	Long: `Runs a command inside a running SwiftSandbox via the in-guest agent over vsock. The
-command runs in the sandbox's OCI root filesystem. Non-interactive (no stdin/TTY);
-stdout and stderr are returned and the command's exit code is propagated.`,
+command runs in the sandbox's OCI root filesystem. stdout and stderr stream back LIVE
+and the command's exit code is propagated. Non-interactive (no stdin/TTY yet).`,
 	Example: `  swiftctl sandbox exec my-job -- ls -la /
   swiftctl -n ci sandbox exec my-job -- cat /etc/os-release`,
 	Args:         cobra.MinimumNArgs(2),
@@ -90,7 +91,7 @@ func runSandboxExec(cmd *cobra.Command, args []string) error {
 	}
 
 	vsockSock := "/var/lib/kubeswift/run/" + cli.GuestID(ns, name) + "/vsock.sock"
-	reqObj := map[string]interface{}{"v": 1, "op": "exec", "argv": command}
+	reqObj := map[string]interface{}{"v": 1, "op": "exec", "argv": command, "stream": true}
 	if len(sandboxExecEnv) > 0 {
 		reqObj["env"] = sandboxExecEnv
 	}
@@ -99,39 +100,21 @@ func runSandboxExec(cmd *cobra.Command, args []string) error {
 	}
 	req, _ := json.Marshal(reqObj)
 
-	resp, err := agentRequest(config, clientset, ns, name, vsockSock, req)
+	code, err := agentExecStream(config, clientset, ns, name, vsockSock, req)
 	if err != nil {
 		return err
 	}
-	if resp.Stdout != "" {
-		fmt.Fprint(os.Stdout, resp.Stdout)
-	}
-	if resp.Stderr != "" {
-		fmt.Fprint(os.Stderr, resp.Stderr)
-	}
-	if !resp.OK {
-		return fmt.Errorf("agent exec failed: %s", resp.Error)
-	}
-	if resp.ExitCode != nil && *resp.ExitCode != 0 {
-		os.Exit(*resp.ExitCode)
+	if code != 0 {
+		os.Exit(code)
 	}
 	return nil
 }
 
-// agentResponse is the subset of the guest agent's reply swiftctl needs.
-type agentResponse struct {
-	OK       bool   `json:"ok"`
-	Error    string `json:"error"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode *int   `json:"exitCode"`
-}
-
-// agentRequest execs socat in the launcher pod (a raw pipe to CH's vsock unix socket),
-// performs CH's hybrid-vsock CONNECT handshake, sends one JSON request to the in-guest
-// agent on agentVsockPort, and returns the parsed JSON response. The request must be
-// sent AFTER the "OK" line, so swiftctl drives the protocol over the exec stdin/stdout.
-func agentRequest(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string, req []byte) (*agentResponse, error) {
+// dialAgent execs socat in the launcher pod (a raw pipe to CH's vsock unix socket) and
+// performs CH's hybrid-vsock CONNECT handshake to the in-guest agent on agentVsockPort.
+// It returns a reader over the agent stream, a writer to it, and the executor's done
+// channel; the request must be written AFTER the returned handshake succeeds.
+func dialAgent(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string) (*bufio.Reader, *io.PipeWriter, chan error, error) {
 	waitAndSocat := fmt.Sprintf("for i in $(seq 1 10); do test -S %q && break; sleep 1; done; exec socat -t10 - UNIX-CONNECT:%s", vsockSock, vsockSock)
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Namespace(ns).Name(pod).SubResource("exec").
@@ -144,7 +127,7 @@ func agentRequest(config *rest.Config, clientset *kubernetes.Clientset, ns, pod,
 		}, clientgoscheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(config, "POST", execReq.URL())
 	if err != nil {
-		return nil, fmt.Errorf("exec setup: %w", err)
+		return nil, nil, nil, fmt.Errorf("exec setup: %w", err)
 	}
 
 	inR, inW := io.Pipe()
@@ -159,30 +142,48 @@ func agentRequest(config *rest.Config, clientset *kubernetes.Clientset, ns, pod,
 
 	br := bufio.NewReader(outR)
 	if _, err := io.WriteString(inW, fmt.Sprintf("CONNECT %d\n", agentVsockPort)); err != nil {
-		return nil, fmt.Errorf("vsock connect: %w", err)
+		return nil, nil, nil, fmt.Errorf("vsock connect: %w", err)
 	}
 	okLine, err := br.ReadString('\n')
 	if err != nil {
-		return nil, fmt.Errorf("vsock handshake (is the sandbox running with an agent?): %w", err)
+		return nil, nil, nil, fmt.Errorf("vsock handshake (is the sandbox running with an agent?): %w", err)
 	}
 	if !strings.HasPrefix(okLine, "OK ") {
-		return nil, fmt.Errorf("vsock handshake failed: %q", strings.TrimSpace(okLine))
+		return nil, nil, nil, fmt.Errorf("vsock handshake failed: %q", strings.TrimSpace(okLine))
 	}
-	if _, err := inW.Write(append(req, '\n')); err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	respLine, err := br.ReadString('\n')
-	if err != nil && respLine == "" {
-		return nil, fmt.Errorf("read agent response: %w", err)
-	}
-	inW.Close()
-	<-done
+	return br, inW, done, nil
+}
 
-	var resp agentResponse
-	if err := json.Unmarshal([]byte(strings.TrimSpace(respLine)), &resp); err != nil {
-		return nil, fmt.Errorf("parse agent response %q: %w", strings.TrimSpace(respLine), err)
+// agentExecStream sends a streaming exec request and copies the agent's framed
+// stdout/stderr to os.Stdout/os.Stderr LIVE, returning the workload's exit code when
+// the terminal Exit frame arrives (see internal/guestagent).
+func agentExecStream(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string, req []byte) (int, error) {
+	br, inW, done, err := dialAgent(config, clientset, ns, pod, vsockSock)
+	if err != nil {
+		return 1, err
 	}
-	return &resp, nil
+	defer func() { inW.Close(); <-done }()
+
+	if _, err := inW.Write(append(req, '\n')); err != nil {
+		return 1, fmt.Errorf("send request: %w", err)
+	}
+	for {
+		typ, payload, err := guestagent.ReadFrame(br)
+		if err != nil {
+			if err == io.EOF {
+				return 0, nil // stream ended without an explicit Exit frame
+			}
+			return 1, fmt.Errorf("read agent stream: %w", err)
+		}
+		switch typ {
+		case guestagent.FrameStdout:
+			os.Stdout.Write(payload)
+		case guestagent.FrameStderr:
+			os.Stderr.Write(payload)
+		case guestagent.FrameExit:
+			return guestagent.DecodeExitCode(payload), nil
+		}
+	}
 }
 
 func runSandboxLogs(cmd *cobra.Command, args []string) error {

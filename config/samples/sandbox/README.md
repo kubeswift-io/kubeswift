@@ -45,9 +45,9 @@ Notes:
 - **Interacting** with a running sandbox:
   - `swiftctl sandbox logs <name>` (`-f` to follow) streams the workload console.
   - `swiftctl sandbox exec <name> -- cmd args...` runs a command inside the sandbox's
-    OCI rootfs over a host↔guest vsock channel (an in-guest agent; non-interactive;
-    stdout/stderr returned, exit code propagated). `-e KEY=VALUE` (repeatable) and
-    `-w DIR` set environment variables and the working directory. Interactive `attach`
-    is a follow-up.
+    OCI rootfs over a host↔guest vsock channel (an in-guest agent). stdout/stderr
+    stream back live (no output cap) and the exit code is propagated. `-e KEY=VALUE`
+    (repeatable) and `-w DIR` set environment variables and the working directory.
+    Non-interactive (no stdin/TTY yet) — interactive `attach` is a follow-up.
 - `spec.timeout` force-terminates a runaway sandbox; `spec.ttl` deletes the
   finished record (and frees the node rootfs cache reference) after it elapses.

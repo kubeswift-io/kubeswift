@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/kubeswift-io/kubeswift/internal/guestagent"
 )
 
 // fakeSys records run() invocations and serves canned file/glob/hostname data so
@@ -127,6 +130,61 @@ func TestExec(t *testing.T) {
 	if !r.OK || r.Stdout != "bar\n/tmp\n" {
 		t.Errorf("env+cwd: %+v", r)
 	}
+}
+
+func TestExecStream(t *testing.T) {
+	h, _ := newHandler()
+	// streaming exec is gated the same way: no --exec-root => a stderr frame + non-zero exit.
+	var off bytes.Buffer
+	h.execStream(&off, Request{Op: "exec", Stream: true, Argv: []string{"echo", "hi"}})
+	if _, _, code := drainFrames(t, &off); code != 255 {
+		t.Fatalf("stream exec must be disabled without --exec-root (exit 255), got %d", code)
+	}
+
+	h.execRoot = "/" // enable (no chroot in the test)
+	var buf bytes.Buffer
+	h.execStream(&buf, Request{Op: "exec", Stream: true,
+		Argv: []string{"sh", "-c", "echo out; echo err 1>&2; exit 5"}})
+	stdout, stderr, code := drainFrames(t, &buf)
+	if stdout != "out\n" {
+		t.Errorf("stdout=%q", stdout)
+	}
+	if !strings.Contains(stderr, "err") {
+		t.Errorf("stderr=%q", stderr)
+	}
+	if code != 5 {
+		t.Errorf("exit code=%d, want 5", code)
+	}
+
+	// env + cwd flow through the same buildExecCmd path.
+	var buf2 bytes.Buffer
+	h.execStream(&buf2, Request{Op: "exec", Stream: true,
+		Argv: []string{"sh", "-c", "echo $FOO; pwd"}, Env: []string{"FOO=bar"}, Cwd: "/tmp"})
+	if out, _, _ := drainFrames(t, &buf2); out != "bar\n/tmp\n" {
+		t.Errorf("env+cwd stream stdout=%q", out)
+	}
+}
+
+// drainFrames reads a completed execStream buffer into (stdout, stderr, exitCode).
+func drainFrames(t *testing.T, r *bytes.Buffer) (string, string, int) {
+	t.Helper()
+	var out, errb strings.Builder
+	code := -1
+	for {
+		typ, pay, err := guestagent.ReadFrame(r)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case guestagent.FrameStdout:
+			out.Write(pay)
+		case guestagent.FrameStderr:
+			errb.Write(pay)
+		case guestagent.FrameExit:
+			code = guestagent.DecodeExitCode(pay)
+		}
+	}
+	return out.String(), errb.String(), code
 }
 
 func TestBadJSON(t *testing.T) {
