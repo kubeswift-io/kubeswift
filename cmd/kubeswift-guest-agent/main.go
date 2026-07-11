@@ -67,22 +67,29 @@ func serve(h *handler, nfd int) {
 	tv := unix.Timeval{Sec: recvTimeoutSecs}
 	_ = unix.SetsockoptTimeval(nfd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
 
-	buf := readRequestLine(nfd)
+	line, rest := readRequestLine(nfd)
 
 	var req Request
-	if json.Unmarshal(buf, &req) == nil && req.Op == "exec" && req.Stream {
+	if json.Unmarshal(line, &req) == nil && req.Op == "exec" && req.Stream {
 		// clear the read deadline — a streamed command may run far longer than the
-		// request-read timeout, and (for attach) the host keeps sending stdin frames.
+		// request-read timeout, and stdin/attach keeps the host sending frames.
 		_ = unix.SetsockoptTimeval(nfd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{})
-		h.execStream(fdWriter{fd: nfd}, req)
+		rw := &fdReadWriter{fd: nfd, rest: rest}
+		if req.TTY {
+			h.execAttach(rw, req)
+		} else {
+			h.execStream(rw, req)
+		}
 		return
 	}
 
-	writeAll(nfd, h.handle(buf))
+	writeAll(nfd, h.handle(line))
 }
 
-// readRequestLine reads one newline-delimited request (bounded by maxRequestBytes).
-func readRequestLine(nfd int) []byte {
+// readRequestLine reads one newline-delimited request (bounded by maxRequestBytes) and
+// returns the line plus any bytes already read past the newline (the start of the frame
+// stream for a streaming/attach request).
+func readRequestLine(nfd int) (line, rest []byte) {
 	var buf []byte
 	tmp := make([]byte, 4096)
 	for len(buf) < maxRequestBytes {
@@ -90,14 +97,14 @@ func readRequestLine(nfd int) []byte {
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
 			if i := bytes.IndexByte(buf, '\n'); i >= 0 {
-				return buf[:i]
+				return buf[:i], buf[i+1:]
 			}
 		}
 		if err != nil || n == 0 {
 			break
 		}
 	}
-	return buf
+	return buf, nil
 }
 
 func writeAll(nfd int, resp []byte) {

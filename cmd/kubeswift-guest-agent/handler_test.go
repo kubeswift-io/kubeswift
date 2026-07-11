@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kubeswift-io/kubeswift/internal/guestagent"
@@ -185,6 +187,63 @@ func drainFrames(t *testing.T, r *bytes.Buffer) (string, string, int) {
 		}
 	}
 	return out.String(), errb.String(), code
+}
+
+func TestExecAttachPTY(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skip("no /dev/ptmx in this environment")
+	}
+	h, _ := newHandler()
+	h.execRoot = "/" // enable exec, no chroot in the test
+
+	stdinR, stdinW := io.Pipe() // host->guest; left open so the reader goroutine blocks
+	out := &safeBuffer{}
+	rw := &rwPair{r: stdinR, w: out}
+
+	done := make(chan struct{})
+	go func() {
+		// `test -t 1` is true ONLY on a real TTY — proves a PTY was allocated.
+		h.execAttach(rw, Request{Op: "exec", Stream: true, TTY: true,
+			Argv: []string{"sh", "-c", "test -t 1 && echo HASTTY; exit 4"}})
+		close(done)
+	}()
+	<-done
+	stdinW.Close()
+
+	stdout, _, code := drainFrames(t, out.buffer())
+	if !strings.Contains(stdout, "HASTTY") {
+		t.Errorf("command did not see a TTY (stdout=%q)", stdout)
+	}
+	if code != 4 {
+		t.Errorf("exit code=%d, want 4", code)
+	}
+}
+
+// rwPair is an io.ReadWriter joining a separate reader and writer for the attach test.
+type rwPair struct {
+	r io.Reader
+	w io.Writer
+}
+
+func (p *rwPair) Read(b []byte) (int, error)  { return p.r.Read(b) }
+func (p *rwPair) Write(b []byte) (int, error) { return p.w.Write(b) }
+
+// safeBuffer is a concurrency-safe bytes.Buffer (the frame writer serializes, but the
+// output pump and the terminal Exit write happen on different goroutines).
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(b)
+}
+func (s *safeBuffer) buffer() *bytes.Buffer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.NewBuffer(s.buf.Bytes())
 }
 
 func TestBadJSON(t *testing.T) {

@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -51,36 +54,68 @@ var sandboxExecCmd = &cobra.Command{
 	Short: "Run a command inside a running sandbox (over vsock)",
 	Long: `Runs a command inside a running SwiftSandbox via the in-guest agent over vsock. The
 command runs in the sandbox's OCI root filesystem. stdout and stderr stream back LIVE
-and the command's exit code is propagated. Non-interactive (no stdin/TTY yet).`,
+and the command's exit code is propagated. Use -i to forward stdin and -t for an
+interactive TTY (e.g. -it -- /bin/sh); "sandbox attach" is shorthand for exec -it.`,
 	Example: `  swiftctl sandbox exec my-job -- ls -la /
-  swiftctl -n ci sandbox exec my-job -- cat /etc/os-release`,
+  swiftctl sandbox exec -i my-job -- sh   < script.sh
+  swiftctl sandbox exec -it my-job -- /bin/sh`,
 	Args:         cobra.MinimumNArgs(2),
 	SilenceUsage: true,
 	RunE:         runSandboxExec,
 }
 
+var sandboxAttachCmd = &cobra.Command{
+	Use:   "attach [sandbox-name] [-- command [args...]]",
+	Short: "Open an interactive shell inside a running sandbox (over vsock)",
+	Long: `Attaches an interactive TTY to a running SwiftSandbox — shorthand for
+"sandbox exec -it". Defaults to /bin/sh; pass -- <command> to run something else.
+Exit the shell (Ctrl-D or 'exit') to detach.`,
+	Example: `  swiftctl sandbox attach my-job
+  swiftctl -n ci sandbox attach my-job -- /bin/bash`,
+	Args:         cobra.MinimumNArgs(1),
+	SilenceUsage: true,
+	RunE:         runSandboxAttach,
+}
+
 var (
 	sandboxExecEnv     []string
 	sandboxExecWorkdir string
+	sandboxExecStdin   bool
+	sandboxExecTTY     bool
 )
 
 func init() {
 	sandboxLogsCmd.Flags().BoolVarP(&sandboxLogsFollow, "follow", "f", false, "Follow the log output")
 	sandboxExecCmd.Flags().StringArrayVarP(&sandboxExecEnv, "env", "e", nil, "Environment variable KEY=VALUE (repeatable)")
 	sandboxExecCmd.Flags().StringVarP(&sandboxExecWorkdir, "workdir", "w", "", "Working directory inside the sandbox")
+	sandboxExecCmd.Flags().BoolVarP(&sandboxExecStdin, "stdin", "i", false, "Forward stdin to the command")
+	sandboxExecCmd.Flags().BoolVarP(&sandboxExecTTY, "tty", "t", false, "Allocate an interactive TTY (implies -i)")
 	sandboxCmd.AddCommand(sandboxLogsCmd)
 	sandboxCmd.AddCommand(sandboxExecCmd)
+	sandboxCmd.AddCommand(sandboxAttachCmd)
 }
 
 func runSandboxExec(cmd *cobra.Command, args []string) error {
 	dash := cmd.ArgsLenAtDash()
 	if dash != 1 || dash >= len(args) {
-		return fmt.Errorf("usage: swiftctl sandbox exec <name> -- command [args...]")
+		return fmt.Errorf("usage: swiftctl sandbox exec [-it] <name> -- command [args...]")
 	}
-	name := args[0]
-	command := args[dash:]
-	ns := getNamespace()
+	return execOrAttach(getNamespace(), args[0], args[dash:],
+		sandboxExecEnv, sandboxExecWorkdir, sandboxExecStdin || sandboxExecTTY, sandboxExecTTY)
+}
 
+func runSandboxAttach(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	command := []string{"/bin/sh"}
+	if dash := cmd.ArgsLenAtDash(); dash >= 1 && dash < len(args) {
+		command = args[dash:]
+	}
+	return execOrAttach(getNamespace(), name, command, nil, "", true, true)
+}
+
+// execOrAttach builds the streaming exec request and dispatches to the TTY-attach or
+// plain-stream client. A non-zero workload exit propagates via os.Exit.
+func execOrAttach(ns, name string, command, env []string, workdir string, stdin, tty bool) error {
 	config, err := kubeConfig.ToRESTConfig()
 	if err != nil {
 		return fmt.Errorf("kubeconfig: %w", err)
@@ -92,15 +127,30 @@ func runSandboxExec(cmd *cobra.Command, args []string) error {
 
 	vsockSock := "/var/lib/kubeswift/run/" + cli.GuestID(ns, name) + "/vsock.sock"
 	reqObj := map[string]interface{}{"v": 1, "op": "exec", "argv": command, "stream": true}
-	if len(sandboxExecEnv) > 0 {
-		reqObj["env"] = sandboxExecEnv
+	if len(env) > 0 {
+		reqObj["env"] = env
 	}
-	if sandboxExecWorkdir != "" {
-		reqObj["cwd"] = sandboxExecWorkdir
+	if workdir != "" {
+		reqObj["cwd"] = workdir
+	}
+	if stdin {
+		reqObj["stdin"] = true
+	}
+	if tty {
+		reqObj["tty"] = true
+		if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			reqObj["rows"] = rows
+			reqObj["cols"] = cols
+		}
 	}
 	req, _ := json.Marshal(reqObj)
 
-	code, err := agentExecStream(config, clientset, ns, name, vsockSock, req)
+	var code int
+	if tty {
+		code, err = agentAttachTTY(config, clientset, ns, name, vsockSock, req)
+	} else {
+		code, err = agentExecStream(config, clientset, ns, name, vsockSock, req, stdin)
+	}
 	if err != nil {
 		return err
 	}
@@ -156,8 +206,10 @@ func dialAgent(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vs
 
 // agentExecStream sends a streaming exec request and copies the agent's framed
 // stdout/stderr to os.Stdout/os.Stderr LIVE, returning the workload's exit code when
-// the terminal Exit frame arrives (see internal/guestagent).
-func agentExecStream(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string, req []byte) (int, error) {
+// the terminal Exit frame arrives (see internal/guestagent). When stdin is set it also
+// forwards os.Stdin as FrameStdin frames (line-buffered; the raw-TTY path is
+// agentAttachTTY).
+func agentExecStream(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string, req []byte, stdin bool) (int, error) {
 	br, inW, done, err := dialAgent(config, clientset, ns, pod, vsockSock)
 	if err != nil {
 		return 1, err
@@ -166,6 +218,9 @@ func agentExecStream(config *rest.Config, clientset *kubernetes.Clientset, ns, p
 
 	if _, err := inW.Write(append(req, '\n')); err != nil {
 		return 1, fmt.Errorf("send request: %w", err)
+	}
+	if stdin {
+		go forwardStdin(guestagent.NewFrameWriter(inW))
 	}
 	for {
 		typ, payload, err := guestagent.ReadFrame(br)
@@ -182,6 +237,84 @@ func agentExecStream(config *rest.Config, clientset *kubernetes.Clientset, ns, p
 			os.Stderr.Write(payload)
 		case guestagent.FrameExit:
 			return guestagent.DecodeExitCode(payload), nil
+		}
+	}
+}
+
+// agentAttachTTY runs an interactive exec: it puts the local terminal in raw mode,
+// forwards os.Stdin as FrameStdin and terminal-resize (SIGWINCH) as FrameResize, and
+// copies the guest PTY's output frames to the terminal until the Exit frame.
+func agentAttachTTY(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vsockSock string, req []byte) (int, error) {
+	br, inW, done, err := dialAgent(config, clientset, ns, pod, vsockSock)
+	if err != nil {
+		return 1, err
+	}
+	defer func() { inW.Close(); <-done }()
+
+	if _, err := inW.Write(append(req, '\n')); err != nil {
+		return 1, fmt.Errorf("send request: %w", err)
+	}
+	fw := guestagent.NewFrameWriter(inW)
+
+	// raw mode so keystrokes (incl. Ctrl-C / Ctrl-D) reach the guest shell verbatim.
+	var restore func()
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		if old, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+			restore = func() { _ = term.Restore(int(os.Stdin.Fd()), old) }
+			defer restore()
+		}
+	}
+
+	go forwardStdin(fw)
+
+	winch := make(chan os.Signal, 1)
+	signal.Notify(winch, syscall.SIGWINCH)
+	defer signal.Stop(winch)
+	go func() {
+		for range winch {
+			if cols, rows, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+				_ = fw.Write(guestagent.FrameResize, guestagent.ResizePayload(uint16(rows), uint16(cols)))
+			}
+		}
+	}()
+
+	for {
+		typ, payload, err := guestagent.ReadFrame(br)
+		if err != nil {
+			if err == io.EOF {
+				return 0, nil
+			}
+			return 1, fmt.Errorf("read agent stream: %w", err)
+		}
+		switch typ {
+		case guestagent.FrameStdout:
+			os.Stdout.Write(payload)
+		case guestagent.FrameStderr:
+			os.Stderr.Write(payload)
+		case guestagent.FrameExit:
+			if restore != nil {
+				restore()
+			}
+			return guestagent.DecodeExitCode(payload), nil
+		}
+	}
+}
+
+// forwardStdin copies os.Stdin into FrameStdin frames until EOF, then sends a
+// FrameStdinClose so the guest closes the command's stdin (a piped `cat`/`sh` sees EOF
+// and exits rather than hanging).
+func forwardStdin(fw *guestagent.FrameWriter) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			if werr := fw.Write(guestagent.FrameStdin, buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			_ = fw.Write(guestagent.FrameStdinClose, nil)
+			return
 		}
 	}
 }

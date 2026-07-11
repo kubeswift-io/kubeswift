@@ -9,24 +9,26 @@
 //
 //	[type:1][len:4 big-endian][payload:len]
 //
-// Guest->host: Stdout, Stderr, Exit (payload = 4-byte exit code). Host->guest
-// (attach only): Stdin, Resize. Frames on one connection are serialized by the
-// writer, so a reader always sees whole frames.
+// Guest->host: Stdout, Stderr, Exit (payload = 4-byte exit code). Host->guest:
+// Stdin and StdinClose (for -i and attach), Resize (attach). Frames on one
+// connection are serialized by the writer, so a reader always sees whole frames.
 package guestagent
 
 import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // Frame types.
 const (
-	FrameStdout byte = 1 // guest->host: workload stdout
-	FrameStderr byte = 2 // guest->host: workload stderr
-	FrameExit   byte = 3 // guest->host: terminal; payload = int32 exit code, big-endian
-	FrameStdin  byte = 4 // host->guest: workload stdin (attach)
-	FrameResize byte = 5 // host->guest: TTY resize (attach); payload = rows:2 + cols:2, big-endian
+	FrameStdout     byte = 1 // guest->host: workload stdout
+	FrameStderr     byte = 2 // guest->host: workload stderr
+	FrameExit       byte = 3 // guest->host: terminal; payload = int32 exit code, big-endian
+	FrameStdin      byte = 4 // host->guest: workload stdin (attach / -i)
+	FrameResize     byte = 5 // host->guest: TTY resize (attach); payload = rows:2 + cols:2, big-endian
+	FrameStdinClose byte = 6 // host->guest: stdin reached EOF; close the command's stdin (keep the connection for output)
 )
 
 // MaxFramePayload bounds a single frame's payload so a hostile/broken peer cannot
@@ -87,4 +89,38 @@ func DecodeExitCode(payload []byte) int {
 		return 0
 	}
 	return int(int32(binary.BigEndian.Uint32(payload)))
+}
+
+// ResizePayload encodes a FrameResize payload (rows:2 + cols:2, big-endian).
+func ResizePayload(rows, cols uint16) []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint16(b[0:2], rows)
+	binary.BigEndian.PutUint16(b[2:4], cols)
+	return b[:]
+}
+
+// DecodeResize reads a FrameResize payload back into (rows, cols); (0,0) if malformed.
+func DecodeResize(payload []byte) (rows, cols uint16) {
+	if len(payload) < 4 {
+		return 0, 0
+	}
+	return binary.BigEndian.Uint16(payload[0:2]), binary.BigEndian.Uint16(payload[2:4])
+}
+
+// FrameWriter serializes WriteFrame across goroutines that share one connection —
+// both the agent (stdout/stderr/exit) and swiftctl (stdin/resize) write frames
+// concurrently, and a frame's header+payload must not interleave with another's.
+type FrameWriter struct {
+	w  io.Writer
+	mu sync.Mutex
+}
+
+// NewFrameWriter wraps w so Write is safe for concurrent use.
+func NewFrameWriter(w io.Writer) *FrameWriter { return &FrameWriter{w: w} }
+
+// Write emits one frame atomically with respect to other Write callers.
+func (f *FrameWriter) Write(typ byte, payload []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return WriteFrame(f.w, typ, payload)
 }

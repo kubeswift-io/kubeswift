@@ -39,6 +39,16 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 }
 
+func TestResizeRoundTrip(t *testing.T) {
+	rows, cols := DecodeResize(ResizePayload(50, 132))
+	if rows != 50 || cols != 132 {
+		t.Fatalf("resize round-trip = (%d,%d), want (50,132)", rows, cols)
+	}
+	if r, c := DecodeResize([]byte{0, 1}); r != 0 || c != 0 {
+		t.Fatalf("short resize payload must decode to (0,0), got (%d,%d)", r, c)
+	}
+}
+
 func TestReadFrameTruncated(t *testing.T) {
 	// header claims 10 bytes but only 3 follow -> ErrUnexpectedEOF, not EOF.
 	var buf bytes.Buffer
