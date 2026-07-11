@@ -131,10 +131,8 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 	}
 
 	switch pod.Status.Phase {
-	case corev1.PodSucceeded:
-		return r.finishTerminal(ctx, sb, pod, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited")
-	case corev1.PodFailed:
-		return r.finishTerminal(ctx, sb, pod, sandboxv1alpha1.SwiftSandboxFailed, "GuestFailed", podFailureMessage(pod))
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return r.finishTerminal(ctx, sb, pod)
 	}
 
 	// Materialize init failure (before the launcher starts) is an honest, specific
@@ -166,13 +164,28 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs")
 }
 
-// finishTerminal maps a terminal pod to Completed/Failed with the launcher exit code.
-func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod, phase sandboxv1alpha1.SwiftSandboxPhase, reason, msg string) (ctrl.Result, error) {
+// finishTerminal maps a terminated launcher pod to Completed/Failed. It prefers the
+// WORKLOAD's exit code — swiftletd writes it to kubeswift.io/sandbox-exit-code from the
+// guest console's KUBESWIFT-EXIT-CODE marker — because CH/the launcher exit 0 on a
+// clean power-off regardless of what the workload returned. When the marker is absent
+// (e.g. the guest died before the bridge emitted it), it falls back to the pod phase +
+// the launcher container's exit code.
+func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
+	applyMaterializeResult(sb, pod)
+	if code, ok := sandboxWorkloadExitCode(pod); ok {
+		sb.Status.ExitCode = &code
+		if code == 0 {
+			return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited 0")
+		}
+		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "WorkloadFailed", fmt.Sprintf("workload exited %d", code))
+	}
 	if code, ok := launcherExitCode(pod); ok {
 		sb.Status.ExitCode = &code
 	}
-	applyMaterializeResult(sb, pod)
-	return r.terminal(ctx, sb, phase, reason, msg)
+	if pod.Status.Phase == corev1.PodFailed {
+		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "GuestFailed", podFailureMessage(pod))
+	}
+	return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited")
 }
 
 func (r *SwiftSandboxReconciler) fail(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
@@ -258,6 +271,24 @@ func launcherExitCode(pod *corev1.Pod) (int32, bool) {
 		}
 	}
 	return 0, false
+}
+
+// annSandboxExitCode carries the workload's real exit code, written by swiftletd from
+// the guest console's KUBESWIFT-EXIT-CODE marker (see rust/swiftletd/src/report.rs).
+const annSandboxExitCode = "kubeswift.io/sandbox-exit-code"
+
+// sandboxWorkloadExitCode reads the workload exit code swiftletd recorded on the
+// launcher pod. Absent when the guest died before the bridge-init could emit it.
+func sandboxWorkloadExitCode(pod *corev1.Pod) (int32, bool) {
+	v := pod.Annotations[annSandboxExitCode]
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(n), true
 }
 
 func podFailureMessage(pod *corev1.Pod) string {

@@ -32,8 +32,12 @@ Notes:
   semantics (command overrides the image ENTRYPOINT, args the CMD, env is merged
   over the image env), delivered to the guest on a per-sandbox read-only config
   disk — never the kernel cmdline, so env stays out of `/proc/cmdline` and the
-  host's `ps`/logs. A bare image runs its own entrypoint. (`workingDir` is
-  best-effort in v1: honored when the image has a shell, else the workload starts
-  in `/`.)
+  host's `ps`/logs. A bare image runs its own entrypoint. (`workingDir` is not
+  honored in v1 — the workload starts in `/`.)
+- **Exit status**: the workload runs as a supervised child, so its real exit code
+  is surfaced as `status.exitCode` — a non-zero exit terminates the sandbox `Failed`,
+  zero terminates it `Completed`. The guest console (workload stdout/stderr) is
+  written to a host file, not an interactive socket; live exec/attach is a vsock
+  follow-up.
 - `spec.timeout` force-terminates a runaway sandbox; `spec.ttl` deletes the
   finished record (and frees the node rootfs cache reference) after it elapses.
