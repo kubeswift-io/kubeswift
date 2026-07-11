@@ -387,6 +387,22 @@ where
             .to_string(),
     });
 
+    // Mode-3 sandbox: serialize the workload exec (argv/env/cwd) to a per-sandbox
+    // read-only config disk (emitted right after the rootfs, so /dev/vdb). It rides a
+    // disk, never the cmdline, so env stays off /proc/cmdline + the host's ps/logs. On
+    // a write failure we leave it unset — the bridge finds no config device and falls
+    // back to /sbin/init -> /bin/sh (a loud degrade, not a crash).
+    let sandbox_config_path = intent.sandbox_exec().and_then(|e| {
+        let path = runtime_dir.root().join("exec.config");
+        match std::fs::write(&path, e.to_config_blob()) {
+            Ok(()) => Some(path.to_string_lossy().to_string()),
+            Err(err) => {
+                log::error!("sandbox exec config write failed: {}", err);
+                None
+            }
+        }
+    });
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -408,6 +424,7 @@ where
             initramfs_path: Some(kb.initramfs_path.clone()),
             kernel_cmdline: Some(kb.cmdline.clone()),
             sandbox_rootfs: intent.sandbox_rootfs_path().map(|s| s.to_string()),
+            sandbox_config: sandbox_config_path.clone(),
             data_disk_paths: data_disk_paths.clone(),
             vfio_devices,
             fs_mounts,
@@ -435,6 +452,7 @@ where
             initramfs_path: None,
             kernel_cmdline: None,
             sandbox_rootfs: None,
+            sandbox_config: None,
             data_disk_paths: data_disk_paths.clone(),
             vfio_devices,
             fs_mounts,

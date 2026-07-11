@@ -31,6 +31,13 @@ pub struct RuntimeIntent {
     /// tmpfs upper. Block path only. None for a normal SwiftGuest kernel boot.
     #[serde(default)]
     pub sandbox_rootfs: Option<SandboxRootfs>,
+    /// Set alongside `sandbox_rootfs` for a mode-3 sandbox: the workload exec spec
+    /// (argv + env + cwd). swiftletd serializes it to a per-sandbox read-only config
+    /// disk (emitted right after the rootfs, so /dev/vdb) that the bridge-initramfs
+    /// reads to exec the workload. Rides a DISK, never the cmdline — env stays off
+    /// /proc/cmdline + the host's ps/logs. None for a SwiftGuest.
+    #[serde(default)]
+    pub sandbox_exec: Option<SandboxExec>,
     /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
@@ -446,6 +453,74 @@ pub struct SandboxRootfs {
     pub path: String,
 }
 
+/// The mode-3 workload exec: full argv, merged env ("KEY=VAL"), and working dir.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxExec {
+    #[serde(default)]
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub cwd: String,
+}
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Standard base64 (with '=' padding). Values are base64-encoded on the config disk
+// so argv/env may contain spaces, tabs, or newlines (e.g. a multi-line `sh -c`
+// script) without breaking the line-based blob; the bridge decodes with `base64 -d`.
+fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(B64_ALPHABET[((n >> 18) & 63) as usize] as char);
+        out.push(B64_ALPHABET[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            B64_ALPHABET[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64_ALPHABET[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+impl SandboxExec {
+    /// Serializes to the bridge's config-disk blob: the `KUBESWIFT-EXEC-V1` magic,
+    /// TAB-separated `CWD`/`ARGV`/`ENV` lines (values base64-encoded), and the
+    /// `KUBESWIFT-EXEC-END` sentinel — padded to a 512-byte sector (virtio-blk).
+    pub fn to_config_blob(&self) -> Vec<u8> {
+        let mut s = String::from("KUBESWIFT-EXEC-V1\n");
+        if !self.cwd.is_empty() {
+            s.push_str(&format!("CWD\t{}\n", base64_encode(self.cwd.as_bytes())));
+        }
+        for a in &self.argv {
+            s.push_str(&format!("ARGV\t{}\n", base64_encode(a.as_bytes())));
+        }
+        for e in &self.env {
+            s.push_str(&format!("ENV\t{}\n", base64_encode(e.as_bytes())));
+        }
+        s.push_str("KUBESWIFT-EXEC-END\n");
+        let mut b = s.into_bytes();
+        // Pad to at least 1 MiB (a multiple of 512, the virtio-blk logical block size).
+        // The exec blob is small (a few hundred bytes); 1 MiB just gives the config disk
+        // a conventional, non-degenerate size (avoids a 1-sector disk) and is negligible
+        // — sparse on the host, and the guest bridge reads only the first 64 KiB.
+        const MIN_CONFIG_DISK: usize = 1024 * 1024;
+        let rounded = b.len().div_ceil(512) * 512;
+        b.resize(rounded.max(MIN_CONFIG_DISK), 0u8);
+        b
+    }
+}
+
 impl RuntimeIntent {
     /// Returns the disk path from intent (no hardcoded path).
     pub fn disk_path(&self) -> &str {
@@ -476,6 +551,11 @@ impl RuntimeIntent {
     /// an OCI rootfs), else None.
     pub fn sandbox_rootfs_path(&self) -> Option<&str> {
         self.sandbox_rootfs.as_ref().map(|s| s.path.as_str())
+    }
+
+    /// Returns the mode-3 sandbox workload exec spec when set.
+    pub fn sandbox_exec(&self) -> Option<&SandboxExec> {
+        self.sandbox_exec.as_ref()
     }
 
     /// Returns the ordered list of secondary data-disk paths.
@@ -626,6 +706,44 @@ pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_base64_encode_known_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"test123"), "dGVzdDEyMw==");
+    }
+
+    #[test]
+    fn test_sandbox_exec_config_blob() {
+        let e = SandboxExec {
+            // A multi-line arg (a `sh -c` script) must survive — that's why values
+            // are base64-encoded rather than written raw into the line format.
+            argv: vec!["/bin/sh".into(), "-c".into(), "echo hi\nline2".into()],
+            env: vec!["PATH=/usr/bin:/bin".into()],
+            cwd: "/work".into(),
+        };
+        let blob = e.to_config_blob();
+        assert_eq!(blob.len() % 512, 0, "blob must be sector-padded");
+        assert!(
+            blob.len() >= 1024 * 1024,
+            "blob must be padded to >= 1 MiB so it enumerates as a virtio-blk device \
+             (a 1-sector disk breaks guest virtio-blk enumeration); got {}",
+            blob.len()
+        );
+        let text = String::from_utf8_lossy(&blob);
+        assert!(text.starts_with("KUBESWIFT-EXEC-V1\n"));
+        assert!(text.contains("KUBESWIFT-EXEC-END\n"));
+        assert!(text.contains(&format!("CWD\t{}\n", base64_encode(b"/work"))));
+        assert!(text.contains(&format!("ARGV\t{}\n", base64_encode(b"echo hi\nline2"))));
+        assert!(text.contains(&format!("ENV\t{}\n", base64_encode(b"PATH=/usr/bin:/bin"))));
+        // No raw newline leaked from the multi-line arg into the line structure:
+        // exactly the magic + CWD + 3 ARGV + 1 ENV + END = 7 content lines.
+        let content_lines = text.trim_end_matches('\u{0}').lines().count();
+        assert_eq!(content_lines, 7, "unexpected line count: {text:?}");
+    }
 
     #[test]
     fn test_intent_os_type_windows() {

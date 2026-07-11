@@ -44,9 +44,15 @@ func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetwork
 	return sandboxv1alpha1.SandboxNetworkRestricted
 }
 
+// sandboxConfigDevice is where the bridge-initramfs reads the workload exec spec.
+// swiftletd emits the config disk right after the rootfs (/dev/vda), and a sandbox
+// carries no seed/data disks, so it enumerates as /dev/vdb.
+const sandboxConfigDevice = "/dev/vdb"
+
 // buildIntent constructs the mode-3 sandbox RuntimeIntent: kernel boot + the RO
-// OCI rootfs disk + the bridge cmdline (rootfs selector + entrypoint).
-func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entrypoint string) *runtimeintent.RuntimeIntent {
+// OCI rootfs disk + (when the workload has a defined exec) the config disk + the
+// bridge cmdline.
+func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string, exec execSpec) *runtimeintent.RuntimeIntent {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 	cmdline := "console=ttyS0 kubeswift.rootfs=block"
 	if networked(sb) {
@@ -58,8 +64,12 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entry
 		// so kernel DHCP would only stall the boot.
 		cmdline += " ip=dhcp"
 	}
-	if entrypoint != "" {
-		cmdline += " kubeswift.entrypoint=" + entrypoint
+	var sandboxExec *runtimeintent.SandboxExecSpec
+	if exec.nonTrivial() {
+		// The workload argv/env/cwd ride the config disk (kubeswift.config points the
+		// bridge at it) — never the cmdline, so env stays out of /proc/cmdline + logs.
+		cmdline += " kubeswift.config=" + sandboxConfigDevice
+		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd}
 	}
 	cpu := int(sb.Spec.CPU)
 	if cpu < 1 {
@@ -76,6 +86,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entry
 			Cmdline:       cmdline,
 		},
 		SandboxRootfs: &runtimeintent.SandboxRootfsSpec{Path: rootfsPath},
+		SandboxExec:   sandboxExec,
 		CPU:           cpu,
 		Memory:        memMiB,
 		Lifecycle:     "start",
