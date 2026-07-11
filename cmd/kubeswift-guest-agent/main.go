@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -56,14 +57,32 @@ func main() {
 	}
 }
 
-// serve reads one newline-delimited JSON request, dispatches it, writes the JSON
-// response, and closes the connection (one request/response per connection).
+// serve reads one newline-delimited JSON request and dispatches it. Single-shot ops
+// write one JSON response and close. A streaming exec (op=exec, stream=true) hands the
+// connection to execStream, which writes framed stdout/stderr/exit for the command's
+// lifetime (see internal/guestagent).
 func serve(h *handler, nfd int) {
 	defer unix.Close(nfd)
-	// bound the connection so a stuck/hostile client cannot pin a goroutine
+	// bound the request read so a stuck/hostile client cannot pin a goroutine
 	tv := unix.Timeval{Sec: recvTimeoutSecs}
 	_ = unix.SetsockoptTimeval(nfd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
 
+	buf := readRequestLine(nfd)
+
+	var req Request
+	if json.Unmarshal(buf, &req) == nil && req.Op == "exec" && req.Stream {
+		// clear the read deadline — a streamed command may run far longer than the
+		// request-read timeout, and (for attach) the host keeps sending stdin frames.
+		_ = unix.SetsockoptTimeval(nfd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{})
+		h.execStream(fdWriter{fd: nfd}, req)
+		return
+	}
+
+	writeAll(nfd, h.handle(buf))
+}
+
+// readRequestLine reads one newline-delimited request (bounded by maxRequestBytes).
+func readRequestLine(nfd int) []byte {
 	var buf []byte
 	tmp := make([]byte, 4096)
 	for len(buf) < maxRequestBytes {
@@ -71,16 +90,17 @@ func serve(h *handler, nfd int) {
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
 			if i := bytes.IndexByte(buf, '\n'); i >= 0 {
-				buf = buf[:i]
-				break
+				return buf[:i]
 			}
 		}
 		if err != nil || n == 0 {
 			break
 		}
 	}
+	return buf
+}
 
-	resp := h.handle(buf)
+func writeAll(nfd int, resp []byte) {
 	for len(resp) > 0 {
 		n, err := unix.Write(nfd, resp)
 		if n > 0 {

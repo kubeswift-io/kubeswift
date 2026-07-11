@@ -74,9 +74,10 @@ type Request struct {
 	Hostname   string   `json:"hostname,omitempty"`
 	RenewLease bool     `json:"renewLease,omitempty"`
 	// exec op:
-	Argv []string `json:"argv,omitempty"`
-	Env  []string `json:"env,omitempty"`
-	Cwd  string   `json:"cwd,omitempty"`
+	Argv   []string `json:"argv,omitempty"`
+	Env    []string `json:"env,omitempty"`
+	Cwd    string   `json:"cwd,omitempty"`
+	Stream bool     `json:"stream,omitempty"` // stream stdout/stderr/exit as frames (see internal/guestagent); dispatched in serve(), not handle()
 }
 
 // Response is the guest->host reply.
@@ -437,18 +438,20 @@ var execPathDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/
 // long-running output is a streaming follow-up.
 const execOutputCap = 1 << 20 // 1 MiB
 
-// exec runs argv chrooted into the sandbox root (h.execRoot) and returns its stdout,
-// stderr and exit code in one response. The command binary is resolved against a PATH
-// INSIDE the chroot — Go's LookPath would search the agent's own (initramfs) root.
-func (h *handler) exec(req Request) Response {
+// buildExecCmd resolves argv + chroot + cwd + env into an *exec.Cmd, shared by the
+// single-shot exec (buffered response) and execStream (framed) paths. The command
+// binary is resolved against a PATH INSIDE the chroot — Go's LookPath would search
+// the agent's own (initramfs) root. It returns an error (never runs) when exec is
+// disabled or argv is empty.
+func (h *handler) buildExecCmd(req Request) (*exec.Cmd, error) {
 	// exec is enabled ONLY when the agent was started with --exec-root (SwiftSandbox).
 	// Identity guests run without it, so they keep the minimal two-op surface — no
 	// arbitrary command execution, even over the host-only vsock.
 	if h.execRoot == "" {
-		return Response{OK: false, Error: "exec is disabled (no --exec-root; SwiftSandbox only)"}
+		return nil, fmt.Errorf("exec is disabled (no --exec-root; SwiftSandbox only)")
 	}
 	if len(req.Argv) == 0 {
-		return Response{OK: false, Error: "exec: empty argv"}
+		return nil, fmt.Errorf("exec: empty argv")
 	}
 	root := h.execRoot
 	prog := req.Argv[0]
@@ -471,6 +474,16 @@ func (h *handler) exec(req Request) Response {
 	}
 	cmd.Dir = dir // "" inherits the agent's cwd (no-chroot case); otherwise relative to the chroot
 	cmd.Env = execEnv(req.Env)
+	return cmd, nil
+}
+
+// exec runs argv chrooted into the sandbox root (h.execRoot) and returns its stdout,
+// stderr and exit code in one response.
+func (h *handler) exec(req Request) Response {
+	cmd, err := h.buildExecCmd(req)
+	if err != nil {
+		return Response{OK: false, Error: err.Error()}
+	}
 	stdout := &capBuffer{max: execOutputCap}
 	stderr := &capBuffer{max: execOutputCap}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
