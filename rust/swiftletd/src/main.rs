@@ -391,7 +391,47 @@ fn main() {
                 }
             }
             match result {
-                Ok((exit_status, _pid, _serial_socket_path)) => {
+                Ok((exit_status, _pid, serial_socket_path)) => {
+                    // Sandbox: recover the workload's exit code from the console file
+                    // (the bridge-init emits `KUBESWIFT-EXIT-CODE=<n>` before powering
+                    // off — CH has exited now, so the file is complete) and write it to
+                    // a pod annotation for the SwiftSandbox controller. Best-effort: a
+                    // missing marker leaves status.exitCode unset, not wrong.
+                    if intent.sandbox_rootfs_path().is_some() {
+                        if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                            let console = format!("{}.log", serial_socket_path);
+                            match std::fs::read_to_string(&console) {
+                                Ok(text) => match report::parse_sandbox_exit_code(&text) {
+                                    Some(code) => rt.block_on(async {
+                                        match kube_client::create_client().await {
+                                            Ok(client) => {
+                                                if let Err(e) = report::report_sandbox_exit(
+                                                    &client, ns, n, code,
+                                                )
+                                                .await
+                                                {
+                                                    log::error!("report_sandbox_exit_failed: {}", e);
+                                                } else {
+                                                    log::info!("sandbox_exit_reported code={}", code);
+                                                }
+                                            }
+                                            Err(e) => log::warn!(
+                                                "kube client unavailable ({}); skipping sandbox exit report",
+                                                e
+                                            ),
+                                        }
+                                    }),
+                                    None => log::warn!(
+                                        "sandbox_exit_code_marker_not_found in {}",
+                                        console
+                                    ),
+                                },
+                                Err(e) => {
+                                    log::warn!("sandbox console read failed {}: {}", console, e)
+                                }
+                            }
+                        }
+                    }
                     if exit_status.success() {
                         // W22 (PR #46 follow-up cluster re-walkthrough):
                         // when CH exits cleanly because vm.send-migration

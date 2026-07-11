@@ -72,11 +72,8 @@ mount -t overlay overlay \
 	-o lowerdir=/lower,upperdir=/over/up,workdir=/over/work /newroot \
 	|| fail "overlay mount failed (kernel lacks OVERLAY_FS?)"
 
-# The config disk (/dev/vdX) and /proc/net/pnp are read HERE — BEFORE the pseudo-
-# filesystems are moved into /newroot below. After the move they are gone from this
-# root, so reading them afterwards silently fails and the exec falls back to
-# /sbin/init (the config disk is never applied). /newroot (the overlay) is already
-# mounted, so writes into it work now.
+# The config disk (/dev/vdX) and /proc/net/pnp are read HERE, after the overlay is
+# mounted (so writes into /newroot land) and while the bridge still owns /dev + /proc.
 
 # --- guest resolver: kernel ip=dhcp autoconfig sets the IP but NOT the userspace
 # /etc/resolv.conf, so a workload can't resolve names without this. /proc/net/pnp
@@ -120,11 +117,14 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 	IFS=$oldifs
 fi
 
-# carry the pseudo-filesystems into the new root (AFTER the reads above)
+# Mount the pseudo-filesystems INSIDE the new root for the workload. We do NOT
+# `mount --move` them out of the bridge's root — the bridge stays PID 1 (see below)
+# and needs to keep its own /dev/console + /proc to report the exit code and power
+# the VM off after the workload exits.
 mkdir -p /newroot/proc /newroot/sys /newroot/dev
-mount --move /proc /newroot/proc 2>/dev/null || mount -t proc none /newroot/proc
-mount --move /sys  /newroot/sys  2>/dev/null || mount -t sysfs none /newroot/sys
-mount --move /dev  /newroot/dev  2>/dev/null || mount -t devtmpfs none /newroot/dev
+mount -t proc     none /newroot/proc 2>/dev/null || true
+mount -t sysfs    none /newroot/sys  2>/dev/null || true
+mount -t devtmpfs none /newroot/dev  2>/dev/null || mount --bind /dev /newroot/dev
 
 if [ "$#" -eq 0 ]; then
 	if [ -n "$ENTRYPOINT" ]; then set -- "$ENTRYPOINT"
@@ -132,7 +132,26 @@ if [ "$#" -eq 0 ]; then
 	else set -- /bin/sh; fi
 fi
 
-echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; exec $1 ($# arg(s))"
-# NOTE: spec.workingDir is NOT honored in v1 — switch_root resets cwd to /, and a
-# shell wrapper to chdir is unreliable across images. The workload starts in /.
-exec switch_root /newroot "$@"
+# Supervise the workload instead of `exec switch_root`-ing it as PID 1. If the
+# workload were PID 1, its exit would panic the kernel ("Attempted to kill init")
+# and CH would keep running — the sandbox would sit "Running" forever with no exit
+# status. Instead the bridge stays PID 1 and runs the workload chrooted into the OCI
+# overlay as a FOREGROUND child (so it keeps the console tty — interactive + batch
+# both work; chroot execs the binary directly, so distroless images work with no
+# shell). When it exits we capture its code, emit it on the console for swiftletd to
+# read, and power the VM off so CH exits and the launcher pod reaches a terminal state.
+# NOTE: spec.workingDir is NOT honored in v1 — chroot starts the workload at / and a
+# chdir wrapper needs a guest shell (deferred). The workload starts in /.
+echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; run $1 ($# arg(s))"
+chroot /newroot "$@"
+code=$?
+printf 'KUBESWIFT-EXIT-CODE=%s\n' "$code" >/dev/console 2>/dev/null
+# Let CH flush the exit line to the host console file before we power off (swiftletd
+# reads it after CH exits to recover the workload's exit code).
+sleep 1
+# Power the guest off (reboot syscall) so CH exits and the pod terminates. Fall back
+# through progressively harder stops; never return (we are PID 1).
+poweroff -f 2>/dev/null
+halt -f 2>/dev/null
+echo o >/proc/sysrq-trigger 2>/dev/null
+while :; do sleep 1; done

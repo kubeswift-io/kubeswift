@@ -300,10 +300,20 @@ impl VmConfig {
         }
 
         if let Some(ref path) = self.serial_socket_path {
-            // Serial socket: bidirectional; connect with socat for interactive console.
-            // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for console=ttyS0).
             args.push("--serial".to_string());
-            args.push(format!("socket={}", path));
+            if self.sandbox_rootfs.is_some() {
+                // Sandbox: write the guest console to a FILE, not an interactive socket.
+                // The workload is a batch job — swiftletd reads this file after CH exits
+                // to recover the workload's exit code (the bridge-init emits a trailing
+                // `KUBESWIFT-EXIT-CODE=<n>`), and it doubles as the sandbox log. CH also
+                // drops serial-socket output emitted before a client connects, which
+                // would lose the exit line. (Interactive exec/attach is a vsock follow-up.)
+                args.push(format!("file={}.log", path));
+            } else {
+                // Serial socket: bidirectional; connect with socat for interactive console.
+                // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for console=ttyS0).
+                args.push(format!("socket={}", path));
+            }
             // Disable virtio-console; serial is the interactive console.
             args.push("--console".to_string());
             args.push("off".to_string());
@@ -769,6 +779,19 @@ mod tests {
             "sandbox rootfs must be the first disk (/dev/vda); args: {:?}",
             args
         );
+        // Sandbox serial goes to a FILE (batch console + exit-code recovery), not an
+        // interactive socket — swiftletd reads the file after CH exits.
+        assert!(
+            joined.contains("--serial file=/tmp/serial.sock.log"),
+            "sandbox serial must be a file: {}",
+            joined
+        );
+        assert!(
+            !joined.contains("--serial socket="),
+            "sandbox must not use an interactive serial socket: {}",
+            joined
+        );
+
         // A normal faas kernel boot (no sandbox_rootfs, no seed/data) emits NO --disk.
         let mut faas = make_disk_boot_config();
         faas.kernel_path = Some("/k/bzImage".to_string());

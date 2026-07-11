@@ -87,6 +87,41 @@ pub async fn report_guest_runtime(
     Ok(())
 }
 
+/// Writes the sandbox workload's exit code to a launcher pod annotation, for the
+/// SwiftSandbox controller to map to `status.exitCode` + a terminal phase. The
+/// bridge-init emits a trailing `KUBESWIFT-EXIT-CODE=<n>` on the console after the
+/// workload exits; swiftletd extracts it from the sandbox console file once CH exits.
+pub async fn report_sandbox_exit(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    exit_code: i32,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let patch = json!({
+        "metadata": {
+            "annotations": {
+                "kubeswift.io/sandbox-exit-code": exit_code.to_string(),
+            }
+        }
+    });
+    let pp = PatchParams::default();
+    api.patch(name, &pp, &Patch::Merge(&patch)).await?;
+    Ok(())
+}
+
+/// Parses the LAST `KUBESWIFT-EXIT-CODE=<n>` line from the sandbox console text. The
+/// bridge-init emits it once, after the workload exits, so it is the workload's exit
+/// code. Taking the LAST match is robust against a workload that printed a look-alike
+/// line before exiting (all of its output precedes the bridge's line).
+pub fn parse_sandbox_exit_code(console: &str) -> Option<i32> {
+    console
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix("KUBESWIFT-EXIT-CODE="))
+        .and_then(|v| v.trim().parse::<i32>().ok())
+}
+
 /// Whether swiftletd should patch a SwiftGuest CR's GuestRunning condition
 /// (`report_guest_running`). Default true — the SwiftGuest launch path is
 /// unchanged. A SwiftSandbox launcher sets `KUBESWIFT_REPORT_GUEST_CR=false`:
@@ -106,7 +141,29 @@ pub fn report_guest_cr_enabled(v: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::report_guest_cr_enabled;
+    use super::{parse_sandbox_exit_code, report_guest_cr_enabled};
+
+    #[test]
+    fn sandbox_exit_code_parsing() {
+        assert_eq!(
+            parse_sandbox_exit_code("hello\nKUBESWIFT-EXIT-CODE=0\n"),
+            Some(0)
+        );
+        assert_eq!(
+            parse_sandbox_exit_code("out\r\nKUBESWIFT-EXIT-CODE=7\r\n"),
+            Some(7)
+        );
+        // Last match wins (workload printed a look-alike before the bridge's real line).
+        assert_eq!(
+            parse_sandbox_exit_code("KUBESWIFT-EXIT-CODE=99\nwork\nKUBESWIFT-EXIT-CODE=3\n"),
+            Some(3)
+        );
+        assert_eq!(parse_sandbox_exit_code("no marker here\n"), None);
+        assert_eq!(
+            parse_sandbox_exit_code("KUBESWIFT-EXIT-CODE=notanint\n"),
+            None
+        );
+    }
 
     #[test]
     fn cr_report_defaults_on() {
