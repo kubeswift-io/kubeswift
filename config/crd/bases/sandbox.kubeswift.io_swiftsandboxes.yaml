@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.nodeName
       name: Node
       type: string
+    - jsonPath: .status.network.primaryIP
+      name: IP
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -375,6 +378,16 @@ spec:
                 type: integer
               message:
                 type: string
+              network:
+                description: |-
+                  Network is the guest network (primaryIP), reported by the swiftletd lease
+                  poller. Absent for network:none sandboxes.
+                properties:
+                  primaryIP:
+                    description: PrimaryIP is the guest's DHCP-assigned IP (network:restricted
+                      only).
+                    type: string
+                type: object
               nodeName:
                 type: string
               phase:
@@ -400,6 +413,19 @@ spec:
                     type: string
                   sizeBytes:
                     description: SizeBytes is the materialized ext4 (or tree) size.
+                    format: int64
+                    type: integer
+                type: object
+              runtime:
+                description: Runtime is the live guest runtime (pid/hypervisor), reported
+                  by swiftletd.
+                properties:
+                  hypervisor:
+                    description: Hypervisor is the resolved VMM (always cloud-hypervisor
+                      for a sandbox).
+                    type: string
+                  pid:
+                    description: PID is the host PID of the hypervisor process.
                     format: int64
                     type: integer
                 type: object

@@ -40,6 +40,15 @@ func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
 func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, entrypoint string) *runtimeintent.RuntimeIntent {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 	cmdline := "console=ttyS0 kubeswift.rootfs=block"
+	if networked(sb) {
+		// Kernel IP autoconfig (the sandbox kernel has CONFIG_IP_PNP_DHCP=y). A bare
+		// OCI workload (e.g. /bin/sh) runs no DHCP client and the bridge-init does no
+		// network setup, so the guest would otherwise never acquire the dnsmasq lease
+		// / an IP (and status.network.primaryIP would stay empty). ip=dhcp makes the
+		// kernel DHCP eth0 at boot. Omitted for network:none — there is no dnsmasq,
+		// so kernel DHCP would only stall the boot.
+		cmdline += " ip=dhcp"
+	}
 	if entrypoint != "" {
 		cmdline += " kubeswift.entrypoint=" + entrypoint
 	}
@@ -129,6 +138,16 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 				Name:            launcherName,
 				Image:           swiftguest.LauncherImage(),
 				SecurityContext: privileged(),
+				// swiftletd reads POD_NAME/POD_NAMESPACE (downward API) to know which
+				// pod to report onto; without them it skips the report + lease paths
+				// entirely (guest pid/hypervisor/IP never surface). KUBESWIFT_REPORT_GUEST_CR
+				// tells swiftletd NOT to patch a SwiftGuest CR status (there is none for a
+				// sandbox — the SwiftSandbox controller owns status from the pod annotations).
+				Env: []corev1.EnvVar{
+					{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+					{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+					{Name: "KUBESWIFT_REPORT_GUEST_CR", Value: "false"},
+				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: "kernel-artifacts", MountPath: kernelDir},
 					{Name: "rootfs-cache", MountPath: rootfsCacheDir},

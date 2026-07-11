@@ -133,6 +133,26 @@ type SandboxRootfsStatus struct {
 	CachePath string `json:"cachePath,omitempty"`
 }
 
+// SandboxRuntimeStatus reports the live guest runtime, mapped from the swiftletd
+// pod annotations (the same reporting path SwiftGuest uses). Absent until swiftletd
+// reaches CH-socket-ready and writes the annotations.
+type SandboxRuntimeStatus struct {
+	// PID is the host PID of the hypervisor process.
+	// +optional
+	PID int64 `json:"pid,omitempty"`
+	// Hypervisor is the resolved VMM (always cloud-hypervisor for a sandbox).
+	// +optional
+	Hypervisor string `json:"hypervisor,omitempty"`
+}
+
+// SandboxNetworkStatus reports the guest network, mapped from the swiftletd
+// lease-poller pod annotation. Absent for network:none sandboxes.
+type SandboxNetworkStatus struct {
+	// PrimaryIP is the guest's DHCP-assigned IP (network:restricted only).
+	// +optional
+	PrimaryIP string `json:"primaryIP,omitempty"`
+}
+
 // SwiftSandboxStatus is the observed state.
 type SwiftSandboxStatus struct {
 	// +optional
@@ -148,6 +168,13 @@ type SwiftSandboxStatus struct {
 	PodRef string `json:"podRef,omitempty"`
 	// +optional
 	Rootfs *SandboxRootfsStatus `json:"rootfs,omitempty"`
+	// Runtime is the live guest runtime (pid/hypervisor), reported by swiftletd.
+	// +optional
+	Runtime *SandboxRuntimeStatus `json:"runtime,omitempty"`
+	// Network is the guest network (primaryIP), reported by the swiftletd lease
+	// poller. Absent for network:none sandboxes.
+	// +optional
+	Network *SandboxNetworkStatus `json:"network,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
@@ -169,6 +196,7 @@ type SwiftSandboxStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.network.primaryIP`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftSandbox struct {
 	metav1.TypeMeta   `json:",inline"`

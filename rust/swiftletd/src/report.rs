@@ -86,3 +86,41 @@ pub async fn report_guest_runtime(
     api.patch(name, &pp, &Patch::Merge(&patch)).await?;
     Ok(())
 }
+
+/// Whether swiftletd should patch a SwiftGuest CR's GuestRunning condition
+/// (`report_guest_running`). Default true — the SwiftGuest launch path is
+/// unchanged. A SwiftSandbox launcher sets `KUBESWIFT_REPORT_GUEST_CR=false`:
+/// there is no SwiftGuest CR named after the pod (the SwiftSandbox controller
+/// owns status, derived from the pod annotations), so the patch would 404 on
+/// every launch. This only gates the CR patch — `report_guest_runtime` (pod
+/// annotations) and the lease poller are unaffected.
+pub fn report_guest_cr_enabled(v: Option<&str>) -> bool {
+    match v {
+        Some(s) => !matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "false" | "off" | "0" | "no"
+        ),
+        None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report_guest_cr_enabled;
+
+    #[test]
+    fn cr_report_defaults_on() {
+        assert!(report_guest_cr_enabled(None));
+        assert!(report_guest_cr_enabled(Some("true")));
+        assert!(report_guest_cr_enabled(Some("1")));
+        // An empty value is not a disable token -> on (only explicit tokens disable).
+        assert!(report_guest_cr_enabled(Some("")));
+    }
+
+    #[test]
+    fn cr_report_off_tokens() {
+        for v in ["false", "off", "0", "no", "False", "OFF", " false "] {
+            assert!(!report_guest_cr_enabled(Some(v)), "{v} should disable");
+        }
+    }
+}
