@@ -105,7 +105,12 @@ func TestUnknownOp(t *testing.T) {
 }
 
 func TestExec(t *testing.T) {
-	h, _ := newHandler() // execRoot="" -> no chroot; runs host commands in the test
+	h, _ := newHandler()
+	// exec is gated on --exec-root: disabled without it (identity-guest posture).
+	if r := decode(t, h.handle([]byte(`{"op":"exec","argv":["echo","hi"]}`))); r.OK || !strings.Contains(r.Error, "disabled") {
+		t.Errorf("exec must be disabled without --exec-root: %+v", r)
+	}
+	h.execRoot = "/" // enable exec; "/" means no chroot, so it runs host commands in the test
 	if r := decode(t, h.handle([]byte(`{"op":"exec"}`))); r.OK {
 		t.Errorf("empty argv should fail: %+v", r)
 	}
@@ -116,6 +121,11 @@ func TestExec(t *testing.T) {
 	r = decode(t, h.handle([]byte(`{"op":"exec","argv":["sh","-c","exit 3"]}`)))
 	if !r.OK || r.ExitCode == nil || *r.ExitCode != 3 {
 		t.Errorf("exit 3 should propagate: %+v", r)
+	}
+	// env + cwd are applied.
+	r = decode(t, h.handle([]byte(`{"op":"exec","argv":["sh","-c","echo $FOO; pwd"],"env":["FOO=bar"],"cwd":"/tmp"}`)))
+	if !r.OK || r.Stdout != "bar\n/tmp\n" {
+		t.Errorf("env+cwd: %+v", r)
 	}
 }
 
