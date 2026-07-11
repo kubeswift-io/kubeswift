@@ -190,6 +190,20 @@ jobs:
       - name: Lint Grafana dashboards
         run: make verify-dashboards
 
+  sandbox-config:
+    name: Sandbox kernel config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Static dependency lint for build/kernels/sandbox/configs/sandbox-linux.config.
+      # buildroot uses it as the WHOLE kernel config and runs `make olddefconfig`,
+      # which SILENTLY drops a driver whose Kconfig dependency is unmet (VIRTIO_PCI
+      # without PCI, VIRTIO_NET without NETDEVICES) -> a kernel with no virtio-blk/-net
+      # at all. That shipped once and only surfaced on a live cluster; catch it per-PR.
+      - name: Verify sandbox kernel config deps
+        run: make verify-sandbox-config
+
   swiftletd-image:
     name: swiftletd image
     runs-on: ubuntu-latest
