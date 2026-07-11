@@ -394,6 +394,15 @@ verify-e2e-scripts:
 verify-dashboards:
 	@./tools/lint-dashboards.sh
 
+# Static dependency lint for the sandbox kernel config
+# (build/kernels/sandbox/configs/sandbox-linux.config). buildroot uses it as the
+# whole kernel config and runs `make olddefconfig`, which SILENTLY drops a driver
+# whose Kconfig dependency is unmet (e.g. VIRTIO_PCI without PCI -> no virtio at all).
+# That shipped once and only surfaced on a live cluster; this catches it per-PR
+# without a full kernel build. Run in CI.
+verify-sandbox-config:
+	@./build/kernels/sandbox/verify-config.sh
+
 # Sync the canonical dashboards (config/grafana/) into the Helm chart
 # (charts/kubeswift/dashboards/), where templates/monitoring/dashboards.yaml
 # embeds them via .Files.Get. Same pattern as the CRD copy step — the
