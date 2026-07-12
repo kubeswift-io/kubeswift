@@ -1,12 +1,11 @@
 # A warm pool: keeps N pre-booted, workload-less alpine microVMs ready so a
 # SwiftSandbox with spec.poolRef pointing here checks out in sub-second time
 # instead of paying the cold materialize + boot. All slots share one materialized
-# rootfs; warming is node-local (a checkout that finds no free slot on its node
-# falls back to the cold path).
+# rootfs and spread one-per-node across kernel-nodes; a checkout that finds no
+# free slot falls back to the cold path automatically.
 #
-# NOTE: this PR ships the SwiftSandboxPool CRD (the declarative surface). The pool
-# controller (warming slots) and SwiftSandbox.spec.poolRef checkout land in
-# follow-up PRs (epic tracks the phases).
+# See swiftsandbox-pooled.yaml for a sandbox that checks out from this pool, and
+# docs/sandbox/warm-pool.md for the operator guide.
 apiVersion: sandbox.kubeswift.io/v1alpha1
 kind: SwiftSandboxPool
 metadata:
