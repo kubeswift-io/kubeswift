@@ -9,7 +9,7 @@ import (
 // SwiftSandboxSpec defines an ephemeral, strongly-isolated microVM that runs an
 // OCI image as its root filesystem (the mode-3 sandbox boot: a direct-kernel
 // boot + a read-only OCI rootfs + a tmpfs overlay). See
-// docs/design/swiftsandbox-design.md.
+// docs/sandbox/overview.md.
 type SwiftSandboxSpec struct {
 	// Image is the OCI image to run as the sandbox root filesystem. A digest
 	// reference (repo@sha256:...) is strongly preferred for reproducibility and
@@ -95,7 +95,7 @@ const (
 
 // SandboxNetwork is the sandbox networking policy.
 type SandboxNetwork struct {
-	// Mode is "restricted" (default) or "none".
+	// Mode is "restricted" (default), "open", or "none".
 	// +kubebuilder:default=restricted
 	// +optional
 	Mode SandboxNetworkMode `json:"mode,omitempty"`

@@ -1,3 +1,26 @@
+apiVersion: seed.kubeswift.io/v1alpha1
+kind: SwiftSeedProfile
+metadata:
+  name: default
+  namespace: default
+spec:
+  datasource: NoCloud
+  userData: |
+    #cloud-config
+    hostname: kubeswift-rocky
+    users:
+      - name: kubeswift
+        passwd: $6$kubeswift$/2TeJTNbX7JcApzW0gTbSFzCAN4eFcOdnQsI0lVANFpXhHmjqLy7npyhHxvT65kpUd0YKVMBAbRt3MUfV6eCJ.
+        sudo: ALL=(ALL) NOPASSWD:ALL
+        lock_passwd: false
+        ssh_authorized_keys:
+          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+    runcmd:
+      - systemctl enable --now getty@ttyS0.service
+  metaData: |
+    instance-id: kubeswift-302
+    local-hostname: kubeswift-rocky
+---
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:
@@ -9,5 +32,5 @@ spec:
   guestClassRef:
     name: default
   seedProfileRef:
-    name: minimal
+    name: default
   runPolicy: Running
