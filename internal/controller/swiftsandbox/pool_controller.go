@@ -108,7 +108,8 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 	}
-	// (idleTTL scale-down + explicit node-spread are follow-up phases.)
+	// (idleTTL scale-down is a follow-up phase; node-spread is applied per slot
+	// in createWarmSlot via warmSlotTopologySpread.)
 
 	return r.updateStatus(ctx, &pool, ready, claimed, ri)
 }
@@ -131,6 +132,17 @@ func slotsToCreate(minWarm, maxWarm, warmLive int) int {
 		want = 0
 	}
 	return want
+}
+
+// warmSlotTopologySpread spreads a pool's warm slots one-per-node across kernel-nodes
+// (MaxSkew 1 over the hostname), soft so it never blocks warming.
+func warmSlotTopologySpread(poolName string) []corev1.TopologySpreadConstraint {
+	return []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "kubernetes.io/hostname",
+		WhenUnsatisfiable: corev1.ScheduleAnyway,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{PoolLabelKey: poolName}},
+	}}
 }
 
 // slotTemplate builds the synthetic (unpersisted) SwiftSandbox for a warm slot: the
@@ -174,6 +186,10 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	pod := buildPod(slot, kernelName)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
+	// Spread the pool's slots across kernel-nodes so a checkout landing on any node is
+	// likely to find a warm slot there (warming is node-local). Soft (ScheduleAnyway):
+	// never block warming just because one node is full.
+	pod.Spec.TopologySpreadConstraints = warmSlotTopologySpread(pool.Name)
 	if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
 		return err
 	}

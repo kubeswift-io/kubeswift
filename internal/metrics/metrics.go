@@ -283,6 +283,19 @@ var (
 		},
 		[]string{"policy", "result"},
 	)
+
+	// SandboxCheckoutsTotal counts SwiftSandbox pool checkouts by result:
+	// "hit" (claimed a pre-booted warm slot — the fast path) or "cold" (no warm
+	// slot available, or no command to inject — fell back to the cold
+	// materialize+boot path). The hit rate is the warm pool's headline signal;
+	// a persistent "cold" rate means minWarm is too low for the arrival rate.
+	SandboxCheckoutsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_checkouts_total",
+			Help: "SwiftSandbox pool checkouts by result (hit=claimed a warm slot, cold=fell back to the cold path)",
+		},
+		[]string{"result"},
+	)
 )
 
 // cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
@@ -295,6 +308,20 @@ var cloneDownloadObserved sync.Map
 // MarkCloneDownloadObserved returns true the first time key is seen.
 func MarkCloneDownloadObserved(key string) bool {
 	_, loaded := cloneDownloadObserved.LoadOrStore(key, struct{}{})
+	return !loaded
+}
+
+// sandboxCheckoutObserved dedupes the per-sandbox checkout decision (hit vs
+// cold) so SandboxCheckoutsTotal counts once per SwiftSandbox — the cold-
+// fallback path can re-enter across reconciles until status.podRef persists
+// (the cold createLaunch may requeue on image resolve before the status write
+// lands). Keyed on the sandbox UID; a controller restart may re-count once
+// (acceptable for a counter, mirroring cloneDownloadObserved).
+var sandboxCheckoutObserved sync.Map
+
+// MarkSandboxCheckoutObserved returns true the first time uid is seen.
+func MarkSandboxCheckoutObserved(uid string) bool {
+	_, loaded := sandboxCheckoutObserved.LoadOrStore(uid, struct{}{})
 	return !loaded
 }
 
@@ -322,5 +349,6 @@ func init() {
 		GPUReleasesTotal,
 		DrainMigrationsTotal,
 		ImageImportTotal,
+		SandboxCheckoutsTotal,
 	)
 }
