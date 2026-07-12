@@ -17,9 +17,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/cli"
 	"github.com/kubeswift-io/kubeswift/internal/guestagent"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
@@ -27,6 +30,34 @@ import (
 // agentVsockPort is the AF_VSOCK port the in-guest agent listens on (matches
 // cmd/kubeswift-guest-agent DefaultPort and swift-vsock-client).
 const agentVsockPort = 1024
+
+// sandboxTargetPod returns the launcher pod that actually runs the sandbox's
+// guest. For a warm-pool checkout the guest runs in the CLAIMED SLOT pod, whose
+// name differs from the sandbox (status.podRef = <pool>-slot-<x>); for a cold or
+// non-pooled sandbox the launcher pod is named after the sandbox. swiftletd keys
+// the guest's run dir (serial.sock.log, vsock.sock) on the launcher pod identity,
+// so BOTH the exec target pod AND the cli.GuestID run-dir segment must be this
+// value — otherwise logs/exec/attach target the wrong (or non-existent) pod for a
+// checked-out sandbox. Falls back to name when status.podRef is unset (early
+// Pending) — same as the pre-checkout behavior.
+func sandboxTargetPod(ns, name string) (string, error) {
+	cfg, err := kubeConfig.ToRESTConfig()
+	if err != nil {
+		return "", fmt.Errorf("kubeconfig: %w", err)
+	}
+	c, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
+	if err != nil {
+		return "", fmt.Errorf("create client: %w", err)
+	}
+	var sb sandboxv1alpha1.SwiftSandbox
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &sb); err != nil {
+		return "", fmt.Errorf("get swiftsandbox %s/%s: %w", ns, name, err)
+	}
+	if sb.Status.PodRef != "" {
+		return sb.Status.PodRef, nil
+	}
+	return name, nil
+}
 
 var sandboxCmd = &cobra.Command{
 	Use:          "sandbox",
@@ -125,7 +156,14 @@ func execOrAttach(ns, name string, command, env []string, workdir string, stdin,
 		return fmt.Errorf("create clientset: %w", err)
 	}
 
-	vsockSock := "/var/lib/kubeswift/run/" + cli.GuestID(ns, name) + "/vsock.sock"
+	// A warm-pool checkout runs in the claimed slot pod, not a pod named after the
+	// sandbox — target the pod (and its run dir) that actually holds the guest.
+	target, err := sandboxTargetPod(ns, name)
+	if err != nil {
+		return err
+	}
+
+	vsockSock := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target) + "/vsock.sock"
 	reqObj := map[string]interface{}{"v": 1, "op": "exec", "argv": command, "stream": true}
 	if len(env) > 0 {
 		reqObj["env"] = env
@@ -147,9 +185,9 @@ func execOrAttach(ns, name string, command, env []string, workdir string, stdin,
 
 	var code int
 	if tty {
-		code, err = agentAttachTTY(config, clientset, ns, name, vsockSock, req)
+		code, err = agentAttachTTY(config, clientset, ns, target, vsockSock, req)
 	} else {
-		code, err = agentExecStream(config, clientset, ns, name, vsockSock, req, stdin)
+		code, err = agentExecStream(config, clientset, ns, target, vsockSock, req, stdin)
 	}
 	if err != nil {
 		return err
@@ -332,9 +370,14 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create clientset: %w", err)
 	}
 
-	// The sandbox launcher pod is named after the sandbox; the guest console is
-	// captured to <run>/serial.sock.log (swiftletd's --serial file= for sandboxes).
-	serialLog := "/var/lib/kubeswift/run/" + cli.GuestID(ns, name) + "/serial.sock.log"
+	// The guest console is captured to <run>/serial.sock.log (swiftletd's
+	// --serial file= for sandboxes). For a warm-pool checkout that run dir lives
+	// in the claimed slot pod, not a pod named after the sandbox — resolve both.
+	target, err := sandboxTargetPod(ns, name)
+	if err != nil {
+		return err
+	}
+	serialLog := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target) + "/serial.sock.log"
 	shellCmd := "cat " + serialLog
 	if sandboxLogsFollow {
 		// tail from the start, then follow; keep waiting even if the file appears late.
@@ -344,7 +387,7 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Namespace(ns).
-		Name(name).
+		Name(target).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: cli.LauncherContainer,
