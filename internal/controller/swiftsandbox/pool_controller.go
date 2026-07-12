@@ -108,7 +108,8 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 	}
-	// (idleTTL scale-down + explicit node-spread are follow-up phases.)
+	// (idleTTL scale-down is a follow-up phase; node-spread is applied per slot
+	// in createWarmSlot via warmSlotTopologySpread.)
 
 	return r.updateStatus(ctx, &pool, ready, claimed, ri)
 }
