@@ -29,6 +29,7 @@ const (
 	// SlotStateLabelKey marks a slot's checkout state: warm (unclaimed) vs claimed.
 	SlotStateLabelKey = "sandbox.kubeswift.io/slot-state"
 	slotStateWarm     = "warm"
+	slotStateClaimed  = "claimed"
 
 	poolPollInterval = 10 * time.Second
 )
