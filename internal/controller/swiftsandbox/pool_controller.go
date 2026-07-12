@@ -1,0 +1,252 @@
+package swiftsandbox
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+)
+
+const (
+	// PoolLabelKey ties a warm slot (its launcher pod / intent ConfigMap /
+	// NetworkPolicy) to the owning SwiftSandboxPool.
+	PoolLabelKey = "sandbox.kubeswift.io/pool"
+	// SlotStateLabelKey marks a slot's checkout state: warm (unclaimed) vs claimed.
+	SlotStateLabelKey = "sandbox.kubeswift.io/slot-state"
+	slotStateWarm     = "warm"
+
+	poolPollInterval = 10 * time.Second
+)
+
+// warmSlotIdleCmd keeps a workload-less slot Running and idle so the in-guest agent
+// stays reachable for a post-boot checkout. It is image-provided (a distroless image
+// without a shell/sleep needs the bridge idle keeper — tracked follow-up).
+var warmSlotIdleCmd = []string{"sleep", "infinity"}
+
+// SwiftSandboxPoolReconciler maintains a warm buffer of pre-booted, workload-less
+// sandbox slots so a SwiftSandbox can check out sub-second. Co-located with the
+// SwiftSandbox controller to reuse its launch builders (buildIntent/buildPod/…) via a
+// synthetic per-slot SwiftSandbox carrying the pool's slot shape + an idle command.
+type SwiftSandboxPoolReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+}
+
+func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var pool sandboxv1alpha1.SwiftSandboxPool
+	if err := r.Get(ctx, req.NamespacedName, &pool); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if pool.DeletionTimestamp != nil {
+		// Warm slots (pods / intent ConfigMaps / NetworkPolicies) are owned by the pool
+		// and cascade-GC with it. No finalizer needed.
+		return ctrl.Result{}, nil
+	}
+	// Warm slots run swiftletd, which reports via pod annotations — ensure the
+	// per-namespace reporter RoleBinding (idempotent), as the sandbox controller does.
+	if err := swiftguest.EnsureSwiftletdRBAC(ctx, r.Client, pool.Namespace); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	kernelName := defaultKernelProfile
+	if pool.Spec.KernelProfileRef != nil && pool.Spec.KernelProfileRef.Name != "" {
+		kernelName = pool.Spec.KernelProfileRef.Name
+	}
+
+	// Census of the pool's live slots.
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(pool.Namespace), client.MatchingLabels{PoolLabelKey: pool.Name}); err != nil {
+		return ctrl.Result{}, err
+	}
+	var ready, warmLive, claimed int
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
+		if p.DeletionTimestamp != nil || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if p.Labels[SlotStateLabelKey] == slotStateWarm {
+			warmLive++
+			if launcherReady(p) {
+				ready++
+			}
+		} else {
+			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
+		}
+	}
+
+	// Resolve the image only when we must — creating slots, or not yet resolved — so a
+	// steady Ready pool does no per-reconcile registry calls.
+	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
+	var ri *resolvedImage
+	if want > 0 || pool.Status.Rootfs == nil || pool.Status.Rootfs.Digest == "" {
+		resolved, err := resolveImage(r.slotTemplate(&pool, "resolve"))
+		if err != nil {
+			return r.degraded(ctx, &pool, ready, claimed, "ImageResolveFailed", err.Error())
+		}
+		ri = &resolved
+	}
+	for i := 0; i < want; i++ {
+		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	// (idleTTL scale-down + explicit node-spread are follow-up phases.)
+
+	return r.updateStatus(ctx, &pool, ready, claimed, ri)
+}
+
+// slotsToCreate is the pure warm-slot arithmetic: how many new slots to bring up this
+// pass to reach minWarm, capped by the effective max. spec.maxWarm=0 means "no cap
+// beyond minWarm", and a max set below minWarm is a misconfiguration where minWarm
+// wins — both fold into effMax = max(maxWarm, minWarm). (Sane min/max bounds are the
+// webhook's job; the operator owns the number, like SwiftGuestPool replicas.)
+func slotsToCreate(minWarm, maxWarm, warmLive int) int {
+	effMax := maxWarm
+	if effMax < minWarm {
+		effMax = minWarm
+	}
+	want := minWarm - warmLive
+	if room := effMax - warmLive; want > room {
+		want = room
+	}
+	if want < 0 {
+		want = 0
+	}
+	return want
+}
+
+// slotTemplate builds the synthetic (unpersisted) SwiftSandbox for a warm slot: the
+// pool's slot shape + the idle keeper command. The launch builders read only its
+// fields; the resulting pod/ConfigMap/NetworkPolicy are owned by the POOL.
+func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSandboxPool, name string) *sandboxv1alpha1.SwiftSandbox {
+	return &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace},
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{
+			Image:            pool.Spec.Image,
+			ImagePullSecret:  pool.Spec.ImagePullSecret,
+			CPU:              pool.Spec.CPU,
+			Memory:           pool.Spec.Memory,
+			Network:          pool.Spec.Network,
+			KernelProfileRef: pool.Spec.KernelProfileRef,
+			NodeSelector:     pool.Spec.NodeSelector,
+			Command:          warmSlotIdleCmd,
+		},
+	}
+}
+
+// createWarmSlot brings up one warm slot: the intent ConfigMap + launcher pod (+ a
+// deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
+func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage) error {
+	slot := r.slotTemplate(pool, pool.Name+"-slot-"+utilrand.String(5))
+
+	intent := buildIntent(slot, kernelName, ri.RootfsPath, ri.Exec)
+	intentJSON, err := runtimeintent.Serialize(intent)
+	if err != nil {
+		return err
+	}
+	cm := buildIntentConfigMap(slot, intentJSON)
+	cm.Labels = map[string]string{PoolLabelKey: pool.Name}
+	if err := controllerutil.SetControllerReference(pool, cm, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	pod := buildPod(slot, kernelName)
+	pod.Labels[PoolLabelKey] = pool.Name
+	pod.Labels[SlotStateLabelKey] = slotStateWarm
+	if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	if networked(slot) {
+		np := buildNetworkPolicy(slot)
+		if np.Labels == nil {
+			np.Labels = map[string]string{}
+		}
+		np.Labels[PoolLabelKey] = pool.Name
+		if err := controllerutil.SetControllerReference(pool, np, r.Scheme); err != nil {
+			return err
+		}
+		if err := r.Create(ctx, np); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, ri *resolvedImage) (ctrl.Result, error) {
+	pool.Status.WarmReplicas = int32(ready)
+	pool.Status.ClaimedReplicas = int32(claimed)
+	pool.Status.ObservedGeneration = pool.Generation
+	if ri != nil {
+		pool.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
+		apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxPoolConditionResolved, Status: metav1.ConditionTrue,
+			Reason: "Resolved", Message: "image digest " + ri.Digest, ObservedGeneration: pool.Generation,
+		})
+	}
+	msg := fmt.Sprintf("%d/%d warm slots ready", ready, pool.Spec.MinWarm)
+	phase := sandboxv1alpha1.SwiftSandboxPoolWarming
+	warm := metav1.ConditionFalse
+	if int32(ready) >= pool.Spec.MinWarm {
+		phase, warm = sandboxv1alpha1.SwiftSandboxPoolReady, metav1.ConditionTrue
+	}
+	pool.Status.Phase = phase
+	pool.Status.Message = msg
+	apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxPoolConditionWarm, Status: warm,
+		Reason: "Warm", Message: msg, ObservedGeneration: pool.Generation,
+	})
+	if err := r.Status().Update(ctx, pool); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: poolPollInterval}, nil
+}
+
+// degraded surfaces a resolve/warm failure honestly (Resolved=False, phase=Degraded)
+// rather than stalling silently.
+func (r *SwiftSandboxPoolReconciler) degraded(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, reason, msg string) (ctrl.Result, error) {
+	pool.Status.WarmReplicas = int32(ready)
+	pool.Status.ClaimedReplicas = int32(claimed)
+	pool.Status.Phase = sandboxv1alpha1.SwiftSandboxPoolDegraded
+	pool.Status.Message = msg
+	apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxPoolConditionResolved, Status: metav1.ConditionFalse,
+		Reason: reason, Message: msg, ObservedGeneration: pool.Generation,
+	})
+	if err := r.Status().Update(ctx, pool); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: poolPollInterval}, nil
+}
+
+func (r *SwiftSandboxPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&sandboxv1alpha1.SwiftSandboxPool{}).
+		Owns(&corev1.Pod{}).
+		Owns(&corev1.ConfigMap{}).
+		Owns(&networkingv1.NetworkPolicy{}).
+		Complete(r)
+}
