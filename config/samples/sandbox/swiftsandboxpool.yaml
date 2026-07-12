@@ -1,0 +1,23 @@
+# A warm pool: keeps N pre-booted, workload-less alpine microVMs ready so a
+# SwiftSandbox with spec.poolRef pointing here checks out in sub-second time
+# instead of paying the cold materialize + boot. All slots share one materialized
+# rootfs; warming is node-local (a checkout that finds no free slot on its node
+# falls back to the cold path).
+#
+# NOTE: this PR ships the SwiftSandboxPool CRD (the declarative surface). The pool
+# controller (warming slots) and SwiftSandbox.spec.poolRef checkout land in
+# follow-up PRs (epic tracks the phases).
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: alpine-pool
+  namespace: default
+spec:
+  image: docker.io/library/alpine:3.20
+  cpu: 1
+  memory: 512Mi
+  minWarm: 2            # keep 2 ready slots (spread across kernel-nodes)
+  maxWarm: 6            # never hold more than 6 warm slots
+  idleTTL: 30m          # scale idle slots back toward 0 after 30m quiet
+  network:
+    mode: restricted    # restricted | open | none — same as SwiftSandbox

@@ -45,7 +45,9 @@ func init() {
 	Scheme.AddKnownTypes(gvMigration, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
 	metav1.AddToGroupVersion(Scheme, gvMigration)
 	gvSandbox := schema.GroupVersion{Group: "sandbox.kubeswift.io", Version: "v1alpha1"}
-	Scheme.AddKnownTypes(gvSandbox, &sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxList{})
+	Scheme.AddKnownTypes(gvSandbox,
+		&sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxList{},
+		&sandboxv1alpha1.SwiftSandboxPool{}, &sandboxv1alpha1.SwiftSandboxPoolList{})
 	metav1.AddToGroupVersion(Scheme, gvSandbox)
 	// fleet.kubeswift.io/v1alpha1 (UI backend): the kubeswift-gateway hub's
 	// registry of federated member clusters. Registered for serialization;
