@@ -133,6 +133,17 @@ func slotsToCreate(minWarm, maxWarm, warmLive int) int {
 	return want
 }
 
+// warmSlotTopologySpread spreads a pool's warm slots one-per-node across kernel-nodes
+// (MaxSkew 1 over the hostname), soft so it never blocks warming.
+func warmSlotTopologySpread(poolName string) []corev1.TopologySpreadConstraint {
+	return []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "kubernetes.io/hostname",
+		WhenUnsatisfiable: corev1.ScheduleAnyway,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{PoolLabelKey: poolName}},
+	}}
+}
+
 // slotTemplate builds the synthetic (unpersisted) SwiftSandbox for a warm slot: the
 // pool's slot shape + the idle keeper command. The launch builders read only its
 // fields; the resulting pod/ConfigMap/NetworkPolicy are owned by the POOL.
@@ -174,6 +185,10 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	pod := buildPod(slot, kernelName)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
+	// Spread the pool's slots across kernel-nodes so a checkout landing on any node is
+	// likely to find a warm slot there (warming is node-local). Soft (ScheduleAnyway):
+	// never block warming just because one node is full.
+	pod.Spec.TopologySpreadConstraints = warmSlotTopologySpread(pool.Name)
 	if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
 		return err
 	}

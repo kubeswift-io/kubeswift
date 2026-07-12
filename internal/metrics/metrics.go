@@ -283,6 +283,19 @@ var (
 		},
 		[]string{"policy", "result"},
 	)
+
+	// SandboxCheckoutsTotal counts SwiftSandbox pool checkouts by result:
+	// "hit" (claimed a pre-booted warm slot — the fast path) or "cold" (no warm
+	// slot available, or no command to inject — fell back to the cold
+	// materialize+boot path). The hit rate is the warm pool's headline signal;
+	// a persistent "cold" rate means minWarm is too low for the arrival rate.
+	SandboxCheckoutsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_checkouts_total",
+			Help: "SwiftSandbox pool checkouts by result (hit=claimed a warm slot, cold=fell back to the cold path)",
+		},
+		[]string{"result"},
+	)
 )
 
 // cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
@@ -322,5 +335,6 @@ func init() {
 		GPUReleasesTotal,
 		DrainMigrationsTotal,
 		ImageImportTotal,
+		SandboxCheckoutsTotal,
 	)
 }

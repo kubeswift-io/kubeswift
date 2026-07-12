@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 )
 
 // sandbox-exec action/status annotation keys — MUST match the swiftletd action loop's
@@ -84,6 +85,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		}
 		r.Recorder.Eventf(sb, corev1.EventTypeNormal, "CheckedOut",
 			"claimed warm slot %s from pool %s", slot.Name, sb.Spec.PoolRef.Name)
+		metrics.SandboxCheckoutsTotal.WithLabelValues("hit").Inc()
 	}
 
 	now := metav1.Now()
@@ -108,6 +110,7 @@ func (r *SwiftSandboxReconciler) coldFallback(ctx context.Context, sb *sandboxv1
 	log.FromContext(ctx).Info("SwiftSandbox pool miss; cold-fallback", "sandbox", sb.Name, "reason", reason)
 	r.Recorder.Eventf(sb, corev1.EventTypeNormal, "PoolColdFallback",
 		"pool %s: %s; booting cold", sb.Spec.PoolRef.Name, reason)
+	metrics.SandboxCheckoutsTotal.WithLabelValues("cold").Inc()
 	sb.Status.PodRef = sb.Name
 	return r.createLaunch(ctx, sb, kernelName)
 }
