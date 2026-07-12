@@ -85,7 +85,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		}
 		r.Recorder.Eventf(sb, corev1.EventTypeNormal, "CheckedOut",
 			"claimed warm slot %s from pool %s", slot.Name, sb.Spec.PoolRef.Name)
-		metrics.SandboxCheckoutsTotal.WithLabelValues("hit").Inc()
+		if metrics.MarkSandboxCheckoutObserved(string(sb.UID)) {
+			metrics.SandboxCheckoutsTotal.WithLabelValues("hit").Inc()
+		}
 	}
 
 	now := metav1.Now()
@@ -110,7 +112,9 @@ func (r *SwiftSandboxReconciler) coldFallback(ctx context.Context, sb *sandboxv1
 	log.FromContext(ctx).Info("SwiftSandbox pool miss; cold-fallback", "sandbox", sb.Name, "reason", reason)
 	r.Recorder.Eventf(sb, corev1.EventTypeNormal, "PoolColdFallback",
 		"pool %s: %s; booting cold", sb.Spec.PoolRef.Name, reason)
-	metrics.SandboxCheckoutsTotal.WithLabelValues("cold").Inc()
+	if metrics.MarkSandboxCheckoutObserved(string(sb.UID)) {
+		metrics.SandboxCheckoutsTotal.WithLabelValues("cold").Inc()
+	}
 	sb.Status.PodRef = sb.Name
 	return r.createLaunch(ctx, sb, kernelName)
 }

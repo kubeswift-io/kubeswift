@@ -311,6 +311,20 @@ func MarkCloneDownloadObserved(key string) bool {
 	return !loaded
 }
 
+// sandboxCheckoutObserved dedupes the per-sandbox checkout decision (hit vs
+// cold) so SandboxCheckoutsTotal counts once per SwiftSandbox — the cold-
+// fallback path can re-enter across reconciles until status.podRef persists
+// (the cold createLaunch may requeue on image resolve before the status write
+// lands). Keyed on the sandbox UID; a controller restart may re-count once
+// (acceptable for a counter, mirroring cloneDownloadObserved).
+var sandboxCheckoutObserved sync.Map
+
+// MarkSandboxCheckoutObserved returns true the first time uid is seen.
+func MarkSandboxCheckoutObserved(uid string) bool {
+	_, loaded := sandboxCheckoutObserved.LoadOrStore(uid, struct{}{})
+	return !loaded
+}
+
 func init() {
 	metrics.Registry.MustRegister(
 		VMBootSeconds,
