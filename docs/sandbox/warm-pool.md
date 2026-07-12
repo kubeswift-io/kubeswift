@@ -115,6 +115,8 @@ spec:
 - `status.podRef` points at the claimed slot pod (`<pool>-slot-<x>`), not at a
   pod named after the sandbox. `status.exitCode` carries the workload's real
   exit code just like a cold sandbox.
+- `swiftctl sandbox logs`/`exec`/`attach <name>` work on a checked-out sandbox
+  — they target the claimed slot transparently (via `status.podRef`).
 
 ## Node placement
 
