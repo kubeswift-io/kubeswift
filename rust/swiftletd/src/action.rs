@@ -233,6 +233,18 @@ pub const IDENTITY_STATUS_KEY: &str = "kubeswift.io/identity-status";
 pub const IDENTITY_STATUS_ID_KEY: &str = "kubeswift.io/identity-status-id";
 pub const IDENTITY_STATUS_DETAIL_KEY: &str = "kubeswift.io/identity-status-detail";
 
+// Sandbox-exec namespace — controller writes (read by swiftletd). Runs a
+// checked-out warm-slot's workload over vsock (SwiftSandboxPool checkout).
+pub const SANDBOX_EXEC_ACTION_KEY: &str = "kubeswift.io/sandbox-exec-action";
+pub const SANDBOX_EXEC_ACTION_ID_KEY: &str = "kubeswift.io/sandbox-exec-action-id";
+pub const SANDBOX_EXEC_ACTION_ARGS_KEY: &str = "kubeswift.io/sandbox-exec-action-args";
+
+// Sandbox-exec namespace — swiftletd writes (read by controller). status=complete
+// on a run, detail = the workload's exit code; status=failed on agent-unreachable.
+pub const SANDBOX_EXEC_STATUS_KEY: &str = "kubeswift.io/sandbox-exec-status";
+pub const SANDBOX_EXEC_STATUS_ID_KEY: &str = "kubeswift.io/sandbox-exec-status-id";
+pub const SANDBOX_EXEC_STATUS_DETAIL_KEY: &str = "kubeswift.io/sandbox-exec-status-detail";
+
 /// Annotation key set for one action namespace. Each namespace
 /// (snapshot, migration) has its own KeySet; the action loop runs
 /// `decide` against each per tick.
@@ -304,6 +316,21 @@ pub static IDENTITY_KEYS: KeySet = KeySet {
     ack_key: None,
     parse_verb: parse_identity_verb,
     namespace: "identity",
+};
+
+/// Sandbox-exec namespace key set. Used by `dispatch_sandbox_exec` to run a
+/// checked-out warm-slot's workload over vsock. No ack-gate (intra-pod host<->guest
+/// vsock, like identity).
+pub static SANDBOX_KEYS: KeySet = KeySet {
+    action_key: SANDBOX_EXEC_ACTION_KEY,
+    action_id_key: SANDBOX_EXEC_ACTION_ID_KEY,
+    action_args_key: SANDBOX_EXEC_ACTION_ARGS_KEY,
+    status_key: SANDBOX_EXEC_STATUS_KEY,
+    status_id_key: SANDBOX_EXEC_STATUS_ID_KEY,
+    status_detail_key: SANDBOX_EXEC_STATUS_DETAIL_KEY,
+    ack_key: None,
+    parse_verb: parse_sandbox_verb,
+    namespace: "sandbox-exec",
 };
 
 /// Env var the SwiftGuest controller sets on the launcher container when
@@ -416,6 +443,14 @@ fn parse_identity_verb(verb: &str) -> ActionKind {
     }
 }
 
+/// Maps a sandbox-exec-namespace verb string to an [`ActionKind`].
+fn parse_sandbox_verb(verb: &str) -> ActionKind {
+    match verb {
+        "run" => ActionKind::SandboxExec,
+        other => ActionKind::Unknown(other.to_string()),
+    }
+}
+
 /// Default per-call timeout for pause/resume/snapshot when the action
 /// args don't carry a `timeout_seconds` hint. 600s covers a 200 GiB VM
 /// at the Phase 0 ~2.8s/GiB curve with margin; the controller passes
@@ -457,6 +492,11 @@ pub enum ActionKind {
     /// Regenerate a cloneFromSnapshot clone's identity in place over vsock:
     /// machine-id / SSH host keys / hostname / MAC + re-DHCP, with no reboot.
     IdentityRegenerate,
+
+    // Sandbox-exec namespace — `kubeswift.io/sandbox-exec-action` verbs.
+    /// Run a checked-out warm-slot's workload in the guest over vsock (single-shot
+    /// exec into /newroot), reporting the exit code (SwiftSandboxPool checkout).
+    SandboxExec,
 
     /// Anything else — surfaces as a malformed-rejection so the
     /// controller learns immediately rather than the launcher silently
@@ -572,6 +612,7 @@ pub struct ActionState {
     pub snapshot: NamespaceState,
     pub migration: NamespaceState,
     pub identity: NamespaceState,
+    pub sandbox: NamespaceState,
 }
 
 /// Pure-function action-decision logic. Tested in isolation — no
@@ -708,6 +749,7 @@ pub async fn dispatch(action: &PendingAction, api_socket: &Path) -> Result<Actio
         ActionKind::MigrationReceive => dispatch_migration_receive(action, api_socket).await,
         ActionKind::MigrationCancel => dispatch_migration_cancel(action, api_socket).await,
         ActionKind::IdentityRegenerate => dispatch_identity_regenerate(action, api_socket).await,
+        ActionKind::SandboxExec => dispatch_sandbox_exec(action, api_socket).await,
         ActionKind::Unknown(verb) => {
             log::warn!(
                 "dispatch_unknown_action_verb verb={} id={}",
@@ -799,6 +841,98 @@ async fn dispatch_identity_regenerate(
             .map(|ip| format!(", ip={}", ip))
             .unwrap_or_default()
     )))
+}
+
+/// Args parsed from `kubeswift.io/sandbox-exec-action-args` for the `run` verb.
+/// The controller writes these from the checked-out SwiftSandbox's resolved
+/// workload (command/args -> argv, env, workingDir -> cwd).
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxExecArgs {
+    #[serde(default)]
+    argv: Vec<String>,
+    #[serde(default)]
+    env: Vec<String>,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// Default sandbox-exec timeout. The single-shot exec's connection is idle while
+/// the workload runs, so this must bound the whole WORKLOAD run, not just the dial;
+/// the controller passes the sandbox's spec.timeout when set.
+const SANDBOX_EXEC_TIMEOUT_SECS: u64 = 3600;
+
+/// Run a checked-out warm-slot's workload in the guest over vsock (single-shot exec
+/// into /newroot) and report the exit code. Mirrors `dispatch_identity_regenerate`:
+/// the vsock socket lives next to the CH API socket; the sync client runs on a
+/// blocking task so the action loop keeps ticking.
+///
+/// A NON-ZERO workload exit is a SUCCESSFUL exec (Ok) carrying the code in the detail
+/// (status "complete") — the controller maps exit!=0 to a Failed sandbox, exit==0 to
+/// Completed, the same as the cold path. Only agent-unreachable / exec-refused is an
+/// Err (surfaced as `GuestAgentUnreachable`), never a silent success.
+async fn dispatch_sandbox_exec(
+    action: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    let args: SandboxExecArgs = if action.args.is_null() {
+        SandboxExecArgs::default()
+    } else {
+        serde_json::from_value(action.args.clone())
+            .map_err(|e| format!("parse sandbox-exec args: {}", e))?
+    };
+    if args.argv.is_empty() {
+        return Err("sandbox-exec: empty argv".to_string());
+    }
+    let run_dir = api_socket
+        .parent()
+        .unwrap_or_else(|| Path::new("/"))
+        .to_path_buf();
+    let vsock_socket = run_dir.join("vsock.sock");
+    let timeout =
+        std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(SANDBOX_EXEC_TIMEOUT_SECS));
+    let req = swift_vsock_client::ExecRequest::new(args.argv, args.env, args.cwd);
+    log::info!(
+        "dispatch_sandbox_exec id={} socket={}",
+        action.id,
+        vsock_socket.display()
+    );
+    let resp =
+        tokio::task::spawn_blocking(move || swift_vsock_client::exec(&vsock_socket, &req, timeout))
+            .await
+            .map_err(|e| format!("sandbox-exec task join: {}", e))?
+            .map_err(|e| format!("GuestAgentUnreachable: {}", e))?;
+
+    if !resp.ok {
+        return Err(format!(
+            "agent exec error: {}",
+            resp.error.unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+    // Tee the workload output to the sandbox serial log (best-effort) so
+    // `swiftctl sandbox logs` shows it — a checked-out workload runs over vsock, not
+    // on the guest console the cold path captures.
+    if !resp.stdout.is_empty() || !resp.stderr.is_empty() {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(run_dir.join("serial.sock.log"))
+        {
+            let _ = f.write_all(resp.stdout.as_bytes());
+            let _ = f.write_all(resp.stderr.as_bytes());
+        }
+    }
+    let code = resp.exit_code.unwrap_or(-1);
+    log::info!("sandbox-exec id={} workload exited {}", action.id, code);
+    // detail = the workload exit code (the controller parses it); status "complete".
+    Ok(ActionOutcome {
+        detail: Some(code.to_string()),
+        pause_window_ms: None,
+        success_status: Some("complete"),
+    })
 }
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
@@ -1835,6 +1969,42 @@ pub async fn write_identity_status(
     Ok(())
 }
 
+/// Write the sandbox-exec status annotations (mirrors `write_identity_status`). The
+/// controller reads `sandbox-exec-status` + `-detail` (the exit code) to drive a
+/// checked-out sandbox to its terminal phase.
+pub async fn write_sandbox_status(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    action_id: &str,
+    status: StatusKind,
+    detail: Option<&str>,
+    _pause_window_ms: Option<u64>,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let mut annotations = BTreeMap::new();
+    annotations.insert(
+        SANDBOX_EXEC_STATUS_KEY.to_string(),
+        status.as_str().to_string(),
+    );
+    annotations.insert(
+        SANDBOX_EXEC_STATUS_ID_KEY.to_string(),
+        action_id.to_string(),
+    );
+    annotations.insert(
+        SANDBOX_EXEC_STATUS_DETAIL_KEY.to_string(),
+        detail.unwrap_or("").to_string(),
+    );
+    let patch = json!({
+        "metadata": {
+            "annotations": annotations
+        }
+    });
+    api.patch(pod_name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    Ok(())
+}
+
 // ─── Phase 3a D2 ─────────────────────────────────────────────────────────────
 //
 // Auto-write `migration-status: failed` on abnormal CH listener exit.
@@ -2163,6 +2333,21 @@ async fn handle_pod_state(
         write_identity_status_fn,
     )
     .await;
+
+    // Sandbox-exec namespace (checked-out warm-slot workload over vsock, SwiftSandboxPool
+    // checkout). Independent state; NOT part of the snapshot<->migration mutual rejection
+    // (a warm slot runs its idle keeper, not a snapshot/migration of the same guest).
+    handle_namespace(
+        client,
+        namespace,
+        pod_name,
+        api_socket,
+        &mut state.sandbox,
+        &SANDBOX_KEYS,
+        annotations,
+        write_sandbox_status_fn,
+    )
+    .await;
 }
 
 /// Type alias for the namespace-specific status writer used by
@@ -2216,6 +2401,20 @@ fn write_identity_status_fn<'a>(
     pause: Option<u64>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
     Box::pin(write_identity_status(
+        client, ns, pod, id, status, detail, pause,
+    ))
+}
+
+fn write_sandbox_status_fn<'a>(
+    client: &'a Client,
+    ns: &'a str,
+    pod: &'a str,
+    id: &'a str,
+    status: StatusKind,
+    detail: Option<&'a str>,
+    pause: Option<u64>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>> {
+    Box::pin(write_sandbox_status(
         client, ns, pod, id, status, detail, pause,
     ))
 }
@@ -3189,6 +3388,42 @@ mod tests {
             parse_identity_verb("xyz"),
             ActionKind::Unknown("xyz".to_string())
         );
+    }
+
+    #[test]
+    fn parse_sandbox_verb_maps_known_and_unknown() {
+        assert_eq!(parse_sandbox_verb("run"), ActionKind::SandboxExec);
+        assert_eq!(
+            parse_sandbox_verb("xyz"),
+            ActionKind::Unknown("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn sandbox_keyset_no_ack_gate_and_accepts_run() {
+        let a = ann(&[
+            (SANDBOX_EXEC_ACTION_KEY, "run"),
+            (SANDBOX_EXEC_ACTION_ID_KEY, "sbx-1"),
+        ]);
+        match decide(&a, &SANDBOX_KEYS, None, None) {
+            ActionDecision::Accept(p) => {
+                assert_eq!(p.kind, ActionKind::SandboxExec);
+                assert_eq!(p.id, "sbx-1");
+            }
+            other => panic!("expected Accept, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn sandbox_exec_args_parse_argv_env_cwd() {
+        let args: SandboxExecArgs = serde_json::from_str(
+            r#"{"argv":["sh","-c","echo hi"],"env":["FOO=bar"],"cwd":"/tmp","timeoutSeconds":42}"#,
+        )
+        .unwrap();
+        assert_eq!(args.argv, vec!["sh", "-c", "echo hi"]);
+        assert_eq!(args.env, vec!["FOO=bar"]);
+        assert_eq!(args.cwd, "/tmp");
+        assert_eq!(args.timeout_seconds, Some(42));
     }
 
     #[test]
