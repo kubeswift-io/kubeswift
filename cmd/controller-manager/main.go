@@ -256,6 +256,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&swiftsandbox.SwiftSandboxPoolReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftsandboxpool-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftSandboxPool controller")
+		os.Exit(1)
+	}
+
 	// Phase 4 drain controller: the "controller creates" half of drain
 	// integration. Watches SwiftGuests for the kubeswift.io/drain-requested
 	// marker (stamped by the eviction webhook) and creates a SwiftMigration to
