@@ -73,6 +73,14 @@ type SwiftSandboxSpec struct {
 	// NodeSelector constrains the sandbox to matching (kernel) nodes.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// PoolRef, when set, satisfies this sandbox from a warm SwiftSandboxPool of the
+	// same image (sub-second checkout: claim a pre-booted slot and inject this
+	// sandbox's command/args/env into it over vsock) instead of the cold
+	// materialize+boot path. If no warm slot is available the sandbox falls back to
+	// the cold path automatically. The pool must be in the same namespace.
+	// +optional
+	PoolRef *corev1.LocalObjectReference `json:"poolRef,omitempty"`
 }
 
 // SandboxNetworkMode selects the sandbox connectivity posture.

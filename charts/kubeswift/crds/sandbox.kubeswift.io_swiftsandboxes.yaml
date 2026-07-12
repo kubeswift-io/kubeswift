@@ -293,6 +293,25 @@ spec:
                 description: NodeSelector constrains the sandbox to matching (kernel)
                   nodes.
                 type: object
+              poolRef:
+                description: |-
+                  PoolRef, when set, satisfies this sandbox from a warm SwiftSandboxPool of the
+                  same image (sub-second checkout: claim a pre-booted slot and inject this
+                  sandbox's command/args/env into it over vsock) instead of the cold
+                  materialize+boot path. If no warm slot is available the sandbox falls back to
+                  the cold path automatically. The pool must be in the same namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               timeout:
                 description: |-
                   Timeout is the wall-clock run cap. Past startedAt+timeout the controller
