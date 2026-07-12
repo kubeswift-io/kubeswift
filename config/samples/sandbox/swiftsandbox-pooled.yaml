@@ -1,0 +1,21 @@
+# A SwiftSandbox that checks out from a warm pool (spec.poolRef) instead of
+# paying the cold materialize + boot. Apply swiftsandboxpool.yaml first and wait
+# for the pool to reach Ready, then apply this — it claims a ready slot and
+# injects the command below over vsock, reaching Completed in ~1-3s.
+#
+# The workload MUST set a command to check out (a command-less sandbox needs the
+# image entrypoint, which only the cold path resolves, so it cold-falls-back).
+# Keep image the same as the pool's image. See docs/sandbox/warm-pool.md.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: pooled-echo
+  namespace: default
+spec:
+  image: docker.io/library/alpine:3.20   # match the pool's image
+  poolRef:
+    name: alpine-pool
+  command: ["sh", "-c"]
+  args: ["echo hello from a warm slot; id; uname -a"]
+  network:
+    mode: restricted

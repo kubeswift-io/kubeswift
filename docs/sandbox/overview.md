@@ -27,6 +27,9 @@ it up).
 - Serverless / short-lived compute
 - Untrusted code and security research
 
+For bursts of same-image sandboxes where the ~15s cold boot dominates, a
+[warm pool](warm-pool.md) keeps pre-booted slots ready for sub-second checkout.
+
 ## Prerequisites
 
 - A node labeled `kubeswift.io/kernel-node=true`
@@ -158,6 +161,7 @@ you're done inspecting it.
 
 ## See also
 
+- [Warm pools (fast start)](warm-pool.md) — pre-booted slots for sub-second checkout
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)
 - [SwiftKernel reference](../swiftkernel.md)
