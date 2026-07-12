@@ -59,7 +59,7 @@ spec:
               SwiftSandboxSpec defines an ephemeral, strongly-isolated microVM that runs an
               OCI image as its root filesystem (the mode-3 sandbox boot: a direct-kernel
               boot + a read-only OCI rootfs + a tmpfs overlay). See
-              docs/design/swiftsandbox-design.md.
+              docs/sandbox/overview.md.
             properties:
               args:
                 description: |-
@@ -280,7 +280,7 @@ spec:
                 properties:
                   mode:
                     default: restricted
-                    description: Mode is "restricted" (default) or "none".
+                    description: Mode is "restricted" (default), "open", or "none".
                     enum:
                     - restricted
                     - open

@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **13 CRDs across 8 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **14 CRDs across 9 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -16,6 +16,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **13 CRDs across 8 API groups
 | SwiftRestore | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftrestore) |
 | SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshotschedule) |
 | SwiftMigration | — | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
+| SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandbox) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 
 ## Mutual exclusivity rules
@@ -516,6 +517,33 @@ Moves a SwiftGuest between nodes — offline (any storage) or live (sub-second d
 | `reason` | string | Free-text operator note (e.g. `"node maintenance"`). |
 
 Full reference: [Migration overview](migration/overview.md).
+
+---
+
+## SwiftSandbox
+
+**Group:** `sandbox.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sbox`
+**Subresource:** status
+
+An ephemeral, strongly-isolated microVM that runs an OCI image as its root
+filesystem — a third boot mode alongside disk boot and kernel boot, ephemeral
+and PVC-free.
+
+| Key field | Type | Description |
+|-----------|------|--------------|
+| `image` | string | OCI image to run as the root filesystem. Required; immutable after create. |
+| `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
+| `command` / `args` / `env` | []string / []string / []EnvVar | Override or extend the image's entrypoint. |
+| `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
+| `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile. |
+| `timeout` / `ttl` | Duration | Wall-clock run cap and post-terminal retention. |
+
+The whole spec except `ttl` is immutable — recreate the sandbox to change
+image, resources, command, or network.
+
+Full reference: [Sandboxes](sandbox/overview.md).
 
 ---
 

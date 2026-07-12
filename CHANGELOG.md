@@ -8,6 +8,60 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.9.0] — 2026-07-12
+
+Adds **SwiftSandbox** — a third boot mode alongside disk boot and kernel
+boot: an ephemeral, strongly-isolated microVM that runs an **OCI image as
+its root filesystem** (the Firecracker/Kata model: direct-kernel boot, a
+read-only ext4 built from the image, a tmpfs overlay, no PVC). Built for CI
+runners, AI-agent/code-interpreter execution, serverless compute, and
+untrusted code. Cluster-validated end to end — an alpine microVM boots, runs
+its workload to a terminal phase, and supports interactive exec/attach over
+vsock on both network modes.
+
+### Added
+
+**SwiftSandbox (`sandbox.kubeswift.io`)**
+- `SwiftSandbox` CRD + controller — resolves an OCI image, materializes it to
+  a node-local ext4 via an init container, and boots it as a direct-kernel
+  microVM with a tmpfs overlay root. New `sandbox` SwiftKernel profile
+  (Linux 6.6.8 + bridge-initramfs; not bootable as a plain `kernelRef`
+  SwiftGuest kernel — it needs the OCI rootfs disk the controller supplies).
+  `status.phase` runs `Pending → Materializing → Running →
+  Completed`/`Failed`; `kubectl get sbox` short name. (#349)
+- **Batch lifecycle** — the workload runs as a supervised child, so its real
+  exit code surfaces as `status.exitCode` (`0` → `Completed`, non-zero →
+  `Failed`); `spec.timeout` force-terminates a runaway run; `spec.ttl`
+  deletes a finished sandbox's record and frees the node's rootfs-cache
+  reference. (#353)
+- **`spec.command`/`args`/`env`/`workingDir`** delivered to the guest over a
+  per-sandbox read-only config disk — never the kernel cmdline, so env stays
+  out of `/proc/cmdline` and the host's `ps`/logs. (`workingDir` is accepted
+  but not honored in v1 — the workload always starts in `/`.) (#352)
+- **Network modes** — `spec.network.mode: restricted` (default: deny-ingress
+  plus hardened egress — DNS and the public internet are reachable, but the
+  cloud metadata endpoint and RFC1918 cluster-internal ranges are blocked via
+  in-pod iptables), `open` (deny-ingress, unrestricted egress), or `none` (no
+  network at all). A networked sandbox resolves cluster service names and
+  external names alike via injected namespace search domains. (#351, #355)
+- **`swiftctl sandbox logs` / `exec` / `attach`** — `logs [-f]` streams the
+  workload console; `exec <name> -- cmd [args...]` runs a command inside the
+  sandbox's OCI rootfs over a host↔guest vsock channel, with stdout/stderr
+  streamed back live, the exit code propagated, `-e KEY=VALUE`/`-w DIR` for
+  env/workdir, and `-i`/`-t` for stdin forwarding and an interactive TTY;
+  `attach` is shorthand for `exec -it -- /bin/sh` with window-resize
+  propagation. (#356, #357, #358, #359, #360)
+
+### Fixed
+
+- **SwiftSandbox status was silently empty.** The sandbox launcher wasn't
+  injecting `POD_NAME`/`POD_NAMESPACE`, so swiftletd skipped all status
+  reporting; `status.runtime` and `status.network` now surface correctly.
+  (#347, #350)
+- Broken Cloud Hypervisor upstream link in `README.md`. (#346)
+
+---
+
 ## [v0.8.0] — 2026-07-08
 
 Makes multi-cluster **federation near-zero-config**. Registering the hub and its

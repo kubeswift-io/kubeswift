@@ -32,7 +32,7 @@ ls -la /dev/kvm
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.6.1 \
+  --version 0.9.0 \
   -n kubeswift-system \
   --create-namespace
 ```
@@ -57,11 +57,11 @@ Verify CRDs are installed:
 
 ```bash
 kubectl get crd | grep kubeswift.io
-# Expected (13 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
+# Expected (14 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
 #   swiftimages, swiftseedprofiles, swiftkernels,
 #   swiftgpuprofiles, swiftgpunodes,
 #   swiftsnapshots, swiftrestores, swiftsnapshotschedules,
-#   swiftmigrations, clusters
+#   swiftmigrations, swiftsandboxes, clusters
 ```
 
 ## Step 2: Boot a disk-boot VM (Ubuntu Noble)
@@ -358,6 +358,7 @@ kubectl get swiftsnapshots          # SwiftSnapshot
 kubectl get swiftrestores           # SwiftRestore
 kubectl get swiftsnapshotschedules  # SwiftSnapshotSchedule
 kubectl get swiftmigrations         # SwiftMigration
+kubectl get sbox                    # SwiftSandbox
 ```
 
 ## Documentation

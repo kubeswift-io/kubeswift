@@ -31,6 +31,10 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 
 - [virtiofs & vhost-user devices](virtiofs.md) — shared filesystems (virtiofs), vhost-user-net/blk/generic (operator backends)
 
+### Sandboxes
+
+- [Ephemeral OCI-rootfs sandboxes](sandbox/overview.md) — SwiftSandbox: run an OCI image as a microVM (CI runners, agent/code execution, untrusted code)
+
 ### Windows Guests
 
 - [Running Windows guests](windows/overview.md) — Overview: `osType: windows`, the end-to-end lifecycle, RDP management, limitations
@@ -144,6 +148,7 @@ The `oci` snapshot backend (`SwiftSnapshot.spec.backend.type: oci`) pushes memor
 | Pass a GPU through to a VM | [GPU Passthrough](gpu-passthrough.md) / [via DRA](gpu/dra-allocation.md) |
 | Snapshot or clone a VM | [Snapshots & fast VMs](snapshots/fast-vms.md) |
 | Migrate a VM between nodes | [Migration overview](migration/overview.md) |
+| Run an ephemeral sandbox | [Sandboxes](sandbox/overview.md) |
 | Publish a golden VM image | [Golden images](registry/golden-images.md) |
 | Migrate from VMware/Proxmox | [Virtualization Comparison](networking/virtualization-comparison.md) |
 | Build locally | [Build](developer/build.md) |
