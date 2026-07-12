@@ -169,6 +169,65 @@ pub fn regenerate_identity(
         .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
 }
 
+/// Single-shot `exec` request sent to the guest agent (the streaming variant is
+/// swiftctl-only). Field names match the agent's `Request`. Used by swiftletd to run a
+/// checked-out warm-slot's workload over vsock (SwiftSandboxPool checkout).
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct ExecRequest {
+    pub v: u32,
+    pub op: String,
+    pub argv: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub cwd: String,
+}
+
+impl ExecRequest {
+    /// Build an `exec` request at the current protocol version.
+    pub fn new(argv: Vec<String>, env: Vec<String>, cwd: String) -> Self {
+        Self {
+            v: PROTOCOL_VERSION,
+            op: "exec".to_string(),
+            argv,
+            env,
+            cwd,
+        }
+    }
+}
+
+/// Single-shot `exec` response from the guest agent. Unknown/missing fields default.
+/// stdout/stderr are capped by the agent (1 MiB each); a large-output workload wants
+/// the streaming path (swiftctl), not this.
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct ExecResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub stdout: String,
+    #[serde(default)]
+    pub stderr: String,
+    #[serde(rename = "exitCode", default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Run a command in the guest over vsock (single-shot) and parse the reply. The agent
+/// runs the workload to completion, then sends one response — so `timeout` must bound
+/// the whole WORKLOAD run (the connection is idle while it runs), not just a dial.
+pub fn exec(
+    socket_path: &Path,
+    req: &ExecRequest,
+    timeout: Duration,
+) -> Result<ExecResponse, VsockError> {
+    let line = serde_json::to_vec(req).map_err(|e| VsockError::Decode(e.to_string()))?;
+    let raw = request_line(socket_path, AGENT_PORT, &line, timeout)?;
+    let trimmed = trim_trailing_newline(&raw);
+    serde_json::from_slice(trimmed)
+        .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
+}
+
 fn trim_trailing_newline(b: &[u8]) -> &[u8] {
     let mut end = b.len();
     while end > 0 && (b[end - 1] == b'\n' || b[end - 1] == b'\r') {
@@ -260,6 +319,38 @@ mod tests {
         let err = regenerate_identity(&sock, &req, Duration::from_secs(5)).unwrap_err();
         assert!(matches!(err, VsockError::Handshake(_)), "got {:?}", err);
         h.join().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn exec_round_trip() {
+        let dir = std::env::temp_dir().join(format!("vsock-test-e-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock = dir.join("vsock.sock");
+        let _ = std::fs::remove_file(&sock);
+        let h = fake_agent(
+            sock.clone(),
+            "{\"ok\":true,\"stdout\":\"hi\\n\",\"stderr\":\"\",\"exitCode\":7}\n",
+        );
+        let req = ExecRequest::new(
+            vec!["sh".into(), "-c".into(), "exit 7".into()],
+            vec!["FOO=bar".into()],
+            "/tmp".into(),
+        );
+        let resp = exec(&sock, &req, Duration::from_secs(5)).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.stdout, "hi\n");
+        assert_eq!(resp.exit_code, Some(7));
+
+        let sent = h.join().unwrap();
+        assert!(sent.contains("\"op\":\"exec\""), "sent={}", sent);
+        assert!(
+            sent.contains("\"argv\":[\"sh\",\"-c\",\"exit 7\"]"),
+            "sent={}",
+            sent
+        );
+        assert!(sent.contains("\"env\":[\"FOO=bar\"]"), "sent={}", sent);
+        assert!(sent.contains("\"cwd\":\"/tmp\""), "sent={}", sent);
         let _ = std::fs::remove_file(&sock);
     }
 }
