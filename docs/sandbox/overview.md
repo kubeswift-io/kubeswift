@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.8`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.9`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller

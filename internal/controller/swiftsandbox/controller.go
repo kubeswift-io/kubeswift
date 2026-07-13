@@ -93,7 +93,7 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImageResolveFailed", err.Error())
 	}
-	intent := buildIntent(sb, kernelName, ri.RootfsPath, ri.Exec)
+	intent := buildIntent(sb, kernelName, ri.RootfsPath, ri.Exec, false)
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return ctrl.Result{}, err

@@ -51,10 +51,16 @@ const sandboxConfigDevice = "/dev/vdb"
 
 // buildIntent constructs the mode-3 sandbox RuntimeIntent: kernel boot + the RO
 // OCI rootfs disk + (when the workload has a defined exec) the config disk + the
-// bridge cmdline.
-func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string, exec execSpec) *runtimeintent.RuntimeIntent {
+// bridge cmdline. idle marks a warm-pool keeper slot: it carries no workload (a
+// checkout injects one later over vsock) and boots straight to the bridge's idle
+// loop via kubeswift.idle=1 — so warming never depends on the image having a sleep
+// binary, and distroless images can be pooled.
+func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string, exec execSpec, idle bool) *runtimeintent.RuntimeIntent {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 	cmdline := "console=ttyS0 kubeswift.rootfs=block"
+	if idle {
+		cmdline += " kubeswift.idle=1"
+	}
 	if networked(sb) {
 		// Kernel IP autoconfig (the sandbox kernel has CONFIG_IP_PNP_DHCP=y). A bare
 		// OCI workload (e.g. /bin/sh) runs no DHCP client and the bridge-init does no
@@ -71,9 +77,10 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		cmdline += " kubeswift.dns-search=" + sb.Namespace + ".svc.cluster.local,svc.cluster.local,cluster.local"
 	}
 	var sandboxExec *runtimeintent.SandboxExecSpec
-	if exec.nonTrivial() {
+	if !idle && exec.nonTrivial() {
 		// The workload argv/env/cwd ride the config disk (kubeswift.config points the
 		// bridge at it) — never the cmdline, so env stays out of /proc/cmdline + logs.
+		// A keeper carries no workload (idle), so it gets no config disk.
 		cmdline += " kubeswift.config=" + sandboxConfigDevice
 		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd}
 	}
