@@ -191,6 +191,92 @@ func TestBuildPod_LauncherReportEnv(t *testing.T) {
 	}
 }
 
+func TestBuildPod_VerifyKeyMount(t *testing.T) {
+	// No verifyKeySecretRef: the materialize init container has no --verify-key arg
+	// and no verify-key volume.
+	plain := buildPod(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "ns"}}, "sandbox")
+	if hasVerifyKeyArg(matInit(t, plain)) {
+		t.Error("no verifyKeySecretRef but --verify-key present")
+	}
+	if hasVolume(plain, "verify-key") {
+		t.Error("no verifyKeySecretRef but verify-key volume present")
+	}
+
+	// With verifyKeySecretRef: the arg, the ro secret mount, the cosign-home
+	// emptyDir, and the HOME/TMPDIR env are all wired onto the materialize init
+	// container so cosign has a writable home.
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "ns"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{VerifyKeySecretRef: &sandboxv1alpha1.SecretObjectReference{Name: "cosign-pub"}},
+	}
+	pod := buildPod(sb, "sandbox")
+	init := matInit(t, pod)
+	if !hasVerifyKeyArg(init) {
+		t.Error("verifyKeySecretRef set but --verify-key missing from materialize args")
+	}
+	if !hasMount(init, "verify-key", "/verify-key") || !hasMount(init, "cosign-home", "/cosign-home") {
+		t.Errorf("verify-key/cosign-home mounts missing: %+v", init.VolumeMounts)
+	}
+	env := map[string]string{}
+	for _, e := range init.Env {
+		env[e.Name] = e.Value
+	}
+	if env["HOME"] != "/cosign-home" || env["TMPDIR"] != "/cosign-home" {
+		t.Errorf("cosign HOME/TMPDIR env not set: %+v", init.Env)
+	}
+	// The secret volume must project cosign.pub -> cosign.pub from the named Secret.
+	var vk *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == "verify-key" {
+			vk = &pod.Spec.Volumes[i]
+		}
+	}
+	if vk == nil || vk.Secret == nil || vk.Secret.SecretName != "cosign-pub" {
+		t.Fatalf("verify-key volume not a Secret projection of cosign-pub: %+v", vk)
+	}
+	if len(vk.Secret.Items) != 1 || vk.Secret.Items[0].Key != "cosign.pub" {
+		t.Errorf("verify-key must project the cosign.pub key: %+v", vk.Secret.Items)
+	}
+}
+
+func matInit(t *testing.T, pod *corev1.Pod) *corev1.Container {
+	t.Helper()
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == materializeInitName {
+			return &pod.Spec.InitContainers[i]
+		}
+	}
+	t.Fatal("no sandbox-materialize init container")
+	return nil
+}
+
+func hasVerifyKeyArg(c *corev1.Container) bool {
+	for _, a := range c.Args {
+		if a == "--verify-key=/verify-key/cosign.pub" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMount(c *corev1.Container, name, path string) bool {
+	for _, m := range c.VolumeMounts {
+		if m.Name == name && m.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasVolume(pod *corev1.Pod, name string) bool {
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIsTerminal(t *testing.T) {
 	if !isTerminal(sandboxv1alpha1.SwiftSandboxCompleted) || !isTerminal(sandboxv1alpha1.SwiftSandboxFailed) {
 		t.Error("Completed/Failed must be terminal")

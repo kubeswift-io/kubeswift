@@ -185,13 +185,14 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 	return &sandboxv1alpha1.SwiftSandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace},
 		Spec: sandboxv1alpha1.SwiftSandboxSpec{
-			Image:            pool.Spec.Image,
-			ImagePullSecret:  pool.Spec.ImagePullSecret,
-			CPU:              pool.Spec.CPU,
-			Memory:           pool.Spec.Memory,
-			Network:          pool.Spec.Network,
-			KernelProfileRef: pool.Spec.KernelProfileRef,
-			NodeSelector:     pool.Spec.NodeSelector,
+			Image:              pool.Spec.Image,
+			ImagePullSecret:    pool.Spec.ImagePullSecret,
+			VerifyKeySecretRef: pool.Spec.VerifyKeySecretRef,
+			CPU:                pool.Spec.CPU,
+			Memory:             pool.Spec.Memory,
+			Network:            pool.Spec.Network,
+			KernelProfileRef:   pool.Spec.KernelProfileRef,
+			NodeSelector:       pool.Spec.NodeSelector,
 		},
 	}
 }

@@ -21,6 +21,15 @@ type SwiftSandboxSpec struct {
 	// +optional
 	ImagePullSecret string `json:"imagePullSecret,omitempty"`
 
+	// VerifyKeySecretRef, when set, names a Secret in the sandbox's namespace
+	// holding a cosign public key (key "cosign.pub"). Before materializing the
+	// rootfs, sandbox-materialize cosign-verifies Image@digest against that key;
+	// a missing or invalid signature fails the materialize step, so the sandbox
+	// goes Failed and NEVER boots. Requires a TLS registry (cosign speaks HTTPS
+	// only). Mirrors SwiftImage's spec.source.oci.verifyKeySecretRef.
+	// +optional
+	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+
 	// CPU is the number of vCPUs.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
@@ -81,6 +90,13 @@ type SwiftSandboxSpec struct {
 	// the cold path automatically. The pool must be in the same namespace.
 	// +optional
 	PoolRef *corev1.LocalObjectReference `json:"poolRef,omitempty"`
+}
+
+// SecretObjectReference references a Secret by name (in the object's own
+// namespace). Used by spec.verifyKeySecretRef for the cosign public key.
+type SecretObjectReference struct {
+	// Name of the Secret.
+	Name string `json:"name"`
 }
 
 // SandboxNetworkMode selects the sandbox connectivity posture.

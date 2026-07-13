@@ -323,6 +323,21 @@ spec:
                   been terminal (Completed/Failed) for at least ttl — keeping finished
                   sandboxes from accumulating. Unset = keep until manual deletion.
                 type: string
+              verifyKeySecretRef:
+                description: |-
+                  VerifyKeySecretRef, when set, names a Secret in the sandbox's namespace
+                  holding a cosign public key (key "cosign.pub"). Before materializing the
+                  rootfs, sandbox-materialize cosign-verifies Image@digest against that key;
+                  a missing or invalid signature fails the materialize step, so the sandbox
+                  goes Failed and NEVER boots. Requires a TLS registry (cosign speaks HTTPS
+                  only). Mirrors SwiftImage's spec.source.oci.verifyKeySecretRef.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    type: string
+                required:
+                - name
+                type: object
               workingDir:
                 description: WorkingDir overrides the image config working directory.
                 type: string
