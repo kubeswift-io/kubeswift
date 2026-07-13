@@ -61,7 +61,19 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// First reconcile. The workload argv comes from the sandbox spec with NO registry
 	// pull (the sub-second point); a sandbox with no command needs the image entrypoint,
 	// which only the cold materialize path knows — so it cold-falls-back.
-	argv, env, cwd := poolExecArgs(sb)
+	// The pool resolved the image env once (status.imageEnv); merge spec.env over it so
+	// the injected workload sees the image env too — parity with a cold sandbox, no pull.
+	var imageEnv []string
+	var pool sandboxv1alpha1.SwiftSandboxPool
+	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.PoolRef.Name}, &pool); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		// Pool gone — tryClaimWarmSlot finds no slots and cold-falls-back below.
+	} else {
+		imageEnv = pool.Status.ImageEnv
+	}
+	argv, env, cwd := poolExecArgs(sb, imageEnv)
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
@@ -121,17 +133,16 @@ func (r *SwiftSandboxReconciler) coldFallback(ctx context.Context, sb *sandboxv1
 
 // poolExecArgs builds the workload exec (argv/env/cwd) from the sandbox spec WITHOUT a
 // registry pull. argv = command + args (nil when no command — the caller cold-falls-back
-// to resolve the image entrypoint). env is spec.env only (the agent adds a default PATH);
-// the image env is not merged in v1 (a warm slot already booted the image).
-func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox) (argv, env []string, cwd string) {
+// to resolve the image entrypoint). env is the pool's resolved image env with spec.env
+// overlaid by key (parity with the cold path's mergeEnv), so the injected workload sees
+// the image env too; the pool supplied imageEnv from its one-time resolve.
+func poolExecArgs(sb *sandboxv1alpha1.SwiftSandbox, imageEnv []string) (argv, env []string, cwd string) {
 	if len(sb.Spec.Command) == 0 {
 		return nil, nil, ""
 	}
 	argv = append(argv, sb.Spec.Command...)
 	argv = append(argv, sb.Spec.Args...)
-	for _, e := range sb.Spec.Env {
-		env = append(env, e.Name+"="+e.Value)
-	}
+	env = mergeEnv(imageEnv, sb.Spec.Env)
 	return argv, env, sb.Spec.WorkingDir
 }
 

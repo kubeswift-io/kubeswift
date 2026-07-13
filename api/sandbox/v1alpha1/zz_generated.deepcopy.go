@@ -230,6 +230,11 @@ func (in *SwiftSandboxPoolStatus) DeepCopyInto(out *SwiftSandboxPoolStatus) {
 		*out = new(SandboxRootfsStatus)
 		**out = **in
 	}
+	if in.ImageEnv != nil {
+		in, out := &in.ImageEnv, &out.ImageEnv
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

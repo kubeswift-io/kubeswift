@@ -231,6 +231,15 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              imageEnv:
+                description: |-
+                  ImageEnv is the pool image's config env ("KEY=VAL"), resolved once at
+                  materialize. A checkout merges its SwiftSandbox.spec.env over this so the
+                  injected workload sees the image env too — parity with a cold sandbox,
+                  without a per-checkout registry pull.
+                items:
+                  type: string
+                type: array
               message:
                 type: string
               observedGeneration:
