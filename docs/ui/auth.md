@@ -64,6 +64,17 @@ kcadm set-password -r kubeswift --username alice --new-password '<password>'
 > browser and the in-cluster gateway. Expose Keycloak at a real hostname (an
 > Ingress / LoadBalancer) resolvable everywhere; don't use an in-cluster-only
 > Service name as the issuer.
+>
+> The issuer's **TLS cert must be trusted by the browser.** The browser fetches
+> the discovery doc + exchanges the code with a background `fetch()` to the
+> issuer, and a background request can't be click-through'd past a cert warning
+> the way a full-page navigation can. `gateway.oidc.caSecret` (`--oidc-ca-file`)
+> only teaches the *gateway* to trust a private IdP CA — it does nothing for the
+> browser. Serve the issuer with a publicly-trusted cert (e.g. Let's Encrypt),
+> or the login stalls before it starts. (`kubeswift-ui` ≥ v0.7.0 degrades
+> gracefully — it still fires the login redirect so the user can accept a
+> private-CA cert on the navigation, and surfaces the error instead of doing
+> nothing — but a browser-trusted issuer cert is the clean answer.)
 
 ## 2. Point the gateway at the IdP
 
