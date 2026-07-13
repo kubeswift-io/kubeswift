@@ -328,7 +328,7 @@ sudo netplan apply
 ip link show bond0.100  # verify
 ```
 
-**Example 2: network-manager cli (RHEL/Rocky):**
+**Example 2: NetworkManager CLI (RHEL/Rocky):**
 
 ```bash
 nmcli connection add type vlan ifname bond0.100 dev bond0 id 100
