@@ -108,6 +108,11 @@ rules:
   - apiGroups: ["image.kubeswift.io", "kernel.kubeswift.io", "seed.kubeswift.io", "snapshot.kubeswift.io", "gpu.kubeswift.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # MicroVM inventory (UI SandboxService read plane, v0.11.0). Create/delete
+  # verbs are added with the write plane (A3).
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes", "swiftsandboxpools"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]

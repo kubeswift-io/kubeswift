@@ -111,6 +111,11 @@ func main() {
 	migSvc := gateway.NewMigrationService(pool, auth)
 	migPath, migHandler := kubeswiftv1connect.NewMigrationServiceHandler(migSvc)
 
+	// Sandboxes (v0.11.0 A2): read plane over SwiftSandbox + SwiftSandboxPool
+	// (the MicroVM inventory). Write actions (create/delete) land in A3.
+	sandboxSvc := gateway.NewSandboxService(pool, auth)
+	sandboxPath, sandboxHandler := kubeswiftv1connect.NewSandboxServiceHandler(sandboxSvc)
+
 	// Telemetry (P1): per-VM range metrics from each member's Prometheus.
 	telSvc := gateway.NewTelemetryService(pool, auth)
 	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc)
@@ -139,6 +144,7 @@ func main() {
 			{Path: clusterPath, Handler: clusterHandler},
 			{Path: guestPath, Handler: guestHandler},
 			{Path: migPath, Handler: migHandler},
+			{Path: sandboxPath, Handler: sandboxHandler},
 			{Path: telPath, Handler: telHandler},
 			{Path: resPath, Handler: resHandler},
 			{Path: accessPath, Handler: accessHandler},
