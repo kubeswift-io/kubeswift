@@ -6,6 +6,16 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+**Sandbox warm-pool efficiency**
+- `sandbox-materialize` now takes a **node-local per-digest lock** around the
+  pull+extract step, so concurrent materializes of the same image on the same
+  node (warm-pool slots when `minWarm` exceeds the node count, or co-located
+  sandboxes) serialize — the first pulls, the rest cache-hit — instead of N
+  redundant parallel pulls of the same layers. The digest cache was already
+  correct (atomic rename); this removes the wasted bandwidth.
+
 ### Added
 
 **Sandbox image signing (verify before boot)**
