@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	connect "connectrpc.com/connect"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -142,5 +143,82 @@ func TestSandboxService_GetSandboxDetail(t *testing.T) {
 	spec := resp.Msg.GetSpec()
 	if spec.GetImage() != "alpine" || len(spec.GetCommand()) != 2 || spec.GetArgs()[0] != "echo hi" {
 		t.Errorf("spec map wrong: %+v", spec)
+	}
+}
+
+func TestSandboxService_CreateSandbox(t *testing.T) {
+	boba := fakeSandboxDyn()
+	svc := NewSandboxService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	resp, err := svc.CreateSandbox(context.Background(), connect.NewRequest(&kubeswiftv1.CreateSandboxRequest{
+		Cluster: "boba", Namespace: "default", Name: "sb-1",
+		Image: "alpine:3.20", Command: []string{"sh", "-c"}, Args: []string{"echo hi"},
+		Env: map[string]string{"A": "1"}, NetworkMode: "open", Cpu: 2, MemoryMib: 512, PoolRef: "p1",
+	}))
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if resp.Msg.GetRef().GetName() != "sb-1" || resp.Msg.GetRef().GetCluster() != "boba" {
+		t.Errorf("ref: %+v", resp.Msg.GetRef())
+	}
+	got, err := boba.Resource(swiftSandboxGVR).Namespace("default").Get(context.Background(), "sb-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("created sandbox not found: %v", err)
+	}
+	image, _, _ := unstructured.NestedString(got.Object, "spec", "image")
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "memory")
+	poolRef, _, _ := unstructured.NestedString(got.Object, "spec", "poolRef", "name")
+	netMode, _, _ := unstructured.NestedString(got.Object, "spec", "network", "mode")
+	if image != "alpine:3.20" || mem != "512Mi" || poolRef != "p1" || netMode != "open" {
+		t.Errorf("spec wrong: image=%q mem=%q pool=%q net=%q", image, mem, poolRef, netMode)
+	}
+
+	// Missing image -> InvalidArgument (a clear gateway error ahead of the webhook).
+	_, err = svc.CreateSandbox(context.Background(), connect.NewRequest(&kubeswiftv1.CreateSandboxRequest{Cluster: "boba", Namespace: "default", Name: "x"}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("missing image: want InvalidArgument, got %v", err)
+	}
+	// A name clash fails loudly.
+	_, err = svc.CreateSandbox(context.Background(), connect.NewRequest(&kubeswiftv1.CreateSandboxRequest{Cluster: "boba", Namespace: "default", Name: "sb-1", Image: "x"}))
+	if connect.CodeOf(err) != connect.CodeAlreadyExists {
+		t.Errorf("duplicate name should be AlreadyExists, got %v", err)
+	}
+}
+
+func TestSandboxService_DeleteSandbox(t *testing.T) {
+	boba := fakeSandboxDyn(uSandbox("default", "sb-a", "Running", "alpine"))
+	svc := NewSandboxService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	if _, err := svc.DeleteSandbox(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteSandboxRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("missing ref: want InvalidArgument, got %v", err)
+	}
+	if _, err := svc.DeleteSandbox(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteSandboxRequest{
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "sb-a"},
+	})); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	list, _ := boba.Resource(swiftSandboxGVR).Namespace("default").List(context.Background(), metav1.ListOptions{})
+	if len(list.Items) != 0 {
+		t.Errorf("sandbox should be deleted, got %d", len(list.Items))
+	}
+}
+
+func TestSandboxService_CreateSandboxPool(t *testing.T) {
+	boba := fakeSandboxDyn()
+	svc := NewSandboxService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+
+	if _, err := svc.CreateSandboxPool(context.Background(), connect.NewRequest(&kubeswiftv1.CreateSandboxPoolRequest{
+		Cluster: "boba", Namespace: "default", Name: "pool-1", Image: "alpine", MinWarm: 3, MaxWarm: 6, MemoryMib: 256,
+	})); err != nil {
+		t.Fatalf("CreateSandboxPool: %v", err)
+	}
+	got, err := boba.Resource(swiftSandboxPoolGVR).Namespace("default").Get(context.Background(), "pool-1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("pool not found: %v", err)
+	}
+	minWarm, _, _ := unstructured.NestedInt64(got.Object, "spec", "minWarm")
+	mem, _, _ := unstructured.NestedString(got.Object, "spec", "memory")
+	if minWarm != 3 || mem != "256Mi" {
+		t.Errorf("pool spec wrong: minWarm=%d mem=%q", minWarm, mem)
 	}
 }
