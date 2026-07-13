@@ -305,7 +305,7 @@ The simplest approach. No OVN-Kubernetes required.
 
 Create VLAN sub-interfaces on each worker node via netplan, nmcli, or a DaemonSet.
 
-**Example 1: Netplan configuration (ubuntu):**
+**Example 1: Netplan configuration (Ubuntu):**
 
 ```yaml
 # /etc/netplan/60-vlans.yaml
