@@ -45,11 +45,11 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests", "swiftguestclasses", "swiftguestpools"]
     verbs: ["get", "list", "watch"]
-  # MicroVM inventory (UI SandboxService read plane, v0.11.0). Add the
-  # create/delete verbs alongside the write plane (A3).
+  # MicroVM inventory (UI SandboxService, v0.11.0): read (list/watch) + the
+  # create/delete verbs for the UI create/delete actions.
   - apiGroups: ["sandbox.kubeswift.io"]
     resources: ["swiftsandboxes", "swiftsandboxpools"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   # Lifecycle write actions (UI Start/Stop) patch swiftguests.spec.runPolicy.
   # Grant these to the subjects you want to be able to act; drop both rules for
   # a strictly read-only audience.
