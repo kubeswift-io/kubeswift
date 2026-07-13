@@ -18,6 +18,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Added
 
+**Sandbox virtio-fs rootfs**
+- **`SwiftSandbox.spec.rootfsMode: block|virtiofs`** (and the same on
+  `SwiftSandboxPool`; default `block`). `virtiofs` shares the unpacked OCI rootfs
+  tree over virtio-fs (tag `sandboxroot`) instead of a read-only ext4 disk —
+  skipping `mkfs.ext4` and the ext4 size floor, and sharing the host page cache.
+  Same RO-base + writable tmpfs-overlay semantics as block. swiftletd gains an
+  `is_sandbox` discriminator (independent of the block rootfs) so a virtio-fs
+  sandbox keeps the sandbox serial-to-file / config-disk behaviour; the config
+  disk moves to `/dev/vda` (no block rootfs precedes it).
+
 **Sandbox image signing (verify before boot)**
 - **`SwiftSandbox.spec.verifyKeySecretRef`** (and `SwiftSandboxPool.spec.verifyKeySecretRef`)
   — a Secret holding a cosign public key (`cosign.pub`). When set,

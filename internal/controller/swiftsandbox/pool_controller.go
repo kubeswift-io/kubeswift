@@ -188,6 +188,7 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 			Image:              pool.Spec.Image,
 			ImagePullSecret:    pool.Spec.ImagePullSecret,
 			VerifyKeySecretRef: pool.Spec.VerifyKeySecretRef,
+			RootfsMode:         pool.Spec.RootfsMode,
 			CPU:                pool.Spec.CPU,
 			Memory:             pool.Spec.Memory,
 			Network:            pool.Spec.Network,

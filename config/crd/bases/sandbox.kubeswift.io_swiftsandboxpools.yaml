@@ -160,6 +160,20 @@ spec:
                   NodeSelector constrains which (kernel) nodes the pool warms slots on, merged with
                   the required kubeswift.io/kernel-node=true label.
                 type: object
+              rootfsMode:
+                allOf:
+                - enum:
+                  - block
+                  - virtiofs
+                - enum:
+                  - block
+                  - virtiofs
+                default: block
+                description: |-
+                  RootfsMode selects how each warm slot's OCI rootfs is delivered: block
+                  (default, read-only ext4 disk) or virtiofs (the unpacked tree over
+                  virtio-fs). A claiming SwiftSandbox must request the same mode.
+                type: string
               verifyKeySecretRef:
                 description: |-
                   VerifyKeySecretRef, when set, names a Secret in the pool's namespace holding a

@@ -73,6 +73,12 @@ pub struct VmConfig {
     pub initramfs_path: Option<String>,
     /// Kernel command line. Only used when kernel_path is set.
     pub kernel_cmdline: Option<String>,
+    /// True for a mode-3 sandbox boot, REGARDLESS of rootfs delivery (a block
+    /// `sandbox_rootfs` OR a virtio-fs `sandboxroot` share). This — not
+    /// `sandbox_rootfs.is_some()` — is the sandbox discriminator (a virtio-fs
+    /// sandbox has no block rootfs but still needs the sandbox serial-to-file
+    /// behaviour). Set false for regular kernel-boot / disk-boot guests.
+    pub is_sandbox: bool,
     /// Mode-3 sandbox: the OCI image as a READ-ONLY root block device. Set only
     /// with kernel_path. Emitted as the FIRST --disk in the kernel-boot branch
     /// (path=<p>,readonly=on,image_type=raw — buffered, NOT direct=on, so
@@ -301,7 +307,7 @@ impl VmConfig {
 
         if let Some(ref path) = self.serial_socket_path {
             args.push("--serial".to_string());
-            if self.sandbox_rootfs.is_some() {
+            if self.is_sandbox {
                 // Sandbox: write the guest console to a FILE, not an interactive socket.
                 // The workload is a batch job — swiftletd reads this file after CH exits
                 // to recover the workload's exit code (the bridge-init emits a trailing
@@ -414,6 +420,7 @@ mod tests {
             kernel_path: None,
             initramfs_path: None,
             kernel_cmdline: None,
+            is_sandbox: false,
             sandbox_rootfs: None,
             sandbox_config: None,
             data_disk_paths: vec![],
@@ -423,6 +430,47 @@ mod tests {
             generic_vhost_user: vec![],
             vsock: None,
         }
+    }
+
+    // A mode-3 sandbox booting its rootfs over virtio-fs: is_sandbox=true, no block
+    // sandbox_rootfs, the rootfs rides an fs_mount (tag "sandboxroot"). CH must get
+    // the --fs, no rootfs --disk, and the sandbox serial-to-file behaviour.
+    #[test]
+    fn test_virtiofs_sandbox_rootfs_args() {
+        let mut cfg = make_disk_boot_config();
+        cfg.firmware_path = None;
+        cfg.kernel_path = Some("/k/bzImage".to_string());
+        cfg.initramfs_path = Some("/k/rootfs.cpio.gz".to_string());
+        cfg.kernel_cmdline = Some("console=ttyS0 kubeswift.rootfs=virtiofs".to_string());
+        cfg.is_sandbox = true;
+        cfg.disk_path = String::new();
+        cfg.seed_path = String::new();
+        cfg.sandbox_rootfs = None; // virtio-fs: no block rootfs disk
+        cfg.sandbox_config = Some("/run/x/exec.config".to_string());
+        cfg.fs_mounts = vec![FsMount {
+            tag: "sandboxroot".to_string(),
+            socket: "/run/x/sandboxroot.fs.sock".to_string(),
+        }];
+        let args = cfg.to_args().join(" ");
+        assert!(
+            args.contains("--fs tag=sandboxroot,socket=/run/x/sandboxroot.fs.sock"),
+            "missing sandboxroot --fs: {args}"
+        );
+        // No block rootfs disk — only the config disk should appear as a --disk.
+        assert!(
+            !args.contains(",readonly=on,image_type=raw path=")
+                || args.matches("--disk").count() == 1,
+            "unexpected extra rootfs disk: {args}"
+        );
+        assert!(
+            args.contains("path=/run/x/exec.config,readonly=on,image_type=raw"),
+            "missing config disk: {args}"
+        );
+        // is_sandbox drives serial-to-file even with sandbox_rootfs=None.
+        assert!(
+            args.contains("--serial") && args.contains("file=/tmp/serial.sock.log"),
+            "sandbox serial-to-file not honoured for virtio-fs rootfs: {args}"
+        );
     }
 
     #[test]
@@ -743,6 +791,7 @@ mod tests {
             Some("console=ttyS0 kubeswift.rootfs=block kubeswift.entrypoint=/bin/sh".to_string());
         cfg.firmware_path = None;
         cfg.seed_path = String::new(); // sandboxes carry no cloud-init seed
+        cfg.is_sandbox = true; // the sandbox marker (swiftletd sets it alongside sandbox_rootfs)
         cfg.sandbox_rootfs = Some("/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4".to_string());
         let args = cfg.to_args();
         let joined = args.join(" ");

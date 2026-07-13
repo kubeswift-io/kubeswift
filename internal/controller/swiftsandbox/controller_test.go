@@ -277,6 +277,55 @@ func hasVolume(pod *corev1.Pod, name string) bool {
 	return false
 }
 
+func TestBuildIntent_VirtiofsRootfs(t *testing.T) {
+	tree := "/var/lib/kubeswift/sandbox-rootfs/sha256-abc"
+
+	// block (default): SandboxRootfs carries the ext4 path, no filesystems,
+	// cmdline kubeswift.rootfs=block, config disk at /dev/vdb.
+	blk := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}}
+	bi := buildIntent(blk, "sandbox", "/cache/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	if bi.SandboxRootfs == nil || bi.SandboxRootfs.Virtiofs || bi.SandboxRootfs.Path != "/cache/x.ext4" {
+		t.Errorf("block SandboxRootfs = %+v", bi.SandboxRootfs)
+	}
+	if len(bi.Filesystems) != 0 {
+		t.Errorf("block must have no filesystems: %+v", bi.Filesystems)
+	}
+	if !strings.Contains(bi.KernelBoot.Cmdline, "kubeswift.rootfs=block") ||
+		!strings.Contains(bi.KernelBoot.Cmdline, "kubeswift.config=/dev/vdb") {
+		t.Errorf("block cmdline = %q", bi.KernelBoot.Cmdline)
+	}
+
+	// virtiofs: SandboxRootfs is the marker (Virtiofs=true, no block path), the
+	// tree rides a sandboxroot filesystems share, cmdline kubeswift.rootfs=virtiofs,
+	// and the config disk moves to /dev/vda (no block rootfs precedes it).
+	vfs := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: "ns"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{RootfsMode: sandboxv1alpha1.SandboxRootfsVirtiofs},
+	}
+	vi := buildIntent(vfs, "sandbox", tree, execSpec{Argv: []string{"/bin/sh"}}, false)
+	if vi.SandboxRootfs == nil || !vi.SandboxRootfs.Virtiofs || vi.SandboxRootfs.Path != "" {
+		t.Errorf("virtiofs SandboxRootfs = %+v", vi.SandboxRootfs)
+	}
+	if len(vi.Filesystems) != 1 || vi.Filesystems[0].Tag != "sandboxroot" || vi.Filesystems[0].SourcePath != tree {
+		t.Fatalf("virtiofs filesystems = %+v", vi.Filesystems)
+	}
+	if !vi.Filesystems[0].ReadOnly {
+		t.Error("virtiofs rootfs share must be read-only")
+	}
+	if !strings.Contains(vi.KernelBoot.Cmdline, "kubeswift.rootfs=virtiofs") ||
+		!strings.Contains(vi.KernelBoot.Cmdline, "kubeswift.config=/dev/vda") {
+		t.Errorf("virtiofs cmdline = %q", vi.KernelBoot.Cmdline)
+	}
+
+	// The materialize --mode follows the rootfs mode.
+	if got := sandboxRootfsMode(blk); got != "block" {
+		t.Errorf("block mode = %q", got)
+	}
+	if got := sandboxRootfsMode(vfs); got != "tree" {
+		t.Errorf("virtiofs mode = %q", got)
+	}
+}
+
 func TestIsTerminal(t *testing.T) {
 	if !isTerminal(sandboxv1alpha1.SwiftSandboxCompleted) || !isTerminal(sandboxv1alpha1.SwiftSandboxFailed) {
 		t.Error("Completed/Failed must be terminal")

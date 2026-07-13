@@ -312,6 +312,24 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              rootfsMode:
+                allOf:
+                - enum:
+                  - block
+                  - virtiofs
+                - enum:
+                  - block
+                  - virtiofs
+                default: block
+                description: |-
+                  RootfsMode selects how the OCI rootfs is delivered to the guest:
+                    block    (default) — a node-local read-only ext4 image passed as a
+                                          virtio-blk disk; the bridge overlays a tmpfs upper.
+                    virtiofs           — the unpacked rootfs tree shared over virtio-fs
+                                          (tag "sandboxroot"); no ext4 sizing/mkfs, and the
+                                          host page cache is shared. Same RO-base + writable
+                                          tmpfs-overlay semantics as block.
+                type: string
               timeout:
                 description: |-
                   Timeout is the wall-clock run cap. Past startedAt+timeout the controller

@@ -445,12 +445,19 @@ pub struct KernelBoot {
     pub cmdline: String,
 }
 
-/// The OCI image as a read-only root block device for a mode-3 sandbox boot.
+/// The OCI rootfs for a mode-3 sandbox boot. Its PRESENCE marks a sandbox; the
+/// delivery mode is `virtiofs`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxRootfs {
-    /// Node-local RO OCI rootfs — opaque (a cached ext4 file or a block device).
+    /// Node-local RO OCI rootfs block path — opaque (a cached ext4 file or a
+    /// block device). Empty/unused when `virtiofs` is true.
+    #[serde(default)]
     pub path: String,
+    /// Deliver the rootfs over virtio-fs (a `sandboxroot` filesystems share)
+    /// instead of a block disk. When true, `path` is ignored.
+    #[serde(default)]
+    pub virtiofs: bool,
 }
 
 /// The mode-3 workload exec: full argv, merged env ("KEY=VAL"), and working dir.
@@ -547,10 +554,21 @@ impl RuntimeIntent {
         self.kernel_boot.is_some()
     }
 
-    /// Returns the mode-3 sandbox RO rootfs disk path when set (kernel boot +
-    /// an OCI rootfs), else None.
+    /// Returns the mode-3 sandbox RO rootfs BLOCK disk path when the rootfs is
+    /// delivered as a block disk. None for a virtio-fs rootfs (the tree rides a
+    /// `sandboxroot` filesystems share instead) or when there is no sandbox.
     pub fn sandbox_rootfs_path(&self) -> Option<&str> {
-        self.sandbox_rootfs.as_ref().map(|s| s.path.as_str())
+        self.sandbox_rootfs
+            .as_ref()
+            .filter(|s| !s.virtiofs)
+            .map(|s| s.path.as_str())
+    }
+
+    /// True when this intent is a mode-3 sandbox boot, regardless of rootfs
+    /// delivery (block or virtio-fs). The sandbox marker is the presence of
+    /// `sandbox_rootfs`, NOT a block path (a virtio-fs rootfs has no path).
+    pub fn is_sandbox(&self) -> bool {
+        self.sandbox_rootfs.is_some()
     }
 
     /// Returns the mode-3 sandbox workload exec spec when set.
@@ -988,6 +1006,37 @@ mod tests {
         let f: RuntimeIntent = serde_json::from_str(faas).unwrap();
         assert!(f.has_kernel());
         assert_eq!(f.sandbox_rootfs_path(), None);
+        // faas is NOT a sandbox (no sandboxRootfs marker).
+        assert!(!f.is_sandbox());
+    }
+
+    #[test]
+    fn test_intent_sandbox_virtiofs_rootfs() {
+        // A virtio-fs rootfs sandbox: sandboxRootfs marks it (is_sandbox true) but
+        // carries virtiofs:true and no block path, so sandbox_rootfs_path() is None
+        // (the rootfs rides a "sandboxroot" filesystems share instead).
+        let json = r#"{
+            "rootDisk": {"path": "", "format": ""},
+            "seedPath": "",
+            "cpu": 1, "memory": 512,
+            "lifecycle": "start",
+            "guestId": "default/vfs",
+            "kernelBoot": {"kernelPath": "/k/bzImage", "initramfsPath": "/k/rootfs.cpio.gz", "cmdline": "console=ttyS0 kubeswift.rootfs=virtiofs"},
+            "sandboxRootfs": {"virtiofs": true},
+            "filesystems": [{"name": "sandboxroot", "tag": "sandboxroot", "sourcePath": "/var/lib/kubeswift/sandbox-rootfs/sha256-abc"}]
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).unwrap();
+        assert!(
+            intent.is_sandbox(),
+            "sandboxRootfs presence must mark a sandbox"
+        );
+        assert_eq!(
+            intent.sandbox_rootfs_path(),
+            None,
+            "a virtio-fs rootfs has no block path"
+        );
+        let fs = intent.filesystems.as_ref().expect("filesystems present");
+        assert_eq!(fs[0].tag, "sandboxroot");
     }
 
     #[test]

@@ -34,6 +34,14 @@ type SwiftSandboxPoolSpec struct {
 	// +optional
 	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
 
+	// RootfsMode selects how each warm slot's OCI rootfs is delivered: block
+	// (default, read-only ext4 disk) or virtiofs (the unpacked tree over
+	// virtio-fs). A claiming SwiftSandbox must request the same mode.
+	// +kubebuilder:validation:Enum=block;virtiofs
+	// +kubebuilder:default=block
+	// +optional
+	RootfsMode SandboxRootfsMode `json:"rootfsMode,omitempty"`
+
 	// CPU is the vCPU count of each warm slot. A claiming SwiftSandbox must match.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
