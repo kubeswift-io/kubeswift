@@ -82,6 +82,14 @@ func TestResourceService_ListResourceKinds(t *testing.T) {
 	if byKey["swiftguests"] != nil || byKey["swiftmigrations"] != nil {
 		t.Errorf("swiftguests/swiftmigrations must not be in the explorer catalog")
 	}
+	// Sandboxes + warm pools are browsed in the Explorer's KubeSwift menu (not a
+	// dedicated top-bar view).
+	if k := byKey["swiftsandboxes"]; k == nil || !k.Namespaced || k.Category != "KubeSwift" {
+		t.Errorf("swiftsandboxes should be a namespaced KubeSwift kind, got %+v", k)
+	}
+	if k := byKey["swiftsandboxpools"]; k == nil || !k.Namespaced || k.Category != "KubeSwift" {
+		t.Errorf("swiftsandboxpools should be a namespaced KubeSwift kind, got %+v", k)
+	}
 }
 
 // TestResourceService_SecretRedaction is the load-bearing E4 test: Secret values
