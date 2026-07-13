@@ -32,7 +32,8 @@ func SandboxMaterializeImage() string {
 // resolvedImage is the controller's upfront resolve of spec.Image.
 type resolvedImage struct {
 	Digest     string
-	RootfsPath string // <cache>/<digest>.ext4 — deterministic, matches what the init produces
+	RootfsPath string // <cache>/<digest>{.ext4|/} — deterministic, matches what the init produces
+	Virtiofs   bool   // rootfs delivered over virtio-fs (tree) instead of a block ext4
 	Exec       execSpec
 }
 
@@ -57,7 +58,12 @@ func (e execSpec) nonTrivial() bool {
 // entrypoint, and can build the launch intent before the materialize init runs.
 // The init container independently resolves the same digest, so they agree.
 func resolveImage(sb *sandboxv1alpha1.SwiftSandbox) (resolvedImage, error) {
-	opts := materialize.Options{ImageRef: sb.Spec.Image, CacheDir: rootfsCacheDir, Mode: materialize.ModeBlock}
+	virtiofs := sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs
+	mode := materialize.ModeBlock
+	if virtiofs {
+		mode = materialize.ModeTree
+	}
+	opts := materialize.Options{ImageRef: sb.Spec.Image, CacheDir: rootfsCacheDir, Mode: mode}
 	img, digest, err := materialize.RemotePull(opts)
 	if err != nil {
 		return resolvedImage{}, err
@@ -68,9 +74,19 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox) (resolvedImage, error) {
 	}
 	return resolvedImage{
 		Digest:     digest,
-		RootfsPath: materialize.CachePathFor(rootfsCacheDir, digest, materialize.ModeBlock),
+		RootfsPath: materialize.CachePathFor(rootfsCacheDir, digest, mode),
+		Virtiofs:   virtiofs,
 		Exec:       resolveExec(sb, cfg),
 	}, nil
+}
+
+// sandboxRootfsMode returns the materialize --mode string for the sandbox's
+// rootfs mode ("tree" for virtio-fs, "block" for the default ext4).
+func sandboxRootfsMode(sb *sandboxv1alpha1.SwiftSandbox) string {
+	if sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs {
+		return "tree"
+	}
+	return "block"
 }
 
 // resolveExec computes the full workload exec spec using k8s/OCI semantics, the

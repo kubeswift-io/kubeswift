@@ -44,10 +44,16 @@ func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetwork
 	return sandboxv1alpha1.SandboxNetworkRestricted
 }
 
-// sandboxConfigDevice is where the bridge-initramfs reads the workload exec spec.
-// swiftletd emits the config disk right after the rootfs (/dev/vda), and a sandbox
-// carries no seed/data disks, so it enumerates as /dev/vdb.
-const sandboxConfigDevice = "/dev/vdb"
+// The bridge-initramfs reads the workload exec spec from the config disk. swiftletd
+// emits it right after the (optional) block rootfs, and a sandbox carries no
+// seed/data disks, so it enumerates as:
+//   - /dev/vdb for block rootfs (rootfs is /dev/vda, config is next).
+//   - /dev/vda for virtio-fs rootfs (no block rootfs disk — the virtio-fs share
+//     is not a virtio-blk device, so the config disk is the first /dev/vd*).
+const (
+	sandboxConfigDeviceBlock    = "/dev/vdb"
+	sandboxConfigDeviceVirtiofs = "/dev/vda"
+)
 
 // buildIntent constructs the mode-3 sandbox RuntimeIntent: kernel boot + the RO
 // OCI rootfs disk + (when the workload has a defined exec) the config disk + the
@@ -57,7 +63,12 @@ const sandboxConfigDevice = "/dev/vdb"
 // binary, and distroless images can be pooled.
 func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string, exec execSpec, idle bool) *runtimeintent.RuntimeIntent {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
-	cmdline := "console=ttyS0 kubeswift.rootfs=block"
+	virtiofs := sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs
+	rootfsKind := "block"
+	if virtiofs {
+		rootfsKind = "virtiofs"
+	}
+	cmdline := "console=ttyS0 kubeswift.rootfs=" + rootfsKind
 	if idle {
 		cmdline += " kubeswift.idle=1"
 	}
@@ -81,7 +92,11 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		// The workload argv/env/cwd ride the config disk (kubeswift.config points the
 		// bridge at it) — never the cmdline, so env stays out of /proc/cmdline + logs.
 		// A keeper carries no workload (idle), so it gets no config disk.
-		cmdline += " kubeswift.config=" + sandboxConfigDevice
+		configDev := sandboxConfigDeviceBlock
+		if virtiofs {
+			configDev = sandboxConfigDeviceVirtiofs
+		}
+		cmdline += " kubeswift.config=" + configDev
 		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd}
 	}
 	cpu := int(sb.Spec.CPU)
@@ -92,13 +107,31 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 	if memMiB < 128 {
 		memMiB = 128
 	}
+	// Rootfs delivery. block: the ext4 rides SandboxRootfs.Path as /dev/vda.
+	// virtiofs: the unpacked tree at rootfsPath is shared over virtio-fs (tag
+	// "sandboxroot"); SandboxRootfs stays present (the sandbox marker) but carries
+	// no block path. Either way the bridge overlays a tmpfs upper.
+	sandboxRootfs := &runtimeintent.SandboxRootfsSpec{Virtiofs: virtiofs}
+	var filesystems []runtimeintent.FilesystemIntent
+	if virtiofs {
+		filesystems = []runtimeintent.FilesystemIntent{{
+			Name:       "sandboxroot",
+			Tag:        "sandboxroot",
+			SourcePath: rootfsPath,
+			ReadOnly:   true,
+		}}
+	} else {
+		sandboxRootfs.Path = rootfsPath
+	}
+
 	return &runtimeintent.RuntimeIntent{
 		KernelBoot: &runtimeintent.KernelBootSpec{
 			KernelPath:    kernelDir + "/bzImage",
 			InitramfsPath: kernelDir + "/rootfs.cpio.gz",
 			Cmdline:       cmdline,
 		},
-		SandboxRootfs: &runtimeintent.SandboxRootfsSpec{Path: rootfsPath},
+		SandboxRootfs: sandboxRootfs,
+		Filesystems:   filesystems,
 		SandboxExec:   sandboxExec,
 		CPU:           cpu,
 		Memory:        memMiB,
@@ -141,7 +174,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	matArgs := []string{
 		"--image", sb.Spec.Image,
 		"--cache-dir", rootfsCacheDir,
-		"--mode", "block",
+		"--mode", sandboxRootfsMode(sb),
 		"--result-file", "/dev/termination-log",
 	}
 	// (--pull-secret mount when spec.imagePullSecret is set — follow-up.)

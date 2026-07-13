@@ -74,6 +74,18 @@ type SwiftSandboxSpec struct {
 	// +optional
 	Network SandboxNetwork `json:"network,omitempty"`
 
+	// RootfsMode selects how the OCI rootfs is delivered to the guest:
+	//   block    (default) — a node-local read-only ext4 image passed as a
+	//                         virtio-blk disk; the bridge overlays a tmpfs upper.
+	//   virtiofs           — the unpacked rootfs tree shared over virtio-fs
+	//                         (tag "sandboxroot"); no ext4 sizing/mkfs, and the
+	//                         host page cache is shared. Same RO-base + writable
+	//                         tmpfs-overlay semantics as block.
+	// +kubebuilder:validation:Enum=block;virtiofs
+	// +kubebuilder:default=block
+	// +optional
+	RootfsMode SandboxRootfsMode `json:"rootfsMode,omitempty"`
+
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot. Defaults to
 	// the well-known "sandbox" kernel when unset.
 	// +optional
@@ -98,6 +110,17 @@ type SecretObjectReference struct {
 	// Name of the Secret.
 	Name string `json:"name"`
 }
+
+// SandboxRootfsMode selects how the OCI rootfs is delivered to the guest.
+// +kubebuilder:validation:Enum=block;virtiofs
+type SandboxRootfsMode string
+
+const (
+	// SandboxRootfsBlock (default) delivers the rootfs as a read-only ext4 disk.
+	SandboxRootfsBlock SandboxRootfsMode = "block"
+	// SandboxRootfsVirtiofs shares the unpacked rootfs tree over virtio-fs.
+	SandboxRootfsVirtiofs SandboxRootfsMode = "virtiofs"
+)
 
 // SandboxNetworkMode selects the sandbox connectivity posture.
 // +kubebuilder:validation:Enum=restricted;open;none

@@ -213,12 +213,20 @@ type RootDiskSpec struct {
 	Format string `json:"format"` // "raw" or "qcow2"
 }
 
-// SandboxRootfsSpec is the OCI image materialized as a read-only root block
-// device for a mode-3 sandbox boot (kernel boot + this + a tmpfs overlay in the
-// bridge-initramfs). Path is opaque to swiftletd (a node-local cached ext4 file
-// or a block device — the W9 opacity contract).
+// SandboxRootfsSpec marks a mode-3 sandbox boot and describes how the OCI rootfs
+// is delivered (kernel boot + this + a tmpfs overlay in the bridge-initramfs).
+// Its PRESENCE is the "this is a sandbox" signal to swiftletd, independent of the
+// delivery mode:
+//   - Virtiofs=false (default): Path is the node-local RO rootfs (a cached ext4
+//     file or a block device — the W9 opacity contract), passed as /dev/vda.
+//   - Virtiofs=true: Path is unused; the rootfs is shared over virtio-fs via a
+//     Filesystems entry (tag "sandboxroot") and the bridge mounts that as the
+//     overlay lower (kubeswift.rootfs=virtiofs).
 type SandboxRootfsSpec struct {
-	Path string `json:"path"`
+	Path string `json:"path,omitempty"`
+	// Virtiofs delivers the rootfs over virtio-fs instead of a block disk.
+	// +optional
+	Virtiofs bool `json:"virtiofs,omitempty"`
 }
 
 // SandboxExecSpec is the workload exec for a mode-3 sandbox: the full argv, the

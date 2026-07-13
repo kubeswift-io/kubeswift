@@ -1,0 +1,21 @@
+# A sandbox whose OCI rootfs is delivered over virtio-fs instead of a read-only
+# ext4 disk (rootfsMode: virtiofs). swiftletd shares the unpacked rootfs tree
+# (tag "sandboxroot") via a virtiofsd backend; the bridge mounts it as the
+# overlay lower and layers a writable tmpfs upper — same RO-base + writable
+# semantics as block, but without mkfs.ext4 or the ext4 size floor (a small
+# image materializes to just its tree size), and the host page cache is shared.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: virtiofs-sandbox
+  namespace: default
+spec:
+  image: docker.io/library/alpine:3.20
+  rootfsMode: virtiofs
+  cpu: 1
+  memory: 512Mi
+  command: ["/bin/sh", "-c", "echo hello from a virtio-fs sandbox"]
+  timeout: 10m
+  ttl: 5m
+  network:
+    mode: restricted
