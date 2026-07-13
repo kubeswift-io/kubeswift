@@ -301,11 +301,11 @@ Three approaches, from simplest to most powerful:
 
 The simplest approach. No OVN-Kubernetes required.
 
-**Host preparation:**
+#### First step: Host preparation
 
 Create VLAN sub-interfaces on each worker node via netplan, nmcli, or a DaemonSet.
 
-**Ubuntu (netplan):**
+**Example 1: Netplan configuration (Ubuntu):**
 
 ```yaml
 # /etc/netplan/60-vlans.yaml
@@ -328,7 +328,7 @@ sudo netplan apply
 ip link show bond0.100  # verify
 ```
 
-**RHEL/Rocky (nmcli):**
+**Example 2: NetworkManager CLI (RHEL/Rocky):**
 
 ```bash
 nmcli connection add type vlan ifname bond0.100 dev bond0 id 100
@@ -337,7 +337,7 @@ nmcli connection up vlan-bond0.100
 nmcli connection up vlan-bond0.200
 ```
 
-**DaemonSet (automated node preparation):**
+**Example 3: DaemonSet (hostNetwork, all distros; example only, no teardown):**
 
 ```yaml
 apiVersion: apps/v1
@@ -373,7 +373,7 @@ spec:
             add: ["NET_ADMIN"]
 ```
 
-**Create NADs per VLAN:**
+#### Second step: Create NetworkAttachmentDefinitions (NADs) per VLAN
 
 ```yaml
 apiVersion: k8s.cni.cncf.io/v1
@@ -419,7 +419,7 @@ spec:
     }
 ```
 
-**SwiftGuest on specific VLANs:**
+#### Last step: Set the interface in the SwiftGuest
 
 ```yaml
 interfaces:
@@ -437,13 +437,15 @@ interfaces:
 No host preparation needed -- the vlan CNI plugin creates VLAN sub-interfaces
 inside the pod's network namespace on demand.
 
+#### First step: Verify the vlan CNI plugin
+
 Verify the vlan CNI plugin binary exists on worker nodes:
 
 ```bash
 ls /opt/cni/bin/vlan
 ```
 
-**Create NADs:**
+#### Second step: Create NetworkAttachmentDefinitions (NADs) per VLAN
 
 ```yaml
 apiVersion: k8s.cni.cncf.io/v1
@@ -469,6 +471,10 @@ spec:
 The `vlan` CNI plugin creates a VLAN sub-interface inside the pod's network
 namespace, not on the host. The sub-interface is per-pod and cleaned up automatically
 when the pod exits.
+
+#### Last step: Set the interface in the SwiftGuest
+
+This is the same as previous example.
 
 ### Approach C: OVN-Kubernetes localnet
 
