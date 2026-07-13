@@ -43,7 +43,7 @@ type resolvedImage struct {
 type execSpec struct {
 	Argv []string // full argv (command/args merged over the image entrypoint/cmd)
 	Env  []string // "KEY=VAL", image env overlaid by spec.env
-	Cwd  string   // working dir (v1: best-effort; the bridge defaults to /)
+	Cwd  string   // working dir; honored on the cold path (bridge -> guest-agent chroot+chdir) and checkout path
 }
 
 // nonTrivial reports whether the exec spec carries anything worth a config disk.
