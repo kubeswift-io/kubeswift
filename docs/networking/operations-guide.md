@@ -437,7 +437,7 @@ interfaces:
 No host preparation needed -- the vlan CNI plugin creates VLAN sub-interfaces
 inside the pod's network namespace on demand.
 
-#### First step: Host preparation
+#### First step: Verify the vlan CNI plugin
 
 Verify the vlan CNI plugin binary exists on worker nodes:
 
