@@ -6,6 +6,14 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- **`SwiftSandboxPool.spec.idleTTL`** — the field was accepted but never honored
+  (a no-op). Scale-to-zero on a quiet pool is done via the scale subresource + an
+  HPA with `minReplicas: 0` on `minWarm`, which the pool already supports; the
+  dead field is removed to stop implying behaviour that didn't exist. Existing
+  pools that set it are unaffected (it was ignored before and is pruned now).
+
 ---
 
 ## [v0.11.0] — 2026-07-13

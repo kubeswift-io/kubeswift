@@ -79,12 +79,6 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              idleTTL:
-                description: |-
-                  IdleTTL, when set, lets the pool scale unclaimed slots back toward zero after they
-                  have sat idle at least this long — so a quiet pool stops holding RAM. Unset = hold
-                  minWarm indefinitely.
-                type: string
               image:
                 description: |-
                   Image is the OCI image every warm slot boots as its root filesystem. A digest

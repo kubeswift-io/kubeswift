@@ -71,7 +71,6 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | `memory` | Quantity | `512Mi` | RAM per slot. |
 | `minWarm` | int32 | `0` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
-| `idleTTL` | Duration | — | **Accepted but not honored in v1** — use the scale subresource + an HPA for scale-to-zero (see [Scaling](#scaling)), not this field. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -141,8 +140,8 @@ kubectl scale sboxpool <name> --replicas=10   # sets minWarm
 and an HPA can target the pool. The natural signal is the checkout cold-fallback
 rate (`kubeswift_sandbox_checkouts_total{result="cold"}`): grow the buffer when
 checkouts miss, shrink when quiet. An HPA with `minReplicas: 0` drains a quiet
-pool to zero and re-warms on demand — the scale-to-zero the `idleTTL` field was
-reaching for (use scaling, not `idleTTL`, which is unhonored in v1).
+pool to zero and re-warms on demand — that is how you get scale-to-zero on a
+quiet pool.
 
 ## Observability
 
@@ -154,9 +153,6 @@ rate. Pool health is `kubectl get sboxpool` (phase + `warmReplicas`).
 
 ## Limitations (v1)
 
-- **`idleTTL` is not honored** — the pool holds `minWarm`. For scale-to-zero on a
-  quiet pool, use the scale subresource with an HPA (see [Scaling](#scaling)),
-  not this field.
 - Keep the pooled sandbox's `image` the same as the pool's `image`; the checkout
   runs your command inside the slot's already-booted rootfs, so a different
   `image` on the sandbox is ignored for a hit (and only applies if it

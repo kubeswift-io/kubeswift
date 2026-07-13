@@ -114,8 +114,9 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, err
 		}
 	}
-	// (idleTTL scale-down is a follow-up phase; node-spread is applied per slot
-	// in createWarmSlot via warmSlotTopologySpread.)
+	// (scale-to-zero on a quiet pool is done via the scale subresource + an HPA on
+	// minWarm, not a pool-side idle timer; node-spread is applied per slot in
+	// createWarmSlot via warmSlotTopologySpread.)
 
 	return r.updateStatus(ctx, &pool, ready, claimed, ri)
 }
