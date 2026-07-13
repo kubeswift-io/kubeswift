@@ -55,7 +55,7 @@ func TestBuildIntent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "default"},
 		Spec:       sandboxv1alpha1.SwiftSandboxSpec{CPU: 2, Memory: resource.MustParse("1Gi")},
 	}
-	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", execSpec{Argv: []string{"/bin/sh"}})
+	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if intent.KernelBoot == nil {
 		t.Fatal("kernelBoot nil")
 	}
@@ -90,7 +90,7 @@ func TestBuildIntent(t *testing.T) {
 	}
 	sbNone := sb.DeepCopy()
 	sbNone.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkNone
-	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}})
+	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if iNone.Network {
 		t.Error("mode=none sandbox must be network-isolated")
 	}
@@ -106,9 +106,22 @@ func TestBuildIntent(t *testing.T) {
 		t.Errorf("hypervisor: %s", intent.Hypervisor)
 	}
 	// Trivial exec (bare image, no overrides) -> no config disk, no SandboxExec.
-	i2 := buildIntent(sb, "sandbox", "/x.ext4", execSpec{})
+	i2 := buildIntent(sb, "sandbox", "/x.ext4", execSpec{}, false)
 	if strings.Contains(i2.KernelBoot.Cmdline, "kubeswift.config") || i2.SandboxExec != nil {
 		t.Errorf("trivial exec should omit the config disk: cmdline=%s exec=%+v", i2.KernelBoot.Cmdline, i2.SandboxExec)
+	}
+	// A warm-pool keeper (idle) boots to the bridge idle loop with NO workload: the
+	// cmdline carries kubeswift.idle=1 and NO config disk, even if an exec is passed.
+	keeper := buildIntent(sb, "sandbox", "/x.ext4", execSpec{Argv: []string{"sleep", "infinity"}}, true)
+	if !strings.Contains(keeper.KernelBoot.Cmdline, "kubeswift.idle=1") {
+		t.Errorf("keeper cmdline missing kubeswift.idle=1: %s", keeper.KernelBoot.Cmdline)
+	}
+	if strings.Contains(keeper.KernelBoot.Cmdline, "kubeswift.config") || keeper.SandboxExec != nil {
+		t.Errorf("keeper must carry no workload/config disk: cmdline=%s exec=%+v", keeper.KernelBoot.Cmdline, keeper.SandboxExec)
+	}
+	// A real workload (idle=false) never gets the idle flag.
+	if strings.Contains(intent.KernelBoot.Cmdline, "kubeswift.idle") {
+		t.Errorf("non-keeper cmdline should not carry kubeswift.idle: %s", intent.KernelBoot.Cmdline)
 	}
 }
 

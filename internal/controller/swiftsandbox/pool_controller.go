@@ -35,15 +35,11 @@ const (
 	poolPollInterval = 10 * time.Second
 )
 
-// warmSlotIdleCmd keeps a workload-less slot Running and idle so the in-guest agent
-// stays reachable for a post-boot checkout. It is image-provided (a distroless image
-// without a shell/sleep needs the bridge idle keeper — tracked follow-up).
-var warmSlotIdleCmd = []string{"sleep", "infinity"}
-
 // SwiftSandboxPoolReconciler maintains a warm buffer of pre-booted, workload-less
 // sandbox slots so a SwiftSandbox can check out sub-second. Co-located with the
 // SwiftSandbox controller to reuse its launch builders (buildIntent/buildPod/…) via a
-// synthetic per-slot SwiftSandbox carrying the pool's slot shape + an idle command.
+// synthetic per-slot SwiftSandbox carrying the pool's slot shape; the slot boots as a
+// bridge-side idle keeper (kubeswift.idle=1), image-independent.
 type SwiftSandboxPoolReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -181,8 +177,10 @@ func warmSlotTopologySpread(poolName string) []corev1.TopologySpreadConstraint {
 }
 
 // slotTemplate builds the synthetic (unpersisted) SwiftSandbox for a warm slot: the
-// pool's slot shape + the idle keeper command. The launch builders read only its
-// fields; the resulting pod/ConfigMap/NetworkPolicy are owned by the POOL.
+// pool's slot shape, with NO workload command — the slot boots as a bridge-side idle
+// keeper (kubeswift.idle=1) and a checkout injects the workload later over vsock. The
+// launch builders read only its fields; the resulting pod/ConfigMap/NetworkPolicy are
+// owned by the POOL.
 func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSandboxPool, name string) *sandboxv1alpha1.SwiftSandbox {
 	return &sandboxv1alpha1.SwiftSandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace},
@@ -194,7 +192,6 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 			Network:          pool.Spec.Network,
 			KernelProfileRef: pool.Spec.KernelProfileRef,
 			NodeSelector:     pool.Spec.NodeSelector,
-			Command:          warmSlotIdleCmd,
 		},
 	}
 }
@@ -204,7 +201,11 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage) error {
 	slot := r.slotTemplate(pool, pool.Name+"-slot-"+utilrand.String(5))
 
-	intent := buildIntent(slot, kernelName, ri.RootfsPath, ri.Exec)
+	// idle=true: a warm keeper carries no workload (execSpec{}); it boots to the
+	// bridge idle loop (kubeswift.idle=1) so warming never depends on the image
+	// having a sleep binary, and a distroless image can be pooled. ri.Exec.Env is
+	// still stamped into the pool status for the checkout env-merge (see updateStatus).
+	intent := buildIntent(slot, kernelName, ri.RootfsPath, execSpec{}, true)
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return err

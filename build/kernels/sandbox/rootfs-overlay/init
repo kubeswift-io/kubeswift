@@ -31,12 +31,14 @@ ROOTFS_KIND=block
 ENTRYPOINT=""
 CONFIG_DEV=""
 DNS_SEARCH=""
+IDLE=""
 for arg in $(cat /proc/cmdline); do
 	case "$arg" in
 		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
 		kubeswift.entrypoint=*) ENTRYPOINT="${arg#kubeswift.entrypoint=}" ;;
 		kubeswift.config=*)     CONFIG_DEV="${arg#kubeswift.config=}" ;;
 		kubeswift.dns-search=*) DNS_SEARCH="${arg#kubeswift.dns-search=}" ;;
+		kubeswift.idle=*)       IDLE="${arg#kubeswift.idle=}" ;;
 	esac
 done
 
@@ -161,6 +163,17 @@ fi
 # that swiftletd captures as the sandbox log.
 if [ -x /usr/local/bin/kubeswift-guest-agent ]; then
 	/usr/local/bin/kubeswift-guest-agent --exec-root=/newroot >/dev/kmsg 2>&1 &
+fi
+
+# Warm-pool keeper (kubeswift.idle=1): the slot is pre-booted with NO workload yet;
+# a checkout injects one later over vsock (the agent above chroots /newroot for it).
+# Idle in the INITRAMFS busybox — NOT `chroot /newroot sleep` — so warming does not
+# depend on the image carrying a sleep binary; that's what lets a distroless image be
+# pooled. Never emit an exit code or power off: the controller deletes this pod when
+# the slot is consumed, so the keeper just waits.
+if [ "$IDLE" = 1 ]; then
+	echo "sandbox-bridge: warm keeper idle (agent serves checkout; image-independent)"
+	while :; do sleep 86400; done
 fi
 
 echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; run $1 ($# arg(s))"
