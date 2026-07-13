@@ -260,6 +260,12 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              selector:
+                description: |-
+                  Selector is the pool's warm-slot label selector serialized as a string.
+                  Required by the scale subresource so `kubectl scale` and an HPA can target
+                  the pool; it selects the warm-slot pods (sandbox.kubeswift.io/pool=<name>).
+                type: string
               warmReplicas:
                 description: WarmReplicas is the number of Ready, pre-booted, unclaimed
                   slots.
@@ -270,4 +276,8 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.minWarm
+        statusReplicasPath: .status.warmReplicas
       status: {}

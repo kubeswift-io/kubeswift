@@ -25,3 +25,23 @@ func TestSlotsToCreate(t *testing.T) {
 		}
 	}
 }
+
+func TestSlotsToDelete(t *testing.T) {
+	cases := []struct {
+		name              string
+		minWarm, warmLive int
+		want              int
+	}{
+		{"at target — nothing to drain", 3, 3, 0},
+		{"under target — nothing to drain (create-side handles it)", 3, 1, 0},
+		{"scaled down — drain the excess", 1, 3, 2},
+		{"scaled to zero — drain all", 0, 4, 4},
+		{"empty pool", 0, 0, 0},
+	}
+	for _, c := range cases {
+		if got := slotsToDelete(c.minWarm, c.warmLive); got != c.want {
+			t.Errorf("%s: slotsToDelete(min=%d,live=%d)=%d, want %d",
+				c.name, c.minWarm, c.warmLive, got, c.want)
+		}
+	}
+}
