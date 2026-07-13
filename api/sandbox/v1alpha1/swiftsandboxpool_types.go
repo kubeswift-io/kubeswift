@@ -27,6 +27,13 @@ type SwiftSandboxPoolSpec struct {
 	// +optional
 	ImagePullSecret string `json:"imagePullSecret,omitempty"`
 
+	// VerifyKeySecretRef, when set, names a Secret in the pool's namespace holding a
+	// cosign public key (key "cosign.pub"). Every warm slot cosign-verifies Image
+	// against it before materializing; an unsigned/tampered image fails the slot so
+	// the pool never warms an unverified rootfs. Requires a TLS registry.
+	// +optional
+	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+
 	// CPU is the vCPU count of each warm slot. A claiming SwiftSandbox must match.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1

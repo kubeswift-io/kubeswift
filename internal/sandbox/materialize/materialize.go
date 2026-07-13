@@ -148,6 +148,33 @@ func RemotePull(opts Options) (v1.Image, string, error) {
 	return img, dig.String(), nil
 }
 
+// Resolve returns the image's canonical repository (registry/repo, no tag or
+// digest) and its digest ("sha256:...") WITHOUT materializing it. It is the
+// verify-before-boot gate's input: the caller cosign-verifies Repository@Digest
+// before Materialize extracts any layer. A manifest fetch only — cheap.
+func Resolve(opts Options) (repository, digest string, err error) {
+	var nameOpts []name.Option
+	if opts.Insecure {
+		nameOpts = append(nameOpts, name.Insecure)
+	}
+	ref, err := name.ParseReference(opts.ImageRef, nameOpts...)
+	if err != nil {
+		return "", "", fmt.Errorf("parse image ref %q: %w", opts.ImageRef, err)
+	}
+	if opts.PullSecret != "" {
+		os.Setenv("DOCKER_CONFIG", filepath.Dir(opts.PullSecret))
+	}
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %q: %w", opts.ImageRef, err)
+	}
+	dig, err := img.Digest()
+	if err != nil {
+		return "", "", fmt.Errorf("resolve digest: %w", err)
+	}
+	return ref.Context().Name(), dig.String(), nil
+}
+
 // Materialize resolves the image, and if the digest is not already cached,
 // flattens it into the requested rootfs form. It is idempotent: a cache hit is a
 // no-op that still reports the resolved digest + config.

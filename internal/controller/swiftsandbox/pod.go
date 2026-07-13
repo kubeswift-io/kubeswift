@@ -146,12 +146,39 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}
 	// (--pull-secret mount when spec.imagePullSecret is set — follow-up.)
 
+	matMounts := []corev1.VolumeMount{{Name: "rootfs-cache", MountPath: rootfsCacheDir}}
+	var matEnv []corev1.EnvVar
+	var verifyVolumes []corev1.Volume
+	if ref := sb.Spec.VerifyKeySecretRef; ref != nil && ref.Name != "" {
+		// cosign-verify image@digest BEFORE materializing. The public key is mounted
+		// read-only at /verify-key/cosign.pub; cosign needs a writable HOME/TMPDIR,
+		// served by an emptyDir. A bad/missing signature fails this init container, so
+		// the sandbox goes Failed and never boots. Mirrors the SwiftImage import path.
+		matArgs = append(matArgs, "--verify-key=/verify-key/cosign.pub")
+		matEnv = append(matEnv,
+			corev1.EnvVar{Name: "HOME", Value: "/cosign-home"},
+			corev1.EnvVar{Name: "TMPDIR", Value: "/cosign-home"},
+		)
+		matMounts = append(matMounts,
+			corev1.VolumeMount{Name: "verify-key", MountPath: "/verify-key", ReadOnly: true},
+			corev1.VolumeMount{Name: "cosign-home", MountPath: "/cosign-home"},
+		)
+		verifyVolumes = append(verifyVolumes,
+			corev1.Volume{Name: "verify-key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: ref.Name,
+				Items:      []corev1.KeyToPath{{Key: "cosign.pub", Path: "cosign.pub"}},
+			}}},
+			corev1.Volume{Name: "cosign-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		)
+	}
+
 	initContainers := []corev1.Container{{
 		Name:            materializeInitName,
 		Image:           SandboxMaterializeImage(),
 		Args:            matArgs,
+		Env:             matEnv,
 		SecurityContext: privileged(),
-		VolumeMounts:    []corev1.VolumeMount{{Name: "rootfs-cache", MountPath: rootfsCacheDir}},
+		VolumeMounts:    matMounts,
 	}}
 	if networked(sb) {
 		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
@@ -169,6 +196,15 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 
 	dirCreate := corev1.HostPathDirectoryOrCreate
 	charDev := corev1.HostPathCharDev
+
+	volumes := []corev1.Volume{
+		{Name: "kernel-artifacts", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: kernelDir, Type: &dirCreate}}},
+		{Name: "rootfs-cache", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: rootfsCacheDir, Type: &dirCreate}}},
+		{Name: "runtime-intent", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: intentConfigMapName(sb)}}}},
+		{Name: "run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "dev-kvm", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/kvm", Type: &charDev}}},
+	}
+	volumes = append(volumes, verifyVolumes...)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -202,13 +238,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 					{Name: "dev-kvm", MountPath: "/dev/kvm"},
 				},
 			}},
-			Volumes: []corev1.Volume{
-				{Name: "kernel-artifacts", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: kernelDir, Type: &dirCreate}}},
-				{Name: "rootfs-cache", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: rootfsCacheDir, Type: &dirCreate}}},
-				{Name: "runtime-intent", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: intentConfigMapName(sb)}}}},
-				{Name: "run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				{Name: "dev-kvm", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/kvm", Type: &charDev}}},
-			},
+			Volumes: volumes,
 		},
 	}
 }

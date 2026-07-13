@@ -1,0 +1,47 @@
+# A sandbox that only boots a cosign-signed image (verify before boot).
+#
+# Prereqs:
+#   1. A Ready SwiftKernel "sandbox" on a kubeswift.io/kernel-node=true node.
+#   2. cosign generate-key-pair
+#      cosign sign --key cosign.key <registry>/<image>@sha256:...
+#      kubectl create secret generic cosign-pub --from-file=cosign.pub
+#
+# Before materializing a single layer, sandbox-materialize resolves the image
+# digest and runs `cosign verify <repo>@<digest>` against cosign.pub. A missing
+# or invalid signature fails the init container -> the sandbox goes Failed and
+# NEVER boots. cosign speaks HTTPS only (a TLS registry).
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: verified-sandbox
+  namespace: default
+spec:
+  # Prefer a digest reference: it is what gets verified and materialized.
+  image: ghcr.io/example/signed-tool@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  cpu: 1
+  memory: 512Mi
+  command: ["/bin/sh"]
+  timeout: 10m
+  ttl: 5m
+  network:
+    mode: restricted
+  verifyKeySecretRef:
+    name: cosign-pub
+---
+# A warm pool of verified slots: every slot is cosign-verified before it warms,
+# so the pool never holds an unverified rootfs. Claiming SwiftSandboxes inherit
+# the guarantee (they boot from the pre-verified slot).
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: verified-pool
+  namespace: default
+spec:
+  image: ghcr.io/example/signed-tool@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  minWarm: 2
+  cpu: 1
+  memory: 512Mi
+  network:
+    mode: restricted
+  verifyKeySecretRef:
+    name: cosign-pub

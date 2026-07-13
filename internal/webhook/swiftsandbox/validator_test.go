@@ -66,3 +66,33 @@ func TestValidateDelete_PassThrough(t *testing.T) {
 		t.Errorf("delete must pass through: %v", err)
 	}
 }
+
+func TestValidateCreate_VerifyKeySecretRef(t *testing.T) {
+	v := &Validator{}
+
+	// A ref with a name is accepted.
+	ok := sb("alpine:3.20")
+	ok.Spec.VerifyKeySecretRef = &sandboxv1alpha1.SecretObjectReference{Name: "cosign-pub"}
+	if _, err := v.ValidateCreate(context.Background(), ok); err != nil {
+		t.Errorf("verifyKeySecretRef with a name should be accepted: %v", err)
+	}
+
+	// A ref with an empty name is rejected (shape check).
+	bad := sb("alpine:3.20")
+	bad.Spec.VerifyKeySecretRef = &sandboxv1alpha1.SecretObjectReference{Name: ""}
+	if _, err := v.ValidateCreate(context.Background(), bad); err == nil {
+		t.Error("verifyKeySecretRef with an empty name should be rejected")
+	}
+}
+
+func TestValidateUpdate_VerifyKeySecretRefImmutable(t *testing.T) {
+	v := &Validator{}
+	old := sb("alpine:3.20")
+	// Adding a verify key after creation is a launch-affecting change (the rootfs
+	// would be verified where before it was not) — immutable, recreate to change.
+	chg := old.DeepCopy()
+	chg.Spec.VerifyKeySecretRef = &sandboxv1alpha1.SecretObjectReference{Name: "cosign-pub"}
+	if _, err := v.ValidateUpdate(context.Background(), old, chg); err == nil {
+		t.Error("adding verifyKeySecretRef should be rejected as immutable")
+	}
+}

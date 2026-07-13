@@ -61,6 +61,7 @@ Ready-to-edit manifests and notes:
 |---|---|---|---|
 | `image` | string | — | OCI image to run as the root filesystem. Required. A digest reference (`repo@sha256:...`) is preferred for reproducibility; a tag is accepted. |
 | `imagePullSecret` | string | — | docker-registry Secret (same namespace) for pulling `image` from a private registry. |
+| `verifyKeySecretRef.name` | string | — | Secret (same namespace) holding a cosign public key at key `cosign.pub`. When set, the image is cosign-verified before it materializes; an unsigned or tampered image fails and never boots. See [Signed images](#signed-images-verify-before-boot). |
 | `cpu` | int32 | `1` | vCPU count. |
 | `memory` | Quantity | `512Mi` | Guest RAM. |
 | `command` | []string | — | Overrides the image's ENTRYPOINT. Empty uses the image's own Entrypoint+Cmd. |
@@ -116,6 +117,34 @@ A networked sandbox resolves cluster service names and external names alike
 — the controller injects the namespace's search domains and `ndots:5`.
 `restricted` still blocks *connecting* to cluster IPs; name resolution and
 egress reachability are separate concerns.
+
+## Signed images (verify before boot)
+
+Set `spec.verifyKeySecretRef.name` to a Secret holding a cosign public key
+(key `cosign.pub`) to require a valid signature before the sandbox boots:
+
+```bash
+cosign generate-key-pair                 # cosign.pub + cosign.key
+cosign sign --key cosign.key <registry>/<image>@sha256:...
+kubectl create secret generic cosign-pub --from-file=cosign.pub
+```
+
+```yaml
+spec:
+  image: <registry>/<image>@sha256:...
+  verifyKeySecretRef:
+    name: cosign-pub
+```
+
+The `sandbox-materialize` init container resolves the image digest and runs
+`cosign verify <repo>@<digest>` against the key **before** it materializes a
+single layer. A missing or invalid signature fails that init container, so the
+sandbox goes `Failed` and never runs an unverified rootfs. cosign speaks HTTPS
+only — a signed image must come from a TLS registry.
+
+A `SwiftSandboxPool` takes the same `spec.verifyKeySecretRef`; every warm slot
+is verified, so a pool never warms an unverified image. This mirrors
+`SwiftImage`'s `spec.source.oci.verifyKeySecretRef` for golden VM disks.
 
 ## Interacting with a sandbox
 

@@ -63,6 +63,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if s.TTL != nil && s.TTL.Duration <= 0 {
 		return fmt.Errorf("spec.ttl must be > 0 when set")
 	}
+	if s.VerifyKeySecretRef != nil && s.VerifyKeySecretRef.Name == "" {
+		return fmt.Errorf("spec.verifyKeySecretRef.name is required when verifyKeySecretRef is set")
+	}
 	return nil
 }
 

@@ -160,6 +160,19 @@ spec:
                   NodeSelector constrains which (kernel) nodes the pool warms slots on, merged with
                   the required kubeswift.io/kernel-node=true label.
                 type: object
+              verifyKeySecretRef:
+                description: |-
+                  VerifyKeySecretRef, when set, names a Secret in the pool's namespace holding a
+                  cosign public key (key "cosign.pub"). Every warm slot cosign-verifies Image
+                  against it before materializing; an unsigned/tampered image fails the slot so
+                  the pool never warms an unverified rootfs. Requires a TLS registry.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    type: string
+                required:
+                - name
+                type: object
             required:
             - image
             - memory

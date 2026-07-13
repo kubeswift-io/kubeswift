@@ -6,6 +6,18 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+**Sandbox image signing (verify before boot)**
+- **`SwiftSandbox.spec.verifyKeySecretRef`** (and `SwiftSandboxPool.spec.verifyKeySecretRef`)
+  — a Secret holding a cosign public key (`cosign.pub`). When set,
+  `sandbox-materialize` resolves the image digest and runs `cosign verify
+  <repo>@<digest>` **before** materializing a single layer; a missing or invalid
+  signature fails the init container, so the sandbox goes `Failed` and never boots
+  an unverified rootfs. A pool verifies every warm slot. Mirrors `SwiftImage`'s
+  `spec.source.oci.verifyKeySecretRef`, reusing the proven `internal/oci.Verify`.
+  Immutable after create; requires a TLS registry (cosign speaks HTTPS only).
+
 ---
 
 ## [v0.10.0] — 2026-07-13
