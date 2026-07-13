@@ -56,6 +56,8 @@ var resourceCatalog = []resourceKind{
 	{key: "swiftkernels", displayName: "Kernels", gvr: gvr("kernel.kubeswift.io", "v1alpha1", "swiftkernels"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
 	{key: "swiftguestclasses", displayName: "Guest Classes", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestclasses"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
 	{key: "swiftguestpools", displayName: "Guest Pools", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "replicas"}, project: poolProject},
+	{key: "swiftsandboxes", displayName: "Sandboxes", gvr: gvr("sandbox.kubeswift.io", "v1alpha1", "swiftsandboxes"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "image", "node", "ip"}, project: sandboxProject},
+	{key: "swiftsandboxpools", displayName: "Sandbox Pools", gvr: gvr("sandbox.kubeswift.io", "v1alpha1", "swiftsandboxpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "warm", "claimed", "min"}, project: sandboxPoolProject},
 	{key: "swiftseedprofiles", displayName: "Seed Profiles", gvr: gvr("seed.kubeswift.io", "v1alpha1", "swiftseedprofiles"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
 	{key: "swiftsnapshots", displayName: "Snapshots", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshots"), namespaced: true, category: "KubeSwift", columns: []string{"guest", "backend", "phase"}, project: snapshotProject},
 	{key: "swiftsnapshotschedules", displayName: "Snapshot Schedules", gvr: gvr("snapshot.kubeswift.io", "v1alpha1", "swiftsnapshotschedules"), namespaced: true, category: "KubeSwift", columns: []string{"schedule", "suspend", "lastRun"}, project: scheduleProject},
@@ -283,6 +285,27 @@ func gpuNodeProject(u *unstructured.Unstructured) map[string]string {
 		"phase": nestedStr(u, "status", "phase"),
 		"gpus":  nestedIntStr(u, "status", "gpuCount"),
 		"free":  nestedIntStr(u, "status", "freeGPUs"),
+	}
+}
+
+// sandboxProject reports a SwiftSandbox's phase, image, node, and guest IP.
+func sandboxProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"phase": nestedStr(u, "status", "phase"),
+		"image": nestedStr(u, "spec", "image"),
+		"node":  nestedStr(u, "status", "nodeName"),
+		"ip":    nestedStr(u, "status", "network", "primaryIP"),
+	}
+}
+
+// sandboxPoolProject reports a SwiftSandboxPool's phase, warm/claimed slot counts,
+// and the configured minimum warm buffer.
+func sandboxPoolProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"phase":   nestedStr(u, "status", "phase"),
+		"warm":    nestedIntStr(u, "status", "warmReplicas"),
+		"claimed": nestedIntStr(u, "status", "claimedReplicas"),
+		"min":     nestedIntStr(u, "spec", "minWarm"),
 	}
 }
 

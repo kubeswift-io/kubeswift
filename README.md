@@ -29,7 +29,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 - **Services** — expose guest ports as Kubernetes Services via `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
 - **Storage** — per-guest root-disk cloning sized from a class; optional data disks (blank/sized, image-backed, or attached PVC); RWX+Block for live-migration-capable volumes.
 - **Snapshots & clones** — disk-only (CSI) and memory+disk (local/S3) snapshots, scheduled snapshots, and `cloneFromSnapshot` for fast VM fan-out.
-- **Sandboxes** — ephemeral OCI-rootfs microVMs ([SwiftSandbox](docs/sandbox/overview.md)) for CI runners, agent/code execution, and untrusted code; restricted-by-default egress.
+- **Sandboxes** — ephemeral OCI-rootfs microVMs ([SwiftSandbox](docs/sandbox/overview.md)) for CI runners, agent/code execution, and untrusted code; restricted-by-default egress, cosign verify-before-boot, and a block or virtio-fs rootfs. Warm pools (`SwiftSandboxPool`) keep pre-booted slots ready for sub-second checkout.
 - **OCI registry artifacts** — golden VM images (`SwiftImage.spec.source.oci` + `swiftctl image publish`, cosign-signed with verify-on-pull) and VM snapshots / full-state cold migration (`SwiftSnapshot` `backend.type: oci`) stored in any OCI registry, for cross-cluster and edge distribution.
 - **Migration** — offline migration on any storage, and live migration (sub-second downtime) with optional mTLS transport and `kubectl drain` integration.
 - **Fleets** — `SwiftGuestPool` gives ReplicaSet-style scaling with rolling updates, topology spread, and a PVC per replica.
@@ -52,9 +52,10 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | Cron-scheduled snapshots + keep-N |
 | SwiftMigration | smig | `migration.kubeswift.io` | Namespaced | Move a guest between nodes |
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | Ephemeral OCI-rootfs microVM |
+| SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | Warm pool of pre-booted sandboxes for sub-second checkout |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | Member cluster federated by the gateway hub |
 
-14 CRDs, all `v1alpha1`.
+15 CRDs, all `v1alpha1`.
 
 ## Documentation
 
