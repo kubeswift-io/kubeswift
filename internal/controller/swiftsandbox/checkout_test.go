@@ -19,22 +19,24 @@ import (
 )
 
 func TestPoolExecArgs(t *testing.T) {
-	// command + args + env + cwd -> argv/env/cwd (no registry pull).
+	// command + args + cwd + the pool image env merged with spec.env (spec overrides
+	// by key), no registry pull.
 	sb := &sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{
 		Command:    []string{"sh", "-c"},
 		Args:       []string{"echo hi"},
 		Env:        []corev1.EnvVar{{Name: "A", Value: "1"}},
 		WorkingDir: "/tmp",
 	}}
-	argv, env, cwd := poolExecArgs(sb)
+	argv, env, cwd := poolExecArgs(sb, []string{"PATH=/usr/bin", "A=image"})
 	if strings.Join(argv, " ") != "sh -c echo hi" {
 		t.Errorf("argv = %v", argv)
 	}
-	if strings.Join(env, ",") != "A=1" || cwd != "/tmp" {
+	// image PATH kept; A overridden by spec.env; image order preserved.
+	if strings.Join(env, ",") != "PATH=/usr/bin,A=1" || cwd != "/tmp" {
 		t.Errorf("env=%v cwd=%q", env, cwd)
 	}
 	// No command -> nil argv (caller cold-falls-back to the image entrypoint).
-	if a, _, _ := poolExecArgs(&sandboxv1alpha1.SwiftSandbox{}); a != nil {
+	if a, _, _ := poolExecArgs(&sandboxv1alpha1.SwiftSandbox{}, nil); a != nil {
 		t.Errorf("no-command argv should be nil, got %v", a)
 	}
 }

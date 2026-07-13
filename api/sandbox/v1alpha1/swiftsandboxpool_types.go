@@ -110,6 +110,12 @@ type SwiftSandboxPoolStatus struct {
 	// Rootfs reports the resolved+materialized image shared by every slot.
 	// +optional
 	Rootfs *SandboxRootfsStatus `json:"rootfs,omitempty"`
+	// ImageEnv is the pool image's config env ("KEY=VAL"), resolved once at
+	// materialize. A checkout merges its SwiftSandbox.spec.env over this so the
+	// injected workload sees the image env too — parity with a cold sandbox,
+	// without a per-checkout registry pull.
+	// +optional
+	ImageEnv []string `json:"imageEnv,omitempty"`
 	// +optional
 	// +listType=map
 	// +listMapKey=type
