@@ -82,12 +82,6 @@ type SwiftSandboxPoolSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxWarm int32 `json:"maxWarm,omitempty"`
-
-	// IdleTTL, when set, lets the pool scale unclaimed slots back toward zero after they
-	// have sat idle at least this long — so a quiet pool stops holding RAM. Unset = hold
-	// minWarm indefinitely.
-	// +optional
-	IdleTTL *metav1.Duration `json:"idleTTL,omitempty"`
 }
 
 // SwiftSandboxPoolPhase is the pool lifecycle phase.
