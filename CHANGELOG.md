@@ -6,26 +6,26 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
-### Changed
+---
 
-**Sandbox `spec.workingDir` honored on cold boot**
-- The bridge-initramfs ran the workload as `chroot /newroot argv`, which cannot
-  set the working directory, so `spec.workingDir` was accepted-but-ignored on the
-  cold-boot path (it already worked on warm-pool checkout via the vsock agent).
-  The bridge now parses the config-disk CWD and, when set, runs the workload via
-  the guest agent's new one-shot mode (`kubeswift-guest-agent --run` — chroot +
-  chdir + exec in one process, distroless-safe, foreground so the bridge stays
-  PID 1). Ships as sandbox kernel `6.6.10` (initramfs-only; bzImage unchanged).
+## [v0.11.0] — 2026-07-13
 
-**Sandbox warm-pool efficiency**
-- `sandbox-materialize` now takes a **node-local per-digest lock** around the
-  pull+extract step, so concurrent materializes of the same image on the same
-  node (warm-pool slots when `minWarm` exceeds the node count, or co-located
-  sandboxes) serialize — the first pulls, the rest cache-hit — instead of N
-  redundant parallel pulls of the same layers. The digest cache was already
-  correct (atomic rename); this removes the wasted bandwidth.
+MicroVM platform expansion. Surfaces **SwiftSandbox / SwiftSandboxPool in the
+kubeswift-ui** (a new gateway `SandboxService` read + write plane and live UI
+views), adds **image signing** and a **virtio-fs rootfs** option to sandboxes,
+honors `spec.workingDir` on cold boot, and dedups warm-pool image pulls. Builds
+on the v0.10.0 warm-pool arc; all cluster-validated on the dev fleet.
 
 ### Added
+
+**MicroVM UI surfacing (SwiftSandbox / SwiftSandboxPool in the web UI)**
+- A new gateway **`SandboxService`** (Connect-RPC): a fleet-fan-out read plane
+  (`ListSandboxes` + a `WatchSandboxes` server-stream, `ListSandboxPools`, detail
+  RPCs — per-cluster error surfacing + impersonation) and a write plane
+  (`CreateSandbox`/`DeleteSandbox`, `CreateSandboxPool`/`DeleteSandboxPool` as the
+  signed-in user). The kubeswift-ui gains a live **Sandboxes** view (sandbox +
+  warm-pool tables) and a create drawer. The member RBAC role gains
+  `sandbox.kubeswift.io` get/list/watch/create/delete.
 
 **Sandbox virtio-fs rootfs**
 - **`SwiftSandbox.spec.rootfsMode: block|virtiofs`** (and the same on
@@ -46,6 +46,30 @@ All notable changes to KubeSwift are documented here.
   an unverified rootfs. A pool verifies every warm slot. Mirrors `SwiftImage`'s
   `spec.source.oci.verifyKeySecretRef`, reusing the proven `internal/oci.Verify`.
   Immutable after create; requires a TLS registry (cosign speaks HTTPS only).
+
+### Changed
+
+**Sandbox `spec.workingDir` honored on cold boot**
+- The bridge-initramfs ran the workload as `chroot /newroot argv`, which cannot
+  set the working directory, so `spec.workingDir` was accepted-but-ignored on the
+  cold-boot path (it already worked on warm-pool checkout via the vsock agent).
+  The bridge now parses the config-disk CWD and, when set, runs the workload via
+  the guest agent's new one-shot mode (`kubeswift-guest-agent --run` — chroot +
+  chdir + exec in one process, distroless-safe, foreground so the bridge stays
+  PID 1). Ships as sandbox kernel `6.6.10` (initramfs-only; bzImage unchanged).
+
+**Sandbox warm-pool efficiency**
+- `sandbox-materialize` now takes a **node-local per-digest lock** around the
+  pull+extract step, so concurrent materializes of the same image on the same
+  node (warm-pool slots when `minWarm` exceeds the node count, or co-located
+  sandboxes) serialize — the first pulls, the rest cache-hit — instead of N
+  redundant parallel pulls of the same layers. The digest cache was already
+  correct (atomic rename); this removes the wasted bandwidth.
+
+### Docs
+
+- Clarified the networking operations guide. Community contribution — thanks
+  [@evrardjp](https://github.com/evrardjp) (#377).
 
 ---
 
