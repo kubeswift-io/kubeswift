@@ -50,7 +50,7 @@ kubectl logs -n kubeswift-system deployment/controller-manager --previous
 
 - **OCI install:** Use a chart version whose images exist. The chart (as of the fix) defaults image tags to match the chart version. Reinstall or upgrade:
   ```bash
-  helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1.0 -n kubeswift-system \
+  helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.10.0 -n kubeswift-system \
     --set controllerManager.image.tag=v0.1.0 \
     --set swiftletd.image.tag=v0.1.0
   ```

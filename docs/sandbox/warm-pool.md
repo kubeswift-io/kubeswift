@@ -9,12 +9,13 @@ materialize + boot (~15s). This page assumes you've read
 > **Status: cluster-validated (2026-07-12).** Checkout claims a warm slot and
 > runs the workload to `Completed`/`Failed`; the consumed slot is destroyed and
 > the pool replenishes a fresh one; a miss falls back to a cold boot. First
-> ships in **v0.9.x**.
+> ships in **v0.10.0**.
 
 ## How checkout works
 
 - The pool boots `minWarm` **idle** slots — each an independent microVM of the
-  pool image with no workload, waiting.
+  pool image with no workload, waiting. The slot idles in the boot bridge (not
+  the image), so **distroless / shell-less images can be pooled**.
 - A `SwiftSandbox` with `spec.poolRef` **claims** one warm slot and injects its
   `command`/`args`/`env` into the already-booted VM over vsock. The VM is
   running, so the workload starts immediately.
@@ -68,9 +69,9 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | `imagePullSecret` | string | — | docker-registry Secret (same namespace) for a private `image`. |
 | `cpu` | int32 | `1` | vCPUs per slot. |
 | `memory` | Quantity | `512Mi` | RAM per slot. |
-| `minWarm` | int32 | `0` | Warm slots to keep ready. The warm buffer the pool maintains. |
+| `minWarm` | int32 | `0` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
-| `idleTTL` | Duration | — | **Accepted but not honored in v1** — the pool holds `minWarm` and does not scale idle slots down. Tracked for a follow-up. |
+| `idleTTL` | Duration | — | **Accepted but not honored in v1** — use the scale subresource + an HPA for scale-to-zero (see [Scaling](#scaling)), not this field. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -109,9 +110,10 @@ spec:
 - The workload **must** have a `command` to check out — with no command the
   image entrypoint has to be resolved, which only the cold path knows, so a
   command-less pooled sandbox cold-falls-back.
-- Unlike the cold path, `env` **and** `workingDir` are honored on a checkout —
-  the workload is injected over the same vsock exec channel `swiftctl sandbox
-  exec` uses, which sets both.
+- `env` **and** `workingDir` are honored on a checkout — the workload is
+  injected over the vsock exec channel. The pool image's own config env is
+  merged in too (resolved once at materialize, no per-checkout pull), so the
+  workload sees **image env + your `spec.env`**, same as a cold sandbox.
 - `status.podRef` points at the claimed slot pod (`<pool>-slot-<x>`), not at a
   pod named after the sandbox. `status.exitCode` carries the workload's real
   exit code just like a cold sandbox.
@@ -127,6 +129,21 @@ materializes on the slot's node), so a checkout that lands on any node is more
 likely to find a warm slot *there*. The constraint is soft — warming never
 blocks just because one node is momentarily full.
 
+## Scaling
+
+The warm buffer is a scale subresource on `spec.minWarm`, so it scales like a
+`SwiftGuestPool`:
+
+```bash
+kubectl scale sboxpool <name> --replicas=10   # sets minWarm
+```
+
+and an HPA can target the pool. The natural signal is the checkout cold-fallback
+rate (`kubeswift_sandbox_checkouts_total{result="cold"}`): grow the buffer when
+checkouts miss, shrink when quiet. An HPA with `minReplicas: 0` drains a quiet
+pool to zero and re-warms on demand — the scale-to-zero the `idleTTL` field was
+reaching for (use scaling, not `idleTTL`, which is unhonored in v1).
+
 ## Observability
 
 `kubeswift_sandbox_checkouts_total{result}` counts checkouts by outcome:
@@ -137,10 +154,9 @@ rate. Pool health is `kubectl get sboxpool` (phase + `warmReplicas`).
 
 ## Limitations (v1)
 
-- **`idleTTL` scale-down is not honored** — the pool holds `minWarm` warm slots;
-  it does not shrink an idle pool. Set `minWarm` to what you want held.
-- **The injected workload's env is `spec.env` only** — the pool image's own env
-  is not merged for the injected command (a warm slot already booted the image).
+- **`idleTTL` is not honored** — the pool holds `minWarm`. For scale-to-zero on a
+  quiet pool, use the scale subresource with an HPA (see [Scaling](#scaling)),
+  not this field.
 - Keep the pooled sandbox's `image` the same as the pool's `image`; the checkout
   runs your command inside the slot's already-booted rootfs, so a different
   `image` on the sandbox is ignored for a hit (and only applies if it
