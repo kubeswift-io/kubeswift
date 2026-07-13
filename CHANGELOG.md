@@ -8,6 +8,51 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.10.0] — 2026-07-13
+
+Adds **SwiftSandbox warm pools** — a `SwiftSandboxPool` keeps N pre-booted,
+workload-less microVMs ready so a `SwiftSandbox` with `spec.poolRef` checks out
+in sub-second time instead of paying the ~15s cold materialize + boot. Built for
+bursty same-image workloads (CI fan-out, AI-agent step execution). Ships the
+feature complete: checkout claims a warm slot and injects the workload over
+vsock (consume-and-replenish), the pool scales like a `SwiftGuestPool`, and
+warming is image-independent so distroless images can be pooled. All
+cluster-validated on the dev cluster.
+
+### Added
+
+**Warm pools (`SwiftSandboxPool`)**
+- `SwiftSandboxPool` CRD + controller — maintains a warm buffer of pre-booted
+  slots for one image (`minWarm`/`maxWarm`), node-spread one-per-node across
+  kernel-nodes. (#363, #364)
+- **`SwiftSandbox.spec.poolRef`** — checkout claims a warm slot (CAS re-parent)
+  and injects the sandbox's `command`/`args`/`env` over vsock, sub-second; the
+  consumed slot is destroyed and the pool replenishes. Falls back to the cold
+  path on a miss (no warm slot, or no command). (#365, #366)
+- **Scale subresource** — `kubectl scale sboxpool <name> --replicas=N` sets the
+  warm buffer and an HPA can target it; scale-down drains excess slots, so an
+  HPA with `minReplicas: 0` on the checkout cold-rate drains a quiet pool and
+  re-warms on demand. (#370)
+- **Image-independent warming** — a warm slot idles in the initramfs
+  (`kubeswift.idle=1`) instead of running the image's `sleep`, so distroless
+  images (no shell/sleep — the untrusted-code case) can be pooled. Kernel
+  `kernels/sandbox:6.6.9`. (#372)
+- **Image-env merge** — a checkout's injected workload gets the pool image's
+  config env merged with `spec.env` (parity with a cold sandbox), resolved once
+  at materialize with no per-checkout pull. (#371)
+
+**Observability**
+- `kubeswift_sandbox_checkouts_total{result}` (hit/cold), `kubeswift_sandbox_total{result}`
+  (completed/failed), and state gauges `kubeswift_sandboxes` / `kubeswift_sandbox_pools`
+  by phase + per-pool `kubeswift_sandbox_pool_{warm,claimed}_replicas`. New
+  **Sandboxes & Warm Pools** Grafana dashboard. (#367, #373)
+- `swiftctl sandbox logs`/`exec`/`attach` now target a checked-out sandbox's
+  claimed slot (via `status.podRef`). (#369)
+
+Operator guide: [`docs/sandbox/warm-pool.md`](docs/sandbox/warm-pool.md). (#368)
+
+---
+
 ## [v0.9.0] — 2026-07-12
 
 Adds **SwiftSandbox** — a third boot mode alongside disk boot and kernel
