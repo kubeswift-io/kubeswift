@@ -284,6 +284,19 @@ var (
 		[]string{"policy", "result"},
 	)
 
+	// SandboxTotal counts SwiftSandboxes that reached a terminal phase, by result
+	// (completed | failed). Recorded once per sandbox on the non-terminal ->
+	// terminal transition. Robust to the ephemeral+TTL nature of sandboxes (the
+	// kubeswift_sandboxes phase gauge is transient); this is the run-throughput /
+	// failure-rate signal over time.
+	SandboxTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_total",
+			Help: "SwiftSandboxes that reached a terminal phase, by result (completed | failed)",
+		},
+		[]string{"result"},
+	)
+
 	// SandboxCheckoutsTotal counts SwiftSandbox pool checkouts by result:
 	// "hit" (claimed a pre-booted warm slot — the fast path) or "cold" (no warm
 	// slot available, or no command to inject — fell back to the cold
@@ -349,6 +362,7 @@ func init() {
 		GPUReleasesTotal,
 		DrainMigrationsTotal,
 		ImageImportTotal,
+		SandboxTotal,
 		SandboxCheckoutsTotal,
 	)
 }

@@ -12,6 +12,7 @@ import (
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
@@ -109,6 +110,23 @@ var (
 		"kubeswift_snapshot_schedule_last_success_timestamp_seconds",
 		"Unix time a SwiftSnapshotSchedule's snapshot last reached Ready",
 		[]string{"namespace", "schedule"}, nil)
+
+	sandboxesDesc = prometheus.NewDesc(
+		"kubeswift_sandboxes",
+		"SwiftSandboxes by namespace and phase",
+		[]string{"namespace", "phase"}, nil)
+	sandboxPoolsDesc = prometheus.NewDesc(
+		"kubeswift_sandbox_pools",
+		"SwiftSandboxPools by namespace and phase",
+		[]string{"namespace", "phase"}, nil)
+	sandboxPoolWarmDesc = prometheus.NewDesc(
+		"kubeswift_sandbox_pool_warm_replicas",
+		"Ready, unclaimed warm slots per SwiftSandboxPool",
+		[]string{"namespace", "pool"}, nil)
+	sandboxPoolClaimedDesc = prometheus.NewDesc(
+		"kubeswift_sandbox_pool_claimed_replicas",
+		"Slots currently checked out per SwiftSandboxPool",
+		[]string{"namespace", "pool"}, nil)
 )
 
 var (
@@ -141,6 +159,19 @@ var (
 		snapshotv1alpha1.SwiftSnapshotPhaseReady,
 		snapshotv1alpha1.SwiftSnapshotPhaseFailed,
 	}
+	sandboxPhases = []sandboxv1alpha1.SwiftSandboxPhase{
+		sandboxv1alpha1.SwiftSandboxPending,
+		sandboxv1alpha1.SwiftSandboxMaterializing,
+		sandboxv1alpha1.SwiftSandboxRunning,
+		sandboxv1alpha1.SwiftSandboxCompleted,
+		sandboxv1alpha1.SwiftSandboxFailed,
+	}
+	sandboxPoolPhases = []sandboxv1alpha1.SwiftSandboxPoolPhase{
+		sandboxv1alpha1.SwiftSandboxPoolPending,
+		sandboxv1alpha1.SwiftSandboxPoolWarming,
+		sandboxv1alpha1.SwiftSandboxPoolReady,
+		sandboxv1alpha1.SwiftSandboxPoolDegraded,
+	}
 )
 
 // Describe implements prometheus.Collector.
@@ -158,6 +189,10 @@ func (c *StateCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- gpuNodeInfoDesc
 	ch <- gpuNodeLastDiscoveryDesc
 	ch <- scheduleLastSuccessDesc
+	ch <- sandboxesDesc
+	ch <- sandboxPoolsDesc
+	ch <- sandboxPoolWarmDesc
+	ch <- sandboxPoolClaimedDesc
 }
 
 // Collect implements prometheus.Collector. Each type is collected
@@ -175,6 +210,45 @@ func (c *StateCollector) Collect(ch chan<- prometheus.Metric) {
 	c.collectMigrations(ctx, ch)
 	c.collectGPUNodes(ctx, ch)
 	c.collectSchedules(ctx, ch)
+	c.collectSandboxes(ctx, ch)
+}
+
+func (c *StateCollector) collectSandboxes(ctx context.Context, ch chan<- prometheus.Metric) {
+	var list sandboxv1alpha1.SwiftSandboxList
+	if err := c.reader.List(ctx, &list); err == nil {
+		byNSPhase := map[string]map[sandboxv1alpha1.SwiftSandboxPhase]int{}
+		for i := range list.Items {
+			s := &list.Items[i]
+			if byNSPhase[s.Namespace] == nil {
+				byNSPhase[s.Namespace] = map[sandboxv1alpha1.SwiftSandboxPhase]int{}
+			}
+			byNSPhase[s.Namespace][s.Status.Phase]++
+		}
+		for ns, phases := range byNSPhase {
+			for _, p := range sandboxPhases {
+				gauge(ch, sandboxesDesc, float64(phases[p]), ns, string(p))
+			}
+		}
+	}
+
+	var pools sandboxv1alpha1.SwiftSandboxPoolList
+	if err := c.reader.List(ctx, &pools); err == nil {
+		byNSPhase := map[string]map[sandboxv1alpha1.SwiftSandboxPoolPhase]int{}
+		for i := range pools.Items {
+			p := &pools.Items[i]
+			if byNSPhase[p.Namespace] == nil {
+				byNSPhase[p.Namespace] = map[sandboxv1alpha1.SwiftSandboxPoolPhase]int{}
+			}
+			byNSPhase[p.Namespace][p.Status.Phase]++
+			gauge(ch, sandboxPoolWarmDesc, float64(p.Status.WarmReplicas), p.Namespace, p.Name)
+			gauge(ch, sandboxPoolClaimedDesc, float64(p.Status.ClaimedReplicas), p.Namespace, p.Name)
+		}
+		for ns, phases := range byNSPhase {
+			for _, ph := range sandboxPoolPhases {
+				gauge(ch, sandboxPoolsDesc, float64(phases[ph]), ns, string(ph))
+			}
+		}
+	}
 }
 
 func gauge(ch chan<- prometheus.Metric, desc *prometheus.Desc, v float64, labels ...string) {
