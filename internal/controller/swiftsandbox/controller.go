@@ -22,6 +22,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
@@ -204,6 +205,12 @@ func (r *SwiftSandboxReconciler) terminal(ctx context.Context, sb *sandboxv1alph
 	if sb.Status.TerminalAt == nil {
 		now := metav1.Now()
 		sb.Status.TerminalAt = &now
+		// Once per sandbox, on the non-terminal -> terminal transition.
+		result := "failed"
+		if phase == sandboxv1alpha1.SwiftSandboxCompleted {
+			result = "completed"
+		}
+		metrics.SandboxTotal.WithLabelValues(result).Inc()
 	}
 	sb.Status.Phase = phase
 	sb.Status.Message = msg
