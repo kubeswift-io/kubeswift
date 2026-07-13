@@ -15,8 +15,10 @@ spec:
   image: docker.io/library/alpine:3.20
   cpu: 1
   memory: 512Mi
-  minWarm: 2            # keep 2 ready slots (spread across kernel-nodes)
+  minWarm: 2            # keep 2 ready slots (spread across kernel-nodes).
+                        # scale-subresource target: kubectl scale sboxpool <name> --replicas=N
   maxWarm: 6            # never hold more than 6 warm slots
-  idleTTL: 30m          # scale idle slots back toward 0 after 30m quiet
+  # idleTTL is not honored in v1 — for scale-to-zero on a quiet pool, use an HPA
+  # on the scale subresource (see docs/sandbox/warm-pool.md#scaling), not idleTTL.
   network:
     mode: restricted    # restricted | open | none — same as SwiftSandbox
