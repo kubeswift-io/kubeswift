@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.9`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.10`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller
@@ -67,7 +67,7 @@ Ready-to-edit manifests and notes:
 | `command` | []string | — | Overrides the image's ENTRYPOINT. Empty uses the image's own Entrypoint+Cmd. |
 | `args` | []string | — | Appended to `command` (or the image's CMD when `command` is empty). |
 | `env` | []EnvVar | — | Merged over the image's config env. |
-| `workingDir` | string | — | Overrides the image's working directory. **Accepted but not honored in v1** — the workload always starts in `/`. |
+| `workingDir` | string | — | Overrides the image's working directory. Honored on both the cold-boot path (the bridge runs the workload via the guest agent's chroot+chdir+exec) and the warm-pool checkout path. Must exist in the image. |
 | `timeout` | Duration | none | Wall-clock run cap. Past `startedAt + timeout` the controller force-terminates the sandbox to `Failed` (`DeadlineExceeded`). |
 | `ttl` | Duration | none | Once the sandbox has been terminal (`Completed`/`Failed`) for at least `ttl`, the controller deletes it and frees the node's rootfs-cache reference. |
 | `rootfsMode` | enum | `block` | How the OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (the unpacked tree over virtio-fs, tag `sandboxroot` — skips `mkfs.ext4` and the ext4 size floor, shares the host page cache). Same RO-base + writable tmpfs-overlay either way. |

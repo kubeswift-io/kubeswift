@@ -361,3 +361,17 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+// TestRunOneShot_ErrorPaths covers the one-shot exec failure modes without needing
+// root/chroot: an empty exec-root disables exec, and an empty argv is rejected —
+// both return 127 (the shell "cannot run" convention).
+func TestRunOneShot_ErrorPaths(t *testing.T) {
+	// No exec-root -> buildExecCmd refuses (exec disabled) -> 127.
+	if code := runOneShot("", "/work", []string{"/bin/true"}); code != 127 {
+		t.Errorf("empty exec-root: code = %d, want 127", code)
+	}
+	// Empty argv -> buildExecCmd refuses -> 127.
+	if code := runOneShot("/newroot", "/work", nil); code != 127 {
+		t.Errorf("empty argv: code = %d, want 127", code)
+	}
+}

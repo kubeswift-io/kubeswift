@@ -126,6 +126,7 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 			KUBESWIFT-EXEC-END) break ;;
 			ARGV) set -- "$@" "$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
 			ENV)  export "$(printf '%s' "$val" | base64 -d 2>/dev/null)" 2>/dev/null || true ;;
+			CWD)  WORKDIR="$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
 		esac
 	done
 	IFS=$oldifs
@@ -154,8 +155,12 @@ fi
 # both work; chroot execs the binary directly, so distroless images work with no
 # shell). When it exits we capture its code, emit it on the console for swiftletd to
 # read, and power the VM off so CH exits and the launcher pod reaches a terminal state.
-# NOTE: spec.workingDir is NOT honored in v1 — chroot starts the workload at / and a
-# chdir wrapper needs a guest shell (deferred). The workload starts in /.
+# spec.workingDir (config-disk CWD): busybox `chroot` cannot set the child's cwd, and a
+# `cd && exec` wrapper would need a guest shell (breaks distroless). When a workingDir is
+# set we instead run the workload via the baked-in guest agent's one-shot mode
+# (`--run --exec-root=/newroot --cwd=<dir>`), which does chroot+chdir+exec in one Go
+# process with in-chroot PATH resolution — foreground, so the bridge stays PID 1 and
+# still reaps the exit code. No workingDir (or no agent) falls back to plain `chroot`.
 # Start the vsock control agent (swiftctl sandbox exec/attach) in the background if it
 # was baked into the initramfs. It runs in the initramfs context (has AF_VSOCK) and
 # chroots into /newroot per exec request. Best-effort — a missing agent just means no
@@ -177,7 +182,12 @@ if [ "$IDLE" = 1 ]; then
 fi
 
 echo "sandbox-bridge: OCI rootfs ($ROOTFS_KIND) + tmpfs overlay; run $1 ($# arg(s))"
-chroot /newroot "$@"
+if [ -n "$WORKDIR" ] && [ "$WORKDIR" != "/" ] && [ -x /usr/local/bin/kubeswift-guest-agent ]; then
+	echo "sandbox-bridge: workingDir=$WORKDIR (via guest-agent --run)"
+	/usr/local/bin/kubeswift-guest-agent --run --exec-root=/newroot --cwd="$WORKDIR" -- "$@"
+else
+	chroot /newroot "$@"
+fi
 code=$?
 printf 'KUBESWIFT-EXIT-CODE=%s\n' "$code" >/dev/console 2>/dev/null
 # Let CH flush the exit line to the host console file before we power off (swiftletd

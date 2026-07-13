@@ -8,6 +8,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Changed
 
+**Sandbox `spec.workingDir` honored on cold boot**
+- The bridge-initramfs ran the workload as `chroot /newroot argv`, which cannot
+  set the working directory, so `spec.workingDir` was accepted-but-ignored on the
+  cold-boot path (it already worked on warm-pool checkout via the vsock agent).
+  The bridge now parses the config-disk CWD and, when set, runs the workload via
+  the guest agent's new one-shot mode (`kubeswift-guest-agent --run` — chroot +
+  chdir + exec in one process, distroless-safe, foreground so the bridge stays
+  PID 1). Ships as sandbox kernel `6.6.10` (initramfs-only; bzImage unchanged).
+
 **Sandbox warm-pool efficiency**
 - `sandbox-materialize` now takes a **node-local per-digest lock** around the
   pull+extract step, so concurrent materializes of the same image on the same
