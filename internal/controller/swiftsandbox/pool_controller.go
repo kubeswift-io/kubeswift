@@ -3,6 +3,7 @@ package swiftsandbox
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -76,6 +77,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	var ready, warmLive, claimed int
+	var warmPods []*corev1.Pod
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
@@ -84,6 +86,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		if p.Labels[SlotStateLabelKey] == slotStateWarm {
 			warmLive++
+			warmPods = append(warmPods, p)
 			if launcherReady(p) {
 				ready++
 			}
@@ -105,6 +108,13 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	for i := 0; i < want; i++ {
 		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	// Drain excess warm slots when the desired count dropped below the live count
+	// (a `kubectl scale`/HPA scale-down). want>0 and this are mutually exclusive.
+	for _, p := range pickWarmToDrain(warmPods, slotsToDelete(int(pool.Spec.MinWarm), warmLive)) {
+		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
 	}
@@ -132,6 +142,31 @@ func slotsToCreate(minWarm, maxWarm, warmLive int) int {
 		want = 0
 	}
 	return want
+}
+
+// slotsToDelete is the drain-side arithmetic: how many warm slots to remove this
+// pass because the live count exceeds the desired minWarm — e.g. after
+// `kubectl scale sboxpool --replicas=N` or an HPA lowered it. Without this the
+// scale subresource could only ratchet the buffer up. Claimed slots are never
+// counted here (they belong to a SwiftSandbox).
+func slotsToDelete(minWarm, warmLive int) int {
+	if warmLive > minWarm {
+		return warmLive - minWarm
+	}
+	return 0
+}
+
+// pickWarmToDrain selects up to n warm slot pods to delete, preferring
+// not-launcher-ready (still-warming) slots so a ready, checkout-serviceable slot
+// is drained last.
+func pickWarmToDrain(warm []*corev1.Pod, n int) []*corev1.Pod {
+	if n >= len(warm) {
+		return warm
+	}
+	sort.SliceStable(warm, func(i, j int) bool {
+		return !launcherReady(warm[i]) && launcherReady(warm[j])
+	})
+	return warm[:n]
 }
 
 // warmSlotTopologySpread spreads a pool's warm slots one-per-node across kernel-nodes
