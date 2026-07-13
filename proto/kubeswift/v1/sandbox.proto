@@ -1,0 +1,219 @@
+syntax = "proto3";
+
+package kubeswift.v1;
+
+import "google/protobuf/timestamp.proto";
+import "kubeswift/v1/common.proto";
+
+option go_package = "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1";
+
+// Sandbox is a UI-shaped, denormalized view of a SwiftSandbox across the fleet
+// (the ephemeral OCI-rootfs microVM). Hand-shaped like Guest (decision D8) — a
+// flat row for the inventory table, NOT a 1:1 mirror of the CRD.
+message Sandbox {
+  ObjectRef ref = 1;
+  // phase is status.phase (Pending|Materializing|Running|Completed|Failed).
+  string phase = 2;
+  // image is spec.image (the OCI image booted as the rootfs).
+  string image = 3;
+  string node_name = 4;
+  // primary_ip is status.network.primaryIP (absent for network.mode: none).
+  string primary_ip = 5;
+  // network_mode is spec.network.mode (restricted|open|none).
+  string network_mode = 6;
+  // exit_code is status.exitCode; meaningful only once phase is terminal
+  // (Completed/Failed) — the UI reads it against phase.
+  int32 exit_code = 7;
+  // pool_ref is spec.poolRef.name — non-empty when this sandbox is a warm-pool
+  // checkout (its podRef then points at the claimed slot, not a same-named pod).
+  string pool_ref = 8;
+  int32 cpu = 9;
+  int64 memory_mib = 10;
+  google.protobuf.Timestamp created_at = 11;
+  // terminal_at is status.terminalAt (the anchor for spec.ttl cleanup).
+  google.protobuf.Timestamp terminal_at = 12;
+  repeated Condition conditions = 13;
+  // labels carries the sandbox.kubeswift.io/* labels (pool membership, slot
+  // state) the UI groups by.
+  map<string, string> labels = 14;
+}
+
+// SandboxPool is a UI-shaped view of a SwiftSandboxPool — the warm buffer of
+// pre-booted slots for one image.
+message SandboxPool {
+  ObjectRef ref = 1;
+  // phase is status.phase (Pending|Warming|Ready|Degraded).
+  string phase = 2;
+  string image = 3;
+  // min_warm is spec.minWarm — the desired warm buffer + the scale-subresource
+  // target (kubectl scale sboxpool).
+  int32 min_warm = 4;
+  // max_warm is spec.maxWarm (0 = no cap beyond minWarm).
+  int32 max_warm = 5;
+  // warm_replicas is status.warmReplicas (ready, unclaimed slots).
+  int32 warm_replicas = 6;
+  // claimed_replicas is status.claimedReplicas (slots currently checked out).
+  int32 claimed_replicas = 7;
+  int32 cpu = 8;
+  int64 memory_mib = 9;
+  string network_mode = 10;
+  google.protobuf.Timestamp created_at = 11;
+  repeated Condition conditions = 12;
+}
+
+// SandboxSpec is the structured config of a SwiftSandbox, so the drawer can show
+// it and the Create form can clone it without re-deriving from the flat row.
+message SandboxSpec {
+  string image = 1;
+  repeated string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  string working_dir = 5;
+  string network_mode = 6; // restricted | open | none
+  string pool_ref = 7;
+  string kernel_profile_ref = 8;
+  string timeout = 9; // e.g. "10m" (spec.timeout)
+  string ttl = 10; // e.g. "1h" (spec.ttl)
+}
+
+message ListSandboxesRequest {
+  ClusterSelector clusters = 1;
+  // namespace filters within each selected cluster; empty = every namespace the
+  // impersonated user is allowed to see.
+  string namespace = 2;
+  // phase is a minimal server-side filter.
+  string phase = 3;
+  PageRequest page = 4;
+}
+
+message ListSandboxesResponse {
+  repeated Sandbox sandboxes = 1;
+  PageResponse page = 2;
+  repeated ClusterError errors = 3;
+}
+
+message ListSandboxPoolsRequest {
+  ClusterSelector clusters = 1;
+  string namespace = 2;
+  PageRequest page = 3;
+}
+
+message ListSandboxPoolsResponse {
+  repeated SandboxPool pools = 1;
+  PageResponse page = 2;
+  repeated ClusterError errors = 3;
+}
+
+message WatchSandboxesRequest {
+  ClusterSelector clusters = 1;
+  string namespace = 2;
+}
+
+// SandboxEvent is a streamed watch update. Sandboxes are ephemeral and their
+// phase moves fast (Materializing -> Running -> Completed), so a live stream is
+// the primary way the inventory stays current.
+message SandboxEvent {
+  EventType type = 1;
+  Sandbox sandbox = 2;
+  ClusterError error = 3;
+}
+
+message GetSandboxDetailRequest {
+  ObjectRef ref = 1;
+}
+
+message GetSandboxDetailResponse {
+  Sandbox sandbox = 1;
+  SandboxSpec spec = 2;
+}
+
+message GetSandboxPoolDetailRequest {
+  ObjectRef ref = 1;
+}
+
+message GetSandboxPoolDetailResponse {
+  SandboxPool pool = 1;
+}
+
+// CreateSandboxRequest is the structured input the Create-Sandbox form submits.
+// The gateway builds a SwiftSandbox and server-side-applies it AS THE
+// IMPERSONATED USER, so the member's RBAC + the admission webhook are the
+// authority (a denial surfaces, never a silent create).
+message CreateSandboxRequest {
+  string cluster = 1;
+  string namespace = 2;
+  string name = 3;
+  string image = 4; // REQUIRED
+  repeated string command = 5;
+  repeated string args = 6;
+  map<string, string> env = 7;
+  string working_dir = 8;
+  string network_mode = 9; // "" (restricted) | restricted | open | none
+  int32 cpu = 10;
+  int64 memory_mib = 11;
+  // pool_ref checks out from a warm SwiftSandboxPool of the same image instead
+  // of a cold boot (sub-second). Optional.
+  string pool_ref = 12;
+  string kernel_profile_ref = 13; // optional (default "sandbox")
+  string timeout = 14; // optional, e.g. "10m"
+  string ttl = 15; // optional, e.g. "1h"
+  string image_pull_secret = 16; // optional (private registry)
+}
+
+message CreateSandboxResponse {
+  ObjectRef ref = 1;
+}
+
+message DeleteSandboxRequest {
+  ObjectRef ref = 1;
+}
+
+message DeleteSandboxResponse {}
+
+// CreateSandboxPoolRequest builds a warm pool. Same authority model as
+// CreateSandbox.
+message CreateSandboxPoolRequest {
+  string cluster = 1;
+  string namespace = 2;
+  string name = 3;
+  string image = 4; // REQUIRED
+  int32 min_warm = 5;
+  int32 max_warm = 6;
+  int32 cpu = 7;
+  int64 memory_mib = 8;
+  string network_mode = 9; // "" (restricted) | restricted | open | none
+  string kernel_profile_ref = 10; // optional
+  string image_pull_secret = 11; // optional
+}
+
+message CreateSandboxPoolResponse {
+  ObjectRef ref = 1;
+}
+
+message DeleteSandboxPoolRequest {
+  ObjectRef ref = 1;
+}
+
+message DeleteSandboxPoolResponse {}
+
+// SandboxService is the read plane for the MicroVM (SwiftSandbox +
+// SwiftSandboxPool) inventory plus the create/delete write actions. List/Watch
+// fan out across the selected member clusters and merge, stamping the cluster
+// dimension on every row; a per-cluster error surface preserves partial-fleet
+// results (the same shape as GuestService).
+service SandboxService {
+  // Read plane.
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse);
+  rpc WatchSandboxes(WatchSandboxesRequest) returns (stream SandboxEvent);
+  rpc GetSandboxDetail(GetSandboxDetailRequest) returns (GetSandboxDetailResponse);
+  rpc ListSandboxPools(ListSandboxPoolsRequest) returns (ListSandboxPoolsResponse);
+  rpc GetSandboxPoolDetail(GetSandboxPoolDetailRequest) returns (GetSandboxPoolDetailResponse);
+
+  // Write plane (basic actions): create + delete for both kinds. The
+  // impersonated user must be allowed to create/delete the resource on the
+  // target member cluster; the admission webhook validates the spec.
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  rpc CreateSandboxPool(CreateSandboxPoolRequest) returns (CreateSandboxPoolResponse);
+  rpc DeleteSandboxPool(DeleteSandboxPoolRequest) returns (DeleteSandboxPoolResponse);
+}
