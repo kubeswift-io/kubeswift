@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -88,6 +89,27 @@ func CachePathFor(cacheDir, digest string, mode Mode) string {
 		return filepath.Join(cacheDir, name)
 	}
 	return filepath.Join(cacheDir, name+".ext4")
+}
+
+// lockDigest takes a node-local exclusive advisory lock (flock) keyed by digest,
+// serializing concurrent materializes of the same image on the same node. The
+// lock file sits in the shared hostPath cache dir so the flock is visible across
+// init containers. Returns an unlock func; the lock file is intentionally left in
+// place (a 0-byte marker, reused next time — never the materialized artifact).
+func lockDigest(cacheDir, digest string) (func(), error) {
+	name := ".lock-" + strings.ReplaceAll(digest, ":", "-")
+	f, err := os.OpenFile(filepath.Join(cacheDir, name), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open digest lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("flock digest lock: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 // ext4SizeBytes sizes the RO ext4: 1.5x the tree + a 64 MiB floor, rounded up to
@@ -205,7 +227,8 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 		Config:     cfg,
 	}
 
-	// Cache hit: the digest is immutable, so an existing artifact is authoritative.
+	// Fast path — cache hit without locking: the digest is immutable, so an
+	// existing artifact is authoritative and the common case pays no lock cost.
 	if fi, err := os.Stat(rootfsPath); err == nil {
 		res.CacheHit = true
 		res.SizeBytes = artifactSize(rootfsPath, fi)
@@ -214,6 +237,24 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 
 	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
+	}
+
+	// Slow path — acquire a node-local per-digest lock so concurrent materializes
+	// of the SAME image on the SAME node serialize (warm-pool slots when
+	// replicas > nodes, or co-located sandboxes of one image): the first process
+	// pulls + extracts, the rest wait then hit the cache below — instead of N
+	// redundant parallel pulls of the same layers. The lock file lives in the
+	// shared hostPath cache, so the flock is visible across init containers on the
+	// node. Best-effort: if locking fails we proceed unlocked (the temp-dir +
+	// atomic-rename below still keeps concurrent writers correct, just not deduped).
+	if unlock, err := lockDigest(opts.CacheDir, digest); err == nil {
+		defer unlock()
+		// Re-check under the lock: another process may have finished while we waited.
+		if fi, err := os.Stat(rootfsPath); err == nil {
+			res.CacheHit = true
+			res.SizeBytes = artifactSize(rootfsPath, fi)
+			return res, nil
+		}
 	}
 
 	// Flatten the image (whiteouts applied) into a temp tree next to the target,

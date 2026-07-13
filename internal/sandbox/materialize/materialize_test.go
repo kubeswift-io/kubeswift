@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -187,5 +188,67 @@ func TestMaterialize_BlockMissPath(t *testing.T) {
 	}
 	if !res2.CacheHit {
 		t.Error("second materialize of the same digest must be a cache hit")
+	}
+}
+
+// TestLockDigest_Serializes verifies the node-local per-digest lock actually
+// blocks a second holder until the first releases (the warm-pool dedup guard).
+func TestLockDigest_Serializes(t *testing.T) {
+	dir := t.TempDir()
+	const dig = "sha256:deadbeef"
+
+	unlock1, err := lockDigest(dir, dig)
+	if err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+
+	got := make(chan struct{})
+	go func() {
+		unlock2, err := lockDigest(dir, dig)
+		if err != nil {
+			t.Errorf("second lock: %v", err)
+			return
+		}
+		close(got)
+		unlock2()
+	}()
+
+	// While the first lock is held, the second must block.
+	select {
+	case <-got:
+		t.Fatal("second lock acquired while first still held")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Release the first; the second must now acquire promptly.
+	unlock1()
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second lock did not acquire after first released")
+	}
+}
+
+// TestLockDigest_DifferentDigests confirms independent digests do not block each
+// other (only same-image same-node materializes serialize).
+func TestLockDigest_DifferentDigests(t *testing.T) {
+	dir := t.TempDir()
+	u1, err := lockDigest(dir, "sha256:aaaa")
+	if err != nil {
+		t.Fatalf("lock a: %v", err)
+	}
+	defer u1()
+	done := make(chan struct{})
+	go func() {
+		u2, err := lockDigest(dir, "sha256:bbbb")
+		if err == nil {
+			u2()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("distinct digest lock blocked unexpectedly")
 	}
 }
