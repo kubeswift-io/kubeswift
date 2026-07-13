@@ -337,7 +337,7 @@ nmcli connection up vlan-bond0.100
 nmcli connection up vlan-bond0.200
 ```
 
-**Example 3: Running commands on the host in a DaemonSet (hostNetwork) (automated node preparation for all distros. Example only, no teardown.):**
+**Example 3: DaemonSet (hostNetwork, all distros; example only, no teardown):**
 
 ```yaml
 apiVersion: apps/v1
