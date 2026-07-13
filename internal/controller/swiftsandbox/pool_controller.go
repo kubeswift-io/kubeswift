@@ -217,6 +217,9 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 	pool.Status.WarmReplicas = int32(ready)
 	pool.Status.ClaimedReplicas = int32(claimed)
 	pool.Status.ObservedGeneration = pool.Generation
+	// The scale subresource selectorpath — the warm-slot label selector, so
+	// `kubectl scale sboxpool` and an HPA can target the pool's warm buffer.
+	pool.Status.Selector = PoolLabelKey + "=" + pool.Name
 	if ri != nil {
 		pool.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
 		apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{
@@ -247,6 +250,7 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 func (r *SwiftSandboxPoolReconciler) degraded(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, reason, msg string) (ctrl.Result, error) {
 	pool.Status.WarmReplicas = int32(ready)
 	pool.Status.ClaimedReplicas = int32(claimed)
+	pool.Status.Selector = PoolLabelKey + "=" + pool.Name
 	pool.Status.Phase = sandboxv1alpha1.SwiftSandboxPoolDegraded
 	pool.Status.Message = msg
 	apimeta.SetStatusCondition(&pool.Status.Conditions, metav1.Condition{

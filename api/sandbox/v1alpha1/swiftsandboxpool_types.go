@@ -117,6 +117,11 @@ type SwiftSandboxPoolStatus struct {
 	// ObservedGeneration is the pool generation last reconciled.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Selector is the pool's warm-slot label selector serialized as a string.
+	// Required by the scale subresource so `kubectl scale` and an HPA can target
+	// the pool; it selects the warm-slot pods (sandbox.kubeswift.io/pool=<name>).
+	// +optional
+	Selector string `json:"selector,omitempty"`
 	// +optional
 	Message string `json:"message,omitempty"`
 }
@@ -126,6 +131,7 @@ type SwiftSandboxPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:path=swiftsandboxpools,scope=Namespaced,shortName=sboxpool
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.minWarm,statuspath=.status.warmReplicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="MinWarm",type=integer,JSONPath=`.spec.minWarm`
 // +kubebuilder:printcolumn:name="Warm",type=integer,JSONPath=`.status.warmReplicas`
