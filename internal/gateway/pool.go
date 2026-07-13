@@ -42,6 +42,13 @@ var (
 // It is gateway-only (no write action touches nodes), so it stays local.
 var nodeGVR = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
 
+// swiftSandboxGVR / swiftSandboxPoolGVR are the MicroVM resources the sandbox
+// read plane lists. Gateway-local (no shared write action references them yet).
+var (
+	swiftSandboxGVR     = schema.GroupVersionResource{Group: "sandbox.kubeswift.io", Version: "v1alpha1", Resource: "swiftsandboxes"}
+	swiftSandboxPoolGVR = schema.GroupVersionResource{Group: "sandbox.kubeswift.io", Version: "v1alpha1", Resource: "swiftsandboxpools"}
+)
+
 // guestPodLabel ties a launcher pod to its SwiftGuest. The label (not the pod
 // name) is the stable handle — a live-migrated guest's pod is <guest>-mig-<uid>.
 const guestPodLabel = actions.GuestLabel
