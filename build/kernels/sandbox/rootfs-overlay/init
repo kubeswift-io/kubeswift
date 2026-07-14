@@ -32,6 +32,11 @@ ENTRYPOINT=""
 CONFIG_DEV=""
 DNS_SEARCH=""
 IDLE=""
+# WORKDIR is only assigned from the config-disk CWD line (spec.workingDir). Init it
+# here so the `set -u` reference below is safe when no workingDir is set — the
+# common case (a missing init was a regression that panicked PID 1: "WORKDIR:
+# parameter not set" -> init exits -> "Attempted to kill init").
+WORKDIR=""
 for arg in $(cat /proc/cmdline); do
 	case "$arg" in
 		kubeswift.rootfs=*)     ROOTFS_KIND="${arg#kubeswift.rootfs=}" ;;
