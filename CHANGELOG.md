@@ -6,6 +6,16 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sandboxes without `spec.workingDir` panicked on kernel 6.6.10** (regression
+  from v0.11.0's cold-path workingDir change). The bridge-initramfs runs `set -u`
+  but only assigned `$WORKDIR` when a workingDir was set, so the no-workingDir case
+  — the common one — hit `WORKDIR: parameter not set`, killing PID 1 ("Attempted to
+  kill init"). Fixed by initialising `WORKDIR=""`; ships as sandbox kernel
+  **6.6.11** (bump the `SwiftKernel sandbox` OCI ref). Operators on 6.6.10 should
+  move to 6.6.11.
+
 ### Removed
 
 - **`SwiftSandboxPool.spec.idleTTL`** — the field was accepted but never honored

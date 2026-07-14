@@ -26,7 +26,7 @@ The artifact carries the same two blobs a SwiftKernel expects (`bzImage` +
 
 ```
 cd output/images
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.1 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.11 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
 ```
