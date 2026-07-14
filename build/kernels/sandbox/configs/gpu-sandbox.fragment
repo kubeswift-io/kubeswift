@@ -1,0 +1,17 @@
+# KubeSwift gpu-sandbox kernel profile — delta over the base sandbox config.
+#
+# Buildroot merges this on top of sandbox-linux.config (BR2_LINUX_KERNEL_CONFIG_
+# FRAGMENT_FILES) so the two profiles share one base and never drift.
+#
+# The ONLY thing a GPU sandbox needs beyond the base sandbox kernel is loadable
+# module support: the NVIDIA driver is an out-of-tree loadable module, and the base
+# sandbox kernel is monolithic (CONFIG_MODULES is not set), so it cannot `insmod
+# nvidia.ko`. GPU-sandbox Phase-0 spike (0b) proved a GTX 1080 (Pascal) proprietary
+# driver 550.x builds against this kernel + loads + `nvidia-smi` reads the GPU over
+# firmware-less mode-3 VFIO passthrough with JUST these symbols added (no 64-bit-BAR
+# / above-4G-decode config — CH maps the BARs and the guest kernel handles them).
+#
+# The driver itself rides the guest OCI image (BYO CUDA image), NOT the kernel.
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+CONFIG_MODULE_FORCE_UNLOAD=y

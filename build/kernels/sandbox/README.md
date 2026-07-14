@@ -11,12 +11,31 @@ essentials a stock OCI image needs (`SYSVIPC`, PTYs). Config:
 [`configs/sandbox-linux.config`](configs/sandbox-linux.config). Bridge PID-1:
 [`rootfs-overlay/init`](rootfs-overlay/init).
 
+## Profiles
+
+| PROFILE | OUTPUT_DIR | Delta over base | For |
+|---|---|---|---|
+| `sandbox` (default) | `output/` | — | all sandboxes |
+| `gpu-sandbox` | `output-gpu-sandbox/` | `CONFIG_MODULES` (loadable modules) | GPU sandboxes — the OCI image `insmod`s the NVIDIA driver |
+
+`gpu-sandbox` is the base sandbox config + a 3-line
+[`configs/gpu-sandbox.fragment`](configs/gpu-sandbox.fragment) merged on top (via
+`BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES`), so the two share one base and never
+drift. The NVIDIA driver rides the guest OCI image, not the kernel — the only
+kernel delta a GPU sandbox needs is being able to load it (the base kernel is
+monolithic). Proven by the GPU-sandbox Phase-0 spike (a GTX 1080 proprietary
+driver built against this kernel → `nvidia-smi` over firmware-less mode-3 VFIO).
+
 ## Build
 
 ```
-make build     # buildroot -> output/images/{bzImage,rootfs.cpio.gz}
-make verify    # boot on cloud-hypervisor with a real OCI rootfs (asserts overlay + switch_root)
+make build                      # sandbox     -> output/images/{bzImage,rootfs.cpio.gz}
+make build PROFILE=gpu-sandbox  # gpu-sandbox -> output-gpu-sandbox/images/...
+make verify                     # boot on cloud-hypervisor with a real OCI rootfs
 ```
+
+Each profile builds into its own `OUTPUT_DIR`; override `OUTPUT_DIR=<dir>` to
+reuse an already-built toolchain (a fresh dir rebuilds the toolchain from scratch).
 
 ## Publish (SwiftKernel OCI artifact)
 
@@ -25,14 +44,16 @@ The artifact carries the same two blobs a SwiftKernel expects (`bzImage` +
 `/var/lib/kubeswift/kernels/<ns>-<name>/`:
 
 ```
-cd output/images
+cd output/images                # or output-gpu-sandbox/images for the gpu profile
 oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.11 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.1 bzImage:... rootfs.cpio.gz:...
 ```
 
-Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` on a
-cluster with a `kubeswift.io/kernel-node=true` node.
+Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
+`swiftkernel-gpu-sandbox.yaml`) on a cluster with a `kubeswift.io/kernel-node=true`
+node.
 
 ## Boot contract (cmdline)
 
