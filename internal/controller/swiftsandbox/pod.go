@@ -7,6 +7,7 @@ import (
 
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
@@ -15,8 +16,17 @@ const (
 	intentConfigMapSuffix = "-runtime-intent"
 	kernelNodeLabel       = "kubeswift.io/kernel-node"
 	defaultKernelProfile  = "sandbox"
-	materializeInitName   = "sandbox-materialize"
-	launcherName          = "launcher"
+	// gpuSandboxKernelProfile is the module-capable kernel a GPU sandbox needs (its
+	// OCI image insmods the NVIDIA driver). The controller selects it when a sandbox
+	// requests a GPU and sets no explicit kernelProfileRef.
+	gpuSandboxKernelProfile = "gpu-sandbox"
+	// sandboxDRAClaimName is the pod-local name under which the sandbox's GPU
+	// ResourceClaim is referenced (pod.spec.resourceClaims[].name + the gpu-init and
+	// launcher containers' resources.claims[].name). Mirrors the SwiftGuest const.
+	sandboxDRAClaimName = "gpu"
+	materializeInitName = "sandbox-materialize"
+	gpuInitName         = "gpu-init"
+	launcherName        = "launcher"
 	// SandboxLabelKey ties the launcher pod (and its intent ConfigMap) to the
 	// owning SwiftSandbox.
 	SandboxLabelKey = "sandbox.kubeswift.io/sandbox"
@@ -24,6 +34,21 @@ const (
 
 func intentConfigMapName(sb *sandboxv1alpha1.SwiftSandbox) string {
 	return sb.Name + intentConfigMapSuffix
+}
+
+// resolveKernelProfile picks the SwiftKernel profile for a sandbox. An explicit
+// spec.kernelProfileRef always wins (operator override); otherwise a GPU sandbox
+// gets the module-capable gpu-sandbox kernel (its OCI image insmods the NVIDIA
+// driver, which the monolithic base sandbox kernel can't load), and everything
+// else gets the base sandbox kernel.
+func resolveKernelProfile(sb *sandboxv1alpha1.SwiftSandbox) string {
+	if sb.Spec.KernelProfileRef != nil && sb.Spec.KernelProfileRef.Name != "" {
+		return sb.Spec.KernelProfileRef.Name
+	}
+	if sb.UsesGPU() {
+		return gpuSandboxKernelProfile
+	}
+	return defaultKernelProfile
 }
 
 func privileged() *corev1.SecurityContext {
@@ -124,7 +149,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		sandboxRootfs.Path = rootfsPath
 	}
 
-	return &runtimeintent.RuntimeIntent{
+	ri := &runtimeintent.RuntimeIntent{
 		KernelBoot: &runtimeintent.KernelBootSpec{
 			KernelPath:    kernelDir + "/bzImage",
 			InitramfsPath: kernelDir + "/rootfs.cpio.gz",
@@ -148,6 +173,18 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 		// is host<->guest only (not network-reachable), so it costs nothing to have.
 		Vsock: &runtimeintent.VsockIntent{CID: runtimeintent.DeriveVsockCID(sb.Namespace, sb.Name)},
 	}
+	if sb.Spec.GPUResourceClaim != nil {
+		// DRA GPU passthrough. deviceSource=env: swiftletd synthesizes the CH --device
+		// from the CDI-injected GPU_PCI_ADDRESSES (run_ch already applies intent.gpu on
+		// the mode-3 path). Firmware is a no-op for a firmware-less direct-kernel sandbox
+		// (there is no CLOUDHV.fd/OVMF); "cloudhv" is the Tier-1 value. No FM partition.
+		ri.GPU = &runtimeintent.GPUIntent{
+			DeviceSource:             "env",
+			Firmware:                 "cloudhv",
+			FabricManagerPartitionID: -1,
+		}
+	}
+	return ri
 }
 
 // buildIntentConfigMap wraps the serialized intent in the ConfigMap the launcher
@@ -239,7 +276,30 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}
 	volumes = append(volumes, verifyVolumes...)
 
-	return &corev1.Pod{
+	if sb.Spec.GPUResourceClaim != nil {
+		// gpu-init binds the requested GPU to vfio-pci (two-pass unbind/bind; idempotent
+		// if already bound). It carries NO GPU_PCI_ADDRESSES env — the DRA driver's CDI
+		// containerEdits inject it (applied because gpu-init references the claim, wired
+		// by applySandboxDRAClaim below). Runs among the init containers, before the
+		// launcher. Same VFIO mounts the GPU SwiftGuest launcher uses.
+		hostSysDir := corev1.HostPathDirectory
+		initContainers = append(initContainers, corev1.Container{
+			Name:            gpuInitName,
+			Image:           swiftguest.LauncherImage(),
+			Command:         []string{"/bin/bash", "/usr/local/bin/gpu-init.sh"},
+			SecurityContext: privileged(),
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "dev-vfio", MountPath: "/dev/vfio"},
+				{Name: "host-sys", MountPath: "/host/sys"},
+			},
+		})
+		volumes = append(volumes,
+			corev1.Volume{Name: "dev-vfio", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/vfio", Type: &dirCreate}}},
+			corev1.Volume{Name: "host-sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys", Type: &hostSysDir}}},
+		)
+	}
+
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sb.Name,
 			Namespace: sb.Namespace,
@@ -273,5 +333,44 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			}},
 			Volumes: volumes,
 		},
+	}
+	if sb.Spec.GPUResourceClaim != nil {
+		applySandboxDRAClaim(pod, sb.Spec.GPUResourceClaim)
+	}
+	return pod
+}
+
+// applySandboxDRAClaim wires the DRA ResourceClaim onto a GPU sandbox pod: the
+// pod-level resourceClaims entry plus a resources.claims reference on the gpu-init
+// and launcher containers (which is what makes kubelet apply the DRA driver's CDI
+// containerEdits — the GPU_PCI_ADDRESSES env — to them), and the launcher's
+// /dev/vfio mount.
+//
+// Unlike the SwiftGuest DRA path (which nils the node selector so the scheduler
+// picks any GPU node), a sandbox MUST stay pinned to kubeswift.io/kernel-node=true:
+// the kernel artifacts and /dev/kvm live on kernel nodes. GPU sandbox nodes must
+// therefore be BOTH gpu-node and kernel-node; the scheduler then places the pod on
+// a node satisfying the kernel-node label AND the GPU ResourceClaim device.
+func applySandboxDRAClaim(pod *corev1.Pod, rc *swiftv1alpha1.GPUResourceClaimSpec) {
+	claim := corev1.PodResourceClaim{Name: sandboxDRAClaimName}
+	if rc.ResourceClaimTemplateName != "" {
+		claim.ResourceClaimTemplateName = &rc.ResourceClaimTemplateName
+	} else {
+		claim.ResourceClaimName = &rc.ResourceClaimName
+	}
+	pod.Spec.ResourceClaims = []corev1.PodResourceClaim{claim}
+
+	ref := corev1.ResourceClaim{Name: sandboxDRAClaimName, Request: rc.RequestName}
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == gpuInitName {
+			pod.Spec.InitContainers[i].Resources.Claims = append(pod.Spec.InitContainers[i].Resources.Claims, ref)
+		}
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == launcherName {
+			pod.Spec.Containers[i].Resources.Claims = append(pod.Spec.Containers[i].Resources.Claims, ref)
+			pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts,
+				corev1.VolumeMount{Name: "dev-vfio", MountPath: "/dev/vfio"})
+		}
 	}
 }
