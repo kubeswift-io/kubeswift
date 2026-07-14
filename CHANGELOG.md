@@ -6,6 +6,21 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **GPU sandboxes (Phase 1) — pass a GPU into a SwiftSandbox via DRA.**
+  `SwiftSandbox.spec.gpuResourceClaim` allocates one Tier-1 GPU through a Kubernetes
+  DRA `ResourceClaim`: the scheduler picks the node/device, the DRA driver injects it
+  (CDI `GPU_PCI_ADDRESSES`), a `gpu-init` container binds VFIO, and the sandbox boots
+  firmware-less (mode-3) with the GPU passed through — an ephemeral VM boundary around
+  GPU inference / untrusted GPU code. The NVIDIA driver rides the guest OCI image and
+  loads at start; a GPU sandbox boots the new module-capable **`gpu-sandbox`** kernel
+  profile (selected automatically). GPU nodes must also be kernel nodes. DRA-only and
+  cold-boot-only in Phase 1 (`gpuResourceClaim` excludes `poolRef`); the native
+  `SwiftGPUProfile` backend and multi-GPU / multi-node are follow-ups
+  ([#390](https://github.com/kubeswift-io/kubeswift/issues/390)). Cluster-validated on
+  a GTX 1080 (`nvidia-smi` in the guest). Runbook: `docs/sandbox/gpu-sandboxes.md`.
+
 ### Fixed
 
 - **Sandboxes without `spec.workingDir` panicked on kernel 6.6.10** (regression

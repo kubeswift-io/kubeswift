@@ -1,0 +1,43 @@
+# A GPU sandbox: an ephemeral microVM with one GPU passed through via DRA. The
+# guest OCI image ships the NVIDIA driver (nvidia.ko built for the gpu-sandbox
+# kernel + nvidia-smi) and loads it at start. See docs/sandbox/gpu-sandboxes.md.
+#
+# Prereqs:
+#   - a DRA GPU driver + a GPU node that is ALSO a kernel node
+#     (kubeswift.io/gpu-node=true AND kubeswift.io/kernel-node=true)
+#   - the gpu-sandbox SwiftKernel: config/samples/sandbox/swiftkernel-gpu-sandbox.yaml
+#   - this ResourceClaimTemplate (one device of your GPU deviceclass)
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: single-vfio-gpu
+  namespace: default
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: kubeswift-vfio-gpu   # your DRA GPU deviceclass
+            allocationMode: ExactCount
+            count: 1
+---
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: gpu-infer
+  namespace: default
+spec:
+  # Replace with a CUDA image that ships nvidia.ko (built for the gpu-sandbox
+  # Linux 6.6.x kernel) + nvidia-smi and insmods it at start.
+  image: <your-registry>/cuda-nvidia-smi@sha256:...
+  cpu: 4
+  memory: 8Gi
+  network:
+    mode: open          # GPU inference typically talks to in-cluster services
+  gpuResourceClaim:
+    resourceClaimTemplateName: single-vfio-gpu
+    tier: pcie
+  # kernelProfileRef defaults to gpu-sandbox when a GPU is requested (the
+  # module-capable kernel); set it explicitly to override.
