@@ -9,10 +9,18 @@
 # The sandbox profile boots a direct kernel + this bridge-initramfs + an OCI
 # image as the root filesystem (RO base + tmpfs overlay). See
 # docs/design/swiftsandbox-design.md.
+#
+# PROFILE selects the kernel profile (default: sandbox). `gpu-sandbox` is the
+# base sandbox config + loadable-module support (CONFIG_MODULES), so a GPU
+# sandbox's OCI image can `insmod` the NVIDIA driver:
+#   make build PROFILE=gpu-sandbox
+# Each profile builds into its own OUTPUT_DIR (output / output-gpu-sandbox) so
+# they don't clobber each other; override OUTPUT_DIR to reuse a built toolchain.
 
+PROFILE           ?= sandbox
 BUILDROOT_VERSION := 2024.02.6
 BUILDROOT_DIR     := $(CURDIR)/buildroot
-OUTPUT_DIR        := $(CURDIR)/output
+OUTPUT_DIR        ?= $(CURDIR)/output$(if $(filter-out sandbox,$(PROFILE)),-$(PROFILE))
 EXTERNAL          := $(CURDIR)
 
 .PHONY: setup build verify clean distclean
@@ -42,13 +50,13 @@ build: setup agent
 	$(MAKE) -C $(BUILDROOT_DIR) \
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \
-		sandbox_defconfig
+		$(PROFILE)_defconfig
 	$(MAKE) -C $(BUILDROOT_DIR) \
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \
 		-j$(shell nproc)
 	@echo ""
-	@echo "Build complete:"
+	@echo "Build complete ($(PROFILE)):"
 	@echo "  bzImage:           $(OUTPUT_DIR)/images/bzImage"
 	@echo "  rootfs.cpio.gz:    $(OUTPUT_DIR)/images/rootfs.cpio.gz  (bridge-initramfs)"
 

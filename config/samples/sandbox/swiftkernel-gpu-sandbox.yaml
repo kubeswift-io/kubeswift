@@ -1,0 +1,21 @@
+# The gpu-sandbox kernel profile: the base sandbox kernel + loadable-module
+# support (CONFIG_MODULES). A GPU sandbox's OCI image ships the NVIDIA driver as
+# a loadable module (nvidia.ko) and `insmod`s it at boot — the base sandbox
+# kernel is monolithic and can't load modules, so a GPU sandbox needs this
+# profile. Everything else (mode-3 direct-kernel boot, bridge-initramfs, OCI
+# rootfs + tmpfs overlay, vsock agent) is identical to the base sandbox kernel.
+#
+# Select it from a GPU SwiftSandbox with `spec.kernelProfileRef: {name: gpu-sandbox}`.
+# Prereq: a node labeled kubeswift.io/kernel-node=true (the per-node ORAS pull).
+# The NVIDIA driver rides the guest OCI image, NOT this kernel — build a CUDA
+# image whose driver version targets Linux 6.6.x (see docs/sandbox/gpu-sandboxes.md).
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: gpu-sandbox
+  namespace: default
+spec:
+  ociRef:
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.1
+  kernelCmdline: "console=ttyS0"
+  profile: gpu-sandbox
