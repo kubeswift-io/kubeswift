@@ -65,10 +65,7 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	kernelName := defaultKernelProfile
-	if sb.Spec.KernelProfileRef != nil && sb.Spec.KernelProfileRef.Name != "" {
-		kernelName = sb.Spec.KernelProfileRef.Name
-	}
+	kernelName := resolveKernelProfile(&sb)
 
 	// spec.poolRef: claim a warm slot from a SwiftSandboxPool (sub-second checkout) and
 	// inject the workload over vsock, else cold-fallback. Own path (its pod is a re-parented

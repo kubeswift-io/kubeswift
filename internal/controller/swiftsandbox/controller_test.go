@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -332,5 +333,128 @@ func TestIsTerminal(t *testing.T) {
 	}
 	if isTerminal(sandboxv1alpha1.SwiftSandboxRunning) || isTerminal(sandboxv1alpha1.SwiftSandboxPending) {
 		t.Error("Running/Pending must not be terminal")
+	}
+}
+
+func TestBuildPod_GPU(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "gsb", Namespace: "ns"},
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{
+			Image:            "cuda:12.4",
+			GPUResourceClaim: &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimTemplateName: "single-vfio-gpu"},
+		},
+	}
+	pod := buildPod(sb, "gpu-sandbox")
+
+	var gpuInit *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == "gpu-init" {
+			gpuInit = &pod.Spec.InitContainers[i]
+		}
+	}
+	if gpuInit == nil {
+		t.Fatal("gpu-init init container missing on a GPU sandbox")
+	}
+	for _, e := range gpuInit.Env {
+		if e.Name == "GPU_PCI_ADDRESSES" {
+			t.Error("gpu-init must NOT hardcode GPU_PCI_ADDRESSES — the DRA driver's CDI injects it")
+		}
+	}
+	if len(pod.Spec.ResourceClaims) != 1 ||
+		pod.Spec.ResourceClaims[0].ResourceClaimTemplateName == nil ||
+		*pod.Spec.ResourceClaims[0].ResourceClaimTemplateName != "single-vfio-gpu" {
+		t.Errorf("pod.Spec.ResourceClaims = %+v, want one template single-vfio-gpu", pod.Spec.ResourceClaims)
+	}
+	if len(gpuInit.Resources.Claims) != 1 {
+		t.Error("gpu-init must reference the claim (so CDI containerEdits apply)")
+	}
+
+	var launcher *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == launcherName {
+			launcher = &pod.Spec.Containers[i]
+		}
+	}
+	if launcher == nil {
+		t.Fatal("launcher container missing")
+	}
+	if len(launcher.Resources.Claims) != 1 {
+		t.Error("launcher must reference the claim")
+	}
+	hasVfio := false
+	for _, m := range launcher.VolumeMounts {
+		if m.Name == "dev-vfio" {
+			hasVfio = true
+		}
+	}
+	if !hasVfio {
+		t.Error("launcher must mount dev-vfio")
+	}
+
+	vols := map[string]bool{}
+	for _, v := range pod.Spec.Volumes {
+		vols[v.Name] = true
+	}
+	if !vols["dev-vfio"] || !vols["host-sys"] {
+		t.Errorf("dev-vfio/host-sys volumes missing: %v", vols)
+	}
+	// A GPU sandbox stays pinned to kernel-node (NOT nilled like the SwiftGuest DRA
+	// path) — the kernel artifacts + /dev/kvm live on kernel nodes.
+	if pod.Spec.NodeSelector[kernelNodeLabel] != "true" {
+		t.Error("GPU sandbox nodeSelector must keep kubeswift.io/kernel-node=true")
+	}
+
+	// A non-GPU sandbox has none of the GPU wiring.
+	plain := buildPod(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}, "sandbox")
+	if plain.Spec.ResourceClaims != nil {
+		t.Errorf("non-GPU sandbox must carry no ResourceClaims; got %v", plain.Spec.ResourceClaims)
+	}
+	for _, c := range plain.Spec.InitContainers {
+		if c.Name == "gpu-init" {
+			t.Error("non-GPU sandbox must have no gpu-init container")
+		}
+	}
+}
+
+func TestBuildIntent_GPU(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "gsb", Namespace: "ns"},
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{
+			Image:            "cuda:12.4",
+			GPUResourceClaim: &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "c"},
+		},
+	}
+	bi := buildIntent(sb, "gpu-sandbox", "/x.ext4", execSpec{Argv: []string{"/entrypoint.sh"}}, false)
+	if bi.GPU == nil {
+		t.Fatal("intent.GPU must be set for a GPU sandbox")
+	}
+	if bi.GPU.DeviceSource != "env" {
+		t.Errorf("intent.GPU.DeviceSource = %q, want env (DRA CDI synthesis)", bi.GPU.DeviceSource)
+	}
+
+	plain := buildIntent(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	if plain.GPU != nil {
+		t.Error("non-GPU sandbox must have no intent.GPU")
+	}
+}
+
+func TestResolveKernelProfile(t *testing.T) {
+	gpu := func() *sandboxv1alpha1.SwiftSandbox {
+		return &sandboxv1alpha1.SwiftSandbox{Spec: sandboxv1alpha1.SwiftSandboxSpec{
+			GPUResourceClaim: &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "c"}}}
+	}
+	// GPU sandbox with no explicit profile -> the module-capable gpu-sandbox kernel.
+	if got := resolveKernelProfile(gpu()); got != "gpu-sandbox" {
+		t.Errorf("GPU sandbox kernel = %q, want gpu-sandbox", got)
+	}
+	// Explicit profile always wins (operator override).
+	g := gpu()
+	g.Spec.KernelProfileRef = &corev1.LocalObjectReference{Name: "my-gpu-kernel"}
+	if got := resolveKernelProfile(g); got != "my-gpu-kernel" {
+		t.Errorf("explicit kernelProfileRef = %q, want my-gpu-kernel", got)
+	}
+	// Non-GPU sandbox -> the base sandbox kernel.
+	if got := resolveKernelProfile(&sandboxv1alpha1.SwiftSandbox{}); got != "sandbox" {
+		t.Errorf("plain sandbox kernel = %q, want sandbox", got)
 	}
 }
