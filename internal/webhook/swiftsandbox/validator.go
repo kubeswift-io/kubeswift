@@ -66,6 +66,18 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if s.VerifyKeySecretRef != nil && s.VerifyKeySecretRef.Name == "" {
 		return fmt.Errorf("spec.verifyKeySecretRef.name is required when verifyKeySecretRef is set")
 	}
+	if rc := s.GPUResourceClaim; rc != nil {
+		// Exactly one claim source (mirror the SwiftGuest DRA rule).
+		hasName := rc.ResourceClaimName != ""
+		hasTemplate := rc.ResourceClaimTemplateName != ""
+		if hasName == hasTemplate {
+			return fmt.Errorf("spec.gpuResourceClaim requires exactly one of resourceClaimName or resourceClaimTemplateName")
+		}
+		// A GPU sandbox boots cold — a warm pool cannot hold a scarce GPU idle.
+		if s.PoolRef != nil {
+			return fmt.Errorf("spec.gpuResourceClaim and spec.poolRef are mutually exclusive: a GPU sandbox boots cold (a warm pool cannot hold a GPU reservation)")
+		}
+	}
 	return nil
 }
 

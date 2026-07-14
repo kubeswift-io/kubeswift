@@ -240,6 +240,52 @@ spec:
                   - name
                   type: object
                 type: array
+              gpuResourceClaim:
+                description: |-
+                  GPUResourceClaim, when set, passes one or more GPUs into the sandbox via a
+                  Kubernetes DRA ResourceClaim: the kube-scheduler allocates the device(s) and
+                  the KubeSwift DRA driver injects them (CDI GPU_PCI_ADDRESSES), gpu-init binds
+                  VFIO, and swiftletd synthesizes the Cloud Hypervisor --device from the env.
+                  The guest OCI image ships the NVIDIA driver and loads it, so a GPU sandbox
+                  needs the module-capable "gpu-sandbox" kernel profile — the controller selects
+                  it automatically when kernelProfileRef is unset.
+
+                  A GPU sandbox boots COLD: a warm pool cannot cheaply hold a scarce GPU idle,
+                  so gpuResourceClaim and poolRef are mutually exclusive. Mirrors
+                  SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend). The native
+                  SwiftGPUProfile backend (gpuProfileRef) is a planned follow-up for sandboxes.
+                properties:
+                  hugepages:
+                    description: Hugepages sizes the GPU memory hugepage backing ("1Gi",
+                      "2Mi", or "").
+                    type: string
+                  requestName:
+                    description: |-
+                      RequestName is the device-request name within the claim to read the
+                      allocation result back from. Defaults to "gpu" when empty.
+                    type: string
+                  resourceClaimName:
+                    description: |-
+                      ResourceClaimName references a pre-created, shared ResourceClaim.
+                      Mutually exclusive with ResourceClaimTemplateName.
+                    type: string
+                  resourceClaimTemplateName:
+                    description: |-
+                      ResourceClaimTemplateName references a ResourceClaimTemplate; the
+                      controller stamps it into pod.spec.resourceClaims so the scheduler mints
+                      a per-pod ResourceClaim. Mutually exclusive with ResourceClaimName.
+                    type: string
+                  tier:
+                    default: pcie
+                    description: |-
+                      Tier selects the hypervisor/firmware exactly as SwiftGPUProfile.Tier does:
+                      pcie -> Cloud Hypervisor (default), hgx-shared/hgx-full -> QEMU.
+                    enum:
+                    - pcie
+                    - hgx-shared
+                    - hgx-full
+                    type: string
+                type: object
               image:
                 description: |-
                   Image is the OCI image to run as the sandbox root filesystem. A digest
