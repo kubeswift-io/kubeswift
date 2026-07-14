@@ -4,6 +4,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // SwiftSandboxSpec defines an ephemeral, strongly-isolated microVM that runs an
@@ -102,6 +104,27 @@ type SwiftSandboxSpec struct {
 	// the cold path automatically. The pool must be in the same namespace.
 	// +optional
 	PoolRef *corev1.LocalObjectReference `json:"poolRef,omitempty"`
+
+	// GPUResourceClaim, when set, passes one or more GPUs into the sandbox via a
+	// Kubernetes DRA ResourceClaim: the kube-scheduler allocates the device(s) and
+	// the KubeSwift DRA driver injects them (CDI GPU_PCI_ADDRESSES), gpu-init binds
+	// VFIO, and swiftletd synthesizes the Cloud Hypervisor --device from the env.
+	// The guest OCI image ships the NVIDIA driver and loads it, so a GPU sandbox
+	// needs the module-capable "gpu-sandbox" kernel profile — the controller selects
+	// it automatically when kernelProfileRef is unset.
+	//
+	// A GPU sandbox boots COLD: a warm pool cannot cheaply hold a scarce GPU idle,
+	// so gpuResourceClaim and poolRef are mutually exclusive. Mirrors
+	// SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend). The native
+	// SwiftGPUProfile backend (gpuProfileRef) is a planned follow-up for sandboxes.
+	// +optional
+	GPUResourceClaim *swiftv1alpha1.GPUResourceClaimSpec `json:"gpuResourceClaim,omitempty"`
+}
+
+// UsesGPU reports whether the sandbox requests a GPU (currently the DRA backend
+// only).
+func (s *SwiftSandbox) UsesGPU() bool {
+	return s.Spec.GPUResourceClaim != nil
 }
 
 // SecretObjectReference references a Secret by name (in the object's own

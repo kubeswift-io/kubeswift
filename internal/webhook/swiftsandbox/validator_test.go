@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 func sb(image string) *sandboxv1alpha1.SwiftSandbox {
@@ -94,5 +96,47 @@ func TestValidateUpdate_VerifyKeySecretRefImmutable(t *testing.T) {
 	chg.Spec.VerifyKeySecretRef = &sandboxv1alpha1.SecretObjectReference{Name: "cosign-pub"}
 	if _, err := v.ValidateUpdate(context.Background(), old, chg); err == nil {
 		t.Error("adding verifyKeySecretRef should be rejected as immutable")
+	}
+}
+
+func TestValidateCreate_GPUResourceClaim(t *testing.T) {
+	v := &Validator{}
+
+	// A single-template claim is valid.
+	tmpl := sb("nvcr.io/nvidia/cuda:12.4.0-runtime-ubuntu22.04")
+	tmpl.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimTemplateName: "single-vfio-gpu", Tier: "pcie"}
+	if _, err := v.ValidateCreate(context.Background(), tmpl); err != nil {
+		t.Errorf("single-template gpuResourceClaim rejected: %v", err)
+	}
+
+	// A single shared-claim is valid.
+	shared := sb("cuda:12.4")
+	shared.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "gpu-claim"}
+	if _, err := v.ValidateCreate(context.Background(), shared); err != nil {
+		t.Errorf("single shared-claim gpuResourceClaim rejected: %v", err)
+	}
+
+	// Neither name nor template — rejected.
+	neither := sb("cuda:12.4")
+	neither.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{Tier: "pcie"}
+	if _, err := v.ValidateCreate(context.Background(), neither); err == nil {
+		t.Error("gpuResourceClaim with neither name nor template should be rejected")
+	}
+
+	// Both name and template — rejected.
+	both := sb("cuda:12.4")
+	both.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "c", ResourceClaimTemplateName: "t"}
+	if _, err := v.ValidateCreate(context.Background(), both); err == nil {
+		t.Error("gpuResourceClaim with both name and template should be rejected")
+	}
+}
+
+func TestValidateCreate_GPUAndPoolMutuallyExclusive(t *testing.T) {
+	v := &Validator{}
+	s := sb("cuda:12.4")
+	s.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimTemplateName: "single-vfio-gpu"}
+	s.Spec.PoolRef = &corev1.LocalObjectReference{Name: "warm-pool"}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("gpuResourceClaim + poolRef should be rejected (GPU sandboxes boot cold)")
 	}
 }

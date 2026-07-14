@@ -5,6 +5,7 @@
 package v1alpha1
 
 import (
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -321,6 +322,11 @@ func (in *SwiftSandboxSpec) DeepCopyInto(out *SwiftSandboxSpec) {
 	if in.PoolRef != nil {
 		in, out := &in.PoolRef, &out.PoolRef
 		*out = new(v1.LocalObjectReference)
+		**out = **in
+	}
+	if in.GPUResourceClaim != nil {
+		in, out := &in.GPUResourceClaim, &out.GPUResourceClaim
+		*out = new(swiftv1alpha1.GPUResourceClaimSpec)
 		**out = **in
 	}
 }
