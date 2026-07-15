@@ -192,6 +192,7 @@ you're done inspecting it.
 ## See also
 
 - [Warm pools (fast start)](warm-pool.md) — pre-booted slots for sub-second checkout
+- [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via DRA
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)
 - [SwiftKernel reference](../swiftkernel.md)
