@@ -41,6 +41,14 @@ func GPUNodeHasCapacity(ctx context.Context, c client.Client, nodeName string, p
 	if profile.Spec.Model != "" && !strings.Contains(node.Status.GPUModel, profile.Spec.Model) {
 		return fmt.Errorf("GPU node %q model %q does not match profile model %q", nodeName, node.Status.GPUModel, profile.Spec.Model)
 	}
+	// Fabric Manager version gate (shared NVSwitch mode): the host FM version
+	// must exactly match the guest driver version (NVIDIA WP-12736-002), or
+	// partition activate/attach fails. A no-op outside shared mode / when the
+	// profile pins no RequiredVersion.
+	if !fmVersionCompatible(&node, profile) {
+		return fmt.Errorf("GPU node %q Fabric Manager version %q does not match profile requiredVersion %q (host FM version must match the guest driver version for shared NVSwitch mode)",
+			nodeName, fmVersionString(&node), profile.Spec.FabricManager.RequiredVersion)
+	}
 	if profile.Spec.PartitionMode == "shared" {
 		// Match the reserve/allocate selection exactly: a viable partition is
 		// one whose MEMBER GPUs are all free (a free partition whose members

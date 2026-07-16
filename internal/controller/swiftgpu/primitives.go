@@ -69,6 +69,14 @@ func ReserveOnNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.Sw
 	if profile.Spec.Model != "" && !strings.Contains(node.Status.GPUModel, profile.Spec.Model) {
 		return nil, nil, -1, fmt.Errorf("GPU node %q model %q does not match profile model %q", nodeName, node.Status.GPUModel, profile.Spec.Model)
 	}
+	// Fabric Manager version gate (shared NVSwitch mode) — mirror
+	// findAndAllocate / GPUNodeHasCapacity so a reserve cannot pin a node whose
+	// host FM version does not match the guest driver version (NVIDIA
+	// WP-12736-002). No-op outside shared mode / when RequiredVersion is unset.
+	if !fmVersionCompatible(&node, profile) {
+		return nil, nil, -1, fmt.Errorf("GPU node %q Fabric Manager version %q does not match profile requiredVersion %q",
+			nodeName, fmVersionString(&node), profile.Spec.FabricManager.RequiredVersion)
+	}
 
 	// Shared partition mode: the FM partition is the unit of allocation — the
 	// guest must receive exactly the chosen partition's member GPUs (the
