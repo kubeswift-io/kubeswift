@@ -2,6 +2,10 @@
 
 This guide covers how to add a new kernel profile to KubeSwift. A kernel profile is a Buildroot external tree that produces a bzImage and initramfs for direct kernel boot via SwiftKernel.
 
+> Building a kernel for a **SwiftSandbox** (OCI-rootfs microVM) is a different
+> contract — the init is a bridge that mounts an arbitrary OCI image, not a fixed
+> workload. See [Build your own sandbox kernel and base images](../sandbox/build-your-own.md).
+
 ## When to add a new profile
 
 Each profile targets a specific workload class. The faas-minimal profile exists for function-style workloads with no networking, no persistent storage, and a BusyBox shell. A new profile is warranted when the workload requires a different kernel configuration, a different userspace, or different init behavior that cannot be achieved by modifying the command line alone.
