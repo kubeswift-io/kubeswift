@@ -7,7 +7,9 @@ use swift_ch_client::{
     spawn_ch, spawn_ch_receive, spawn_ch_restore, wait_for_socket, FsMount, GenericVhostUser,
     NICConfig, VFIODeviceConfig, VmConfig, VsockConfig,
 };
-use swift_qemu_client::{QemuConfig, QemuNICConfig, QemuProcess, QemuVFIODevice};
+use swift_qemu_client::{
+    QemuConfig, QemuNICConfig, QemuNUMANode, QemuProcess, QemuVCPUPin, QemuVFIODevice,
+};
 use swift_runtime::RuntimeDir;
 
 use crate::intent::{FilesystemIntent, RuntimeIntent};
@@ -514,18 +516,47 @@ where
     let (tap_name, mac, qemu_nics, mut vfio_devices) = build_qemu_nics(intent);
 
     // Add GPU VFIO devices from the GPU intent (resolved_devices: intent list
-    // for native, CDI-injected GPU_PCI_ADDRESSES env for DRA).
+    // for native, CDI-injected GPU_PCI_ADDRESSES env for DRA), then NVSwitches
+    // (Tier-3 hgx-full: the whole fabric moves into the guest). Tier-2/3 SXM
+    // devices carry pcie_root_port=true — QEMU places each behind its own
+    // root port (CUDA rejects a flat topology) — and no_mmap for large BARs.
+    let mut numa_nodes = vec![];
+    let mut hugepages = String::new();
+    let mut vcpu_pinning = vec![];
     if let Some(ref gpu) = intent.gpu {
-        for dev in &gpu.resolved_devices()? {
+        for dev in gpu.resolved_devices()?.iter().chain(gpu.nv_switches.iter()) {
             log::info!(
-                "gpu_device host={} root_port={}",
+                "gpu_device host={} root_port={} no_mmap={}",
                 dev.pci_address,
-                dev.pcie_root_port
+                dev.pcie_root_port,
+                dev.no_mmap
             );
             vfio_devices.push(QemuVFIODevice {
                 host_address: dev.pci_address.clone(),
+                pcie_root_port: dev.pcie_root_port,
+                no_mmap: dev.no_mmap,
             });
         }
+        if let Some(ref numa) = gpu.numa {
+            numa_nodes = numa
+                .nodes
+                .iter()
+                .map(|n| QemuNUMANode {
+                    id: n.id.max(0) as u32,
+                    cpus: n.cpus.clone(),
+                    memory_mib: n.memory_mi.max(0) as u64,
+                })
+                .collect();
+        }
+        hugepages = gpu.hugepages.clone();
+        vcpu_pinning = gpu
+            .vcpu_pinning
+            .iter()
+            .map(|p| QemuVCPUPin {
+                vcpu: p.vcpu,
+                host_cpu: p.host_cpu,
+            })
+            .collect();
     }
 
     let config = QemuConfig {
@@ -543,6 +574,9 @@ where
         serial_socket: serial_socket.clone(),
         qmp_socket: qmp_socket.clone(),
         data_disk_paths: intent.data_disk_paths(),
+        numa_nodes,
+        hugepages,
+        vcpu_pinning: vcpu_pinning.clone(),
     };
 
     let mut process = QemuProcess::spawn(&config)?;
@@ -551,6 +585,16 @@ where
 
     // Wait for QEMU to create the QMP socket (signals QEMU is ready to accept connections)
     wait_for_socket(&qmp_socket, Duration::from_secs(30))?;
+
+    // vCPU pinning is applied post-spawn (QEMU has no CLI for thread
+    // affinity). Best-effort: a missed pin degrades performance, never
+    // correctness — log loudly and keep the guest.
+    if !vcpu_pinning.is_empty() {
+        match process.apply_vcpu_pinning(&vcpu_pinning) {
+            Ok(n) => log::info!("vcpu_pinning_applied pins={}", n),
+            Err(e) => log::warn!("vcpu_pinning_failed err={}", e),
+        }
+    }
 
     if let Some(cb) = on_socket_ready {
         cb(pid, serial_socket_path.clone(), "qemu".to_string());
@@ -676,7 +720,13 @@ fn build_qemu_nics(
                     if let Some(addr) =
                         crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
                     {
-                        vfio_devs.push(QemuVFIODevice { host_address: addr });
+                        vfio_devs.push(QemuVFIODevice {
+                            host_address: addr,
+                            // SR-IOV VFs attach flat to pcie.0 (no SXM
+                            // root-port requirement, no large BARs).
+                            pcie_root_port: false,
+                            no_mmap: false,
+                        });
                         sriov_idx += 1;
                     } else {
                         log::error!(

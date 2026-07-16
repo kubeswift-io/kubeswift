@@ -1,12 +1,17 @@
 //! QEMU process management for KubeSwift swiftletd.
 //!
-//! Provides QemuProcess (spawn, monitor, shutdown) and QemuConfig (arg builder).
-//! Phase 1: disk boot only, no GPU/NUMA/hugepages.
+//! Provides QemuProcess (spawn, monitor, shutdown) and QemuConfig (arg
+//! builder). Covers disk boot plus the Tier-2/3 HGX GPU topology:
+//! pcie-root-port per SXM device, x-no-mmap large-BAR handling, NUMA memory
+//! backends, hugepages, and post-spawn vCPU pinning.
 
 mod config;
+mod pinning;
 mod qmp;
 
-pub use config::{QemuConfig, QemuNICConfig, QemuVFIODevice, DEFAULT_QEMU_BINARY};
+pub use config::{
+    QemuConfig, QemuNICConfig, QemuNUMANode, QemuVCPUPin, QemuVFIODevice, DEFAULT_QEMU_BINARY,
+};
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
@@ -66,6 +71,20 @@ impl QemuProcess {
     /// Returns the OS process ID of the QEMU process.
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// Apply vCPU→host-CPU pinning post-spawn (QEMU has no CLI for thread
+    /// affinity — the libvirt-style flow): QMP query-cpus-fast maps each vCPU
+    /// index to its host thread id, then sched_setaffinity pins it. Call once
+    /// the QMP socket is up. Returns the number of vCPUs pinned. Callers
+    /// treat failure as best-effort: a missed pin degrades performance, never
+    /// correctness.
+    pub fn apply_vcpu_pinning(&self, pins: &[QemuVCPUPin]) -> Result<usize, String> {
+        if pins.is_empty() {
+            return Ok(0);
+        }
+        let cpu_threads = self.qmp.query_cpus_fast()?;
+        pinning::apply_pins(pins, &cpu_threads)
     }
 
     /// Returns the path to the serial console Unix socket.

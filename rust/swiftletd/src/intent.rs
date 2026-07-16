@@ -223,6 +223,50 @@ pub struct GPUIntent {
     /// Fabric Manager partition ID (-1 = none).
     #[serde(default)]
     pub fabric_manager_partition_id: i32,
+    /// Virtual NUMA topology for the guest (Tier-2/3 QEMU only; None = flat).
+    /// The Go controller computes it from SwiftGPUProfile.numaTopology + the
+    /// node inventory; QEMU renders it as per-node memory backends + -numa.
+    #[serde(default)]
+    pub numa: Option<GPUNUMAIntent>,
+    /// vCPU→host-CPU pinning map (Tier-2/3 QEMU only). QEMU has no CLI for
+    /// affinity, so swiftletd applies it post-spawn via QMP query-cpus-fast +
+    /// sched_setaffinity. null-tolerant like `devices`.
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub vcpu_pinning: Vec<VCPUPinIntent>,
+    /// Hugepage size for guest RAM backing: "1G", "2M", or "" (none).
+    /// Already normalized by the controller ("1Gi"→"1G").
+    #[serde(default)]
+    pub hugepages: String,
+    /// NVSwitch VFIO devices (Tier-3 hgx-full only: the whole fabric moves into
+    /// the guest). Same device shape as `devices`; never env-synthesized.
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub nv_switches: Vec<GPUDeviceIntent>,
+}
+
+/// Virtual NUMA topology (mirrors Go runtimeintent.NUMAIntent).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPUNUMAIntent {
+    #[serde(default, deserialize_with = "null_to_default")]
+    pub nodes: Vec<GPUNUMANodeIntent>,
+}
+
+/// One virtual NUMA node (mirrors Go runtimeintent.NUMANodeIntent).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GPUNUMANodeIntent {
+    pub id: i32,
+    /// Guest CPU list in Linux range syntax (e.g., "0-39").
+    pub cpus: String,
+    pub memory_mi: i64,
+}
+
+/// One vCPU→host-CPU pin (mirrors Go runtimeintent.VCPUPin).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VCPUPinIntent {
+    pub vcpu: u32,
+    pub host_cpu: u32,
 }
 
 impl GPUIntent {
@@ -260,6 +304,7 @@ impl GPUIntent {
                 pcie_root_port: false,
                 gpu_direct_clique: -1,
                 no_mmap: false,
+                numa_node: 0,
             })
             .collect())
     }
@@ -282,6 +327,10 @@ pub struct GPUDeviceIntent {
     /// Add x-no-mmap=true (QEMU, large BARs).
     #[serde(default)]
     pub no_mmap: bool,
+    /// Virtual NUMA node this device belongs to (QEMU Tier 2/3; informational
+    /// for CH).
+    #[serde(default)]
+    pub numa_node: i32,
 }
 
 /// Describes a single virtiofs share (vhost-user-fs). swiftletd runs a
@@ -1214,5 +1263,78 @@ mod tests {
         .unwrap();
         assert!(dra.devices.is_empty());
         assert_eq!(dra.device_source, "env");
+    }
+
+    /// Wire contract for the Tier-2/3 GPU topology fields the Go controller
+    /// emits (runtimeintent.GPUIntent): numa/vcpuPinning/hugepages/nvSwitches
+    /// plus per-device numaNode. Older controllers omit them all — every field
+    /// must default (version-skew tolerance, the C2 dual-field lesson).
+    #[test]
+    fn gpu_intent_tier23_wire_contract() {
+        let json = r#"{
+            "guestId": "default/hgx",
+            "cpu": 80,
+            "memory": 983040,
+            "hypervisor": "qemu",
+            "seedPath": "",
+            "lifecycle": "start",
+            "network": false,
+            "rootDisk": {"format": "raw", "path": "/data/image.raw"},
+            "gpu": {
+                "devices": [
+                    {"hostPath": "/sys/bus/pci/devices/0000:0f:00.0/", "pciAddress": "0000:0f:00.0", "pcieRootPort": true, "gpuDirectClique": 0, "noMmap": true, "numaNode": 0},
+                    {"hostPath": "/sys/bus/pci/devices/0000:86:00.0/", "pciAddress": "0000:86:00.0", "pcieRootPort": true, "gpuDirectClique": 0, "noMmap": true, "numaNode": 1}
+                ],
+                "firmware": "ovmf",
+                "numa": {"nodes": [
+                    {"id": 0, "cpus": "0-39", "memoryMi": 491520},
+                    {"id": 1, "cpus": "40-79", "memoryMi": 491520}
+                ]},
+                "vcpuPinning": [{"vcpu": 0, "hostCpu": 8}, {"vcpu": 1, "hostCpu": 9}],
+                "hugepages": "1G",
+                "nvSwitches": [
+                    {"hostPath": "/sys/bus/pci/devices/0000:03:00.0/", "pciAddress": "0000:03:00.0", "pcieRootPort": true, "gpuDirectClique": 0, "noMmap": false, "numaNode": 0}
+                ],
+                "fabricManagerPartitionId": 1
+            }
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).expect("tier2/3 intent parses");
+        let gpu = intent.gpu.expect("gpu present");
+        assert_eq!(gpu.devices.len(), 2);
+        assert!(gpu.devices[0].pcie_root_port && gpu.devices[0].no_mmap);
+        assert_eq!(gpu.devices[1].numa_node, 1);
+        let numa = gpu.numa.expect("numa present");
+        assert_eq!(numa.nodes.len(), 2);
+        assert_eq!(numa.nodes[1].cpus, "40-79");
+        assert_eq!(numa.nodes[1].memory_mi, 491520);
+        assert_eq!(gpu.vcpu_pinning.len(), 2);
+        assert_eq!(gpu.vcpu_pinning[1].host_cpu, 9);
+        assert_eq!(gpu.hugepages, "1G");
+        assert_eq!(gpu.nv_switches.len(), 1);
+        assert_eq!(gpu.nv_switches[0].pci_address, "0000:03:00.0");
+        assert_eq!(gpu.fabric_manager_partition_id, 1);
+    }
+
+    /// Version-skew: an OLD controller's GPU intent (no topology fields, and
+    /// explicit nulls where Go emits nil slices) still parses with defaults.
+    #[test]
+    fn gpu_intent_old_controller_defaults() {
+        let json = r#"{
+            "guestId": "default/old",
+            "cpu": 2,
+            "memory": 2048,
+            "hypervisor": "qemu",
+            "seedPath": "",
+            "lifecycle": "start",
+            "network": false,
+            "rootDisk": {"format": "raw", "path": "/d.raw"},
+            "gpu": {"devices": null, "deviceSource": "env", "firmware": "cloudhv", "fabricManagerPartitionId": -1, "vcpuPinning": null, "nvSwitches": null}
+        }"#;
+        let intent: RuntimeIntent = serde_json::from_str(json).expect("old intent parses");
+        let gpu = intent.gpu.expect("gpu present");
+        assert!(gpu.numa.is_none());
+        assert!(gpu.vcpu_pinning.is_empty());
+        assert!(gpu.nv_switches.is_empty());
+        assert!(gpu.hugepages.is_empty());
     }
 }

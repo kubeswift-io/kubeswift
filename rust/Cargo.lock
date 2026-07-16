@@ -1777,7 +1777,9 @@ dependencies = [
 name = "swift-qemu-client"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
+ "serde_json",
 ]
 
 [[package]]
