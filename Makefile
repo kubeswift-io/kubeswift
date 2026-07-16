@@ -403,6 +403,14 @@ verify-dashboards:
 verify-sandbox-config:
 	@./build/kernels/sandbox/verify-config.sh
 
+# Boot-smoke the generated Tier-2/3 HGX QEMU topology (pcie-root-port per
+# device, NUMA memory backends, SMP) against the SHIPPING QEMU in the swiftletd
+# image, with emulated PCIe endpoints substituted on the same root ports — no
+# GPU hardware needed. Lab tool (needs /dev/kvm + docker), not wired into CI.
+# See docs/design/gpu-testing-without-hardware.md.
+verify-qemu-topology:
+	@./test/gpu/verify-qemu-topology.sh
+
 # Sync the canonical dashboards (config/grafana/) into the Helm chart
 # (charts/kubeswift/dashboards/), where templates/monitoring/dashboards.yaml
 # embeds them via .Files.Get. Same pattern as the CRD copy step — the

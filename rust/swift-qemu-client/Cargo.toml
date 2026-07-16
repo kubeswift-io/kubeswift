@@ -9,3 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 log = "0.4"
+# query-cpus-fast response parsing (vCPU thread ids for post-spawn pinning).
+serde_json = "1"
+# sched_setaffinity for vCPU->host-CPU pinning (QEMU has no CLI for affinity).
+libc = "0.2"

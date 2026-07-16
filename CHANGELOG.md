@@ -8,6 +8,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Added
 
+- **Tier-2/3 HGX QEMU topology runtime** — the QEMU launch path now renders the
+  full GPU topology the controller has always computed (previously dropped as a
+  documented "when hardware is available" stub, leaving a flat PCI layout that
+  CUDA rejects): each SXM device behind its own `pcie-root-port` (unique
+  chassis/slot per QEMU docs/pcie.txt), `x-no-mmap=true` large-BAR handling,
+  per-NUMA-node shared memory backends + `-numa` bindings, optional 1G/2M
+  hugepage backing, SMP sockets matching the NUMA layout, NVSwitch device
+  passthrough (Tier 3), and post-spawn vCPU→host-CPU pinning via QMP
+  `query-cpus-fast` + `sched_setaffinity`. Grounded in the NVIDIA HGX Shared
+  NVSwitch Passthrough Integration Guide (WP-12736-002). Validated without GPU
+  hardware by `make verify-qemu-topology`, which boots the builder's exact args
+  on the shipping QEMU with emulated PCIe endpoints substituted on the same
+  root ports; VFIO/NVLink/Fabric-Manager runtime behaviour still requires real
+  HGX hardware.
+
 - **GPU sandboxes (Phase 1) — pass a GPU into a SwiftSandbox via DRA.**
   `SwiftSandbox.spec.gpuResourceClaim` allocates one Tier-1 GPU through a Kubernetes
   DRA `ResourceClaim`: the scheduler picks the node/device, the DRA driver injects it
