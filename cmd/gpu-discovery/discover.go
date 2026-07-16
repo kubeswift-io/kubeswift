@@ -405,7 +405,7 @@ func parseNVSwitchesFromLspci(output string) ([]gpuv1alpha1.NVSwitchDevice, erro
 
 // --- Fabric Manager Discovery ---
 
-func discoverFabricManager() (*gpuv1alpha1.FabricManagerStatus, error) {
+func discoverFabricManager(moduleToIndex map[int]int) (*gpuv1alpha1.FabricManagerStatus, error) {
 	fmpmPath, err := exec.LookPath("fmpm")
 	if err != nil {
 		return nil, fmt.Errorf("fmpm not in PATH")
@@ -432,19 +432,44 @@ func discoverFabricManager() (*gpuv1alpha1.FabricManagerStatus, error) {
 	if err != nil {
 		klog.V(2).InfoS("fmpm -q failed, skipping partition info", "err", err)
 	} else {
-		fm.Partitions = parseFMPartitions(partOutput)
+		fm.Partitions = parseFMPartitions(partOutput, moduleToIndex)
+		if len(fm.Partitions) > 0 && len(moduleToIndex) == 0 {
+			// No silent failure (Design Principle #6): FM partition membership is
+			// keyed on GPU physical/Module IDs, which do NOT follow lspci order.
+			// Without the nvidia-smi Module-ID join the GPUIndices fall back to
+			// identity and are very likely WRONG on real HGX baseboards.
+			klog.ErrorS(nil, "Fabric Manager partitions discovered but GPU Module IDs are unavailable "+
+				"(nvidia-smi missing from the discovery environment); partition GPUIndices fall back to "+
+				"an identity mapping and are very likely INCORRECT on HGX baseboards. Provide nvidia-smi "+
+				"to the gpu-discovery pod (host-mount or NVIDIA container runtime).")
+		}
 	}
 
 	return fm, nil
 }
 
-// parseFMPartitions parses fmpm -q output.
-// Expected format per line: "partition <id>: gpus=<indices> active=<true/false>"
-// Example: "partition 0: gpus=0,1 active=false"
+// parseFMPartitions parses a Fabric Manager partition listing and translates the
+// per-partition GPU membership into the device-Index space the allocator uses
+// (FMPartitionStatus.GPUIndices, consumed by selectPartitionGPUs).
+//
+// SEMANTICS (NVIDIA HGX Shared NVSwitch GPU Passthrough guide, WP-12736-002):
+// Fabric Manager expresses partition membership in GPU *physical IDs* — the
+// baseboard slot / Module ID surfaced by `nvidia-smi -q` as "GPU Module Id".
+// Those IDs do NOT follow lspci/BDF order, so they cannot be used as device
+// indices directly. moduleToIndex (from discoverGPUModuleIDs) carries the
+// (Module ID -> device Index) join; translatePartitionGPUIndices applies it.
+//
+// FORMAT: the line grammar below ("partition N: gpus=... active=...") is a
+// placeholder — the fmpm CLI text format is FM/driver-version dependent and the
+// canonical acquisition is the Fabric Manager shared-library API
+// (fmGetSupportedFabricPartitions). This is the hardware-gated adapter seam; the
+// LOAD-BEARING correctness (physical-ID -> Index translation) lives in
+// translatePartitionGPUIndices and is unit-tested independent of the source
+// format. The parsed `gpus=` values are physical/Module IDs, NOT indices.
 var fmPartitionPattern = regexp.MustCompile(
 	`partition\s+(\d+):\s+gpus=([\d,]+)\s+active=(\w+)`)
 
-func parseFMPartitions(output string) []gpuv1alpha1.FMPartitionStatus {
+func parseFMPartitions(output string, moduleToIndex map[int]int) []gpuv1alpha1.FMPartitionStatus {
 	var partitions []gpuv1alpha1.FMPartitionStatus
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
@@ -453,16 +478,143 @@ func parseFMPartitions(output string) []gpuv1alpha1.FMPartitionStatus {
 			continue
 		}
 		id, _ := strconv.Atoi(matches[1])
-		gpuIndices := parseIntList(matches[2])
+		physicalIDs := parseIntList(matches[2])
 		active := matches[3] == "true"
 
 		partitions = append(partitions, gpuv1alpha1.FMPartitionStatus{
 			ID:         id,
-			GPUIndices: gpuIndices,
+			GPUIndices: translatePartitionGPUIndices(physicalIDs, moduleToIndex),
 			Active:     active,
 		})
 	}
 	return partitions
+}
+
+// translatePartitionGPUIndices maps a partition's GPU physical / Module IDs into
+// device-Index space via moduleToIndex (see parseFMPartitions for why this is
+// required).
+//
+//   - Empty map (nvidia-smi unavailable): the raw physical IDs pass through
+//     unchanged (identity) so PCIe-only nodes and unit tests still function; the
+//     caller logs a prominent warning because identity is likely wrong on HGX.
+//   - Non-empty map, physical ID present: translated to its device Index.
+//   - Non-empty map, physical ID absent: DROPPED (the partition ends up
+//     under-count and is therefore not selectable — a safe failure, never a
+//     wrong-NVLink one) with a warning.
+func translatePartitionGPUIndices(physicalIDs []int, moduleToIndex map[int]int) []int {
+	if len(moduleToIndex) == 0 {
+		return physicalIDs
+	}
+	out := make([]int, 0, len(physicalIDs))
+	for _, pid := range physicalIDs {
+		idx, ok := moduleToIndex[pid]
+		if !ok {
+			klog.V(1).InfoS("FM partition references a GPU Module ID with no discovered device; dropping it from the partition",
+				"moduleID", pid)
+			continue
+		}
+		out = append(out, idx)
+	}
+	return out
+}
+
+// --- GPU Module ID Discovery (nvidia-smi) ---
+
+// nvidiaSmiGPUHeaderPattern matches a per-GPU section header in `nvidia-smi -q`,
+// e.g. "GPU 00000000:0F:00.0". nvidia-smi uses an 8-hex-digit domain and
+// upper-case hex; lspci discovery uses a 4-hex-digit lower-case domain —
+// normalizeBDF reconciles the two.
+var nvidiaSmiGPUHeaderPattern = regexp.MustCompile(
+	`^GPU\s+([0-9a-fA-F]{4,8}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])`)
+
+// moduleIDPattern matches the "GPU Module Id" field in `nvidia-smi -q`. The
+// exact field name is FM/driver-version dependent (seen as "GPU Module Id" and
+// "Module Id"); match case-insensitively on the "module id" tail.
+var moduleIDPattern = regexp.MustCompile(`(?i)module id\s*:\s*(\d+)`)
+
+// discoverGPUModuleIDs runs `nvidia-smi -q` and returns a (GPU Module Id ->
+// device Index) map for the discovered GPUs — the join Fabric Manager partition
+// translation needs. Returns an empty map (never an error) when nvidia-smi is
+// unavailable, so FM partition translation degrades to identity with a
+// caller-side warning.
+//
+// DEPLOYMENT: nvidia-smi must be present in the discovery environment. The
+// shipped gpu-discovery DaemonSet is drop-ALL / read-only-/sys and does NOT ship
+// it — HGX deployments must provide nvidia-smi to the discovery pod (host-mount
+// or NVIDIA container runtime). Correct on PCIe-tier nodes without it (no FM, no
+// partitions to translate).
+func discoverGPUModuleIDs(gpus []gpuv1alpha1.GPUDevice) map[int]int {
+	smiPath, err := exec.LookPath("nvidia-smi")
+	if err != nil {
+		return map[int]int{}
+	}
+	out, err := runCommand(smiPath, "-q")
+	if err != nil {
+		klog.V(2).InfoS("nvidia-smi -q failed; FM partition membership will degrade to identity", "err", err)
+		return map[int]int{}
+	}
+	return buildModuleToIndex(parseModuleIDs(out), gpus)
+}
+
+// parseModuleIDs parses `nvidia-smi -q` output into a (normalized BDF -> GPU
+// Module Id) map. Each "GPU <BDF>" section header starts a new device; the first
+// "Module Id" line within that section records its module id.
+func parseModuleIDs(output string) map[string]int {
+	result := map[string]int{}
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	current := ""
+	for scanner.Scan() {
+		line := scanner.Text()
+		if m := nvidiaSmiGPUHeaderPattern.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			current = normalizeBDF(m[1])
+			continue
+		}
+		if current == "" {
+			continue
+		}
+		if m := moduleIDPattern.FindStringSubmatch(line); m != nil {
+			if _, seen := result[current]; !seen {
+				id, _ := strconv.Atoi(m[1])
+				result[current] = id
+			}
+		}
+	}
+	return result
+}
+
+// buildModuleToIndex joins the (normalized BDF -> Module Id) map from nvidia-smi
+// with the (BDF -> Index) order from lspci discovery to produce the
+// (Module Id -> device Index) map the FM-partition translation consumes.
+func buildModuleToIndex(bdfToModule map[string]int, gpus []gpuv1alpha1.GPUDevice) map[int]int {
+	out := map[int]int{}
+	for _, g := range gpus {
+		if mod, ok := bdfToModule[normalizeBDF(g.PCIAddress)]; ok {
+			out[mod] = g.Index
+		}
+	}
+	return out
+}
+
+// normalizeBDF canonicalizes a PCI address to lower-case with a 4-hex-digit
+// domain, so nvidia-smi's "00000000:0F:00.0" and lspci's "0000:0f:00.0" compare
+// equal. A domain-less "BB:DD.F" is treated as domain 0000.
+func normalizeBDF(bdf string) string {
+	bdf = strings.ToLower(strings.TrimSpace(bdf))
+	if strings.Count(bdf, ":") == 1 {
+		bdf = "0000:" + bdf
+	}
+	parts := strings.SplitN(bdf, ":", 2)
+	if len(parts) != 2 {
+		return bdf
+	}
+	dom := parts[0]
+	switch {
+	case len(dom) > 4:
+		dom = dom[len(dom)-4:]
+	case len(dom) < 4:
+		dom = strings.Repeat("0", 4-len(dom)) + dom
+	}
+	return dom + ":" + parts[1]
 }
 
 // --- Utility functions ---

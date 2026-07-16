@@ -258,7 +258,12 @@ func discoverHardware() (*SwiftGPUNodeStatus, error) {
 			nvSwitches = nil
 		}
 
-		fm, err = discoverFabricManager()
+		// GPU Module IDs (nvidia-smi) are needed to translate Fabric Manager
+		// partition membership (physical/Module IDs) into device-Index space.
+		// Empty when nvidia-smi is unavailable; discoverFabricManager warns.
+		moduleToIndex := discoverGPUModuleIDs(gpus)
+
+		fm, err = discoverFabricManager(moduleToIndex)
 		if err != nil {
 			klog.V(2).InfoS("Fabric Manager discovery skipped", "reason", err)
 			fm = nil
