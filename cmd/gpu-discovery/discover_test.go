@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"testing"
 
 	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
@@ -493,13 +494,16 @@ func TestNVSwitchDiscoveryNone(t *testing.T) {
 
 // --- TestFabricManagerParsing ---
 
-func TestFabricManagerParsing(t *testing.T) {
+// With an empty module map (nvidia-smi unavailable / PCIe-only), the parsed
+// physical IDs pass through as-is (identity) — preserves pre-translation
+// behavior for nodes without a Fabric.
+func TestParseFMPartitions_IdentityFallback(t *testing.T) {
 	output := `partition 0: gpus=0,1 active=false
 partition 1: gpus=2,3 active=false
 partition 2: gpus=0,1,2,3 active=false
 partition 3: gpus=0,1,2,3,4,5,6,7 active=true
 `
-	partitions := parseFMPartitions(output)
+	partitions := parseFMPartitions(output, map[int]int{})
 	if len(partitions) != 4 {
 		t.Fatalf("expected 4 partitions, got %d", len(partitions))
 	}
@@ -509,6 +513,141 @@ partition 3: gpus=0,1,2,3,4,5,6,7 active=true
 	if !partitions[3].Active || len(partitions[3].GPUIndices) != 8 {
 		t.Errorf("partition[3] Active=%v, GPUs=%d", partitions[3].Active, len(partitions[3].GPUIndices))
 	}
+}
+
+// The load-bearing correctness property (NVIDIA WP-12736-002): Fabric Manager
+// lists partition membership in GPU physical/Module IDs, which do NOT follow
+// lspci order. parseFMPartitions must translate those into device-Index space.
+func TestParseFMPartitions_ModuleIDTranslation(t *testing.T) {
+	// Guide mapping: Module Id -> device Index.
+	moduleToIndex := map[int]int{5: 0, 7: 1, 6: 2, 8: 3, 1: 4, 3: 5, 2: 6, 4: 7}
+	// Partition 1 (the guide's first 4-GPU half) = Module IDs 1,2,3,4.
+	partitions := parseFMPartitions("partition 1: gpus=1,2,3,4 active=false\n", moduleToIndex)
+	if len(partitions) != 1 {
+		t.Fatalf("expected 1 partition, got %d", len(partitions))
+	}
+	got := append([]int(nil), partitions[0].GPUIndices...)
+	sort.Ints(got)
+	// Module {1,2,3,4} -> Index {4,6,5,7}; NOT the raw {1,2,3,4}.
+	want := []int{4, 5, 6, 7}
+	if !equalInts(got, want) {
+		t.Errorf("GPUIndices = %v (raw would be [1 2 3 4]); want translated %v",
+			partitions[0].GPUIndices, want)
+	}
+}
+
+// A physical ID with no discovered device is dropped (safe under-count), not
+// left as a wrong index.
+func TestParseFMPartitions_DropsUnmappedModuleID(t *testing.T) {
+	moduleToIndex := map[int]int{5: 0, 7: 1}
+	partitions := parseFMPartitions("partition 0: gpus=5,99,7 active=false\n", moduleToIndex)
+	got := append([]int(nil), partitions[0].GPUIndices...)
+	sort.Ints(got)
+	if !equalInts(got, []int{0, 1}) {
+		t.Errorf("GPUIndices = %v, want [0 1] (Module Id 99 dropped)", partitions[0].GPUIndices)
+	}
+}
+
+func TestNormalizeBDF(t *testing.T) {
+	cases := map[string]string{
+		"00000000:0F:00.0": "0000:0f:00.0", // nvidia-smi form
+		"0000:0f:00.0":     "0000:0f:00.0", // lspci form
+		"0000:B8:00.0":     "0000:b8:00.0",
+		"0f:00.0":          "0000:0f:00.0", // domain-less
+	}
+	for in, want := range cases {
+		if got := normalizeBDF(in); got != want {
+			t.Errorf("normalizeBDF(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseModuleIDs(t *testing.T) {
+	// Real-shape `nvidia-smi -q` excerpt: 8-hex-digit upper-case domain header,
+	// indented fields.
+	input := `
+==============NVSMI LOG==============
+
+Attached GPUs                             : 2
+GPU 00000000:0F:00.0
+    Product Name                          : NVIDIA H100 80GB HBM3
+    GPU Module Id                         : 5
+    Bus Id                                : 00000000:0F:00.0
+GPU 00000000:10:00.0
+    Product Name                          : NVIDIA H100 80GB HBM3
+    GPU Module Id                         : 7
+`
+	m := parseModuleIDs(input)
+	if m["0000:0f:00.0"] != 5 {
+		t.Errorf("module id for 0f = %d, want 5 (map=%v)", m["0000:0f:00.0"], m)
+	}
+	if m["0000:10:00.0"] != 7 {
+		t.Errorf("module id for 10 = %d, want 7 (map=%v)", m["0000:10:00.0"], m)
+	}
+}
+
+func TestBuildModuleToIndex(t *testing.T) {
+	bdfToModule := map[string]int{"0000:0f:00.0": 5, "0000:10:00.0": 7}
+	gpus := []gpuv1alpha1.GPUDevice{
+		{Index: 0, PCIAddress: "0000:0f:00.0"},
+		{Index: 1, PCIAddress: "0000:10:00.0"},
+	}
+	m := buildModuleToIndex(bdfToModule, gpus)
+	if m[5] != 0 || m[7] != 1 {
+		t.Errorf("moduleToIndex = %v, want {5:0, 7:1}", m)
+	}
+}
+
+// End-to-end round-trip proving discovery produces exactly the Index-space
+// GPUIndices the #405 allocator fixture hard-codes: nvidia-smi Module IDs +
+// lspci BDF order -> the guide's physicalId->Index map -> translated partition.
+func TestFMPartition_GuideRoundTrip(t *testing.T) {
+	smi := `GPU 00000000:0F:00.0
+    GPU Module Id : 5
+GPU 00000000:10:00.0
+    GPU Module Id : 7
+GPU 00000000:41:00.0
+    GPU Module Id : 6
+GPU 00000000:44:00.0
+    GPU Module Id : 8
+GPU 00000000:86:00.0
+    GPU Module Id : 1
+GPU 00000000:87:00.0
+    GPU Module Id : 3
+GPU 00000000:B8:00.0
+    GPU Module Id : 2
+GPU 00000000:BB:00.0
+    GPU Module Id : 4
+`
+	gpus := []gpuv1alpha1.GPUDevice{
+		{Index: 0, PCIAddress: "0000:0f:00.0"}, {Index: 1, PCIAddress: "0000:10:00.0"},
+		{Index: 2, PCIAddress: "0000:41:00.0"}, {Index: 3, PCIAddress: "0000:44:00.0"},
+		{Index: 4, PCIAddress: "0000:86:00.0"}, {Index: 5, PCIAddress: "0000:87:00.0"},
+		{Index: 6, PCIAddress: "0000:b8:00.0"}, {Index: 7, PCIAddress: "0000:bb:00.0"},
+	}
+	moduleToIndex := buildModuleToIndex(parseModuleIDs(smi), gpus)
+
+	// The guide's partition 1 = the 4-GPU half with Module IDs {1,2,3,4}.
+	// The #405 fixture encodes the same partition as device Indices via
+	// phys{1:4,2:6,3:5,4:7} => {4,6,5,7}.
+	partitions := parseFMPartitions("partition 1: gpus=1,2,3,4 active=false\n", moduleToIndex)
+	got := append([]int(nil), partitions[0].GPUIndices...)
+	sort.Ints(got)
+	if !equalInts(got, []int{4, 5, 6, 7}) {
+		t.Errorf("round-trip GPUIndices = %v, want [4 5 6 7] (fixture parity)", partitions[0].GPUIndices)
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestNoFabricManager(t *testing.T) {
