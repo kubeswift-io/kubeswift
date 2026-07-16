@@ -53,6 +53,30 @@ All notable changes to KubeSwift are documented here.
   Module-ID mapping, and partition table — the mismatch reproduced verbatim on
   the old code.
 
+- **GPU discovery now translates Fabric Manager partition membership from GPU
+  Module IDs to device indices.** `gpu-discovery` wrote
+  `SwiftGPUNode.status.fabricManager.partitions[].gpuIndices` straight from the
+  parsed FM partition listing, treating the values as device indices — but FM
+  expresses membership in GPU physical/Module IDs (`nvidia-smi -q` "GPU Module
+  Id"), which do not follow lspci order (NVIDIA WP-12736-002). The membership
+  the shared-NVSwitch allocator consumes was therefore wrong on real HGX
+  baseboards. Discovery now joins the Module IDs from `nvidia-smi -q` with the
+  lspci BDF→index order and translates each partition into device-Index space;
+  an unmapped ID is dropped (safe under-count, never a wrong-NVLink one) and an
+  empty map (no `nvidia-smi`) degrades to identity with a prominent warning.
+  HGX deployments must provide `nvidia-smi` to the discovery pod. No effect on
+  the PCIe path (no Fabric, identity pass-through).
+
+- **Shared-NVSwitch allocation now enforces the Fabric Manager version match.**
+  `SwiftGPUProfile.spec.fabricManager.requiredVersion` (the guest driver
+  version) had no consumers; per NVIDIA WP-12736-002 the host Fabric Manager
+  version must exactly match the guest driver version in shared mode or the
+  partition attach fails — a broken fabric, not a boot failure. The allocator,
+  the migration `ReserveOnNode` reserve, and the `GPUNodeHasCapacity` pre-flight
+  now reject a version-mismatched node (shared mode only; full mode runs FM in
+  the guest), and the `GPUAllocated=NoCapacity` condition names the mismatch
+  rather than reporting a bare "no capacity".
+
 
 - **Sandboxes without `spec.workingDir` panicked on kernel 6.6.10** (regression
   from v0.11.0's cold-path workingDir change). The bridge-initramfs runs `set -u`
