@@ -11,6 +11,7 @@
 package materialize
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -73,7 +74,84 @@ type Options struct {
 	CacheDir   string // node-local cache root (hostPath)
 	Mode       Mode   // ModeBlock (default) or ModeTree
 	PullSecret string // path to a docker config.json for private registries; "" = anonymous
-	Insecure   bool   // allow a plain-HTTP registry (trusted in-cluster stores only)
+	// Auth is an in-memory registry authenticator. When set it takes precedence
+	// over PullSecret/the default keychain — used by the controller, which reads
+	// the pull Secret from the apiserver (it has no mounted config.json) and can't
+	// set the process-global DOCKER_CONFIG env safely under concurrent reconciles.
+	Auth     authn.Authenticator
+	Insecure bool // allow a plain-HTTP registry (trusted in-cluster stores only)
+}
+
+// authOption resolves the go-containerregistry auth for a pull: an explicit
+// in-memory authenticator (opts.Auth) wins; otherwise the default keychain reads
+// $DOCKER_CONFIG (the mounted pull-secret path, set by RemotePull/Resolve).
+func (opts Options) authOption() remote.Option {
+	if opts.Auth != nil {
+		return remote.WithAuth(opts.Auth)
+	}
+	return remote.WithAuthFromKeychain(authn.DefaultKeychain)
+}
+
+// AuthFromDockerConfigJSON builds a registry authenticator from a
+// kubernetes.io/dockerconfigjson Secret's bytes for the registry that hosts
+// imageRef. Returns authn.Anonymous when the config has no entry for that
+// registry (so a pull secret scoped to a different registry degrades to
+// anonymous rather than erroring). The controller uses this to resolve a private
+// image upfront without mounting a config.json.
+func AuthFromDockerConfigJSON(dockerConfigJSON []byte, imageRef string) (authn.Authenticator, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("parse image ref %q: %w", imageRef, err)
+	}
+	var cfg struct {
+		Auths map[string]struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Auth     string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(dockerConfigJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("parse .dockerconfigjson: %w", err)
+	}
+	reg := ref.Context().RegistryStr()
+	for host, entry := range cfg.Auths {
+		if !registryHostMatches(host, reg) {
+			continue
+		}
+		user, pass := entry.Username, entry.Password
+		if entry.Auth != "" {
+			decoded, derr := base64.StdEncoding.DecodeString(entry.Auth)
+			if derr == nil {
+				if u, p, ok := strings.Cut(string(decoded), ":"); ok {
+					user, pass = u, p
+				}
+			}
+		}
+		if user == "" && pass == "" {
+			return authn.Anonymous, nil
+		}
+		return authn.FromConfig(authn.AuthConfig{Username: user, Password: pass}), nil
+	}
+	return authn.Anonymous, nil
+}
+
+// registryHostMatches compares a docker-config auth key (which may carry a
+// scheme, a path, or the docker.io "https://index.docker.io/v1/" alias) against a
+// go-containerregistry registry host.
+func registryHostMatches(configKey, registry string) bool {
+	k := configKey
+	k = strings.TrimPrefix(k, "https://")
+	k = strings.TrimPrefix(k, "http://")
+	if i := strings.IndexAny(k, "/"); i >= 0 {
+		k = k[:i]
+	}
+	if k == registry {
+		return true
+	}
+	// Docker Hub aliases.
+	dockerAliases := registry == "index.docker.io" || registry == "docker.io" || registry == "registry-1.docker.io"
+	keyIsDockerHub := configKey == "https://index.docker.io/v1/" || k == "index.docker.io" || k == "docker.io" || k == "registry-1.docker.io"
+	return dockerAliases && keyIsDockerHub
 }
 
 // Puller resolves an Options to a pulled image and its digest ("sha256:..."). The
@@ -154,12 +232,12 @@ func RemotePull(opts Options) (v1.Image, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("parse image ref %q: %w", opts.ImageRef, err)
 	}
-	// A pull secret is a mounted docker config.json; DefaultKeychain reads it from
-	// $DOCKER_CONFIG's directory.
+	// A mounted pull secret (config.json) is read via $DOCKER_CONFIG by the default
+	// keychain; an in-memory opts.Auth (controller path) takes precedence.
 	if opts.PullSecret != "" {
 		os.Setenv("DOCKER_CONFIG", filepath.Dir(opts.PullSecret))
 	}
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	img, err := remote.Image(ref, opts.authOption())
 	if err != nil {
 		return nil, "", fmt.Errorf("pull %q: %w", opts.ImageRef, err)
 	}
@@ -186,7 +264,7 @@ func Resolve(opts Options) (repository, digest string, err error) {
 	if opts.PullSecret != "" {
 		os.Setenv("DOCKER_CONFIG", filepath.Dir(opts.PullSecret))
 	}
-	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	img, err := remote.Image(ref, opts.authOption())
 	if err != nil {
 		return "", "", fmt.Errorf("resolve %q: %w", opts.ImageRef, err)
 	}

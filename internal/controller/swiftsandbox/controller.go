@@ -38,8 +38,11 @@ const (
 // SwiftSandboxReconciler runs OCI-rootfs microVM sandboxes.
 type SwiftSandboxReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader is an uncached reader (mgr.GetAPIReader) used to Get the
+	// imagePullSecret without opening a cluster-wide secrets informer.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 }
 
 func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
@@ -87,7 +90,11 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 // createLaunch resolves the image and creates the intent ConfigMap + launcher pod.
 func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, kernelName string) (ctrl.Result, error) {
-	ri, err := resolveImage(sb)
+	auth, err := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Image)
+	if err != nil {
+		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
+	}
+	ri, err := resolveImage(sb, auth)
 	if err != nil {
 		return r.fail(ctx, sb, "ImageResolveFailed", err.Error())
 	}

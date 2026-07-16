@@ -1,10 +1,15 @@
 package swiftsandbox
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
@@ -53,17 +58,39 @@ func (e execSpec) nonTrivial() bool {
 	return len(e.Argv) > 0 || len(e.Env) > 0 || e.Cwd != ""
 }
 
+// pullSecretAuth builds an in-memory registry authenticator from a
+// docker-registry Secret (spec.imagePullSecret) so the controller can resolve a
+// PRIVATE image upfront — the controller pod has no mounted config.json, and
+// setting the process-global DOCKER_CONFIG env would race concurrent reconciles.
+// The Secret is read with an UNCACHED reader (get-only; no cluster-wide secrets
+// informer). Returns nil (anonymous) when no pull secret is set.
+func pullSecretAuth(ctx context.Context, reader client.Reader, namespace, secretName, imageRef string) (authn.Authenticator, error) {
+	if secretName == "" {
+		return nil, nil
+	}
+	var sec corev1.Secret
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretName}, &sec); err != nil {
+		return nil, fmt.Errorf("read imagePullSecret %q: %w", secretName, err)
+	}
+	dcj := sec.Data[corev1.DockerConfigJsonKey] // ".dockerconfigjson"
+	if len(dcj) == 0 {
+		return nil, fmt.Errorf("imagePullSecret %q has no %s (is it a kubernetes.io/dockerconfigjson Secret?)", secretName, corev1.DockerConfigJsonKey)
+	}
+	return materialize.AuthFromDockerConfigJSON(dcj, imageRef)
+}
+
 // resolveImage does a cheap registry resolve (manifest + config, no layers) so
 // the controller learns the digest -> deterministic cache path and the image
 // entrypoint, and can build the launch intent before the materialize init runs.
 // The init container independently resolves the same digest, so they agree.
-func resolveImage(sb *sandboxv1alpha1.SwiftSandbox) (resolvedImage, error) {
+// auth (from pullSecretAuth) authenticates a private image; nil = anonymous.
+func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator) (resolvedImage, error) {
 	virtiofs := sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs
 	mode := materialize.ModeBlock
 	if virtiofs {
 		mode = materialize.ModeTree
 	}
-	opts := materialize.Options{ImageRef: sb.Spec.Image, CacheDir: rootfsCacheDir, Mode: mode}
+	opts := materialize.Options{ImageRef: sb.Spec.Image, CacheDir: rootfsCacheDir, Mode: mode, Auth: auth}
 	img, digest, err := materialize.RemotePull(opts)
 	if err != nil {
 		return resolvedImage{}, err
