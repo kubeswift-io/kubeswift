@@ -70,16 +70,22 @@ func ReserveOnNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.Sw
 		return nil, nil, -1, fmt.Errorf("GPU node %q model %q does not match profile model %q", nodeName, node.Status.GPUModel, profile.Spec.Model)
 	}
 
-	gpus, numa := selectGPUs(node.Status.GPUs, profile.Spec.Count, profile.Spec.Model)
-	if gpus == nil {
-		return nil, nil, -1, fmt.Errorf("GPU node %q could not select %d matching GPU(s)", nodeName, profile.Spec.Count)
-	}
-
+	// Shared partition mode: the FM partition is the unit of allocation — the
+	// guest must receive exactly the chosen partition's member GPUs (the
+	// NVSwitch fabric only allows NVLink within the activated partition). Same
+	// coupling as findAndAllocate's selection.
+	var gpus []gpuv1alpha1.GPUDevice
+	var numa []int
 	partID := -1
 	if profile.Spec.PartitionMode == "shared" {
-		partID, err = findFMPartition(node.Status.FabricManager, profile.Spec.Count)
-		if err != nil {
-			return nil, nil, -1, fmt.Errorf("GPU node %q: no free FM partition for %d GPU(s): %w", nodeName, profile.Spec.Count, err)
+		gpus, numa, partID = selectPartitionGPUs(&node, profile.Spec.Count, profile.Spec.Model)
+		if gpus == nil {
+			return nil, nil, -1, fmt.Errorf("GPU node %q: no free FM partition with %d free matching GPU(s)", nodeName, profile.Spec.Count)
+		}
+	} else {
+		gpus, numa = selectGPUs(node.Status.GPUs, profile.Spec.Count, profile.Spec.Model)
+		if gpus == nil {
+			return nil, nil, -1, fmt.Errorf("GPU node %q could not select %d matching GPU(s)", nodeName, profile.Spec.Count)
 		}
 	}
 

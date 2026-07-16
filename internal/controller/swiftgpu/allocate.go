@@ -102,18 +102,28 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 			continue
 		}
 
-		// Select GPUs, preferring same NUMA node for locality.
-		gpus, numa := selectGPUs(n.Status.GPUs, profile.Spec.Count, profile.Spec.Model)
-		if gpus == nil {
-			continue
-		}
-
-		// For shared partition mode, find an available Fabric Manager partition.
+		// Select GPUs. In shared partition mode the Fabric Manager partition is
+		// the unit of allocation: the NVSwitch fabric is programmed to allow
+		// NVLink among ONLY the GPUs within the activated partition (NVIDIA HGX
+		// Shared NVSwitch integration guide, WP-12736-002), so the guest MUST
+		// receive exactly that partition's member GPUs. Selecting GPUs by NUMA
+		// locality and a partition by count independently hands the guest GPUs
+		// the activated partition doesn't cover — no NVLink for this tenant,
+		// and a fabric cross-wired against another tenant's devices.
+		var gpus []gpuv1alpha1.GPUDevice
+		var numa []int
 		partID := -1
 		if profile.Spec.PartitionMode == "shared" {
-			partID, err = findFMPartition(n.Status.FabricManager, profile.Spec.Count)
-			if err != nil {
-				// Try the next node.
+			gpus, numa, partID = selectPartitionGPUs(n, profile.Spec.Count, profile.Spec.Model)
+			if gpus == nil {
+				// No free partition whose member GPUs are all free — try the
+				// next node.
+				continue
+			}
+		} else {
+			// No fabric constraint: prefer same-NUMA GPUs for locality.
+			gpus, numa = selectGPUs(n.Status.GPUs, profile.Spec.Count, profile.Spec.Model)
+			if gpus == nil {
 				continue
 			}
 		}
@@ -234,18 +244,59 @@ func selectGPUs(gpus []gpuv1alpha1.GPUDevice, count int, model string) (selected
 	return picked, numaSetToSlice(numaSet)
 }
 
-// findFMPartition returns the ID of an unallocated Fabric Manager partition
-// whose GPU count matches gpuCount.
-func findFMPartition(fm *gpuv1alpha1.FabricManagerStatus, gpuCount int) (int, error) {
+// selectPartitionGPUs picks a free Fabric Manager partition with exactly count
+// member GPUs whose members are ALL free (and match the optional model filter),
+// and returns those member devices — the partition is the unit of allocation
+// in shared NVSwitch mode. Partition GPUIndices reference GPUDevice.Index
+// (gpu-discovery owns mapping the FM physical/module IDs — which do NOT follow
+// lspci order, per nvidia-smi -q "Module ID" — onto the device inventory).
+// When several partitions qualify, one whose members share a single NUMA node
+// is preferred (locality, matching selectGPUs' preference). Returns nil when
+// no viable partition exists.
+func selectPartitionGPUs(
+	n *gpuv1alpha1.SwiftGPUNode,
+	count int,
+	model string,
+) (selected []gpuv1alpha1.GPUDevice, numaNodes []int, partitionID int) {
+	fm := n.Status.FabricManager
 	if fm == nil || !fm.Running {
-		return -1, fmt.Errorf("Fabric Manager is not running")
+		return nil, nil, -1
 	}
+	byIndex := map[int]gpuv1alpha1.GPUDevice{}
+	for _, g := range n.Status.GPUs {
+		byIndex[g.Index] = g
+	}
+
+	var fbGPUs []gpuv1alpha1.GPUDevice
+	var fbNUMA []int
+	fbPart := -1
 	for _, p := range fm.Partitions {
-		if len(p.GPUIndices) == gpuCount && p.AllocatedTo == "" {
-			return p.ID, nil
+		if len(p.GPUIndices) != count || p.AllocatedTo != "" {
+			continue
+		}
+		members := make([]gpuv1alpha1.GPUDevice, 0, count)
+		numaSet := map[int]bool{}
+		viable := true
+		for _, idx := range p.GPUIndices {
+			g, ok := byIndex[idx]
+			if !ok || g.Allocated || (model != "" && !strings.Contains(g.Model, model)) {
+				viable = false
+				break
+			}
+			members = append(members, g)
+			numaSet[g.NUMANode] = true
+		}
+		if !viable {
+			continue
+		}
+		if len(numaSet) == 1 {
+			return members, numaSetToSlice(numaSet), p.ID
+		}
+		if fbPart < 0 {
+			fbGPUs, fbNUMA, fbPart = members, numaSetToSlice(numaSet), p.ID
 		}
 	}
-	return -1, fmt.Errorf("no unallocated Fabric Manager partition for %d GPUs", gpuCount)
+	return fbGPUs, fbNUMA, fbPart
 }
 
 // countFreeGPUs recomputes the free GPU count from the allocation state.

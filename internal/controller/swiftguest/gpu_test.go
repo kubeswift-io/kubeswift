@@ -15,6 +15,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	kscheme "github.com/kubeswift-io/kubeswift/internal/scheme"
 )
 
 func gpuGuest(nodeName string, devices []string, partitionID int) *swiftv1alpha1.SwiftGuest {
@@ -687,5 +688,129 @@ func TestBuildPodDispatcher_GPUOnlyNoMigrationNodeName(t *testing.T) {
 	}
 	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "miles" {
 		t.Errorf("GPU pod NodeSelector hostname = %q, want miles", pod.Spec.NodeSelector["kubernetes.io/hostname"])
+	}
+}
+
+// TestBuildGPUIntent_HGXSharedTier2 exercises the FULL Tier-2 intent assembly
+// against a hardware-faithful HGX H100 node (real BDFs + the dual-socket NUMA
+// split from the NVIDIA WP-12736-002 integration guide): every SXM device
+// behind a pcie-root-port with x-no-mmap, per-device NUMA affinity looked up
+// from the node inventory, OVMF firmware, 1G hugepages, the FM partition id,
+// and the virtual-NUMA + vCPU-pinning layout. This is the allocation→intent
+// boundary a real HGX box would otherwise be the first to test.
+func TestBuildGPUIntent_HGXSharedTier2(t *testing.T) {
+	profile := &gpuv1alpha1.SwiftGPUProfile{
+		ObjectMeta: metav1.ObjectMeta{Name: "hgx4", Namespace: "default"},
+		Spec: gpuv1alpha1.SwiftGPUProfileSpec{
+			Count:         4,
+			Tier:          "hgx-shared",
+			PartitionMode: "shared",
+			PCIeTopology: &gpuv1alpha1.PCIeTopologySpec{
+				RootPortPerDevice: true,
+				NoMmap:            true,
+			},
+			NUMATopology: &gpuv1alpha1.NUMATopologySpec{
+				Sockets:           2,
+				CoresPerSocket:    20,
+				ThreadsPerCore:    1,
+				MemoryPerSocketMi: 491520,
+			},
+			Hugepages:   "1Gi",
+			VCPUPinning: true,
+			FabricManager: &gpuv1alpha1.FabricManagerSpec{
+				RequiredVersion: "550.163.01",
+			},
+		},
+	}
+	// The allocation the SwiftGPU controller produced: partition 1's members
+	// (physicalIds 1-4 → BDFs 86/87/b8/bb, ALL on NUMA 1 — the guide's real
+	// Module-ID mapping).
+	node := &gpuv1alpha1.SwiftGPUNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "hgx-0"},
+		Status: gpuv1alpha1.SwiftGPUNodeStatus{
+			GPUModel: "H100-SXM",
+			Host: gpuv1alpha1.HostTopology{
+				NUMANodes: []gpuv1alpha1.NUMANodeInfo{
+					{ID: 0, CPUs: "0-55,112-167", MemoryMi: 1048576},
+					{ID: 1, CPUs: "56-111,168-223", MemoryMi: 1048576},
+				},
+			},
+			GPUs: []gpuv1alpha1.GPUDevice{
+				{Index: 0, PCIAddress: "0000:0f:00.0", Model: "H100-SXM", NUMANode: 0},
+				{Index: 1, PCIAddress: "0000:10:00.0", Model: "H100-SXM", NUMANode: 0},
+				{Index: 2, PCIAddress: "0000:41:00.0", Model: "H100-SXM", NUMANode: 0},
+				{Index: 3, PCIAddress: "0000:44:00.0", Model: "H100-SXM", NUMANode: 0},
+				{Index: 4, PCIAddress: "0000:86:00.0", Model: "H100-SXM", NUMANode: 1},
+				{Index: 5, PCIAddress: "0000:87:00.0", Model: "H100-SXM", NUMANode: 1},
+				{Index: 6, PCIAddress: "0000:b8:00.0", Model: "H100-SXM", NUMANode: 1},
+				{Index: 7, PCIAddress: "0000:bb:00.0", Model: "H100-SXM", NUMANode: 1},
+			},
+			FabricManager: &gpuv1alpha1.FabricManagerStatus{
+				Installed: true, Version: "550.163.01", Running: true,
+				Partitions: []gpuv1alpha1.FMPartitionStatus{
+					{ID: 1, GPUIndices: []int{4, 6, 5, 7}, AllocatedTo: "default/hgx-guest"},
+				},
+			},
+		},
+	}
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "hgx-guest", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			GPUProfileRef: &corev1.LocalObjectReference{Name: "hgx4"},
+		},
+		Status: swiftv1alpha1.SwiftGuestStatus{
+			GPU: &swiftv1alpha1.GPUStatus{
+				Devices:     []string{"0000:86:00.0", "0000:87:00.0", "0000:b8:00.0", "0000:bb:00.0"},
+				PartitionID: 1,
+				NUMANodes:   []int{1},
+				Hypervisor:  "qemu",
+				NodeName:    "hgx-0",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(kscheme.Scheme).
+		WithObjects(profile, node, guest).
+		Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: kscheme.Scheme}
+
+	gi, err := r.buildGPUIntent(context.Background(), guest)
+	if err != nil {
+		t.Fatalf("buildGPUIntent: %v", err)
+	}
+	if gi.Firmware != "ovmf" {
+		t.Errorf("firmware = %q, want ovmf (QEMU Tier-2)", gi.Firmware)
+	}
+	if gi.Hugepages != "1G" {
+		t.Errorf("hugepages = %q, want 1G (normalized from 1Gi)", gi.Hugepages)
+	}
+	if gi.FabricManagerPartitionID != 1 {
+		t.Errorf("fmPartition = %d, want 1", gi.FabricManagerPartitionID)
+	}
+	if len(gi.Devices) != 4 {
+		t.Fatalf("devices = %d, want 4", len(gi.Devices))
+	}
+	for _, d := range gi.Devices {
+		if !d.PCIeRootPort {
+			t.Errorf("device %s must be behind a pcie-root-port (SXM: CUDA rejects flat)", d.PCIAddress)
+		}
+		if !d.NoMmap {
+			t.Errorf("device %s must carry noMmap (large BARs)", d.PCIAddress)
+		}
+		if d.NUMANode != 1 {
+			t.Errorf("device %s numaNode = %d, want 1 (from the node inventory)", d.PCIAddress, d.NUMANode)
+		}
+		if d.HostPath != "/sys/bus/pci/devices/"+d.PCIAddress+"/" {
+			t.Errorf("device hostPath = %q", d.HostPath)
+		}
+	}
+	if gi.NUMA == nil || len(gi.NUMA.Nodes) != 2 {
+		t.Fatalf("virtual NUMA layout missing: %+v", gi.NUMA)
+	}
+	if gi.NUMA.Nodes[0].MemoryMi != 491520 {
+		t.Errorf("numa node 0 memoryMi = %d", gi.NUMA.Nodes[0].MemoryMi)
+	}
+	if len(gi.VCPUPinning) == 0 {
+		t.Error("vcpuPinning must be computed (profile.vcpuPinning=true)")
 	}
 }

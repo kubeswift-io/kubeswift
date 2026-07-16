@@ -38,6 +38,22 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Shared-NVSwitch GPU allocation now couples GPU selection to the Fabric
+  Manager partition membership.** Previously the allocator picked GPUs by NUMA
+  locality and an FM partition by count *independently* — but the NVSwitch
+  fabric only allows NVLink among the GPUs **within** the activated partition
+  (NVIDIA WP-12736-002), and FM physical IDs do not follow lspci order, so a
+  Tier-2 `hgx-shared` guest could receive one partition's GPUs while a
+  *different* partition was activated: no NVLink for that tenant and a fabric
+  cross-wired against the next one. The partition is now the unit of
+  allocation (`findAndAllocate`, the migration `ReserveOnNode` primitive, and
+  the `GPUNodeHasCapacity` pre-flight all select a free partition whose member
+  GPUs are all free and hand the guest exactly those members). Proven with a
+  hardware-faithful HGX H100 fixture built from the NVIDIA guide's real BDFs,
+  Module-ID mapping, and partition table — the mismatch reproduced verbatim on
+  the old code.
+
+
 - **Sandboxes without `spec.workingDir` panicked on kernel 6.6.10** (regression
   from v0.11.0's cold-path workingDir change). The bridge-initramfs runs `set -u`
   but only assigned `$WORKDIR` when a workingDir was set, so the no-workingDir case
