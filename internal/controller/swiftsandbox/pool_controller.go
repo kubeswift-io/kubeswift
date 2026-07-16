@@ -42,8 +42,11 @@ const (
 // bridge-side idle keeper (kubeswift.idle=1), image-independent.
 type SwiftSandboxPoolReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader is an uncached reader (mgr.GetAPIReader) used to Get the pool's
+	// imagePullSecret without opening a cluster-wide secrets informer.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
 }
 
 func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -96,7 +99,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
 	var ri *resolvedImage
 	if want > 0 || pool.Status.Rootfs == nil || pool.Status.Rootfs.Digest == "" {
-		resolved, err := resolveImage(r.slotTemplate(&pool, "resolve"))
+		auth, err := pullSecretAuth(ctx, r.APIReader, pool.Namespace, pool.Spec.ImagePullSecret, pool.Spec.Image)
+		if err != nil {
+			return r.degraded(ctx, &pool, ready, claimed, "ImagePullSecretInvalid", err.Error())
+		}
+		resolved, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth)
 		if err != nil {
 			return r.degraded(ctx, &pool, ready, claimed, "ImageResolveFailed", err.Error())
 		}

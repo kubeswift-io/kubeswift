@@ -458,3 +458,60 @@ func TestResolveKernelProfile(t *testing.T) {
 		t.Errorf("plain sandbox kernel = %q, want sandbox", got)
 	}
 }
+
+func TestBuildPod_ImagePullSecret(t *testing.T) {
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "priv", Namespace: "ns"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{Image: "ghcr.io/org/cuda@sha256:x", ImagePullSecret: "ghcr-creds"},
+	}
+	pod := buildPod(sb, "sandbox")
+
+	var mat *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == materializeInitName {
+			mat = &pod.Spec.InitContainers[i]
+		}
+	}
+	if mat == nil {
+		t.Fatal("sandbox-materialize init container missing")
+	}
+	hasArg := false
+	for _, a := range mat.Args {
+		if a == "--pull-secret=/pull-secret/config.json" {
+			hasArg = true
+		}
+	}
+	if !hasArg {
+		t.Errorf("materialize must get --pull-secret; args=%v", mat.Args)
+	}
+	hasMount := false
+	for _, m := range mat.VolumeMounts {
+		if m.Name == "pull-secret" && m.MountPath == "/pull-secret" {
+			hasMount = true
+		}
+	}
+	if !hasMount {
+		t.Error("materialize must mount the pull-secret volume")
+	}
+	// The volume maps the docker-registry Secret's .dockerconfigjson -> config.json.
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == "pull-secret" {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil || vol.Secret == nil || vol.Secret.SecretName != "ghcr-creds" {
+		t.Fatalf("pull-secret volume missing/wrong: %+v", vol)
+	}
+	if len(vol.Secret.Items) != 1 || vol.Secret.Items[0].Key != ".dockerconfigjson" || vol.Secret.Items[0].Path != "config.json" {
+		t.Errorf("pull-secret must map .dockerconfigjson->config.json; got %+v", vol.Secret.Items)
+	}
+
+	// No pull secret -> no pull-secret wiring.
+	plain := buildPod(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}, "sandbox")
+	for _, v := range plain.Spec.Volumes {
+		if v.Name == "pull-secret" {
+			t.Error("no imagePullSecret -> no pull-secret volume")
+		}
+	}
+}

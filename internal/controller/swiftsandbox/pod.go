@@ -219,6 +219,23 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	matMounts := []corev1.VolumeMount{{Name: "rootfs-cache", MountPath: rootfsCacheDir}}
 	var matEnv []corev1.EnvVar
 	var verifyVolumes []corev1.Volume
+
+	if sb.Spec.ImagePullSecret != "" {
+		// Pull a private image: mount the docker-registry Secret's .dockerconfigjson
+		// as config.json and point materialize's --pull-secret at it (the default
+		// keychain reads $DOCKER_CONFIG's config.json). Mirrors the SwiftImage import
+		// path. The controller's upfront resolveImage uses the same Secret via the
+		// apiserver (in-memory auth) — see pullSecretAuth.
+		matArgs = append(matArgs, "--pull-secret=/pull-secret/config.json")
+		matMounts = append(matMounts, corev1.VolumeMount{Name: "pull-secret", MountPath: "/pull-secret", ReadOnly: true})
+		verifyVolumes = append(verifyVolumes, corev1.Volume{
+			Name: "pull-secret",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: sb.Spec.ImagePullSecret,
+				Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
+			}},
+		})
+	}
 	if ref := sb.Spec.VerifyKeySecretRef; ref != nil && ref.Name != "" {
 		// cosign-verify image@digest BEFORE materializing. The public key is mounted
 		// read-only at /verify-key/cosign.pub; cosign needs a writable HOME/TMPDIR,
