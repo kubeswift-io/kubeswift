@@ -132,8 +132,15 @@ func (r *SwiftGPUReconciler) handlePrepareError(ctx context.Context, guest *swif
 			metrics.GPUAllocationsTotal.WithLabelValues("no_capacity").Inc()
 		}
 		status := guest.Status.DeepCopy()
-		setGPUAllocatedCondition(status, false, "NoCapacity",
-			"no SwiftGPUNode has sufficient free GPUs matching the profile")
+		// Surface the error detail (e.g. a Fabric Manager version mismatch that
+		// was the sole blocker) rather than a bare "no capacity" — no silent
+		// failures (Design Principle #6). findAndAllocate wraps errNoCapacity
+		// with the specific reason when there is one.
+		msg := "no SwiftGPUNode has sufficient free GPUs matching the profile"
+		if detail := err.Error(); detail != errNoCapacity.Error() {
+			msg = detail
+		}
+		setGPUAllocatedCondition(status, false, "NoCapacity", msg)
 		if patchErr := r.patchStatus(ctx, guest, status); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}

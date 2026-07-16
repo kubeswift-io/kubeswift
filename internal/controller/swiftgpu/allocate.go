@@ -89,6 +89,7 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 	}
 
 	// Second pass: find a node with capacity and allocate.
+	fmVersionMismatch := false
 	for i := range nodeList.Items {
 		n := &nodeList.Items[i]
 
@@ -99,6 +100,18 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 
 		// Optional model filter: profile.Model must be a substring of the node's GPUModel.
 		if profile.Spec.Model != "" && !strings.Contains(n.Status.GPUModel, profile.Spec.Model) {
+			continue
+		}
+
+		// Fabric Manager version gate (shared NVSwitch mode). Per NVIDIA
+		// WP-12736-002, the host Fabric Manager version MUST exactly match the
+		// guest nvidia-open driver version or partition activation/attach fails
+		// — a broken fabric, not a boot failure, so it must be caught before
+		// allocation (Design Principle #6: no silent failures). Skip the node;
+		// if version mismatch turns out to be the sole blocker the final error
+		// names it (rather than a bare "no capacity").
+		if !fmVersionCompatible(n, profile) {
+			fmVersionMismatch = true
 			continue
 		}
 
@@ -157,7 +170,41 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 		return n, gpus, numa, partID, nil
 	}
 
+	if fmVersionMismatch {
+		return nil, nil, nil, -1, fmt.Errorf("%w: candidate GPU node(s) run a Fabric Manager version that does not match profile.spec.fabricManager.requiredVersion=%q (for shared NVSwitch mode the host Fabric Manager version must exactly match the guest driver version)",
+			errNoCapacity, profile.Spec.FabricManager.RequiredVersion)
+	}
 	return nil, nil, nil, -1, errNoCapacity
+}
+
+// fmVersionCompatible reports whether node's Fabric Manager version satisfies
+// the profile's RequiredVersion.
+//
+// Per NVIDIA WP-12736-002, in shared NVSwitch mode the host Fabric Manager
+// version MUST exactly match the guest nvidia-open driver version
+// (profile.spec.fabricManager.requiredVersion) — the FM partition activate/attach
+// handshake with the guest driver fails otherwise. This applies to SHARED mode
+// only: in full mode (Tier 3) Fabric Manager runs IN the guest, so the host FM
+// version is irrelevant. An empty RequiredVersion means the operator did not pin
+// a version -> no check (any FM version accepted).
+func fmVersionCompatible(node *gpuv1alpha1.SwiftGPUNode, profile *gpuv1alpha1.SwiftGPUProfile) bool {
+	if profile.Spec.PartitionMode != "shared" {
+		return true
+	}
+	if profile.Spec.FabricManager == nil || profile.Spec.FabricManager.RequiredVersion == "" {
+		return true
+	}
+	fm := node.Status.FabricManager
+	return fm != nil && fm.Version == profile.Spec.FabricManager.RequiredVersion
+}
+
+// fmVersionString returns node's Fabric Manager version for error messages, or a
+// placeholder when Fabric Manager is not reported on the node.
+func fmVersionString(node *gpuv1alpha1.SwiftGPUNode) string {
+	if node.Status.FabricManager == nil {
+		return "<no Fabric Manager reported>"
+	}
+	return node.Status.FabricManager.Version
 }
 
 // deallocateGPUs releases the GPU allocation recorded in guest.status.gpu from
