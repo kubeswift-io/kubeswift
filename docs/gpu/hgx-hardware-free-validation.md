@@ -55,26 +55,61 @@ kubectl get swiftguest hgx-tenant-a -o jsonpath='{.status.gpu}{"\n"}'
 kubectl get swiftguest hgx-tenant-b -o jsonpath='{.status.gpu}{"\n"}'
 ```
 
-Expected:
+Expected (verified on-cluster, controller `sha-13291e4`):
 
 - **`hgx-tenant-a`** gets four devices that are exactly one FM partition's
-  members -- e.g. `["0000:86:00.0","0000:b8:00.0","0000:87:00.0","0000:bb:00.0"]`
+  members -- `["0000:86:00.0","0000:b8:00.0","0000:87:00.0","0000:bb:00.0"]`
   (partition 1, NUMA 1), `partitionId: 1`, `numaNodes: [1]`, `hypervisor: qemu`.
-- **`hgx-tenant-b`** gets the **disjoint** other half (partition 2, NUMA 0).
-  Two tenants, two partitions, no overlap -- the shared-NVSwitch invariant.
+- **`hgx-tenant-b`** gets the **disjoint** other half:
+  `["0000:0f:00.0","0000:41:00.0","0000:10:00.0","0000:44:00.0"]` (partition 2,
+  NUMA 0). Two tenants, two partitions, no overlap -- the shared-NVSwitch
+  invariant. The node's `fabricManager.partitions[1].allocatedTo` and `[2]` now
+  name the two guests.
 - **`hgx-tenant-c`** stays `GPUAllocated=False, reason=NoCapacity` (only 8 GPUs;
   both 4-GPU partitions are taken).
-- **`hgx-badver`** stays `GPUAllocated=False, reason=NoCapacity` with a message
-  naming the Fabric Manager version mismatch (`requiredVersion=999.99.99` vs the
-  node's `550.163.01`) -- the #407 gate, not a silent allocation.
 
 ```bash
 kubectl get swiftguest -o custom-columns=\
 NAME:.metadata.name,GPUALLOC:'.status.conditions[?(@.type=="GPUAllocated")].status',REASON:'.status.conditions[?(@.type=="GPUAllocated")].reason',DEVICES:.status.gpu.devices
-kubectl get swiftgpunode fake-hgx-0 -o jsonpath='{.status.freeGPUs}{"\n"}'  # -> 0
+```
 
-# 4. Clean up.
+### The Fabric Manager version gate (#407) -- a separate step
+
+No-capacity wins over a version mismatch when the node has no free GPUs (correct
+precedence), so the version-mismatch surface only appears on a node **with**
+capacity. Reset to a fresh 8-free node and apply one guest on the bad-version
+profile:
+
+```bash
 kubectl delete -f test/gpu/fake-hgx-workload.yaml
+./test/gpu/inject-fake-hgx-node.sh   # freeGPUs back to 8
+kubectl apply -f - <<'EOF'
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata: { name: hgx-badver }
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  gpuProfileRef: { name: hgx-shared-4-badver }   # requiredVersion 999.99.99
+EOF
+kubectl get swiftguest hgx-badver \
+  -o jsonpath='{.status.conditions[?(@.type=="GPUAllocated")].message}{"\n"}'
+```
+
+`hgx-badver` stays `GPUAllocated=False, reason=NoCapacity` with a message that
+**names** the mismatch, not a silent allocation:
+
+```
+no GPU node has sufficient capacity: candidate GPU node(s) run a Fabric Manager
+version that does not match profile.spec.fabricManager.requiredVersion="999.99.99"
+(for shared NVSwitch mode the host Fabric Manager version must exactly match the
+guest driver version)
+```
+
+```bash
+# Clean up.
+kubectl delete swiftguest hgx-badver --ignore-not-found
+kubectl delete -f test/gpu/fake-hgx-workload.yaml --ignore-not-found
 ./test/gpu/inject-fake-hgx-node.sh remove
 ```
 

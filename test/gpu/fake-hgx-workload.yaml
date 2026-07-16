@@ -77,12 +77,8 @@ spec:
   imageRef: { name: ubuntu-noble }
   guestClassRef: { name: default }
   gpuProfileRef: { name: hgx-shared-4 }
----
-apiVersion: swift.kubeswift.io/v1alpha1
-kind: SwiftGuest
-metadata:
-  name: hgx-badver   # -> GPUAllocated=NoCapacity naming the FM version mismatch
-spec:
-  imageRef: { name: ubuntu-noble }
-  guestClassRef: { name: default }
-  gpuProfileRef: { name: hgx-shared-4-badver }
+# The FM-version gate (#407) is a SEPARATE step: no-capacity wins over a version
+# mismatch when the node has no free GPUs (correct precedence), so the
+# version-mismatch surface only appears on a node WITH capacity. Apply a guest
+# on the hgx-shared-4-badver profile above against a freshly-injected (8-free)
+# node -- see docs/gpu/hgx-hardware-free-validation.md.
