@@ -140,7 +140,18 @@ func TestSelectGPUs_ModelFilter_Match(t *testing.T) {
 	}
 }
 
-func TestFindFMPartition_Match(t *testing.T) {
+// partitionNode wraps an FM status in a minimal node whose GPU inventory
+// (indices 0-3, all free, one NUMA node) backs the partition membership.
+func partitionNode(fm *gpuv1alpha1.FabricManagerStatus) *gpuv1alpha1.SwiftGPUNode {
+	gpus := make([]gpuv1alpha1.GPUDevice, 4)
+	for i := range gpus {
+		gpus[i] = makeGPU(i, "0000:0"+string(rune('a'+i))+":00.0", "H200", 0, false, "")
+	}
+	n := testGPUNode("part-node", gpus, fm)
+	return n
+}
+
+func TestSelectPartitionGPUs_Match(t *testing.T) {
 	fm := &gpuv1alpha1.FabricManagerStatus{
 		Installed: true,
 		Version:   "580.95.05",
@@ -151,17 +162,16 @@ func TestFindFMPartition_Match(t *testing.T) {
 			{ID: 2, GPUIndices: []int{0, 1, 2, 3}, AllocatedTo: ""},
 		},
 	}
-
-	id, err := findFMPartition(fm, 4)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	gpus, _, id := selectPartitionGPUs(partitionNode(fm), 4, "")
 	if id != 2 {
 		t.Errorf("partition ID = %d, want 2", id)
 	}
+	if len(gpus) != 4 {
+		t.Errorf("got %d GPUs, want the partition's 4 members", len(gpus))
+	}
 }
 
-func TestFindFMPartition_NoMatch(t *testing.T) {
+func TestSelectPartitionGPUs_NoCountMatch(t *testing.T) {
 	fm := &gpuv1alpha1.FabricManagerStatus{
 		Installed: true,
 		Version:   "580.95.05",
@@ -171,14 +181,12 @@ func TestFindFMPartition_NoMatch(t *testing.T) {
 			{ID: 1, GPUIndices: []int{2, 3}, AllocatedTo: ""},
 		},
 	}
-
-	_, err := findFMPartition(fm, 8)
-	if err == nil {
-		t.Error("expected error when no partition matches GPU count")
+	if gpus, _, _ := selectPartitionGPUs(partitionNode(fm), 8, ""); gpus != nil {
+		t.Error("expected nil when no partition matches GPU count")
 	}
 }
 
-func TestFindFMPartition_AlreadyAllocated(t *testing.T) {
+func TestSelectPartitionGPUs_AlreadyAllocated(t *testing.T) {
 	fm := &gpuv1alpha1.FabricManagerStatus{
 		Installed: true,
 		Version:   "580.95.05",
@@ -187,14 +195,12 @@ func TestFindFMPartition_AlreadyAllocated(t *testing.T) {
 			{ID: 0, GPUIndices: []int{0, 1, 2, 3}, AllocatedTo: "default/other-guest"},
 		},
 	}
-
-	_, err := findFMPartition(fm, 4)
-	if err == nil {
-		t.Error("expected error when matching partition is already allocated")
+	if gpus, _, _ := selectPartitionGPUs(partitionNode(fm), 4, ""); gpus != nil {
+		t.Error("expected nil when matching partition is already allocated")
 	}
 }
 
-func TestFindFMPartition_FMNotRunning(t *testing.T) {
+func TestSelectPartitionGPUs_FMNotRunning(t *testing.T) {
 	fm := &gpuv1alpha1.FabricManagerStatus{
 		Installed: true,
 		Version:   "580.95.05",
@@ -203,10 +209,32 @@ func TestFindFMPartition_FMNotRunning(t *testing.T) {
 			{ID: 0, GPUIndices: []int{0, 1, 2, 3}, AllocatedTo: ""},
 		},
 	}
+	if gpus, _, _ := selectPartitionGPUs(partitionNode(fm), 4, ""); gpus != nil {
+		t.Error("expected nil when Fabric Manager is not running")
+	}
+}
 
-	_, err := findFMPartition(fm, 4)
-	if err == nil {
-		t.Error("expected error when Fabric Manager is not running")
+func TestSelectPartitionGPUs_MemberHeld(t *testing.T) {
+	// A count-matching FREE partition whose MEMBER is held must be skipped —
+	// the count-only check this replaces got that wrong.
+	fm := &gpuv1alpha1.FabricManagerStatus{
+		Installed: true,
+		Version:   "580.95.05",
+		Running:   true,
+		Partitions: []gpuv1alpha1.FMPartitionStatus{
+			{ID: 0, GPUIndices: []int{0, 1}, AllocatedTo: ""},
+			{ID: 1, GPUIndices: []int{2, 3}, AllocatedTo: ""},
+		},
+	}
+	n := partitionNode(fm)
+	n.Status.GPUs[0].Allocated = true
+	n.Status.GPUs[0].AllocatedTo = "default/other"
+	gpus, _, id := selectPartitionGPUs(n, 2, "")
+	if id != 1 {
+		t.Errorf("must skip partition 0 (member held) and pick 1, got %d", id)
+	}
+	if len(gpus) != 2 || gpus[0].Index != 2 {
+		t.Errorf("must return partition 1's members, got %+v", gpus)
 	}
 }
 

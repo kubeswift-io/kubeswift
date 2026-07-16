@@ -42,8 +42,12 @@ func GPUNodeHasCapacity(ctx context.Context, c client.Client, nodeName string, p
 		return fmt.Errorf("GPU node %q model %q does not match profile model %q", nodeName, node.Status.GPUModel, profile.Spec.Model)
 	}
 	if profile.Spec.PartitionMode == "shared" {
-		if _, err := findFMPartition(node.Status.FabricManager, profile.Spec.Count); err != nil {
-			return fmt.Errorf("GPU node %q has no free Fabric Manager partition for %d GPU(s): %w", nodeName, profile.Spec.Count, err)
+		// Match the reserve/allocate selection exactly: a viable partition is
+		// one whose MEMBER GPUs are all free (a free partition whose members
+		// are held by another allocation would pass a count-only check here
+		// and then fail at reserve).
+		if gpus, _, _ := selectPartitionGPUs(&node, profile.Spec.Count, profile.Spec.Model); gpus == nil {
+			return fmt.Errorf("GPU node %q has no free Fabric Manager partition with %d free matching GPU(s)", nodeName, profile.Spec.Count)
 		}
 	}
 	return nil
