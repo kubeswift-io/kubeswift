@@ -193,6 +193,7 @@ you're done inspecting it.
 
 - [Warm pools (fast start)](warm-pool.md) — pre-booted slots for sub-second checkout
 - [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via DRA
+- [Build your own](build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)
 - [SwiftKernel reference](../swiftkernel.md)
