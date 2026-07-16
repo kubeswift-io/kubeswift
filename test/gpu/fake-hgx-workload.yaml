@@ -1,0 +1,88 @@
+# Fake-HGX walkthrough workload -- exercises the shared-NVSwitch allocation path
+# against the injected fake-hgx-0 SwiftGPUNode (test/gpu/inject-fake-hgx-node.sh).
+#
+# What this validates hardware-free:
+#   - selectPartitionGPUs couples the guest's devices to a Fabric Manager
+#     partition's MEMBER GPUs (the #405 shared-NVSwitch invariant).
+#   - Two 4-GPU tenants land on the two DISJOINT 4-GPU partitions (the NUMA
+#     halves); a third gets GPUAllocated=NoCapacity.
+#   - The Fabric Manager version gate (#407): a guest whose profile pins a
+#     requiredVersion the node does not run is rejected, not silently allocated.
+#
+# The SwiftGPU controller allocates as soon as the profile + node resolve,
+# INDEPENDENT of image readiness -- so status.gpu populates even though the
+# launcher pod stays Pending (fake-hgx-0 is not a real kubelet) and imageRef
+# need not exist. Read the result with:
+#   kubectl get swiftguest <name> -o jsonpath='{.status.gpu}{"\n"}'
+#   kubectl get swiftgpunode fake-hgx-0 -o jsonpath='{.status.freeGPUs}{"\n"}'
+---
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: hgx-shared-4
+spec:
+  count: 4
+  model: H100-SXM
+  tier: hgx-shared
+  partitionMode: shared
+  pcieTopology:
+    rootPortPerDevice: true
+    noMmap: true
+  numaTopology:
+    sockets: 1
+    coresPerSocket: 16
+    threadsPerCore: 1
+    memoryPerSocketMi: 131072
+  hugepages: "1Gi"
+  vcpuPinning: true
+---
+# Same as hgx-shared-4 but pins a Fabric Manager / guest-driver version the fake
+# node does NOT run (it reports 550.163.01) -- drives the #407 version gate.
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: hgx-shared-4-badver
+spec:
+  count: 4
+  model: H100-SXM
+  tier: hgx-shared
+  partitionMode: shared
+  hugepages: "1Gi"
+  fabricManager:
+    requiredVersion: "999.99.99"
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: hgx-tenant-a
+spec:
+  imageRef: { name: ubuntu-noble }   # need not exist: allocation precedes image resolution
+  guestClassRef: { name: default }
+  gpuProfileRef: { name: hgx-shared-4 }
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: hgx-tenant-b
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  gpuProfileRef: { name: hgx-shared-4 }
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: hgx-tenant-c   # third 4-GPU guest -> GPUAllocated=NoCapacity (only 8 GPUs)
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  gpuProfileRef: { name: hgx-shared-4 }
+---
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: hgx-badver   # -> GPUAllocated=NoCapacity naming the FM version mismatch
+spec:
+  imageRef: { name: ubuntu-noble }
+  guestClassRef: { name: default }
+  gpuProfileRef: { name: hgx-shared-4-badver }

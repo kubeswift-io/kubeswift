@@ -1,0 +1,57 @@
+{
+  "status": {
+    "phase": "Ready",
+    "gpuCount": 8,
+    "freeGPUs": 8,
+    "gpuModel": "H100-SXM",
+    "gpuVendor": "NVIDIA",
+    "vfioReady": true,
+    "host": {
+      "cpuTopology": { "sockets": 2, "coresPerSocket": 56, "threadsPerCore": 2, "totalCPUs": 224 },
+      "numaNodes": [
+        { "id": 0, "cpus": "0-55,112-167", "memoryMi": 1048576 },
+        { "id": 1, "cpus": "56-111,168-223", "memoryMi": 1048576 }
+      ],
+      "iommuEnabled": true,
+      "hugepages1Gi": { "total": 1800, "free": 1800 }
+    },
+    "gpus": [
+      { "index": 0, "pciAddress": "0000:0f:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 0, "iommuGroup": 10, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 1, "pciAddress": "0000:10:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 0, "iommuGroup": 11, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 2, "pciAddress": "0000:41:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 0, "iommuGroup": 12, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 3, "pciAddress": "0000:44:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 0, "iommuGroup": 13, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 4, "pciAddress": "0000:86:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 1, "iommuGroup": 14, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 5, "pciAddress": "0000:87:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 1, "iommuGroup": 15, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 6, "pciAddress": "0000:b8:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 1, "iommuGroup": 16, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false },
+      { "index": 7, "pciAddress": "0000:bb:00.0", "vendor": "NVIDIA", "model": "H100-SXM", "deviceId": "10de:2330", "numaNode": 1, "iommuGroup": 17, "driver": "vfio-pci", "barSizes": [{ "region": 1, "sizeMi": 131072 }], "allocated": false }
+    ],
+    "nvSwitches": [
+      { "pciAddress": "0000:03:00.0", "deviceId": "10de:22a3", "numaNode": 0 },
+      { "pciAddress": "0000:04:00.0", "deviceId": "10de:22a3", "numaNode": 0 },
+      { "pciAddress": "0000:05:00.0", "deviceId": "10de:22a3", "numaNode": 1 },
+      { "pciAddress": "0000:06:00.0", "deviceId": "10de:22a3", "numaNode": 1 }
+    ],
+    "fabricManager": {
+      "installed": true,
+      "version": "550.163.01",
+      "running": true,
+      "partitions": [
+        { "id": 0,  "gpuIndices": [4, 6, 5, 7, 0, 2, 1, 3], "active": false },
+        { "id": 1,  "gpuIndices": [4, 6, 5, 7], "active": false },
+        { "id": 2,  "gpuIndices": [0, 2, 1, 3], "active": false },
+        { "id": 3,  "gpuIndices": [4, 5], "active": false },
+        { "id": 4,  "gpuIndices": [6, 7], "active": false },
+        { "id": 5,  "gpuIndices": [0, 1], "active": false },
+        { "id": 6,  "gpuIndices": [2, 3], "active": false },
+        { "id": 7,  "gpuIndices": [4], "active": false },
+        { "id": 8,  "gpuIndices": [6], "active": false },
+        { "id": 9,  "gpuIndices": [5], "active": false },
+        { "id": 10, "gpuIndices": [7], "active": false },
+        { "id": 11, "gpuIndices": [0], "active": false },
+        { "id": 12, "gpuIndices": [2], "active": false },
+        { "id": 13, "gpuIndices": [1], "active": false },
+        { "id": 14, "gpuIndices": [3], "active": false }
+      ]
+    }
+  }
+}

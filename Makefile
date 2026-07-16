@@ -411,6 +411,15 @@ verify-sandbox-config:
 verify-qemu-topology:
 	@./test/gpu/verify-qemu-topology.sh
 
+# Inject / remove a hardware-faithful fake 8-GPU HGX H100 SwiftGPUNode so the
+# shared-NVSwitch allocation + FM-version-gate path can be exercised on a
+# cluster with NO HGX hardware. Honors $KUBECONFIG.
+# See docs/gpu/hgx-hardware-free-validation.md.
+inject-fake-hgx:
+	@./test/gpu/inject-fake-hgx-node.sh
+remove-fake-hgx:
+	@./test/gpu/inject-fake-hgx-node.sh remove
+
 # Sync the canonical dashboards (config/grafana/) into the Helm chart
 # (charts/kubeswift/dashboards/), where templates/monitoring/dashboards.yaml
 # embeds them via .Files.Get. Same pattern as the CRD copy step — the
