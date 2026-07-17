@@ -68,6 +68,17 @@ type SwiftSandboxPoolSpec struct {
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
+	// GPUProfileRef, when set, makes this a WARM GPU POOL: every warm slot is a
+	// GPU sandbox holding a native SwiftGPU allocation (a SwiftGPUProfile in the
+	// pool's namespace), pre-booted so a checkout is sub-second instead of a cold
+	// GPU boot + model load. This deliberately TRADES an idle GPU per warm slot
+	// for latency — each of MinWarm slots holds a whole GPU idle — so size the
+	// pool to your available GPUs (on an N-GPU cluster, keep minWarm <= N). A GPU
+	// pool warms only on nodes that are both gpu-node and kernel-node. The DRA
+	// backend (gpuResourceClaim) is a follow-up.
+	// +optional
+	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
+
 	// MinWarm is the desired number of Ready (pre-booted, unclaimed) warm slots the pool
 	// keeps. Because warming is node-local, the pool spreads these across the schedulable
 	// kernel-nodes in scope; a claim that lands on a node with no free slot falls back to

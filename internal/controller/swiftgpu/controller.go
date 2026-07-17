@@ -125,7 +125,7 @@ func (r *SwiftGPUReconciler) handlePrepareError(ctx context.Context, guest *swif
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	case errors.Is(err, errNoCapacity):
+	case errors.Is(err, ErrNoCapacity):
 		// Transition-gated: count entering the NoCapacity state once, not every
 		// 30s retry tick while capacity stays exhausted.
 		if !hasGPUAllocatedReason(guest, "NoCapacity") {
@@ -134,10 +134,10 @@ func (r *SwiftGPUReconciler) handlePrepareError(ctx context.Context, guest *swif
 		status := guest.Status.DeepCopy()
 		// Surface the error detail (e.g. a Fabric Manager version mismatch that
 		// was the sole blocker) rather than a bare "no capacity" — no silent
-		// failures (Design Principle #6). findAndAllocate wraps errNoCapacity
+		// failures (Design Principle #6). findAndAllocate wraps ErrNoCapacity
 		// with the specific reason when there is one.
 		msg := "no SwiftGPUNode has sufficient free GPUs matching the profile"
-		if detail := err.Error(); detail != errNoCapacity.Error() {
+		if detail := err.Error(); detail != ErrNoCapacity.Error() {
 			msg = detail
 		}
 		setGPUAllocatedCondition(status, false, "NoCapacity", msg)

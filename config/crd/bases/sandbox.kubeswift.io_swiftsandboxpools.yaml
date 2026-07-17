@@ -79,6 +79,28 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              gpuProfileRef:
+                description: |-
+                  GPUProfileRef, when set, makes this a WARM GPU POOL: every warm slot is a
+                  GPU sandbox holding a native SwiftGPU allocation (a SwiftGPUProfile in the
+                  pool's namespace), pre-booted so a checkout is sub-second instead of a cold
+                  GPU boot + model load. This deliberately TRADES an idle GPU per warm slot
+                  for latency — each of MinWarm slots holds a whole GPU idle — so size the
+                  pool to your available GPUs (on an N-GPU cluster, keep minWarm <= N). A GPU
+                  pool warms only on nodes that are both gpu-node and kernel-node. The DRA
+                  backend (gpuResourceClaim) is a follow-up.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               image:
                 description: |-
                   Image is the OCI image every warm slot boots as its root filesystem. A digest

@@ -1,0 +1,51 @@
+# A WARM GPU POOL: pre-booted GPU sandboxes so an inference checkout is
+# sub-second instead of a cold GPU boot + model load. Each warm slot holds a
+# WHOLE GPU idle — this trades idle GPU for latency, so keep minWarm <= your
+# free GPU count. See docs/sandbox/gpu-sandboxes.md.
+#
+# Prereqs: a node that is BOTH gpu-node and kernel-node, vfio-pci loaded,
+# gpu-discovery running (SwiftGPUNode FREE >= minWarm), and the gpu-sandbox
+# SwiftKernel in this namespace.
+---
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: infer-gpu
+  namespace: default
+spec:
+  count: 1
+  tier: pcie                # pcie only — a warm slot boots mode-3 (Cloud Hypervisor)
+  partitionMode: isolated
+---
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: infer-pool
+  namespace: default
+spec:
+  # A CUDA image that ships nvidia.ko (built for the gpu-sandbox kernel) + your
+  # server; bake the model in, or mount it (a follow-up pool-shared RO cache).
+  image: <your-registry>/cuda-inference@sha256:...
+  cpu: 4
+  memory: 8Gi
+  network:
+    mode: open
+  gpuProfileRef:
+    name: infer-gpu
+  minWarm: 1                 # each warm slot holds a GPU — keep <= free GPUs
+---
+# Check out a warm GPU slot (sub-second): a SwiftSandbox with poolRef and NO GPU
+# of its own — the GPU comes from the claimed slot. The workload is injected
+# over vsock into the already-booted, GPU-attached slot.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: infer-job
+  namespace: default
+spec:
+  image: <your-registry>/cuda-inference@sha256:...   # must match the pool
+  cpu: 4
+  memory: 8Gi
+  poolRef:
+    name: infer-pool
+  command: ["/bin/sh", "-c", "nvidia-smi -L && python /app/infer.py"]
