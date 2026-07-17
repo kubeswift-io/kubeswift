@@ -8,8 +8,17 @@ firmware-less (mode-3) with the GPU passed through via VFIO.
 
 > **Status: Phase 1 — single Tier-1 GPU, cluster-validated on a GTX 1080.**
 > Multi-GPU / NVLink and multi-node distributed inference are scoped but not yet
-> shipped (they need multi-GPU hardware). Allocation is DRA-only in Phase 1; the
-> native `SwiftGPUProfile` backend is a planned follow-up.
+> shipped (they need multi-GPU hardware).
+>
+> **Two allocation backends, mutually exclusive:** `spec.gpuResourceClaim` (DRA —
+> the scheduler + a DRA driver allocate at pod-schedule time) and
+> `spec.gpuProfileRef` (native SwiftGPU — the SwiftGPU controller allocates a
+> `SwiftGPUProfile` against a `SwiftGPUNode` at controller time, stamps
+> `status.gpu`, pins the sandbox to that node, and `gpu-init` binds the specific
+> BDF). Native suits heterogeneous estates / clusters without the NVIDIA DRA
+> stack. Native is **tier: pcie only** — a sandbox boots mode-3 (Cloud
+> Hypervisor direct-kernel); HGX tiers need the QEMU disk-boot path (a
+> SwiftGuest) and are rejected at allocation.
 
 ## How it works
 

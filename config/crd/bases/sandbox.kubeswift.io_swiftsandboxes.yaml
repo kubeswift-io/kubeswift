@@ -240,6 +240,30 @@ spec:
                   - name
                   type: object
                 type: array
+              gpuProfileRef:
+                description: |-
+                  GPUProfileRef selects the NATIVE SwiftGPU allocation backend (a
+                  SwiftGPUProfile in the same namespace), the sandbox analogue of
+                  SwiftGuest.spec.gpuProfileRef. Unlike DRA, the KubeSwift SwiftGPU
+                  controller allocates the device(s) at CONTROLLER time and stamps
+                  status.gpu; the sandbox pod is then pinned to status.gpu.nodeName and
+                  gpu-init binds the specific BDFs from status.gpu.devices. Mutually
+                  exclusive with gpuResourceClaim (pick one GPU backend) and — like
+                  gpuResourceClaim — with poolRef (a GPU sandbox boots cold). Selecting a
+                  GPU still switches the sandbox to the module-capable "gpu-sandbox" kernel
+                  unless kernelProfileRef is set.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               gpuResourceClaim:
                 description: |-
                   GPUResourceClaim, when set, passes one or more GPUs into the sandbox via a
@@ -252,8 +276,7 @@ spec:
 
                   A GPU sandbox boots COLD: a warm pool cannot cheaply hold a scarce GPU idle,
                   so gpuResourceClaim and poolRef are mutually exclusive. Mirrors
-                  SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend). The native
-                  SwiftGPUProfile backend (gpuProfileRef) is a planned follow-up for sandboxes.
+                  SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend).
                 properties:
                   hugepages:
                     description: Hugepages sizes the GPU memory hugepage backing ("1Gi",
@@ -475,6 +498,38 @@ spec:
                 description: ExitCode is the workload/guest exit code when known.
                 format: int32
                 type: integer
+              gpu:
+                description: |-
+                  GPU is the native SwiftGPU allocation (devices, node, NUMA), populated by
+                  the SwiftGPU controller when spec.gpuProfileRef is set. Absent for the DRA
+                  backend (the device identity lives in the pod's ResourceClaim) and for
+                  non-GPU sandboxes.
+                properties:
+                  devices:
+                    description: Devices lists the PCI addresses of allocated GPUs
+                      (e.g. "0000:41:00.0").
+                    items:
+                      type: string
+                    type: array
+                  hypervisor:
+                    description: Hypervisor is the resolved hypervisor for this guest
+                      ("cloud-hypervisor" or "qemu").
+                    type: string
+                  nodeName:
+                    description: NodeName is the Kubernetes node where GPUs were allocated.
+                    type: string
+                  numaNodes:
+                    description: NUMANodes lists the NUMA node IDs the allocated GPUs
+                      are attached to.
+                    items:
+                      type: integer
+                    type: array
+                  partitionId:
+                    description: |-
+                      PartitionID is the Fabric Manager partition ID for shared NVSwitch mode.
+                      -1 means no partition (isolated or full passthrough mode).
+                    type: integer
+                type: object
               message:
                 type: string
               network:

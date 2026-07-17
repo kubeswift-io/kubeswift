@@ -57,8 +57,10 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if sb.DeletionTimestamp != nil {
 		// The launcher pod + intent ConfigMap are owned by the SwiftSandbox and GC
 		// with it; the digest-keyed rootfs cache is a shared node artifact, not
-		// per-sandbox owned. No finalizer needed in v1.
-		return ctrl.Result{}, nil
+		// per-sandbox owned. A NATIVE-GPU sandbox additionally carries a finalizer
+		// so its SwiftGPUNode reservation is released here (the allocation is a
+		// status field on a separate cluster-scoped object, not ownerRef-GC'd).
+		return r.handleDeletion(ctx, &sb)
 	}
 	if isTerminal(sb.Status.Phase) {
 		return r.handleRetention(ctx, &sb)
@@ -66,6 +68,14 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	if err := swiftguest.EnsureSwiftletdRBAC(ctx, r.Client, sb.Namespace); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Native SwiftGPU (spec.gpuProfileRef): allocate the device(s) at CONTROLLER
+	// time and stamp status.gpu BEFORE the pod is built (the pod pins to
+	// status.gpu.nodeName and gpu-init binds status.gpu.devices). A no-op for the
+	// DRA backend (scheduler-time) and non-GPU sandboxes.
+	if ready, res, err := r.reconcileNativeGPU(ctx, &sb); err != nil || !ready {
+		return res, err
 	}
 
 	kernelName := resolveKernelProfile(&sb)

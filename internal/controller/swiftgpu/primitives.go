@@ -128,6 +128,15 @@ func ReserveOnNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.Sw
 // delete); migration release-and-reallocate uses it to drop a pre-cutover
 // reservation on the target (failure path) or to free the source at cutover.
 func ReleaseFromNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest, nodeName string) error {
+	return releaseFromNodeFor(ctx, c, guest.Namespace+"/"+guest.Name, nodeName)
+}
+
+// releaseFromNodeFor is the object-agnostic core of ReleaseFromNode: it clears
+// the GPU (+ FM partition) reservation/allocation for the given identity on a
+// specific node's SwiftGPUNode. `allocatedTo` is the opaque workload identity
+// ("<ns>/<name>" for a SwiftGuest, "sandbox:<ns>/<name>" for a SwiftSandbox).
+// Idempotent; no-op if the node is gone or nothing is allocated to the identity.
+func releaseFromNodeFor(ctx context.Context, c client.Client, allocatedTo, nodeName string) error {
 	if nodeName == "" {
 		return nil
 	}
@@ -139,7 +148,6 @@ func ReleaseFromNode(ctx context.Context, c client.Client, guest *swiftv1alpha1.
 		return err
 	}
 
-	allocatedTo := guest.Namespace + "/" + guest.Name
 	changed := false
 	for i := range node.Status.GPUs {
 		if node.Status.GPUs[i].AllocatedTo == allocatedTo {
