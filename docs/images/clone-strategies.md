@@ -11,7 +11,22 @@ When a SwiftGuest boots from a SwiftImage, KubeSwift produces a per-guest root-d
 | `copy` (default) | Per-guest Copy Job: `cp` from the SwiftImage PVC to the new PVC, then `qemu-img resize` + `sgdisk -e` | Any CSI driver, including non-snapshot-capable ones (local-path, NFS, hostPath) |
 | `snapshot` | CSI VolumeSnapshot of the SwiftImage PVC + per-guest `dataSource: VolumeSnapshot` clones, expand-and-wait gate before guest pod schedule | Snapshot-capable CSI drivers (Longhorn, Rook Ceph, EBS, GCE PD) |
 
-The `snapshot` strategy is substantially faster on most snapshot-capable drivers because it skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble) and the Copy Job's `apt-get install qemu-utils`. On true copy-on-write drivers (Rook Ceph, EBS, GCE PD) the speedup is dramatic; on full-copy drivers like Longhorn it is real but smaller (Phase 0 spike measured ≈3× on a 4 GiB source, more on larger sources).
+The `snapshot` strategy is substantially faster on most snapshot-capable drivers because it skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble) and the Copy Job's `apt-get install qemu-utils`. On true copy-on-write drivers (Rook Ceph, EBS, GCE PD) the speedup is dramatic — the `dataSource` clone and the expand are metadata operations, not data copies.
+
+> **Caveat — full-copy drivers at single-guest scale can be *slower* with `snapshot`.**
+> On a full-copy driver like Longhorn the `dataSource` clone is itself a full
+> copy, and because Longhorn refuses different-size clones the PVC is created at
+> the *source* size and then expanded to the target — an **expand-and-wait** gate
+> plus a `clone-grow-init` container before the guest boots. When the resize
+> delta is large (e.g. a 10 GiB image → a 40 GiB guest), that overhead can exceed
+> what it saves: the snapshot-walkthrough measured `snapshot` **34 s slower** than
+> `copy` booting one guest (147 s vs 113 s). The Phase 0 spike's ≈3× Longhorn
+> speedup was measured on a small, matched-size source and at concurrent-clone
+> (fleet) scale, where `snapshot` clones run in parallel while `copy` Jobs
+> serialize on the source PVC. So on Longhorn: **fleet scale or matched size →
+> `snapshot` wins; single guest with a large resize delta → `copy` wins.** True
+> CoW drivers do not have this inversion (the expand is free). See the F7 finding
+> in [`../snapshots/operator-walkthrough.md`](../snapshots/operator-walkthrough.md).
 
 The default is **`copy`** for backward compatibility. Existing SwiftImages keep working unchanged.
 
