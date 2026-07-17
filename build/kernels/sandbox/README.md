@@ -37,6 +37,16 @@ make verify                     # boot on cloud-hypervisor with a real OCI rootf
 Each profile builds into its own `OUTPUT_DIR`; override `OUTPUT_DIR=<dir>` to
 reuse an already-built toolchain (a fresh dir rebuilds the toolchain from scratch).
 
+`make build` prints the built kernel's `CONFIG_MODULES` so you can see the config
+actually took. It has to: buildroot applies `configs/sandbox-linux.config` (and a
+profile fragment) to the kernel at its `linux-configure` step and then **stamps**
+it, so a later edit to either file is silently ignored on an incremental build —
+you get a kernel built from the OLD config with no warning. (That trap once
+shipped a `sandbox` kernel carrying `CONFIG_MODULES=y` even though the config had
+said `=n` for months.) The build target now re-applies the config whenever it is
+newer than the stamp. If you ever suspect drift, `make -C buildroot O=<outdir>
+linux-reconfigure` re-applies it unconditionally.
+
 ## Publish (SwiftKernel OCI artifact)
 
 The artifact carries the same two blobs a SwiftKernel expects (`bzImage` +
@@ -45,10 +55,10 @@ The artifact carries the same two blobs a SwiftKernel expects (`bzImage` +
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.11 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.1 bzImage:... rootfs.cpio.gz:...
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.2 bzImage:... rootfs.cpio.gz:...
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
