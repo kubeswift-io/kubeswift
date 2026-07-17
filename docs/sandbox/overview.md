@@ -74,6 +74,11 @@ Ready-to-edit manifests and notes:
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
+| `poolRef.name` | string | — | Check out a pre-booted slot from this `SwiftSandboxPool` (sub-second) instead of the cold materialize+boot path; falls back to cold on a miss. Same namespace. See [Warm pools](warm-pool.md). |
+| `gpuResourceClaim` | GPUResourceClaimSpec | — | Pass a GPU through via Kubernetes **DRA**: the scheduler + a DRA driver allocate at pod-schedule time. Mutually exclusive with `gpuProfileRef` and with `poolRef`. See [GPU sandboxes](gpu-sandboxes.md). |
+| `gpuProfileRef.name` | string | — | Pass a GPU through via the **native SwiftGPU** backend: the SwiftGPU controller allocates at controller time against this `SwiftGPUProfile` and pins the sandbox to the allocated node. Mutually exclusive with `gpuResourceClaim` and with `poolRef`. `tier: pcie` only. See [GPU sandboxes](gpu-sandboxes.md). |
+| `scratchDisk` | SandboxScratchDisk | — | Attaches one secondary raw block disk (`blank`, sandbox-owned, or `pvcRef`, an existing PVC) for build caches, datasets, or checkpoints. See [Scratch / persistent disks](scratch-disks.md). |
+| `model.imageRef` / `model.mountPath` | string / string (default `/model`) | — | Mounts a read-only, node-shared model artifact (an OCI image whose filesystem holds the weights) over virtio-fs. See [GPU sandboxes › Model preload](gpu-sandboxes.md#model-preload). |
 
 Everything in `spec` except `ttl` is immutable after create — recreate the
 sandbox to change image, resources, command, or network.
@@ -83,15 +88,18 @@ sandbox to change image, resources, command, or network.
 | Field | Type | Description |
 |---|---|---|
 | `phase` | enum | `Pending`, `Materializing`, `Running`, `Completed`, `Failed`. |
-| `conditions[]` | []Condition | `Resolved`, `RootfsReady`, `GuestRunning`. |
+| `conditions[]` | []Condition | `Resolved`, `RootfsReady`, `GuestRunning`, plus `GPUAllocated` (native GPU backend only) and `ScratchDiskReady` (when `spec.scratchDisk` is set). |
 | `nodeName` | string | Node running the sandbox. |
-| `podRef` | string | Launcher pod name. |
+| `podRef` | string | Launcher pod name (the claimed slot's pod name for a pool checkout). |
 | `rootfs.digest` | string | Resolved image digest (`sha256:...`). |
 | `rootfs.sizeBytes` | int64 | Materialized ext4 size. |
 | `rootfs.cachePath` | string | Node-local rootfs artifact path. |
 | `runtime.pid` | int64 | Hypervisor process PID (reported by swiftletd). |
 | `runtime.hypervisor` | string | Always `cloud-hypervisor`. |
 | `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. |
+| `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
+| `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
+| `model.digest` / `model.mountPath` / `model.cachePath` | string / string / string | The resolved model artifact once materialized. Absent when `spec.model` is unset. |
 | `startedAt` | Time | When the guest began running. |
 | `terminalAt` | Time | When the sandbox first reached `Completed`/`Failed` — the anchor for `spec.ttl`. |
 | `exitCode` | int32 | The workload's real exit code: `0` → `Completed`, non-zero → `Failed`. |
@@ -192,7 +200,8 @@ you're done inspecting it.
 ## See also
 
 - [Warm pools (fast start)](warm-pool.md) — pre-booted slots for sub-second checkout
-- [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via DRA
+- [GPU sandboxes](gpu-sandboxes.md) — pass a GPU into a sandbox via the native SwiftGPU or DRA backend
+- [Scratch / persistent disks](scratch-disks.md) — attach a secondary block disk for build caches or datasets
 - [Build your own](build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — sample manifests and notes
 - [swiftctl reference](../swiftctl.md)

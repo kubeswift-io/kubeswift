@@ -1,6 +1,6 @@
 # KubeSwift Documentation
 
-KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the primary hypervisor — disk boot, kernel boot, Windows guests, PCIe GPU passthrough, snapshots, and migration all run on it. QEMU is a secondary runtime used only for HGX SXM multi-GPU topologies, where CUDA requires a full PCIe hierarchy. Define guests with CRDs; the control plane reconciles them into pods; swiftletd launches the hypervisor. Two boot sources are supported: disk boot (cloud images with firmware) and kernel boot (direct bzImage + initramfs); Windows guests use `osType: windows`, a disk-boot variant.
+KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://www.cloud-hypervisor.org/) is the primary hypervisor — disk boot, kernel boot, Windows guests, PCIe GPU passthrough, snapshots, and migration all run on it. QEMU is a secondary runtime used only for HGX SXM multi-GPU topologies, where CUDA requires a full PCIe hierarchy. Define guests with CRDs; the control plane reconciles them into pods; swiftletd launches the hypervisor. Three boot modes are supported: disk boot (cloud images with firmware), kernel boot (direct bzImage + initramfs), and ephemeral OCI-rootfs sandboxes (`SwiftSandbox`, direct kernel + read-only OCI rootfs + tmpfs overlay); Windows guests use `osType: windows`, a disk-boot variant.
 
 ## Documentation Index
 
@@ -14,6 +14,7 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 ### API Reference
 
 - [API overview](api/overview.md) — API groups, CRDs, versioning
+- [CRD reference](crds.md) — full field detail for every CRD, concise reference for the rest
 - [SwiftGuest](api/swiftguest.md) — VM instance resource
 - [SwiftGuestClass](api/swiftguestclass.md) — Cluster-scoped template (CPU, memory, root disk)
 - [SwiftImage](api/swiftimage.md) — Disk image source (HTTP, PVC)
@@ -34,6 +35,10 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 ### Sandboxes
 
 - [Ephemeral OCI-rootfs sandboxes](sandbox/overview.md) — SwiftSandbox: run an OCI image as a microVM (CI runners, agent/code execution, untrusted code)
+- [GPU sandboxes](sandbox/gpu-sandboxes.md) — pass a GPU into a sandbox via the native SwiftGPU or DRA backend, warm GPU pools, model preload
+- [Warm pools](sandbox/warm-pool.md) — pre-booted SwiftSandbox slots for sub-second checkout
+- [Scratch / persistent disks](sandbox/scratch-disks.md) — attach a secondary block disk for build caches or datasets
+- [Build your own](sandbox/build-your-own.md) — custom sandbox kernels + base images (BYO / in-house library)
 
 ### Windows Guests
 

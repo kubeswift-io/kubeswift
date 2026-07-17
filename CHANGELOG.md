@@ -4,37 +4,99 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.12.0] — 2026-07-17
+
+GPU sandboxes graduate from a DRA-only spike to a complete feature: `SwiftSandbox`/
+`SwiftSandboxPool` gain a **native SwiftGPU allocation backend** (`spec.gpuProfileRef`,
+alongside the existing DRA `gpuResourceClaim`), **warm GPU pools** that hold pre-booted
+GPU slots for sub-second checkout, and **model preload** (`spec.model`) so an inference
+checkout starts with weights already resident. Sandboxes also gain a
+**scratch/persistent block disk** (`spec.scratchDisk`) and a working
+`spec.imagePullSecret`. The QEMU **Tier-2/3 HGX topology runtime** ships — Tier 2
+(`hgx-shared`, host Fabric Manager) is now allocatable and boots on the full generated
+topology; Tier 3 (`hgx-full`, in-guest Fabric Manager) is rejected at allocation, since
+the NVSwitch-into-guest passthrough isn't wired yet. The web console's Explorer now
+lists sandboxes generically, retiring the dedicated gateway `SandboxService`.
 
 ### Added
 
-- **Tier-2/3 HGX QEMU topology runtime** — the QEMU launch path now renders the
-  full GPU topology the controller has always computed (previously dropped as a
-  documented "when hardware is available" stub, leaving a flat PCI layout that
-  CUDA rejects): each SXM device behind its own `pcie-root-port` (unique
-  chassis/slot per QEMU docs/pcie.txt), `x-no-mmap=true` large-BAR handling,
-  per-NUMA-node shared memory backends + `-numa` bindings, optional 1G/2M
-  hugepage backing, SMP sockets matching the NUMA layout, NVSwitch device
-  passthrough (Tier 3), and post-spawn vCPU→host-CPU pinning via QMP
-  `query-cpus-fast` + `sched_setaffinity`. Grounded in the NVIDIA HGX Shared
-  NVSwitch Passthrough Integration Guide (WP-12736-002). Validated without GPU
-  hardware by `make verify-qemu-topology`, which boots the builder's exact args
-  on the shipping QEMU with emulated PCIe endpoints substituted on the same
-  root ports; VFIO/NVLink/Fabric-Manager runtime behaviour still requires real
-  HGX hardware.
+**Tier-2/3 HGX QEMU topology runtime**
+- The QEMU launch path now renders the full GPU topology the controller has always
+  computed (previously dropped as a documented "when hardware is available" stub,
+  leaving a flat PCI layout that CUDA rejects): each SXM device behind its own
+  `pcie-root-port` (unique chassis/slot per QEMU docs/pcie.txt), `x-no-mmap=true`
+  large-BAR handling, per-NUMA-node shared memory backends + `-numa` bindings,
+  optional 1G/2M hugepage backing, SMP sockets matching the NUMA layout, and
+  post-spawn vCPU→host-CPU pinning via QMP `query-cpus-fast` + `sched_setaffinity`
+  — usable today for **Tier 2** (`hgx-shared`). The builder can also emit NVSwitch
+  device-passthrough args for **Tier 3** (`hgx-full`), but Tier 3 allocation is
+  rejected (see Fixed below), so that path isn't reachable through the controller
+  yet. Grounded in the NVIDIA HGX Shared NVSwitch Passthrough Integration Guide
+  (WP-12736-002). Validated without GPU hardware by `make verify-qemu-topology`,
+  which boots the builder's exact args on the shipping QEMU with emulated PCIe
+  endpoints substituted on the same root ports; VFIO/NVLink/Fabric-Manager runtime
+  behaviour still requires real HGX hardware.
 
-- **GPU sandboxes (Phase 1) — pass a GPU into a SwiftSandbox via DRA.**
-  `SwiftSandbox.spec.gpuResourceClaim` allocates one Tier-1 GPU through a Kubernetes
-  DRA `ResourceClaim`: the scheduler picks the node/device, the DRA driver injects it
-  (CDI `GPU_PCI_ADDRESSES`), a `gpu-init` container binds VFIO, and the sandbox boots
-  firmware-less (mode-3) with the GPU passed through — an ephemeral VM boundary around
-  GPU inference / untrusted GPU code. The NVIDIA driver rides the guest OCI image and
-  loads at start; a GPU sandbox boots the new module-capable **`gpu-sandbox`** kernel
-  profile (selected automatically). GPU nodes must also be kernel nodes. DRA-only and
-  cold-boot-only in Phase 1 (`gpuResourceClaim` excludes `poolRef`); the native
-  `SwiftGPUProfile` backend and multi-GPU / multi-node are follow-ups
-  ([#390](https://github.com/kubeswift-io/kubeswift/issues/390)). Cluster-validated on
-  a GTX 1080 (`nvidia-smi` in the guest). Runbook: `docs/sandbox/gpu-sandboxes.md`.
+**GPU sandboxes — two allocation backends, warm GPU pools, model preload**
+- **Pass a GPU into a `SwiftSandbox` via either backend.** `spec.gpuResourceClaim`
+  (DRA — the scheduler + a DRA driver allocate at pod-schedule time) or
+  `spec.gpuProfileRef` (native SwiftGPU — the SwiftGPU controller allocates at
+  controller time), mutually exclusive. Either way a `gpu-init` container binds
+  VFIO and the sandbox boots firmware-less (mode-3) with the GPU passed through —
+  an ephemeral VM boundary around GPU inference / untrusted GPU code. The NVIDIA
+  driver rides the guest OCI image and loads at start; a GPU sandbox boots the
+  module-capable **`gpu-sandbox`** kernel profile (selected automatically). GPU
+  nodes must also be kernel nodes. Single Tier-1 GPU per sandbox; multi-GPU /
+  multi-node remain scoped follow-ups (#390). Cluster-validated on a GTX 1080
+  (`nvidia-smi` in the guest). Runbook: `docs/sandbox/gpu-sandboxes.md`.
+- **Native SwiftGPU allocation backend for sandboxes (`spec.gpuProfileRef`).** The
+  SwiftGPU controller allocates the device(s) at controller time against a
+  `SwiftGPUProfile` + `SwiftGPUNode` (no ResourceClaim), stamps `status.gpu`, pins
+  the sandbox to the allocated node, and `gpu-init` binds the specific BDF(s) — the
+  same allocation core the native SwiftGuest path uses. `tier: pcie` only;
+  `hgx-shared`/`hgx-full` are rejected at allocation (`GPUAllocated=False` reason
+  `UnsupportedTier` — use a SwiftGuest for the QEMU HGX path). (#410)
+- **Warm GPU pools (`SwiftSandboxPool.spec.gpuProfileRef`).** Setting
+  `gpuProfileRef` on a pool makes every warm slot a GPU sandbox holding a native
+  SwiftGPU allocation, pre-booted so a checkout is sub-second instead of a cold GPU
+  boot. Trades an idle GPU per warm slot for latency — size `minWarm` to the free
+  GPU count. GPU pools warm only on nodes that are both `gpu-node` and
+  `kernel-node`; `tier: pcie` only. A checking-out `SwiftSandbox` sets `poolRef`
+  alone — never a GPU field — and inherits the slot's GPU implicitly (the webhook
+  rejects `poolRef` + either GPU field on a user-authored sandbox: a GPU sandbox
+  always boots cold, so the slot's GPU shape, not the claimant's request, is what
+  matters). (#412)
+- **Model preload (`spec.model`, on both `SwiftSandbox` and
+  `SwiftSandboxPool`).** Mounts a read-only, node-shared model artifact — an OCI
+  image whose filesystem holds the weights — into the sandbox over virtio-fs
+  (default `/model`). Materialized once per node (digest-keyed cache,
+  cosign-verifiable via `verifyKeySecretRef`) and shared read-only from the host
+  page cache, so a warm GPU pool with a preloaded model needs neither a cold GPU
+  boot nor a cold model load on checkout. (#414)
+
+**Sandbox scratch disks + private-registry pulls**
+- **Scratch / persistent block disk (`SwiftSandbox.spec.scratchDisk`).** Attaches
+  one secondary block disk to the sandbox guest — for build caches, dataset
+  staging, checkpoints, or a GPU model/weight cache — beyond the ephemeral
+  RAM-backed rootfs overlay. `blank` provisions a new, sandbox-owned, sized Block
+  PVC (GC'd with the sandbox); `pvcRef` attaches an existing Block PVC that
+  persists beyond it. Reuses the v0.4.2 blank-data-disk runtime path (raw
+  `--disk`, no filesystem mount) — the workload runs `mkfs`+`mount` itself. New
+  `ScratchDiskReady` condition gates boot on the PVC being Bound. (#411)
+- **`spec.imagePullSecret` is now wired through the sandbox materialize path**
+  (on both `SwiftSandbox` and `SwiftSandboxPool`, and for `spec.model`'s image).
+  Resolves the named docker-registry Secret and attaches it to the
+  materialize/pool pods so a private-registry rootfs or model image pulls
+  correctly; an invalid or missing secret surfaces as `ImagePullSecretInvalid`
+  rather than a generic pull failure. (#402)
+
+**Gateway Explorer sandbox catalog**
+- **The web console's Explorer replaces the dedicated gateway `SandboxService`.**
+  `SwiftSandbox`/`SwiftSandboxPool` are now surfaced through the generic
+  ResourceService/Explorer resource catalog (phase/image/node/IP and
+  phase/warm/claimed/min columns) instead of a bespoke Connect-RPC service — one
+  fewer service to keep in sync as the sandbox CRD surface grows. (#387) The
+  v0.11.0 `SandboxService` is removed. (#401)
 
 ### Fixed
 
@@ -77,6 +139,26 @@ All notable changes to KubeSwift are documented here.
   the guest), and the `GPUAllocated=NoCapacity` condition names the mismatch
   rather than reporting a bare "no capacity".
 
+- **SwiftGuest GPU allocation now rejects `tier: hgx-full` (Tier 3) instead of
+  silently routing it through the QEMU path.** The native SwiftGPU backend
+  previously treated `hgx-full` the same as `hgx-shared` (Tier 2, host Fabric
+  Manager) and would allocate a Tier 3 guest onto the same QEMU runtime — but
+  the in-guest Fabric Manager / NVSwitch-into-guest passthrough isn't wired, so
+  an `hgx-full` guest would fail at boot/fabric time rather than at allocation
+  (a silent-failure-shaped gap, not a clean rejection). `nativeBackend.Prepare`
+  now returns an `UnsupportedTierError` for `hgx-full`, surfaced as
+  `GPUAllocated=False` reason `UnsupportedTier` — mirroring the SwiftSandbox
+  native GPU path's existing tier gate. `tier: hgx-shared` (Tier 2) is
+  unaffected and allocatable on the topology runtime above. (#416)
+
+- **Sandbox kernel build was silently re-using a stale `.config`, shipping a
+  non-monolithic kernel.** Buildroot applies `configs/sandbox-linux.config` (plus
+  any profile fragment) at its `linux-configure` step and then STAMPS it, so a
+  later edit was ignored on incremental builds — the `sandbox` kernel had shipped
+  `CONFIG_MODULES=y` even though the config had said `=n` for months. `make build`
+  now re-applies the config whenever it changed and prints the built
+  `CONFIG_MODULES`. Republished `kernels/sandbox:6.6.13` (now genuinely monolithic)
+  and `kernels/gpu-sandbox:6.6.2`. (#415)
 
 - **Sandboxes without `spec.workingDir` panicked on kernel 6.6.10** (regression
   from v0.11.0's cold-path workingDir change). The bridge-initramfs runs `set -u`

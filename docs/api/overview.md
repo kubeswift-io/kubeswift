@@ -1,6 +1,6 @@
 # API Overview
 
-Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
+Fifteen CRDs across nine API groups. All `v1alpha1` (no stability guarantee).
 
 ## CRDs
 
@@ -14,6 +14,13 @@ Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 | SwiftKernel | `sk` | Namespaced | Kernel + initramfs OCI artifact; must be Ready before SwiftGuest |
 | SwiftGPUProfile | `sgp` | Namespaced | GPU passthrough request (count, model, tier, topology) |
 | SwiftGPUNode | `sgn` | Cluster | Per-node GPU inventory; auto-populated by Discovery DaemonSet |
+| SwiftSnapshot | `ssnap` | Namespaced | VM snapshot — disk-only (CSI) or memory+disk (local/S3/OCI) |
+| SwiftRestore | `srst` | Namespaced | Restore a VM from a SwiftSnapshot, in-place or as a clone |
+| SwiftSnapshotSchedule | `sss` | Namespaced | Cron-scheduled snapshots + keep-N retention |
+| SwiftMigration | `smig` | Namespaced | Move a SwiftGuest between nodes — offline or live |
+| SwiftSandbox | `sbox` | Namespaced | Ephemeral OCI-rootfs microVM (a third boot mode); PVC-free |
+| SwiftSandboxPool | `sboxpool` | Namespaced | Warm buffer of pre-booted sandbox slots for sub-second checkout |
+| Cluster | `ksc` | Namespaced | Member cluster federated by the kubeswift-gateway hub |
 
 ## API groups
 
@@ -24,6 +31,10 @@ Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 | `seed.kubeswift.io` | SwiftSeedProfile |
 | `kernel.kubeswift.io` | SwiftKernel |
 | `gpu.kubeswift.io` | SwiftGPUProfile, SwiftGPUNode |
+| `snapshot.kubeswift.io` | SwiftSnapshot, SwiftRestore, SwiftSnapshotSchedule |
+| `migration.kubeswift.io` | SwiftMigration |
+| `sandbox.kubeswift.io` | SwiftSandbox, SwiftSandboxPool |
+| `fleet.kubeswift.io` | Cluster |
 
 ## Typical workflows
 
@@ -61,5 +72,12 @@ Eight CRDs across five API groups. All `v1alpha1` (no stability guarantee).
 5. Update `template.spec` to trigger a rolling update.
 
 [SwiftGuest](swiftguest.md) · [SwiftGuestPool](swiftguestpool.md) · [SwiftGuestClass](swiftguestclass.md) · [SwiftImage](swiftimage.md) · [SwiftSeedProfile](swiftseedprofile.md) · [SwiftKernel](swiftkernel.md) · [SwiftGPUProfile](swiftgpuprofile.md) · [SwiftGPUNode](swiftgpunode.md)
+
+The snapshot/migration/sandbox/fleet CRDs (SwiftSnapshot, SwiftRestore,
+SwiftSnapshotSchedule, SwiftMigration, SwiftSandbox, SwiftSandboxPool, Cluster)
+have concise field references in [the CRD reference](../crds.md) and full
+operator guides under [Snapshots](../snapshots/csi-snapshots.md),
+[Migration](../migration/overview.md), [Sandboxes](../sandbox/overview.md), and
+[Gateway](../ui/gateway.md) respectively.
 
 Topics: [Data disks](data-disks.md) — blank / image-backed / attached-PVC secondary disks.

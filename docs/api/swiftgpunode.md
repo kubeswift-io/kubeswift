@@ -25,6 +25,8 @@ The entire resource is status-only (no user-editable spec).
 | `gpuCount` | Total number of GPUs on this node |
 | `freeGPUs` | Number of unallocated GPUs |
 | `gpuModel` | GPU model (assumes homogeneous node) |
+| `gpuVendor` | GPU vendor (assumes homogeneous node): `"NVIDIA"`, `"AMD"`, `"Intel"` |
+| `vfioReady` | `true` when the `vfio-pci` driver is loaded on this node (`/sys/bus/pci/drivers/vfio-pci` exists). GPU allocation and the migration GPU target pre-flight refuse a node that isn't `vfioReady`. Loading `vfio-pci` is a host responsibility (e.g. `/etc/modules-load.d`) — the minimal-capability discovery DaemonSet only detects and reports it, it cannot `modprobe`. Printcolumn `VfioReady`. |
 
 ### Host topology
 
@@ -49,6 +51,7 @@ Each entry in `gpus[]`:
 |-------|-------------|
 | `index` | GPU index on this node (0-7) |
 | `pciAddress` | Full PCI BDF (e.g. `"0000:17:00.0"`) |
+| `vendor` | GPU manufacturer: `"NVIDIA"`, `"AMD"`, `"Intel"`, or `"Unknown (<vendor-id>)"` |
 | `model` | Human-readable model (e.g. `"NVIDIA H200 SXM"`) |
 | `deviceId` | PCI vendor:device ID (e.g. `"10de:2336"`) |
 | `numaNode` | Physical NUMA node this GPU is attached to |
@@ -85,8 +88,13 @@ Each entry in `nvSwitches[]`:
 
 | Fields | Written by |
 |--------|-----------|
-| `phase`, `lastDiscovery`, `host`, `gpus[].index` through `gpus[].barSizes`, `nvSwitches`, `fabricManager.installed/version/running/partitions[].id/gpuIndices` | GPU Discovery DaemonSet |
-| `gpus[].allocated`, `gpus[].allocatedTo`, `fabricManager.partitions[].active/allocatedTo`, `gpuCount`, `freeGPUs`, `gpuModel` | SwiftGPU Controller |
+| `phase`, `lastDiscovery`, `host`, `gpuVendor`, `vfioReady`, `gpus[].index` through `gpus[].barSizes` (incl. `gpus[].vendor`), `nvSwitches`, `fabricManager.installed/version/running/partitions[].id/gpuIndices/active` | GPU Discovery DaemonSet |
+| `gpus[].allocated`, `gpus[].allocatedTo`, `fabricManager.partitions[].allocatedTo`, `gpuCount`, `freeGPUs`, `gpuModel` | SwiftGPU Controller |
+
+`fabricManager.partitions[].active` is written by discovery (it reflects the
+host `fmpm` partition state, not a KubeSwift allocation decision) — `gpu-init`
+activates the partition via `fmpm -a` before swiftletd starts, and the next
+discovery cycle picks up the change.
 
 The discovery DaemonSet preserves controller-owned fields during status patches.
 

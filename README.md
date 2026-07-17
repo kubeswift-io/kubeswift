@@ -12,7 +12,7 @@ KubeSwift runs lightweight virtual machines as native Kubernetes workloads using
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.11.0 \
+  --version 0.12.0 \
   -n kubeswift-system \
   --create-namespace
 ```
@@ -29,7 +29,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 - **Services** — expose guest ports as Kubernetes Services via `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
 - **Storage** — per-guest root-disk cloning sized from a class; optional data disks (blank/sized, image-backed, or attached PVC); RWX+Block for live-migration-capable volumes.
 - **Snapshots & clones** — disk-only (CSI) and memory+disk (local/S3) snapshots, scheduled snapshots, and `cloneFromSnapshot` for fast VM fan-out.
-- **Sandboxes** — ephemeral OCI-rootfs microVMs ([SwiftSandbox](docs/sandbox/overview.md)) for CI runners, agent/code execution, and untrusted code; restricted-by-default egress, cosign verify-before-boot, and a block or virtio-fs rootfs. Warm pools (`SwiftSandboxPool`) keep pre-booted slots ready for sub-second checkout.
+- **Sandboxes** — ephemeral OCI-rootfs microVMs ([SwiftSandbox](docs/sandbox/overview.md)) for CI runners, agent/code execution, and untrusted code; restricted-by-default egress, cosign verify-before-boot, and a block or virtio-fs rootfs. Warm pools (`SwiftSandboxPool`) keep pre-booted slots ready for sub-second checkout. [GPU sandboxes](docs/sandbox/gpu-sandboxes.md) pass a GPU through via the native SwiftGPU or DRA backend, with warm GPU pools and model preload (`spec.model`) for sub-second inference starts; `spec.scratchDisk` attaches a block disk for build caches or dataset staging.
 - **OCI registry artifacts** — golden VM images (`SwiftImage.spec.source.oci` + `swiftctl image publish`, cosign-signed with verify-on-pull) and VM snapshots / full-state cold migration (`SwiftSnapshot` `backend.type: oci`) stored in any OCI registry, for cross-cluster and edge distribution.
 - **Migration** — offline migration on any storage, and live migration (sub-second downtime) with optional mTLS transport and `kubectl drain` integration.
 - **Fleets** — `SwiftGuestPool` gives ReplicaSet-style scaling with rolling updates, topology spread, and a PVC per replica.

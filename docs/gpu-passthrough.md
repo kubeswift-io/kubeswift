@@ -27,12 +27,22 @@ lsmod | grep vfio
 # Expected: vfio_pci, vfio_iommu_type1, vfio listed
 ```
 
-### For HGX SXM nodes (Tier 2/3 only)
+### For HGX SXM nodes (Tier 2 — `hgx-shared`)
 
 - NVIDIA Fabric Manager installed and running
 - Host FM version must exactly match the `nvidia-open` driver version in the guest image
 - 1GiB hugepages configured (`/proc/sys/vm/nr_hugepages`)
 - OVMF firmware available at `/usr/share/OVMF/OVMF_CODE.fd` (included in swiftletd image)
+- **`nvidia-smi` on the node, reachable by the GPU Discovery DaemonSet.** FM
+  expresses partition membership in GPU physical/Module IDs, which do not
+  follow lspci order — discovery needs `nvidia-smi -q` to translate them into
+  the device-Index space the shared-NVSwitch allocator consumes. Without
+  `nvidia-smi`, partition membership silently degrades to an identity mapping
+  (module ID == device index), which is wrong on real HGX baseboards. Discovery
+  logs a prominent warning when it falls back this way.
+
+Tier 3 (`hgx-full`, in-guest Fabric Manager) is **not implemented** — see
+[GPU compatibility tiers](#gpu-compatibility-tiers) below.
 
 ## GPU compatibility tiers
 
@@ -45,13 +55,13 @@ lsmod | grep vfio
 | H100-SXM (2-4 GPU) | `hgx-shared` | QEMU | Yes | Yes (host) | Required | Required |
 | H200-SXM (2-4 GPU) | `hgx-shared` | QEMU | Yes | Yes (host) | Required | Required |
 | B200-SXM (2-4 GPU) | `hgx-shared` | QEMU | Yes + noMmap | Yes (host) | Required | Required |
-| Any HGX (8 GPU full) | `hgx-full` | QEMU | Full hierarchy | Yes (guest) | Required | Required |
+| Any HGX (8 GPU full) | `hgx-full` | — | — | — | — | **not implemented** |
 
 **Tier 1 (`pcie`)**: Cloud Hypervisor is used. Each GPU is passed with `--device path=<sysfs>,x_nv_gpudirect_clique=0`. Flat PCI topology is sufficient — CUDA initializes correctly for PCIe-attached GPUs.
 
 **Tier 2 (`hgx-shared`)**: QEMU is required. CUDA refuses to initialize on a flat PCI topology for HGX SXM GPUs. Each GPU is placed behind its own `pcie-root-port`. The host Fabric Manager manages NVSwitch partitions. OVMF firmware is used for UEFI boot.
 
-**Tier 3 (`hgx-full`)**: QEMU with full PCIe hierarchy including expander buses, root ports, and switches. NVSwitches are passed to the guest. Fabric Manager runs inside the guest. This is Phase 4 — not yet implemented.
+**Tier 3 (`hgx-full`)**: **Not implemented — rejected at allocation.** The design calls for QEMU with a full PCIe hierarchy (expander buses, root ports, switches), NVSwitches passed to the guest, and Fabric Manager running inside the guest (SwiftGPU Phase 4 on the roadmap). The QEMU builder can emit the NVSwitch device-passthrough args, but the in-guest Fabric Manager wiring doesn't exist, so a `SwiftGPUProfile` with `tier: hgx-full` fails at allocation (`GPUAllocated=False` reason `UnsupportedTier`) rather than booting into a broken fabric. Use `tier: hgx-shared` (Tier 2) today.
 
 ## GPU Discovery DaemonSet
 
@@ -301,7 +311,7 @@ Key fields in `status`:
 
 ## Fabric Manager
 
-Fabric Manager (FM) is required for HGX SXM GPUs in shared or full passthrough mode. It manages the NVSwitch fabric that connects GPUs.
+Fabric Manager (FM) is required for HGX SXM GPUs in shared partition mode (Tier 2). It manages the NVSwitch fabric that connects GPUs. Full passthrough mode (Tier 3, FM inside the guest) is not yet implemented — see [GPU compatibility tiers](#gpu-compatibility-tiers).
 
 **Version matching**: The FM version on the host must exactly match the `nvidia-open` driver version in the guest image. Mismatches cause CUDA initialization failures that appear as "no devices found" in `nvidia-smi`.
 
@@ -316,7 +326,7 @@ Fabric Manager (FM) is required for HGX SXM GPUs in shared or full passthrough m
 
 - `isolated` — No Fabric Manager involvement. GPUs have no NVLink connectivity.
 - `shared` — Host FM manages the partition. Guest uses NVLink through the NVSwitch fabric.
-- `full` — All GPUs + NVSwitches passed to a single VM. FM runs inside the guest. (Phase 4)
+- `full` — All GPUs + NVSwitches passed to a single VM. FM runs inside the guest. **Not implemented — rejected at allocation** (see Tier 3 above; SwiftGPU Phase 4 on the roadmap).
 
 ## Network Separation for GPU Workloads
 
