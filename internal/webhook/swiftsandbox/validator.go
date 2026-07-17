@@ -66,6 +66,10 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if s.VerifyKeySecretRef != nil && s.VerifyKeySecretRef.Name == "" {
 		return fmt.Errorf("spec.verifyKeySecretRef.name is required when verifyKeySecretRef is set")
 	}
+	// Exactly one GPU backend: gpuProfileRef (native) XOR gpuResourceClaim (DRA).
+	if s.GPUProfileRef != nil && s.GPUResourceClaim != nil {
+		return fmt.Errorf("spec.gpuProfileRef and spec.gpuResourceClaim are mutually exclusive: choose the native (gpuProfileRef) or DRA (gpuResourceClaim) GPU backend")
+	}
 	if rc := s.GPUResourceClaim; rc != nil {
 		// Exactly one claim source (mirror the SwiftGuest DRA rule).
 		hasName := rc.ResourceClaimName != ""
@@ -76,6 +80,15 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 		// A GPU sandbox boots cold — a warm pool cannot hold a scarce GPU idle.
 		if s.PoolRef != nil {
 			return fmt.Errorf("spec.gpuResourceClaim and spec.poolRef are mutually exclusive: a GPU sandbox boots cold (a warm pool cannot hold a GPU reservation)")
+		}
+	}
+	if pr := s.GPUProfileRef; pr != nil {
+		if pr.Name == "" {
+			return fmt.Errorf("spec.gpuProfileRef.name is required when gpuProfileRef is set")
+		}
+		// Same cold-boot rule as the DRA backend: a warm pool cannot hold a GPU.
+		if s.PoolRef != nil {
+			return fmt.Errorf("spec.gpuProfileRef and spec.poolRef are mutually exclusive: a GPU sandbox boots cold (a warm pool cannot hold a GPU reservation)")
 		}
 	}
 	return nil

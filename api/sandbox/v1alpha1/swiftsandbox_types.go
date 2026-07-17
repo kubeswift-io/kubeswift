@@ -115,16 +115,43 @@ type SwiftSandboxSpec struct {
 	//
 	// A GPU sandbox boots COLD: a warm pool cannot cheaply hold a scarce GPU idle,
 	// so gpuResourceClaim and poolRef are mutually exclusive. Mirrors
-	// SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend). The native
-	// SwiftGPUProfile backend (gpuProfileRef) is a planned follow-up for sandboxes.
+	// SwiftGuest.spec.gpuResourceClaim (the DRA allocation backend).
 	// +optional
 	GPUResourceClaim *swiftv1alpha1.GPUResourceClaimSpec `json:"gpuResourceClaim,omitempty"`
+
+	// GPUProfileRef selects the NATIVE SwiftGPU allocation backend (a
+	// SwiftGPUProfile in the same namespace), the sandbox analogue of
+	// SwiftGuest.spec.gpuProfileRef. Unlike DRA, the KubeSwift SwiftGPU
+	// controller allocates the device(s) at CONTROLLER time and stamps
+	// status.gpu; the sandbox pod is then pinned to status.gpu.nodeName and
+	// gpu-init binds the specific BDFs from status.gpu.devices. Mutually
+	// exclusive with gpuResourceClaim (pick one GPU backend) and — like
+	// gpuResourceClaim — with poolRef (a GPU sandbox boots cold). Selecting a
+	// GPU still switches the sandbox to the module-capable "gpu-sandbox" kernel
+	// unless kernelProfileRef is set.
+	// +optional
+	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
 }
 
-// UsesGPU reports whether the sandbox requests a GPU (currently the DRA backend
-// only).
+// UsesGPU reports whether the sandbox requests a GPU by either backend.
 func (s *SwiftSandbox) UsesGPU() bool {
-	return s.Spec.GPUResourceClaim != nil
+	return s.Spec.GPUResourceClaim != nil || s.Spec.GPUProfileRef != nil
+}
+
+// GPUBackend returns the GPU allocation backend the sandbox selects: "native"
+// (gpuProfileRef), "dra" (gpuResourceClaim), or "" (no GPU). Mirrors
+// SwiftGuest.GPUBackend so the shared gpualloc/swiftgpu seam treats both
+// workload kinds uniformly. gpuProfileRef wins if both are set (the webhook
+// rejects that combination, so it cannot happen in practice).
+func (s *SwiftSandbox) GPUBackend() string {
+	switch {
+	case s.Spec.GPUProfileRef != nil:
+		return swiftv1alpha1.GPUBackendNative
+	case s.Spec.GPUResourceClaim != nil:
+		return swiftv1alpha1.GPUBackendDRA
+	default:
+		return ""
+	}
 }
 
 // SecretObjectReference references a Secret by name (in the object's own
@@ -251,6 +278,12 @@ type SwiftSandboxStatus struct {
 	// poller. Absent for network:none sandboxes.
 	// +optional
 	Network *SandboxNetworkStatus `json:"network,omitempty"`
+	// GPU is the native SwiftGPU allocation (devices, node, NUMA), populated by
+	// the SwiftGPU controller when spec.gpuProfileRef is set. Absent for the DRA
+	// backend (the device identity lives in the pod's ResourceClaim) and for
+	// non-GPU sandboxes.
+	// +optional
+	GPU *swiftv1alpha1.GPUStatus `json:"gpu,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
