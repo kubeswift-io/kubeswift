@@ -7,38 +7,56 @@ import (
 	"sort"
 	"strings"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 var errNoCapacity = errors.New("no GPU node has sufficient capacity")
 
-// findAndAllocate finds a suitable SwiftGPUNode, marks the GPUs as allocated
-// in its status, and returns the selected GPUs and associated metadata.
-//
-// Idempotent: if GPUs are already marked as allocated to this guest (e.g. a
-// previous reconcile updated the node but failed to patch the guest status),
-// they are returned without re-allocating.
+// findAndAllocate is the SwiftGuest wrapper over FindAndAllocateFor: it derives
+// the allocation identity ("<ns>/<name>") and the preferred node (from
+// status.GPU) and delegates. Preserves the SwiftGuest native path unchanged.
 func (r *SwiftGPUReconciler) findAndAllocate(
 	ctx context.Context,
 	guest *swiftv1alpha1.SwiftGuest,
 	profile *gpuv1alpha1.SwiftGPUProfile,
-) (node *gpuv1alpha1.SwiftGPUNode, selectedGPUs []gpuv1alpha1.GPUDevice, numaNodes []int, partitionID int, err error) {
-
-	var nodeList gpuv1alpha1.SwiftGPUNodeList
-	if err := r.List(ctx, &nodeList); err != nil {
-		return nil, nil, nil, -1, err
-	}
-
-	allocatedTo := guest.Namespace + "/" + guest.Name
-
-	// The node status.GPU already references, if any. The first pass prefers it.
+) (*gpuv1alpha1.SwiftGPUNode, []gpuv1alpha1.GPUDevice, []int, int, error) {
 	preferredNode := ""
 	if guest.Status.GPU != nil {
 		preferredNode = guest.Status.GPU.NodeName
 	}
+	return FindAndAllocateFor(ctx, r.Client, guest.Namespace+"/"+guest.Name, preferredNode, profile)
+}
 
-	// First pass: return an existing allocation for this guest (idempotency
+// FindAndAllocateFor is the object-agnostic native allocation core: it finds a
+// SwiftGPUNode with capacity for the profile, marks profile.Count GPUs (+ an FM
+// partition in shared mode) AllocatedTo the given identity, and returns the
+// selection. `allocatedTo` is an opaque workload identity — "<ns>/<name>" for a
+// SwiftGuest, "sandbox:<ns>/<name>" for a SwiftSandbox — that only has to be
+// unique per workload so two workloads never share a reservation. Both native
+// paths (SwiftGuest, SwiftSandbox) call this; SwiftGuest behavior is unchanged.
+//
+// Idempotent: if GPUs are already marked AllocatedTo this identity (e.g. a
+// previous reconcile updated the node but failed to patch the workload status),
+// they are returned without re-allocating; `preferredNode` (the node status.GPU
+// already references) is preferred so the re-stamp never races a migration
+// (W-GPU-1).
+func FindAndAllocateFor(
+	ctx context.Context,
+	c client.Client,
+	allocatedTo string,
+	preferredNode string,
+	profile *gpuv1alpha1.SwiftGPUProfile,
+) (node *gpuv1alpha1.SwiftGPUNode, selectedGPUs []gpuv1alpha1.GPUDevice, numaNodes []int, partitionID int, err error) {
+
+	var nodeList gpuv1alpha1.SwiftGPUNodeList
+	if err := c.List(ctx, &nodeList); err != nil {
+		return nil, nil, nil, -1, err
+	}
+
+	// First pass: return an existing allocation for this identity (idempotency
 	// guard — handles partial status patch failure). PREFER the node
 	// status.GPU already points at over the first node found.
 	//
@@ -163,7 +181,7 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 		// Recompute freeGPUs from allocation state.
 		n.Status.FreeGPUs = countFreeGPUs(n.Status.GPUs)
 
-		if err := r.Status().Update(ctx, n); err != nil {
+		if err := c.Status().Update(ctx, n); err != nil {
 			return nil, nil, nil, -1, fmt.Errorf("update SwiftGPUNode %s status: %w", n.Name, err)
 		}
 
@@ -224,12 +242,22 @@ func (r *SwiftGPUReconciler) deallocateGPUs(ctx context.Context, guest *swiftv1a
 	// ReleaseFromNode is idempotent (a no-op on nodes the guest doesn't hold),
 	// so this is safe and the per-node Get cost is trivial (few GPU nodes).
 	// (Design doc vfio-release-reallocate.md §10.1.)
+	return DeallocateForWorkload(ctx, r.Client, guest.Namespace+"/"+guest.Name)
+}
+
+// DeallocateForWorkload frees every GPU (and FM partition) AllocatedTo the given
+// identity on ALL SwiftGPUNodes — the object-agnostic release core shared by the
+// SwiftGuest (deallocateGPUs) and SwiftSandbox native paths. Listing all nodes
+// (not just status.GPU.NodeName) covers the reserve-before-stop double-hold
+// window (design doc vfio-release-reallocate.md §10.1). releaseFromNodeFor is
+// idempotent, so this is a safe no-op on nodes the workload does not hold.
+func DeallocateForWorkload(ctx context.Context, c client.Client, allocatedTo string) error {
 	var nodes gpuv1alpha1.SwiftGPUNodeList
-	if err := r.List(ctx, &nodes); err != nil {
+	if err := c.List(ctx, &nodes); err != nil {
 		return fmt.Errorf("list SwiftGPUNodes for deallocation: %w", err)
 	}
 	for i := range nodes.Items {
-		if err := ReleaseFromNode(ctx, r.Client, guest, nodes.Items[i].Name); err != nil {
+		if err := releaseFromNodeFor(ctx, c, allocatedTo, nodes.Items[i].Name); err != nil {
 			return err
 		}
 	}

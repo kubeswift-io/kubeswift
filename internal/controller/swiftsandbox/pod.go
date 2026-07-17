@@ -1,6 +1,9 @@
 package swiftsandbox
 
 import (
+	"strconv"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -183,6 +186,25 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 			Firmware:                 "cloudhv",
 			FabricManagerPartitionID: -1,
 		}
+	} else if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil {
+		// Native SwiftGPU passthrough (controller-time allocation): the devices are
+		// already known, so pass them explicitly — deviceSource="" makes swiftletd
+		// use intent.gpu.devices (resolved_devices), no CDI env. Tier: pcie only
+		// (CH mode-3); HGX tiers are rejected at allocation, so no pcie-root-port /
+		// no-mmap / virtual NUMA here. GPUDirectClique defaults to 0 (a single NVIDIA
+		// Tier-1 GPU). No FM partition.
+		devs := make([]runtimeintent.VFIODeviceIntent, 0, len(sb.Status.GPU.Devices))
+		for _, bdf := range sb.Status.GPU.Devices {
+			devs = append(devs, runtimeintent.VFIODeviceIntent{
+				HostPath:   "/sys/bus/pci/devices/" + bdf + "/",
+				PCIAddress: bdf,
+			})
+		}
+		ri.GPU = &runtimeintent.GPUIntent{
+			Devices:                  devs,
+			Firmware:                 "cloudhv",
+			FabricManagerPartitionID: -1,
+		}
 	}
 	return ri
 }
@@ -206,6 +228,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	nodeSelector := map[string]string{kernelNodeLabel: "true"}
 	for k, v := range sb.Spec.NodeSelector {
 		nodeSelector[k] = v
+	}
+	// Native SwiftGPU: pin to the node the controller allocated the device(s) on
+	// (the DRA backend instead lets the scheduler place the claim). The GPU node
+	// must also be a kernel node — the kernel-node label above still applies.
+	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil && sb.Status.GPU.NodeName != "" {
+		nodeSelector["kubernetes.io/hostname"] = sb.Status.GPU.NodeName
 	}
 
 	matArgs := []string{
@@ -316,6 +344,34 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		)
 	}
 
+	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil {
+		// Native SwiftGPU: same gpu-init + VFIO mounts as the DRA path, but the
+		// controller already knows the devices, so pass them to gpu-init via env
+		// (GPU_PCI_ADDRESSES + GPU_PARTITION_ID) — no ResourceClaim, no CDI. The
+		// launcher /dev/vfio mount is added below (the DRA path adds it in
+		// applySandboxDRAClaim). Native and DRA are mutually exclusive (webhook),
+		// so exactly one of these two blocks fires.
+		hostSysDir := corev1.HostPathDirectory
+		initContainers = append(initContainers, corev1.Container{
+			Name:            gpuInitName,
+			Image:           swiftguest.LauncherImage(),
+			Command:         []string{"/bin/bash", "/usr/local/bin/gpu-init.sh"},
+			SecurityContext: privileged(),
+			Env: []corev1.EnvVar{
+				{Name: "GPU_PCI_ADDRESSES", Value: strings.Join(sb.Status.GPU.Devices, ",")},
+				{Name: "GPU_PARTITION_ID", Value: strconv.Itoa(sb.Status.GPU.PartitionID)},
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "dev-vfio", MountPath: "/dev/vfio"},
+				{Name: "host-sys", MountPath: "/host/sys"},
+			},
+		})
+		volumes = append(volumes,
+			corev1.Volume{Name: "dev-vfio", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/vfio", Type: &dirCreate}}},
+			corev1.Volume{Name: "host-sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys", Type: &hostSysDir}}},
+		)
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      sb.Name,
@@ -353,6 +409,16 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	}
 	if sb.Spec.GPUResourceClaim != nil {
 		applySandboxDRAClaim(pod, sb.Spec.GPUResourceClaim)
+	}
+	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil {
+		// Launcher opens the VFIO group devices to pass them into CH; the native
+		// path adds the mount here (the DRA path adds it in applySandboxDRAClaim).
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == launcherName {
+				pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts,
+					corev1.VolumeMount{Name: "dev-vfio", MountPath: "/dev/vfio"})
+			}
+		}
 	}
 	return pod
 }

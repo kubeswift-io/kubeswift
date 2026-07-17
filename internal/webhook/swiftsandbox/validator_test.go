@@ -140,3 +140,41 @@ func TestValidateCreate_GPUAndPoolMutuallyExclusive(t *testing.T) {
 		t.Error("gpuResourceClaim + poolRef should be rejected (GPU sandboxes boot cold)")
 	}
 }
+
+func TestValidateCreate_GPUProfileAndClaimMutuallyExclusive(t *testing.T) {
+	v := &Validator{}
+	s := sb("cuda:12.4")
+	s.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gtx"}
+	s.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimTemplateName: "single-vfio-gpu"}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("gpuProfileRef + gpuResourceClaim should be rejected (pick one GPU backend)")
+	}
+}
+
+func TestValidateCreate_GPUProfileAndPoolMutuallyExclusive(t *testing.T) {
+	v := &Validator{}
+	s := sb("cuda:12.4")
+	s.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gtx"}
+	s.Spec.PoolRef = &corev1.LocalObjectReference{Name: "warm-pool"}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("gpuProfileRef + poolRef should be rejected (a GPU sandbox boots cold)")
+	}
+}
+
+func TestValidateCreate_GPUProfileRef_OK(t *testing.T) {
+	v := &Validator{}
+	s := sb("cuda:12.4")
+	s.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gtx"}
+	if _, err := v.ValidateCreate(context.Background(), s); err != nil {
+		t.Errorf("gpuProfileRef alone should be accepted, got: %v", err)
+	}
+}
+
+func TestValidateCreate_GPUProfileRef_RequiresName(t *testing.T) {
+	v := &Validator{}
+	s := sb("cuda:12.4")
+	s.Spec.GPUProfileRef = &corev1.LocalObjectReference{}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("gpuProfileRef with an empty name should be rejected")
+	}
+}

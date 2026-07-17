@@ -1,0 +1,44 @@
+# A GPU sandbox using the NATIVE SwiftGPU backend (spec.gpuProfileRef) instead of
+# DRA. The SwiftGPU controller allocates the device at controller time (a
+# SwiftGPUProfile + SwiftGPUNode, no ResourceClaim), stamps status.gpu, pins the
+# sandbox to the allocated node, and gpu-init binds the specific BDF. Right for
+# heterogeneous estates / NVIDIA-stack-free clusters where DRA isn't set up.
+# See docs/sandbox/gpu-sandboxes.md.
+#
+# Prereqs:
+#   - a GPU node that is ALSO a kernel node
+#     (kubeswift.io/gpu-node=true AND kubeswift.io/kernel-node=true), vfio-pci loaded
+#   - gpu-discovery running (populates the SwiftGPUNode inventory)
+#   - the gpu-sandbox SwiftKernel: config/samples/sandbox/swiftkernel-gpu-sandbox.yaml
+#
+# Tier: pcie only — a sandbox boots mode-3 (Cloud Hypervisor direct-kernel); HGX
+# tiers need the QEMU disk-boot path (use a SwiftGuest).
+---
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: single-pcie-gpu
+  namespace: default
+spec:
+  count: 1
+  tier: pcie
+  partitionMode: isolated
+  # model: "GTX 1080"   # optional: constrain to a specific GPU model
+---
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: gpu-infer-native
+  namespace: default
+spec:
+  # Replace with a CUDA image that ships nvidia.ko (built for the gpu-sandbox
+  # Linux 6.6.x kernel) + nvidia-smi and insmods it at start.
+  image: <your-registry>/cuda-nvidia-smi@sha256:...
+  cpu: 4
+  memory: 8Gi
+  network:
+    mode: open
+  gpuProfileRef:
+    name: single-pcie-gpu
+  # kernelProfileRef defaults to gpu-sandbox when a GPU is requested; override
+  # explicitly if needed. gpuProfileRef excludes gpuResourceClaim and poolRef.

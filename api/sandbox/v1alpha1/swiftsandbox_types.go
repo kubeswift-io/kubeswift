@@ -221,6 +221,11 @@ const (
 	SwiftSandboxConditionResolved     = "Resolved"
 	SwiftSandboxConditionRootfsReady  = "RootfsReady"
 	SwiftSandboxConditionGuestRunning = "GuestRunning"
+	// SwiftSandboxConditionGPUAllocated is True once the native SwiftGPU backend
+	// (spec.gpuProfileRef) has allocated the device(s) and stamped status.gpu;
+	// False with reason ProfileNotFound / NoCapacity while it cannot. Absent for
+	// the DRA backend and non-GPU sandboxes.
+	SwiftSandboxConditionGPUAllocated = "GPUAllocated"
 )
 
 // SandboxRootfsStatus reports the materialized OCI rootfs.
