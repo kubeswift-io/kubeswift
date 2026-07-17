@@ -46,11 +46,35 @@ agent:
 		go build -ldflags="-s -w" -o $(AGENT_BIN) ./cmd/kubeswift-guest-agent
 	@echo "  guest-agent: $(AGENT_BIN) ($$(du -h $(AGENT_BIN) | cut -f1))"
 
+# The kernel config files the built kernel must match. Buildroot applies these to
+# the kernel's .config ONCE, at its linux-configure step, and then STAMPS it: a
+# later edit to either file is silently ignored, so `make build` happily rebuilds
+# and ships a kernel built from the OLD config. That trap shipped a
+# module-capable "monolithic" sandbox kernel (CONFIG_MODULES=n was honored on a
+# clean build, but the stale tree kept CONFIG_MODULES=y). Re-apply the config
+# whenever it is newer than the stamp, so the built kernel always matches the
+# tracked config -- no silent drift.
+KERNEL_CONFIGS := $(CURDIR)/configs/sandbox-linux.config \
+	$(wildcard $(CURDIR)/configs/$(PROFILE).fragment)
+
 build: setup agent
 	$(MAKE) -C $(BUILDROOT_DIR) \
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \
 		$(PROFILE)_defconfig
+	@stamp=$$(ls -1 $(OUTPUT_DIR)/build/linux-*/.stamp_configured 2>/dev/null | head -1); \
+	if [ -n "$$stamp" ]; then \
+		for cfg in $(KERNEL_CONFIGS); do \
+			if [ "$$cfg" -nt "$$stamp" ]; then \
+				echo "kernel config $$cfg changed since configure -> linux-reconfigure"; \
+				$(MAKE) -C $(BUILDROOT_DIR) \
+					BR2_EXTERNAL=$(EXTERNAL) \
+					O=$(OUTPUT_DIR) \
+					linux-reconfigure; \
+				break; \
+			fi; \
+		done; \
+	fi
 	$(MAKE) -C $(BUILDROOT_DIR) \
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \
@@ -59,6 +83,8 @@ build: setup agent
 	@echo "Build complete ($(PROFILE)):"
 	@echo "  bzImage:           $(OUTPUT_DIR)/images/bzImage"
 	@echo "  rootfs.cpio.gz:    $(OUTPUT_DIR)/images/rootfs.cpio.gz  (bridge-initramfs)"
+	@echo "  CONFIG_MODULES:    $$(grep -E '^CONFIG_MODULES=|^# CONFIG_MODULES is not set' \
+		$(OUTPUT_DIR)/build/linux-*/.config 2>/dev/null | head -1)"
 
 verify:
 	./verify-boot.sh
