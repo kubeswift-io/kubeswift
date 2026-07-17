@@ -80,8 +80,8 @@ func TestFindAndAllocate_HGXShared_FMVersionMismatch_Rejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected rejection on FM version mismatch, allocated %d GPU(s)", len(gpus))
 	}
-	if !errors.Is(err, errNoCapacity) {
-		t.Errorf("error should wrap errNoCapacity, got %v", err)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Errorf("error should wrap ErrNoCapacity, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "560.35.03") {
 		t.Errorf("error should name the required version 560.35.03, got: %v", err)

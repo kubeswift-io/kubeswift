@@ -2,6 +2,7 @@ package swiftsandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftgpu"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
@@ -56,8 +58,26 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	if pool.DeletionTimestamp != nil {
 		// Warm slots (pods / intent ConfigMaps / NetworkPolicies) are owned by the pool
-		// and cascade-GC with it. No finalizer needed.
+		// and cascade-GC with it. A GPU pool additionally carries a finalizer so its
+		// per-slot SwiftGPU allocations (status fields on separate SwiftGPUNodes, not
+		// owner-ref'd) are released before the pool goes.
+		if controllerutil.ContainsFinalizer(&pool, poolGPUFinalizer) {
+			if err := r.reconcileSlotGPUGC(ctx, &pool, map[string]bool{}); err != nil {
+				return ctrl.Result{}, err
+			}
+			controllerutil.RemoveFinalizer(&pool, poolGPUFinalizer)
+			if err := r.Update(ctx, &pool); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
+	}
+	// A GPU pool needs the release finalizer before it warms any GPU slot.
+	if pool.Spec.GPUProfileRef != nil && !controllerutil.ContainsFinalizer(&pool, poolGPUFinalizer) {
+		controllerutil.AddFinalizer(&pool, poolGPUFinalizer)
+		if err := r.Update(ctx, &pool); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	// Warm slots run swiftletd, which reports via pod annotations — ensure the
 	// per-namespace reporter RoleBinding (idempotent), as the sandbox controller does.
@@ -77,6 +97,13 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	var ready, warmLive, claimed int
 	var warmPods []*corev1.Pod
+	// Every pool pod that still EXISTS (any phase, incl. terminating) — used to GC
+	// the GPUs of slots whose pods are gone. A terminating pod's CH may still hold
+	// its VFIO group, so its allocation is kept until the pod is truly gone.
+	liveSlotPods := map[string]bool{}
+	for i := range pods.Items {
+		liveSlotPods[pods.Items[i].Name] = true
+	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
@@ -92,6 +119,12 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		} else {
 			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
 		}
+	}
+
+	// Release the GPU of any slot whose pod is gone (drain / checkout completion /
+	// churn). Runs before warming so freed GPUs are available for new slots.
+	if err := r.reconcileSlotGPUGC(ctx, &pool, liveSlotPods); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Resolve the image only when we must — creating slots, or not yet resolved — so a
@@ -111,6 +144,12 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	for i := 0; i < want; i++ {
 		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri); err != nil {
+			// A GPU pool sized above the free-GPU count stops warming here (holds
+			// what it could) instead of erroring every reconcile — minWarm > GPUs
+			// is an operator sizing choice, surfaced as ready < minWarm.
+			if pool.Spec.GPUProfileRef != nil && errors.Is(err, swiftgpu.ErrNoCapacity) {
+				break
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -210,6 +249,16 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 // deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
 func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage) error {
 	slot := r.slotTemplate(pool, pool.Name+"-slot-"+utilrand.String(5))
+
+	// Warm GPU pool: allocate a GPU for this slot and stamp its spec.gpuProfileRef
+	// + status.GPU so the launch builders produce a GPU-aware slot (node pin,
+	// gpu-init, explicit device intent — B1 machinery). An ErrNoCapacity here is
+	// propagated so the reconcile stops warming rather than looping.
+	if pool.Spec.GPUProfileRef != nil {
+		if err := r.allocateSlotGPU(ctx, pool, slot); err != nil {
+			return err
+		}
+	}
 
 	// idle=true: a warm keeper carries no workload (execSpec{}); it boots to the
 	// bridge idle loop (kubeswift.idle=1) so warming never depends on the image

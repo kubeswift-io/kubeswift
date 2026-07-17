@@ -114,3 +114,44 @@ resourceclaim` shows the allocation.
 - [`config/samples/sandbox/`](../../config/samples/sandbox/) — GPU sandbox +
   ResourceClaimTemplate samples
 - GPU sandbox scoping / roadmap: [#390](https://github.com/kubeswift-io/kubeswift/issues/390)
+
+## Warm GPU pools (sub-second inference start)
+
+A cold GPU sandbox pays a full boot + driver load + model load per request. For
+latency-critical inference, a **warm GPU pool** keeps N pre-booted GPU sandboxes
+so a checkout is sub-second (the workload is injected over vsock into an
+already-booted, GPU-attached slot).
+
+```yaml
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata: {name: infer-pool}
+spec:
+  image: <cuda-inference image>
+  cpu: 4
+  memory: 8Gi
+  gpuProfileRef: {name: infer-gpu}   # makes every warm slot a GPU sandbox
+  minWarm: 1
+```
+
+Check out a slot with a `SwiftSandbox` that has `poolRef` and **no GPU of its
+own** — the GPU comes from the claimed slot:
+
+```yaml
+kind: SwiftSandbox
+spec:
+  image: <same image>
+  poolRef: {name: infer-pool}
+  command: ["/bin/sh", "-c", "python /app/infer.py"]
+```
+
+**The tradeoff is explicit:** each warm slot holds a **whole GPU idle**, so keep
+`minWarm` ≤ your free GPU count (on one GPU, `minWarm: 1`). The controller
+allocates a GPU per warm slot, gates the slot on it, and releases it when the
+slot drains, its checkout completes, or the pool is deleted. **Tier `pcie` only**
+(a warm slot boots mode-3 Cloud Hypervisor); HGX tiers are rejected. Full sample:
+`config/samples/sandbox/swiftsandboxpool-gpu.yaml`.
+
+**Model preload** (a pool-shared read-only model cache mounted into every warm
+slot, so the weights are resident before checkout) is the next step; today, bake
+the model into the image or mount it via `spec.scratchDisk` on the pool slots.

@@ -13,7 +13,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
-var errNoCapacity = errors.New("no GPU node has sufficient capacity")
+var ErrNoCapacity = errors.New("no GPU node has sufficient capacity")
 
 // findAndAllocate is the SwiftGuest wrapper over FindAndAllocateFor: it derives
 // the allocation identity ("<ns>/<name>") and the preferred node (from
@@ -190,9 +190,9 @@ func FindAndAllocateFor(
 
 	if fmVersionMismatch {
 		return nil, nil, nil, -1, fmt.Errorf("%w: candidate GPU node(s) run a Fabric Manager version that does not match profile.spec.fabricManager.requiredVersion=%q (for shared NVSwitch mode the host Fabric Manager version must exactly match the guest driver version)",
-			errNoCapacity, profile.Spec.FabricManager.RequiredVersion)
+			ErrNoCapacity, profile.Spec.FabricManager.RequiredVersion)
 	}
-	return nil, nil, nil, -1, errNoCapacity
+	return nil, nil, nil, -1, ErrNoCapacity
 }
 
 // fmVersionCompatible reports whether node's Fabric Manager version satisfies
