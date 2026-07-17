@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -89,6 +90,26 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 		// Same cold-boot rule as the DRA backend: a warm pool cannot hold a GPU.
 		if s.PoolRef != nil {
 			return fmt.Errorf("spec.gpuProfileRef and spec.poolRef are mutually exclusive: a GPU sandbox boots cold (a warm pool cannot hold a GPU reservation)")
+		}
+	}
+	if sd := s.ScratchDisk; sd != nil {
+		hasBlank := sd.Blank != nil
+		hasPVC := sd.PVCRef != nil
+		if hasBlank == hasPVC {
+			return fmt.Errorf("spec.scratchDisk requires exactly one of blank or pvcRef")
+		}
+		if hasBlank {
+			if sd.Blank.Size.Sign() <= 0 {
+				return fmt.Errorf("spec.scratchDisk.blank.size must be > 0")
+			}
+			// v1 supports Block-mode scratch disks only (raw device). A
+			// Filesystem escape hatch would need a fill Job + a mount step.
+			if sd.Blank.VolumeMode == corev1.PersistentVolumeFilesystem {
+				return fmt.Errorf("spec.scratchDisk.blank.volumeMode: only Block is supported for sandbox scratch disks")
+			}
+		}
+		if hasPVC && sd.PVCRef.Name == "" {
+			return fmt.Errorf("spec.scratchDisk.pvcRef.name is required")
 		}
 	}
 	return nil

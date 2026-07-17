@@ -7,6 +7,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
@@ -176,5 +178,47 @@ func TestValidateCreate_GPUProfileRef_RequiresName(t *testing.T) {
 	s.Spec.GPUProfileRef = &corev1.LocalObjectReference{}
 	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
 		t.Error("gpuProfileRef with an empty name should be rejected")
+	}
+}
+
+func TestValidateCreate_ScratchDisk_OneOf(t *testing.T) {
+	v := &Validator{}
+	// both blank + pvcRef → reject
+	s := sb("alpine:3")
+	s.Spec.ScratchDisk = &sandboxv1alpha1.SandboxScratchDisk{
+		Blank:  &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("5Gi")},
+		PVCRef: &corev1.LocalObjectReference{Name: "cache"},
+	}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("scratchDisk with both blank and pvcRef should be rejected")
+	}
+	// neither → reject
+	s2 := sb("alpine:3")
+	s2.Spec.ScratchDisk = &sandboxv1alpha1.SandboxScratchDisk{}
+	if _, err := v.ValidateCreate(context.Background(), s2); err == nil {
+		t.Error("scratchDisk with neither blank nor pvcRef should be rejected")
+	}
+}
+
+func TestValidateCreate_ScratchDisk_BlankRules(t *testing.T) {
+	v := &Validator{}
+	// size 0 → reject
+	s := sb("alpine:3")
+	s.Spec.ScratchDisk = &sandboxv1alpha1.SandboxScratchDisk{Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("0")}}
+	if _, err := v.ValidateCreate(context.Background(), s); err == nil {
+		t.Error("scratchDisk.blank.size 0 should be rejected")
+	}
+	// Filesystem → reject (Block only in v1)
+	s2 := sb("alpine:3")
+	s2.Spec.ScratchDisk = &sandboxv1alpha1.SandboxScratchDisk{Blank: &swiftv1alpha1.BlankDiskSpec{
+		Size: resource.MustParse("5Gi"), VolumeMode: corev1.PersistentVolumeFilesystem}}
+	if _, err := v.ValidateCreate(context.Background(), s2); err == nil {
+		t.Error("scratchDisk.blank Filesystem volumeMode should be rejected")
+	}
+	// valid blank Block → ok
+	s3 := sb("alpine:3")
+	s3.Spec.ScratchDisk = &sandboxv1alpha1.SandboxScratchDisk{Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("5Gi")}}
+	if _, err := v.ValidateCreate(context.Background(), s3); err != nil {
+		t.Errorf("valid blank Block scratchDisk should be accepted, got: %v", err)
 	}
 }

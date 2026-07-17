@@ -131,6 +131,31 @@ type SwiftSandboxSpec struct {
 	// unless kernelProfileRef is set.
 	// +optional
 	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
+
+	// ScratchDisk attaches ONE secondary block disk to the sandbox guest — a
+	// large or persistent scratch volume for build caches, dataset staging,
+	// checkpoints, or (for GPU inference) a model/weight cache, so the sandbox is
+	// not limited to its ephemeral RAM-backed rootfs overlay. The disk is
+	// attached as a RAW block device (the same v0.4.2 blank-data-disk runtime
+	// path SwiftGuest uses); the workload runs mkfs + mount, or uses it raw.
+	// +optional
+	ScratchDisk *SandboxScratchDisk `json:"scratchDisk,omitempty"`
+}
+
+// SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
+// of blank / pvcRef must be set.
+type SandboxScratchDisk struct {
+	// Blank provisions a new, empty, sized Block PVC OWNED by the sandbox
+	// (deleted with it — an ephemeral-but-large, non-RAM scratch). The workload
+	// mkfs+mounts the raw device. VolumeMode must be Block (Filesystem is not
+	// supported for sandbox scratch disks in v1).
+	// +optional
+	Blank *swiftv1alpha1.BlankDiskSpec `json:"blank,omitempty"`
+	// PVCRef attaches an EXISTING PersistentVolumeClaim (Block volumeMode) as the
+	// raw disk. It PERSISTS beyond the sandbox (not owned by it) — the case for a
+	// durable cache reused across sandboxes. Exactly one of blank / pvcRef.
+	// +optional
+	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
 }
 
 // UsesGPU reports whether the sandbox requests a GPU by either backend.
@@ -226,7 +251,25 @@ const (
 	// False with reason ProfileNotFound / NoCapacity while it cannot. Absent for
 	// the DRA backend and non-GPU sandboxes.
 	SwiftSandboxConditionGPUAllocated = "GPUAllocated"
+	// SwiftSandboxConditionScratchDiskReady is True once spec.scratchDisk's PVC
+	// is Bound and attachable; False while provisioning/binding. Absent when no
+	// scratchDisk is requested.
+	SwiftSandboxConditionScratchDiskReady = "ScratchDiskReady"
 )
+
+// SandboxScratchDiskStatus reports the attached scratch disk.
+type SandboxScratchDiskStatus struct {
+	// PVCName is the bound PVC (sandbox-owned for blank, the operator's for pvcRef).
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
+	// DevicePath is the launcher-side host device path (/dev/kubeswift-data-scratch).
+	// Inside the guest it is a raw virtio-blk device (typically /dev/vdc).
+	// +optional
+	DevicePath string `json:"devicePath,omitempty"`
+	// Bound is true once the PVC is Bound.
+	// +optional
+	Bound bool `json:"bound,omitempty"`
+}
 
 // SandboxRootfsStatus reports the materialized OCI rootfs.
 type SandboxRootfsStatus struct {
@@ -289,6 +332,10 @@ type SwiftSandboxStatus struct {
 	// non-GPU sandboxes.
 	// +optional
 	GPU *swiftv1alpha1.GPUStatus `json:"gpu,omitempty"`
+	// ScratchDisk reports the attached scratch disk once its PVC is Bound.
+	// Absent when spec.scratchDisk is unset.
+	// +optional
+	ScratchDisk *SandboxScratchDiskStatus `json:"scratchDisk,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

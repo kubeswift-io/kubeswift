@@ -186,7 +186,16 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 			Firmware:                 "cloudhv",
 			FabricManagerPartitionID: -1,
 		}
-	} else if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil {
+	}
+	if sb.Spec.ScratchDisk != nil {
+		// Attach the scratch Block PVC as a raw secondary disk. swiftletd's
+		// mode-3 run_ch applies intent.dataDisks as additional --disk args; the
+		// pod exposes the PVC as a block device at the same path (below).
+		ri.DataDisks = append(ri.DataDisks, runtimeintent.DataDiskSpec{
+			Name: scratchDiskName, Path: scratchDiskDevicePath(), Format: "raw",
+		})
+	}
+	if sb.Spec.GPUResourceClaim == nil && sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil {
 		// Native SwiftGPU passthrough (controller-time allocation): the devices are
 		// already known, so pass them explicitly — deviceSource="" makes swiftletd
 		// use intent.gpu.devices (resolved_devices), no CDI env. Tier: pcie only
@@ -420,7 +429,32 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			}
 		}
 	}
+	if sb.Spec.ScratchDisk != nil {
+		// Attach the scratch Block PVC as a raw device (volumeDevices, not a
+		// filesystem mount) at the host device path swiftletd hands CH.
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+			Name: "scratch-disk",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: scratchPVCNameFor(sb)},
+			},
+		})
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == launcherName {
+				pod.Spec.Containers[i].VolumeDevices = append(pod.Spec.Containers[i].VolumeDevices,
+					corev1.VolumeDevice{Name: "scratch-disk", DevicePath: scratchDiskDevicePath()})
+			}
+		}
+	}
 	return pod
+}
+
+// scratchPVCNameFor returns the PVC backing the sandbox's scratch disk: the
+// operator's PVC for pvcRef, or the sandbox-owned PVC for blank.
+func scratchPVCNameFor(sb *sandboxv1alpha1.SwiftSandbox) string {
+	if sb.Spec.ScratchDisk.PVCRef != nil {
+		return sb.Spec.ScratchDisk.PVCRef.Name
+	}
+	return scratchDiskPVCName(sb)
 }
 
 // applySandboxDRAClaim wires the DRA ResourceClaim onto a GPU sandbox pod: the

@@ -399,6 +399,67 @@ spec:
                                           host page cache is shared. Same RO-base + writable
                                           tmpfs-overlay semantics as block.
                 type: string
+              scratchDisk:
+                description: |-
+                  ScratchDisk attaches ONE secondary block disk to the sandbox guest — a
+                  large or persistent scratch volume for build caches, dataset staging,
+                  checkpoints, or (for GPU inference) a model/weight cache, so the sandbox is
+                  not limited to its ephemeral RAM-backed rootfs overlay. The disk is
+                  attached as a RAW block device (the same v0.4.2 blank-data-disk runtime
+                  path SwiftGuest uses); the workload runs mkfs + mount, or uses it raw.
+                properties:
+                  blank:
+                    description: |-
+                      Blank provisions a new, empty, sized Block PVC OWNED by the sandbox
+                      (deleted with it — an ephemeral-but-large, non-RAM scratch). The workload
+                      mkfs+mounts the raw device. VolumeMode must be Block (Filesystem is not
+                      supported for sandbox scratch disks in v1).
+                    properties:
+                      size:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: Size is the requested disk size (e.g. "100Gi").
+                          Required, must be > 0.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                      storageClassName:
+                        description: |-
+                          StorageClassName selects the StorageClass for the PVC. Empty uses the
+                          cluster default class.
+                        type: string
+                      volumeMode:
+                        default: Block
+                        description: |-
+                          VolumeMode is Block (default) or Filesystem. Block attaches the raw
+                          device to the guest (the guest runs mkfs). Filesystem is an escape
+                          hatch for Block-incapable clusters — a blank image.raw is created in a
+                          Filesystem PVC and attached as a VM disk.
+                        enum:
+                        - Block
+                        - Filesystem
+                        type: string
+                    required:
+                    - size
+                    type: object
+                  pvcRef:
+                    description: |-
+                      PVCRef attaches an EXISTING PersistentVolumeClaim (Block volumeMode) as the
+                      raw disk. It PERSISTS beyond the sandbox (not owned by it) — the case for a
+                      durable cache reused across sandboxes. Exactly one of blank / pvcRef.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
               timeout:
                 description: |-
                   Timeout is the wall-clock run cap. Past startedAt+timeout the controller
@@ -582,6 +643,24 @@ spec:
                     description: PID is the host PID of the hypervisor process.
                     format: int64
                     type: integer
+                type: object
+              scratchDisk:
+                description: |-
+                  ScratchDisk reports the attached scratch disk once its PVC is Bound.
+                  Absent when spec.scratchDisk is unset.
+                properties:
+                  bound:
+                    description: Bound is true once the PVC is Bound.
+                    type: boolean
+                  devicePath:
+                    description: |-
+                      DevicePath is the launcher-side host device path (/dev/kubeswift-data-scratch).
+                      Inside the guest it is a raw virtio-blk device (typically /dev/vdc).
+                    type: string
+                  pvcName:
+                    description: PVCName is the bound PVC (sandbox-owned for blank,
+                      the operator's for pvcRef).
+                    type: string
                 type: object
               startedAt:
                 description: StartedAt is when the guest began running.
