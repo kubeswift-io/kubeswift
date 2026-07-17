@@ -61,5 +61,14 @@ command: ["/bin/sh", "-c",
 
 - **Auto-mkfs + mount at a path** (a bridge-init addition) — so the workload
   just sees a directory. Follow-up.
-- **Pool-shared read-only cache** across warm `SwiftSandboxPool` slots (the GPU
-  weight-cache case) — tracked with the warm-GPU-pool work.
+
+## Pool-shared read-only cache
+
+A **pool-shared, read-only** cache across warm `SwiftSandboxPool` slots (the GPU
+weight-cache case this doc originally tracked as a follow-up) is now covered by
+`spec.model` — a read-only OCI model artifact mounted over virtio-fs and
+materialized once per node, shared into every slot's host page cache. It composes
+with `scratchDisk` rather than replacing it: `model` is the right tool for
+read-only, registry-distributed weights; `scratchDisk` (especially `pvcRef`) is
+still the tool for a writable or non-OCI shared cache. See
+[GPU sandboxes › Model preload](gpu-sandboxes.md#model-preload).

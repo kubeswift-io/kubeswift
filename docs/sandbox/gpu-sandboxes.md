@@ -2,9 +2,11 @@
 
 Pass a GPU into a [sandbox](overview.md) — an ephemeral microVM with a real VM
 boundary around GPU code (CUDA inference, untrusted or multi-tenant GPU
-workloads). The GPU is allocated through Kubernetes **DRA** (Dynamic Resource
-Allocation): the scheduler picks the node and device, and the sandbox boots
-firmware-less (mode-3) with the GPU passed through via VFIO.
+workloads). Two allocation backends: **native** SwiftGPU (`spec.gpuProfileRef`)
+allocates the device(s) at controller time and pins the sandbox to that node;
+**DRA** (`spec.gpuResourceClaim`) lets the kube-scheduler and a DRA driver
+allocate at pod-schedule time. Either way the sandbox boots firmware-less
+(mode-3) with the GPU passed through via VFIO.
 
 > **Status: Phase 1 — single Tier-1 GPU, cluster-validated on a GTX 1080.**
 > Multi-GPU / NVLink and multi-node distributed inference are scoped but not yet
@@ -34,21 +36,33 @@ sandbox kernel is monolithic and can't `insmod`).
 
 ## Prerequisites
 
-1. **A DRA GPU driver** — the KubeSwift reference driver (`gpu.kubeswift.io`,
-   deviceclass `kubeswift-vfio-gpu`) or the NVIDIA `k8s-dra-driver-gpu`. The node
-   publishes a `ResourceSlice` for its GPU(s).
-2. **A GPU node that is also a kernel node.** The node needs both
+Common to both backends:
+
+1. **A GPU node that is also a kernel node.** The node needs both
    `kubeswift.io/gpu-node=true` (discovery) and **`kubeswift.io/kernel-node=true`**
    — the kernel artifacts and `/dev/kvm` live on kernel nodes, and a GPU sandbox
    stays pinned there (unlike a GPU SwiftGuest). `vfio-pci` must be loadable on the
    node.
-3. **The `gpu-sandbox` SwiftKernel:**
+2. **The `gpu-sandbox` SwiftKernel:**
    ```bash
    kubectl apply -f config/samples/sandbox/swiftkernel-gpu-sandbox.yaml
    kubectl get swiftkernel gpu-sandbox -w      # wait for Ready (per-node ORAS pull)
    ```
+
+**DRA backend only** (`spec.gpuResourceClaim`):
+
+3. **A DRA GPU driver** — the KubeSwift reference driver (`gpu.kubeswift.io`,
+   deviceclass `kubeswift-vfio-gpu`) or the NVIDIA `k8s-dra-driver-gpu`. The node
+   publishes a `ResourceSlice` for its GPU(s).
 4. **A `ResourceClaimTemplate`** for the GPU (one device of your GPU deviceclass) —
    see `config/samples/sandbox/` for an example.
+
+**Native backend only** (`spec.gpuProfileRef`):
+
+3. **`gpu-discovery` running** on the GPU node, populating the `SwiftGPUNode`
+   inventory (no DRA driver, no ResourceSlice, no ResourceClaim).
+4. **A `SwiftGPUProfile`** describing the GPU request (`count`, `tier: pcie`) —
+   see `config/samples/sandbox/swiftsandbox-gpu-native.yaml`.
 
 ## The guest image (BYO)
 
@@ -95,12 +109,17 @@ swiftctl sandbox logs gpu-infer         # nvidia-smi output, workload logs
 The scheduler places the sandbox on a node with a free GPU device; `kubectl get
 resourceclaim` shows the allocation.
 
-## Limits (Phase 1)
+For the native backend instead of DRA — no ResourceClaim, no scheduler
+involvement, the SwiftGPU controller allocates and pins the node — see
+[`config/samples/sandbox/swiftsandbox-gpu-native.yaml`](../../config/samples/sandbox/swiftsandbox-gpu-native.yaml).
 
-- **DRA only.** `gpuResourceClaim` (not `gpuProfileRef`). Needs a DRA driver on the
-  cluster.
-- **Cold-boot only.** `gpuResourceClaim` and `poolRef` are mutually exclusive — a
-  warm pool can't hold a scarce GPU idle. (Warm GPU pools are a later tier.)
+## Limits
+
+- **Cold-boot only for a plain `SwiftSandbox`.** The webhook rejects `poolRef`
+  combined with either `gpuResourceClaim` or `gpuProfileRef` on a user-authored
+  sandbox — a warm pool can't cheaply hold a scarce GPU idle for an arbitrary
+  claimant. (A [warm GPU pool](#warm-gpu-pools-sub-second-inference-start) holds
+  the GPU on the *slot* itself, not the claimant — see below.)
 - **Single Tier-1 GPU.** One PCIe GPU per sandbox, no NVLink. Multi-GPU
   tensor-parallel and multi-node are scoped
   ([#390](https://github.com/kubeswift-io/kubeswift/issues/390)) but need hardware.

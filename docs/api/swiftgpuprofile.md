@@ -27,9 +27,9 @@ SwiftGPUProfile defines a **GPU passthrough request**. It describes how many GPU
 | `numaTopology.threadsPerCore` | No | `1` | SMT threads per core (usually 1). |
 | `numaTopology.memoryPerSocketMi` | No | — | Memory per NUMA node in MiB. |
 | `hugepages` | No | `""` | Hugepage size: `1Gi`, `2Mi`, or `""` (none). `1Gi` required for most GPU workloads. |
-| `vcpuPinning` | No | `false` | 1:1 vCPU to physical CPU pinning. Critical for HGX performance. |
-| `fabricManager.runInGuest` | No | `false` | `true` for Tier 3 full passthrough (FM inside guest). |
-| `fabricManager.requiredVersion` | No | `""` | Host FM version must match guest nvidia-open driver. |
+| `vcpuPinning` | No | `false` | 1:1 vCPU to physical CPU pinning. Critical for HGX performance. **Best-effort**: swiftletd applies pinning post-spawn via QMP and logs a warning on failure, but does not fail the launch — a pinning failure degrades performance, it does not block boot. |
+| `fabricManager.runInGuest` | No | `false` | `true` for Tier 3 full passthrough (FM inside guest). **Tier 3 is not implemented** — see [Tiers](#tiers) below; setting `tier: hgx-full` is rejected at allocation regardless of this field. |
+| `fabricManager.requiredVersion` | No | `""` | Host FM version must match guest nvidia-open driver. **This is an allocation gate, not advisory**: shared-mode allocation skips any node whose Fabric Manager version doesn't exactly match, and reports the mismatch by name in `GPUAllocated=NoCapacity` if it's the sole blocker. An empty value means no check (any FM version accepted). |
 
 ## Tiers
 
@@ -39,7 +39,7 @@ The `tier` field is the single decision point for hypervisor and topology select
 |------|------------|---------------|----------|----------------|--------------|
 | `pcie` | Cloud Hypervisor | Flat (no root ports) | No | No | A100-PCIe, L40S, RTX 4090 |
 | `hgx-shared` | QEMU | Root port per device | Host-managed | Host (shared partition) | H100-SXM, H200-SXM |
-| `hgx-full` | QEMU | Full PCIe hierarchy | Passed to guest | Guest | 8-GPU HGX full passthrough |
+| `hgx-full` | — | — | — | — | **Not implemented — rejected at allocation.** The design targets full PCIe hierarchy + guest-passed NVSwitches + in-guest FM for 8-GPU HGX full passthrough, but the in-guest Fabric Manager wiring doesn't exist yet. Allocation rejects `tier: hgx-full` with `GPUAllocated=False` reason `UnsupportedTier`. Use `hgx-shared` (Tier 2). |
 
 Firmware is auto-selected: `CLOUDHV.fd` for Cloud Hypervisor, `OVMF` for QEMU.
 
@@ -48,8 +48,8 @@ Firmware is auto-selected: `CLOUDHV.fd` for Cloud Hypervisor, `OVMF` for QEMU.
 | Mode | Description |
 |------|-------------|
 | `isolated` | No NVLink. Single GPU or multiple GPUs without fabric connectivity. |
-| `shared` | GPUs share NVSwitch fabric via host Fabric Manager partition. |
-| `full` | All GPUs + NVSwitches passed to one VM. Fabric Manager runs inside guest. |
+| `shared` | GPUs share NVSwitch fabric via host Fabric Manager partition. **`count` must exactly equal a partition's member-GPU count** (the FM partition, not an arbitrary GPU selection, is the unit of allocation — NVLink only connects GPUs *within* the same activated partition) and Fabric Manager must be running on the node; otherwise allocation permanently reports `NoCapacity` even if enough free GPUs exist. |
+| `full` | All GPUs + NVSwitches passed to one VM. Fabric Manager runs inside guest. **Not implemented — rejected at allocation** (see `hgx-full` in [Tiers](#tiers) above). |
 
 ## Examples
 

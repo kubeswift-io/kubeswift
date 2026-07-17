@@ -315,7 +315,7 @@ Key facts:
 | `sandbox.kubeswift.io/v1alpha1` | SwiftSandbox | Ephemeral OCI-rootfs microVM sandboxes |
 | `fleet.kubeswift.io/v1alpha1` | Cluster | Member cluster federated by the gateway hub |
 
-14 CRDs across 9 API groups, all `v1alpha1`.
+15 CRDs across 9 API groups, all `v1alpha1`.
 
 ## Design principles
 

@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **14 CRDs across 9 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **15 CRDs across 9 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -12,11 +12,12 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **14 CRDs across 9 API groups
 | SwiftKernel | `sk` | `kernel.kubeswift.io` | Namespaced | [below](#swiftkernel) |
 | SwiftGPUProfile | `sgp` | `gpu.kubeswift.io` | Namespaced | [below](#swiftgpuprofile) |
 | SwiftGPUNode | `sgn` | `gpu.kubeswift.io` | Cluster | [below](#swiftgpunode) |
-| SwiftSnapshot | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshot) |
-| SwiftRestore | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftrestore) |
-| SwiftSnapshotSchedule | — | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshotschedule) |
-| SwiftMigration | — | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
+| SwiftSnapshot | `ssnap` | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshot) |
+| SwiftRestore | `srst` | `snapshot.kubeswift.io` | Namespaced | [below](#swiftrestore) |
+| SwiftSnapshotSchedule | `sss` | `snapshot.kubeswift.io` | Namespaced | [below](#swiftsnapshotschedule) |
+| SwiftMigration | `smig` | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandbox) |
+| SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandboxpool) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 
 ## Mutual exclusivity rules
@@ -534,16 +535,53 @@ and PVC-free.
 | Key field | Type | Description |
 |-----------|------|--------------|
 | `image` | string | OCI image to run as the root filesystem. Required; immutable after create. |
+| `imagePullSecret` | string | docker-registry Secret (same namespace) for a private `image` (and `model.imageRef`, if set). |
+| `verifyKeySecretRef.name` | string | Secret holding a cosign public key; cosign-verifies `image` before it materializes. |
+| `rootfsMode` | enum | `block` (default, read-only ext4 disk) or `virtiofs` (unpacked tree over virtio-fs). |
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
-| `command` / `args` / `env` | []string / []string / []EnvVar | Override or extend the image's entrypoint. |
+| `command` / `args` / `env` / `workingDir` | []string / []string / []EnvVar / string | Override or extend the image's entrypoint, environment, and working directory. |
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
-| `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile. |
+| `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile (or `gpu-sandbox` when a GPU is requested). |
+| `nodeSelector` | map[string]string | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
+| `poolRef` | LocalObjectReference | Check out a pre-booted slot from a `SwiftSandboxPool` instead of the cold path; falls back to cold on a miss. Mutually exclusive with either GPU field. |
+| `gpuResourceClaim` | GPUResourceClaimSpec | Pass a GPU through via Kubernetes DRA (scheduler-time allocation). Mutually exclusive with `gpuProfileRef`. |
+| `gpuProfileRef` | LocalObjectReference | Pass a GPU through via the native SwiftGPU backend (controller-time allocation, `tier: pcie` only). Mutually exclusive with `gpuResourceClaim`. |
+| `scratchDisk` | SandboxScratchDisk | Attaches one secondary raw block disk — `blank` (sandbox-owned, sized) or `pvcRef` (an existing Block PVC). |
+| `model` | SandboxModel | Mounts a read-only, node-shared model artifact over virtio-fs (`imageRef` + `mountPath`, default `/model`). |
 | `timeout` / `ttl` | Duration | Wall-clock run cap and post-terminal retention. |
 
 The whole spec except `ttl` is immutable — recreate the sandbox to change
 image, resources, command, or network.
 
-Full reference: [Sandboxes](sandbox/overview.md).
+Full reference: [Sandboxes](sandbox/overview.md) · [GPU sandboxes](sandbox/gpu-sandboxes.md) · [Scratch disks](sandbox/scratch-disks.md).
+
+---
+
+## SwiftSandboxPool
+
+**Group:** `sandbox.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sboxpool`
+**Subresource:** status, scale
+
+A warm buffer of pre-booted, workload-less `SwiftSandbox` slots for one OCI
+image, kept Ready so a `SwiftSandbox` with `spec.poolRef` checks out in
+sub-second time instead of paying the cold materialize + boot. The `scale`
+subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
+
+| Key field | Type | Description |
+|-----------|------|--------------|
+| `image` | string | OCI image every warm slot boots. Required; all slots share one materialized rootfs. |
+| `imagePullSecret` / `verifyKeySecretRef` / `rootfsMode` | string / SecretObjectReference / enum | Same semantics as `SwiftSandbox`, applied to every slot. |
+| `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`) of each warm slot. |
+| `network.mode` | enum | `restricted` (default), `open`, or `none` — applies to every slot. |
+| `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`) and extra node constraints. |
+| `gpuProfileRef` | LocalObjectReference | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation, pre-booted. `tier: pcie` only. |
+| `model` | SandboxModel | Preloads a read-only model artifact into every slot. |
+| `minWarm` | int32 | Desired Ready (unclaimed) warm slots. Default `1`. The scale-subresource target. |
+| `maxWarm` | int32 | Cap on warm slots (back-pressure); `0` means no cap beyond `minWarm`. |
+
+Full reference: [Warm pools](sandbox/warm-pool.md) · [GPU sandboxes › Warm GPU pools](sandbox/gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start).
 
 ---
 

@@ -43,6 +43,13 @@ is involved.
 Same as a plain sandbox — a `kubeswift.io/kernel-node=true` node and a `Ready`
 `sandbox` `SwiftKernel`. See [Running sandboxes › Prerequisites](overview.md#prerequisites).
 
+**A warm GPU pool** (`spec.gpuProfileRef` set) additionally needs a node that is
+**both** `kubeswift.io/gpu-node=true` **and** `kubeswift.io/kernel-node=true`
+(with `vfio-pci` loadable and `gpu-discovery` running), the `gpu-sandbox`
+SwiftKernel instead of the base `sandbox` one, and a `SwiftGPUProfile` with
+**`tier: pcie`** — a warm slot boots mode-3 (Cloud Hypervisor direct-kernel), so
+`hgx-shared`/`hgx-full` are rejected. See [GPU sandboxes › Warm GPU pools](gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start).
+
 ## Quickstart
 
 ```bash
@@ -66,14 +73,18 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `image` | string | — | OCI image every slot boots. Required. All slots share one materialized rootfs. Digest reference preferred. |
-| `imagePullSecret` | string | — | docker-registry Secret (same namespace) for a private `image`. |
+| `imagePullSecret` | string | — | docker-registry Secret (same namespace) for a private `image` (and for `model.imageRef`, if set). |
+| `verifyKeySecretRef.name` | string | — | Secret (same namespace) holding a cosign public key (`cosign.pub`). Every warm slot is cosign-verified before it materializes. |
+| `rootfsMode` | enum | `block` | How each slot's OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (unpacked tree over virtio-fs). A claiming `SwiftSandbox` must request the same mode. |
 | `cpu` | int32 | `1` | vCPUs per slot. |
-| `memory` | Quantity | `512Mi` | RAM per slot. |
-| `minWarm` | int32 | `0` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
+| `memory` | Quantity | `512Mi` | RAM per slot. Held per warm slot — a pool of N slots holds N × `memory` idle. |
+| `minWarm` | int32 | `1` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
+| `gpuProfileRef.name` | string | — | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation against this `SwiftGPUProfile`, pre-booted. Trades an idle GPU per slot for latency — size `minWarm` ≤ your free GPU count. `tier: pcie` only; `hgx-shared`/`hgx-full` are rejected. See [GPU sandboxes › Warm GPU pools](gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start). |
+| `model.imageRef` / `model.mountPath` | string / string (default `/model`) | — | Preloads a read-only, node-shared model artifact into every slot over virtio-fs (digest-keyed cache, cosign-verifiable). See [GPU sandboxes › Model preload](gpu-sandboxes.md#model-preload). |
 
 ### Status
 
