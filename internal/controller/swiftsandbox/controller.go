@@ -78,6 +78,12 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return res, err
 	}
 
+	// Scratch disk (spec.scratchDisk): provision/bind the Block PVC and gate pod
+	// creation on it so the guest never boots without its attached disk.
+	if ready, res, err := r.reconcileScratchDisk(ctx, &sb); err != nil || !ready {
+		return res, err
+	}
+
 	kernelName := resolveKernelProfile(&sb)
 
 	// spec.poolRef: claim a warm slot from a SwiftSandboxPool (sub-second checkout) and

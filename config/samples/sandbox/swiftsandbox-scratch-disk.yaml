@@ -1,0 +1,40 @@
+# A sandbox with a secondary scratch/persistent block disk. Useful for build
+# caches, dataset staging, checkpoints, or a GPU model/weight cache — anything
+# that outgrows the ephemeral RAM-backed rootfs overlay.
+#
+# The disk is attached as a RAW block device (typically /dev/vdc in the guest);
+# the workload runs mkfs + mount, or uses it raw. See docs/sandbox/scratch-disks.md.
+---
+# (A) BLANK — a new sized Block PVC owned by the sandbox (deleted with it).
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: scratch-blank
+  namespace: default
+spec:
+  image: alpine:3
+  cpu: 2
+  memory: 2Gi
+  scratchDisk:
+    blank:
+      size: 20Gi
+      # storageClassName: longhorn   # optional; empty = cluster default
+      # volumeMode: Block            # Block only (default)
+  command: ["/bin/sh", "-c", "mkfs.ext4 -F /dev/vdc && mkdir -p /scratch && mount /dev/vdc /scratch && df -h /scratch && sleep 3600"]
+---
+# (B) PVCREF — attach an EXISTING Block PVC that persists beyond the sandbox
+# (e.g. a shared model cache reused across runs). Reuse pattern: mount if it
+# already has a filesystem, else mkfs first.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: scratch-persistent
+  namespace: default
+spec:
+  image: alpine:3
+  cpu: 2
+  memory: 2Gi
+  scratchDisk:
+    pvcRef:
+      name: model-cache        # an existing Block-mode PVC
+  command: ["/bin/sh", "-c", "mount /dev/vdc /cache 2>/dev/null || (mkfs.ext4 -F /dev/vdc && mount /dev/vdc /cache); ls -la /cache; sleep 3600"]
