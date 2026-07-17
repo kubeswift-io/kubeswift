@@ -32,6 +32,10 @@ ENTRYPOINT=""
 CONFIG_DEV=""
 DNS_SEARCH=""
 IDLE=""
+# kubeswift.model=virtiofs mounts a read-only, pool-shared model artifact (spec.model)
+# over the "sandboxmodel" virtio-fs tag at kubeswift.modelpath (default /model).
+MODEL_KIND=""
+MODEL_PATH="/model"
 # WORKDIR is only assigned from the config-disk CWD line (spec.workingDir). Init it
 # here so the `set -u` reference below is safe when no workingDir is set — the
 # common case (a missing init was a regression that panicked PID 1: "WORKDIR:
@@ -44,6 +48,8 @@ for arg in $(cat /proc/cmdline); do
 		kubeswift.config=*)     CONFIG_DEV="${arg#kubeswift.config=}" ;;
 		kubeswift.dns-search=*) DNS_SEARCH="${arg#kubeswift.dns-search=}" ;;
 		kubeswift.idle=*)       IDLE="${arg#kubeswift.idle=}" ;;
+		kubeswift.model=*)      MODEL_KIND="${arg#kubeswift.model=}" ;;
+		kubeswift.modelpath=*)  MODEL_PATH="${arg#kubeswift.modelpath=}" ;;
 	esac
 done
 
@@ -80,6 +86,27 @@ mkdir -p /over/up /over/work
 mount -t overlay overlay \
 	-o lowerdir=/lower,upperdir=/over/up,workdir=/over/work /newroot \
 	|| fail "overlay mount failed (kernel lacks OVERLAY_FS?)"
+
+# --- optional read-only model share (kubeswift.model=virtiofs) ---
+# A pool-shared model artifact mounted READ-ONLY at MODEL_PATH (default /model)
+# INSIDE the new root, so the workload sees its weights there: the cold workload
+# chroot'd below, a vsock-injected checkout (the agent chroots /newroot), or a warm
+# keeper's later checkout. Mounted BEFORE the idle loop so a warm GPU slot already
+# carries the model when a checkout runs; that is what makes a checkout sub-second
+# (no cold model load). RO is enforced here (-o ro) because virtiofsd shares the
+# tree read-write and the model has no overlay to make it RO -- without this a
+# checkout could corrupt the node-cached model shared by every other slot.
+# Retry the mount bounded, like the block rootfs (virtio device enumeration lags PID 1).
+if [ "$MODEL_KIND" = virtiofs ]; then
+	mkdir -p "/newroot${MODEL_PATH}"
+	n=0
+	until mount -t virtiofs -o ro sandboxmodel "/newroot${MODEL_PATH}" 2>/dev/null; do
+		n=$((n + 1))
+		[ "$n" -ge 30 ] && fail "cannot mount virtio-fs tag 'sandboxmodel' at ${MODEL_PATH} after ${n}s"
+		sleep 1
+	done
+	echo "sandbox-bridge: model mounted read-only at ${MODEL_PATH}"
+fi
 
 # The config disk (/dev/vdX) and /proc/net/pnp are read HERE, after the overlay is
 # mounted (so writes into /newroot land) and while the bridge still owns /dev + /proc.

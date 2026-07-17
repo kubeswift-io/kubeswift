@@ -23,6 +23,10 @@ const (
 	// rootfsCacheDir is the node-local RO-rootfs cache (hostPath), shared across
 	// sandboxes and keyed by image digest.
 	rootfsCacheDir = "/var/lib/kubeswift/sandbox-rootfs"
+	// modelCacheDir is the node-local RO-model cache (hostPath), shared across
+	// sandboxes and keyed by model-image digest. A model is always materialized as
+	// a tree (virtio-fs source), never an ext4 — the guest mounts it read-only.
+	modelCacheDir = "/var/lib/kubeswift/sandbox-models"
 )
 
 // SandboxMaterializeImage resolves the materialize init-container image (env
@@ -104,6 +108,30 @@ func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator) (r
 		RootfsPath: materialize.CachePathFor(rootfsCacheDir, digest, mode),
 		Virtiofs:   virtiofs,
 		Exec:       resolveExec(sb, cfg),
+	}, nil
+}
+
+// resolvedModel is the controller's upfront resolve of spec.model.
+type resolvedModel struct {
+	Digest   string
+	TreePath string // <modelCache>/<digest>/ — the virtio-fs source, deterministic
+}
+
+// resolveModel does a cheap registry resolve (no layers) of the model image so
+// the controller learns the digest -> deterministic node-cache tree path and can
+// wire the virtio-fs share into the launch intent before the model-materialize
+// init runs (which independently resolves the same digest, so they agree). A
+// model is always a tree (virtio-fs). auth (from pullSecretAuth) authenticates a
+// private model image; nil = anonymous.
+func resolveModel(model *sandboxv1alpha1.SandboxModel, auth authn.Authenticator) (resolvedModel, error) {
+	opts := materialize.Options{ImageRef: model.ImageRef, CacheDir: modelCacheDir, Mode: materialize.ModeTree, Auth: auth}
+	_, digest, err := materialize.RemotePull(opts)
+	if err != nil {
+		return resolvedModel{}, err
+	}
+	return resolvedModel{
+		Digest:   digest,
+		TreePath: materialize.CachePathFor(modelCacheDir, digest, materialize.ModeTree),
 	}, nil
 }
 

@@ -344,6 +344,34 @@ spec:
                 description: Memory is the guest RAM (e.g. "512Mi", "4Gi").
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              model:
+                description: |-
+                  Model mounts a read-only, pool-shareable model artifact (an OCI image whose
+                  filesystem holds the weights) into the sandbox at MountPath over virtio-fs.
+                  It is materialized once per node (digest-keyed cache, cosign-verifiable via
+                  verifyKeySecretRef) and shared read-only from the host page cache — so the
+                  weights are resident before the workload runs. This is the OCI-native
+                  alternative to baking the model into the image or mounting it via a
+                  scratchDisk PVC: content-addressed, signed, portable, and deduplicated
+                  across every sandbox on the node. On a SwiftSandboxPool it makes every warm
+                  slot carry the model, so a checkout starts inference sub-second.
+                properties:
+                  imageRef:
+                    description: |-
+                      ImageRef is the OCI image whose filesystem holds the model (e.g. weights
+                      under the image root, or under MountPath's basename). A digest reference
+                      (repo@sha256:...) is strongly preferred: it pins the content and keeps the
+                      per-node cache stable across pool churn.
+                    type: string
+                  mountPath:
+                    default: /model
+                    description: |-
+                      MountPath is the read-only in-guest mount point for the model tree. The
+                      workload reads its weights from here.
+                    type: string
+                required:
+                - imageRef
+                type: object
               network:
                 description: Network controls sandbox connectivity. Defaults to restricted.
                 properties:
@@ -593,6 +621,22 @@ spec:
                 type: object
               message:
                 type: string
+              model:
+                description: |-
+                  Model reports the materialized model artifact once resolved. Absent when
+                  spec.model is unset.
+                properties:
+                  cachePath:
+                    description: CachePath is the node-local model tree path (virtio-fs
+                      source).
+                    type: string
+                  digest:
+                    description: Digest is the resolved model image digest (sha256:...).
+                    type: string
+                  mountPath:
+                    description: MountPath is the read-only in-guest mount point.
+                    type: string
+                type: object
               network:
                 description: |-
                   Network is the guest network (primaryIP), reported by the swiftletd lease

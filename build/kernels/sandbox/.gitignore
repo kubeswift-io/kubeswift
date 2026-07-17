@@ -1,3 +1,5 @@
 /buildroot/
 /output/
+# Non-default profiles build into output-<profile>/ (see the Makefile's OUTPUT_DIR).
+/output-*/
 /rootfs-overlay/usr/local/bin/kubeswift-guest-agent

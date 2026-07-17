@@ -108,6 +108,11 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if sb.Status.StartedAt == nil {
 		sb.Status.StartedAt = &now
 	}
+	// Echo the pool-shared model onto the checkout for observability (the slot was
+	// booted with it mounted RO at MountPath). The digest lives on the pool status.
+	if pool.Spec.Model != nil {
+		sb.Status.Model = &sandboxv1alpha1.SandboxModelStatus{MountPath: pool.Spec.Model.ModelMountPath()}
+	}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 		Reason:             "CheckedOut",

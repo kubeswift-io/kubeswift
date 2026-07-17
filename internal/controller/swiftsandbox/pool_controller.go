@@ -131,6 +131,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// steady Ready pool does no per-reconcile registry calls.
 	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
 	var ri *resolvedImage
+	var modelPath string
 	if want > 0 || pool.Status.Rootfs == nil || pool.Status.Rootfs.Digest == "" {
 		auth, err := pullSecretAuth(ctx, r.APIReader, pool.Namespace, pool.Spec.ImagePullSecret, pool.Spec.Image)
 		if err != nil {
@@ -141,9 +142,23 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return r.degraded(ctx, &pool, ready, claimed, "ImageResolveFailed", err.Error())
 		}
 		ri = &resolved
+		// Resolve the pool-shared model once (every warm slot shares the same
+		// node-cached tree). Its own registry entry (same imagePullSecret) so a
+		// model on a different registry than the rootfs still authenticates.
+		if pool.Spec.Model != nil {
+			modelAuth, merr := pullSecretAuth(ctx, r.APIReader, pool.Namespace, pool.Spec.ImagePullSecret, pool.Spec.Model.ImageRef)
+			if merr != nil {
+				return r.degraded(ctx, &pool, ready, claimed, "ImagePullSecretInvalid", merr.Error())
+			}
+			rm, merr := resolveModel(pool.Spec.Model, modelAuth)
+			if merr != nil {
+				return r.degraded(ctx, &pool, ready, claimed, "ModelResolveFailed", merr.Error())
+			}
+			modelPath = rm.TreePath
+		}
 	}
 	for i := 0; i < want; i++ {
-		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri); err != nil {
+		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri, modelPath); err != nil {
 			// A GPU pool sized above the free-GPU count stops warming here (holds
 			// what it could) instead of erroring every reconcile — minWarm > GPUs
 			// is an operator sizing choice, surfaced as ready < minWarm.
@@ -241,13 +256,14 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 			Network:            pool.Spec.Network,
 			KernelProfileRef:   pool.Spec.KernelProfileRef,
 			NodeSelector:       pool.Spec.NodeSelector,
+			Model:              pool.Spec.Model,
 		},
 	}
 }
 
 // createWarmSlot brings up one warm slot: the intent ConfigMap + launcher pod (+ a
 // deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
-func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage) error {
+func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string) error {
 	slot := r.slotTemplate(pool, pool.Name+"-slot-"+utilrand.String(5))
 
 	// Warm GPU pool: allocate a GPU for this slot and stamp its spec.gpuProfileRef
@@ -264,7 +280,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	// bridge idle loop (kubeswift.idle=1) so warming never depends on the image
 	// having a sleep binary, and a distroless image can be pooled. ri.Exec.Env is
 	// still stamped into the pool status for the checkout env-merge (see updateStatus).
-	intent := buildIntent(slot, kernelName, ri.RootfsPath, execSpec{}, true)
+	intent := buildIntent(slot, kernelName, ri.RootfsPath, modelPath, execSpec{}, true)
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return err

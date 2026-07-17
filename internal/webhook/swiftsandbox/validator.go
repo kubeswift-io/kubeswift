@@ -4,6 +4,7 @@ package swiftsandbox
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -110,6 +111,14 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 		}
 		if hasPVC && sd.PVCRef.Name == "" {
 			return fmt.Errorf("spec.scratchDisk.pvcRef.name is required")
+		}
+	}
+	if m := s.Model; m != nil {
+		if m.ImageRef == "" {
+			return fmt.Errorf("spec.model.imageRef is required when model is set")
+		}
+		if m.MountPath != "" && !strings.HasPrefix(m.MountPath, "/") {
+			return fmt.Errorf("spec.model.mountPath must be an absolute path")
 		}
 	}
 	return nil

@@ -152,6 +152,62 @@ slot drains, its checkout completes, or the pool is deleted. **Tier `pcie` only*
 (a warm slot boots mode-3 Cloud Hypervisor); HGX tiers are rejected. Full sample:
 `config/samples/sandbox/swiftsandboxpool-gpu.yaml`.
 
-**Model preload** (a pool-shared read-only model cache mounted into every warm
-slot, so the weights are resident before checkout) is the next step; today, bake
-the model into the image or mount it via `spec.scratchDisk` on the pool slots.
+## Model preload
+
+A warm GPU slot still pays a cold **model load** on checkout unless the weights
+are already there. `spec.model` mounts a model artifact — an OCI image whose
+filesystem holds the weights — read-only at `/model` in every warm slot, so a
+checkout starts inference without loading anything from a registry or a PVC:
+
+```yaml
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata: {name: infer-pool}
+spec:
+  image: <cuda-inference image>
+  cpu: 4
+  memory: 8Gi
+  gpuProfileRef: {name: infer-gpu}
+  model:
+    imageRef: <registry>/llama-3-8b@sha256:...   # digest ref preferred
+    mountPath: /model                            # default
+  minWarm: 1
+```
+
+The model is pulled and unpacked **once per node**, keyed by digest, into
+`/var/lib/kubeswift/sandbox-models/` and shared into each slot over virtio-fs. So
+every slot on the node — and every other pool or cold sandbox using the same
+model digest — reads the same host page cache, at no extra memory or disk cost.
+`spec.model` works on a plain `SwiftSandbox` too, not just a pool.
+
+It is read-only on both sides (the launcher mounts the cache RO and the guest
+mounts it `-o ro`), so one checkout can't corrupt the model other slots share.
+
+**Packaging a model.** Any OCI image whose filesystem is the weights:
+
+```dockerfile
+FROM scratch
+COPY model/ /
+```
+
+```bash
+docker build -t <registry>/llama-3-8b:v1 . && docker push <registry>/llama-3-8b:v1
+```
+
+Push it to any registry — the same one your images already come from. Set
+`spec.verifyKeySecretRef` and the model is cosign-verified before it is
+materialized, exactly like the rootfs (same key; the model is expected to come
+from the same trust domain). `spec.imagePullSecret` covers a private model
+registry.
+
+**Why an OCI artifact and not a shared PVC.** The registry already distributes
+every other KubeSwift artifact (images, kernels, VM disks), so a model rides the
+same path: content-addressed and digest-pinned, signable, portable across
+clusters with no per-cluster PVC to pre-populate, deduplicated per node for free,
+and with no RWX storage class to depend on. If your weights already live on a
+shared filesystem — or are too large to push to a registry — mount that PVC
+read-only via `spec.scratchDisk.pvcRef` instead; that path is unchanged.
+
+The first pull on a node costs what the bytes cost; every slot and pool after
+that is a cache hit. Pre-pull a node by running one throwaway sandbox with the
+same `spec.model`.

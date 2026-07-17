@@ -129,7 +129,7 @@ func TestReconcileNativeGPU_HGXTierRejected(t *testing.T) {
 func TestBuildIntent_NativeGPU_ExplicitDevices(t *testing.T) {
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
 	sb.Status.GPU = gpuStatus("boba", "0000:01:00.0")
-	ri := buildIntent(sb, "gpu-sandbox", "/cache/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	ri := buildIntent(sb, "gpu-sandbox", "/cache/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if ri.GPU == nil {
 		t.Fatal("native sandbox must carry a GPU intent")
 	}

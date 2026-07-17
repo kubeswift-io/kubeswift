@@ -114,7 +114,25 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImageResolveFailed", err.Error())
 	}
-	intent := buildIntent(sb, kernelName, ri.RootfsPath, ri.Exec, false)
+	var modelPath string
+	if sb.Spec.Model != nil {
+		// Resolve the model against its OWN registry entry (same imagePullSecret,
+		// which may carry auth for more than one registry) so a model on a different
+		// registry than the rootfs still authenticates.
+		modelAuth, merr := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Model.ImageRef)
+		if merr != nil {
+			return r.fail(ctx, sb, "ImagePullSecretInvalid", merr.Error())
+		}
+		rm, merr := resolveModel(sb.Spec.Model, modelAuth)
+		if merr != nil {
+			return r.fail(ctx, sb, "ModelResolveFailed", merr.Error())
+		}
+		modelPath = rm.TreePath
+		sb.Status.Model = &sandboxv1alpha1.SandboxModelStatus{
+			Digest: rm.Digest, MountPath: sb.Spec.Model.ModelMountPath(), CachePath: rm.TreePath,
+		}
+	}
+	intent := buildIntent(sb, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
 	intentJSON, err := runtimeintent.Serialize(intent)
 	if err != nil {
 		return ctrl.Result{}, err

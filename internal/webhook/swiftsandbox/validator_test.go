@@ -222,3 +222,45 @@ func TestValidateCreate_ScratchDisk_BlankRules(t *testing.T) {
 		t.Errorf("valid blank Block scratchDisk should be accepted, got: %v", err)
 	}
 }
+
+// spec.model shape. The CRD schema already makes imageRef required and defaults
+// mountPath to /model; these are the webhook's defense-in-depth checks (and the
+// mountPath rule the CRD cannot express).
+func TestValidateSpec_Model(t *testing.T) {
+	base := func() *sandboxv1alpha1.SwiftSandboxSpec {
+		return &sandboxv1alpha1.SwiftSandboxSpec{Image: "alpine:3"}
+	}
+	t.Run("valid", func(t *testing.T) {
+		s := base()
+		s.Model = &sandboxv1alpha1.SandboxModel{ImageRef: "reg/llama@sha256:abc", MountPath: "/model"}
+		if err := validateSpec(s); err != nil {
+			t.Errorf("valid model rejected: %v", err)
+		}
+	})
+	t.Run("empty mountPath is allowed (CRD defaults it)", func(t *testing.T) {
+		s := base()
+		s.Model = &sandboxv1alpha1.SandboxModel{ImageRef: "reg/llama@sha256:abc"}
+		if err := validateSpec(s); err != nil {
+			t.Errorf("model without mountPath rejected: %v", err)
+		}
+	})
+	t.Run("imageRef required", func(t *testing.T) {
+		s := base()
+		s.Model = &sandboxv1alpha1.SandboxModel{MountPath: "/model"}
+		if err := validateSpec(s); err == nil {
+			t.Error("model without imageRef must be rejected")
+		}
+	})
+	t.Run("mountPath must be absolute", func(t *testing.T) {
+		s := base()
+		s.Model = &sandboxv1alpha1.SandboxModel{ImageRef: "reg/llama@sha256:abc", MountPath: "model"}
+		if err := validateSpec(s); err == nil {
+			t.Error("relative mountPath must be rejected")
+		}
+	})
+	t.Run("no model is fine", func(t *testing.T) {
+		if err := validateSpec(base()); err != nil {
+			t.Errorf("no model rejected: %v", err)
+		}
+	})
+}

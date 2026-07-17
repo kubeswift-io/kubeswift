@@ -24,7 +24,8 @@ metadata:
   namespace: default
 spec:
   # A CUDA image that ships nvidia.ko (built for the gpu-sandbox kernel) + your
-  # server; bake the model in, or mount it (a follow-up pool-shared RO cache).
+  # server. To keep the weights out of the image, add spec.model — see
+  # swiftsandboxpool-gpu-model.yaml.
   image: <your-registry>/cuda-inference@sha256:...
   cpu: 4
   memory: 8Gi

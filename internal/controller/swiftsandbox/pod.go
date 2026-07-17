@@ -28,8 +28,11 @@ const (
 	// launcher containers' resources.claims[].name). Mirrors the SwiftGuest const.
 	sandboxDRAClaimName = "gpu"
 	materializeInitName = "sandbox-materialize"
-	gpuInitName         = "gpu-init"
-	launcherName        = "launcher"
+	// modelMaterializeInitName pulls + materializes the RO model tree (spec.model)
+	// into the node-local model cache, before the launcher spawns virtiofsd for it.
+	modelMaterializeInitName = "model-materialize"
+	gpuInitName              = "gpu-init"
+	launcherName             = "launcher"
 	// SandboxLabelKey ties the launcher pod (and its intent ConfigMap) to the
 	// owning SwiftSandbox.
 	SandboxLabelKey = "sandbox.kubeswift.io/sandbox"
@@ -89,7 +92,7 @@ const (
 // checkout injects one later over vsock) and boots straight to the bridge's idle
 // loop via kubeswift.idle=1 — so warming never depends on the image having a sleep
 // binary, and distroless images can be pooled.
-func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string, exec execSpec, idle bool) *runtimeintent.RuntimeIntent {
+func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, modelPath string, exec execSpec, idle bool) *runtimeintent.RuntimeIntent {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 	virtiofs := sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs
 	rootfsKind := "block"
@@ -142,14 +145,28 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath string
 	sandboxRootfs := &runtimeintent.SandboxRootfsSpec{Virtiofs: virtiofs}
 	var filesystems []runtimeintent.FilesystemIntent
 	if virtiofs {
-		filesystems = []runtimeintent.FilesystemIntent{{
+		filesystems = append(filesystems, runtimeintent.FilesystemIntent{
 			Name:       "sandboxroot",
 			Tag:        "sandboxroot",
 			SourcePath: rootfsPath,
 			ReadOnly:   true,
-		}}
+		})
 	} else {
 		sandboxRootfs.Path = rootfsPath
+	}
+	if sb.Spec.Model != nil && modelPath != "" {
+		// Model preload: a read-only virtio-fs share of the node-cached model tree.
+		// The bridge mounts tag "sandboxmodel" at kubeswift.modelpath. virtio-fs adds
+		// NO virtio-blk device, so the config-disk /dev/vdX enumeration above is
+		// unaffected. Present on both block and virtio-fs rootfs sandboxes, and on
+		// idle warm-pool slots (so the model is resident before a checkout runs).
+		filesystems = append(filesystems, runtimeintent.FilesystemIntent{
+			Name:       "sandboxmodel",
+			Tag:        "sandboxmodel",
+			SourcePath: modelPath,
+			ReadOnly:   true,
+		})
+		cmdline += " kubeswift.model=virtiofs kubeswift.modelpath=" + sb.Spec.Model.ModelMountPath()
 	}
 
 	ri := &runtimeintent.RuntimeIntent{
@@ -304,6 +321,47 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		SecurityContext: privileged(),
 		VolumeMounts:    matMounts,
 	}}
+	if sb.Spec.Model != nil {
+		// Model preload: materialize the model image as a RO tree in the node-local
+		// model cache (always --mode=tree — the guest mounts it over virtio-fs). Reuses
+		// the SAME pull-secret + cosign verify-key volumes as the rootfs materialize
+		// (same trust domain); those volumes are already declared in verifyVolumes, so
+		// this container only mounts them. Runs sequentially after sandbox-materialize
+		// (no concurrent cosign-home write). Writes its own container's termination-log
+		// (the controller reads the rootfs container's, not this one — the model path is
+		// deterministic from resolveModel).
+		modelArgs := []string{
+			"--image", sb.Spec.Model.ImageRef,
+			"--cache-dir", modelCacheDir,
+			"--mode", "tree",
+			"--result-file", "/dev/termination-log",
+		}
+		modelMounts := []corev1.VolumeMount{{Name: "model-cache", MountPath: modelCacheDir}}
+		var modelEnv []corev1.EnvVar
+		if sb.Spec.ImagePullSecret != "" {
+			modelArgs = append(modelArgs, "--pull-secret=/pull-secret/config.json")
+			modelMounts = append(modelMounts, corev1.VolumeMount{Name: "pull-secret", MountPath: "/pull-secret", ReadOnly: true})
+		}
+		if ref := sb.Spec.VerifyKeySecretRef; ref != nil && ref.Name != "" {
+			modelArgs = append(modelArgs, "--verify-key=/verify-key/cosign.pub")
+			modelEnv = append(modelEnv,
+				corev1.EnvVar{Name: "HOME", Value: "/cosign-home"},
+				corev1.EnvVar{Name: "TMPDIR", Value: "/cosign-home"},
+			)
+			modelMounts = append(modelMounts,
+				corev1.VolumeMount{Name: "verify-key", MountPath: "/verify-key", ReadOnly: true},
+				corev1.VolumeMount{Name: "cosign-home", MountPath: "/cosign-home"},
+			)
+		}
+		initContainers = append(initContainers, corev1.Container{
+			Name:            modelMaterializeInitName,
+			Image:           SandboxMaterializeImage(),
+			Args:            modelArgs,
+			Env:             modelEnv,
+			SecurityContext: privileged(),
+			VolumeMounts:    modelMounts,
+		})
+	}
 	if networked(sb) {
 		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
 		// runtime-intent + run volumes the launcher uses. KUBESWIFT_SANDBOX_EGRESS
@@ -329,6 +387,11 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		{Name: "dev-kvm", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/kvm", Type: &charDev}}},
 	}
 	volumes = append(volumes, verifyVolumes...)
+	if sb.Spec.Model != nil {
+		// The launcher's virtiofsd shares the model tree from this node-local cache
+		// (populated by the model-materialize init container above).
+		volumes = append(volumes, corev1.Volume{Name: "model-cache", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: modelCacheDir, Type: &dirCreate}}})
+	}
 
 	if sb.Spec.GPUResourceClaim != nil {
 		// gpu-init binds the requested GPU to vfio-pci (two-pass unbind/bind; idempotent
@@ -442,6 +505,21 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			if pod.Spec.Containers[i].Name == launcherName {
 				pod.Spec.Containers[i].VolumeDevices = append(pod.Spec.Containers[i].VolumeDevices,
 					corev1.VolumeDevice{Name: "scratch-disk", DevicePath: scratchDiskDevicePath()})
+			}
+		}
+	}
+	if sb.Spec.Model != nil {
+		// The launcher runs virtiofsd against the model tree in this cache, so it
+		// must see the same node-local hostPath the model-materialize init populated.
+		// Mounted READ-ONLY: virtiofsd does not enforce read-only (it shares the dir
+		// RW), and the model — unlike the rootfs — has no overlay to make it RO, so a
+		// RW share would let one checkout corrupt the node-cached model for every
+		// other slot. The RO container mount here + the guest's `mount -o ro`
+		// (bridge) are the two guards that keep the shared model immutable.
+		for i := range pod.Spec.Containers {
+			if pod.Spec.Containers[i].Name == launcherName {
+				pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts,
+					corev1.VolumeMount{Name: "model-cache", MountPath: modelCacheDir, ReadOnly: true})
 			}
 		}
 	}
