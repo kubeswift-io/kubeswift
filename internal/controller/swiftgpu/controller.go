@@ -117,10 +117,21 @@ func (r *SwiftGPUReconciler) backend(name string) gpualloc.Backend {
 // requeue / metrics the native path produced before the refactor.
 func (r *SwiftGPUReconciler) handlePrepareError(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, err error) (ctrl.Result, error) {
 	var pnf *ProfileNotFoundError
+	var ute *UnsupportedTierError
 	switch {
 	case errors.As(err, &pnf):
 		status := guest.Status.DeepCopy()
 		setGPUAllocatedCondition(status, false, "ProfileNotFound", pnf.Error())
+		if patchErr := r.patchStatus(ctx, guest, status); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	case errors.As(err, &ute):
+		// Tier 3 requested but not deliverable — surface it as a condition (no silent
+		// failure) rather than booting a fabric-less guest. No GPUs were allocated
+		// (the tier check precedes findAndAllocate), so nothing to release.
+		status := guest.Status.DeepCopy()
+		setGPUAllocatedCondition(status, false, "UnsupportedTier", ute.Error())
 		if patchErr := r.patchStatus(ctx, guest, status); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}

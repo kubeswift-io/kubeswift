@@ -30,6 +30,28 @@ func (e *ProfileNotFoundError) Error() string {
 	return fmt.Sprintf("SwiftGPUProfile %q not found", e.Name)
 }
 
+// UnsupportedTierError is returned by nativeBackend.Prepare when the guest's
+// SwiftGPUProfile requests tier: hgx-full (Tier 3). The controller maps it to a
+// GPUAllocated=False / UnsupportedTier condition + a 30s requeue.
+//
+// Tier 3 (full baseboard passthrough) needs the host's NVSwitches passed INTO the
+// guest so an in-guest Fabric Manager can drive the fabric. gpu-discovery finds
+// those NVSwitches and records them on SwiftGPUNode.status.nvSwitches, but the
+// controller does not yet thread them into GPUIntent.NVSwitches (buildGPUIntent
+// omits the field), so a Tier-3 guest would boot with GPUs but NO fabric and an
+// in-guest FM with nothing to manage — a silent failure (Design Principle #6).
+// Reject it honestly until the guest-side NVSwitch passthrough is wired and can be
+// validated on real HGX hardware. Tier 2 (hgx-shared, host Fabric Manager, no
+// guest NVSwitches) is unaffected.
+type UnsupportedTierError struct{ Tier string }
+
+func (e *UnsupportedTierError) Error() string {
+	return fmt.Sprintf("tier %q (Tier 3, full baseboard passthrough) is not yet supported: "+
+		"the guest-side NVSwitch passthrough that an in-guest Fabric Manager needs is not wired "+
+		"(NVSwitches are discovered on the SwiftGPUNode but not passed into the guest). "+
+		"Use tier: hgx-shared (Tier 2, host Fabric Manager) or tier: pcie", e.Tier)
+}
+
 // Name implements gpualloc.Backend.
 func (n *nativeBackend) Name() string { return swiftv1alpha1.GPUBackendNative }
 
@@ -47,6 +69,14 @@ func (n *nativeBackend) Prepare(ctx context.Context, guest *swiftv1alpha1.SwiftG
 			return nil, &ProfileNotFoundError{Name: guest.Spec.GPUProfileRef.Name}
 		}
 		return nil, err
+	}
+
+	// Reject Tier 3 BEFORE allocating — it can't be delivered (see
+	// UnsupportedTierError), so allocating GPUs for it would strand them on a guest
+	// that boots without a fabric. Tier 2 (hgx-shared) is allowed: it uses the host
+	// Fabric Manager and does not pass NVSwitches into the guest.
+	if profile.Spec.Tier == "hgx-full" {
+		return nil, &UnsupportedTierError{Tier: profile.Spec.Tier}
 	}
 
 	gpuNode, selectedGPUs, numaNodes, partitionID, err := n.r.findAndAllocate(ctx, guest, &profile)
