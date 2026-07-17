@@ -140,6 +140,18 @@ type SwiftSandboxSpec struct {
 	// path SwiftGuest uses); the workload runs mkfs + mount, or uses it raw.
 	// +optional
 	ScratchDisk *SandboxScratchDisk `json:"scratchDisk,omitempty"`
+
+	// Model mounts a read-only, pool-shareable model artifact (an OCI image whose
+	// filesystem holds the weights) into the sandbox at MountPath over virtio-fs.
+	// It is materialized once per node (digest-keyed cache, cosign-verifiable via
+	// verifyKeySecretRef) and shared read-only from the host page cache — so the
+	// weights are resident before the workload runs. This is the OCI-native
+	// alternative to baking the model into the image or mounting it via a
+	// scratchDisk PVC: content-addressed, signed, portable, and deduplicated
+	// across every sandbox on the node. On a SwiftSandboxPool it makes every warm
+	// slot carry the model, so a checkout starts inference sub-second.
+	// +optional
+	Model *SandboxModel `json:"model,omitempty"`
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -156,6 +168,33 @@ type SandboxScratchDisk struct {
 	// durable cache reused across sandboxes. Exactly one of blank / pvcRef.
 	// +optional
 	PVCRef *corev1.LocalObjectReference `json:"pvcRef,omitempty"`
+}
+
+// SandboxModel is a read-only, node-shared model artifact mounted into a sandbox
+// over virtio-fs. It reuses spec.verifyKeySecretRef (and spec.imagePullSecret)
+// for cosign verification and private-registry pulls — the model is expected to
+// come from the same trust domain as the rootfs image.
+type SandboxModel struct {
+	// ImageRef is the OCI image whose filesystem holds the model (e.g. weights
+	// under the image root, or under MountPath's basename). A digest reference
+	// (repo@sha256:...) is strongly preferred: it pins the content and keeps the
+	// per-node cache stable across pool churn.
+	ImageRef string `json:"imageRef"`
+
+	// MountPath is the read-only in-guest mount point for the model tree. The
+	// workload reads its weights from here.
+	// +kubebuilder:default=/model
+	// +optional
+	MountPath string `json:"mountPath,omitempty"`
+}
+
+// ModelMountPath returns the effective in-guest model mount point (MountPath,
+// defaulting to /model). Callers use it whether or not the CRD default fired.
+func (m *SandboxModel) ModelMountPath() string {
+	if m != nil && m.MountPath != "" {
+		return m.MountPath
+	}
+	return "/model"
 }
 
 // UsesGPU reports whether the sandbox requests a GPU by either backend.
@@ -284,6 +323,19 @@ type SandboxRootfsStatus struct {
 	CachePath string `json:"cachePath,omitempty"`
 }
 
+// SandboxModelStatus reports the resolved read-only model artifact.
+type SandboxModelStatus struct {
+	// Digest is the resolved model image digest (sha256:...).
+	// +optional
+	Digest string `json:"digest,omitempty"`
+	// MountPath is the read-only in-guest mount point.
+	// +optional
+	MountPath string `json:"mountPath,omitempty"`
+	// CachePath is the node-local model tree path (virtio-fs source).
+	// +optional
+	CachePath string `json:"cachePath,omitempty"`
+}
+
 // SandboxRuntimeStatus reports the live guest runtime, mapped from the swiftletd
 // pod annotations (the same reporting path SwiftGuest uses). Absent until swiftletd
 // reaches CH-socket-ready and writes the annotations.
@@ -336,6 +388,10 @@ type SwiftSandboxStatus struct {
 	// Absent when spec.scratchDisk is unset.
 	// +optional
 	ScratchDisk *SandboxScratchDiskStatus `json:"scratchDisk,omitempty"`
+	// Model reports the materialized model artifact once resolved. Absent when
+	// spec.model is unset.
+	// +optional
+	Model *SandboxModelStatus `json:"model,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

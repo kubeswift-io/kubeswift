@@ -79,6 +79,17 @@ type SwiftSandboxPoolSpec struct {
 	// +optional
 	GPUProfileRef *corev1.LocalObjectReference `json:"gpuProfileRef,omitempty"`
 
+	// Model preloads a read-only, node-shared model artifact (an OCI image whose
+	// filesystem holds the weights) into EVERY warm slot over virtio-fs — so the
+	// weights are resident (in the host page cache, shared across slots) before a
+	// checkout runs and inference starts sub-second. It is the pool complement to
+	// GPUProfileRef: a warm GPU pool with a model needs neither a cold GPU boot
+	// NOR a cold model load on checkout. The model is materialized once per node
+	// (digest-keyed, cosign-verifiable via verifyKeySecretRef) and mounted RO at
+	// Model.mountPath (default /model). Every claiming SwiftSandbox inherits it.
+	// +optional
+	Model *SandboxModel `json:"model,omitempty"`
+
 	// MinWarm is the desired number of Ready (pre-booted, unclaimed) warm slots the pool
 	// keeps. Because warming is node-local, the pool spreads these across the schedulable
 	// kernel-nodes in scope; a claim that lands on a node with no free slot falls back to

@@ -1,0 +1,66 @@
+# A WARM GPU POOL WITH MODEL PRELOAD: pre-booted GPU slots that ALREADY have the
+# weights mounted, so a checkout pays neither a cold GPU boot nor a cold model
+# load. See docs/sandbox/gpu-sandboxes.md.
+#
+# The model is an OCI image whose filesystem IS the weights:
+#   FROM scratch
+#   COPY model/ /
+# It is pulled + unpacked once per node (keyed by digest, under
+# /var/lib/kubeswift/sandbox-models/) and shared read-only into every slot over
+# virtio-fs — so all slots on the node share one host page cache. Use a DIGEST
+# ref: it pins the content and keeps the node cache stable across pool churn.
+#
+# Prereqs: a node that is BOTH gpu-node and kernel-node, vfio-pci loaded,
+# gpu-discovery running (SwiftGPUNode FREE >= minWarm), and the gpu-sandbox
+# SwiftKernel in this namespace.
+---
+apiVersion: gpu.kubeswift.io/v1alpha1
+kind: SwiftGPUProfile
+metadata:
+  name: infer-gpu
+  namespace: default
+spec:
+  count: 1
+  tier: pcie                # pcie only — a warm slot boots mode-3 (Cloud Hypervisor)
+  partitionMode: isolated
+---
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: infer-pool
+  namespace: default
+spec:
+  # The SERVER image (CUDA + nvidia.ko built for the gpu-sandbox kernel). The
+  # weights are NOT in here — they ride spec.model below, so this image stays
+  # small and the model versions independently of the server.
+  image: <your-registry>/cuda-inference@sha256:...
+  cpu: 4
+  memory: 8Gi
+  network:
+    mode: open
+  gpuProfileRef:
+    name: infer-gpu
+  model:
+    imageRef: <your-registry>/llama-3-8b@sha256:...   # weights-only OCI image
+    mountPath: /model                                 # default; read-only in-guest
+  # Optional: cosign-verify BOTH the server image and the model before either is
+  # materialized (same key — the model is expected to come from the same trust
+  # domain). A bad signature fails the slot; it never boots unverified.
+  # verifyKeySecretRef:
+  #   name: cosign-key            # Secret with key "cosign.pub"
+  minWarm: 1                       # each warm slot holds a GPU — keep <= free GPUs
+---
+# Check out a warm GPU slot (sub-second): a SwiftSandbox with poolRef and NO GPU
+# and NO model of its own — both come from the claimed slot, already resident.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: infer-job
+  namespace: default
+spec:
+  image: <your-registry>/cuda-inference@sha256:...   # must match the pool
+  cpu: 4
+  memory: 8Gi
+  poolRef:
+    name: infer-pool
+  command: ["/bin/sh", "-c", "nvidia-smi -L && python /app/infer.py --model /model"]

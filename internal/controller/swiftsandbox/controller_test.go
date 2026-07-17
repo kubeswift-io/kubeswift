@@ -56,7 +56,7 @@ func TestBuildIntent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "sbx", Namespace: "default"},
 		Spec:       sandboxv1alpha1.SwiftSandboxSpec{CPU: 2, Memory: resource.MustParse("1Gi")},
 	}
-	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	intent := buildIntent(sb, "sandbox", "/var/lib/kubeswift/sandbox-rootfs/sha256-abc.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if intent.KernelBoot == nil {
 		t.Fatal("kernelBoot nil")
 	}
@@ -91,7 +91,7 @@ func TestBuildIntent(t *testing.T) {
 	}
 	sbNone := sb.DeepCopy()
 	sbNone.Spec.Network.Mode = sandboxv1alpha1.SandboxNetworkNone
-	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	iNone := buildIntent(sbNone, "sandbox", "/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if iNone.Network {
 		t.Error("mode=none sandbox must be network-isolated")
 	}
@@ -107,13 +107,13 @@ func TestBuildIntent(t *testing.T) {
 		t.Errorf("hypervisor: %s", intent.Hypervisor)
 	}
 	// Trivial exec (bare image, no overrides) -> no config disk, no SandboxExec.
-	i2 := buildIntent(sb, "sandbox", "/x.ext4", execSpec{}, false)
+	i2 := buildIntent(sb, "sandbox", "/x.ext4", "", execSpec{}, false)
 	if strings.Contains(i2.KernelBoot.Cmdline, "kubeswift.config") || i2.SandboxExec != nil {
 		t.Errorf("trivial exec should omit the config disk: cmdline=%s exec=%+v", i2.KernelBoot.Cmdline, i2.SandboxExec)
 	}
 	// A warm-pool keeper (idle) boots to the bridge idle loop with NO workload: the
 	// cmdline carries kubeswift.idle=1 and NO config disk, even if an exec is passed.
-	keeper := buildIntent(sb, "sandbox", "/x.ext4", execSpec{Argv: []string{"sleep", "infinity"}}, true)
+	keeper := buildIntent(sb, "sandbox", "/x.ext4", "", execSpec{Argv: []string{"sleep", "infinity"}}, true)
 	if !strings.Contains(keeper.KernelBoot.Cmdline, "kubeswift.idle=1") {
 		t.Errorf("keeper cmdline missing kubeswift.idle=1: %s", keeper.KernelBoot.Cmdline)
 	}
@@ -284,7 +284,7 @@ func TestBuildIntent_VirtiofsRootfs(t *testing.T) {
 	// block (default): SandboxRootfs carries the ext4 path, no filesystems,
 	// cmdline kubeswift.rootfs=block, config disk at /dev/vdb.
 	blk := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}}
-	bi := buildIntent(blk, "sandbox", "/cache/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	bi := buildIntent(blk, "sandbox", "/cache/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if bi.SandboxRootfs == nil || bi.SandboxRootfs.Virtiofs || bi.SandboxRootfs.Path != "/cache/x.ext4" {
 		t.Errorf("block SandboxRootfs = %+v", bi.SandboxRootfs)
 	}
@@ -303,7 +303,7 @@ func TestBuildIntent_VirtiofsRootfs(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "v", Namespace: "ns"},
 		Spec:       sandboxv1alpha1.SwiftSandboxSpec{RootfsMode: sandboxv1alpha1.SandboxRootfsVirtiofs},
 	}
-	vi := buildIntent(vfs, "sandbox", tree, execSpec{Argv: []string{"/bin/sh"}}, false)
+	vi := buildIntent(vfs, "sandbox", tree, "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if vi.SandboxRootfs == nil || !vi.SandboxRootfs.Virtiofs || vi.SandboxRootfs.Path != "" {
 		t.Errorf("virtiofs SandboxRootfs = %+v", vi.SandboxRootfs)
 	}
@@ -424,7 +424,7 @@ func TestBuildIntent_GPU(t *testing.T) {
 			GPUResourceClaim: &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "c"},
 		},
 	}
-	bi := buildIntent(sb, "gpu-sandbox", "/x.ext4", execSpec{Argv: []string{"/entrypoint.sh"}}, false)
+	bi := buildIntent(sb, "gpu-sandbox", "/x.ext4", "", execSpec{Argv: []string{"/entrypoint.sh"}}, false)
 	if bi.GPU == nil {
 		t.Fatal("intent.GPU must be set for a GPU sandbox")
 	}
@@ -432,7 +432,7 @@ func TestBuildIntent_GPU(t *testing.T) {
 		t.Errorf("intent.GPU.DeviceSource = %q, want env (DRA CDI synthesis)", bi.GPU.DeviceSource)
 	}
 
-	plain := buildIntent(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}, "sandbox", "/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	plain := buildIntent(&sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"}}, "sandbox", "/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if plain.GPU != nil {
 		t.Error("non-GPU sandbox must have no intent.GPU")
 	}

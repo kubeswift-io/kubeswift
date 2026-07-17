@@ -111,7 +111,7 @@ func TestReconcileScratchDisk_PVCRefReadyWhenBound(t *testing.T) {
 func TestBuildPodAndIntent_ScratchDisk(t *testing.T) {
 	sb := scratchSandbox("sb", "default", "5Gi")
 
-	ri := buildIntent(sb, "sandbox", "/cache/x.ext4", execSpec{Argv: []string{"/bin/sh"}}, false)
+	ri := buildIntent(sb, "sandbox", "/cache/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if len(ri.DataDisks) != 1 || ri.DataDisks[0].Path != "/dev/kubeswift-data-scratch" || ri.DataDisks[0].Format != "raw" {
 		t.Fatalf("intent dataDisks = %+v, want one raw scratch disk", ri.DataDisks)
 	}

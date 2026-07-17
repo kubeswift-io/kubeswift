@@ -155,6 +155,33 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              model:
+                description: |-
+                  Model preloads a read-only, node-shared model artifact (an OCI image whose
+                  filesystem holds the weights) into EVERY warm slot over virtio-fs — so the
+                  weights are resident (in the host page cache, shared across slots) before a
+                  checkout runs and inference starts sub-second. It is the pool complement to
+                  GPUProfileRef: a warm GPU pool with a model needs neither a cold GPU boot
+                  NOR a cold model load on checkout. The model is materialized once per node
+                  (digest-keyed, cosign-verifiable via verifyKeySecretRef) and mounted RO at
+                  Model.mountPath (default /model). Every claiming SwiftSandbox inherits it.
+                properties:
+                  imageRef:
+                    description: |-
+                      ImageRef is the OCI image whose filesystem holds the model (e.g. weights
+                      under the image root, or under MountPath's basename). A digest reference
+                      (repo@sha256:...) is strongly preferred: it pins the content and keeps the
+                      per-node cache stable across pool churn.
+                    type: string
+                  mountPath:
+                    default: /model
+                    description: |-
+                      MountPath is the read-only in-guest mount point for the model tree. The
+                      workload reads its weights from here.
+                    type: string
+                required:
+                - imageRef
+                type: object
               network:
                 description: |-
                   Network is the slot networking posture (default restricted), the same modes as
