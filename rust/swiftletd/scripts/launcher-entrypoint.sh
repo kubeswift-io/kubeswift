@@ -67,7 +67,10 @@ if network_enabled; then
         # shellcheck disable=SC1090
         . "$sec_env"   # SEC_IP, SEC_PREFIX, SEC_MAC, SEC_BRIDGE, SEC_MTU
         echo "Secondary-on-NAD dnsmasq: handing $SEC_IP to $SEC_MAC on $SEC_BRIDGE (mtu ${SEC_MTU:-default}, no default route)"
-        dnsmasq --no-daemon --bind-interfaces --interface="$SEC_BRIDGE" \
+        # --port=0: DHCP only, no DNS. This dnsmasq coexists with the primary NIC's
+        # dnsmasq in the same pod; without it both bind 127.0.0.1:53 and the primary
+        # one fails ("Address already in use") and exits, so the primary never DHCPs.
+        dnsmasq --no-daemon --port=0 --bind-interfaces --interface="$SEC_BRIDGE" \
             --dhcp-range="$SEC_IP,$SEC_IP,infinite" \
             ${SEC_MAC:+--dhcp-host="$SEC_MAC,$SEC_IP"} \
             ${SEC_MAC:+--dhcp-ignore=tag:!known} \
