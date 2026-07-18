@@ -61,23 +61,24 @@ var ipamClaimGVK = schema.GroupVersionKind{
 // OVN-Kubernetes layer2 NAD. ok=false (no error) means "not an OVN-K layer2
 // primary-on-NAD guest" → the caller skips. A Get error is returned so the caller
 // requeues (fail closed).
-func ovnKubernetesPrimaryNAD(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest) (network, iface string, ok bool, err error) {
-	prim := guest.PrimaryInterface()
-	if prim == nil || prim.NetworkRef == nil {
-		return "", "", false, nil
-	}
-	ns := prim.NetworkRef.Namespace
+// ovnKubernetesNADNetwork resolves a networkRef to the OVN logical-network name (the
+// NAD config "name", used as the IPAMClaim spec.network) when it names an
+// OVN-Kubernetes layer2 NAD. ok=false (no error) means "not an OVN-K layer2 NAD"
+// (kube-ovn / bridge / localnet → the caller skips). A Get error is returned so the
+// caller requeues (fail closed).
+func ovnKubernetesNADNetwork(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest, ref *swiftv1alpha1.NetworkReference) (network string, ok bool, err error) {
+	ns := ref.Namespace
 	if ns == "" {
 		ns = guest.Namespace
 	}
 	nad := &unstructured.Unstructured{}
 	nad.SetGroupVersionKind(networkAttachmentDefinitionGVK)
-	if e := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: prim.NetworkRef.Name}, nad); e != nil {
-		return "", "", false, fmt.Errorf("get NAD %s/%s for ovn-kubernetes identity: %w", ns, prim.NetworkRef.Name, e)
+	if e := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, nad); e != nil {
+		return "", false, fmt.Errorf("get NAD %s/%s for ovn-kubernetes identity: %w", ns, ref.Name, e)
 	}
 	cfgStr, _, _ := unstructured.NestedString(nad.Object, "spec", "config")
 	if cfgStr == "" {
-		return "", "", false, nil
+		return "", false, nil
 	}
 	var cfg struct {
 		Type     string `json:"type"`
@@ -85,22 +86,34 @@ func ovnKubernetesPrimaryNAD(ctx context.Context, c client.Client, guest *swiftv
 		Name     string `json:"name"`
 	}
 	if json.Unmarshal([]byte(cfgStr), &cfg) != nil {
-		return "", "", false, nil
+		return "", false, nil
 	}
-	// v1: only ovn-k8s-cni-overlay + layer2 + a named OVN network (the IPAMClaim's
-	// spec.network). Any other type/topology is not this backend's (kube-ovn,
-	// bridge, localnet → skip).
+	// v1: only ovn-k8s-cni-overlay + layer2 + a named OVN network. Any other
+	// type/topology is not this backend's (kube-ovn, bridge, localnet → skip).
 	if cfg.Type != OVNKubernetesCNIType || cfg.Topology != OVNKubernetesLayer2Topology || cfg.Name == "" {
+		return "", false, nil
+	}
+	return cfg.Name, true, nil
+}
+
+// ovnKubernetesPrimaryNAD returns the OVN logical-network name + the primary
+// interface's Multus name when the guest's PRIMARY rides an OVN-Kubernetes layer2
+// NAD. ok=false means the primary is not an OVN-K layer2 NAD (a secondary-only guest
+// still takes the general Identity path). Retained for the migration-dst code path.
+func ovnKubernetesPrimaryNAD(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest) (network, iface string, ok bool, err error) {
+	prim := guest.PrimaryInterface()
+	if prim == nil || prim.NetworkRef == nil {
 		return "", "", false, nil
 	}
-	// The primary's Multus interface name (net1, ...) — the IPAMClaim spec.interface
-	// and the entry to augment. primaryIdx is the primary's position among the
-	// NAD-bearing entries; it is >= 0 here because the primary has a NetworkRef.
+	network, ok, err = ovnKubernetesNADNetwork(ctx, c, guest, prim.NetworkRef)
+	if err != nil || !ok {
+		return "", "", ok, err
+	}
 	entries, primaryIdx := buildMultusEntries(guest)
 	if primaryIdx < 0 || primaryIdx >= len(entries) {
 		return "", "", false, nil
 	}
-	return cfg.Name, entries[primaryIdx].Interface, true, nil
+	return network, entries[primaryIdx].Interface, true, nil
 }
 
 // ovnKubernetesClaimName is the deterministic, per-guest-per-interface IPAMClaim
@@ -116,59 +129,90 @@ type ovnKubernetesBackend struct{}
 
 func (ovnKubernetesBackend) Name() string { return "ovn-kubernetes" }
 
-// Detect reports whether the guest's primary interface rides an OVN-Kubernetes
-// layer2 NAD.
+// Detect reports whether ANY of the guest's interfaces (primary or secondary) rides
+// an OVN-Kubernetes layer2 NAD.
 func (ovnKubernetesBackend) Detect(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest) (bool, error) {
-	_, _, ok, err := ovnKubernetesPrimaryNAD(ctx, c, guest)
-	return ok, err
+	for i := range guest.Spec.Interfaces {
+		ref := guest.Spec.Interfaces[i].NetworkRef
+		if ref == nil {
+			continue
+		}
+		_, ok, err := ovnKubernetesNADNetwork(ctx, c, guest, ref)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
-// Identity injects the guest MAC (the LSP identity) + the ipam-claim-reference into
-// the primary NAD's Multus selection element, and returns the per-guest IPAMClaim to
-// ensure. MigrationDstAnnotations is empty: the augmented Multus annotation is carried
-// onto the dst pod by mergeAnnotationsForDst and OVN-K allows the cross-node claim
-// overlap by default (spike P0-c), so the dst keeps the identity + IP with no marker.
+// Identity injects the guest MAC (the LSP identity) + an ipam-claim-reference into
+// EVERY OVN-Kubernetes NAD interface's Multus selection element (primary and/or
+// secondary), and returns the per-interface IPAMClaims to ensure. A secondary NAD
+// interface (e.g. a routable node-datapath NIC) needs the same treatment as the
+// primary, or OVN's per-port ARP responder answers with the pod NIC's MAC and the
+// bridged guest is unreachable on the segment. MigrationDstAnnotations is empty: the
+// augmented Multus annotation is carried onto the dst pod by mergeAnnotationsForDst
+// and OVN-K allows the cross-node claim overlap by default (spike P0-c).
 func (ovnKubernetesBackend) Identity(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest, _ string) (ovnIdentity, error) {
-	network, iface, ok, err := ovnKubernetesPrimaryNAD(ctx, c, guest)
-	if err != nil {
-		return ovnIdentity{}, err
-	}
-	if !ok {
+	// The full networks annotation (matching the pod builder's, since both use
+	// buildMultusEntries). Entries are in guest.Spec.Interfaces order among the
+	// NAD-bearing interfaces, so the idx counter below indexes straight into it.
+	entries, _ := buildMultusEntries(guest)
+	if len(entries) == 0 {
 		return ovnIdentity{}, nil
 	}
-	mac := primaryMAC(guest, guest.PrimaryInterface())
-	if mac == "" {
-		return ovnIdentity{}, nil
-	}
-	claimName := ovnKubernetesClaimName(guest, iface)
 
-	// Rebuild the full networks annotation (matching the pod builder's, since both
-	// use buildMultusEntries) with mac + ipam-claim-reference on the primary entry.
-	entries, primaryIdx := buildMultusEntries(guest)
-	if primaryIdx < 0 || primaryIdx >= len(entries) {
+	var claims []*unstructured.Unstructured
+	idx := -1
+	for i := range guest.Spec.Interfaces {
+		iface := &guest.Spec.Interfaces[i]
+		if iface.NetworkRef == nil {
+			continue
+		}
+		idx++
+		if idx >= len(entries) {
+			break
+		}
+		network, ok, err := ovnKubernetesNADNetwork(ctx, c, guest, iface.NetworkRef)
+		if err != nil {
+			return ovnIdentity{}, err
+		}
+		if !ok {
+			continue // kube-ovn / bridge / localnet — not this backend's
+		}
+		mac := primaryMAC(guest, iface)
+		if mac == "" {
+			continue
+		}
+		claimName := ovnKubernetesClaimName(guest, entries[idx].Interface)
+		entries[idx].MAC = mac
+		entries[idx].IPAMClaimReference = claimName
+
+		// spec.network is the OVN logical-network name (the NAD config "name"),
+		// spec.interface this interface's Multus name. Owner-ref + create are applied
+		// by the stamp dispatch (ensureOVNClaim).
+		claim := &unstructured.Unstructured{}
+		claim.SetGroupVersionKind(ipamClaimGVK)
+		claim.SetNamespace(guest.Namespace)
+		claim.SetName(claimName)
+		_ = unstructured.SetNestedField(claim.Object, network, "spec", "network")
+		_ = unstructured.SetNestedField(claim.Object, entries[idx].Interface, "spec", "interface")
+		claims = append(claims, claim)
+	}
+	if len(claims) == 0 {
 		return ovnIdentity{}, nil
 	}
-	entries[primaryIdx].MAC = mac
-	entries[primaryIdx].IPAMClaimReference = claimName
+
 	data, err := json.Marshal(entries)
 	if err != nil {
 		return ovnIdentity{}, fmt.Errorf("marshal ovn-kubernetes networks annotation: %w", err)
 	}
-
-	// The IPAMClaim this guest's pod (and its migration dst) reference. spec.network
-	// is the OVN logical-network name (the NAD config "name"), spec.interface the
-	// primary's Multus interface. Owner-ref + create are applied by the stamp
-	// dispatch (ensureOVNClaim).
-	claim := &unstructured.Unstructured{}
-	claim.SetGroupVersionKind(ipamClaimGVK)
-	claim.SetNamespace(guest.Namespace)
-	claim.SetName(claimName)
-	_ = unstructured.SetNestedField(claim.Object, network, "spec", "network")
-	_ = unstructured.SetNestedField(claim.Object, iface, "spec", "interface")
-
 	return ovnIdentity{
 		PodAnnotations:          map[string]string{MultusAnnotationKey: string(data)},
 		MigrationDstAnnotations: nil,
-		ClaimsToEnsure:          []*unstructured.Unstructured{claim},
+		ClaimsToEnsure:          claims,
 	}, nil
 }

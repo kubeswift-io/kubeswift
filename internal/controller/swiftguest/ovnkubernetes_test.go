@@ -200,6 +200,48 @@ func TestStampOVNIdentity_OVNKubernetes_CreatesClaimAndStamps(t *testing.T) {
 	}
 }
 
+// A guest whose PRIMARY is node-local nat but whose SECONDARY interface rides an
+// OVN-K NAD (e.g. a routable node-datapath NIC) gets the same stamping: the secondary
+// entry carries the guest MAC + ipam-claim-reference and its IPAMClaim is created.
+// Without it OVN's per-port ARP responder answers with the pod NIC's MAC and the
+// bridged guest is unreachable on the segment.
+func TestStampOVNIdentity_OVNKubernetes_SecondaryNAD(t *testing.T) {
+	s := ovnkDispatchScheme()
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ovn-ns", Name: "ovnk-vm"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			Interfaces: []swiftv1alpha1.GuestInterface{
+				{Name: "mgmt", Primary: true}, // node-local nat, no NAD
+				{Name: "node", MAC: "52:54:00:ab:cd:ef", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "ovnk-nad"}},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ovnkNADObj("ovn-ns", "ovnk-nad", "ovnknet", "layer2")).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: s}
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ovn-ns", Name: "p"}}
+	if err := r.stampOVNIdentity(context.Background(), guest, pod); err != nil {
+		t.Fatalf("stampOVNIdentity: %v", err)
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(ipamClaimGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "ovn-ns", Name: "ovnk-vm-net1"}, got); err != nil {
+		t.Fatalf("secondary IPAMClaim not created: %v", err)
+	}
+	if net, _, _ := unstructured.NestedString(got.Object, "spec", "network"); net != "ovnknet" {
+		t.Errorf("created claim spec.network = %q, want ovnknet", net)
+	}
+
+	var entries []multusNetworkEntry
+	if err := json.Unmarshal([]byte(pod.Annotations[MultusAnnotationKey]), &entries); err != nil {
+		t.Fatalf("pod networks annotation: %v", err)
+	}
+	if len(entries) != 1 || entries[0].MAC != "52:54:00:ab:cd:ef" || entries[0].IPAMClaimReference != "ovnk-vm-net1" {
+		t.Errorf("secondary NAD entry not augmented: %+v", entries)
+	}
+}
+
 // First-match-wins dispatch over disjoint NAD types: a kube-ovn guest resolves to
 // the kube-ovn backend, an OVN-K guest to the ovn-kubernetes backend.
 func TestResolveOVNBackend_DisjointTypes(t *testing.T) {
