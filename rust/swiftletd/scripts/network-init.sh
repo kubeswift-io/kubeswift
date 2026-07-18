@@ -186,6 +186,81 @@ setup_secondary_nic() {
     echo "Secondary NIC: $bridge with $tap, bridged to $multus_iface"
 }
 
+# setup_secondary_nad_nic -- a SECONDARY interface that rides a Multus NAD (e.g. an
+# OVN-Kubernetes secondary UDN) and must carry a routable IP INTO the guest. The
+# mirror of setup_primary_nad_nic for a non-primary NIC: without it a secondary NAD
+# interface is only bridged (setup_secondary_nic), so the guest never gets the NAD's
+# IP and the NIC is unusable (e.g. as a routable node-datapath interface).
+#
+# Same read->flush->re-MAC->bridge->serve contract as the primary path, with two
+# differences: the IP is handed via a SECOND dnsmasq (secondary-nad.env, driven by
+# the launcher entrypoint) so the primary NIC's lease is untouched; and NO default
+# route is handed (the primary interface keeps the default route -- the guest gets
+# only the on-link route to the NAD subnet).
+setup_secondary_nad_nic() {
+    bridge="$1"; tap="$2"; multus_iface="$3"; guest_mac="$4"
+
+    attempts=0
+    while [ $attempts -lt 30 ]; do
+        ip link show "$multus_iface" >/dev/null 2>&1 && break
+        sleep 1; attempts=$((attempts + 1))
+    done
+    if ! ip link show "$multus_iface" >/dev/null 2>&1; then
+        echo "ERROR: secondary NAD interface $multus_iface not found after 30s" >&2
+        exit 1
+    fi
+
+    nad_cidr=$(ip -4 addr show "$multus_iface" 2>/dev/null | awk '/inet /{print $2; exit}')
+    if [ -z "$nad_cidr" ]; then
+        echo "ERROR: secondary NAD interface $multus_iface has no IPv4 address (NAD IPAM did not assign one)" >&2
+        exit 1
+    fi
+    nad_ip="${nad_cidr%/*}"
+    nad_prefix="${nad_cidr#*/}"
+    nad_mtu=$(ip -o link show "$multus_iface" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="mtu"){print $(i+1); exit}}')
+
+    rd=$(guest_run_dir); mkdir -p "$rd"
+    {
+        echo "SEC_IP=$nad_ip"
+        echo "SEC_PREFIX=$nad_prefix"
+        echo "SEC_MAC=$guest_mac"
+        echo "SEC_BRIDGE=$bridge"
+        echo "SEC_MTU=$nad_mtu"
+    } > "$rd/secondary-nad.env"
+
+    # The guest claims nad_ip; the host must not also hold it on the L2.
+    ip addr flush dev "$multus_iface" 2>/dev/null || true
+
+    ip link add "$bridge" type bridge stp_state 0 2>/dev/null || true
+    ip link set "$bridge" up
+    ip tuntap add dev "$tap" mode tap 2>/dev/null || true
+    ip link set "$tap" up
+    ip link set "$tap" master "$bridge"
+
+    # Re-MAC the NIC off the guest MAC before enslaving (same reason as the primary
+    # path: when the OVN LSP is stamped with the guest MAC, an enslaved NIC carrying
+    # that same MAC adds a permanent fdb entry that shadows the guest's tap). No-op
+    # when the NIC's IPAM gave it a distinct MAC (plain-bridge / VXLAN-mesh path).
+    nic_mac=$(cat "/sys/class/net/$multus_iface/address" 2>/dev/null)
+    if [ -n "$guest_mac" ] && [ "$nic_mac" = "$guest_mac" ]; then
+        ip link set "$multus_iface" down 2>/dev/null || true
+        ip link set "$multus_iface" address "0a:${guest_mac#*:}" 2>/dev/null || true
+        ip link set "$multus_iface" up 2>/dev/null || true
+        echo "Secondary NAD: re-MAC'd $multus_iface off the guest MAC $guest_mac"
+    fi
+
+    ip link set "$multus_iface" master "$bridge"
+    ip link set "$multus_iface" up
+
+    # Helper IP for the secondary dnsmasq to bind (same .254 heuristic as primary).
+    net_base=$(echo "$nad_ip" | sed 's/\.[0-9]*$//')
+    helper="${net_base}.254"
+    [ "$helper" = "$nad_ip" ] && helper="${net_base}.253"
+    ip addr add "$helper/$nad_prefix" dev "$bridge" 2>/dev/null || true
+
+    echo "Secondary NIC on NAD: $bridge bridges $multus_iface to $tap; guest IP=$nad_ip/$nad_prefix (helper $helper, no default route)"
+}
+
 # setup_primary_nad_nic -- multi-node L2, primary-on-NAD.
 #
 # Datapath is cluster-validated (kube-ovn primary NAD: zero-touch cross-node
@@ -467,6 +542,11 @@ for nic in nics:
         elif [ "$primary" = "1" ]; then
             setup_primary_nic "$bridge" "$tap"
             setup_exposed_ports "$bridge"
+        elif [ -n "$multus" ]; then
+            # Secondary-on-NAD: the NIC rides a Multus NAD and must carry the NAD's
+            # IP into the guest (e.g. a routable node-datapath interface). Hand it
+            # over the same way the primary-on-NAD path does, minus the default route.
+            setup_secondary_nad_nic "$bridge" "$tap" "$multus" "$mac"
         else
             setup_secondary_nic "$bridge" "$tap" "$multus"
         fi

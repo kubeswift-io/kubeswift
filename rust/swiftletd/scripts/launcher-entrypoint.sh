@@ -56,6 +56,26 @@ if network_enabled; then
     # port_security pins MAC+IP). Hand exactly that IP to the guest (matched by MAC) via
     # a fixed dnsmasq lease, and export the MAC so swiftletd uses it for the CH
     # --net mac= (the guest cannot use its own 52:54:.. MAC -- OVN would drop it).
+    # Secondary-on-NAD: network-init persisted a routable secondary NIC's IP. Hand it
+    # to the guest via a SECOND fixed-lease dnsmasq -- no default route (the primary
+    # interface owns that) and no DNS (the primary serves it). This runs regardless of
+    # the primary path (nat / UDN / NAD), backgrounded, BEFORE the primary path's exec;
+    # the reparented dnsmasq survives the exec. A separate leasefile keeps lease.rs's
+    # primary-IP discovery (dnsmasq.leases) untouched.
+    sec_env="$lease_dir/secondary-nad.env"
+    if [ -f "$sec_env" ]; then
+        # shellcheck disable=SC1090
+        . "$sec_env"   # SEC_IP, SEC_PREFIX, SEC_MAC, SEC_BRIDGE, SEC_MTU
+        echo "Secondary-on-NAD dnsmasq: handing $SEC_IP to $SEC_MAC on $SEC_BRIDGE (mtu ${SEC_MTU:-default}, no default route)"
+        dnsmasq --no-daemon --bind-interfaces --interface="$SEC_BRIDGE" \
+            --dhcp-range="$SEC_IP,$SEC_IP,infinite" \
+            ${SEC_MAC:+--dhcp-host="$SEC_MAC,$SEC_IP"} \
+            ${SEC_MAC:+--dhcp-ignore=tag:!known} \
+            ${SEC_MTU:+--dhcp-option=option:mtu,"$SEC_MTU"} \
+            --dhcp-leasefile="$lease_dir/secondary-dnsmasq.leases" \
+            --dhcp-authoritative &
+    fi
+
     udn_env="$lease_dir/primary-udn.env"
     if [ -f "$udn_env" ]; then
         # shellcheck disable=SC1090
