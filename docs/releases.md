@@ -17,7 +17,7 @@ KubeSwift uses three release types: **dev** (main branch), **RC** (release candi
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.0.0-dev.a1b2c3d -n kubeswift-system --create-namespace
 
 # Stable
-helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.12.0 -n kubeswift-system --create-namespace
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.12.1 -n kubeswift-system --create-namespace
 ```
 
 ## CI workflows

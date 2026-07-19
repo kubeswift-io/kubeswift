@@ -89,6 +89,33 @@ The IP-preservation gate keys on the **primary** interface, not on "any
 | **Primary on a NAD** (`primary: true` + `networkRef`) | accepted, IP preserved, no `allowIPChange` |
 | Single NAD interface (de-facto primary) | accepted, IP preserved |
 
+## Secondary NAD interface (routable node datapath on a NAT primary)
+
+*(Added v0.12.1.)* The inverse of primary-on-NAD: keep the guest's **primary** NIC
+node-local (NAT, reachable at the pod IP) and add a **secondary** interface on a NAD
+that carries a routable, cross-node IP. Use this when the guest must stay reachable at
+its pod IP — e.g. a Service-fronted control-plane endpoint, with no proxy — *and* also
+needs a cross-node address for a node datapath. That is the shape a multi-node
+Kubernetes node needs when the primary pod network is not itself node-routable.
+
+```yaml
+spec:
+  interfaces:
+    - name: mgmt
+      primary: true                 # node-local NAT (reachable at the pod IP)
+    - name: node
+      networkRef: { name: ovn-l2 }  # secondary, routable cross-node IP
+```
+
+The launcher reads the CNI-assigned address off the secondary Multus interface and
+hands it to the guest by MAC (a second fixed-lease dnsmasq); on an OVN-Kubernetes NAD
+the controller also stamps the guest MAC and a per-interface `IPAMClaim`. The secondary
+receives **no default gateway** (the primary owns the default route), and NAT guests
+are handed the pod's overlay MTU so large packets do not blackhole on an overlay CNI.
+Works with an OVN-Kubernetes `layer2` secondary UDN or a plain bridge / VXLAN-mesh NAD
+(Recipe B). The secondary IP is **not** preserved across migration — it is not the
+primary (see the table above).
+
 ## Recipe A (reference): OVN-Kubernetes layer-2 NAD
 
 > The portable, production-recommended path, and the one that validates
