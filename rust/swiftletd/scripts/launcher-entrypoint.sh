@@ -56,6 +56,37 @@ if network_enabled; then
     # port_security pins MAC+IP). Hand exactly that IP to the guest (matched by MAC) via
     # a fixed dnsmasq lease, and export the MAC so swiftletd uses it for the CH
     # --net mac= (the guest cannot use its own 52:54:.. MAC -- OVN would drop it).
+    # Secondary-on-NAD: network-init persisted a routable secondary NIC's IP. Hand it
+    # to the guest via a SECOND fixed-lease dnsmasq -- no default route (the primary
+    # interface owns that) and no DNS (the primary serves it). This runs regardless of
+    # the primary path (nat / UDN / NAD), backgrounded, BEFORE the primary path's exec;
+    # the reparented dnsmasq survives the exec. A separate leasefile keeps lease.rs's
+    # primary-IP discovery (dnsmasq.leases) untouched.
+    sec_env="$lease_dir/secondary-nad.env"
+    if [ -f "$sec_env" ]; then
+        # shellcheck disable=SC1090
+        . "$sec_env"   # SEC_IP, SEC_PREFIX, SEC_MAC, SEC_BRIDGE, SEC_MTU
+        echo "Secondary-on-NAD dnsmasq: handing $SEC_IP to $SEC_MAC on $SEC_BRIDGE (mtu ${SEC_MTU:-default}, no default route)"
+        # --port=0: DHCP only, no DNS. This dnsmasq coexists with the primary NIC's
+        # dnsmasq in the same pod; without it both bind 127.0.0.1:53 and the primary
+        # one fails ("Address already in use") and exits, so the primary never DHCPs.
+        # --dhcp-option=option:router (empty): send NO default gateway. Without this,
+        # dnsmasq defaults to advertising its own listening address (the br1 helper IP)
+        # as option:router, and the guest installs a default route via the secondary --
+        # a dead end on an isolated L2 (e.g. an OVN-K layer2 UDN) with no off-segment
+        # egress, which blackholes ALL of the guest's traffic. The guest's PRIMARY NIC
+        # owns the default route; the secondary only needs its on-link subnet route
+        # (from the /prefix address) for node-to-node reachability.
+        dnsmasq --no-daemon --port=0 --bind-interfaces --interface="$SEC_BRIDGE" \
+            --dhcp-range="$SEC_IP,$SEC_IP,infinite" \
+            --dhcp-option=option:router \
+            ${SEC_MAC:+--dhcp-host="$SEC_MAC,$SEC_IP"} \
+            ${SEC_MAC:+--dhcp-ignore=tag:!known} \
+            ${SEC_MTU:+--dhcp-option=option:mtu,"$SEC_MTU"} \
+            --dhcp-leasefile="$lease_dir/secondary-dnsmasq.leases" \
+            --dhcp-authoritative &
+    fi
+
     udn_env="$lease_dir/primary-udn.env"
     if [ -f "$udn_env" ]; then
         # shellcheck disable=SC1090
@@ -158,10 +189,23 @@ if network_enabled; then
     # DHCP domain-search option, so the guest resolves bare service names.
     search=$(grep '^search ' /etc/resolv.conf 2>/dev/null | head -1 | cut -d' ' -f2- | tr ' ' ',')
 
+    # MTU: the guest reaches the outside world by MASQUERADE through the pod's
+    # egress interface. On an overlay CNI (OVN-K Geneve, Calico VXLAN, ...) that
+    # interface's MTU is < 1500. If the guest keeps the default 1500 it silently
+    # blackholes every packet larger than the path MTU -- no ICMP frag-needed is
+    # delivered back into the guest, so PMTU discovery cannot recover and TLS
+    # handshakes / package downloads hang. Hand the guest the pod egress MTU so
+    # its NIC matches the path. On a 1500-MTU (non-overlay) cluster this is a
+    # no-op. The UDN / NAD paths above already carry their overlay MTU; only this
+    # plain-nat path lacked it.
+    egress_if=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')
+    egress_mtu=$(cat "/sys/class/net/$egress_if/mtu" 2>/dev/null)
+
     dnsmasq --no-daemon --bind-interfaces --interface="$BRIDGE" \
         --dhcp-range="$range" \
         --dhcp-option=option:router,"$gateway" \
         --dhcp-option=option:dns-server,"$dns" \
+        ${egress_mtu:+--dhcp-option=option:mtu,"$egress_mtu"} \
         ${search:+--dhcp-option=option:domain-search,"$search"} \
         --dhcp-leasefile="$lease_dir/dnsmasq.leases" \
         --dhcp-authoritative &
