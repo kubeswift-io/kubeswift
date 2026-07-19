@@ -4,6 +4,37 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.12.1] — 2026-07-19
+
+A networking patch release: give a `SwiftGuest` a second, cross-node-routable NIC on
+top of its node-local NAT primary, and fix an MTU blackhole on overlay CNIs. Together
+these let a guest be a node in a multi-node cluster where the primary pod network is
+not itself node-routable — validated on OVN-Kubernetes and on Calico VXLAN.
+
+### Added
+
+- **Secondary NAD interface IP hand-off.** A guest can attach a secondary
+  NetworkAttachmentDefinition interface — an OVN-Kubernetes `layer2` secondary UDN, or
+  a plain bridge / VXLAN-mesh NAD — that carries its own routable, cross-node IP into
+  the guest, alongside a node-local NAT primary. The launcher reads the CNI-assigned
+  address off the Multus interface and hands it to the guest by MAC (fixed-lease
+  dnsmasq), and the controller stamps the guest MAC and a per-interface `IPAMClaim` on
+  every OVN-Kubernetes NAD interface. The secondary hands **no default gateway**
+  (`--dhcp-option=option:router`), so it does not shadow the primary's default route
+  with a dead end on an isolated L2 — it keeps only its on-link subnet route for
+  node-to-node reachability. (#419)
+
+### Fixed
+
+- **NAT guests now receive the pod's overlay MTU.** The primary NAT dnsmasq never
+  handed the guest an MTU, so on an overlay CNI (Geneve/VXLAN, pod MTU < 1500) the
+  guest kept 1500 and silently dropped every packet larger than the path MTU — no ICMP
+  fragmentation-needed reaches the guest, PMTU discovery cannot recover, and TLS
+  handshakes and package downloads hang. The guest is now handed the pod egress
+  interface's MTU (`--dhcp-option=option:mtu`). No-op on a 1500-MTU cluster. (#419)
+
+---
+
 ## [v0.12.0] — 2026-07-17
 
 GPU sandboxes graduate from a DRA-only spike to a complete feature: `SwiftSandbox`/
