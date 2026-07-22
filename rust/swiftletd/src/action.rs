@@ -213,6 +213,16 @@ pub const MIGRATION_PROGRESS_ESTIMATE_KEY: &str = "kubeswift.io/migration-progre
 /// don't ship the field pre-emptively.
 pub const PROGRESS_BASELINE_MBPS: f64 = 108.0;
 
+/// Poll cadence for the CH >= v53 non-blocking `send-migration` completion
+/// wait ([`swift_ch_client::ApiClient::wait_for_send_migration_terminal`]).
+/// CH v53 returns 204 the instant it *accepts* the migration (#8021) and
+/// runs pre-copy/stop-and-copy on a background thread, so completion is
+/// observed by polling `vm.info` this often until the source process exits
+/// (success) or the migration deadline elapses (failure). 200 ms reports
+/// completion promptly while keeping the same-host UNIX-socket query rate
+/// negligible; the v53 spike polled at ~100 ms with no adverse effect.
+const MIGRATION_SEND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Phase 2 unsafe-plaintext acknowledgement annotation. Required on
 /// the launcher pod for swiftletd to accept any migration action — the
 /// S2 mitigation gate.
@@ -1187,10 +1197,24 @@ async fn dispatch_migration_send(
         std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(DEFAULT_ACTION_TIMEOUT_SECS));
     let client = swift_ch_client::ApiClient::new(api_socket).with_timeout(timeout);
 
-    // Phase 3b PR 1 Commit D — spawn the progress-estimate emitter
-    // BEFORE the blocking send_migration call. Drop guard ensures
-    // the emitter is signaled to exit on any return path (success,
-    // error, async cancellation).
+    // Detect the local CH's blocking semantics up-front — before the VM
+    // starts migrating, so `vmm.ping` is unambiguous. CH >= v53 made
+    // `send-migration` NON-BLOCKING (#8021): the call returns 204 the
+    // instant CH accepts the migration while pre-copy/stop-and-copy run on
+    // a background thread. CH <= v52 blocks the call until the source has
+    // exited. This decides how completion is detected below. On a query
+    // failure we fall back to the historic (blocking) assumption — no
+    // worse than the pre-v53 behaviour.
+    let non_blocking = client
+        .version()
+        .ok()
+        .and_then(|v| v.major_minor())
+        .map(|(major, _)| major >= 53)
+        .unwrap_or(false);
+
+    // Phase 3b PR 1 Commit D — spawn the progress-estimate emitter BEFORE
+    // the send_migration call. Drop guard ensures the emitter is signaled
+    // to exit on any return path (success, error, async cancellation).
     let _progress = spawn_progress_emitter(action.id.clone(), args.guest_ram_mib);
 
     let started = std::time::Instant::now();
@@ -1201,27 +1225,73 @@ async fn dispatch_migration_send(
         ));
     }
 
-    // W1 completion-gate (load-bearing item C, walkthrough W1).
-    // `send_migration` exit=0 is necessary but not sufficient; the
-    // source CH must actually have exited cleanly (Q1c finding).
-    // We probe vm_info: if it returns ConnectionRefused / similar,
-    // CH is gone (the expected post-success state). If it returns
-    // Running, send-migration claimed success but the guest is
-    // still here — abnormal, treat as failure.
-    match client.vm_info() {
-        Err(_) => {
-            // CH is gone — the expected outcome on success.
+    // Completion detection (W1 completion-gate, load-bearing item C).
+    // `send_migration` returning Ok is necessary but not sufficient — the
+    // source CH must actually have exited (Q1c). HOW that is confirmed
+    // depends on the blocking semantics detected above:
+    //
+    //   * CH <= v52 (blocking): the call already returned only after the
+    //     source exited, so a single `vm_info` probe is authoritative —
+    //     ConnectionRefused ⇒ gone (success); Running ⇒ the historic W1
+    //     violation. This branch is byte-identical to the pre-v53 code.
+    //   * CH >= v53 (non-blocking): the call returned while the migration
+    //     is still in flight, so POLL `vm.info` until a terminal edge
+    //     (source gone ⇒ complete; still Running past the deadline ⇒
+    //     failed — v53 auto-resumes the source guest, so no `vm.resume` is
+    //     needed). `receive-migration` stays blocking on v53, so the
+    //     destination handler (`dispatch_migration_receive`) is unchanged.
+    let terminal = if non_blocking {
+        // On v53 `send_migration` has returned 204: CH has ACCEPTED the
+        // migration and now runs it on a background thread. From here a
+        // clean CH exit == migration completed — and at completion the
+        // source CH (and this launcher process) EXITS. main.rs's CH-exit
+        // observer writes the terminal `migration-status: complete` iff the
+        // W22 flag is set (migration_send_completed_clean()), then waits
+        // (W23) for the action loop's own `complete` write before exiting.
+        // So the flag MUST be set BEFORE CH exits. On the blocking v52 path
+        // the send call returned only after the source exited, so setting
+        // the flag in the success match below was in time; on v53 the exit
+        // races the poll loop that would set it there — the cluster
+        // walkthrough hit exactly this: the src pod exited with
+        // migration-status stuck at "sending" and the controller stalled.
+        // Set it NOW, at accept time; the poll below only has to catch the
+        // FAILURE case, where CH does NOT exit and the guest auto-resumes.
+        MIGRATION_SEND_COMPLETED.store(true, Ordering::SeqCst);
+        let deadline = started + timeout;
+        let outcome =
+            client.wait_for_send_migration_terminal(deadline, MIGRATION_SEND_POLL_INTERVAL);
+        if matches!(outcome, swift_ch_client::SendMigrationOutcome::Failed(_)) {
+            // Migration did not complete — the source guest is still Running
+            // (v53 auto-resumed it) and CH did NOT exit, so main.rs's
+            // observer never fires. Undo the optimistic flag so any later
+            // unrelated CH exit is reported as VmStopped rather than
+            // silently suppressed as a migration success.
+            MIGRATION_SEND_COMPLETED.store(false, Ordering::SeqCst);
+        }
+        outcome
+    } else {
+        match client.vm_info() {
+            Err(_) => swift_ch_client::SendMigrationOutcome::Completed,
+            Ok(info) => swift_ch_client::SendMigrationOutcome::Failed(format!(
+                "w1_violation: send_migration returned 0 but CH state={}",
+                info.state
+            )),
+        }
+    };
+
+    match terminal {
+        swift_ch_client::SendMigrationOutcome::Completed => {
             let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
             // W22: mark migration-send as cleanly completed so main.rs's
-            // post-launch path suppresses the VmStopped write that
-            // would race the dst-side W16 GuestRunning=True write.
-            // Set BEFORE logging the success message so any future
-            // observer sees a consistent state.
+            // post-launch path suppresses the VmStopped write that would
+            // race the dst-side W16 GuestRunning=True write. Set BEFORE
+            // logging so any future observer sees a consistent state.
             MIGRATION_SEND_COMPLETED.store(true, Ordering::SeqCst);
             log::info!(
-                "dispatch_migration_send_complete id={} elapsed_ms={} w22_send_completed_flag=set",
+                "dispatch_migration_send_complete id={} elapsed_ms={} non_blocking={} w22_send_completed_flag=set",
                 action.id,
-                elapsed_ms
+                elapsed_ms,
+                non_blocking
             );
             Ok(ActionOutcome {
                 detail: Some(format!("sent to {} ({}ms)", args.target_url, elapsed_ms)),
@@ -1231,19 +1301,14 @@ async fn dispatch_migration_send(
                 success_status: Some("complete"),
             })
         }
-        Ok(info) => {
-            // CH is still alive after a "successful" send-migration.
-            // This contradicts Q1c; surface as failure with the W1
-            // category so operators learn the gate fired.
+        swift_ch_client::SendMigrationOutcome::Failed(detail) => {
             log::warn!(
-                "migration_send_w1_violation id={} state={}",
+                "migration_send_failed id={} non_blocking={} detail={}",
                 action.id,
-                info.state
+                non_blocking,
+                detail
             );
-            Err(format!(
-                "w1_violation: send_migration returned 0 but CH state={}",
-                info.state
-            ))
+            Err(detail)
         }
     }
 }
@@ -3024,6 +3089,23 @@ mod tests {
         b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()
     }
 
+    /// A `vmm.ping` 200 response advertising the given build version (e.g.
+    /// "v52.0" or "v53.0"). Drives the send-migration version gate in the
+    /// dispatch tests: the mock is sequence-based, so this is queued as the
+    /// FIRST response because `dispatch_migration_send` pings before it
+    /// sends.
+    fn vmm_ping(build_version: &str) -> Vec<u8> {
+        let body = format!(
+            r#"{{"build_version":"{}","version":"{}","pid":4242}}"#,
+            build_version,
+            build_version.trim_start_matches('v')
+        );
+        let mut full =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        full.extend_from_slice(body.as_bytes());
+        full
+    }
+
     fn capture_action(args: serde_json::Value) -> PendingAction {
         PendingAction {
             kind: ActionKind::SnapshotCapture,
@@ -3592,16 +3674,16 @@ mod tests {
 
     #[tokio::test]
     async fn migration_send_returns_complete_when_ch_exits() {
-        // Phase 2 spike Q1c: source CH auto-exits cleanly on successful
-        // send-migration. The dispatch handler probes vm_info post-send;
-        // ConnectionRefused is the expected outcome (CH gone).
+        // Phase 2 spike Q1c: on CH <= v52 send-migration BLOCKS, and the
+        // source CH auto-exits cleanly on success. The dispatch handler
+        // probes vm_info once post-send; ConnectionRefused is the expected
+        // outcome (CH gone).
         //
-        // We model this with a mock that responds to the send-migration
-        // call with 204 No Content, then the second accept (vm_info)
-        // never connects because the mock has run out of responses.
-        // The vm_info call returns a Connect error → sanitizer maps to
-        // `connection_refused` → W1 gate accepts as "CH gone clean".
-        let server = MultiMockServer::spawn(vec![no_content()]);
+        // Sequence (mock is response-ordered): vmm.ping → v52 (pins the
+        // single-probe blocking path), send-migration → 204, then the
+        // vm_info probe finds the mock exhausted → Connect error → W1 gate
+        // accepts as "CH gone clean".
+        let server = MultiMockServer::spawn(vec![vmm_ping("v52.0"), no_content()]);
         let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
         let outcome = dispatch(&action, &server.path).await.unwrap();
         let detail = outcome.detail.unwrap();
@@ -3616,6 +3698,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_send_v53_polls_until_source_exits() {
+        // CH v53 (#8021): send-migration is non-blocking, so dispatch must
+        // POLL vm.info rather than probe once. Sequence: vmm.ping → v53,
+        // send-migration → 204 (accepted), then the first vm.info poll
+        // finds the mock exhausted → Connect error → source gone →
+        // Completed. Mirrors the hardware-confirmed v53 spike contract.
+        let server = MultiMockServer::spawn(vec![vmm_ping("v53.0"), no_content()]);
+        let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
+        let outcome = dispatch(&action, &server.path).await.unwrap();
+        assert!(outcome.detail.unwrap().contains("sent to tcp:1.2.3.4:6789"));
+        // Same source-side success verb as the blocking path.
+        assert_eq!(outcome.success_status, Some("complete"));
+    }
+
+    #[tokio::test]
     async fn migration_send_w1_violates_when_ch_still_running() {
         // W1 gate (load-bearing item C): if send_migration returns 0
         // but vm_info still reports state=Running, that's abnormal —
@@ -3625,7 +3722,9 @@ mod tests {
         let info_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
         let mut info_full = info_response.into_bytes();
         info_full.extend_from_slice(body);
-        let server = MultiMockServer::spawn(vec![no_content(), info_full]);
+        // vmm.ping → v52 pins the single-probe path; then send-migration →
+        // 204 and vm_info → 200 Running triggers the historic W1 violation.
+        let server = MultiMockServer::spawn(vec![vmm_ping("v52.0"), no_content(), info_full]);
         let action = migration_send_action(serde_json::json!({ "target_url": "tcp:1.2.3.4:6789" }));
         let err = dispatch(&action, &server.path).await.unwrap_err();
         assert!(err.contains("w1_violation"), "got {}", err);
@@ -3638,7 +3737,10 @@ mod tests {
         // gone or network drops. The sanitizer converts the raw error
         // into a category token; raw bytes never reach the
         // status-detail annotation.
+        // vmm.ping is consumed first (v52); send-migration then returns the
+        // 500, which the sanitizer converts to a category token.
         let server = MultiMockServer::spawn(vec![
+            vmm_ping("v52.0"),
             b"HTTP/1.1 500 Internal\r\nContent-Length: 25\r\n\r\nguest secret memory bytes"
                 .to_vec(),
         ]);

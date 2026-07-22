@@ -44,7 +44,7 @@ type RuntimeIntent struct {
 	// VhostUserDevices is the list of operator-backed vhost-user devices
 	// (vhost-user-blk disks and generic vhost-user devices). swiftletd hands
 	// each to Cloud Hypervisor via --disk vhost_user=on,socket= (blk) or
-	// --generic-vhost-user virtio_id=,socket= (generic). CH path only.
+	// --generic-vhost-user device_type=,socket= (generic). CH path only.
 	VhostUserDevices []VhostUserDeviceIntent `json:"vhostUserDevices,omitempty"`
 	// Filesystems is the list of virtiofs shares. For each, swiftletd spawns a
 	// virtiofsd backend (shared-dir = SourcePath, socket = SocketPath) before

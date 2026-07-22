@@ -110,7 +110,7 @@ pub struct VmConfig {
     /// appears as a virtio-blk device after the root/data disks.
     pub vhost_user_blk_sockets: Vec<String>,
     /// Generic vhost-user devices. Each produces a
-    /// `--generic-vhost-user virtio_id=<id>,socket=<sock>[,queue_sizes=[...]]`.
+    /// `--generic-vhost-user device_type=<id>,socket=<sock>[,queue_sizes=[...]]`.
     pub generic_vhost_user: Vec<GenericVhostUser>,
     /// Optional vsock device. When set, produces `--vsock cid=<N>,socket=<path>`
     /// — a host<->guest channel for the in-guest identity agent. Set ONLY on a
@@ -139,8 +139,10 @@ pub struct VsockConfig {
 /// A generic vhost-user device for `--generic-vhost-user`.
 #[derive(Debug, Clone)]
 pub struct GenericVhostUser {
-    /// virtio device-type id: a number or symbolic name ("block", "fs", ...).
-    pub virtio_id: String,
+    /// virtio device type: a number or symbolic name ("block", "fs", ...).
+    /// Emitted as `device_type=` (CH >= v53; the `virtio_id=` key of <= v52 was
+    /// renamed to `device_type` by cloud-hypervisor#8564).
+    pub device_type: String,
     /// Operator backend socket path (mounted into the launcher).
     pub socket: String,
     /// Optional per-queue sizes; empty omits the param (CH defaults apply).
@@ -376,7 +378,7 @@ impl VmConfig {
         // Generic vhost-user devices.
         for dev in &self.generic_vhost_user {
             args.push("--generic-vhost-user".to_string());
-            let mut arg = format!("virtio_id={},socket={}", dev.virtio_id, dev.socket);
+            let mut arg = format!("device_type={},socket={}", dev.device_type, dev.socket);
             if !dev.queue_sizes.is_empty() {
                 let list = dev
                     .queue_sizes
@@ -558,12 +560,12 @@ mod tests {
         cfg.vhost_user_blk_sockets = vec!["/run/spdk/vhost.0".to_string()];
         cfg.generic_vhost_user = vec![
             GenericVhostUser {
-                virtio_id: "block".to_string(),
+                device_type: "block".to_string(),
                 socket: "/run/x/gen.sock".to_string(),
                 queue_sizes: vec![1024, 1024],
             },
             GenericVhostUser {
-                virtio_id: "fs".to_string(),
+                device_type: "fs".to_string(),
                 socket: "/run/x/gen2.sock".to_string(),
                 queue_sizes: vec![],
             },
@@ -578,15 +580,15 @@ mod tests {
         // generic with queue_sizes -> bracketed list.
         assert!(
             joined.contains(
-                "--generic-vhost-user virtio_id=block,socket=/run/x/gen.sock,queue_sizes=[1024,1024]"
+                "--generic-vhost-user device_type=block,socket=/run/x/gen.sock,queue_sizes=[1024,1024]"
             ),
             "missing generic w/ queue_sizes: {}",
             joined
         );
         // generic without queue_sizes -> no queue_sizes param.
         assert!(
-            joined.contains("--generic-vhost-user virtio_id=fs,socket=/run/x/gen2.sock")
-                && !joined.contains("virtio_id=fs,socket=/run/x/gen2.sock,queue_sizes"),
+            joined.contains("--generic-vhost-user device_type=fs,socket=/run/x/gen2.sock")
+                && !joined.contains("device_type=fs,socket=/run/x/gen2.sock,queue_sizes"),
             "generic w/o queue_sizes wrong: {}",
             joined
         );

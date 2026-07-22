@@ -100,11 +100,15 @@ COPY --from=builder /usr/local/bin/virtiofsd /usr/libexec/virtiofsd
 # qemu-system-x86 package provides /usr/bin/qemu-system-x86_64
 # Both paths are the defaults in swift-qemu-client/src/config.rs
 
-# Cloud Hypervisor static binary (v52.0)
-# Bumped v51.1 -> v52.0: v51.1's virtio-blk has a bug that bugchecks Windows'
-# viostor driver (0xD1); v52.0 fixes it and boots Windows cleanly. The CLOUDHV.fd
-# firmware below (ch-13b4963ec4) is the spike-validated pairing with the v52.0 binary.
-ARG CH_VERSION=52.0
+# Cloud Hypervisor static binary (v53.0)
+# Bumped v52.0 -> v53.0: v53 makes vm.send-migration non-blocking (#8021 — the
+# source-side completion-detection rework in swift-ch-client/swiftletd handles it),
+# renames the generic-vhost-user CLI key virtio_id -> device_type (#8564), and brings
+# free fixes (guest clock across snapshot/restore/migration, post-migration GARP,
+# memfd memory-regression revert, guest-triggerable-VMM-panic hardening). The CLOUDHV.fd
+# firmware below (ch-13b4963ec4) is UNCHANGED — the v53 spike confirmed it boots on the
+# v53.0 binary (no re-pair needed).
+ARG CH_VERSION=53.0
 ARG TARGETARCH=amd64
 RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
     curl -sSL -o /usr/local/bin/cloud-hypervisor \
