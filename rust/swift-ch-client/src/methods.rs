@@ -24,6 +24,8 @@
 //! a generous timeout (the controller derives one from VM RAM size
 //! before issuing the action annotation that drives this method).
 
+use std::time::{Duration, Instant};
+
 use serde::Deserialize;
 
 use crate::api::{ApiClient, ApiError};
@@ -75,6 +77,57 @@ impl VmmVersion {
         let major: u32 = parts.next()?.parse().ok()?;
         let minor: u32 = parts.next()?.parse().ok()?;
         Some((major, minor))
+    }
+}
+
+/// Terminal outcome of a non-blocking (CH >= v53) `send-migration`,
+/// derived by polling `vm.info` on the source after
+/// [`ApiClient::send_migration`] returns 204 ("accepted").
+///
+/// See the CH v53 spike
+/// (`field-testing/ch-v53-spike/results/SPIKE-RESULTS.md`) for the
+/// hardware-confirmed source-side contract this encodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendMigrationOutcome {
+    /// The source CH process exited — the guest is now running on the
+    /// destination. Success.
+    Completed,
+    /// The deadline elapsed with the guest still `Running` on the source.
+    /// On CH v53 a failed transfer auto-resumes the source guest, so the
+    /// guest never stopped here and **no `vm.resume` is required**. The
+    /// string is a short detail suitable for the status annotation.
+    Failed(String),
+}
+
+/// One `vm.info` sample's verdict while waiting for send-migration to
+/// reach a terminal state. Internal to
+/// [`ApiClient::wait_for_send_migration_terminal`].
+#[derive(Debug, PartialEq, Eq)]
+enum SendMigrationSample {
+    /// Source process is gone (connect refused) — migration completed.
+    SourceGone,
+    /// Source still reachable: `Running`, or a tear-down transient (the
+    /// HTTP 500 "receiving on a closed channel" seen just before the
+    /// process exits). Keep polling; the deadline is the backstop.
+    StillPresent,
+}
+
+/// Classify a single `vm.info` result during a send-migration wait.
+///
+/// The only success edge is the source CH process disappearing: on a
+/// same-host UNIX socket that surfaces as [`ApiError::Connect`] (connect
+/// refused). Every other result — `Ok(Running)`, the transient HTTP 500
+/// "closed channel", a 404, or any other transport error — is treated as
+/// "still present"; whether that ultimately means in-progress or failed
+/// is decided by the deadline in the caller, not here. (This is why a
+/// failed transfer, where CH v53 auto-resumes the source and it stays
+/// `Running` forever, is caught by the deadline rather than a distinct
+/// error edge — the spike confirmed there is no failure-specific signal
+/// on the source API.)
+fn classify_send_migration_sample(sample: &Result<VmInfo, ApiError>) -> SendMigrationSample {
+    match sample {
+        Err(ApiError::Connect { .. }) => SendMigrationSample::SourceGone,
+        _ => SendMigrationSample::StillPresent,
     }
 }
 
@@ -192,6 +245,57 @@ impl ApiClient {
             .map_err(|e| ApiError::Malformed(format!("send_migration body serialize: {}", e)))?;
         self.request_ok("PUT", "/api/v1/vm.send-migration", Some(&body))
             .map(drop)
+    }
+
+    /// Wait for a non-blocking (CH >= v53) `send-migration` to reach a
+    /// terminal state by polling `vm.info` on this (source) CH.
+    ///
+    /// On CH v53 [`send_migration`](Self::send_migration) returns 204 the
+    /// instant CH *accepts* the migration (#8021) — pre-copy and
+    /// stop-and-copy then run on a background thread, so completion must
+    /// be observed out-of-band. This method encodes the hardware-confirmed
+    /// source-side contract (see the v53 spike):
+    ///
+    /// ```text
+    /// poll vm.info:
+    ///   connect refused (source exited)      -> Completed
+    ///   HTTP 500 "closed channel" (teardown) -> keep polling (transient)
+    ///   HTTP 200 Running, now <  deadline    -> keep polling (in progress)
+    ///   HTTP 200 Running, now >= deadline    -> Failed (auto-resumed; no vm.resume)
+    /// ```
+    ///
+    /// `deadline` bounds the total wait — the caller derives it from the
+    /// migration timeout budget (already sized from guest RAM). `poll` is
+    /// the inter-sample sleep.
+    ///
+    /// Safe on CH <= v52 too: there `send_migration` blocked until the
+    /// source had already exited, so the first sample observes the source
+    /// gone and this returns [`SendMigrationOutcome::Completed`] on the
+    /// first iteration. Callers still version-gate (only v53 needs the
+    /// poll) so the historic single-probe v52 path stays byte-identical.
+    ///
+    /// This blocks the calling thread for up to `deadline - now`; the
+    /// caller must not run it on a thread that gates a poll cadence (the
+    /// action loop already dispatches send-migration off its critical
+    /// path).
+    pub fn wait_for_send_migration_terminal(
+        &self,
+        deadline: Instant,
+        poll: Duration,
+    ) -> SendMigrationOutcome {
+        loop {
+            if classify_send_migration_sample(&self.vm_info()) == SendMigrationSample::SourceGone {
+                return SendMigrationOutcome::Completed;
+            }
+            if Instant::now() >= deadline {
+                return SendMigrationOutcome::Failed(
+                    "source guest still Running past the migration deadline \
+                     (v53 auto-resumes the source on a failed transfer)"
+                        .to_string(),
+                );
+            }
+            std::thread::sleep(poll);
+        }
     }
 
     /// Open a migration receive listener on this (empty) CH and wait for
@@ -488,6 +592,88 @@ mod tests {
                 );
             }
             other => panic!("expected Status error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_send_migration_sample_source_gone_on_connect_refused() {
+        // The confirmed success edge: the source CH process exited, so a
+        // connect to its now-dead UNIX socket is refused.
+        let sample = Err(ApiError::Connect {
+            path: PathBuf::from("/run/ch/api.sock"),
+            source: std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"),
+        });
+        assert_eq!(
+            classify_send_migration_sample(&sample),
+            SendMigrationSample::SourceGone
+        );
+    }
+
+    #[test]
+    fn classify_send_migration_sample_still_present_while_running() {
+        // Guest still resident on the source (in-progress, or failed +
+        // auto-resumed — the deadline, not this classifier, decides which).
+        let sample = Ok(VmInfo {
+            state: "Running".to_string(),
+        });
+        assert_eq!(
+            classify_send_migration_sample(&sample),
+            SendMigrationSample::StillPresent
+        );
+    }
+
+    #[test]
+    fn classify_send_migration_sample_still_present_on_teardown_500() {
+        // The tear-down transient observed just before the process exits:
+        // HTTP 500 "receiving on a closed channel". Must NOT be mistaken
+        // for a terminal state — the next poll gets connect-refused.
+        let sample = Err(ApiError::Status(crate::api::ApiResponse {
+            status: 500,
+            body: b"receiving on a closed channel".to_vec(),
+        }));
+        assert_eq!(
+            classify_send_migration_sample(&sample),
+            SendMigrationSample::StillPresent
+        );
+    }
+
+    #[test]
+    fn wait_for_send_migration_terminal_completed_when_source_gone() {
+        // No server on the path -> connect refused on the first poll ->
+        // Completed immediately (this is also the v52 fast path: after a
+        // blocking send-migration the source has already exited).
+        let tmp = tempfile::tempdir().unwrap();
+        let absent = tmp.path().join("gone.sock");
+        let client = ApiClient::new(absent);
+        let outcome = client.wait_for_send_migration_terminal(
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+        );
+        assert_eq!(outcome, SendMigrationOutcome::Completed);
+    }
+
+    #[test]
+    fn wait_for_send_migration_terminal_failed_past_deadline() {
+        // Server answers 200 Running and the deadline is already reached:
+        // one sample (StillPresent) then the deadline check -> Failed. The
+        // guest auto-resumed on the source, so the caller must NOT resume.
+        let body = br#"{"state":"Running"}"#;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let mut full = response.into_bytes();
+        full.extend_from_slice(body);
+        let server = MockServer::spawn(full);
+        let client = ApiClient::new(server.path.clone());
+        let outcome =
+            client.wait_for_send_migration_terminal(Instant::now(), Duration::from_millis(1));
+        match outcome {
+            SendMigrationOutcome::Failed(detail) => {
+                assert!(
+                    detail.contains("past the migration deadline"),
+                    "detail: {}",
+                    detail
+                );
+            }
+            other => panic!("expected Failed, got {:?}", other),
         }
     }
 

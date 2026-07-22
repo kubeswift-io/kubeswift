@@ -368,7 +368,7 @@ where
                     d.socket
                 );
                 generic_vhost_user.push(GenericVhostUser {
-                    virtio_id: d.virtio_id.clone().unwrap_or_default(),
+                    device_type: d.virtio_id.clone().unwrap_or_default(),
                     socket: d.socket.clone(),
                     queue_sizes: d.queue_sizes.clone().unwrap_or_default(),
                 });

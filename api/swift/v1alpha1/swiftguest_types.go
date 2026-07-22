@@ -566,7 +566,7 @@ const (
 	// VhostUserDeviceTypeBlk is a vhost-user-blk disk (CH --disk vhost_user=on).
 	VhostUserDeviceTypeBlk = "blk"
 	// VhostUserDeviceTypeGeneric is a generic vhost-user device
-	// (CH --generic-vhost-user virtio_id=...).
+	// (CH --generic-vhost-user device_type=...).
 	VhostUserDeviceTypeGeneric = "generic"
 )
 
@@ -583,8 +583,9 @@ type VhostUserDevice struct {
 	// Type selects the device kind:
 	//   blk:     a vhost-user block device (appears as a virtio-blk disk in the
 	//            guest) — Cloud Hypervisor `--disk vhost_user=on,socket=`.
-	//   generic: any vhost-user device by virtio id — Cloud Hypervisor
-	//            `--generic-vhost-user virtio_id=,socket=,queue_sizes=`.
+	//   generic: any vhost-user device by virtio device type — Cloud
+	//            Hypervisor `--generic-vhost-user device_type=,socket=,queue_sizes=`
+	//            (the flag key was `virtio_id=` on CH <= v52).
 	// +kubebuilder:validation:Enum=blk;generic
 	Type string `json:"type"`
 	// Socket is the node-local path of the operator's vhost-user backend
