@@ -121,6 +121,16 @@ pub struct VmConfig {
     /// controller's configjson patcher rewrites only the socket PATH to the
     /// clone runtime dir).
     pub vsock: Option<VsockConfig>,
+
+    /// Optional `--seccomp <mode>` value. `None` omits the flag entirely, so
+    /// CH uses its built-in default (`true` — a seccomp violation SIGSYS-kills
+    /// the VMM). Set (via `KUBESWIFT_SECCOMP`) only for debugging: `log`
+    /// permits + logs a violation, and `errno` (CH >= v53, cloud-hypervisor
+    /// #8578) returns `EPERM` to the offending syscall instead of killing the
+    /// VMM — either lets an operator see which syscall a hardened profile
+    /// blocked without the process disappearing. Validated to CH's accepted
+    /// set by the launcher before it reaches here.
+    pub seccomp: Option<String>,
 }
 
 /// A vsock device for `--vsock cid=<N>,socket=<path>`.
@@ -186,7 +196,16 @@ impl VmConfig {
             // backing for snapshot/live-migration-capable guests (mirrors QEMU's
             // memory-backend-memfd,share=on) and what the sparse-snapshot /
             // userfaultfd path (#163) wants.
-            format!("size={}M,shared=on", self.memory_mib),
+            //
+            // reserve=on (CH >= v53, cloud-hypervisor#8350): create the guest-RAM
+            // mapping WITHOUT MAP_NORESERVE so the kernel reserves commit up front
+            // and CH fails at VM creation (ENOMEM) if the node cannot back the full
+            // guest RAM -- a fail-fast that turns a mid-run guest OOM into a clean
+            // start-time error. Safe for our model: the launcher pod already
+            // requests the full guest RAM, so a scheduled guest's node has it; this
+            // only trips on real node-level memory pressure, which is exactly when
+            // we want to refuse to start rather than OOM later.
+            format!("size={}M,shared=on,reserve=on", self.memory_mib),
             "--cpus".to_string(),
             {
                 let mut cpus = format!("boot={}", self.cpus.max(1));
@@ -311,15 +330,20 @@ impl VmConfig {
             args.push("--serial".to_string());
             if self.is_sandbox {
                 // Sandbox: write the guest console to a FILE, not an interactive socket.
-                // The workload is a batch job — swiftletd reads this file after CH exits
+                // The workload is a batch job — swiftletd reads this file AFTER CH exits
                 // to recover the workload's exit code (the bridge-init emits a trailing
-                // `KUBESWIFT-EXIT-CODE=<n>`), and it doubles as the sandbox log. CH also
-                // drops serial-socket output emitted before a client connects, which
-                // would lose the exit line. (Interactive exec/attach is a vsock follow-up.)
+                // `KUBESWIFT-EXIT-CODE=<n>`), and it doubles as the sandbox log. A socket
+                // does not survive CH's exit, so `file=` is required for that
+                // read-after-exit regardless of CH version. (v53 #8322 does now buffer
+                // pre-connect socket output — that removes the *other* old reason for
+                // `file=`, but not this one. Interactive exec/attach is over vsock.)
                 args.push(format!("file={}.log", path));
             } else {
                 // Serial socket: bidirectional; connect with socat for interactive console.
-                // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for console=ttyS0).
+                // Kernel cmdline comes from disk GRUB (patched during SwiftImage import for
+                // console=ttyS0). On CH >= v53 (#8322) the socket buffers output emitted
+                // before any client connects, so `swiftctl console` attached AFTER boot now
+                // replays the boot log instead of showing an empty screen (was lost on v52).
                 args.push(format!("socket={}", path));
             }
             // Disable virtio-console; serial is the interactive console.
@@ -398,6 +422,13 @@ impl VmConfig {
             args.push(format!("cid={},socket={}", v.cid, v.socket));
         }
 
+        // Optional --seccomp override (debugging only; None omits the flag so
+        // CH keeps its default `true` = SIGSYS-kill on a violation).
+        if let Some(ref mode) = self.seccomp {
+            args.push("--seccomp".to_string());
+            args.push(mode.clone());
+        }
+
         args
     }
 }
@@ -431,6 +462,7 @@ mod tests {
             vhost_user_blk_sockets: vec![],
             generic_vhost_user: vec![],
             vsock: None,
+            seccomp: None,
         }
     }
 
@@ -630,8 +662,8 @@ mod tests {
         assert!(
             disk.to_args()
                 .join(" ")
-                .contains("--memory size=2048M,shared=on"),
-            "disk-boot --memory must carry shared=on: {}",
+                .contains("--memory size=2048M,shared=on,reserve=on"),
+            "disk-boot --memory must carry shared=on,reserve=on: {}",
             disk.to_args().join(" ")
         );
         let mut kern = make_disk_boot_config();
@@ -640,9 +672,27 @@ mod tests {
         assert!(
             kern.to_args()
                 .join(" ")
-                .contains("--memory size=2048M,shared=on"),
-            "kernel-boot --memory must carry shared=on: {}",
+                .contains("--memory size=2048M,shared=on,reserve=on"),
+            "kernel-boot --memory must carry shared=on,reserve=on: {}",
             kern.to_args().join(" ")
+        );
+    }
+
+    #[test]
+    fn seccomp_none_omits_flag_some_emits_it() {
+        // Default (None) must NOT emit --seccomp so CH keeps its built-in
+        // default; an explicit mode (e.g. the v53 `errno`) is passed through.
+        let mut cfg = make_disk_boot_config();
+        assert!(
+            !cfg.to_args().join(" ").contains("--seccomp"),
+            "default (None) must not emit --seccomp: {}",
+            cfg.to_args().join(" ")
+        );
+        cfg.seccomp = Some("errno".to_string());
+        assert!(
+            cfg.to_args().join(" ").contains("--seccomp errno"),
+            "seccomp=Some(errno) must emit `--seccomp errno`: {}",
+            cfg.to_args().join(" ")
         );
     }
 

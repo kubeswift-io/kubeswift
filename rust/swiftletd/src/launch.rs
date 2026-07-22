@@ -405,6 +405,25 @@ where
         }
     });
 
+    // Optional --seccomp override for debugging (KUBESWIFT_SECCOMP). CH accepts
+    // true|false|log, plus errno on v53 (#8578: return EPERM instead of
+    // SIGSYS-killing the VMM). Anything else is ignored with a warning so a typo
+    // cannot stop the guest from booting. Unset => omit the flag => CH default.
+    let seccomp = std::env::var("KUBESWIFT_SECCOMP").ok().and_then(|v| {
+        let v = v.trim().to_ascii_lowercase();
+        match v.as_str() {
+            "true" | "false" | "log" | "errno" => Some(v),
+            "" => None,
+            other => {
+                log::warn!(
+                    "ignoring KUBESWIFT_SECCOMP={:?}: not one of true|false|log|errno",
+                    other
+                );
+                None
+            }
+        }
+    });
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -434,6 +453,7 @@ where
             vhost_user_blk_sockets,
             generic_vhost_user,
             vsock: vsock.clone(),
+            seccomp: seccomp.clone(),
         }
     } else {
         VmConfig {
@@ -463,6 +483,7 @@ where
             vhost_user_blk_sockets,
             generic_vhost_user,
             vsock: vsock.clone(),
+            seccomp: seccomp.clone(),
         }
     };
 
