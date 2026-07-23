@@ -46,9 +46,9 @@ For air-gapped or custom registry installs:
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version <version> -n kubeswift-system --create-namespace \
   --set controllerManager.image.registry=my-registry.io \
-  --set controllerManager.image.tag=v0.13.0 \
+  --set controllerManager.image.tag=v0.13.1 \
   --set swiftletd.image.registry=my-registry.io \
-  --set swiftletd.image.tag=v0.13.0
+  --set swiftletd.image.tag=v0.13.1
 ```
 
 ### Release workflow
