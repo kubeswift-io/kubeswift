@@ -157,6 +157,11 @@ is verified, so a pool never warms an unverified image. This mirrors
 
 ## Interacting with a sandbox
 
+> Also available in **kubeswift-ui** (v0.8.0+): open the sandbox in the Explorer
+> and use the **Logs** and **Shell** buttons — the same console tail and
+> interactive vsock exec, in the browser (via the gateway `/sandbox-logs` and
+> `/sandbox-exec` planes).
+
 ```bash
 swiftctl sandbox logs <name> [-f]
 swiftctl sandbox exec <name> [-e KEY=VALUE] [-w DIR] [-i] [-t] -- <cmd> [args...]

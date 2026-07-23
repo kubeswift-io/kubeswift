@@ -193,6 +193,13 @@ In `insecure` mode these work with no token; in `token` mode add
   `?token=` query param — which **can land in proxy/access logs**; prefer a
   short-lived token, and a TLS-terminating ingress so the URL isn't on the wire.
   `insecure` mode needs no token (and then anyone can open any console).
+- **Sandbox logs & shell** — two sibling raw WebSockets for a `SwiftSandbox`
+  (added in kubeswift v0.13.1): `/sandbox-logs?cluster=&namespace=&name=&token=`
+  (read-only — `tail -F`s the microVM console log) and
+  `/sandbox-exec?…&cmd=/bin/sh` (an interactive shell — pod-exec → the in-guest
+  vsock agent → the `internal/guestagent` frame protocol; the browser sends
+  binary stdin frames and a text `{"resize":{cols,rows}}` control). Same
+  token-on-`?token=` + `pods/exec` RBAC posture as the console.
 - **Console transport — exec-pipe is the chosen transport for the hub** (not
   D5's "serial-on-a-port"). The gateway is a multi-cluster hub: it reaches a
   member's launcher pod *through that member's API server* (the impersonating
