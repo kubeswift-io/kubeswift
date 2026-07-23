@@ -70,9 +70,9 @@ helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
   -n kubeswift-system \
   --create-namespace \
   --set controllerManager.image.registry=my-registry.io \
-  --set controllerManager.image.tag=v0.1.0 \
+  --set controllerManager.image.tag=v0.13.0 \
   --set swiftletd.image.registry=my-registry.io \
-  --set swiftletd.image.tag=v0.1.0
+  --set swiftletd.image.tag=v0.13.0
 ```
 
 ## Migration: previously published charts
