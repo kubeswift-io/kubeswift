@@ -4,6 +4,35 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.1] — 2026-07-23
+
+Adds the sandbox-interactivity backend for kubeswift-ui and folds in the v0.13.0
+doc sweeps. **No runtime, CRD, or migration change** — the launcher and
+controller behave exactly as in v0.13.0; this release is the gateway + docs.
+
+### Added
+
+- **Gateway sandbox logs + interactive exec/attach** — two raw-WebSocket planes
+  for kubeswift-ui: `/sandbox-logs` (read-only, `tail -F` the microVM console
+  log) and `/sandbox-exec` (an interactive shell: pod-exec → the in-guest vsock
+  agent → the `internal/guestagent` frame protocol). Both mirror the existing
+  serial-console plane — a raw WebSocket (browsers can't do bidirectional
+  Connect) with the bearer token on the query string, authorized by the
+  impersonating client. **No proto, RBAC, or chart change**: new routes on the
+  existing gateway listener, reusing `internal/guestagent`.
+
+### Docs
+
+- Install snippets across the docs now pin the current chart version (the
+  `helm --version` lines had lagged at 0.11.0).
+
+The matching **kubeswift-ui v0.8.0** ships the sandbox **Logs** + interactive
+**Shell**, a guided sandbox-create wizard (model preload / scratch disk / GPU
+profile / warm-pool checkout), a snapshot-schedule drawer with suspend/resume,
+Fabric Manager partitions in the GPU node drawer, and a kernel drawer.
+
+---
+
 ## [v0.13.0] — 2026-07-23
 
 Moves the runtime to **Cloud Hypervisor v53.0** and adopts the safe v53 leverage wins.
