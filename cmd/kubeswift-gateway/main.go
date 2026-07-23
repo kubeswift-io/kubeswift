@@ -131,6 +131,9 @@ func main() {
 	// the guest's serial socket. Not a Connect RPC — browsers can't do bidi
 	// Connect — so it rides RawHandlers, not the generated ConsoleService stub.
 	consoleWS := gateway.NewConsoleHandler(pool, auth)
+	// Sandbox logs plane: a raw WebSocket at /sandbox-logs that exec-tails the
+	// microVM's captured console log (read-only). Same raw-WS rationale as /console.
+	sandboxLogsWS := gateway.NewSandboxLogsHandler(pool, auth)
 
 	srv := &gateway.Server{
 		Addr:          *listen,
@@ -146,6 +149,7 @@ func main() {
 		},
 		RawHandlers: []gateway.ConnectHandler{
 			{Path: "/console", Handler: consoleWS},
+			{Path: "/sandbox-logs", Handler: sandboxLogsWS},
 		},
 		Log: log.WithName("server"),
 	}
