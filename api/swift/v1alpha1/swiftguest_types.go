@@ -10,7 +10,7 @@ import (
 //
 // RunPolicy governs what the controller does when the launcher POD reaches a
 // terminal state (Succeeded/Failed) — i.e. when Cloud Hypervisor itself exits.
-// A guest *reboot* is NOT such an event: on Cloud Hypervisor v52 a guest reboot
+// A guest *reboot* is NOT such an event: on Cloud Hypervisor a guest reboot
 // RESETS THE VM IN PLACE (the CH process and the launcher pod survive, the
 // guest restarts), so reboots never trigger RunPolicy. CH exits only on guest
 // shutdown/poweroff or a crash; those are what Stopped/RestartOnFailure/Always

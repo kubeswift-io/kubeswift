@@ -220,7 +220,7 @@ spec:
                   controller actually sent on vm.send-migration (from
                   spec.downtimeTarget; CH >= v52). It is a BOUND, not a measurement:
                   CH converges pre-copy so the final vCPU stop-and-copy fits under it,
-                  so the real "guest frozen" window is <= this value — but CH v52 does
+                  so the real "guest frozen" window is <= this value — but CH does
                   not report the achieved downtime (vm.send-migration returns 204 with
                   no body, and CH logs no migration telemetry at its default level), so
                   the achieved window is not directly measurable here. The only ground

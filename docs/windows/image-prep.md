@@ -148,7 +148,7 @@ over **RDP** (the sample seed enables it); Windows on CH is headless.
 | Setup error "we couldn't find any drives" | viostor not injected — check the `DriverPaths` letters/paths match your `virtio-win.iso` layout (`\viostor\2k22\amd64`). |
 | Boots to a graphical **"Automatic Repair"** that hangs on CH | Missing headless BCD prep — `recoveryenabled no` + `bootstatuspolicy ignoreallfailures` (the answer file applies these). |
 | Windows silently hangs early on CH (no SAC) | Missing `kvm_hyperv` — the KubeSwift runtime adds `--cpus kvm_hyperv=on` for `osType: windows` automatically. |
-| `0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`, reboot loop | A **CH v51.1** virtio-blk bug. Fixed in **CH v52.0** (KubeSwift ships v52.0). |
+| `0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` in `viostor.sys`, reboot loop | A **CH v51.1** virtio-blk bug. Fixed in **CH v52.0** (KubeSwift ships v53.0). |
 
 ## 6. Scope
 

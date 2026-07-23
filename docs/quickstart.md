@@ -328,7 +328,7 @@ Success criteria:
 ## Status
 
 **Working and cluster-validated:** Linux disk boot (CLOUDHV.fd) and kernel boot; Windows guests
-(`osType: windows`, Cloud Hypervisor v52.0 — see [Windows overview](windows/overview.md)); networking
+(`osType: windows`, Cloud Hypervisor v53.0 — see [Windows overview](windows/overview.md)); networking
 (tap+bridge+dnsmasq) and [service exposure](networking/service-exposure.md); SR-IOV NIC passthrough;
 SwiftGuestPool (scaling, rolling updates, topology spread, PVC per replica); per-guest root disk cloning;
 [snapshots and clones](snapshots/csi-snapshots.md) (CSI, local/S3 memory, scheduled, cloneFromSnapshot);

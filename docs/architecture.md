@@ -40,7 +40,7 @@ SwiftGuest Pod (one per SwiftGuest)
   |-- launcher container: swiftletd  (Rust)
         |
         v
-  Cloud Hypervisor v52.0   (primary: Linux + Windows disk boot, kernel boot, Tier 1 PCIe GPU)
+  Cloud Hypervisor v53.0   (primary: Linux + Windows disk boot, kernel boot, Tier 1 PCIe GPU)
   QEMU                     (secondary: HGX SXM Tier 2/3 GPU workloads only)
         |
         v
