@@ -25,7 +25,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **15 CRDs across 9 API groups
 - `spec.imageRef` and `spec.kernelRef` on SwiftGuest are mutually exclusive.
 - `spec.gpuProfileRef` and `spec.kernelRef` on SwiftGuest are mutually exclusive (GPU boot requires disk boot with UEFI).
 - `spec.gpuProfileRef` can combine with `spec.imageRef`.
-- `spec.osType: windows` requires the disk-boot path (`imageRef`); it is incompatible with `kernelRef`. Windows boots on Cloud Hypervisor v52.0 via the disk path — see [Windows overview](windows/overview.md).
+- `spec.osType: windows` requires the disk-boot path (`imageRef`); it is incompatible with `kernelRef`. Windows boots on Cloud Hypervisor v53.0 via the disk path — see [Windows overview](windows/overview.md).
 
 ---
 
@@ -42,7 +42,7 @@ Represents a running virtual machine instance.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `osType` | enum | No | `linux` | Guest OS family: `linux` or `windows`. `windows` requires `imageRef` (disk boot); it selects the Cloud Hypervisor v52.0 Windows path (`--cpus boot=N,kvm_hyperv=on`, `--disk image_type=raw`) and cloudbase-init provisioning. See [Windows overview](windows/overview.md). |
+| `osType` | enum | No | `linux` | Guest OS family: `linux` or `windows`. `windows` requires `imageRef` (disk boot); it selects the Cloud Hypervisor v53.0 Windows path (`--cpus boot=N,kvm_hyperv=on`, `--disk image_type=raw`) and cloudbase-init provisioning. See [Windows overview](windows/overview.md). |
 | `imageRef.name` | string | No | — | SwiftImage to boot from (disk boot). Mutually exclusive with `kernelRef`. |
 | `kernelRef.name` | string | No | — | SwiftKernel to boot from (kernel boot). Mutually exclusive with `imageRef` and `gpuProfileRef`. Incompatible with `osType: windows`. |
 | `kernelCmdline` | string | No | — | Per-guest kernel command line override (kernel boot only). Overrides SwiftKernel's default cmdline. |

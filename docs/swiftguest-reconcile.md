@@ -38,7 +38,7 @@ and the pod has failed (or succeeded for Always), the controller:
 
 Both guards key on the launcher **pod's terminal state** (Succeeded/Failed),
 which means Cloud Hypervisor exited. A guest **reboot is not such an event on
-CH v52**: the VM resets in place, so the CH process and the pod survive and the
+Cloud Hypervisor**: the VM resets in place, so the CH process and the pod survive and the
 guest restarts without any controller action (validated 2026-06-09 — the pod
 stayed Running with the same CH PID across an in-guest `reboot`, only the
 guest's `boot_id` changed). CH exits — and these guards fire — only on guest

@@ -113,7 +113,7 @@ spec:
 | **NoCloud seed as directory** | swiftletd passes NoCloud directory path to CH; CH expects ISO/vfat. May fail on some CH builds; doc suggests adding ISO generation |
 | **Runtime intent disk path** | Intent uses `rootDisk.path` = `/var/lib/kubeswift/disks/root` (mount dir); import writes `image.raw`. CH expects a file path; if CH requires the full path (e.g. `.../disks/root/image.raw`), the intent may need adjustment |
 | **No nodeSelector/tolerations** | Guest pods can schedule on any node; no explicit "KVM-capable" node targeting |
-| **Cloud Hypervisor v52.0** | Containerfile pins CH v52.0; CLI format must match |
+| **Cloud Hypervisor v53.0** | Containerfile pins CH v53.0; CLI format must match |
 | **In-cluster Kubeconfig** | swiftletd assumes in-cluster config (service account) for status patching |
 | **Single launcher container** | No init container; swiftletd does all setup |
 | **Import Job uses curl** | No retries or checksum validation; assumes URL returns valid image |

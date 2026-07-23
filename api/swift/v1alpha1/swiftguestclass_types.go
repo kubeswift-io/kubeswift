@@ -21,7 +21,7 @@ type RootDiskSpec struct {
 }
 
 // CoreScheduling selects the Cloud Hypervisor vCPU core-scheduling policy
-// (CH v52 `--cpus core_scheduling=`), a defense against cross-thread SMT
+// (Cloud Hypervisor `--cpus core_scheduling=`), a defense against cross-thread SMT
 // (hyper-threading) side channels without disabling SMT host-wide.
 //
 //	off  (default) no core-scheduling.

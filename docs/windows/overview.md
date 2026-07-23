@@ -7,7 +7,7 @@ This page is the operator entry point; the deep dives are linked inline.
 > **Status: v1 cluster-validated (2026-06-13).** The full in-cluster chain runs
 > end-to-end on the dev cluster: a virtio-ready Windows Server image imports
 > (qcow2→raw, osType-gated), clones its root disk, and boots on **Cloud
-> Hypervisor v52.0** (`--kernel CLOUDHV.fd`, `--cpus boot=N,kvm_hyperv=on`);
+> Hypervisor v53.0** (`--kernel CLOUDHV.fd`, `--cpus boot=N,kvm_hyperv=on`);
 > NetKVM brings up the NIC and the guest gets a DHCP IP; and **cloudbase-init
 > reads the NoCloud `cidata` seed and runs the first-boot user-data** (RDP
 > enabled), reaching `Running` with an IP — the last previously-untested piece

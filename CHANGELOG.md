@@ -4,6 +4,56 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.0] — 2026-07-23
+
+Moves the runtime to **Cloud Hypervisor v53.0** and adopts the safe v53 leverage wins.
+The headline is a migration-internals rework forced by v53, done so live migration is
+unchanged for operators: `vm.send-migration` became non-blocking in v53, so the
+source-side completion gate now polls instead of relying on the call blocking. Two v53
+opportunities were investigated and **deliberately not taken** because cluster
+validation proved each would regress or was impossible — see below.
+
+### Changed
+
+- **Cloud Hypervisor v52.0 → v53.0** in the swiftletd image. The paired `CLOUDHV.fd`
+  firmware is unchanged (validated on the v53 binary). Free fixes ride along: the guest
+  clock now advances across snapshot/restore/migration, post-migration GARP speeds L2
+  reconvergence, the memfd private-mapping memory regression is reverted, and
+  guest-triggerable VMM panics are hardened (strengthening the SwiftSandbox boundary).
+- **Source-side live-migration completion detection reworked for v53's non-blocking
+  `vm.send-migration`** (cloud-hypervisor#8021). `send-migration` now returns the instant
+  CH accepts the migration, so swiftletd polls `vm.info` until the source CH exits
+  (success) or the deadline passes (failure, guest auto-resumed). Version-gated: on CH
+  ≤ v52 the historic single-probe path is byte-identical. `receive-migration` remains
+  blocking, so the destination handler is unchanged. Live migration behaviour and
+  downtime are unchanged for operators.
+- **Generic vhost-user CLI key `virtio_id` → `device_type`** (cloud-hypervisor#8564).
+  Emitted to CH only; the `virtioId` CRD/RuntimeIntent field is unchanged.
+
+### Added
+
+- **`reserve=on` on guest memory** (cloud-hypervisor#8350): CH reserves guest-RAM commit
+  at VM creation and fails fast with `ENOMEM` instead of a later out-of-memory kill.
+- **Optional `--seccomp` mode via `KUBESWIFT_SECCOMP`** (`true|false|log|errno`;
+  cloud-hypervisor#8578). Unset keeps CH's default (kill on violation); `errno` returns
+  `EPERM` instead of killing the VMM — a debugging aid, off by default.
+- **`swiftctl console` now replays the boot log** when attached after boot — CH v53
+  buffers pre-connect serial-socket output (cloud-hypervisor#8322).
+
+### Investigated, not adopted (validated regressions)
+
+- **Native CH migration mTLS** (cloud-hypervisor#8053) was evaluated as a replacement for
+  the stunnel sidecar and **rejected**: it connects to the destination by DNS name, and
+  OVN-Kubernetes primary-UDN launchers cannot resolve cluster DNS (proven on-cluster), so
+  it would break live migration for multi-node guests. The stunnel transport (already
+  mutual TLS, pod-to-pod, IP-based) is retained.
+- **Unprivileged GPU launchers via pre-opened VFIO/iommufd FDs** (cloud-hypervisor#8287)
+  was spiked on real hardware and **rejected**: CH v53's iommufd DMA-map fails (`EFAULT`)
+  for the test GPU regardless of memory backing, so the privileged legacy-VFIO GPU path
+  is retained. May be revisited if a future CH release fixes iommufd.
+
+---
+
 ## [v0.12.1] — 2026-07-19
 
 A networking patch release: give a `SwiftGuest` a second, cross-node-routable NIC on
