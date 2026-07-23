@@ -134,6 +134,7 @@ func main() {
 	// Sandbox logs plane: a raw WebSocket at /sandbox-logs that exec-tails the
 	// microVM's captured console log (read-only). Same raw-WS rationale as /console.
 	sandboxLogsWS := gateway.NewSandboxLogsHandler(pool, auth)
+	sandboxExecWS := gateway.NewSandboxExecHandler(pool, auth)
 
 	srv := &gateway.Server{
 		Addr:          *listen,
@@ -150,6 +151,7 @@ func main() {
 		RawHandlers: []gateway.ConnectHandler{
 			{Path: "/console", Handler: consoleWS},
 			{Path: "/sandbox-logs", Handler: sandboxLogsWS},
+			{Path: "/sandbox-exec", Handler: sandboxExecWS},
 		},
 		Log: log.WithName("server"),
 	}
