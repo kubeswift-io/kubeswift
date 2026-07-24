@@ -4,6 +4,29 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.2] — 2026-07-24
+
+Gateway enablement for permission-aware, general-purpose Kubernetes resource CRUD
+in the kubeswift-ui Explorer. **No runtime, CRD, or migration change** — the
+launcher and controller behave exactly as in v0.13.1; this release is the gateway
++ docs.
+
+### Added
+- **`ResourceService.CanI`** — a batch access-review RPC. The gateway runs a
+  `SelfSubjectAccessReview` per (kind, verb, namespace) check through the user's
+  own impersonated client, so the UI can hide create/update/delete actions the
+  user can't perform instead of firing them and surfacing a denial. Fail-closed;
+  needs no extra gateway RBAC (it is a self-review).
+- **Broadened explorer catalog** — the ResourceService now surfaces the common
+  native kinds for browse + (RBAC-gated) CRUD: Deployments, StatefulSets,
+  DaemonSets, ReplicaSets, Jobs, CronJobs, Ingresses, and a new **Access**
+  category (ServiceAccounts, Roles, RoleBindings, ClusterRoles,
+  ClusterRoleBindings). Every call stays impersonated and gated by the user's
+  Kubernetes RBAC; Secret values remain redacted on read.
+
+Pairs with kubeswift-ui v0.10.0 (the proactive action gating + guided
+Secret / ConfigMap / Service create forms).
+
 ## [v0.13.1] — 2026-07-23
 
 Adds the sandbox-interactivity backend for kubeswift-ui and folds in the v0.13.0
