@@ -9,9 +9,12 @@ import (
 	"strings"
 
 	connect "connectrpc.com/connect"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/yaml"
 
 	kubeswiftv1 "github.com/kubeswift-io/kubeswift/gen/kubeswift/v1"
@@ -274,4 +277,74 @@ func sortResources(rs []*kubeswiftv1.Resource) {
 		}
 		return a.GetName() < b.GetName()
 	})
+}
+
+// restConfigProvider is the subset of the pool CanI needs: an impersonated
+// rest.Config to build a typed client for SelfSubjectAccessReview. The concrete
+// *ClientPool satisfies it; kept narrow so the shared clientProvider interface
+// (and its test fakes) are untouched.
+type restConfigProvider interface {
+	RestConfigFor(cluster string, id Identity) (*rest.Config, error)
+}
+
+// CanI answers, per (kind, verb, namespace) check, whether the impersonated user
+// may perform it — via a SelfSubjectAccessReview run through the user's own
+// (impersonated) client, so the apiserver is the sole decider. This lets the UI
+// hide actions the user can't take instead of firing them and surfacing a
+// denial. Decisions are positionally aligned with the request; an unknown kind
+// or a review error yields allowed=false (fail-closed).
+func (s *ResourceService) CanI(ctx context.Context, req *connect.Request[kubeswiftv1.CanIRequest]) (*connect.Response[kubeswiftv1.CanIResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	cluster := req.Msg.GetCluster()
+	if cluster == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cluster is required"))
+	}
+	rcp, ok := s.pool.(restConfigProvider)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("access review not supported"))
+	}
+	cfg, err := rcp.RestConfigFor(cluster, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	out := &kubeswiftv1.CanIResponse{}
+	for _, chk := range req.Msg.GetChecks() {
+		out.Decisions = append(out.Decisions, reviewAccess(ctx, cs, chk))
+	}
+	return connect.NewResponse(out), nil
+}
+
+// reviewAccess maps one catalog-kind check to a SelfSubjectAccessReview and
+// returns the apiserver's verdict. namespace is ignored for cluster-scoped kinds.
+func reviewAccess(ctx context.Context, cs kubernetes.Interface, chk *kubeswiftv1.ResourceAccessCheck) *kubeswiftv1.AccessDecision {
+	kind := lookupKind(chk.GetKind())
+	if kind == nil {
+		return &kubeswiftv1.AccessDecision{Allowed: false, Reason: fmt.Sprintf("unknown kind %q", chk.GetKind())}
+	}
+	ns := chk.GetNamespace()
+	if !kind.namespaced {
+		ns = ""
+	}
+	ssar := &authorizationv1.SelfSubjectAccessReview{
+		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authorizationv1.ResourceAttributes{
+				Namespace: ns,
+				Verb:      chk.GetVerb(),
+				Group:     kind.gvr.Group,
+				Resource:  kind.gvr.Resource,
+			},
+		},
+	}
+	res, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, ssar, metav1.CreateOptions{})
+	if err != nil {
+		return &kubeswiftv1.AccessDecision{Allowed: false, Reason: err.Error()}
+	}
+	return &kubeswiftv1.AccessDecision{Allowed: res.Status.Allowed, Reason: res.Status.Reason}
 }

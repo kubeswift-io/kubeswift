@@ -48,6 +48,8 @@ const (
 	// ResourceServiceDeleteResourceProcedure is the fully-qualified name of the ResourceService's
 	// DeleteResource RPC.
 	ResourceServiceDeleteResourceProcedure = "/kubeswift.v1.ResourceService/DeleteResource"
+	// ResourceServiceCanIProcedure is the fully-qualified name of the ResourceService's CanI RPC.
+	ResourceServiceCanIProcedure = "/kubeswift.v1.ResourceService/CanI"
 )
 
 // ResourceServiceClient is a client for the kubeswift.v1.ResourceService service.
@@ -57,6 +59,7 @@ type ResourceServiceClient interface {
 	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
 	ApplyResource(context.Context, *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error)
 	DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error)
+	CanI(context.Context, *connect.Request[v1.CanIRequest]) (*connect.Response[v1.CanIResponse], error)
 }
 
 // NewResourceServiceClient constructs a client for the kubeswift.v1.ResourceService service. By
@@ -100,6 +103,12 @@ func NewResourceServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(resourceServiceMethods.ByName("DeleteResource")),
 			connect.WithClientOptions(opts...),
 		),
+		canI: connect.NewClient[v1.CanIRequest, v1.CanIResponse](
+			httpClient,
+			baseURL+ResourceServiceCanIProcedure,
+			connect.WithSchema(resourceServiceMethods.ByName("CanI")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -110,6 +119,7 @@ type resourceServiceClient struct {
 	getResource       *connect.Client[v1.GetResourceRequest, v1.GetResourceResponse]
 	applyResource     *connect.Client[v1.ApplyResourceRequest, v1.ApplyResourceResponse]
 	deleteResource    *connect.Client[v1.DeleteResourceRequest, v1.DeleteResourceResponse]
+	canI              *connect.Client[v1.CanIRequest, v1.CanIResponse]
 }
 
 // ListResourceKinds calls kubeswift.v1.ResourceService.ListResourceKinds.
@@ -137,6 +147,11 @@ func (c *resourceServiceClient) DeleteResource(ctx context.Context, req *connect
 	return c.deleteResource.CallUnary(ctx, req)
 }
 
+// CanI calls kubeswift.v1.ResourceService.CanI.
+func (c *resourceServiceClient) CanI(ctx context.Context, req *connect.Request[v1.CanIRequest]) (*connect.Response[v1.CanIResponse], error) {
+	return c.canI.CallUnary(ctx, req)
+}
+
 // ResourceServiceHandler is an implementation of the kubeswift.v1.ResourceService service.
 type ResourceServiceHandler interface {
 	ListResourceKinds(context.Context, *connect.Request[v1.ListResourceKindsRequest]) (*connect.Response[v1.ListResourceKindsResponse], error)
@@ -144,6 +159,7 @@ type ResourceServiceHandler interface {
 	GetResource(context.Context, *connect.Request[v1.GetResourceRequest]) (*connect.Response[v1.GetResourceResponse], error)
 	ApplyResource(context.Context, *connect.Request[v1.ApplyResourceRequest]) (*connect.Response[v1.ApplyResourceResponse], error)
 	DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error)
+	CanI(context.Context, *connect.Request[v1.CanIRequest]) (*connect.Response[v1.CanIResponse], error)
 }
 
 // NewResourceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -183,6 +199,12 @@ func NewResourceServiceHandler(svc ResourceServiceHandler, opts ...connect.Handl
 		connect.WithSchema(resourceServiceMethods.ByName("DeleteResource")),
 		connect.WithHandlerOptions(opts...),
 	)
+	resourceServiceCanIHandler := connect.NewUnaryHandler(
+		ResourceServiceCanIProcedure,
+		svc.CanI,
+		connect.WithSchema(resourceServiceMethods.ByName("CanI")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/kubeswift.v1.ResourceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ResourceServiceListResourceKindsProcedure:
@@ -195,6 +217,8 @@ func NewResourceServiceHandler(svc ResourceServiceHandler, opts ...connect.Handl
 			resourceServiceApplyResourceHandler.ServeHTTP(w, r)
 		case ResourceServiceDeleteResourceProcedure:
 			resourceServiceDeleteResourceHandler.ServeHTTP(w, r)
+		case ResourceServiceCanIProcedure:
+			resourceServiceCanIHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -222,4 +246,8 @@ func (UnimplementedResourceServiceHandler) ApplyResource(context.Context, *conne
 
 func (UnimplementedResourceServiceHandler) DeleteResource(context.Context, *connect.Request[v1.DeleteResourceRequest]) (*connect.Response[v1.DeleteResourceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.DeleteResource is not implemented"))
+}
+
+func (UnimplementedResourceServiceHandler) CanI(context.Context, *connect.Request[v1.CanIRequest]) (*connect.Response[v1.CanIResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.ResourceService.CanI is not implemented"))
 }
