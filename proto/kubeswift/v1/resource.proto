@@ -109,15 +109,44 @@ message DeleteResourceRequest {
 
 message DeleteResourceResponse {}
 
+// ResourceAccessCheck asks whether the impersonated user may perform one verb on
+// one catalog kind (the gateway maps kind -> group/resource). namespace is ""
+// for a cluster-scoped kind or an all-namespaces check.
+message ResourceAccessCheck {
+  string kind = 1; // a ResourceKind.key
+  string verb = 2; // create | update | delete | get | list | patch
+  string namespace = 3;
+}
+
+// CanIRequest batches access checks so the UI can gate a kind's actions
+// (create/update/delete) in one round-trip.
+message CanIRequest {
+  string cluster = 1;
+  repeated ResourceAccessCheck checks = 2;
+}
+
+// AccessDecision is the outcome for one check, positionally aligned with the
+// request. allowed=false with an empty reason means "not permitted".
+message AccessDecision {
+  bool allowed = 1;
+  string reason = 2;
+}
+
+message CanIResponse {
+  repeated AccessDecision decisions = 1; // aligned 1:1 with CanIRequest.checks
+}
+
 // ResourceService is the cluster explorer + object editor. ListResourceKinds /
-// ListResources / GetResource read; ApplyResource / DeleteResource write. Every
-// call impersonates the end user, so both the read and write planes are gated
-// entirely by that user's Kubernetes RBAC — a denial surfaces as a permission
-// error, never a silent success.
+// ListResources / GetResource read; ApplyResource / DeleteResource write; CanI
+// answers whether the user may write (so the UI can hide actions it can't do).
+// Every call impersonates the end user, so both the read and write planes are
+// gated entirely by that user's Kubernetes RBAC — a denial surfaces as a
+// permission error, never a silent success.
 service ResourceService {
   rpc ListResourceKinds(ListResourceKindsRequest) returns (ListResourceKindsResponse);
   rpc ListResources(ListResourcesRequest) returns (ListResourcesResponse);
   rpc GetResource(GetResourceRequest) returns (GetResourceResponse);
   rpc ApplyResource(ApplyResourceRequest) returns (ApplyResourceResponse);
   rpc DeleteResource(DeleteResourceRequest) returns (DeleteResourceResponse);
+  rpc CanI(CanIRequest) returns (CanIResponse);
 }

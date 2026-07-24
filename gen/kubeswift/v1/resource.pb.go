@@ -760,6 +760,221 @@ func (*DeleteResourceResponse) Descriptor() ([]byte, []int) {
 	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{11}
 }
 
+// ResourceAccessCheck asks whether the impersonated user may perform one verb on
+// one catalog kind (the gateway maps kind -> group/resource). namespace is ""
+// for a cluster-scoped kind or an all-namespaces check.
+type ResourceAccessCheck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"` // a ResourceKind.key
+	Verb          string                 `protobuf:"bytes,2,opt,name=verb,proto3" json:"verb,omitempty"` // create | update | delete | get | list | patch
+	Namespace     string                 `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResourceAccessCheck) Reset() {
+	*x = ResourceAccessCheck{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResourceAccessCheck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResourceAccessCheck) ProtoMessage() {}
+
+func (x *ResourceAccessCheck) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResourceAccessCheck.ProtoReflect.Descriptor instead.
+func (*ResourceAccessCheck) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ResourceAccessCheck) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ResourceAccessCheck) GetVerb() string {
+	if x != nil {
+		return x.Verb
+	}
+	return ""
+}
+
+func (x *ResourceAccessCheck) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+// CanIRequest batches access checks so the UI can gate a kind's actions
+// (create/update/delete) in one round-trip.
+type CanIRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Checks        []*ResourceAccessCheck `protobuf:"bytes,2,rep,name=checks,proto3" json:"checks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CanIRequest) Reset() {
+	*x = CanIRequest{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CanIRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CanIRequest) ProtoMessage() {}
+
+func (x *CanIRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CanIRequest.ProtoReflect.Descriptor instead.
+func (*CanIRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CanIRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *CanIRequest) GetChecks() []*ResourceAccessCheck {
+	if x != nil {
+		return x.Checks
+	}
+	return nil
+}
+
+// AccessDecision is the outcome for one check, positionally aligned with the
+// request. allowed=false with an empty reason means "not permitted".
+type AccessDecision struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Allowed       bool                   `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AccessDecision) Reset() {
+	*x = AccessDecision{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AccessDecision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AccessDecision) ProtoMessage() {}
+
+func (x *AccessDecision) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AccessDecision.ProtoReflect.Descriptor instead.
+func (*AccessDecision) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AccessDecision) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *AccessDecision) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type CanIResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Decisions     []*AccessDecision      `protobuf:"bytes,1,rep,name=decisions,proto3" json:"decisions,omitempty"` // aligned 1:1 with CanIRequest.checks
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CanIResponse) Reset() {
+	*x = CanIResponse{}
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CanIResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CanIResponse) ProtoMessage() {}
+
+func (x *CanIResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_resource_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CanIResponse.ProtoReflect.Descriptor instead.
+func (*CanIResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_resource_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CanIResponse) GetDecisions() []*AccessDecision {
+	if x != nil {
+		return x.Decisions
+	}
+	return nil
+}
+
 var File_kubeswift_v1_resource_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_resource_proto_rawDesc = "" +
@@ -816,13 +1031,26 @@ const file_kubeswift_v1_resource_proto_rawDesc = "" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\"\x18\n" +
-	"\x16DeleteResourceResponse2\xdc\x03\n" +
+	"\x16DeleteResourceResponse\"[\n" +
+	"\x13ResourceAccessCheck\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04verb\x18\x02 \x01(\tR\x04verb\x12\x1c\n" +
+	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"b\n" +
+	"\vCanIRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x129\n" +
+	"\x06checks\x18\x02 \x03(\v2!.kubeswift.v1.ResourceAccessCheckR\x06checks\"B\n" +
+	"\x0eAccessDecision\x12\x18\n" +
+	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"J\n" +
+	"\fCanIResponse\x12:\n" +
+	"\tdecisions\x18\x01 \x03(\v2\x1c.kubeswift.v1.AccessDecisionR\tdecisions2\x9b\x04\n" +
 	"\x0fResourceService\x12d\n" +
 	"\x11ListResourceKinds\x12&.kubeswift.v1.ListResourceKindsRequest\x1a'.kubeswift.v1.ListResourceKindsResponse\x12X\n" +
 	"\rListResources\x12\".kubeswift.v1.ListResourcesRequest\x1a#.kubeswift.v1.ListResourcesResponse\x12R\n" +
 	"\vGetResource\x12 .kubeswift.v1.GetResourceRequest\x1a!.kubeswift.v1.GetResourceResponse\x12X\n" +
 	"\rApplyResource\x12\".kubeswift.v1.ApplyResourceRequest\x1a#.kubeswift.v1.ApplyResourceResponse\x12[\n" +
-	"\x0eDeleteResource\x12#.kubeswift.v1.DeleteResourceRequest\x1a$.kubeswift.v1.DeleteResourceResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
+	"\x0eDeleteResource\x12#.kubeswift.v1.DeleteResourceRequest\x1a$.kubeswift.v1.DeleteResourceResponse\x12=\n" +
+	"\x04CanI\x12\x19.kubeswift.v1.CanIRequest\x1a\x1a.kubeswift.v1.CanIResponseB@Z>github.com/kubeswift-io/kubeswift/gen/kubeswift/v1;kubeswiftv1b\x06proto3"
 
 var (
 	file_kubeswift_v1_resource_proto_rawDescOnce sync.Once
@@ -836,7 +1064,7 @@ func file_kubeswift_v1_resource_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_resource_proto_rawDescData
 }
 
-var file_kubeswift_v1_resource_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_kubeswift_v1_resource_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_kubeswift_v1_resource_proto_goTypes = []any{
 	(*ResourceKind)(nil),              // 0: kubeswift.v1.ResourceKind
 	(*ListResourceKindsRequest)(nil),  // 1: kubeswift.v1.ListResourceKindsRequest
@@ -850,33 +1078,41 @@ var file_kubeswift_v1_resource_proto_goTypes = []any{
 	(*ApplyResourceResponse)(nil),     // 9: kubeswift.v1.ApplyResourceResponse
 	(*DeleteResourceRequest)(nil),     // 10: kubeswift.v1.DeleteResourceRequest
 	(*DeleteResourceResponse)(nil),    // 11: kubeswift.v1.DeleteResourceResponse
-	nil,                               // 12: kubeswift.v1.Resource.ColumnsEntry
-	(*ObjectRef)(nil),                 // 13: kubeswift.v1.ObjectRef
-	(*timestamppb.Timestamp)(nil),     // 14: google.protobuf.Timestamp
-	(*ClusterError)(nil),              // 15: kubeswift.v1.ClusterError
+	(*ResourceAccessCheck)(nil),       // 12: kubeswift.v1.ResourceAccessCheck
+	(*CanIRequest)(nil),               // 13: kubeswift.v1.CanIRequest
+	(*AccessDecision)(nil),            // 14: kubeswift.v1.AccessDecision
+	(*CanIResponse)(nil),              // 15: kubeswift.v1.CanIResponse
+	nil,                               // 16: kubeswift.v1.Resource.ColumnsEntry
+	(*ObjectRef)(nil),                 // 17: kubeswift.v1.ObjectRef
+	(*timestamppb.Timestamp)(nil),     // 18: google.protobuf.Timestamp
+	(*ClusterError)(nil),              // 19: kubeswift.v1.ClusterError
 }
 var file_kubeswift_v1_resource_proto_depIdxs = []int32{
 	0,  // 0: kubeswift.v1.ListResourceKindsResponse.kinds:type_name -> kubeswift.v1.ResourceKind
-	13, // 1: kubeswift.v1.Resource.ref:type_name -> kubeswift.v1.ObjectRef
-	14, // 2: kubeswift.v1.Resource.created_at:type_name -> google.protobuf.Timestamp
-	12, // 3: kubeswift.v1.Resource.columns:type_name -> kubeswift.v1.Resource.ColumnsEntry
+	17, // 1: kubeswift.v1.Resource.ref:type_name -> kubeswift.v1.ObjectRef
+	18, // 2: kubeswift.v1.Resource.created_at:type_name -> google.protobuf.Timestamp
+	16, // 3: kubeswift.v1.Resource.columns:type_name -> kubeswift.v1.Resource.ColumnsEntry
 	3,  // 4: kubeswift.v1.ListResourcesResponse.resources:type_name -> kubeswift.v1.Resource
-	15, // 5: kubeswift.v1.ListResourcesResponse.error:type_name -> kubeswift.v1.ClusterError
-	1,  // 6: kubeswift.v1.ResourceService.ListResourceKinds:input_type -> kubeswift.v1.ListResourceKindsRequest
-	4,  // 7: kubeswift.v1.ResourceService.ListResources:input_type -> kubeswift.v1.ListResourcesRequest
-	6,  // 8: kubeswift.v1.ResourceService.GetResource:input_type -> kubeswift.v1.GetResourceRequest
-	8,  // 9: kubeswift.v1.ResourceService.ApplyResource:input_type -> kubeswift.v1.ApplyResourceRequest
-	10, // 10: kubeswift.v1.ResourceService.DeleteResource:input_type -> kubeswift.v1.DeleteResourceRequest
-	2,  // 11: kubeswift.v1.ResourceService.ListResourceKinds:output_type -> kubeswift.v1.ListResourceKindsResponse
-	5,  // 12: kubeswift.v1.ResourceService.ListResources:output_type -> kubeswift.v1.ListResourcesResponse
-	7,  // 13: kubeswift.v1.ResourceService.GetResource:output_type -> kubeswift.v1.GetResourceResponse
-	9,  // 14: kubeswift.v1.ResourceService.ApplyResource:output_type -> kubeswift.v1.ApplyResourceResponse
-	11, // 15: kubeswift.v1.ResourceService.DeleteResource:output_type -> kubeswift.v1.DeleteResourceResponse
-	11, // [11:16] is the sub-list for method output_type
-	6,  // [6:11] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	19, // 5: kubeswift.v1.ListResourcesResponse.error:type_name -> kubeswift.v1.ClusterError
+	12, // 6: kubeswift.v1.CanIRequest.checks:type_name -> kubeswift.v1.ResourceAccessCheck
+	14, // 7: kubeswift.v1.CanIResponse.decisions:type_name -> kubeswift.v1.AccessDecision
+	1,  // 8: kubeswift.v1.ResourceService.ListResourceKinds:input_type -> kubeswift.v1.ListResourceKindsRequest
+	4,  // 9: kubeswift.v1.ResourceService.ListResources:input_type -> kubeswift.v1.ListResourcesRequest
+	6,  // 10: kubeswift.v1.ResourceService.GetResource:input_type -> kubeswift.v1.GetResourceRequest
+	8,  // 11: kubeswift.v1.ResourceService.ApplyResource:input_type -> kubeswift.v1.ApplyResourceRequest
+	10, // 12: kubeswift.v1.ResourceService.DeleteResource:input_type -> kubeswift.v1.DeleteResourceRequest
+	13, // 13: kubeswift.v1.ResourceService.CanI:input_type -> kubeswift.v1.CanIRequest
+	2,  // 14: kubeswift.v1.ResourceService.ListResourceKinds:output_type -> kubeswift.v1.ListResourceKindsResponse
+	5,  // 15: kubeswift.v1.ResourceService.ListResources:output_type -> kubeswift.v1.ListResourcesResponse
+	7,  // 16: kubeswift.v1.ResourceService.GetResource:output_type -> kubeswift.v1.GetResourceResponse
+	9,  // 17: kubeswift.v1.ResourceService.ApplyResource:output_type -> kubeswift.v1.ApplyResourceResponse
+	11, // 18: kubeswift.v1.ResourceService.DeleteResource:output_type -> kubeswift.v1.DeleteResourceResponse
+	15, // 19: kubeswift.v1.ResourceService.CanI:output_type -> kubeswift.v1.CanIResponse
+	14, // [14:20] is the sub-list for method output_type
+	8,  // [8:14] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_resource_proto_init() }
@@ -891,7 +1127,7 @@ func file_kubeswift_v1_resource_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_resource_proto_rawDesc), len(file_kubeswift_v1_resource_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
