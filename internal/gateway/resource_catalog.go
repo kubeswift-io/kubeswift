@@ -37,10 +37,17 @@ var resourceCatalog = []resourceKind{
 	{key: "persistentvolumes", displayName: "Persistent Volumes", gvr: gvr("", "v1", "persistentvolumes"), namespaced: false, category: "Cluster", columns: []string{"status", "capacity", "storageClass", "claim"}, project: pvProject},
 
 	// Workloads.
+	{key: "deployments", displayName: "Deployments", gvr: gvr("apps", "v1", "deployments"), namespaced: true, category: "Workloads", columns: []string{"ready", "uptodate", "available"}, project: deploymentProject},
+	{key: "statefulsets", displayName: "Stateful Sets", gvr: gvr("apps", "v1", "statefulsets"), namespaced: true, category: "Workloads", columns: []string{"ready"}, project: replicaReadyProject},
+	{key: "daemonsets", displayName: "Daemon Sets", gvr: gvr("apps", "v1", "daemonsets"), namespaced: true, category: "Workloads", columns: []string{"desired", "ready"}, project: daemonSetProject},
+	{key: "replicasets", displayName: "Replica Sets", gvr: gvr("apps", "v1", "replicasets"), namespaced: true, category: "Workloads", columns: []string{"ready"}, project: replicaReadyProject},
+	{key: "jobs", displayName: "Jobs", gvr: gvr("batch", "v1", "jobs"), namespaced: true, category: "Workloads", columns: []string{"completions", "status"}, project: jobProject},
+	{key: "cronjobs", displayName: "Cron Jobs", gvr: gvr("batch", "v1", "cronjobs"), namespaced: true, category: "Workloads", columns: []string{"schedule", "suspend", "lastRun"}, project: scheduleProject},
 	{key: "pods", displayName: "Pods", gvr: gvr("", "v1", "pods"), namespaced: true, category: "Workloads", columns: []string{"status", "ready", "node", "ip"}, project: podProject},
 
 	// Networking.
 	{key: "services", displayName: "Services", gvr: gvr("", "v1", "services"), namespaced: true, category: "Networking", columns: []string{"type", "clusterIP", "ports"}, project: serviceProject},
+	{key: "ingresses", displayName: "Ingresses", gvr: gvr("networking.k8s.io", "v1", "ingresses"), namespaced: true, category: "Networking", columns: []string{"class", "hosts"}, project: ingressProject},
 	{key: "network-attachment-definitions", displayName: "Network Attachments", gvr: gvr("k8s.cni.cncf.io", "v1", "network-attachment-definitions"), namespaced: true, category: "Networking", columns: nil, project: nilProject},
 	{key: "networkpolicies", displayName: "Network Policies", gvr: gvr("networking.k8s.io", "v1", "networkpolicies"), namespaced: true, category: "Networking", columns: []string{"podSelector"}, project: netpolProject},
 
@@ -50,6 +57,13 @@ var resourceCatalog = []resourceKind{
 	// Config.
 	{key: "secrets", displayName: "Secrets", gvr: gvr("", "v1", "secrets"), namespaced: true, category: "Config", columns: []string{"type", "keys"}, project: secretProject},
 	{key: "configmaps", displayName: "Config Maps", gvr: gvr("", "v1", "configmaps"), namespaced: true, category: "Config", columns: []string{"keys"}, project: configMapProject},
+
+	// Access control (RBAC + identities).
+	{key: "serviceaccounts", displayName: "Service Accounts", gvr: gvr("", "v1", "serviceaccounts"), namespaced: true, category: "Access", columns: []string{"secrets"}, project: serviceAccountProject},
+	{key: "roles", displayName: "Roles", gvr: gvr("rbac.authorization.k8s.io", "v1", "roles"), namespaced: true, category: "Access", columns: []string{"rules"}, project: ruleCountProject},
+	{key: "rolebindings", displayName: "Role Bindings", gvr: gvr("rbac.authorization.k8s.io", "v1", "rolebindings"), namespaced: true, category: "Access", columns: []string{"role", "subjects"}, project: roleBindingProject},
+	{key: "clusterroles", displayName: "Cluster Roles", gvr: gvr("rbac.authorization.k8s.io", "v1", "clusterroles"), namespaced: false, category: "Access", columns: []string{"rules"}, project: ruleCountProject},
+	{key: "clusterrolebindings", displayName: "Cluster Role Bindings", gvr: gvr("rbac.authorization.k8s.io", "v1", "clusterrolebindings"), namespaced: false, category: "Access", columns: []string{"role", "subjects"}, project: roleBindingProject},
 
 	// KubeSwift CRDs without a dedicated view.
 	{key: "swiftimages", displayName: "Images", gvr: gvr("image.kubeswift.io", "v1alpha1", "swiftimages"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
@@ -307,6 +321,108 @@ func sandboxPoolProject(u *unstructured.Unstructured) map[string]string {
 		"claimed": nestedIntStr(u, "status", "claimedReplicas"),
 		"min":     nestedIntStr(u, "spec", "minWarm"),
 	}
+}
+
+// deploymentProject reports a Deployment's ready/desired, up-to-date, and
+// available replica counts.
+func deploymentProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"ready":     readyOverDesired(u),
+		"uptodate":  nestedIntStr(u, "status", "updatedReplicas"),
+		"available": nestedIntStr(u, "status", "availableReplicas"),
+	}
+}
+
+// replicaReadyProject reports ready/desired for StatefulSets and ReplicaSets.
+func replicaReadyProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{"ready": readyOverDesired(u)}
+}
+
+// daemonSetProject reports a DaemonSet's desired and ready scheduled counts.
+func daemonSetProject(u *unstructured.Unstructured) map[string]string {
+	return map[string]string{
+		"desired": nestedIntStr(u, "status", "desiredNumberScheduled"),
+		"ready":   nestedIntStr(u, "status", "numberReady"),
+	}
+}
+
+// jobProject reports a Job's succeeded/desired completions and a coarse status.
+func jobProject(u *unstructured.Unstructured) map[string]string {
+	succeeded := nestedIntStr(u, "status", "succeeded")
+	if succeeded == "" {
+		succeeded = "0"
+	}
+	completions := nestedIntStr(u, "spec", "completions")
+	if completions == "" {
+		completions = "1"
+	}
+	status := "Running"
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok || cm["status"] != "True" {
+			continue
+		}
+		switch cm["type"] {
+		case "Complete":
+			status = "Complete"
+		case "Failed":
+			status = "Failed"
+		}
+	}
+	return map[string]string{"completions": succeeded + "/" + completions, "status": status}
+}
+
+// ingressProject reports an Ingress's class and the hosts it routes.
+func ingressProject(u *unstructured.Unstructured) map[string]string {
+	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
+	var hosts []string
+	for _, r := range rules {
+		if rm, ok := r.(map[string]interface{}); ok {
+			if h, _ := rm["host"].(string); h != "" {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	return map[string]string{
+		"class": nestedStr(u, "spec", "ingressClassName"),
+		"hosts": strings.Join(hosts, ","),
+	}
+}
+
+// serviceAccountProject reports how many secrets a ServiceAccount references.
+func serviceAccountProject(u *unstructured.Unstructured) map[string]string {
+	secrets, _, _ := unstructured.NestedSlice(u.Object, "secrets")
+	return map[string]string{"secrets": strconv.Itoa(len(secrets))}
+}
+
+// ruleCountProject reports the number of policy rules on a (Cluster)Role.
+func ruleCountProject(u *unstructured.Unstructured) map[string]string {
+	rules, _, _ := unstructured.NestedSlice(u.Object, "rules")
+	return map[string]string{"rules": strconv.Itoa(len(rules))}
+}
+
+// roleBindingProject reports a (Cluster)RoleBinding's target role + subject count.
+func roleBindingProject(u *unstructured.Unstructured) map[string]string {
+	subjects, _, _ := unstructured.NestedSlice(u.Object, "subjects")
+	return map[string]string{
+		"role":     nestedStr(u, "roleRef", "name"),
+		"subjects": strconv.Itoa(len(subjects)),
+	}
+}
+
+// readyOverDesired renders "<status.readyReplicas>/<spec.replicas>" with sane
+// defaults (ready→0, desired→1) — shared by Deployments/StatefulSets/ReplicaSets.
+func readyOverDesired(u *unstructured.Unstructured) string {
+	ready := nestedIntStr(u, "status", "readyReplicas")
+	if ready == "" {
+		ready = "0"
+	}
+	desired := nestedIntStr(u, "spec", "replicas")
+	if desired == "" {
+		desired = "1"
+	}
+	return ready + "/" + desired
 }
 
 // --- helpers --------------------------------------------------------------
