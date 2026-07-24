@@ -170,4 +170,5 @@ and manageable with `kubectl`.
 ## See also
 
 - [`gateway.md`](gateway.md) — the gateway itself + the auth-mode table.
+- [`explorer.md`](explorer.md) — the Resource Explorer's RBAC-gated native CRUD + the Secret create/rotate-only posture.
 - `config/samples/gateway/` — member-RBAC + explorer-RBAC samples.
