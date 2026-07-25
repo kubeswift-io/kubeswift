@@ -254,13 +254,23 @@ func (s *ResourceService) DeleteResource(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(&kubeswiftv1.DeleteResourceResponse{}), nil
 }
 
+// lastAppliedAnnotation is kubectl's client-side-apply record. For a Secret it
+// contains the ENTIRE submitted manifest — including data (base64) or
+// stringData (plaintext) — so stripping only data/stringData would still leak
+// the values to anyone who reads the object.
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
 // redactSecret strips Secret values so the gateway never exposes them (E4),
 // even via GetResource / ApplyResource which return the full object.
 func redactSecret(obj *unstructured.Unstructured, kind *resourceKind) {
-	if kind.gvr.Group == "" && kind.gvr.Resource == "secrets" {
-		unstructured.RemoveNestedField(obj.Object, "data")
-		unstructured.RemoveNestedField(obj.Object, "stringData")
+	if kind.gvr.Group != "" || kind.gvr.Resource != "secrets" {
+		return
 	}
+	unstructured.RemoveNestedField(obj.Object, "data")
+	unstructured.RemoveNestedField(obj.Object, "stringData")
+	// A Secret created with `kubectl apply` carries the plaintext manifest in
+	// this annotation; dropping only data/stringData above left it readable.
+	unstructured.RemoveNestedField(obj.Object, "metadata", "annotations", lastAppliedAnnotation)
 }
 
 func resourcesErr(cluster, msg string) *connect.Response[kubeswiftv1.ListResourcesResponse] {

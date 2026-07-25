@@ -47,11 +47,24 @@ func mkNode(name string, ready bool) *unstructured.Unstructured {
 
 // uSecret carries real (base64) values so the redaction test can assert none
 // of them — base64 or decoded — reach the wire.
+//
+// It also carries kubectl's last-applied-configuration annotation, because that
+// is how a Secret created with `kubectl apply` really looks: the annotation
+// holds the ENTIRE submitted manifest, stringData in PLAINTEXT. Redaction that
+// drops only data/stringData leaves it readable, so the fixture must have it or
+// the leak is invisible to these tests.
 func uSecret(ns, name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1", "kind": "Secret",
-		"metadata": map[string]interface{}{"namespace": ns, "name": name},
-		"type":     "Opaque",
+		"metadata": map[string]interface{}{
+			"namespace": ns, "name": name,
+			"annotations": map[string]interface{}{
+				"kubectl.kubernetes.io/last-applied-configuration": `{"apiVersion":"v1","kind":"Secret",` +
+					`"metadata":{"name":"` + name + `","namespace":"` + ns + `"},` +
+					`"stringData":{"password":"super-secret","apitoken":"top-secret"}}`,
+			},
+		},
+		"type": "Opaque",
 		"data": map[string]interface{}{
 			"password": "c3VwZXItc2VjcmV0", // base64("super-secret")
 			"apitoken": "dG9wLXNlY3JldA==", // base64("top-secret")

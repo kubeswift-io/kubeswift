@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	connect "connectrpc.com/connect"
@@ -137,10 +138,30 @@ func identityFromClaims(claims map[string]interface{}, cfg OIDCClaimConfig) (Ide
 		return Identity{}, fmt.Errorf("token has no %q claim for the username", cfg.UsernameClaim)
 	}
 	id := Identity{User: cfg.UsernamePrefix + user}
+	if isReservedSubject(id.User) {
+		return Identity{}, fmt.Errorf("username %q uses the reserved %q prefix", id.User, reservedSubjectPrefix)
+	}
 	for _, g := range stringSliceClaim(claims, cfg.GroupsClaim) {
-		id.Groups = append(id.Groups, cfg.GroupsPrefix+g)
+		g = cfg.GroupsPrefix + g
+		if isReservedSubject(g) {
+			return Identity{}, fmt.Errorf("group %q uses the reserved %q prefix", g, reservedSubjectPrefix)
+		}
+		id.Groups = append(id.Groups, g)
 	}
 	return id, nil
+}
+
+// reservedSubjectPrefix is Kubernetes' reserved namespace for built-in subjects.
+// system:masters is a hardcoded superuser and system:serviceaccount:… names a
+// real SA, so a claim that lands in this namespace must never be impersonated.
+const reservedSubjectPrefix = "system:"
+
+// isReservedSubject rejects a claim-derived user/group in the system: namespace.
+// Without a groups prefix configured (the default), an IdP that lets a user
+// influence their own groups claim could otherwise assert system:masters and
+// obtain cluster-admin on every federated member.
+func isReservedSubject(s string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), reservedSubjectPrefix)
 }
 
 func stringClaim(claims map[string]interface{}, key string) string {
