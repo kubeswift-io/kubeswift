@@ -48,6 +48,13 @@ on:
       - 'tools/lint-dashboards.sh'
       - '.github/workflows/**'
 
+# Least privilege: CI only reads the repo. Without this the workflow inherits the
+# repo/org default, which may be read-write -- handing a write-scoped
+# GITHUB_TOKEN to third-party actions and to `go build`/`cargo build` of
+# PR-authored code.
+permissions:
+  contents: read
+
 jobs:
   go:
     name: Go

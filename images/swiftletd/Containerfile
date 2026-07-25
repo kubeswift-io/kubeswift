@@ -110,9 +110,24 @@ COPY --from=builder /usr/local/bin/virtiofsd /usr/libexec/virtiofsd
 # v53.0 binary (no re-pair needed).
 ARG CH_VERSION=53.0
 ARG TARGETARCH=amd64
+# Checksum-pinned like CLOUDHV.fd below. This binary IS the hypervisor — it runs
+# every VM on every node — so an unverified fetch would let a compromised
+# upstream release asset (or a re-uploaded one on the same tag) bake a foreign
+# VMM into every KubeSwift image. Both digests were taken from the published
+# v53.0 assets and verified locally (`cloud-hypervisor v53.0`).
+# Re-pin BOTH when bumping CH_VERSION:
+#   curl -sSL .../cloud-hypervisor-static{,-aarch64} | sha256sum
+ARG CH_SHA256_AMD64=448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc
+ARG CH_SHA256_ARM64=f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850
 RUN CH_ARCH=$(echo "${TARGETARCH}" | sed 's/amd64//;s/arm64/-aarch64/') && \
+    case "${TARGETARCH}" in \
+      amd64) CH_SHA256="${CH_SHA256_AMD64}" ;; \
+      arm64) CH_SHA256="${CH_SHA256_ARM64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
     curl -sSL -o /usr/local/bin/cloud-hypervisor \
     "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v${CH_VERSION}/cloud-hypervisor-static${CH_ARCH}" && \
+    echo "${CH_SHA256}  /usr/local/bin/cloud-hypervisor" | sha256sum -c - && \
     chmod +x /usr/local/bin/cloud-hypervisor
 
 # CLOUDHV.fd — Cloud Hypervisor UEFI firmware (EDK2/OVMF build for CH)

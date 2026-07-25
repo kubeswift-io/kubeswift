@@ -68,6 +68,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", verr)
 			os.Exit(1)
 		}
+		// Materialize the digest we just verified, not the original ref. Otherwise
+		// Materialize re-resolves the tag independently and an attacker with push
+		// rights but no signing key could swap the tag between the verify and the
+		// pull -- we would verify a good image and boot a different one. The
+		// sibling snapshot-oras download-image path pins the same way.
+		opts.ImageRef = repo + "@" + digest
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
 	}
 
