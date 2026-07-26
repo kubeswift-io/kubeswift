@@ -653,6 +653,12 @@ type GuestInterface struct {
 	Socket string `json:"socket,omitempty"`
 	// MAC optionally pins the interface MAC address. When empty a deterministic
 	// MAC is generated. Honored for vhost-user (and bridge) interfaces.
+	//
+	// Constrained to a canonical colon-separated MAC. This is a security
+	// boundary, not cosmetics: network-init.sh writes the value into a shell
+	// env file that launcher-entrypoint.sh SOURCES, so an unconstrained value
+	// containing $(...) would execute in the privileged launcher container.
+	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`
 	// +optional
 	MAC string `json:"mac,omitempty"`
 }
