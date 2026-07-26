@@ -10,17 +10,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/webhook/hostpath"
 )
 
 // Validator validates SwiftGuest resources.
-type Validator struct{}
+//
+// AllowedHostPathPrefixes confines the host paths a SwiftGuest may ask the
+// (privileged) launcher pod to mount -- spec.filesystems[].source.hostPath and
+// the vhost-user socket directories. It comes from the operator via
+// --allowed-hostpath-prefix / swiftGuest.allowedHostPathPrefixes. EMPTY MEANS
+// DENY ALL: these fields are niche, so an install opts in explicitly rather
+// than shipping a node-root escape hatch by default.
+type Validator struct {
+	AllowedHostPathPrefixes []string
+}
 
 func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	g, ok := obj.(*swiftv1alpha1.SwiftGuest)
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftGuest, got %T", obj)
 	}
-	return nil, validateSwiftGuest(g)
+	return nil, validateSwiftGuest(g, v.AllowedHostPathPrefixes)
 }
 
 func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
@@ -28,14 +38,14 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftGuest, got %T", newObj)
 	}
-	return nil, validateSwiftGuest(g)
+	return nil, validateSwiftGuest(g, v.AllowedHostPathPrefixes)
 }
 
 func (v *Validator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
+func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest, allowedHostPaths []string) error {
 	spec := &g.Spec
 	hasImage := spec.ImageRef != nil && spec.ImageRef.Name != ""
 	hasKernel := spec.KernelRef != nil && spec.KernelRef.Name != ""
@@ -113,13 +123,13 @@ func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest) error {
 		}
 	}
 
-	if err := validateFilesystems(spec); err != nil {
+	if err := validateFilesystems(spec, allowedHostPaths); err != nil {
 		return err
 	}
-	if err := validateInterfaces(spec); err != nil {
+	if err := validateInterfaces(spec, allowedHostPaths); err != nil {
 		return err
 	}
-	if err := validateVhostUserDevices(spec); err != nil {
+	if err := validateVhostUserDevices(spec, allowedHostPaths); err != nil {
 		return err
 	}
 	if err := validateNetworkPorts(spec); err != nil {
@@ -289,7 +299,7 @@ func usesGPU(spec *swiftv1alpha1.SwiftGuestSpec) bool {
 // names, a socket per device, virtioId required for generic devices, and the
 // v1 scope limit (Cloud Hypervisor only — a gpuProfileRef may select the QEMU
 // runtime, which v1 does not wire for vhost-user).
-func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec) error {
+func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec, allowedHostPaths []string) error {
 	if len(spec.VhostUserDevices) == 0 {
 		return nil
 	}
@@ -310,6 +320,12 @@ func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec) error {
 		if d.Socket == "" {
 			return fmt.Errorf("spec.vhostUserDevices[%d].socket is required", i)
 		}
+		// The pod builder mounts filepath.Dir(socket) as a hostPath into the
+		// privileged launcher, so the DIRECTORY must be confined.
+		if err := hostpath.ValidateDir(
+			fmt.Sprintf("spec.vhostUserDevices[%d].socket", i), d.Socket, allowedHostPaths); err != nil {
+			return err
+		}
 		switch d.Type {
 		case swiftv1alpha1.VhostUserDeviceTypeBlk:
 			// nothing extra
@@ -328,7 +344,7 @@ func validateVhostUserDevices(spec *swiftv1alpha1.SwiftGuestSpec) error {
 // is required, the bridge/sriov-only fields are not set, and the v1 scope limit
 // (Cloud Hypervisor only — a gpuProfileRef may select the QEMU runtime, which
 // v1 does not wire for vhost-user). bridge/sriov interfaces are unchanged.
-func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
+func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec, allowedHostPaths []string) error {
 	hasVhostUser := false
 	for i := range spec.Interfaces {
 		iface := &spec.Interfaces[i]
@@ -338,6 +354,11 @@ func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
 		hasVhostUser = true
 		if iface.Socket == "" {
 			return fmt.Errorf("spec.interfaces[%d] (type vhost-user) requires a socket path", i)
+		}
+		// Same hostPath primitive as vhostUserDevices above.
+		if err := hostpath.ValidateDir(
+			fmt.Sprintf("spec.interfaces[%d].socket", i), iface.Socket, allowedHostPaths); err != nil {
+			return err
 		}
 		if iface.NetworkRef != nil {
 			return fmt.Errorf("spec.interfaces[%d]: vhost-user does not use networkRef", i)
@@ -374,7 +395,7 @@ func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec) error {
 // unique name + tag per guest, exactly one source, and the v1 scope limits
 // (Cloud Hypervisor + Linux only — the QEMU path is a later phase and a
 // Windows virtio-fs driver is out of scope).
-func validateFilesystems(spec *swiftv1alpha1.SwiftGuestSpec) error {
+func validateFilesystems(spec *swiftv1alpha1.SwiftGuestSpec, allowedHostPaths []string) error {
 	if len(spec.Filesystems) == 0 {
 		return nil
 	}
@@ -417,8 +438,14 @@ func validateFilesystems(spec *swiftv1alpha1.SwiftGuestSpec) error {
 		case !hasHostPath && !hasPVC:
 			return fmt.Errorf("spec.filesystems[%d].source: exactly one of hostPath or pvcRef is required", i)
 		}
-		if hasHostPath && *fs.Source.HostPath == "" {
-			return fmt.Errorf("spec.filesystems[%d].source.hostPath must not be empty", i)
+		if hasHostPath {
+			// The launcher is privileged and virtiofsd is handed this directory
+			// verbatim, so an unconfined value is node-root in the guest.
+			if err := hostpath.Validate(
+				fmt.Sprintf("spec.filesystems[%d].source.hostPath", i),
+				*fs.Source.HostPath, allowedHostPaths); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

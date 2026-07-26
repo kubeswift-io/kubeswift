@@ -359,3 +359,22 @@ migration:
   # dependency and no behavior change.
   mtls:
     enabled: false
+
+# SwiftGuest admission policy.
+swiftGuest:
+  # Host-path prefixes a SwiftGuest may mount into its launcher pod, via
+  # spec.filesystems[].source.hostPath (virtio-fs share) or a vhost-user socket
+  # directory.
+  #
+  # The launcher container is privileged, so a host path it mounts is
+  # effectively node-root access granted to whoever authored the SwiftGuest.
+  # An EMPTY list (the default) denies every host path: these fields are niche,
+  # so a cluster opts in explicitly rather than shipping an escape hatch.
+  # ".." is always rejected, and prefixes match whole path segments
+  # ("/srv/vm" allows "/srv/vm/a" but not "/srv/vmsecrets").
+  #
+  # Enforced by the validating webhook, so it requires webhook.enabled=true.
+  #
+  #   allowedHostPathPrefixes:
+  #     - /srv/kubeswift-shares
+  allowedHostPathPrefixes: []

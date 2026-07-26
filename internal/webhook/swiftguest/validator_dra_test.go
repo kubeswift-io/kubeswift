@@ -15,13 +15,13 @@ func TestValidate_GPUResourceClaim(t *testing.T) {
 	// Valid: a single template reference.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimTemplateName: "gpu-tmpl", Tier: "pcie"}
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("a single-template gpuResourceClaim should be valid: %v", err)
 	}
 	// Valid: a single shared-claim reference.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "gpu-claim"}
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("a single shared-claim gpuResourceClaim should be valid: %v", err)
 	}
 
@@ -29,19 +29,19 @@ func TestValidate_GPUResourceClaim(t *testing.T) {
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "prof"}
 		g.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{ResourceClaimName: "c"}
-	})), "mutually exclusive")
+	}), testAllowAllHostPaths), "mutually exclusive")
 
 	// Neither claimName nor templateName: rejected.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{Tier: "pcie"}
-	})), "exactly one of resourceClaimName or resourceClaimTemplateName")
+	}), testAllowAllHostPaths), "exactly one of resourceClaimName or resourceClaimTemplateName")
 
 	// Both claimName and templateName: rejected.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUResourceClaim = &swiftv1alpha1.GPUResourceClaimSpec{
 			ResourceClaimName: "c", ResourceClaimTemplateName: "t",
 		}
-	})), "exactly one of resourceClaimName or resourceClaimTemplateName")
+	}), testAllowAllHostPaths), "exactly one of resourceClaimName or resourceClaimTemplateName")
 }
 
 // TestValidate_GPUResourceClaim_SharesGPUConstraints proves the DRA backend is
@@ -56,13 +56,13 @@ func TestValidate_GPUResourceClaim_SharesGPUConstraints(t *testing.T) {
 		g.Spec.ImageRef = nil
 		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{SnapshotRef: corev1.LocalObjectReference{Name: "snap"}}
 		withClaim(g)
-	})), "mutually exclusive with GPU passthrough")
+	}), testAllowAllHostPaths), "mutually exclusive with GPU passthrough")
 
 	// osType: windows + DRA GPU: rejected.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
 		withClaim(g)
-	})), "GPU passthrough to Windows is out of scope")
+	}), testAllowAllHostPaths), "GPU passthrough to Windows is out of scope")
 
 	// virtiofs + DRA GPU: rejected.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -71,5 +71,5 @@ func TestValidate_GPUResourceClaim_SharesGPUConstraints(t *testing.T) {
 			{Name: "share", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
 		}
 		withClaim(g)
-	})), "not supported with GPU passthrough")
+	}), testAllowAllHostPaths), "not supported with GPU passthrough")
 }

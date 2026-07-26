@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -59,6 +60,15 @@ const (
 	defaultLeaderElectionNS = "kubeswift-system"
 )
 
+// stringSliceFlag collects a repeatable string flag.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string { return strings.Join(*s, ",") }
+func (s *stringSliceFlag) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
@@ -68,6 +78,11 @@ func main() {
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	metricsAddr := flag.String("metrics-bind-address", ":8080", "Address for metrics endpoint")
+	var allowedHostPaths stringSliceFlag
+	flag.Var(&allowedHostPaths, "allowed-hostpath-prefix",
+		"Host-path prefix a SwiftGuest may mount into the (privileged) launcher pod "+
+			"-- spec.filesystems[].source.hostPath and vhost-user socket dirs. Repeatable. "+
+			"EMPTY DENIES ALL, which is the default: opt in per cluster.")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -301,7 +316,7 @@ func main() {
 
 	if *webhookEnabled {
 		if err = ctrl.NewWebhookManagedBy(mgr, &swiftv1alpha1.SwiftGuest{}).
-			WithCustomValidator(&swiftguestwebhook.Validator{}).
+			WithCustomValidator(&swiftguestwebhook.Validator{AllowedHostPathPrefixes: allowedHostPaths}).
 			WithCustomDefaulter(&swiftguestwebhook.Defaulter{}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftGuest webhook")

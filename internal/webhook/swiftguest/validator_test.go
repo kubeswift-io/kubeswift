@@ -12,6 +12,11 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
+// testAllowAllHostPaths is used by tests that predate host-path confinement and
+// are not exercising it. Confinement is covered by internal/webhook/hostpath
+// and by TestValidateFilesystems_HostPathConfinement below.
+var testAllowAllHostPaths = []string{"/"}
+
 func guest(mut func(*swiftv1alpha1.SwiftGuest)) *swiftv1alpha1.SwiftGuest {
 	g := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
@@ -35,14 +40,14 @@ func errContains(t *testing.T, err error, want string) {
 
 func TestValidate_BootSourceExclusivity(t *testing.T) {
 	// imageRef alone: OK.
-	if err := validateSwiftGuest(guest(nil)); err != nil {
+	if err := validateSwiftGuest(guest(nil), testAllowAllHostPaths); err != nil {
 		t.Errorf("imageRef-only should be valid: %v", err)
 	}
 	// kernelRef alone: OK.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.ImageRef = nil
 		g.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("kernelRef-only should be valid: %v", err)
 	}
 	// cloneFromSnapshot (with guestClassRef, which the CRD requires): OK.
@@ -51,7 +56,7 @@ func TestValidate_BootSourceExclusivity(t *testing.T) {
 		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{
 			SnapshotRef: corev1.LocalObjectReference{Name: "snap"},
 		}
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("cloneFromSnapshot should be valid: %v", err)
 	}
 	// cloneFromSnapshot without guestClassRef: rejected (CRD requires it; webhook aligned).
@@ -59,31 +64,31 @@ func TestValidate_BootSourceExclusivity(t *testing.T) {
 		g.Spec.ImageRef = nil
 		g.Spec.GuestClassRef = corev1.LocalObjectReference{}
 		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{SnapshotRef: corev1.LocalObjectReference{Name: "snap"}}
-	})), "spec.guestClassRef.name is required")
+	}), testAllowAllHostPaths), "spec.guestClassRef.name is required")
 	// none set.
-	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) { g.Spec.ImageRef = nil })),
+	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) { g.Spec.ImageRef = nil }), testAllowAllHostPaths),
 		"exactly one of spec.imageRef")
 	// two set (imageRef + cloneFromSnapshot).
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.CloneFromSnapshot = &swiftv1alpha1.CloneFromSnapshotSource{SnapshotRef: corev1.LocalObjectReference{Name: "snap"}}
-	})), "exactly one of spec.imageRef")
+	}), testAllowAllHostPaths), "exactly one of spec.imageRef")
 }
 
 func TestValidate_OSType(t *testing.T) {
 	// default (unset) osType + imageRef: OK (no behaviour change for existing guests).
-	if err := validateSwiftGuest(guest(nil)); err != nil {
+	if err := validateSwiftGuest(guest(nil), testAllowAllHostPaths); err != nil {
 		t.Errorf("unset osType should be valid: %v", err)
 	}
 	// explicit linux + imageRef: OK.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeLinux
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("linux + imageRef should be valid: %v", err)
 	}
 	// windows + imageRef (disk boot): OK.
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("windows + imageRef should be valid: %v", err)
 	}
 	// windows + kernelRef: rejected (Windows is disk-boot only).
@@ -91,16 +96,16 @@ func TestValidate_OSType(t *testing.T) {
 		g.Spec.ImageRef = nil
 		g.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
-	})), "windows requires disk boot")
+	}), testAllowAllHostPaths), "windows requires disk boot")
 	// windows + gpuProfileRef: rejected (GPU-to-Windows out of scope v1).
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
-	})), "GPU passthrough")
+	}), testAllowAllHostPaths), "GPU passthrough")
 	// invalid enum value: rejected (defense-in-depth beyond the CRD schema).
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSType("bsd")
-	})), "spec.osType must be linux or windows")
+	}), testAllowAllHostPaths), "spec.osType must be linux or windows")
 }
 
 func TestValidate_CloneFromSnapshotRules(t *testing.T) {
@@ -119,17 +124,17 @@ func TestValidate_CloneFromSnapshotRules(t *testing.T) {
 	// missing snapshotRef.name.
 	errContains(t, validateSwiftGuest(cloneGuest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.CloneFromSnapshot.SnapshotRef.Name = ""
-	})), "snapshotRef.name is required")
+	}), testAllowAllHostPaths), "snapshotRef.name is required")
 	// gpuProfileRef + cloneFromSnapshot: rejected.
 	errContains(t, validateSwiftGuest(cloneGuest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
-	})), "mutually exclusive with GPU passthrough")
+	}), testAllowAllHostPaths), "mutually exclusive with GPU passthrough")
 }
 
 func TestValidate_GuestClassRequiredForImageBoot(t *testing.T) {
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GuestClassRef = corev1.LocalObjectReference{}
-	})), "spec.guestClassRef.name is required")
+	}), testAllowAllHostPaths), "spec.guestClassRef.name is required")
 }
 
 func hostPathFS(name string, mut func(*swiftv1alpha1.Filesystem)) swiftv1alpha1.Filesystem {
@@ -153,7 +158,7 @@ func TestValidate_Filesystems(t *testing.T) {
 				PVCRef: &corev1.LocalObjectReference{Name: "claim"}}},
 		}
 	})
-	if err := validateSwiftGuest(g); err != nil {
+	if err := validateSwiftGuest(g, testAllowAllHostPaths); err != nil {
 		t.Fatalf("valid filesystems rejected: %v", err)
 	}
 
@@ -161,7 +166,7 @@ func TestValidate_Filesystems(t *testing.T) {
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("dup", nil), hostPathFS("dup", nil)}
 	})
-	errContains(t, validateSwiftGuest(g), "is duplicated")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "is duplicated")
 
 	// Duplicate effective tag (one explicit, one defaulted from name).
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -170,7 +175,7 @@ func TestValidate_Filesystems(t *testing.T) {
 			hostPathFS("shared", nil),
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "tag")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "tag")
 
 	// Both sources set.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -180,27 +185,27 @@ func TestValidate_Filesystems(t *testing.T) {
 			}),
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "not both")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "not both")
 
 	// No source set.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{{Name: "empty"}}
 	})
-	errContains(t, validateSwiftGuest(g), "exactly one of hostPath or pvcRef")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "exactly one of hostPath or pvcRef")
 
 	// Rejected with gpuProfileRef (CH-only in v1).
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu"}
 		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("data", nil)}
 	})
-	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "gpuProfileRef")
 
 	// Rejected with Windows (no virtio-fs guest driver in v1).
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
 		g.Spec.OSType = swiftv1alpha1.OSTypeWindows
 		g.Spec.Filesystems = []swiftv1alpha1.Filesystem{hostPathFS("data", nil)}
 	})
-	errContains(t, validateSwiftGuest(g), "windows")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "windows")
 }
 
 func TestValidate_VhostUserInterfaces(t *testing.T) {
@@ -211,7 +216,7 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
 		}
 	})
-	if err := validateSwiftGuest(g); err != nil {
+	if err := validateSwiftGuest(g, testAllowAllHostPaths); err != nil {
 		t.Fatalf("valid vhost-user rejected: %v", err)
 	}
 
@@ -221,7 +226,7 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "requires a socket")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "requires a socket")
 
 	// networkRef not allowed.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -230,7 +235,7 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 				Socket: "/s.sock", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "nad"}},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "networkRef")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "networkRef")
 
 	// resourceName not allowed.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -239,7 +244,7 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 				Socket: "/s.sock", ResourceName: "intel.com/sriov"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "resourceName")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "resourceName")
 
 	// Rejected with gpuProfileRef (CH-only in v1).
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -248,7 +253,7 @@ func TestValidate_VhostUserInterfaces(t *testing.T) {
 			{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/s.sock"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "gpuProfileRef")
 }
 
 func TestValidate_VhostUserDevices(t *testing.T) {
@@ -259,7 +264,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "gen0", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/run/x/g", VirtioID: "block"},
 		}
 	})
-	if err := validateSwiftGuest(g); err != nil {
+	if err := validateSwiftGuest(g, testAllowAllHostPaths); err != nil {
 		t.Fatalf("valid vhost-user devices rejected: %v", err)
 	}
 
@@ -269,7 +274,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "socket is required")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "socket is required")
 
 	// Generic without virtioId.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -277,7 +282,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeGeneric, Socket: "/s"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "virtioId")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "virtioId")
 
 	// Bad type.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -285,7 +290,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "d", Type: "weird", Socket: "/s"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "must be blk or generic")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "must be blk or generic")
 
 	// Duplicate name.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -294,7 +299,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/b"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "duplicated")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "duplicated")
 
 	// Rejected with gpuProfileRef.
 	g = guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -303,7 +308,7 @@ func TestValidate_VhostUserDevices(t *testing.T) {
 			{Name: "d", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/s"},
 		}
 	})
-	errContains(t, validateSwiftGuest(g), "gpuProfileRef")
+	errContains(t, validateSwiftGuest(g, testAllowAllHostPaths), "gpuProfileRef")
 }
 
 func TestValidate_DataDisks(t *testing.T) {
@@ -315,7 +320,7 @@ func TestValidate_DataDisks(t *testing.T) {
 	if err := validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
 		Name:  "db",
 		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("100Gi")},
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("blank Block disk should be valid: %v", err)
 	}
 
@@ -323,7 +328,7 @@ func TestValidate_DataDisks(t *testing.T) {
 	if err := validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
 		Name:  "fs",
 		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("10Gi"), VolumeMode: corev1.PersistentVolumeFilesystem},
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("blank Filesystem disk should be valid: %v", err)
 	}
 
@@ -332,12 +337,12 @@ func TestValidate_DataDisks(t *testing.T) {
 		swiftv1alpha1.DataDiskRef{Name: "img", ImageRef: &corev1.LocalObjectReference{Name: "i"}},
 		swiftv1alpha1.DataDiskRef{Name: "vmpvc", PVCRef: &corev1.LocalObjectReference{Name: "p"}, AttachAsDisk: true},
 		swiftv1alpha1.DataDiskRef{Name: "fspvc", PVCRef: &corev1.LocalObjectReference{Name: "q"}},
-	)); err != nil {
+	), testAllowAllHostPaths); err != nil {
 		t.Errorf("mixed image/pvc disks should be valid: %v", err)
 	}
 
 	// Invalid: no source kind.
-	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{Name: "empty"})),
+	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{Name: "empty"}), testAllowAllHostPaths),
 		"exactly one of imageRef, pvcRef, or blank")
 
 	// Invalid: two source kinds.
@@ -345,26 +350,26 @@ func TestValidate_DataDisks(t *testing.T) {
 		Name:     "two",
 		ImageRef: &corev1.LocalObjectReference{Name: "i"},
 		Blank:    &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")},
-	})), "exactly one of imageRef, pvcRef, or blank")
+	}), testAllowAllHostPaths), "exactly one of imageRef, pvcRef, or blank")
 
 	// Invalid: blank size 0.
 	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
 		Name:  "zero",
 		Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("0")},
-	})), "blank.size must be greater than 0")
+	}), testAllowAllHostPaths), "blank.size must be greater than 0")
 
 	// Invalid: attachAsDisk without pvcRef.
 	errContains(t, validateSwiftGuest(gi(swiftv1alpha1.DataDiskRef{
 		Name:         "bad",
 		Blank:        &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")},
 		AttachAsDisk: true,
-	})), "attachAsDisk is only valid with pvcRef")
+	}), testAllowAllHostPaths), "attachAsDisk is only valid with pvcRef")
 
 	// Invalid: duplicate names.
 	errContains(t, validateSwiftGuest(gi(
 		swiftv1alpha1.DataDiskRef{Name: "dup", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}},
 		swiftv1alpha1.DataDiskRef{Name: "dup", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("2Gi")}},
-	)), "duplicated")
+	), testAllowAllHostPaths), "duplicated")
 
 	// Invalid: a plural entry named "data" collides with the singular shorthand.
 	errContains(t, validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -372,14 +377,14 @@ func TestValidate_DataDisks(t *testing.T) {
 		g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
 			{Name: "data", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}},
 		}
-	})), "collides with the implicit name of spec.dataDiskRef")
+	}), testAllowAllHostPaths), "collides with the implicit name of spec.dataDiskRef")
 
 	// Invalid: more than 8 data disks.
 	many := make([]swiftv1alpha1.DataDiskRef, 9)
 	for i := range many {
 		many[i] = swiftv1alpha1.DataDiskRef{Name: "d" + strconv.Itoa(i), Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("1Gi")}}
 	}
-	errContains(t, validateSwiftGuest(gi(many...)), "at most 8 data disks")
+	errContains(t, validateSwiftGuest(gi(many...), testAllowAllHostPaths), "at most 8 data disks")
 
 	// Valid: data disks compose with GPU (no usesGPU rejection).
 	if err := validateSwiftGuest(guest(func(g *swiftv1alpha1.SwiftGuest) {
@@ -387,7 +392,38 @@ func TestValidate_DataDisks(t *testing.T) {
 		g.Spec.DataDiskRefs = []swiftv1alpha1.DataDiskRef{
 			{Name: "db", Blank: &swiftv1alpha1.BlankDiskSpec{Size: resource.MustParse("50Gi")}},
 		}
-	})); err != nil {
+	}), testAllowAllHostPaths); err != nil {
 		t.Errorf("data disk + GPU should be valid: %v", err)
+	}
+}
+
+// TestValidateFilesystems_HostPathConfinement pins the reported Critical: a
+// namespaced tenant could set spec.filesystems[].source.hostPath to "/" and get
+// the node root mounted read-write into their own VM, because the launcher is
+// privileged and virtiofsd is handed the directory verbatim.
+func TestValidateFilesystems_HostPathConfinement(t *testing.T) {
+	withFS := func(hp string) *swiftv1alpha1.SwiftGuest {
+		return guest(func(g *swiftv1alpha1.SwiftGuest) {
+			g.Spec.Filesystems = []swiftv1alpha1.Filesystem{{
+				Name:   "share",
+				Source: swiftv1alpha1.FilesystemSource{HostPath: &hp},
+			}}
+		})
+	}
+	allowed := []string{"/srv/vm"}
+
+	// The exploit, and the traversal that defeats a naive prefix check.
+	for _, bad := range []string{"/", "/etc/kubernetes/pki", "/srv/vm/../../etc", "/srv/vmsecrets"} {
+		if err := validateSwiftGuest(withFS(bad), allowed); err == nil {
+			t.Errorf("accepted hostPath %q", bad)
+		}
+	}
+	// The legitimate case still works.
+	if err := validateSwiftGuest(withFS("/srv/vm/share1"), allowed); err != nil {
+		t.Errorf("rejected an allowed hostPath: %v", err)
+	}
+	// Default posture: no allowlist configured -> nothing is mountable.
+	if err := validateSwiftGuest(withFS("/srv/vm/share1"), nil); err == nil {
+		t.Error("empty allowlist should deny every hostPath")
 	}
 }
