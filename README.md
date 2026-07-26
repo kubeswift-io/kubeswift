@@ -33,7 +33,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 - **OCI registry artifacts** — golden VM images (`SwiftImage.spec.source.oci` + `swiftctl image publish`, cosign-signed with verify-on-pull) and VM snapshots / full-state cold migration (`SwiftSnapshot` `backend.type: oci`) stored in any OCI registry, for cross-cluster and edge distribution.
 - **Migration** — offline migration on any storage, and live migration (sub-second downtime) with optional mTLS transport and `kubectl drain` integration.
 - **Fleets** — `SwiftGuestPool` gives ReplicaSet-style scaling with rolling updates, topology spread, and a PVC per replica.
-- **Operations** — `swiftctl` for console/SSH/lifecycle/describe; Prometheus metrics and Grafana dashboards across every feature; cloud-init via NoCloud; security-hardened containers (drop-ALL, no privileged).
+- **Operations** — `swiftctl` for console/SSH/lifecycle/describe; Prometheus metrics and Grafana dashboards across every feature; cloud-init via NoCloud; hardened supporting containers (gpu-discovery, DRA driver, gateway and UI run non-root / drop-ALL). The VM **launcher** pod is privileged by design — it manages KVM, tap devices and VFIO — so it is a node-level trust boundary; see [`docs/security-audit.md`](docs/security-audit.md).
 
 ## Custom Resources
 

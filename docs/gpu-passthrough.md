@@ -101,7 +101,7 @@ Discovery preserves controller-owned fields during status patches by reading the
 
 ### Security
 
-- **No privileged containers**: drops ALL capabilities, readOnlyRootFilesystem
+- **Hardened discovery**: the gpu-discovery DaemonSet drops ALL capabilities and uses readOnlyRootFilesystem (the GPU *launcher* pod is privileged by design — see `docs/security-audit.md`)
 - **/sys and /dev mounted read-only**: sysfs and lspci reads only, no host state modification
 - **hostPID=false, hostNetwork=false**
 - **Separate RBAC**: only `swiftgpunodes` (get/list/create/patch) + `swiftgpunodes/status` (get/patch) + `nodes` (get)
