@@ -4,6 +4,80 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.3] — 2026-07-26
+
+Security release. A five-domain review (gateway auth, RBAC/chart/containers, UI,
+VM runtime, supply chain) produced eight fixes. Every one carries a regression
+test that was verified to fail without its source change.
+
+### Action required on upgrade
+
+- **`gateway.authMode` now defaults to `oidc`** (was `insecure`, which performs no
+  authentication at all). The gateway is not deployed unless `gateway.enabled=true`
+  or `federation.role=hub`, so a bare install is unaffected — but if you enable the
+  gateway you must now configure an IdP, or set `gateway.authMode=insecure`
+  deliberately. The chart also refuses `authMode=insecure` together with
+  `gateway.ingress.enabled`; override with `gateway.allowInsecureIngress=true`.
+- **SwiftGuest host paths are confined to an allowlist that is empty by default.**
+  `spec.filesystems[].source.hostPath` and vhost-user socket directories are
+  rejected until an operator opts in with `swiftGuest.allowedHostPathPrefixes`.
+  `pvcRef` shares are unaffected. See `docs/virtiofs.md`.
+- **`spec.interfaces[].mac` must be a canonical MAC.** Previously unvalidated.
+- **The `manage-rbac` capability no longer grants `escalate`/`bind`**, so the UI's
+  Admin role can no longer grant permissions its holder does not already have.
+
+### Fixed
+
+- **Gateway `ListClusters`/`WatchClusters` were unauthenticated** — both returned
+  every member cluster's apiserver URL, version and condition messages to any
+  caller that could reach the port, and `WatchClusters` streamed it live. (#434)
+- **Secret redaction was bypassed by the kubectl annotation.** Only `data` and
+  `stringData` were stripped, so a Secret created with `kubectl apply` still
+  carried its plaintext `stringData` in
+  `kubectl.kubernetes.io/last-applied-configuration`. (#434)
+- **OIDC claims could assert `system:masters`.** Claim values were copied verbatim
+  into the impersonation headers with no reserved-prefix guard. (#434)
+- **Command injection in the image-import and kernel-pull Jobs.** `fmt.Sprintf("%q")`
+  is a Go quoter, not a shell quoter — it leaves `$` and backticks intact — and the
+  result was placed inside shell double quotes. A SwiftImage URL or SwiftKernel OCI
+  reference containing `$(...)` executed as root in a privileged container. Values
+  now ride as environment variables. (#435)
+- **The Cloud Hypervisor binary was downloaded without integrity verification**,
+  while the firmware beside it was already checksum-pinned. Both architectures are
+  now pinned. (#436)
+- **Verify-before-boot had a TOCTOU in `sandbox-materialize`** — it verified one
+  digest and then re-resolved the tag, so a tag swap between the two defeated
+  `verifyKeySecretRef`. It now materializes the digest it verified. (#436)
+- **Unconfined SwiftGuest host paths.** `hostPath: /` mounted the node root
+  read-write into a tenant's VM. (#437)
+- **`spec.interfaces[].mac` reached a sourced shell file**, so a MAC containing a
+  command substitution executed in the privileged launcher. (#439)
+- **`spec.nodeName` bypassed the scheduler's taint check.** Direct pod binding is
+  deliberate (live migration depends on it), so the taint predicate is now
+  reproduced in the controller instead of changing the binding. (#439)
+- oras-go bumped for GO-2026-5880; both CI workflows declare least-privilege
+  `permissions`. (#436)
+
+### Changed
+
+- The host-path allowlist is enforced in the controller as well as the validating
+  webhook, so it holds on installs running with `webhook.enabled=false`. (#441)
+- `docs/security-audit.md` SEC-01/02/03 move from RESOLVED to **ACCEPTED**: the
+  capability-scoped launcher was implemented and then reverted because it broke
+  QEMU boot, so every launcher is privileged by design. README and the GPU and
+  operator docs said otherwise and are corrected. The consequence is recorded
+  plainly — the launcher pod is a node-level trust boundary. (#438)
+
+### Known
+
+- The launcher pod runs as the namespace `default` ServiceAccount, which is bound
+  `pods: get,patch`. Anyone able to create a pod in that namespace inherits it and
+  can patch the privileged launcher's image. A dedicated ServiceAccount is planned
+  but does not by itself close this — Kubernetes does not gate which ServiceAccount
+  a pod may reference. Tracked.
+
+---
+
 ## [v0.13.2] — 2026-07-24
 
 Gateway enablement for permission-aware, general-purpose Kubernetes resource CRUD

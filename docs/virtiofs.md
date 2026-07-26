@@ -58,6 +58,25 @@ Rules the admission webhook enforces:
 - `source` sets **exactly one** of `hostPath` / `pvcRef`.
 - not combinable with `gpuProfileRef`, nor with `osType: windows`.
 
+## hostPath needs an operator opt-in (v0.13.3+)
+
+`hostPath` shares are confined to an allowlist that is **empty by default**, so a
+guest using one is rejected until a cluster admin permits the prefix:
+
+```bash
+helm upgrade kubeswift ... \
+  --set swiftGuest.allowedHostPathPrefixes[0]=/srv/data
+```
+
+The launcher container is privileged, so a host path it mounts is effectively
+node-root access handed to whoever authored the SwiftGuest — which is why the
+default is deny rather than allow. `..` is always rejected regardless of the
+allowlist, and prefixes match whole path segments (`/srv/data` permits
+`/srv/data/x` but not `/srv/database`). Enforced by both the validating webhook
+and the controller, so it holds even with `webhook.enabled=false`.
+
+`pvcRef` shares are unaffected — they carry no host path.
+
 `readOnly: true` is enforced at the launcher pod's volumeMount (and the PVC
 volume), so the guest physically cannot mutate the backing content.
 
