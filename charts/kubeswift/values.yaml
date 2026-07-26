@@ -179,6 +179,11 @@ gateway:
   #              per-user impersonation. DEV/LAB ONLY: every UI user inherits
   #              whatever the member credentials grant. Do not use in production.
   authMode: insecure
+  # Escape hatch for authMode=insecure + ingress.enabled, which the chart
+  # otherwise refuses: that combination puts an UNAUTHENTICATED control plane
+  # (VM console, sandbox exec, RBAC editor) on the network. Only set this if the
+  # gateway is isolated by other means.
+  allowInsecureIngress: false
   # OIDC settings (used only when authMode=oidc). The gateway verifies the
   # browser-supplied ID token against issuerURL's JWKS and impersonates the
   # claim-derived user+groups onto each member. issuerURL must resolve to ONE URL
