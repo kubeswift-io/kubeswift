@@ -300,6 +300,12 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err != nil {
 		return nil, err
 	}
+	// Re-apply the host-path allowlist here, not only in the webhook: the
+	// webhook is off by default, and the launcher is privileged. See
+	// hostpathguard.go.
+	if err := checkHostPaths(guest, r.AllowedHostPathPrefixes); err != nil {
+		return nil, err
+	}
 	// spec.NodeName binds the pod directly, skipping the scheduler -- so the
 	// taint predicate never runs. Reproduce it here; see nodeplacement.go.
 	if err := checkNodePlacement(ctx, r.Client, guest, pod); err != nil {

@@ -178,7 +178,16 @@ gateway:
   #   insecure - member queries run as the gateway's own credential, with NO
   #              per-user impersonation. DEV/LAB ONLY: every UI user inherits
   #              whatever the member credentials grant. Do not use in production.
-  authMode: insecure
+  # SECURE BY DEFAULT: oidc. authMode=insecure performs NO authentication at all
+  # -- every caller runs as the member cluster credential across the whole API
+  # plus the console and sandbox-exec planes -- so it is opt-in, never inherited.
+  # The gateway is not deployed unless gateway.enabled=true (or role=hub), so
+  # this only asks operators who are deliberately standing up the browser-facing
+  # control plane to pick an auth mode.
+  #   oidc      verify the IdP token, impersonate the user (see docs/ui/auth.md)
+  #   token     Kubernetes TokenReview
+  #   insecure  DEV/LAB ONLY -- no authentication
+  authMode: oidc
   # Escape hatch for authMode=insecure + ingress.enabled, which the chart
   # otherwise refuses: that combination puts an UNAUTHENTICATED control plane
   # (VM console, sandbox exec, RBAC editor) on the network. Only set this if the

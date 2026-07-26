@@ -68,6 +68,10 @@ type SwiftGuestReconciler struct {
 	// source pod. When false (default) the launcher pod is byte-for-byte
 	// unchanged from Phase 3a/3b.
 	MigrationMTLSEnabled bool
+	// AllowedHostPathPrefixes mirrors the webhook's host-path allowlist. The
+	// webhook is the primary gate but is disabled by default (it needs
+	// cert-manager), so the controller enforces it too -- see hostpathguard.go.
+	AllowedHostPathPrefixes []string
 
 	// SystemNamespace is the controller-manager's own namespace, where the
 	// migration CA Issuer, the per-node identity Secrets, and the

@@ -54,7 +54,7 @@ spec:
             - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}
             - --prometheus-discovery-namespaces={{ join "," .Values.gateway.prometheusDiscovery.namespaces }}
             {{- if eq .Values.gateway.authMode "oidc" }}
-            - --oidc-issuer-url={{ required "gateway.oidc.issuerURL is required when gateway.authMode=oidc" .Values.gateway.oidc.issuerURL }}
+            - --oidc-issuer-url={{ required "gateway.oidc.issuerURL is required when gateway.authMode=oidc (the default). Configure your IdP -- see docs/ui/auth.md -- or set gateway.authMode=insecure for an isolated lab." .Values.gateway.oidc.issuerURL }}
             - --oidc-client-id={{ required "gateway.oidc.clientID is required when gateway.authMode=oidc" .Values.gateway.oidc.clientID }}
             - --oidc-username-claim={{ .Values.gateway.oidc.usernameClaim }}
             - --oidc-groups-claim={{ .Values.gateway.oidc.groupsClaim }}
