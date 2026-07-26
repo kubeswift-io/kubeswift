@@ -38,15 +38,24 @@ func pullJobName(skName, nodeName string) string {
 	return base[:40] + "-" + suffix
 }
 
+// pullImageEnv carries the user-supplied OCI reference to the pull container.
+// It is NOT interpolated into the script: the shell does not re-evaluate the
+// contents of a variable it expands, so a reference containing $(...) or
+// backticks is inert. Interpolating it (even via %q, which escapes " and \ but
+// NOT $ or `) put attacker-controlled command substitution inside a root
+// container holding a node hostPath mount.
+const pullImageEnv = "OCI_IMAGE"
+
 // pullScript returns a shell script that pulls OCI artifacts into destDir.
-func pullScript(image, destDir string) string {
+// destDir is controller-derived (KernelLocalPath), not user input.
+func pullScript(destDir string) string {
 	return fmt.Sprintf(`set -e
 mkdir -p %q
 cd %q
-oras pull %q
+oras pull "$%s"
 echo "Pull complete"
 ls -lh .`,
-		destDir, destDir, image)
+		destDir, destDir, pullImageEnv)
 }
 
 // StartPullOnNode creates the pull Job for the SwiftKernel scheduled on the given node.
@@ -56,7 +65,7 @@ func (r *SwiftKernelReconciler) StartPullOnNode(ctx context.Context, sk *kernelv
 	}
 	jobName := pullJobName(sk.Name, nodeName)
 	destDir := kernelv1alpha1.KernelLocalPath(sk.Namespace, sk.Name)
-	script := pullScript(sk.Spec.OCIRef.Image, destDir)
+	script := pullScript(destDir)
 
 	podSpec := corev1.PodSpec{
 		NodeSelector: map[string]string{
@@ -71,6 +80,7 @@ func (r *SwiftKernelReconciler) StartPullOnNode(ctx context.Context, sk *kernelv
 			Name:    "pull",
 			Image:   orasImage,
 			Command: []string{"sh", "-c", script},
+			Env:     []corev1.EnvVar{{Name: pullImageEnv, Value: sk.Spec.OCIRef.Image}},
 			VolumeMounts: []corev1.VolumeMount{{
 				Name:      "kernels",
 				MountPath: kernelHostBasePath,

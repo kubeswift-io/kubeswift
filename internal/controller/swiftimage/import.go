@@ -35,15 +35,23 @@ const (
 // (Windows has no GRUB — it boots bootmgfw from the ESP and manages serial via
 // EMS/SAC in the operator-prepped image), keeping only the OS-agnostic
 // qcow2->raw convert + size measurement. (Windows guest support — PR 3.)
-func importScript(sourceURL, sourceFormat, osType string) string {
+// The source URL is NOT interpolated into the script. It is passed to the
+// container as SOURCE_URL and referenced as "$SOURCE_URL", because the shell
+// does not re-evaluate the CONTENTS of a variable it expands — so a URL
+// containing $(...) or backticks is inert. Interpolating it (even via %q, which
+// escapes " and \ but NOT $ or `) put attacker-controlled command substitution
+// inside a root, privileged container.
+const importSourceURLEnv = "SOURCE_URL"
+
+func importScript(sourceFormat, osType string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
 	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o %q %q\nqemu-img convert -f qcow2 -O raw %q \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, sourceURL, source, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o \"$SRC\" \"$%s\"\nqemu-img convert -f qcow2 -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, importSourceURLEnv, grubPatch)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" %q%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, sourceURL, grubPatch)
+	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" \"$%s\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, importSourceURLEnv, grubPatch)
 }
 
 // grubPatchBlock is the shell that loop-mounts a Linux disk image and injects
@@ -179,7 +187,7 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 	// Per-guest disk sizing happens during the root disk clone step.
 	sourceURL := img.Spec.Source.HTTP.URL
 	sourceFormat := string(img.Spec.Format)
-	script := importScript(sourceURL, sourceFormat, string(img.Spec.OSType))
+	script := importScript(sourceFormat, string(img.Spec.OSType))
 	// The import Job needs privileged ONLY for the loop-mount the Linux GRUB
 	// serial-console patch performs. Windows skips that patch (no GRUB), so its
 	// import runs unprivileged (Design Principle: no privileged unless required).
@@ -199,6 +207,9 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 						Name:    "import",
 						Image:   "ubuntu:22.04",
 						Command: []string{"sh", "-c", script},
+						// The user-supplied URL rides as an env var, never spliced
+						// into the script text.
+						Env: []corev1.EnvVar{{Name: importSourceURLEnv, Value: sourceURL}},
 						SecurityContext: &corev1.SecurityContext{
 							// Privileged only for the Linux GRUB-patch loop-mount;
 							// false for Windows imports (no patch, no mount).
