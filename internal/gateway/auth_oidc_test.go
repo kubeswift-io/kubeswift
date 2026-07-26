@@ -113,3 +113,42 @@ func TestHTTPClientWithCA(t *testing.T) {
 		t.Error("expected error for a file with no PEM certificates")
 	}
 }
+
+// A claim landing in the system: namespace must be refused outright. Without a
+// groups prefix (the default), an IdP where a user can influence their own
+// groups claim could otherwise assert system:masters — a hardcoded Kubernetes
+// superuser — and get cluster-admin on every federated member.
+func TestIdentityFromClaims_RejectsReservedSubjects(t *testing.T) {
+	cfg := OIDCClaimConfig{UsernameClaim: "email", GroupsClaim: "groups"}
+	cases := []struct {
+		name   string
+		claims map[string]interface{}
+	}{
+		{"masters group", map[string]interface{}{
+			"email": "alice@corp", "groups": []interface{}{"devs", "system:masters"}}},
+		{"serviceaccount group", map[string]interface{}{
+			"email": "alice@corp", "groups": []interface{}{"system:serviceaccount:kube-system:default"}}},
+		{"system username", map[string]interface{}{
+			"email": "system:masters", "groups": []interface{}{"devs"}}},
+		{"case and space evasion", map[string]interface{}{
+			"email": "alice@corp", "groups": []interface{}{" System:Masters"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := identityFromClaims(tc.claims, cfg)
+			if err == nil {
+				t.Fatalf("accepted a reserved subject: user=%q groups=%v", id.User, id.Groups)
+			}
+		})
+	}
+}
+
+// A prefix that pushes an otherwise-innocent claim into system: must also be
+// caught — the check runs on the final impersonated value, not the raw claim.
+func TestIdentityFromClaims_RejectsReservedAfterPrefix(t *testing.T) {
+	cfg := OIDCClaimConfig{UsernameClaim: "email", GroupsClaim: "groups", GroupsPrefix: "system:"}
+	claims := map[string]interface{}{"email": "alice@corp", "groups": []interface{}{"masters"}}
+	if id, err := identityFromClaims(claims, cfg); err == nil {
+		t.Fatalf("accepted groups=%v after the prefix pushed it into system:", id.Groups)
+	}
+}

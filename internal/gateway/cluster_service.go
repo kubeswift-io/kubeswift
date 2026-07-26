@@ -44,7 +44,15 @@ func NewClusterService(hub client.Reader, namespace string, watcher *ClusterWatc
 
 // ListClusters returns every registered member cluster. The fleet is small, so
 // P0 does not paginate (the page field is reserved for later scale).
-func (s *ClusterService) ListClusters(ctx context.Context, _ *connect.Request[kubeswiftv1.ListClustersRequest]) (*connect.Response[kubeswiftv1.ListClustersResponse], error) {
+//
+// The response carries each member's apiserver URL and version, so it is
+// authenticated like every other RPC — an unauthenticated caller must not be
+// able to enumerate the fleet. The identity is not used beyond that: these are
+// hub-cache reads, not impersonated member calls.
+func (s *ClusterService) ListClusters(ctx context.Context, req *connect.Request[kubeswiftv1.ListClustersRequest]) (*connect.Response[kubeswiftv1.ListClustersResponse], error) {
+	if _, err := s.auth.Authenticate(ctx, req.Header()); err != nil {
+		return nil, err
+	}
 	var list fleetv1alpha1.ClusterList
 	if err := s.hub.List(ctx, &list, client.InNamespace(s.namespace)); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -59,7 +67,13 @@ func (s *ClusterService) ListClusters(ctx context.Context, _ *connect.Request[ku
 // WatchClusters streams an initial ADDED snapshot followed by live deltas.
 // It subscribes BEFORE listing so no change is missed in the list→watch gap;
 // any resulting duplicate is harmless because the UI upserts by cluster name.
-func (s *ClusterService) WatchClusters(ctx context.Context, _ *connect.Request[kubeswiftv1.WatchClustersRequest], stream *connect.ServerStream[kubeswiftv1.ClusterEvent]) error {
+//
+// Authenticated for the same reason as ListClusters: the stream carries member
+// apiserver URLs, versions, and condition messages.
+func (s *ClusterService) WatchClusters(ctx context.Context, req *connect.Request[kubeswiftv1.WatchClustersRequest], stream *connect.ServerStream[kubeswiftv1.ClusterEvent]) error {
+	if _, err := s.auth.Authenticate(ctx, req.Header()); err != nil {
+		return err
+	}
 	sub := s.watcher.subscribe()
 	defer s.watcher.unsubscribe(sub)
 
