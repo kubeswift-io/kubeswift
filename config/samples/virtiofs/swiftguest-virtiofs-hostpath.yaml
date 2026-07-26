@@ -20,6 +20,13 @@ spec:
     - name: scratch          # per-guest id; drives the socket name
       tag: scratch           # guest: mount -t virtiofs scratch /mnt/scratch
       source:
+        # REQUIRES OPT-IN (v0.13.3+): host paths are confined to an operator
+        # allowlist, which is EMPTY by default, so this sample is rejected
+        # until the cluster admin permits the prefix:
+        #   --set swiftGuest.allowedHostPathPrefixes[0]=/srv/kubeswift
+        # The launcher is privileged, so a host path it mounts is node-root
+        # access granted to whoever authored the SwiftGuest. '..' is always
+        # rejected, and prefixes match whole path segments.
         hostPath: /srv/kubeswift/scratch   # created on the node if absent
   # In-guest, after boot:
   #   sudo mkdir -p /mnt/scratch
