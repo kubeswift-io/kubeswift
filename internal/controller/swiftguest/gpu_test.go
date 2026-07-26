@@ -482,8 +482,12 @@ func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
 
 	// Precedence check fires before any API call, so an empty fake client
 	// is sufficient.
+	// buildPod resolves spec.NodeName to run the scheduler's taint check
+	// (nodeplacement.go), so the fake client must know corev1 and hold the node.
 	scheme := runtime.NewScheme()
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	_ = corev1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
@@ -523,8 +527,12 @@ func TestBuildPodDispatcher_NodeNameSetGPUNil(t *testing.T) {
 		// Status.GPU intentionally nil.
 	}
 	rg := gpuResolvedGuest()
+	// buildPod resolves spec.NodeName to run the scheduler's taint check
+	// (nodeplacement.go), so the fake client must know corev1 and hold the node.
 	scheme := runtime.NewScheme()
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	_ = corev1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	// Precedence check should NOT fire (status.GPU is nil). The dispatcher
@@ -570,8 +578,12 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 		Seed:          &resolved.Seed{Datasource: "NoCloud", UserData: "x", MetaData: "y"},
 		Network:       true,
 	}
+	// buildPod resolves spec.NodeName to run the scheduler's taint check
+	// (nodeplacement.go), so the fake client must know corev1 and hold the node.
 	scheme := runtime.NewScheme()
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	_ = corev1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
@@ -618,7 +630,9 @@ func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
 			PartitionMode: "isolated",
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(profile).Build()
+	// The node must exist: buildPod resolves spec.NodeName for the taint check.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(profile,
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)

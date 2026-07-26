@@ -300,6 +300,11 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err != nil {
 		return nil, err
 	}
+	// spec.NodeName binds the pod directly, skipping the scheduler -- so the
+	// taint predicate never runs. Reproduce it here; see nodeplacement.go.
+	if err := checkNodePlacement(ctx, r.Client, guest, pod); err != nil {
+		return nil, err
+	}
 	if r.MigrationMTLSEnabled && migrationEligible(guest) {
 		applyMigrationSourceSidecar(pod, guest)
 	}

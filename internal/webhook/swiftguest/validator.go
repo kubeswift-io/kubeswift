@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +13,12 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/webhook/hostpath"
 )
+
+// macRE mirrors the kubebuilder Pattern on InterfaceSpec.MAC. Duplicated here
+// so the check survives a CRD/Go drift: the value is written into a shell env
+// file that launcher-entrypoint.sh sources, so a non-MAC string is command
+// execution in a privileged container, not a cosmetic problem.
+var macRE = regexp.MustCompile(`^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$`)
 
 // Validator validates SwiftGuest resources.
 //
@@ -348,6 +355,11 @@ func validateInterfaces(spec *swiftv1alpha1.SwiftGuestSpec, allowedHostPaths []s
 	hasVhostUser := false
 	for i := range spec.Interfaces {
 		iface := &spec.Interfaces[i]
+		// Checked before the vhost-user filter below: MAC is honored for bridge
+		// interfaces too, and it reaches a shell env file the launcher sources.
+		if iface.MAC != "" && !macRE.MatchString(iface.MAC) {
+			return fmt.Errorf("spec.interfaces[%d].mac %q is not a valid MAC address", i, iface.MAC)
+		}
 		if iface.Type != swiftv1alpha1.InterfaceTypeVhostUser {
 			continue
 		}
