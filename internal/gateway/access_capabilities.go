@@ -90,9 +90,21 @@ var capabilities = []capability{
 	},
 	{
 		key: "manage-rbac", displayName: "Manage access (RBAC)",
-		description: "Create roles and assign them to users (manage Kubernetes RBAC).",
+		description: "Create roles and assign them to users (manage Kubernetes RBAC). " +
+			"Cannot grant permissions the assigner does not already hold.",
+		// NO "escalate" and NO "bind".
+		//
+		// escalate is precisely the verb that disables Kubernetes' privilege-
+		// escalation prevention: with it, a holder can author a ClusterRole
+		// granting * / * and bind it to themselves, so "manage-rbac" silently
+		// became cluster-admin -- and the capability description shown to the
+		// operator granting it said nothing of the sort.
+		//
+		// Without escalate, the apiserver applies its normal rule: you may only
+		// grant permissions you already hold. That is the correct semantics for
+		// a delegated access editor, and it is what the description now claims.
 		rules: []rbacv1.PolicyRule{
-			rule([]string{"rbac.authorization.k8s.io"}, []string{"roles", "rolebindings", "clusterroles", "clusterrolebindings"}, []string{"get", "list", "watch", "create", "update", "patch", "delete", "bind", "escalate"}),
+			rule([]string{"rbac.authorization.k8s.io"}, []string{"roles", "rolebindings", "clusterroles", "clusterrolebindings"}, []string{"get", "list", "watch", "create", "update", "patch", "delete"}),
 		},
 	},
 }

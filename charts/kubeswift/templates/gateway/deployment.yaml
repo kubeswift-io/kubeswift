@@ -34,6 +34,22 @@ spec:
           args:
             - --listen=:{{ .Values.gateway.port }}
             - --clusters-namespace={{ .Values.namespace }}
+            {{- /*
+              auth-mode=insecure performs NO authentication: insecureAuthenticator
+              returns an empty identity with no error, so every caller runs as the
+              member cluster credential -- the whole Connect surface plus the
+              console/exec WebSocket planes, unauthenticated. That is a documented
+              dev/lab mode, but combined with an Ingress it puts an unauthenticated
+              control plane on the network, and CheckOrigin is permissive on the
+              WebSocket upgrades so any web page can drive it.
+
+              Refuse the combination rather than rely on the operator reading a
+              comment. gateway.allowInsecureIngress is the explicit override for
+              anyone who genuinely wants it (an isolated lab behind other controls).
+            */ -}}
+            {{- if and (eq .Values.gateway.authMode "insecure") .Values.gateway.ingress.enabled (not .Values.gateway.allowInsecureIngress) }}
+              {{- fail "gateway.authMode=insecure with gateway.ingress.enabled exposes an UNAUTHENTICATED control plane (VM console, sandbox exec, RBAC editor). Set gateway.authMode=oidc (or token), or set gateway.allowInsecureIngress=true to accept the risk deliberately." }}
+            {{- end }}
             - --auth-mode={{ .Values.gateway.authMode }}
             - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}
             - --prometheus-discovery-namespaces={{ join "," .Values.gateway.prometheusDiscovery.namespaces }}
