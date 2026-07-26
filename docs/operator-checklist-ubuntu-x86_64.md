@@ -311,7 +311,7 @@ See [OVN-Kubernetes Integration](networking/ovn-kubernetes.md#4-tenant-isolation
 
 ### Security contexts
 
-All containers run with minimum capabilities (not privileged):
+Supporting containers run with minimum capabilities. The VM launcher pod is privileged by design (KVM/tap/VFIO) — see `docs/security-audit.md`:
 
 | Container | Capabilities |
 |-----------|-------------|

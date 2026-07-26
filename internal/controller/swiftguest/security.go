@@ -135,7 +135,26 @@ func gpuInitSecurityContext() *corev1.SecurityContext {
 }
 
 // launcherSecurityContext returns the security context for the launcher
-// (swiftletd) container.
+// (swiftletd) container: privileged, GPU or not.
+//
+// This is deliberate, not an oversight. A capability-scoped launcher was
+// implemented and then reverted — dropping to explicit capabilities broke QEMU
+// boot in a cascade (/dev/net/tun unavailable, /proc/sys/net/ipv4/ip_forward
+// unwritable, sysctl allowlist), each round needing a rebuild + redeploy. A VMM
+// that manages KVM, VFIO, tap devices and iptables needs deep host access;
+// capability micromanagement added complexity without proportionate benefit.
+// See docs/security-audit.md (SEC-01/02/03) for the record.
+//
+// The consequence is that the launcher pod is a NODE-level trust boundary, not
+// a container-level one: anything a SwiftGuest can make the launcher do is
+// node-root. That is why host paths reaching this pod are confined to an
+// operator allowlist in the webhook (internal/webhook/hostpath) instead of
+// being taken verbatim from the CR.
+//
+// hasGPU is retained because the callers are GPU-aware and a future split
+// (e.g. only the GPU path needing VFIO privileges) would key on it; today both
+// paths are identical.
 func launcherSecurityContext(hasGPU bool) *corev1.SecurityContext {
+	_ = hasGPU // both paths are privileged today; see the comment above
 	return privilegedContext()
 }

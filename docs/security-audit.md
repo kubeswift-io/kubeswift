@@ -11,9 +11,9 @@
 
 | ID | Severity | Component | Finding |
 |----|----------|-----------|---------|
-| SEC-01 | ~~CRITICAL~~ RESOLVED | launcher container | ~~`privileged: true`~~ Replaced with drop ALL + NET_ADMIN, SYS_ADMIN (non-GPU) / + SYS_RESOURCE, DAC_OVERRIDE (GPU) |
-| SEC-02 | ~~CRITICAL~~ RESOLVED | network-init container | ~~`privileged: true`~~ Replaced with drop ALL + NET_ADMIN, NET_RAW |
-| SEC-03 | ~~HIGH~~ RESOLVED | gpu-init container | ~~`privileged: true`~~ Replaced with drop ALL + SYS_ADMIN; sysfs-pci hostPath volume added |
+| SEC-01 | ACCEPTED (was CRITICAL) | launcher container | `privileged: true`. The capability-based replacement was implemented, then **reverted** — see the note below. |
+| SEC-02 | ACCEPTED (was CRITICAL) | network-init container | `privileged: true`. Same revert as SEC-01. |
+| SEC-03 | ACCEPTED (was HIGH) | gpu-init container | `privileged: true`. Same revert as SEC-01. |
 | SEC-04 | HIGH (mitigated) | /dev/vfio hostPath | Entire `/dev/vfio` directory mounted — documented why scoping is impractical (VFIO group files created during bind) |
 | SEC-05 | ~~HIGH~~ RESOLVED | PCI address injection | BDF format validation added to gpu-init.sh (regex: `^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$`) |
 | SEC-06 | ~~HIGH~~ RESOLVED | Fabric Manager partition isolation | Partition ownership validated against SwiftGPUNode allocatedTo before pod creation |
@@ -28,6 +28,31 @@
 | SEC-15 | LOW | Kernel pull job runs as root | Pull job uses `runAsUser: 0` for hostPath write; could be scoped tighter |
 | SEC-16 | LOW | VFIO bind interrupted state | gpu-init.sh unbind/rebind is not atomic; crash leaves device driverless |
 | SEC-17 | LOW | Guest-to-pod network reachability | Bridge subnet is hardcoded; no network policy enforcement on guest traffic |
+
+> **Correction (2026-07-25).** SEC-01/02/03 were marked RESOLVED in the April
+> audit because the capability-based security contexts had just landed. That
+> approach was subsequently **reverted**: dropping to explicit capabilities
+> produced a cascade of runtime failures during QEMU boot validation
+> (`/dev/net/tun` unavailable, `/proc/sys/net/ipv4/ip_forward` unwritable,
+> sysctl allowlist), each needing a rebuild + redeploy + cluster config change.
+>
+> The decision taken was that a VM platform managing KVM, VFIO, tap devices and
+> iptables inherently needs deep host access, and that capability
+> micromanagement added complexity without proportionate benefit. So
+> `internal/controller/swiftguest/security.go` returns `privileged: true` for
+> the launcher, network-init, gpu-init and clone-grow-init containers, and that
+> is deliberate.
+>
+> **The launcher pod is therefore a node-level trust boundary, not a
+> container-level one.** Anything a SwiftGuest can make the launcher do — mount
+> a host path, open a socket, reach a device — is node-root. That is why host
+> paths are confined to an operator allowlist
+> (`swiftGuest.allowedHostPathPrefixes`) rather than accepted verbatim.
+>
+> Components that genuinely do not need host access are still hardened and
+> should stay that way: gpu-discovery and the DRA driver run `privileged:
+> false` + drop-ALL + read-only rootfs, and the gateway and UI run non-root.
+
 | SEC-18 | LOW | No seccomp profile | No containers specify a seccomp profile |
 | SEC-19 | LOW | OVMF_VARS template world-readable | Writable UEFI variable store copied without restrictive permissions |
 
