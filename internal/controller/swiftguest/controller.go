@@ -34,6 +34,9 @@ import (
 const gpuHypervisorAnnotation = "kubeswift.io/hypervisor-override"
 
 const (
+	// SeedConfigMapSuffix names the rendered seed. It is a SECRET despite the
+	// constant name (kept to avoid churn across the pod builders): user-data
+	// carries SSH keys, passwords and join tokens.
 	SeedConfigMapSuffix = "-seed"
 
 	// defaultNetworkConfig is used when SwiftSeedProfile has no networkData.
@@ -216,27 +219,37 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			networkData = defaultNetworkConfig
 		}
 		seedConfigMapName = guest.Name + SeedConfigMapSuffix
-		desiredCM := seed.BuildConfigMap(seedConfigMapName, guest.Namespace, userData, metaData, networkData)
-		if err := controllerutil.SetControllerReference(&guest, desiredCM, r.Scheme); err != nil {
+		// Rendered as a SECRET: user-data routinely carries SSH keys, passwords
+		// and join tokens, and a seed profile can source it from a Secret — which
+		// this used to copy into a ConfigMap, in the clear.
+		desiredSeed := seed.BuildSecret(seedConfigMapName, guest.Namespace, userData, metaData, networkData)
+		if err := controllerutil.SetControllerReference(&guest, desiredSeed, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
-		var existingCM corev1.ConfigMap
-		if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: seedConfigMapName}, &existingCM); err != nil {
+		var existingSeed corev1.Secret
+		if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: seedConfigMapName}, &existingSeed); err != nil {
 			if client.IgnoreNotFound(err) != nil {
 				return ctrl.Result{}, err
 			}
-			if err := r.Create(ctx, desiredCM); err != nil {
+			if err := r.Create(ctx, desiredSeed); err != nil {
 				return ctrl.Result{}, err
 			}
 		} else {
-			if !equality.Semantic.DeepEqual(existingCM.Data, desiredCM.Data) ||
-				!equality.Semantic.DeepEqual(existingCM.OwnerReferences, desiredCM.OwnerReferences) {
-				existingCM.Data = desiredCM.Data
-				existingCM.OwnerReferences = desiredCM.OwnerReferences
-				if err := r.Update(ctx, &existingCM); err != nil {
+			// Compare against the rendered form: the apiserver returns Data
+			// (decoded), never StringData, so DeepEqual on StringData would
+			// differ on every reconcile and hot-loop.
+			if !equality.Semantic.DeepEqual(existingSeed.Data, renderedSeedData(desiredSeed)) ||
+				!equality.Semantic.DeepEqual(existingSeed.OwnerReferences, desiredSeed.OwnerReferences) {
+				existingSeed.Data = renderedSeedData(desiredSeed)
+				existingSeed.StringData = nil
+				existingSeed.OwnerReferences = desiredSeed.OwnerReferences
+				if err := r.Update(ctx, &existingSeed); err != nil {
 					return ctrl.Result{}, err
 				}
 			}
+		}
+		if err := r.retireLegacySeedConfigMap(ctx, &guest, seedConfigMapName); err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 

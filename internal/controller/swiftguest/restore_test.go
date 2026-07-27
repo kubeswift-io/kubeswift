@@ -366,11 +366,16 @@ func TestBuildRestorePod_SeedMountWhenSourceHadSeed(t *testing.T) {
 	if seedVol == nil {
 		t.Fatal("restore pod missing seed volume despite source having a seed")
 	}
-	if seedVol.ConfigMap == nil {
-		t.Fatal("seed volume must be a ConfigMap")
+	// A Secret, not a ConfigMap: user-data carries SSH keys and join tokens, and
+	// the restore path renders the same seed as the boot path.
+	if seedVol.Secret == nil {
+		t.Fatal("seed volume must be a Secret")
 	}
-	if seedVol.ConfigMap.Name != "g1-seed" {
-		t.Errorf("seed ConfigMap name = %q, want g1-seed", seedVol.ConfigMap.Name)
+	if seedVol.ConfigMap != nil {
+		t.Error("seed volume must not be a ConfigMap — that re-materialized the credential in the clear")
+	}
+	if seedVol.Secret.SecretName != "g1-seed" {
+		t.Errorf("seed Secret name = %q, want g1-seed", seedVol.Secret.SecretName)
 	}
 	launcher := pod.Spec.Containers[0]
 	mount := findMount(&launcher, "seed")
