@@ -160,9 +160,11 @@ and manageable with `kubectl`.
 - **The hub holds every member's credential** — restrict who can read Secrets in
   the gateway namespace; scope each member credential to least privilege.
 - **The bearer token is the user's** — served over TLS (terminate at the
-  ingress; the gateway speaks h2c behind it). The console WebSocket carries the
-  token in `?token=` (browsers can't set a WS auth header) — prefer short-lived
-  tokens and TLS so it isn't logged.
+  ingress; the gateway speaks h2c behind it). The raw WebSocket planes carry it
+  in a `Sec-WebSocket-Protocol` subprotocol, not in the URL, so it does not
+  reach access logs; see [gateway.md](gateway.md). The legacy `?token=` query
+  form is still accepted for older clients and is deprecated — it *is* logged,
+  by the UI's nginx and by any ingress in front of it.
 - **`auth-mode=insecure` bypasses all of this** (no impersonation; every user
   inherits the gateway credential). Never use it in production — the gateway
   logs a warning at startup when it is on.

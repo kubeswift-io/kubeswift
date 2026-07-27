@@ -185,21 +185,42 @@ In `insecure` mode these work with no token; in `token` mode add
   there (see `config/samples/gateway/member-rbac.yaml`); a read-only audience
   gets a clean permission denial. In `token` mode the member's RBAC gates who
   can act.
-- **Console** — a raw WebSocket at `/console?cluster=&namespace=&name=&token=`
+- **Console** — a raw WebSocket at `/console?cluster=&namespace=&name=`
   exec-bridges the guest's serial socket. It execs `socat` in the launcher
   pod, so the acting subject needs `create` on `pods/exec` — **powerful**
-  (arbitrary in-pod commands); grant it only to console users. Because browsers
-  can't set a WebSocket `Authorization` header, the bearer token rides the
-  `?token=` query param — which **can land in proxy/access logs**; prefer a
-  short-lived token, and a TLS-terminating ingress so the URL isn't on the wire.
-  `insecure` mode needs no token (and then anyone can open any console).
+  (arbitrary in-pod commands); grant it only to console users.
+
+  A browser cannot set a WebSocket `Authorization` header, so the bearer travels
+  as a **subprotocol** — `Sec-WebSocket-Protocol:
+  base64url.bearer.authorization.kubeswift.io.<base64url-nopad(token)>,
+  kubeswift.io` — mirroring the Kubernetes apiserver's own convention for
+  `kubectl exec`. That is a header, so it is not part of the URL and no access
+  log on the path records it. A client offering the bearer **must** also offer
+  `kubeswift.io`: a browser fails the connection if the server selects no
+  subprotocol, and the gateway only ever echoes that one back.
+
+  `?token=` is still accepted for clients released before this change, but it is
+  **deprecated and will be removed** — a query string is written to the UI's own
+  nginx access log and to any ingress in front of it, so a live token ends up
+  readable by anyone with `pods/log` on the namespace and by every log shipper.
+  The gateway logs when a caller uses it. `insecure` mode needs no token at all
+  (and then anyone who can reach the gateway can open any console).
 - **Sandbox logs & shell** — two sibling raw WebSockets for a `SwiftSandbox`
   (added in kubeswift v0.13.1): `/sandbox-logs?cluster=&namespace=&name=&token=`
   (read-only — `tail -F`s the microVM console log) and
   `/sandbox-exec?…&cmd=/bin/sh` (an interactive shell — pod-exec → the in-guest
   vsock agent → the `internal/guestagent` frame protocol; the browser sends
   binary stdin frames and a text `{"resize":{cols,rows}}` control). Same
-  token-on-`?token=` + `pods/exec` RBAC posture as the console.
+  subprotocol-bearer + `pods/exec` RBAC posture as the console.
+
+**Cross-origin upgrades.** The three planes above police `Origin` against
+`--cors-allow-origin`. Same-origin is always allowed, and a request with no
+`Origin` (swiftctl, curl) is not a browser and is allowed — the bearer is still
+required. With `auth-mode=oidc`/`token` a `*` setting is honoured, because the
+bearer is the real control and an attacker's page cannot read it. With
+**`auth-mode=insecure` a `*` setting is refused for cross-origin upgrades**:
+there is no bearer, so `Origin` is the only thing standing between a page the
+operator happens to visit and a root console on one of their VMs.
 - **Console transport — exec-pipe is the chosen transport for the hub** (not
   D5's "serial-on-a-port"). The gateway is a multi-cluster hub: it reaches a
   member's launcher pod *through that member's API server* (the impersonating

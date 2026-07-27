@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/klog/v2"
 )
 
 // sandboxGVR is the SwiftSandbox resource. Kept local to the gateway so the
@@ -34,11 +35,11 @@ type SandboxLogsHandler struct {
 	up   websocket.Upgrader
 }
 
-func NewSandboxLogsHandler(pool consoleProvider, auth Authenticator) *SandboxLogsHandler {
+func NewSandboxLogsHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *SandboxLogsHandler {
 	return &SandboxLogsHandler{
 		pool: pool,
 		auth: auth,
-		up:   websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		up:   wsUpgrader(origin.Allow),
 	}
 }
 
@@ -51,11 +52,13 @@ func (h *SandboxLogsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	follow := q.Get("follow") != "false" // default: follow
 
-	hdr := http.Header{}
-	if tok := q.Get("token"); tok != "" {
-		hdr.Set("Authorization", "Bearer "+tok)
-	} else if a := r.Header.Get("Authorization"); a != "" {
-		hdr.Set("Authorization", a)
+	// Bearer via Sec-WebSocket-Protocol; ?token= still accepted but deprecated.
+	// See internal/gateway/wsauth.go.
+	hdr, viaQuery := wsAuthHeader(r)
+	if viaQuery {
+		klog.V(2).InfoS("websocket bearer supplied via the deprecated ?token= query parameter; "+
+			"it is written to every access log on the path — upgrade the client to the "+
+			"Sec-WebSocket-Protocol form", "path", r.URL.Path)
 	}
 	id, err := h.auth.Authenticate(r.Context(), hdr)
 	if err != nil {

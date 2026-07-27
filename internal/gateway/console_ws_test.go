@@ -13,7 +13,7 @@ import (
 // socket. The exec bridge itself is validated on-cluster.
 func TestConsoleHandler_Preflight(t *testing.T) {
 	boba := fakeDyn(uGuest("default", "vm-a", "Running")) // a guest, but no launcher pod
-	h := NewConsoleHandler(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+	h := NewConsoleHandler(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator(), NewOriginPolicy("*", "oidc"))
 
 	cases := []struct {
 		name, target string
