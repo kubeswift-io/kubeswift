@@ -19,6 +19,16 @@ spec:
         app.kubernetes.io/component: controller-manager
     spec:
       serviceAccountName: controller-manager
+      # The controller-manager is a plain Go binary on
+      # distroless/static-debian12:nonroot — it needs no host access at all, so
+      # it gets the same hardened context as the gateway, UI and gpu-discovery.
+      # (The LAUNCHER pods are privileged, deliberately, and separately — see
+      # docs/security-audit.md SEC-01/02/03. That is not a reason for the
+      # controller to be.)
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: controller-manager
           image: {{ .Values.controllerManager.image.registry }}/controller-manager:{{ include "kubeswift.imageTag" (dict "tag" .Values.controllerManager.image.tag "appVersion" .Chart.AppVersion) }}
@@ -53,6 +63,12 @@ spec:
           ports:
             - containerPort: 9443
               name: webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           resources:
             {{- toYaml .Values.controllerManager.resources | nindent 12 }}
           {{- if .Values.webhook.enabled }}
