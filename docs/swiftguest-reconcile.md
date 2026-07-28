@@ -6,7 +6,7 @@ The SwiftGuest controller reconciles SwiftGuest resources by resolving reference
 
 1. **Resolve** – Resolver fetches SwiftGuestClass, SwiftImage, SwiftSeedProfile and produces ResolvedGuest. On failure: set `Resolved=False`, `phase=Failed`, return.
 
-2. **Seed rendering** – When ResolvedGuest has Seed, render userData/metaData/networkData and create ConfigMap `<guest-name>-seed`.
+2. **Seed rendering** – When ResolvedGuest has Seed, render userData/metaData/networkData and create Secret `<guest-name>-seed`.
 
 3. **Intent ConfigMap** – Build RuntimeIntent from ResolvedGuest, serialize to JSON, create ConfigMap `<guest-name>-runtime-intent` with key `runtime-intent.json`.
 

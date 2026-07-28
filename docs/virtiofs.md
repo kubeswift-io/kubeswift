@@ -58,7 +58,7 @@ Rules the admission webhook enforces:
 - `source` sets **exactly one** of `hostPath` / `pvcRef`.
 - not combinable with `gpuProfileRef`, nor with `osType: windows`.
 
-## hostPath needs an operator opt-in (v0.13.3+)
+## hostPath needs an operator opt-in (v0.13.4+)
 
 `hostPath` shares are confined to an allowlist that is **empty by default**, so a
 guest using one is rejected until a cluster admin permits the prefix:

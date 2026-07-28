@@ -20,7 +20,7 @@ spec:
     - name: scratch          # per-guest id; drives the socket name
       tag: scratch           # guest: mount -t virtiofs scratch /mnt/scratch
       source:
-        # REQUIRES OPT-IN (v0.13.3+): host paths are confined to an operator
+        # REQUIRES OPT-IN (v0.13.4+): host paths are confined to an operator
         # allowlist, which is EMPTY by default, so this sample is rejected
         # until the cluster admin permits the prefix:
         #   --set swiftGuest.allowedHostPathPrefixes[0]=/srv/kubeswift

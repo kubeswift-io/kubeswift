@@ -4,6 +4,76 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.4] — 2026-07-28
+
+Second security pass. A UI-focused review found a class of defect in the v0.11.0
+guided forms, and closing out every remaining finding from both reviews produced
+six more fixes across the gateway, controller, chart and launcher. Validated on
+the dev cluster — including the two items previous releases could only unit-test.
+
+### Action required on upgrade
+
+- **The rendered cloud-init seed is now a Secret, not a ConfigMap.** Anything
+  reading `<guest>-seed` as a ConfigMap must read the Secret instead. A guest
+  that is already running keeps its ConfigMap until it is next recreated (the
+  controller will not delete it out from under a live pod); guests created after
+  the upgrade never get one.
+- **The console and sandbox WebSocket planes now expect the bearer as a
+  `Sec-WebSocket-Protocol` subprotocol.** `?token=` still works and is logged as
+  deprecated, so an older UI keeps functioning — but **kubeswift-ui must be at
+  v0.12.0 or later** to use the new form. Upgrade both.
+- **`auth-mode=insecure` now refuses cross-origin WebSocket upgrades** even with
+  `gateway.corsAllowOrigin="*"`. Set an explicit origin, or use a real auth mode.
+  No change for `oidc`/`token` deployments.
+- **SwiftKernel is now validated at admission.** An `ociRef.image` containing
+  shell metacharacters or `..`, or a `kernelCmdline` with a newline, is rejected.
+- `make deploy` (kustomize) now installs 9 webhooks instead of 7 — SwiftSnapshot
+  and SwiftRestore were silently missing.
+
+### Fixed
+
+- **Guided forms silently rewrote fields the operator never touched**
+  (kubeswift-ui #37). `hydrate()` failed to recognise a variant and `build()`
+  overwrote the subtree. The PodSpec editor rebuilt from scratch, dropping
+  `automountServiceAccountToken`, `initContainers`, `envFrom`, `capabilities`,
+  `seccompProfile`, `affinity`, probe tuning, extended resources like
+  `nvidia.com/gpu`, env `valueFrom` and volumeMount `subPath`;
+  `allowPrivilegeEscalation: false` was not even expressible; unmodelled volume
+  types became `emptyDir` while keeping the name, so mounts still resolved onto
+  an empty tmpdir. A SwiftSnapshotSchedule on the s3 or oci backend was rewritten
+  to `local`, silently redirecting offsite backups to node disk; a SwiftImage on
+  the oci source lost its cosign `verifyKeySecretRef`.
+- **The WebSocket bearer travelled in the query string** (#445) and so was
+  written to every access log on the path — the UI's nginx and any ingress in
+  front of it — leaving replayable ID tokens readable by anyone with `pods/log`.
+- **`CheckOrigin` accepted every origin** (#445). Harmless under a real auth mode,
+  but under `auth-mode=insecure` any page the operator visited could open a
+  console or a sandbox shell.
+- **Cloud-init user-data sourced from a Secret was re-materialized into a
+  plaintext ConfigMap** (#446) — SSH keys, passwords and join tokens readable
+  with `get configmaps`.
+- **controller-manager ran with no `securityContext`** (#447), alone among the
+  components this project ships.
+- **Release workflows ran Actions on floating tags** while holding
+  `id-token: write` for cosign keyless signing (#447).
+- **SwiftKernel had no validating webhook at all** (#448), and the snapshot
+  host-path guard existed only in the webhook — which is disabled by default.
+- **A SwiftGuest pinned to an unschedulable node stalled silently** (#449,
+  closes #444). The taint check ran after the root-disk clone Job had already
+  pinned to the same node, so reconcile never reached it.
+- **Sandbox `restricted` egress was bypassable by source-address spoofing**
+  (#449). The policy chain was entered on `-s <subnet>`; the guest configures its
+  own NIC, so a forged source did not match the jump and skipped every DROP.
+  IPv6 had no rules at all.
+
+### Changed
+
+- `migration.mtls` stays **off** by default; its documentation now states plainly
+  that a cross-node live migration streams guest RAM in the clear when it is off,
+  and that enabling it is a hard cert-manager dependency.
+
+---
+
 ## [v0.13.3] — 2026-07-26
 
 Security release. A five-domain review (gateway auth, RBAC/chart/containers, UI,
