@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/klog/v2"
 )
 
 // consoleProvider is the subset of ClientPool the console plane needs: the
@@ -35,13 +36,11 @@ type ConsoleHandler struct {
 	up   websocket.Upgrader
 }
 
-func NewConsoleHandler(pool consoleProvider, auth Authenticator) *ConsoleHandler {
+func NewConsoleHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *ConsoleHandler {
 	return &ConsoleHandler{
 		pool: pool,
 		auth: auth,
-		// The bearer token (not a cookie) is the auth, so a cross-origin upgrade
-		// is safe to accept — mirrors the Connect CORS=* posture.
-		up: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		up:   wsUpgrader(origin.Allow),
 	}
 }
 
@@ -56,11 +55,13 @@ func (h *ConsoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Browsers cannot set headers on a WebSocket, so the token rides a query
 	// param (?token=); insecure mode ignores it. (URL-borne tokens can land in
 	// logs — acceptable for the bootstrap path, noted in the operator docs.)
-	hdr := http.Header{}
-	if tok := q.Get("token"); tok != "" {
-		hdr.Set("Authorization", "Bearer "+tok)
-	} else if a := r.Header.Get("Authorization"); a != "" {
-		hdr.Set("Authorization", a)
+	// Bearer via Sec-WebSocket-Protocol; ?token= still accepted but deprecated.
+	// See internal/gateway/wsauth.go.
+	hdr, viaQuery := wsAuthHeader(r)
+	if viaQuery {
+		klog.V(2).InfoS("websocket bearer supplied via the deprecated ?token= query parameter; "+
+			"it is written to every access log on the path — upgrade the client to the "+
+			"Sec-WebSocket-Protocol form", "path", r.URL.Path)
 	}
 	id, err := h.auth.Authenticate(r.Context(), hdr)
 	if err != nil {

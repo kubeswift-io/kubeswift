@@ -130,11 +130,15 @@ func main() {
 	// Console plane (D5 bootstrap): a raw WebSocket at /console that exec-bridges
 	// the guest's serial socket. Not a Connect RPC — browsers can't do bidi
 	// Connect — so it rides RawHandlers, not the generated ConsoleService stub.
-	consoleWS := gateway.NewConsoleHandler(pool, auth)
+	// Cross-origin policy for the raw-WS planes. With a real auth mode the
+	// bearer is the control and "*" is honoured; auth-mode=insecure has no
+	// bearer at all, so Origin becomes the only control and "*" is refused.
+	wsOrigin := gateway.NewOriginPolicy(*corsOrigin, *authMode)
+	consoleWS := gateway.NewConsoleHandler(pool, auth, wsOrigin)
 	// Sandbox logs plane: a raw WebSocket at /sandbox-logs that exec-tails the
 	// microVM's captured console log (read-only). Same raw-WS rationale as /console.
-	sandboxLogsWS := gateway.NewSandboxLogsHandler(pool, auth)
-	sandboxExecWS := gateway.NewSandboxExecHandler(pool, auth)
+	sandboxLogsWS := gateway.NewSandboxLogsHandler(pool, auth, wsOrigin)
+	sandboxExecWS := gateway.NewSandboxExecHandler(pool, auth, wsOrigin)
 
 	srv := &gateway.Server{
 		Addr:          *listen,

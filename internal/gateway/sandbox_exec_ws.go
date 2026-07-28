@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/kubeswift-io/kubeswift/internal/guestagent"
+	"k8s.io/klog/v2"
 )
 
 // agentVsockPort is the AF_VSOCK port the in-guest agent listens on (matches
@@ -37,11 +38,11 @@ type SandboxExecHandler struct {
 	up   websocket.Upgrader
 }
 
-func NewSandboxExecHandler(pool consoleProvider, auth Authenticator) *SandboxExecHandler {
+func NewSandboxExecHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *SandboxExecHandler {
 	return &SandboxExecHandler{
 		pool: pool,
 		auth: auth,
-		up:   websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }},
+		up:   wsUpgrader(origin.Allow),
 	}
 }
 
@@ -64,11 +65,13 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		command = "/bin/sh"
 	}
 
-	hdr := http.Header{}
-	if tok := q.Get("token"); tok != "" {
-		hdr.Set("Authorization", "Bearer "+tok)
-	} else if a := r.Header.Get("Authorization"); a != "" {
-		hdr.Set("Authorization", a)
+	// Bearer via Sec-WebSocket-Protocol; ?token= still accepted but deprecated.
+	// See internal/gateway/wsauth.go.
+	hdr, viaQuery := wsAuthHeader(r)
+	if viaQuery {
+		klog.V(2).InfoS("websocket bearer supplied via the deprecated ?token= query parameter; "+
+			"it is written to every access log on the path — upgrade the client to the "+
+			"Sec-WebSocket-Protocol form", "path", r.URL.Path)
 	}
 	id, err := h.auth.Authenticate(r.Context(), hdr)
 	if err != nil {
