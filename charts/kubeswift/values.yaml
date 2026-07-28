@@ -365,12 +365,33 @@ monitoring:
 # Live migration settings.
 migration:
   # mTLS transport for cross-node live migration (Phase 3c, Option B per-node
-  # identity). When enabled the chart provisions a per-namespace cert-manager
-  # PKI (selfSigned Issuer -> CA -> CA Issuer) in .Values.namespace and the
-  # controller-manager runs with --migration-mtls-enabled=true (issues one
-  # leaf Certificate per worker node). Requires cert-manager installed
-  # cluster-side. Off by default — default clusters incur no cert-manager
-  # dependency and no behavior change.
+  # identity).
+  #
+  # WHAT IS ON THE WIRE WITH THIS OFF (the default): a cross-node live
+  # migration streams the guest's RAM between launcher pods in the CLEAR, over
+  # the pod network. That memory contains whatever the guest holds at that
+  # moment — SSH host keys, in-memory secrets, disk-encryption keys, database
+  # buffers. Anyone able to observe pod-to-pod traffic on the migration path
+  # (a compromised node, a CNI with no encryption, a span port) can read it.
+  # Offline migration does not stream memory and is unaffected.
+  #
+  # ENABLING IT IS A HARD DEPENDENCY ON cert-manager. The chart provisions a
+  # per-namespace PKI (selfSigned Issuer -> CA -> CA Issuer) in
+  # .Values.namespace and the controller-manager runs with
+  # --migration-mtls-enabled=true, issuing one leaf Certificate per worker
+  # node. cert-manager must ALREADY be installed and its CRDs established, on
+  # every cluster running this chart, before you flip this — the templates
+  # render Issuer/Certificate objects and the install fails if those kinds do
+  # not exist. It is not a soft or optional dependency, and there is no
+  # fallback path.
+  #
+  # It stays OFF by default deliberately: a default install should not acquire
+  # a cluster-wide operator dependency it did not ask for. Turn it on where the
+  # pod network is untrusted and you already run cert-manager.
+  #
+  # See docs/migration/ for the transport detail (a stunnel sidecar; CH's own
+  # native migration TLS was evaluated and rejected — it connects by DNS name,
+  # which UDN/OVN-K launcher pods cannot resolve).
   mtls:
     enabled: false
 
