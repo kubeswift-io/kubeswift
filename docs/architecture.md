@@ -210,7 +210,7 @@ cloud-hypervisor \
   --serial socket=serial.sock
 ```
 
-No root disk PVC, no seed ConfigMap, no cloud-init. The kernel artifact path is deterministic: `/var/lib/kubeswift/kernels/<namespace>-<name>/`.
+No root disk PVC, no seed Secret, no cloud-init. The kernel artifact path is deterministic: `/var/lib/kubeswift/kernels/<namespace>-<name>/`.
 
 ### Windows boot (osType: windows)
 

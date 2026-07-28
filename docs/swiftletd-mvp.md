@@ -6,7 +6,7 @@ swiftletd is the node-side launcher that runs inside each SwiftGuest pod. It rea
 
 1. **Read intent** – Load `runtime-intent.json` from `KUBESWIFT_INTENT_PATH` (default `/var/lib/kubeswift/intent/runtime-intent.json`).
 2. **Create runtime dir** – Per-guest directory at `KUBESWIFT_RUN_DIR/<guest-id>/` with `seed/` subdir and `ch.sock` socket path.
-3. **Build NoCloud** – If seed is present, copy and transform seed ConfigMap into `runtime_dir/seed/` via `swift-seed`.
+3. **Build NoCloud** – If seed is present, copy and transform the seed Secret into `runtime_dir/seed/` via `swift-seed`.
 4. **Lifecycle check** – If `lifecycle=stop`, report Stopped and exit.
 5. **Launch CH** – Spawn Cloud Hypervisor with `--kernel CLOUDHV.fd`, `--api-socket`, `--disk` (root.raw + seed.iso), `--memory`, `--cpus`, `--serial socket=`, `--net tap=tap0`.
 6. **Wait for socket** – Poll until CH creates the API socket.
@@ -20,7 +20,7 @@ The pod must mount:
 | Volume       | Mount path                      | Purpose                          |
 |--------------|----------------------------------|----------------------------------|
 | root-disk    | `/var/lib/kubeswift/disks/root` | Root disk image (PVC)            |
-| seed         | `/var/lib/kubeswift/seed`       | Seed ConfigMap (when present)    |
+| seed         | `/var/lib/kubeswift/seed`       | Seed Secret (when present)       |
 | runtime-intent | `/var/lib/kubeswift/intent`   | Runtime intent ConfigMap          |
 
 The runtime directory is created under `KUBESWIFT_RUN_DIR` (default `/var/lib/kubeswift/run`). Ensure this path is writable (e.g. emptyDir or hostPath).

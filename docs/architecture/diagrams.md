@@ -166,7 +166,7 @@ flowchart TB
     subgraph perguest["Per-guest provisioning (SwiftGuest controller)"]
         clone["root-disk clone<br/>copy: Copy Job (cp / qemu-img to<br/>volumeDevice for Block) ·<br/>snapshot: CSI clone of clone-seed"]
         gpvc[("per-guest root PVC<br/>RWO+Filesystem (default) or<br/>RWX+Block (live-migratable)")]
-        seedcm["&lt;guest&gt;-seed ConfigMap<br/>(NoCloud user-data/meta-data)"]
+        seedcm["&lt;guest&gt;-seed Secret<br/>(NoCloud user-data/meta-data)"]
         intentcm["&lt;guest&gt;-runtime-intent ConfigMap<br/>(JSON: cpu, memory, disks, network,<br/>gpu, lifecycle, restore...)"]
     end
 

@@ -141,15 +141,15 @@ Check Events in the describe output for scheduling failures.
 
 ### Stage 3: Seed rendering and mount path
 
-**Expected:** When SwiftGuest has seedProfileRef, seed ConfigMap exists and pod has seed volume mounted at `/var/lib/kubeswift/seed`.
+**Expected:** When SwiftGuest has seedProfileRef, the seed **Secret** exists and the pod has the seed volume mounted at `/var/lib/kubeswift/seed`.
 
 **Verify:**
 ```bash
-kubectl get configmap sample-seed -n <namespace>
+kubectl get secret sample-seed -n <namespace>
 kubectl get pod <pod-name> -n <namespace> -o jsonpath='{.spec.containers[0].volumeMounts}' | jq .
 ```
 
-**On failure:** Check SwiftSeedProfile exists; verify controller created seed ConfigMap; ensure pod spec includes seed volume mount.
+**On failure:** Check SwiftSeedProfile exists; verify the controller created the seed Secret; ensure the pod spec includes the seed volume mount.
 
 ### Stage 4: swiftletd launches Cloud Hypervisor
 
@@ -209,7 +209,7 @@ kubectl logs <pod-name> -n <namespace> -c launcher | grep -E "lease|guest IP|tim
 |--------------|----------|
 | SwiftImage not Ready | `kubectl describe swiftimage ubuntu-noble -n <namespace>` |
 | Pod not scheduled | `kubectl describe pod <pod-name> -n <namespace>` |
-| Seed missing | `kubectl get configmap sample-seed -n <namespace>`; `kubectl get pod <pod> -o yaml` |
+| Seed missing | `kubectl get secret sample-seed -n <namespace>`; `kubectl get pod <pod> -o yaml` |
 | swiftletd error | `kubectl logs <pod-name> -n <namespace> -c launcher` |
 | SwiftGuest not Running | `kubectl describe swiftguest sample -n <namespace>`; `kubectl logs <pod-name> -n <namespace> -c launcher` |
 | primaryIP not populated | `kubectl get swiftguest sample -o jsonpath='{.status.network}'`; launcher logs |

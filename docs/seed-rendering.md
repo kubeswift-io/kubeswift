@@ -5,7 +5,7 @@ KubeSwift delivers cloud-init-compatible NoCloud datasource media without reimpl
 ## Overview
 
 1. **Control plane (Go)**: Resolves user-data, meta-data, network-config from SwiftSeedProfile (inline or Secret/ConfigMap refs), creates a ConfigMap with NoCloud-standard keys, mounts it into the guest pod.
-2. **Node runtime (Rust, swiftletd)**: Reads ConfigMap contents from the mounted path, builds NoCloud directory layout via swift-seed, passes path to Cloud Hypervisor.
+2. **Node runtime (Rust, swiftletd)**: Reads the mounted seed contents, builds NoCloud directory layout via swift-seed, passes path to Cloud Hypervisor.
 
 ## Control Plane Flow
 
@@ -14,7 +14,10 @@ KubeSwift delivers cloud-init-compatible NoCloud datasource media without reimpl
 3. Seed renderer (`internal/seed.Render`) resolves Secret/ConfigMap refs, produces final strings.
 4. Controller creates ConfigMap with keys: `user-data`, `meta-data`, `network-config`.
 5. Controller adds ConfigMap volume to pod spec, mounts at `/var/lib/kubeswift/seed`.
-6. ConfigMap name: `<guest-name>-seed`.
+6. Secret name: `<guest-name>-seed`. It is a **Secret**, not a ConfigMap:
+   user-data routinely carries SSH keys, passwords and join tokens, and a
+   SwiftSeedProfile can source it from a Secret — rendering that into a
+   ConfigMap re-materialized the credential in the clear (changed in v0.13.4).
 
 ## ConfigMap Contract
 
@@ -24,15 +27,15 @@ KubeSwift delivers cloud-init-compatible NoCloud datasource media without reimpl
 | meta-data | openstack/latest/meta_data.json |
 | network-config | openstack/latest/network_config.json |
 
-Empty values are omitted. The node runtime (swift-seed) copies from ConfigMap mount to NoCloud layout.
+Empty values are omitted. The node runtime (swift-seed) copies from the seed mount to the NoCloud layout.
 
 ## Node Runtime Flow
 
 1. swiftletd loads runtime intent from `/var/lib/kubeswift/intent/runtime-intent.json`.
-2. If `seed_path` is non-empty, swiftletd calls swift-seed `build_nocloud_dir(configmap_path, output_path)`.
+2. If `seed_path` is non-empty, swiftletd calls swift-seed `build_nocloud_dir(seed_path, output_path)`.
 3. swift-seed reads user-data, meta-data, network-config from ConfigMap mount and writes NoCloud v2 layout to output.
 4. swiftletd passes path to Cloud Hypervisor for VM launch.
 
 ## When No Seed
 
-If SwiftGuest does not reference SwiftSeedProfile, no seed ConfigMap is created. No seed volume is mounted. `seed_path` in runtime intent is empty. VM boots without cloud-init.
+If SwiftGuest does not reference SwiftSeedProfile, no seed Secret is created. No seed volume is mounted. `seed_path` in runtime intent is empty. VM boots without cloud-init.

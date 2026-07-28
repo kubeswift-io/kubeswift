@@ -44,7 +44,7 @@ No `--disk`, no `--kernel CLOUDHV.fd`, no `--net` in kernel boot mode.
 | Volume       | Mount path                      | Purpose                          |
 |--------------|----------------------------------|----------------------------------|
 | root-disk    | `/var/lib/kubeswift/disks/root` | Root disk image (PVC)            |
-| seed         | `/var/lib/kubeswift/seed`       | Seed ConfigMap (when present)    |
+| seed         | `/var/lib/kubeswift/seed`       | Seed Secret (when present)       |
 | runtime-intent | `/var/lib/kubeswift/intent`   | Runtime intent ConfigMap         |
 | run          | `/var/lib/kubeswift/run`        | Per-guest runtime directory (emptyDir) |
 | dev-kvm      | `/dev/kvm`                      | KVM device passthrough           |
