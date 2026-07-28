@@ -450,6 +450,23 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// SwiftGPU controller's Resolve stamps status.GPU after scheduling
 	// (status-only, not load-bearing for the runtime). Design doc §A2/§A6.
 
+	// Node placement, BEFORE anything that pins to that node (issue #444).
+	//
+	// The root-disk clone Job below pins to spec.nodeName too. If that node is
+	// unschedulable, the Job's pod sits Pending forever, reconcile never reaches
+	// buildPod, and the guest stalls in Scheduling with nothing explaining why.
+	// Checking here turns a silent stall into a terminal failure with a reason.
+	if err := checkNodePlacementFor(ctx, r.Client, &guest, nil); err != nil {
+		status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
+		SetResolvedCondition(status, false, err.Error())
+		recordGuestMetrics(&guest, &guest.Status, status, nil)
+		if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		logger.Info("rejected guest: unschedulable spec.nodeName", "error", err.Error())
+		return ctrl.Result{}, nil
+	}
+
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
 	// RootDisk.FromOCI (a source-independent full-state clone) has NO prepared
 	// image — its disk is materialized from the snapshot's oci disk artifact

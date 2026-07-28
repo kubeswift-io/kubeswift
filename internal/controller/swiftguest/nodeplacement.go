@@ -38,6 +38,18 @@ import (
 // preference the scheduler weighs; it never blocks placement, so enforcing it
 // here would be stricter than Kubernetes itself.
 func checkNodePlacement(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod) error {
+	return checkNodePlacementFor(ctx, c, guest, pod.Spec.Tolerations)
+}
+
+// checkNodePlacementFor is the same check against a toleration set directly,
+// so it can run BEFORE the pod is built.
+//
+// That ordering is the point (issue #444): a guest pinned to an unschedulable
+// node used to stall with no diagnosis, because the root-disk clone Job is
+// created first and pins to the SAME node, its pod sits Pending forever, and
+// the reconcile never reaches buildPod where this check lived. The operator saw
+// a guest stuck in Scheduling with nothing saying why.
+func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest, tolerations []corev1.Toleration) error {
 	if guest.Spec.NodeName == "" {
 		return nil // not pinned; the scheduler runs normally and applies taints itself
 	}
@@ -48,10 +60,15 @@ func checkNodePlacement(ctx context.Context, c client.Reader, guest *swiftv1alph
 		}
 		return fmt.Errorf("resolve spec.nodeName=%q: %w", guest.Spec.NodeName, err)
 	}
-	if t, ok := untoleratedTaint(node.Spec.Taints, pod.Spec.Tolerations); ok {
+	if t, ok := untoleratedTaint(node.Spec.Taints, tolerations); ok {
+		// NB: SwiftGuest has no spec.tolerations field — the launcher pod is
+		// built with none — so in practice a pinned guest cannot target a
+		// NoSchedule/NoExecute node at all. The message says that, rather than
+		// pointing at a field that does not exist (which the first version of
+		// this check did).
 		return fmt.Errorf(
-			"spec.nodeName=%q has taint %s=%s:%s which this guest does not tolerate; "+
-				"add a matching toleration to spec.tolerations to place a guest there",
+			"spec.nodeName=%q has taint %s=%s:%s and a guest cannot tolerate taints; "+
+				"pin the guest to an untainted node, or remove the taint",
 			guest.Spec.NodeName, t.Key, t.Value, t.Effect)
 	}
 	return nil
