@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -39,6 +40,7 @@ import (
 	evictionwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/eviction"
 	swiftguestwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftguest"
 	swiftimagewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftimage"
+	swiftkernelwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftkernel"
 	swiftmigrationwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftmigration"
 	swiftrestorewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftrestore"
 	swiftsandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
@@ -328,6 +330,12 @@ func main() {
 			WithCustomDefaulter(&swiftimagewebhook.Defaulter{}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftImage webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &kernelv1alpha1.SwiftKernel{}).
+			WithCustomValidator(&swiftkernelwebhook.Validator{}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftKernel webhook")
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &seedv1alpha1.SwiftSeedProfile{}).

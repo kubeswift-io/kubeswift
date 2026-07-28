@@ -100,6 +100,20 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	status := snap.Status.DeepCopy()
 
+	// The local backend's hostPath is mounted into a privileged Job on the node,
+	// and webhook.enabled defaults to false — so enforce it here too rather than
+	// relying on admission that may not be installed. Fail terminally and loudly:
+	// a rejected path is an authoring error, not something to retry.
+	if err := checkLocalHostPath(&snap); err != nil {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed, err.Error())
+		if updateErr := r.persist(ctx, &snap, status); updateErr != nil {
+			return ctrl.Result{}, updateErr
+		}
+		logger.Info("rejected snapshot: host path outside the permitted prefix", "error", err.Error())
+		return ctrl.Result{}, nil
+	}
+
 	switch phase {
 	case snapshotv1alpha1.SwiftSnapshotPhasePending:
 		result, requeue, err := r.handlePending(ctx, &snap, status)
