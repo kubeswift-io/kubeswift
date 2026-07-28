@@ -69,11 +69,15 @@ rules:
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # secrets — get,list,watch for general reads; create,update added for
-  # the Phase 3c live-migration mTLS path (migration.mtls.enabled): the
-  # migrationcert controller copies a node's cert-manager-issued identity
-  # Secret into guest namespaces (distribution, not issuance). The verbs
-  # are harmless when mTLS is disabled (the reconciler is not registered).
+  # secrets — get,list,watch for general reads. create,update have two
+  # consumers:
+  #   1. the rendered cloud-init seed, which is a Secret rather than a
+  #      ConfigMap (user-data carries SSH keys, passwords and join tokens,
+  #      and a seed profile can source it from a Secret);
+  #   2. the live-migration mTLS path (migration.mtls.enabled): the
+  #      migrationcert controller copies a node's cert-manager-issued
+  #      identity Secret into guest namespaces (distribution, not issuance),
+  #      and is not registered at all when mTLS is disabled.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update"]

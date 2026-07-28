@@ -685,15 +685,20 @@ func AddVolumeMounts(mounts *[]corev1.VolumeMount, devices *[]corev1.VolumeDevic
 	}
 }
 
-// AddSeedVolume adds the seed ConfigMap volume to the pod. Use when ResolvedGuest has Seed.
-// ConfigMap name should be guestName + SeedConfigMapSuffix.
-func AddSeedVolume(volumes *[]corev1.Volume, configMapName string) {
+// AddSeedVolume adds the rendered seed volume to the pod. Use when
+// ResolvedGuest has Seed. The name is guestName + SeedConfigMapSuffix.
+//
+// This is a SECRET, not a ConfigMap. cloud-init user-data routinely carries SSH
+// keys, passwords and join tokens, and a SwiftSeedProfile can source it from a
+// Secret via valueFrom.secretKeyRef — which the controller then rendered into a
+// ConfigMap, re-materializing the credential in the clear for anyone with `get
+// configmaps` in the namespace. Same three keys, same mount path, so the guest
+// side is unchanged.
+func AddSeedVolume(volumes *[]corev1.Volume, seedName string) {
 	*volumes = append(*volumes, corev1.Volume{
 		Name: "seed",
 		VolumeSource: corev1.VolumeSource{
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
-			},
+			Secret: &corev1.SecretVolumeSource{SecretName: seedName},
 		},
 	})
 }
