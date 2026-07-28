@@ -98,3 +98,45 @@ func TestTolerated_Wildcard(t *testing.T) {
 		t.Error("wildcard toleration should tolerate any taint")
 	}
 }
+
+// TestCheckNodePlacementFor_RunsWithoutAPod is the #444 fix: the check has to be
+// callable BEFORE the pod is built, because the root-disk clone Job pins to the
+// same node and its pod would sit Pending forever, so reconcile never reached
+// the old call site inside buildPod and the guest stalled with no reason set.
+func TestCheckNodePlacementFor_RunsWithoutAPod(t *testing.T) {
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "frida"},
+		Spec: corev1.NodeSpec{Taints: []corev1.Taint{{
+			Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule,
+		}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(node).Build()
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "g1"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "frida"},
+	}
+
+	err := checkNodePlacementFor(context.Background(), c, guest, nil)
+	if err == nil {
+		t.Fatal("a guest pinned to a NoSchedule node was accepted; it would stall silently")
+	}
+	// The message must not send the operator to a field that does not exist.
+	if strings.Contains(err.Error(), "spec.tolerations") {
+		t.Errorf("error points at spec.tolerations, which SwiftGuest does not have: %v", err)
+	}
+	if !strings.Contains(err.Error(), "frida") {
+		t.Errorf("error does not name the node: %v", err)
+	}
+}
+
+func TestCheckNodePlacementFor_UntaintedNodeIsFine(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "g1"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "miles"},
+	}
+	if err := checkNodePlacementFor(context.Background(), c, guest, nil); err != nil {
+		t.Errorf("rejected an untainted node: %v", err)
+	}
+}
