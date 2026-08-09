@@ -4,6 +4,56 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.5] — 2026-08-09
+
+An incident release. Two SwiftGuests were deleted from a lab cluster and the
+cause could not be established — not because the evidence was ambiguous, but
+because none existed. The gateway had served traffic for 42 hours and written
+three lines, all from start-up.
+
+### Added
+
+- **The gateway records every RPC.** Mutations are logged unconditionally with
+  the service, method, impersonated user, cluster, namespace, object name and
+  outcome; reads sit at `-v=1` because list/watch/telemetry poll continuously.
+
+  Classification is *default-mutating*: a procedure counts as a read only if its
+  name begins with a known read verb, so an RPC added later that nobody
+  classifies is logged loudly rather than skipped silently.
+
+  This matters more than it looks for this object. A SwiftGuest carries no
+  finalizer and no owner reference, so a delete takes the object, its launcher
+  pod and its events together and leaves nothing behind to inspect. The gateway
+  is the only place such a call can be observed at all.
+
+  **This records calls that go through the gateway.** A `kubectl delete` still
+  leaves no KubeSwift-side trace — for that, enable apiserver audit logging.
+
+### Fixed
+
+- **The fleet view reported an unreachable cluster as an empty one**
+  (kubeswift-ui #42). `ListGuests` is partial-fleet: a member that fails yields
+  an `errors` entry while the RPC still returns OK. The UI cleared its table and
+  repopulated from an empty list, then set the state to "live" — so a failed
+  query rendered as a confident **"No VMs across the fleet."**, and self-healed
+  on the next 3-second poll, making it near-impossible to catch in the act.
+
+  A cluster that errors now keeps its last-known rows flagged stale, "live"
+  means the whole fleet answered (a partial answer is "degraded"), and the
+  "No VMs" message is only shown when every member actually replied.
+
+- Deleting a VM from the UI now requires typing its name. The previous yes/no
+  confirm was not an adequate gate for an irreversible action that leaves
+  nothing behind, and afterwards is indistinguishable from a delete nobody
+  performed.
+
+### Upgrade notes
+
+No API, CRD or chart-value changes. **kubeswift-ui v0.12.2** carries the fleet
+fix; the gateway change is independent and needs no UI update.
+
+---
+
 ## [v0.13.4] — 2026-07-28
 
 Second security pass. A UI-focused review found a class of defect in the v0.11.0
