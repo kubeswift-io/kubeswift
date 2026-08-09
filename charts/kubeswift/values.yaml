@@ -38,6 +38,13 @@ swiftletd:
     limits:
       cpu: 2
       memory: 2Gi
+  # Secrets attached to every LAUNCHER pod for pulling the swiftletd image.
+  # From v0.13.6 launcher pods run as a dedicated ServiceAccount
+  # (kubeswift-launcher / kubeswift-sandbox-launcher) instead of the namespace
+  # `default` SA, so they no longer inherit pull secrets patched onto `default`.
+  # Set this if the launcher image lives on a private registry; leaving it empty
+  # is correct for a public registry.
+  imagePullSecrets: []
 
 # snapshot-s3: the uploader/downloader image for the Tier C (s3 / object-storage)
 # snapshot backend. The controller passes this to the per-snapshot upload Job and

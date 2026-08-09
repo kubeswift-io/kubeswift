@@ -451,9 +451,17 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			Labels:    map[string]string{SandboxLabelKey: sb.Name},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			NodeSelector:   nodeSelector,
-			InitContainers: initContainers,
+			// The SANDBOX launcher SA, not the guest one: a sandbox provably does
+			// not need swiftguests/status (KUBESWIFT_REPORT_GUEST_CR=false below),
+			// and granting it would let an escaped sandbox — the workload class
+			// that runs untrusted code — forge GuestRunning/Failed on any
+			// SwiftGuest in the namespace. Also covers warm-pool slots, which are
+			// built by this same function (#443).
+			ServiceAccountName: swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher),
+			ImagePullSecrets:   swiftguest.LauncherImagePullSecrets(),
+			RestartPolicy:      corev1.RestartPolicyNever,
+			NodeSelector:       nodeSelector,
+			InitContainers:     initContainers,
 			Containers: []corev1.Container{{
 				Name:            launcherName,
 				Image:           swiftguest.LauncherImage(),

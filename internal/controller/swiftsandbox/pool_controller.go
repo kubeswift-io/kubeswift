@@ -81,7 +81,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	// Warm slots run swiftletd, which reports via pod annotations — ensure the
 	// per-namespace reporter RoleBinding (idempotent), as the sandbox controller does.
-	if err := swiftguest.EnsureSwiftletdRBAC(ctx, r.Client, pool.Namespace); err != nil {
+	if err := swiftguest.EnsureLauncherRBAC(ctx, r.Client, pool.Namespace, swiftguest.SandboxLauncher); err != nil {
 		return ctrl.Result{}, err
 	}
 

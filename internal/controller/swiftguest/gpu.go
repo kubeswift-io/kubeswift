@@ -566,8 +566,12 @@ func BuildGPUDiskBootPod(
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			// Without this the pod silently inherits `default`, and loses its
+			// grant the moment the legacy subject retires (#443).
+			ServiceAccountName: LauncherServiceAccountFor(GuestLauncher),
+			ImagePullSecrets:   LauncherImagePullSecrets(),
+			RestartPolicy:      corev1.RestartPolicyNever,
+			InitContainers:     initContainers,
 			// Pin to the specific node where GPUs were allocated.
 			NodeSelector: map[string]string{
 				"kubernetes.io/hostname": nodeName,
