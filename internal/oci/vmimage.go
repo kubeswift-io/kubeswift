@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"strconv"
+	"time"
 
 	godigest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -48,13 +50,39 @@ type PushResult struct {
 	TotalBytes       int64
 }
 
+// PushOption tunes ChunkAndPush without changing its signature for the callers
+// that do not care.
+type PushOption func(*pushOpts)
+
+type pushOpts struct {
+	notify RetryNotifyFunc
+}
+
+// WithRetryNotify reports each rate-limit backoff. A publish that pauses for a
+// minute with no output looks hung, so anything with a terminal should set it.
+func WithRetryNotify(f RetryNotifyFunc) PushOption {
+	return func(o *pushOpts) { o.notify = f }
+}
+
 // ChunkAndPush streams filePath in chunkSize windows, SKIPS all-zero windows
 // (never stored — a raw disk is sparse), and pushes each non-zero chunk as one
 // digest-addressed layer. A chunk already present in dst (a re-push of an
 // unchanged v1.1 block, or a repeated non-zero pattern) is counted as skipped
 // (deduped), not re-uploaded — so TransferredBytes/TotalBytes is the dedup
 // figure. Streams window-by-window; the whole disk is never held in memory.
-func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag string, chunkSize int64, format, osType string) (ocispec.Descriptor, PushResult, error) {
+//
+// Every registry call is retried with backoff on a rate limit (see retry.go):
+// a large image is hundreds of sequential requests, and registries limit on
+// request rate rather than bytes.
+func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag string, chunkSize int64, format, osType string, opts ...PushOption) (ocispec.Descriptor, PushResult, error) {
+	var o pushOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	// Seeded per call rather than from the global source: concurrent publishes
+	// jittering identically would re-create the burst that tripped the limit.
+	rnd := rand.New(rand.NewSource(time.Now().UnixNano())) //nolint:gosec // jitter, not crypto
+
 	var zero ocispec.Descriptor
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -96,15 +124,26 @@ func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 					Size:        int64(n),
 					Annotations: map[string]string{ChunkOffsetAnnotation: strconv.FormatInt(offset, 10)},
 				}
-				exists, eerr := dst.Exists(ctx, desc)
+				// Exists is a HEAD and counts against the same request-rate
+				// limit as the PUT, so it needs the same backoff.
+				var exists bool
+				eerr := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+					var e error
+					exists, e = dst.Exists(ctx, desc)
+					return e
+				})
 				if eerr != nil {
 					return zero, PushResult{}, fmt.Errorf("exists check at offset %d: %w", offset, eerr)
 				}
 				if exists {
 					skipped += int64(n)
 				} else {
-					// Push reads the reader fully before returning, so buf is safe to reuse.
-					if perr := dst.Push(ctx, desc, bytes.NewReader(chunk)); perr != nil {
+					// Push reads the reader fully before returning, so buf is safe
+					// to reuse — and a fresh Reader per attempt is required, since
+					// a retry must start from the beginning of the chunk.
+					if perr := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+						return dst.Push(ctx, desc, bytes.NewReader(chunk))
+					}); perr != nil {
 						return zero, PushResult{}, fmt.Errorf("push chunk at offset %d: %w", offset, perr)
 					}
 					transferred += int64(n)
@@ -127,18 +166,29 @@ func ChunkAndPush(ctx context.Context, filePath string, dst oras.Target, tag str
 		return zero, PushResult{}, err
 	}
 	cfgDesc := ocispec.Descriptor{MediaType: VMImageConfigType, Digest: godigest.FromBytes(cfgBytes), Size: int64(len(cfgBytes))}
+	// These last three calls are the worst place to lose a publish: every chunk
+	// is already uploaded, and without the manifest and tag none of it is
+	// reachable. They get the same backoff as the chunk loop.
 	if exists, _ := dst.Exists(ctx, cfgDesc); !exists {
-		if err := dst.Push(ctx, cfgDesc, bytes.NewReader(cfgBytes)); err != nil {
+		if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+			return dst.Push(ctx, cfgDesc, bytes.NewReader(cfgBytes))
+		}); err != nil {
 			return zero, PushResult{}, fmt.Errorf("push config: %w", err)
 		}
 	}
 
-	manifestDesc, err := oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, VMImageArtifactType,
-		oras.PackManifestOptions{Layers: layers, ConfigDescriptor: &cfgDesc})
-	if err != nil {
+	var manifestDesc ocispec.Descriptor
+	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+		var e error
+		manifestDesc, e = oras.PackManifest(ctx, dst, oras.PackManifestVersion1_1, VMImageArtifactType,
+			oras.PackManifestOptions{Layers: layers, ConfigDescriptor: &cfgDesc})
+		return e
+	}); err != nil {
 		return zero, PushResult{}, fmt.Errorf("pack manifest: %w", err)
 	}
-	if err := dst.Tag(ctx, manifestDesc, tag); err != nil {
+	if err := withRateLimitRetry(ctx, o.notify, rnd, func() error {
+		return dst.Tag(ctx, manifestDesc, tag)
+	}); err != nil {
 		return zero, PushResult{}, fmt.Errorf("tag: %w", err)
 	}
 	return manifestDesc, PushResult{

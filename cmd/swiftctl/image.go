@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -79,7 +80,12 @@ Consume the result from a SwiftImage:
 func init() {
 	imagePublishCmd.Flags().StringVar(&publishTo, "to", "", "Target OCI repository WITHOUT a tag, e.g. ghcr.io/acme/vm-images (required)")
 	imagePublishCmd.Flags().StringVar(&publishTag, "tag", "latest", "Artifact tag")
-	imagePublishCmd.Flags().IntVar(&publishChunkMiB, "chunk-size-mib", 64, "Chunk size in MiB (larger = fewer layers; smaller = finer cross-version dedup)")
+	// 0 means "choose from the disk size" — see chunkSizeFor. A fixed 64 MiB
+	// default is right for a small image and wrong for a 30 GiB one, where it
+	// means enough sequential blob PUTs to trip a registry's request-rate limit.
+	imagePublishCmd.Flags().IntVar(&publishChunkMiB, "chunk-size-mib", 0,
+		"Chunk size in MiB (default: scaled to disk size, 64-256). Larger = fewer requests; "+
+			"smaller = finer cross-version dedup, but a small size on a large disk can trip a registry rate limit")
 	imagePublishCmd.Flags().StringVar(&publishOSType, "os-type", "linux", "OS family recorded in the artifact config: linux | windows")
 	imagePublishCmd.Flags().BoolVar(&publishInsecure, "insecure", false, "Allow a plaintext (http) registry — UNSAFE; in-cluster / test registry only")
 	imagePublishCmd.Flags().StringVar(&publishSignKey, "sign-key", "", "Path to a cosign private key; when set, cosign-sign the pushed artifact (COSIGN_PASSWORD from env)")
@@ -88,10 +94,51 @@ func init() {
 	imageCmd.AddCommand(imagePublishCmd)
 }
 
+// chunkSizeFor picks a chunk size in MiB from the disk size.
+//
+// The two costs pull opposite ways. Small chunks dedup better across image
+// versions (a changed byte re-uploads one window, not one big one), but a chunk
+// is one blob PUT plus one HEAD, and registries rate-limit on request COUNT,
+// not bytes. A 30 GiB sparse image is ~8.5 GiB real, which at 64 MiB is ~135
+// sequential PUTs — enough to trip GitHub's secondary rate limit partway
+// through (#452).
+//
+// So keep 64 MiB where dedup is what matters and the request count is small,
+// and step up for the large golden images where it is the request count that
+// decides whether the publish finishes at all. Retry/backoff handles the limit
+// when it is hit anyway; this just stops provoking it by default.
+//
+// An explicit --chunk-size-mib always wins — this is only the default.
+func chunkSizeFor(path string) int {
+	const (
+		gib     = int64(1) << 30
+		small   = 64
+		medium  = 128
+		large   = 256
+		mediumF = 8 * gib
+		largeF  = 24 * gib
+	)
+	fi, err := os.Stat(path)
+	if err != nil {
+		// Sizing is an optimisation; a stat failure here is not worth failing
+		// the publish over, and the real open happens moments later anyway.
+		return small
+	}
+	size := fi.Size()
+	switch {
+	case size >= largeF:
+		return large
+	case size >= mediumF:
+		return medium
+	default:
+		return small
+	}
+}
+
 func runImagePublish(cmd *cobra.Command, args []string) error {
 	inputPath := args[0]
 	out := cmd.OutOrStdout()
-	if publishChunkMiB <= 0 {
+	if cmd.Flags().Changed("chunk-size-mib") && publishChunkMiB <= 0 {
 		return fmt.Errorf("--chunk-size-mib must be positive")
 	}
 	if _, err := os.Stat(inputPath); err != nil {
@@ -112,9 +159,23 @@ func runImagePublish(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ref := publishTo + ":" + publishTag
-	fmt.Fprintf(out, "Publishing %s -> %s (chunk %d MiB)\n", filepath.Base(inputPath), ref, publishChunkMiB)
 
-	_, res, err := oci.ChunkAndPush(ctx, rawPath, repo, publishTag, int64(publishChunkMiB)*1024*1024, "raw", publishOSType)
+	chunkMiB := publishChunkMiB
+	chosen := ""
+	if !cmd.Flags().Changed("chunk-size-mib") {
+		chunkMiB = chunkSizeFor(rawPath)
+		chosen = " [auto]"
+	}
+	fmt.Fprintf(out, "Publishing %s -> %s (chunk %d MiB%s)\n", filepath.Base(inputPath), ref, chunkMiB, chosen)
+
+	// A rate-limit backoff can pause for a minute at a time; without this the
+	// publish is indistinguishable from a hang.
+	notify := oci.WithRetryNotify(func(attempt int, delay time.Duration, err error) {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"  registry rate limit (attempt %d) — waiting %s before retrying: %v\n", attempt, delay.Round(time.Second), err)
+	})
+
+	_, res, err := oci.ChunkAndPush(ctx, rawPath, repo, publishTag, int64(chunkMiB)*1024*1024, "raw", publishOSType, notify)
 	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
