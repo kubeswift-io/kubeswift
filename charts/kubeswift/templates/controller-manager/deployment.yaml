@@ -35,6 +35,14 @@ spec:
           env:
             - name: KUBESWIFT_LAUNCHER_IMAGE
               value: {{ .Values.swiftletd.image.registry }}/swiftletd:{{ include "kubeswift.imageTag" (dict "tag" .Values.swiftletd.image.tag "appVersion" .Chart.AppVersion) }}
+            {{- with .Values.swiftletd.imagePullSecrets }}
+            # Launcher pods run as a dedicated ServiceAccount from v0.13.6, so
+            # they no longer inherit imagePullSecrets attached to the namespace
+            # `default` SA. Set these when the launcher image is on a private
+            # registry — otherwise the switch shows up as ImagePullBackOff.
+            - name: KUBESWIFT_LAUNCHER_IMAGE_PULL_SECRETS
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: KUBESWIFT_SNAPSHOT_S3_IMAGE
               value: {{ .Values.snapshotS3.image.registry }}/snapshot-s3:{{ include "kubeswift.imageTag" (dict "tag" .Values.snapshotS3.image.tag "appVersion" .Chart.AppVersion) }}
             - name: KUBESWIFT_SNAPSHOT_ORAS_IMAGE

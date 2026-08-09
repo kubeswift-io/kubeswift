@@ -467,8 +467,12 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 			Labels:      podLabels(guest),
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			// Without this the pod silently inherits `default`, and loses its
+			// grant the moment the legacy subject retires (#443).
+			ServiceAccountName: LauncherServiceAccountFor(GuestLauncher),
+			ImagePullSecrets:   LauncherImagePullSecrets(),
+			RestartPolicy:      corev1.RestartPolicyNever,
+			InitContainers:     initContainers,
 			NodeSelector: map[string]string{
 				"kubeswift.io/kernel-node": "true",
 			},
@@ -592,8 +596,12 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 			Labels:      podLabels(guest),
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:  corev1.RestartPolicyNever,
-			InitContainers: initContainers,
+			// Without this the pod silently inherits `default`, and loses its
+			// grant the moment the legacy subject retires (#443).
+			ServiceAccountName: LauncherServiceAccountFor(GuestLauncher),
+			ImagePullSecrets:   LauncherImagePullSecrets(),
+			RestartPolicy:      corev1.RestartPolicyNever,
+			InitContainers:     initContainers,
 			Containers: []corev1.Container{
 				{
 					Name:            "launcher",

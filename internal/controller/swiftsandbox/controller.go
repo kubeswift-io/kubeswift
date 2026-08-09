@@ -66,7 +66,7 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleRetention(ctx, &sb)
 	}
 
-	if err := swiftguest.EnsureSwiftletdRBAC(ctx, r.Client, sb.Namespace); err != nil {
+	if err := swiftguest.EnsureLauncherRBAC(ctx, r.Client, sb.Namespace, swiftguest.SandboxLauncher); err != nil {
 		return ctrl.Result{}, err
 	}
 

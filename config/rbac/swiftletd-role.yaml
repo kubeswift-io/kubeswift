@@ -24,7 +24,24 @@ metadata:
 rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests/status"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
+---
+# The SANDBOX launcher's role. Strictly smaller than the guest reporter: no
+# swiftguests/status. A sandbox sets KUBESWIFT_REPORT_GUEST_CR=false and never
+# patches a SwiftGuest, and it is the workload class that runs untrusted code —
+# granting it status:patch would let an escaped sandbox forge GuestRunning or
+# Failed on any SwiftGuest in the namespace, which the controller state machine
+# and the drain path both consume. (#443)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-sandbox-reporter
+  labels:
+    app.kubernetes.io/name: kubeswift
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]

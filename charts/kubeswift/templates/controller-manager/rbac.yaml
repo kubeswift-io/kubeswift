@@ -186,9 +186,18 @@ rules:
   # operator-applied RoleBinding pattern (snapshot walkthrough finding
   # F2 + Phase 2 walkthrough finding W3). list+watch are required by
   # controller-runtime's cached client (Phase 2 W3 follow-up).
+  # core ServiceAccounts — the controller creates the per-namespace launcher
+  # SAs (kubeswift-launcher / kubeswift-sandbox-launcher) so a launcher pod no
+  # longer runs as the namespace `default` SA (#443). list+watch are REQUIRED,
+  # not optional: controller-runtime's cached client opens an informer per
+  # GETable type and blocks indefinitely without them — the same trap as W7
+  # (rolebindings) and W8 (storageclasses).
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "list", "watch", "create"]
+    verbs: ["get", "list", "watch", "create", "update"]
   # cert-manager.io Certificates — the Phase 3c migrationcert controller
   # (migration.mtls.enabled) creates one per-node leaf Certificate
   # (SAN=nodeName, Option B) and deletes stale ones. list+watch are
@@ -232,7 +241,24 @@ metadata:
 rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests/status"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
+---
+# The SANDBOX launcher's role. Strictly smaller than the guest reporter: no
+# swiftguests/status. A sandbox sets KUBESWIFT_REPORT_GUEST_CR=false and never
+# patches a SwiftGuest, and it is the workload class that runs untrusted code —
+# granting it status:patch would let an escaped sandbox forge GuestRunning or
+# Failed on any SwiftGuest in the namespace, which the controller state machine
+# and the drain path both consume. (#443)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-sandbox-reporter
+  labels:
+    app.kubernetes.io/name: kubeswift
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]
