@@ -79,7 +79,7 @@ jobs:
       # that holds security-events: write.
       - name: Install trivy
         env:
-          TRIVY_VERSION: '0.68.0'
+          TRIVY_VERSION: '0.73.0'
         run: |
           set -euo pipefail
           curl -sSfL -o /tmp/trivy.tar.gz \
