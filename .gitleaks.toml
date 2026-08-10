@@ -1,0 +1,29 @@
+# gitleaks configuration — Phase 1 of #466.
+#
+# Scoped allowlists ONLY. The `generic-api-key` rule is the noisy one: it fires
+# on high-entropy strings and on key-looking names regardless of value. Every
+# entry below is pinned to a specific path AND justified, so a real secret
+# landing in one of these files still has to look like something other than the
+# match described here. Disabling the rule outright would be the easy fix and
+# the wrong one.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+paths = [
+  # Buildroot kernel configs and the script that emits them. The match is
+  # `BR2_TARGET_GENERIC_ROOT_PASSWD=""` — an EMPTY value, i.e. the setting that
+  # says the sandbox/faas kernels ship with no root password at all. gitleaks
+  # matches the key name, not a credential.
+  '''build/kernels/.*_defconfig''',
+  '''build/kernels/faas-minimal/buildstuff\.sh''',
+
+  # Fixtures for the test that asserts Secret VALUES never reach a
+  # ListResources response — only key names and type. The literals
+  # "super-secret"/"top-secret" and their base64 are the thing being proven
+  # unreachable. Flagging a security test's fixture is the textbook false
+  # positive.
+  '''internal/gateway/resource_service_test\.go''',
+]
