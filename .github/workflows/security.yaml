@@ -29,6 +29,12 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          # go.mod pins the minor; stdlib vulnerabilities are fixed in PATCH
+          # releases. Without this, setup-go installs exactly go1.25 and
+          # govulncheck reports 29 stdlib findings fixed in go1.25.3 — real
+          # advisories, but ones no dependency change can address. Track the
+          # newest patch of the pinned minor instead.
+          check-latest: true
       - name: govulncheck
         run: |
           # Scoped to our own packages rather than ./... : build/kernels/sandbox
@@ -62,6 +68,19 @@ jobs:
           # Full history: a credential committed and later "removed" is still
           # in the objects, and still valid until it is rotated.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+      - name: gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pinned; bumped by Dependabot is not possible for a raw download, so
+          # this is reviewed by hand when the scanner is updated.
+          GITLEAKS_VERSION: '8.30.0'
+        run: |
+          set -euo pipefail
+          # The gitleaks ACTION is commercially licensed for organization-owned
+          # repos ("[kubeswift-io] is an organization. License key is
+          # required."). The binary is MIT. Running it directly keeps the scan,
+          # drops the licence requirement, and removes a third-party action
+          # from a workflow that would otherwise hold a token.
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git . --redact --verbose
