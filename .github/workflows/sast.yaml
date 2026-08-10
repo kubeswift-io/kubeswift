@@ -1,0 +1,167 @@
+name: SAST
+
+# Phase 3 of #466 — static analysis of our own Go code.
+#
+# Phases 1 and 2 ask "is something we depend on known-vulnerable?". This phase
+# asks a different question: "did we write a bug?". Both scanners here read the
+# source rather than a dependency manifest.
+#
+# GATING POLICY — deliberately different from Phases 1 and 2:
+#
+#   Phase 1 (deps/secrets)  fails the build. A finding is almost always real.
+#   Phase 2 (images)        fails on fixable findings only.
+#   Phase 3 (SAST)          REPORTS ONLY. Nothing here fails the build yet.
+#
+# That is the sequencing #466 called for, and the numbers justify it: gosec
+# currently reports 86 findings on our tree. Turning that red on day one would
+# mean 86 things to triage before anyone can merge, and the predictable outcome
+# is that the scanner gets deleted rather than tuned.
+#
+# BASELINE AT LANDING (2026-08-10) — recorded so the next person can tell a
+# regression from the existing backlog:
+#
+#     23  G115  HIGH    integer overflow on conversion (gosec's noisiest rule)
+#     19  G304  MEDIUM  file path from a variable
+#     19  G104  LOW     unhandled error
+#      7  G204  MEDIUM  subprocess launched with a variable
+#      6  G301  MEDIUM  directory permissions
+#      6  G306  MEDIUM  file write permissions
+#      2  G302  MEDIUM  file permissions
+#      1  G404  HIGH    weak RNG
+#      1  G101  HIGH    potential hardcoded credentials
+#      1  G109  HIGH    strconv.Atoi result converted to int32
+#      1  G122  HIGH    filesystem op in a WalkDir callback
+#
+# G304 and G204 are expected and mostly inherent: we build Cloud Hypervisor and
+# QEMU command lines and open disk paths by design. The Job paths that took
+# untrusted input were already hardened in the #466-adjacent shell-injection
+# work.
+#
+# The four non-G115 HIGH findings were triaged by hand before this landed, so
+# nobody has to repeat it:
+#
+#   G404 internal/oci/vmimage.go        retry jitter, not crypto. Already
+#                                       annotated, but with //nolint, which
+#                                       gosec does not honour — it wants #nosec.
+#   G101 internal/gateway/wsauth.go     the Kubernetes WebSocket bearer
+#                                       subprotocol prefix. A protocol
+#                                       constant, not a credential. LOW
+#                                       confidence, and correct to ignore.
+#   G109 .../stopandcopy_live.go        a migration progress percentage. A
+#                                       robustness nit at worst.
+#   G122 cmd/snapshot-stager/main.go    copyTree builds every destination as
+#                                       filepath.Join(dst, rel) and WalkDir
+#                                       does not descend through symlinks, so
+#                                       it cannot be walked out of dst. It does
+#                                       faithfully recreate absolute symlinks,
+#                                       but the only consumer is the launcher,
+#                                       which is already a node-level trust
+#                                       boundary (docs/security-audit.md).
+#
+# So: no urgent action, which is exactly the result that makes report-only the
+# honest setting. Tuning (a gosec config, #nosec at justified sites) comes
+# before any move to gating — not after.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # SAST results do not change without our code changing, so the weekly run is
+    # really about picking up new CodeQL queries rather than new findings.
+    - cron: '29 3 * * 1'
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        with:
+          languages: go
+          # The DEFAULT query suite, not security-extended. #466 chose this for
+          # signal: the default set is the low-noise one, and a SAST phase that
+          # lands report-only has to eventually justify becoming a gate.
+          # security-extended can be revisited once this one is clean.
+          build-mode: manual
+
+      # Built explicitly rather than by autobuild, and scoped to the same three
+      # trees as govulncheck in security.yaml. build/kernels/sandbox is a
+      # buildroot output tree that (when present) contains GCC's Go testsuite,
+      # which does not compile and is not ours. It is gitignored so a fresh CI
+      # checkout would not have it, but pinning the scope keeps all three
+      # scanners looking at exactly the same code, and keeps CI identical to
+      # what a developer runs locally with the tree present.
+      - name: Build
+        run: go build ./api/... ./internal/... ./cmd/...
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        with:
+          category: codeql-go
+
+  gosec:
+    name: gosec
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Installed from source rather than using securego/gosec's action, for the
+      # same reason Phase 1 runs the gitleaks binary and Phase 2 drives the Trivy
+      # CLI: this job holds security-events: write, and every third-party action
+      # in it is another thing that could write to our Security tab. Pinned to a
+      # tag so the baseline above stays meaningful — a floating @latest would
+      # change the finding count without anyone touching this repo.
+      - name: Install gosec
+        env:
+          GOSEC_VERSION: 'v2.28.0'
+        run: go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+
+      # -no-fail is the whole gating policy in one flag. Remove it to gate,
+      # but tune first (see the header).
+      - name: gosec
+        run: |
+          set -euo pipefail
+          gosec -no-fail -fmt sarif -out gosec.sarif \
+            ./api/... ./internal/... ./cmd/...
+          test -s gosec.sarif
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+
+      # A visible count in the job log. The SARIF goes to the Security tab, but
+      # the log is where someone notices "that number moved" without clicking
+      # through.
+      - name: Summary
+        if: always()
+        run: |
+          n=$(grep -o '"ruleId"' gosec.sarif 2>/dev/null | wc -l || echo 0)
+          echo "gosec reported $n finding(s). Baseline at landing: 86."
+          echo "Report-only — this job does not fail the build. See the header of this workflow."
