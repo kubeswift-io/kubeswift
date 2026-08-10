@@ -1,0 +1,52 @@
+version: 2
+
+# Phase 1 of #466. Dependabot is the other half of govulncheck/cargo-audit:
+# those tell us we are exposed, this proposes the upgrade.
+#
+# Weekly, grouped, and capped deliberately. Ungrouped daily updates across four
+# ecosystems produce more PRs than anyone reviews, and unreviewed dependency PRs
+# are worse than none — they train people to merge dependency changes without
+# looking, which is exactly the habit a supply-chain attack relies on.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    groups:
+      # k8s libraries move in lockstep; separate PRs for each would not build.
+      kubernetes:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /rust
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    groups:
+      rust-minor-patch:
+        update-types: [minor, patch]
+
+  # The supply-chain one that matters most: a compromised action in a workflow
+  # holding `packages: write` can republish every image we ship. Pinned to SHAs
+  # (also Phase 1), so Dependabot is what moves those pins forward.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+
+  # Base images for the 9 published containers. swiftletd is the one to watch:
+  # it carries Cloud Hypervisor and QEMU and runs privileged.
+  - package-ecosystem: docker
+    directories:
+      - /images/controller-manager
+      - /images/swiftletd
+      - /images/kubeswift-gateway
+      - /images/gpu-discovery
+      - /images/sandbox-materialize
+      - /images/snapshot-s3
+      - /images/snapshot-oras
+      - /images/migration-stunnel
+      - /images/kubeswift-dra-driver
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
