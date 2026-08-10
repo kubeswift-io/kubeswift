@@ -503,6 +503,70 @@ The OVMF_VARS.fd file is copied with the default permissions of the source file.
 
 ---
 
+## Accepted risk: `create pods` in a VM namespace is node-admin
+
+**Status: accepted and documented (#443). Not a defect report — a threat-model boundary.**
+
+A launcher pod is privileged by design (see SEC-01/02/03 above). swiftletd reports
+status by patching annotations onto its own pod, so the launcher ServiceAccount
+holds `pods: get,patch` in the workload namespace. Because
+`spec.containers[*].image` is mutable and kubelet restarts a container whose spec
+hash changed — regardless of `restartPolicy: Never` — anyone who can obtain that
+grant can repoint the privileged launcher's image and get node root.
+
+From v0.13.6 launchers run as dedicated ServiceAccounts rather than the namespace
+`default`, which removes *incidental* inheritance: ordinary Jobs, sidecars,
+CronJobs and debug pods in the namespace no longer hold `pods: patch` by accident.
+
+**It does not close the escalation, and neither would `resourceNames` scoping.**
+Kubernetes has no RBAC gate on which ServiceAccount a pod may reference — there is
+no `serviceaccounts/use` subresource and no verb for it. A tenant who can create
+pods simply names the launcher SA on a pod of their own and receives its token.
+Verified on a live cluster:
+
+```
+$ kubectl auth can-i patch pods -n <ns> --as=system:serviceaccount:<ns>:tenant
+no
+
+$ # ...as that same tenant, create a pod with `serviceAccountName: <launcher-sa>`
+pod/attacker created
+$ kubectl -n <ns> get pod attacker -o jsonpath='{.spec.serviceAccountName} {.spec.volumes[0].name}'
+<launcher-sa> kube-api-access-7qq6x
+```
+
+The token is mounted, so the tenant now holds whatever the launcher SA holds.
+Scoping the grant with `resourceNames` narrows *which* launcher pods are
+reachable; it does not stop the tenant reaching them.
+
+This matters most where Pod Security Admission stops a tenant from creating a
+privileged pod directly — they cannot make their own, but they can repoint the
+one already running.
+
+### The boundary
+
+**Treat `create pods` in a namespace that runs SwiftGuests or SwiftSandboxes as
+equivalent to node-admin on the nodes those workloads land on.** Grant it only to
+principals you would trust with node root.
+
+Practically:
+
+- Run tenant workloads in namespaces that do **not** run KubeSwift launchers.
+- Do not grant `create pods` in VM namespaces to anyone who should not have node
+  access; namespace-admin there is cluster-significant.
+- Node isolation (taints/affinity) bounds *which* nodes are exposed, not whether.
+
+### What would actually close it
+
+- **Admission control** — reject a pod referencing a launcher ServiceAccount
+  unless it is a genuine controller-created launcher. This closes it, at the cost
+  of a `pods` CREATE webhook the apiserver calls for every pod creation in the
+  cluster.
+- **Removing the grant** — move swiftletd's status reporting off pod annotations
+  onto a channel that needs no write access to its own pod. Closes it properly;
+  a rework of the status path in both the runtime and the controller.
+
+Neither is implemented. #443 tracks the decision.
+
 ## Cross-Cutting Observations
 
 ### Trust Boundary Summary

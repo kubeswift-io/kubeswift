@@ -279,8 +279,9 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			BackoffLimit: ptr.To(ociPushBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      captureNode,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					NodeName:                     captureNode,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:         "push",
 						Image:        image,

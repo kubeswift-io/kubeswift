@@ -106,8 +106,9 @@ func BuildDownloadJob(p DownloadJobParams) *batchv1.Job {
 			BackoffLimit: ptr.To(DownloadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      p.Node,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					NodeName:                     p.Node,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:  "download",
 						Image: p.Image,
@@ -228,8 +229,9 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 			BackoffLimit: ptr.To(DownloadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      p.Node,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					NodeName:                     p.Node,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:         "download",
 						Image:        p.Image,

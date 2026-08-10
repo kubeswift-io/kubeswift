@@ -517,7 +517,8 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
 			BackoffLimit: ptr.To(int32(3)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
+					RestartPolicy:                corev1.RestartPolicyNever,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:          "clone",
 						Image:         CloneJobImage,

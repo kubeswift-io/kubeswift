@@ -213,10 +213,11 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 			BackoffLimit: ptr.To(int32(4)),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      node,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
-					Containers:    []corev1.Container{container},
-					Volumes:       volumes,
+					NodeName:                     node,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
+					Containers:                   []corev1.Container{container},
+					Volumes:                      volumes,
 				},
 			},
 		},

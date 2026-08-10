@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"k8s.io/utils/ptr"
 	"strconv"
 	"strings"
 
@@ -53,7 +54,8 @@ func (r *SwiftImageReconciler) Validate(ctx context.Context, img *imagev1alpha1.
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
-							RestartPolicy: corev1.RestartPolicyNever,
+							RestartPolicy:                corev1.RestartPolicyNever,
+							AutomountServiceAccountToken: ptr.To(false),
 							Containers: []corev1.Container{{
 								Name:    "measure",
 								Image:   "ubuntu:22.04",

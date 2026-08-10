@@ -363,10 +363,11 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 			BackoffLimit: ptr.To(ociPushBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      captureNode,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
-					Containers:    []corev1.Container{container},
-					Volumes:       volumes,
+					NodeName:                     captureNode,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
+					Containers:                   []corev1.Container{container},
+					Volumes:                      volumes,
 				},
 			},
 		},

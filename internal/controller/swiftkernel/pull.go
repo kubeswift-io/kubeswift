@@ -72,7 +72,8 @@ func (r *SwiftKernelReconciler) StartPullOnNode(ctx context.Context, sk *kernelv
 			"kubeswift.io/kernel-node": "true",
 			"kubernetes.io/hostname":   nodeName,
 		},
-		RestartPolicy: corev1.RestartPolicyNever,
+		RestartPolicy:                corev1.RestartPolicyNever,
+		AutomountServiceAccountToken: ptr.To(false),
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsUser: ptr.To(int64(0)),
 		},

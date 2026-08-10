@@ -198,7 +198,8 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					SecurityContext: &corev1.PodSecurityContext{
 						// Root is needed for apt-get (and, on Linux, the loop-mount).
 						RunAsUser: ptr.To(int64(0)),
@@ -349,7 +350,8 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					SecurityContext: &corev1.PodSecurityContext{
 						// Root: the init container writes into the (root-owned) PVC
 						// mount; the main container runs apt-get (+ Linux loop-mount).
