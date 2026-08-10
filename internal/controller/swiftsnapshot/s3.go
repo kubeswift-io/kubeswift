@@ -232,7 +232,8 @@ func buildDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string) *batchv1
 			BackoffLimit: ptr.To(s3UploadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:  "delete",
 						Image: image,
@@ -321,8 +322,9 @@ func buildUploadJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode str
 			BackoffLimit: ptr.To(s3UploadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					NodeName:      captureNode,
-					RestartPolicy: corev1.RestartPolicyOnFailure,
+					NodeName:                     captureNode,
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:  "upload",
 						Image: image,

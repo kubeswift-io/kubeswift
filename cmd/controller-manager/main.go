@@ -200,6 +200,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Retires the legacy `default` subject from launcher RoleBindings once a
+	// namespace stops running legacy launchers. Convergence otherwise only runs
+	// from a guest/sandbox reconcile, so a fully drained namespace would keep
+	// the namespace-wide pods:patch grant forever (#443).
+	if err = (&swiftguest.LauncherRBACReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create launcher-rbac controller")
+		os.Exit(1)
+	}
+
 	if err = (&swiftkernel.SwiftKernelReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

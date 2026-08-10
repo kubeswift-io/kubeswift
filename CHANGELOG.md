@@ -8,6 +8,22 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A drained namespace now retires the legacy `default` launcher subject**
+  (#443). Subject convergence only ran from a SwiftGuest or SwiftSandbox
+  reconcile, so once the last guest in a namespace was deleted nothing
+  reconciled there again and `default` stayed bound to the reporter ClusterRole
+  forever — the namespace-wide `pods: patch` grant left behind in a namespace
+  with no launcher to justify it, which is when it is least defensible. A small
+  reconciler now watches the launcher RoleBindings themselves, so the object
+  carrying the stale subject drives its own cleanup after every CR is gone.
+
+- **Helper Jobs no longer mount a ServiceAccount token** (#443). Thirteen
+  pod specs across image import/validate, kernel pull, root/data disk
+  provisioning, snapshot s3/oci/cold-migration and clone download now set
+  `automountServiceAccountToken: false`. None of them talks to the API server.
+  Launcher pods are deliberately untouched — swiftletd needs its token to
+  report status.
+
 - **A NoCloud seed with no `metaData` no longer discards the operator's
   cloud-config** (#457). NoCloud is only recognised as a datasource when the
   seed disk carries a `meta-data` file; the renderer omitted the key when the
