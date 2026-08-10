@@ -50,6 +50,7 @@ Represents a running virtual machine instance.
 | `seedProfileRef.name` | string | No | — | SwiftSeedProfile for cloud-init (disk boot only). Optional. |
 | `runPolicy` | enum | No | `Running` | `Running`, `Stopped`, `RestartOnFailure`, or `Always`. |
 | `gpuProfileRef.name` | string | No | — | SwiftGPUProfile for GPU passthrough. Mutually exclusive with `kernelRef`. |
+| `schedulerName` | string | No | — | kube-scheduler profile for the launcher pod. Use a profile with the `NodeResourcesFit` `LeastAllocated` strategy to bias placement toward less-loaded nodes. Ignored when `nodeName` pins the guest. An unknown name leaves the pod Pending — KubeSwift cannot validate it, since scheduler profiles are not exposed through the API. |
 
 **RunPolicy values:**
 
@@ -430,6 +431,7 @@ Manages a fleet of identical VMs with ReplicaSet-style semantics: rolling update
 | `template` | SwiftGuestTemplateSpec | The per-replica SwiftGuest spec (boot source, class, seed, etc.). |
 | `updateStrategy` | UpdateStrategy | Rolling-update parameters (e.g. `maxUnavailable`, `maxSurge`). |
 | `spreadPolicy` / `topologySpreadConstraints` | string / []TopologySpreadConstraint | How replicas are spread across nodes/zones. |
+| `template.spec.schedulerName` | string | Routes every replica to a named scheduler profile — the utilization-aware complement to topology spread, which only counts pods. See the [guide](swiftguestpool-guide.md). |
 | `volumeClaimTemplates` | []PersistentVolumeClaimTemplate | Per-replica PVCs (owned by the pool, not the individual SwiftGuests). |
 | `service` | PoolServiceSpec | One load-balanced Service across all replicas (`ports`, `type`, `headless`). See [Service exposure](networking/service-exposure.md). |
 

@@ -40,6 +40,7 @@ func BuildPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, seedC
 	}
 	applyTopologyConstraints(pod, guest)
 	applyNodeName(pod, guest)
+	applySchedulerName(pod, guest)
 	applyDataDiskRefs(pod, guest)
 	applyFilesystems(pod, guest)
 	applyVhostUserSocketVolumes(pod, guest)
@@ -273,6 +274,22 @@ func applyTopologyConstraints(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) 
 func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 	if guest.Spec.NodeName != "" {
 		pod.Spec.NodeName = guest.Spec.NodeName
+	}
+}
+
+// applySchedulerName routes the launcher pod to a named kube-scheduler
+// profile. The launcher's requests already describe the guest's real
+// footprint (vCPU + RAM + overhead, requests == limits), so a profile using
+// the NodeResourcesFit LeastAllocated strategy will bias replicas toward
+// less-loaded nodes; this is how a guest opts into such a profile.
+//
+// NodeName wins: direct binding skips the scheduler entirely, so writing a
+// schedulerName alongside it would be inert configuration that reads as if
+// it did something. Leave the field empty in that case so the pod spec says
+// what actually happened.
+func applySchedulerName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
+	if guest.Spec.SchedulerName != "" && guest.Spec.NodeName == "" {
+		pod.Spec.SchedulerName = guest.Spec.SchedulerName
 	}
 }
 

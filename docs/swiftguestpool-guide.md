@@ -217,6 +217,75 @@ spec:
 
 When `topologySpreadConstraints` is set, `spreadPolicy` is ignored.
 
+### Spreading by utilization, not just by count
+
+Topology spread counts pods. It will happily put the seventh replica on a node
+that is already 90% committed, because that node holds no more *pods* of this
+pool than its neighbours.
+
+Node utilization is not invisible to the scheduler — the launcher pod requests
+the guest's real footprint (`cpu` = vCPU count, `memory` = guest RAM plus
+launcher overhead, with requests equal to limits), so `NodeResourcesFit` scores
+on the true cost of the VM. What the default profile does not offer is a way to
+say *how much* free capacity should matter relative to the other scoring terms.
+
+`schedulerName` on the guest template is that lever. Add a second scheduler
+profile that scores with `LeastAllocated`, then point the pool's template at it:
+
+```yaml
+# kube-scheduler config (KubeSchedulerConfiguration), alongside the default profile
+profiles:
+  - schedulerName: default-scheduler
+  - schedulerName: least-allocated
+    pluginConfig:
+      - name: NodeResourcesFit
+        args:
+          scoringStrategy:
+            type: LeastAllocated
+            resources:
+              - name: cpu
+                weight: 1
+              - name: memory
+                weight: 1
+```
+
+```yaml
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestPool
+spec:
+  replicas: 6
+  spreadPolicy: Spread          # still spreads across nodes
+  template:
+    spec:
+      schedulerName: least-allocated   # ...and prefers the emptier ones
+      imageRef:
+        name: ubuntu-noble
+      guestClassRef:
+        name: default
+```
+
+Both mechanisms compose: topology spread keeps replicas off a single node,
+`LeastAllocated` breaks the tie toward whichever node has the most headroom.
+That tie-break is the case worth having once every node already runs a replica.
+
+`schedulerName` also works on a standalone SwiftGuest — it is a field on
+`SwiftGuestSpec`, and a pool simply passes its template through.
+
+Two things to know before using it:
+
+- **An unknown profile name means Pending forever.** No scheduler claims a pod
+  whose `schedulerName` matches no configured profile, so nothing ever writes
+  an `Unschedulable` condition to explain it. KubeSwift cannot validate the
+  name — the set of scheduler profiles is not exposed through the API. Check it
+  against your cluster's scheduler config.
+- **`nodeName` wins.** Pinning a guest binds the pod directly and skips the
+  scheduler, so `schedulerName` is ignored and left unset on the pod rather
+  than written as configuration that never ran. This also applies to the target
+  side of a live migration, which pins by design.
+
+On a managed control plane you may not be able to add a scheduler profile at
+all. In that case topology spread remains the available lever.
+
 ### Node failure handling
 
 If a node goes down, the launcher pods on that node enter `Terminating` state. Once Kubernetes marks the pods as terminated (controlled by the node's `pod-eviction-timeout`, default 5 minutes), the SwiftGuestPool controller detects the missing replicas and creates replacements on healthy nodes.

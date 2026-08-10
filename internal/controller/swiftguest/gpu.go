@@ -359,6 +359,7 @@ func (r *SwiftGuestReconciler) buildBasePod(
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
 		pod := BuildRestorePod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone, params)
 		applyNodeName(pod, guest)
+		applySchedulerName(pod, guest)
 		return pod, nil
 	}
 	if guest.Spec.GPUProfileRef != nil && guest.Status.GPU != nil {
