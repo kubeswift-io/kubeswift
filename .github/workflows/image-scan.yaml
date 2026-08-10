@@ -71,16 +71,33 @@ jobs:
           load: true
           tags: scan-target:${{ matrix.image }}
 
-      # Report pass: everything, never fails. This is what populates the
-      # Security tab, including the unfixable findings the gate ignores.
+      # Trivy is driven as a CLI rather than through trivy-action. The action
+      # writes its report via inputs whose contract differs across versions —
+      # the first run here produced no SARIF at all and the upload step failed
+      # on a missing path, with nothing scanned. Invoking the binary keeps the
+      # output contract ours, and removes a third-party action from a workflow
+      # that holds security-events: write.
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: '0.68.0'
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          /tmp/trivy --version
+
+      # Report pass: everything, never fails. Populates the Security tab,
+      # including the unfixable findings the gate deliberately ignores.
       - name: Trivy (report)
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # 0.32.0
-        with:
-          image-ref: scan-target:${{ matrix.image }}
-          format: sarif
-          output: trivy-${{ matrix.image }}.sarif
-          severity: 'MEDIUM,HIGH,CRITICAL'
-          exit-code: '0'
+        run: |
+          /tmp/trivy image \
+            --format sarif \
+            --output "trivy-${{ matrix.image }}.sarif" \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --exit-code 0 \
+            "scan-target:${{ matrix.image }}"
+          test -s "trivy-${{ matrix.image }}.sarif"
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
@@ -91,10 +108,10 @@ jobs:
 
       # Gating pass: only what we can actually act on.
       - name: Trivy (gate on fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # 0.32.0
-        with:
-          image-ref: scan-target:${{ matrix.image }}
-          format: table
-          severity: 'HIGH,CRITICAL'
-          ignore-unfixed: true
-          exit-code: '1'
+        run: |
+          /tmp/trivy image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "scan-target:${{ matrix.image }}"
