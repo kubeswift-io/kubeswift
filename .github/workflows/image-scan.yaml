@@ -1,0 +1,100 @@
+name: Image scan
+
+# Phase 2 of #466 — container vulnerability scanning for the nine published
+# images.
+#
+# GATING POLICY (the open question in #466; this implements the recommendation
+# there, and is the one knob to revisit if it proves wrong):
+#
+#   fail   HIGH/CRITICAL that HAS a fix available
+#   report everything else, including unfixable HIGH/CRITICAL
+#
+# The asymmetry is deliberate. A fixable HIGH is an action item: bump the base
+# image. An unfixable one is someone else's upstream backlog, and gating on it
+# blocks every release until a third party ships — which in practice gets the
+# whole scanner disabled. `--ignore-unfixed` on the gating pass keeps red
+# meaning "you can do something about this".
+#
+# Nothing is hidden: the report pass runs regardless and uploads SARIF, so
+# unfixable findings are visible in the Security tab and can be tracked without
+# holding the build hostage.
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload
+
+on:
+  pull_request:
+    # Only when an image's build inputs change — a docs PR should not pay for
+    # nine container builds.
+    paths:
+      - 'images/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'rust/**'
+      - '.github/workflows/image-scan.yaml'
+  push:
+    branches: [main]
+  schedule:
+    # The important one. CVEs are disclosed against images we already shipped,
+    # without anything in this repo changing.
+    - cron: '43 5 * * *'
+
+jobs:
+  scan:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one bad image should not mask the other eight
+      matrix:
+        image:
+          - controller-manager
+          - swiftletd
+          - kubeswift-gateway
+          - gpu-discovery
+          - sandbox-materialize
+          - snapshot-s3
+          - snapshot-oras
+          - migration-stunnel
+          - kubeswift-dra-driver
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: images/${{ matrix.image }}/Containerfile
+          push: false
+          load: true
+          tags: scan-target:${{ matrix.image }}
+
+      # Report pass: everything, never fails. This is what populates the
+      # Security tab, including the unfixable findings the gate ignores.
+      - name: Trivy (report)
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # 0.32.0
+        with:
+          image-ref: scan-target:${{ matrix.image }}
+          format: sarif
+          output: trivy-${{ matrix.image }}.sarif
+          severity: 'MEDIUM,HIGH,CRITICAL'
+          exit-code: '0'
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}
+
+      # Gating pass: only what we can actually act on.
+      - name: Trivy (gate on fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@dc5a429b52fcf669ce959baa2c2dd26090d2a6c4 # 0.32.0
+        with:
+          image-ref: scan-target:${{ matrix.image }}
+          format: table
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
