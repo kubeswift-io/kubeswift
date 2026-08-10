@@ -35,6 +35,20 @@ on:
       - '.github/workflows/image-scan.yaml'
   push:
     branches: [main]
+    # Same filter as the PR trigger, and for the same reason. Without it every
+    # merge to main — including a docs typo — rebuilds and rescans all nine
+    # images. A batch of 13 dependency merges queued 117 build jobs and starved
+    # the runners, which is how this was noticed.
+    #
+    # Nothing is lost: a merge that does not touch these paths cannot change the
+    # images, and the nightly run below re-scans the full matrix anyway, so
+    # main's current state is still established every day.
+    paths:
+      - 'images/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'rust/**'
+      - '.github/workflows/image-scan.yaml'
   schedule:
     # The important one. CVEs are disclosed against images we already shipped,
     # without anything in this repo changing.
