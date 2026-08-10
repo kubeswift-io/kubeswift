@@ -46,9 +46,23 @@ spec:
               Refuse the combination rather than rely on the operator reading a
               comment. gateway.allowInsecureIngress is the explicit override for
               anyone who genuinely wants it (an isolated lab behind other controls).
+
+              REACHABILITY IS THE TRIGGER, NOT gateway.ingress (issue #459). The
+              first version of this guard checked only gateway.ingress.enabled and
+              so missed the way operators actually publish the UI: ui.ingress, plus
+              the tlsAuto ergonomics the chart itself recommends. The UI's nginx
+              proxies /kubeswift.v1.* to the gateway at same origin, so ui.ingress
+              exposes precisely the same control plane -- and a hub was published
+              unauthenticated on a public address with this guard sitting silent
+              and allowInsecureIngress still false. A LoadBalancer/NodePort UI
+              Service does it too, with no Ingress object at all.
             */ -}}
-            {{- if and (eq .Values.gateway.authMode "insecure") .Values.gateway.ingress.enabled (not .Values.gateway.allowInsecureIngress) }}
-              {{- fail "gateway.authMode=insecure with gateway.ingress.enabled exposes an UNAUTHENTICATED control plane (VM console, sandbox exec, RBAC editor). Set gateway.authMode=oidc (or token), or set gateway.allowInsecureIngress=true to accept the risk deliberately." }}
+            {{- $viaGatewayIngress := .Values.gateway.ingress.enabled -}}
+            {{- $viaUI := and .Values.ui.enabled (or .Values.ui.ingress.enabled (has .Values.ui.service.type (list "LoadBalancer" "NodePort"))) -}}
+            {{- $viaGatewayService := has .Values.gateway.service.type (list "LoadBalancer" "NodePort") -}}
+            {{- $reachable := or $viaGatewayIngress $viaUI $viaGatewayService -}}
+            {{- if and (eq .Values.gateway.authMode "insecure") $reachable (not .Values.gateway.allowInsecureIngress) }}
+              {{- fail "gateway.authMode=insecure with a reachable gateway (gateway.ingress, ui.ingress, or a LoadBalancer/NodePort Service for either) exposes an UNAUTHENTICATED control plane: every Connect RPC, the VM console and sandbox-exec WebSockets, and the RBAC editor, all running as the member cluster credential. The UI proxies these to the gateway at same origin, so publishing the UI publishes the gateway. Set gateway.authMode=oidc (or token), or keep authMode=insecure with NO ingress/LoadBalancer and reach it via kubectl port-forward. gateway.allowInsecureIngress=true accepts the risk deliberately." }}
             {{- end }}
             - --auth-mode={{ .Values.gateway.authMode }}
             - --cors-allow-origin={{ .Values.gateway.corsAllowOrigin }}

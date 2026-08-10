@@ -23,6 +23,16 @@ All notable changes to KubeSwift are documented here.
   is why clones worked and ordinary guests did not. An explicit value always
   wins; only NoCloud is affected.
 
+- **The chart's insecure-ingress interlock now triggers on actual reachability**
+  (#459). It only checked `gateway.ingress.enabled`, while the documented way to
+  publish the UI is `ui.ingress` — and the UI's nginx proxies the Connect RPCs to
+  the gateway at same origin, so it exposes the identical control plane. A hub
+  went out unauthenticated on a public address with the guard silent and
+  `allowInsecureIngress` still `false`. The check now covers `gateway.ingress`,
+  `ui.ingress`, and a `LoadBalancer`/`NodePort` Service for either — the last of
+  which needs no Ingress object at all. `authMode: insecure` remains usable with
+  no exposure (port-forward), and the override is unchanged.
+
 ### Added
 
 - **`spec.schedulerName` on SwiftGuest**, and therefore on every SwiftGuestPool
