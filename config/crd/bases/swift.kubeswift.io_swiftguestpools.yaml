@@ -863,6 +863,28 @@ spec:
                         - RestartOnFailure
                         - Always
                         type: string
+                      schedulerName:
+                        description: |-
+                          SchedulerName routes the launcher pod to a specific kube-scheduler
+                          profile (pod.spec.schedulerName). Empty means the cluster default.
+
+                          The launcher pod already carries accurate requests — cpu equal to the
+                          guest's vCPU count and memory equal to guest RAM plus the launcher
+                          overhead, with requests == limits — so the scheduler scores nodes on
+                          the guest's real footprint. What the default profile does NOT let an
+                          operator choose is how heavily free capacity weighs against the other
+                          scoring terms. A profile configured with the NodeResourcesFit
+                          LeastAllocated strategy biases placement toward less-loaded nodes;
+                          naming it here is how a guest (or every replica of a pool, via the
+                          pool template) opts into it.
+
+                          This is placement policy, not placement: an unknown scheduler name
+                          leaves the pod Pending forever, because no scheduler claims it. Set it
+                          only to a profile that exists in the cluster's scheduler config.
+
+                          Ignored when NodeName is set — direct binding bypasses the scheduler
+                          entirely, so no profile ever sees the pod.
+                        type: string
                       seedProfileRef:
                         description: SeedProfileRef references a SwiftSeedProfile
                           for cloud-init (disk boot only).

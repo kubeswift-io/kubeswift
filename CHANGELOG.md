@@ -4,6 +4,34 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`spec.schedulerName` on SwiftGuest**, and therefore on every SwiftGuestPool
+  replica (the pool copies its template spec wholesale). It sets
+  `pod.spec.schedulerName` on the launcher, which lets a guest opt into a
+  kube-scheduler profile configured with the `NodeResourcesFit`
+  `LeastAllocated` scoring strategy.
+
+  This closes the gap in #418. `spreadPolicy: Spread` counts pods, so it will
+  place the next replica on a node that is already nearly full as long as that
+  node holds no more pods of the pool than its neighbours. The launcher has
+  always requested the guest's real footprint — cpu equal to the vCPU count,
+  memory equal to guest RAM plus overhead, requests equal to limits — so the
+  scheduler could already score on utilization; what an operator had no way to
+  express was how heavily free capacity should weigh. Naming a profile is that
+  expression. The two compose: spread keeps replicas off one node,
+  `LeastAllocated` breaks the tie toward the emptiest.
+
+  `nodeName` still wins — direct binding skips the scheduler entirely, so the
+  field is left unset on the pod rather than written as configuration that
+  never ran. An unknown profile name leaves the pod Pending indefinitely and
+  KubeSwift cannot warn about it, because the set of scheduler profiles is not
+  exposed through the API; the guide says so plainly.
+
+---
+
 ## [v0.13.5] — 2026-08-09
 
 An incident release. Two SwiftGuests were deleted from a lab cluster and the
