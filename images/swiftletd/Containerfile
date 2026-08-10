@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # repo-root context. snapshot-stager imports
 # internal/snapshot/configjson — the source-of-truth for the narrow
 # config.json edits applied to a Tier B clone (see commits 12/13).
-FROM golang:1.25-bookworm AS go-builder
+FROM golang:1.26-bookworm AS go-builder
 ARG VERSION=dev
 WORKDIR /go-build
 COPY go.mod go.sum ./
