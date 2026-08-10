@@ -33,6 +33,18 @@ All notable changes to KubeSwift are documented here.
   which needs no Ingress object at all. `authMode: insecure` remains usable with
   no exposure (port-forward), and the override is unchanged.
 
+- **A cache that never syncs is now fatal instead of silent** (#460). When RBAC
+  denies a watched type, the reflector retries forever: the manager stays up, the
+  pod stays Ready, and *nothing* reconciles — no controller starts until every
+  informer syncs — so fresh resources sat with a completely empty `.status`, no
+  pod and no event. The manager now waits a bounded 3 minutes and exits non-zero
+  with the likely cause, turning an idle-but-healthy process into a
+  CrashLoopBackOff next to the reflector's own `is forbidden` lines. A cancelled
+  context (SIGTERM, lost leader election) is still a clean shutdown.
+
+  Note this differs from a *missing CRD*, which already failed at informer
+  construction — only the RBAC-denied case was invisible.
+
 ### Added
 
 - **`spec.schedulerName` on SwiftGuest**, and therefore on every SwiftGuestPool

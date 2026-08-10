@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	cacheopts "sigs.k8s.io/controller-runtime/pkg/cache"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
@@ -386,10 +388,76 @@ func main() {
 	}
 
 	klog.InfoS("starting manager", "version", version.Version, "git", version.GitCommit)
+	go watchdogCacheSync(ctx, mgr)
 	if err := mgr.Start(ctx); err != nil {
 		klog.ErrorS(err, "manager exited with error")
 		os.Exit(1)
 	}
+}
+
+// cacheSyncDeadline bounds how long the manager may run with an unsynced cache
+// before it gives up. Generous enough for a cold apiserver and a large fleet;
+// far short of "forever", which is the default and the bug (#460).
+var cacheSyncDeadline = 3 * time.Minute
+
+// watchdogCacheSync turns an un-syncable informer into a crash instead of a
+// silent, permanent no-op.
+//
+// controller-runtime's cached client starts an informer per watched type and
+// retries a failing LIST forever. The manager keeps running, the pod stays
+// Ready, and NOTHING reconciles — not just the affected type, all of it,
+// because no controller starts until the cache syncs. Observed for real when a
+// controller built after the launcher-ServiceAccount work ran against an older
+// chart's RBAC: `serviceaccounts is forbidden` every 15s, and freshly created
+// SwiftGuests sat with a completely empty .status, no pod, no event, no phase.
+// The operator has nothing to go on; `kubectl get deploy` says healthy.
+//
+// That is the most complete violation of "no silent failures" the system can
+// manage, so make it loud: wait a bounded time for the cache, and if it has not
+// synced, log the likely cause and exit non-zero. CrashLoopBackOff plus the
+// reflector's own "is forbidden" lines is a diagnosis; an idle Running pod is
+// not.
+//
+// The deadline is only armed while the process should be starting up — a normal
+// ctx cancellation (SIGTERM, lost leader election) exits quietly and is not a
+// sync failure.
+// A NOTE ON WHY THIS WAS NEEDED, given the comment above about VolumeSnapshot:
+// a MISSING CRD and a FORBIDDEN LIST fail differently. No such type at all fails
+// when the informer is constructed, and the manager does exit — which is what
+// that comment describes and why the CRD check exists. A type that exists but
+// which RBAC denies fails inside the reflector's retry loop instead, forever,
+// with the manager perfectly healthy. Only the second case is silent.
+func watchdogCacheSync(ctx context.Context, mgr manager.Manager) {
+	if err := cacheSyncOutcome(ctx, cacheSyncDeadline, mgr.GetCache().WaitForCacheSync); err != nil {
+		klog.ErrorS(err, "REFUSING TO RUN with an unsynced informer cache")
+		os.Exit(1)
+	}
+}
+
+// cacheSyncOutcome holds the decision, separate from the process exit, so the
+// three outcomes are testable without a real manager.
+//
+// Returns nil when the cache syncs, and nil when the parent context is already
+// done — a SIGTERM or a lost leader election during start-up is a shutdown, not
+// a fault, and must not be reported as one. Returns an error only when the
+// deadline passes with the process still expected to be running.
+func cacheSyncOutcome(ctx context.Context, deadline time.Duration, waitForCacheSync func(context.Context) bool) error {
+	deadlined, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	if waitForCacheSync(deadlined) {
+		klog.InfoS("informer cache synced")
+		return nil
+	}
+	if ctx.Err() != nil {
+		return nil // shutting down, not a sync failure
+	}
+	return fmt.Errorf("informer cache did not sync within %s. No controller reconciles until "+
+		"EVERY watched type syncs, so this process would otherwise sit idle and Ready while doing "+
+		"nothing at all — no pods created, no status written, for any resource. The usual cause is "+
+		"missing RBAC on a watched type: look for \"is forbidden\" from the reflector above and grant "+
+		"the controller-manager ClusterRole list+watch on that resource. Running a controller image "+
+		"newer than its chart's RBAC produces exactly this", deadline)
 }
 
 // volumeSnapshotCRDsInstalled reports whether the CSI external-snapshotter
