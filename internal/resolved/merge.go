@@ -52,7 +52,7 @@ func Merge(
 	rg.Networks = Networks{InterfaceModel: DefaultInterfaceModel}
 
 	// Seed: from SwiftSeedProfile when referenced
-	rg.Seed = mergeSeed(seedProfile)
+	rg.Seed = mergeSeed(seedProfile, guest)
 
 	// PreparedImage: from SwiftImage when Ready
 	rg.PreparedImage = mergePreparedImage(image)
@@ -172,7 +172,7 @@ func mergeRootDisk(guestClass *swiftv1alpha1.SwiftGuestClass) RootDisk {
 	return RootDisk{Size: size, Format: format}
 }
 
-func mergeSeed(seedProfile *seedv1alpha1.SwiftSeedProfile) *Seed {
+func mergeSeed(seedProfile *seedv1alpha1.SwiftSeedProfile, guest *swiftv1alpha1.SwiftGuest) *Seed {
 	if seedProfile == nil {
 		return nil
 	}
@@ -191,7 +191,45 @@ func mergeSeed(seedProfile *seedv1alpha1.SwiftSeedProfile) *Seed {
 	if seedProfile.Spec.NetworkDataFrom != nil {
 		s.NetworkDataFrom = seedProfile.Spec.NetworkDataFrom
 	}
+	defaultNoCloudMetaData(s, guest)
 	return s
+}
+
+// defaultNoCloudMetaData synthesizes meta-data for a NoCloud seed that does not
+// supply its own (issue #457).
+//
+// NoCloud is only RECOGNISED as a datasource if the seed disk carries a
+// meta-data file. The renderer omits the key when the field is empty, so a
+// profile that sets only userData produced a disk cloud-init could not identify:
+// it fell back to DataSourceNone and discarded the operator's entire user-data.
+// The guest still booted, still got a DHCP lease and still reported
+// Running/Ready, so nothing in kubectl indicated that no user, no SSH key and no
+// hostname had been applied. spec.metaData is marked +optional on the CRD, so an
+// operator following the CRD contract landed there.
+//
+// The values are not a guess. instance-id is what cloud-init keys "have I
+// already run for this instance?" off, so it must be stable per guest across
+// reboots — hence namespace-name rather than anything generated. This mirrors
+// what the clone path has always done (see swiftguest/clone.go), which is why
+// clones worked while ordinary guests did not.
+//
+// An explicit metaData (inline or metaDataFrom) always wins: this only fills a
+// gap, it never overrides an operator.
+func defaultNoCloudMetaData(s *Seed, guest *swiftv1alpha1.SwiftGuest) {
+	if s.Datasource != string(seedv1alpha1.DatasourceNoCloud) {
+		return
+	}
+	if s.MetaData != "" || s.MetaDataFrom != nil {
+		return
+	}
+	if guest == nil || guest.Name == "" {
+		return
+	}
+	instanceID := guest.Name
+	if guest.Namespace != "" {
+		instanceID = guest.Namespace + "-" + guest.Name
+	}
+	s.MetaData = "instance-id: " + instanceID + "\nlocal-hostname: " + guest.Name + "\n"
 }
 
 func mergePreparedImage(image *imagev1alpha1.SwiftImage) PreparedImage {

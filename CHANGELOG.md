@@ -6,6 +6,23 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A NoCloud seed with no `metaData` no longer discards the operator's
+  cloud-config** (#457). NoCloud is only recognised as a datasource when the
+  seed disk carries a `meta-data` file; the renderer omitted the key when the
+  field was empty, so cloud-init fell back to `DataSourceNone` and threw away
+  `userData` entirely — no user, no SSH key, no hostname — while the guest
+  booted, took a DHCP lease and reported Running/Ready. Nothing in `kubectl`
+  indicated anything had gone wrong.
+
+  The controller now synthesizes `instance-id: <namespace>-<guest>` +
+  `local-hostname: <guest>` when neither `metaData` nor `metaDataFrom` is set.
+  `instance-id` must be stable per guest because cloud-init keys "have I already
+  run for this instance?" off it. This is what the clone path already did, which
+  is why clones worked and ordinary guests did not. An explicit value always
+  wins; only NoCloud is affected.
+
 ### Added
 
 - **`spec.schedulerName` on SwiftGuest**, and therefore on every SwiftGuestPool

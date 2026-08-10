@@ -54,6 +54,15 @@ spec:
                 - NoCloud
                 type: string
               metaData:
+                description: |-
+                  MetaData is inline NoCloud instance metadata (use MetaDataFrom for a ref).
+
+                  Optional because it is DEFAULTED, not because NoCloud works without it: a
+                  NoCloud seed disk with no meta-data file is not recognised as a datasource
+                  at all, and cloud-init then discards userData wholesale while the guest
+                  still boots and reports Ready (#457). When neither this nor MetaDataFrom is
+                  set, the controller synthesizes `instance-id: <namespace>-<guest>` +
+                  `local-hostname: <guest>`. Set it only to override that.
                 type: string
               metaDataFrom:
                 description: SeedDataValueFrom holds a reference to Secret or ConfigMap.

@@ -213,7 +213,7 @@ cloud-init NoCloud datasource configuration. Rendered to a seed ISO and mounted 
 | `datasource` | enum | Yes | Only `NoCloud` is supported. |
 | `userData` | string | No | Inline cloud-config YAML. |
 | `userDataFrom` | SeedDataValueFrom | No | Reference to Secret or ConfigMap key. |
-| `metaData` | string | No | Inline instance metadata YAML. |
+| `metaData` | string | No | Inline instance metadata YAML. **Defaulted when omitted** (`instance-id: <namespace>-<guest>`, `local-hostname: <guest>`) — a NoCloud disk with no `meta-data` file is not recognised as a datasource, and cloud-init would silently discard `userData` while the guest still booted and reported Ready. Set it only to override. |
 | `metaDataFrom` | SeedDataValueFrom | No | Reference to Secret or ConfigMap key. |
 | `networkData` | string | No | Inline network configuration. |
 | `networkDataFrom` | SeedDataValueFrom | No | Reference to Secret or ConfigMap key. |
