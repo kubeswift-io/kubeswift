@@ -23,7 +23,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # Fetch a pinned cosign for provenance signing (P2). Verified against the
 # release checksums file so a tampered/corrupt binary fails the build.
-ARG COSIGN_VERSION=v2.4.1
+#
+# Stay on the 2.x line. cosign 3.x REMOVES support for `--tlog-upload=false`
+# ("not supported with --signing-config"), which internal/oci.SignArgs relies on
+# to sign offline with no Rekor entry. The flag still appears in `cosign 3 sign
+# --help`, so this only shows up at runtime — and no test covers the round-trip,
+# so a 3.x bump would break signing silently. Moving to 3.x means reworking
+# SignArgs onto a signing-config file first.
+ARG COSIGN_VERSION=v2.6.5
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" -o cosign_checksums.txt \

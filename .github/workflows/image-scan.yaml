@@ -1,0 +1,138 @@
+name: Image scan
+
+# Phase 2 of #466 — container vulnerability scanning for the nine published
+# images.
+#
+# GATING POLICY (the open question in #466; this implements the recommendation
+# there, and is the one knob to revisit if it proves wrong):
+#
+#   fail   HIGH/CRITICAL that HAS a fix available
+#   report everything else, including unfixable HIGH/CRITICAL
+#
+# The asymmetry is deliberate. A fixable HIGH is an action item: bump the base
+# image. An unfixable one is someone else's upstream backlog, and gating on it
+# blocks every release until a third party ships — which in practice gets the
+# whole scanner disabled. `--ignore-unfixed` on the gating pass keeps red
+# meaning "you can do something about this".
+#
+# Nothing is hidden: the report pass runs regardless and uploads SARIF, so
+# unfixable findings are visible in the Security tab and can be tracked without
+# holding the build hostage.
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload
+
+on:
+  pull_request:
+    # Only when an image's build inputs change — a docs PR should not pay for
+    # nine container builds.
+    paths:
+      - 'images/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'rust/**'
+      - '.github/workflows/image-scan.yaml'
+  push:
+    branches: [main]
+  schedule:
+    # The important one. CVEs are disclosed against images we already shipped,
+    # without anything in this repo changing.
+    - cron: '43 5 * * *'
+
+jobs:
+  scan:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # one bad image should not mask the other eight
+      matrix:
+        image:
+          - controller-manager
+          - swiftletd
+          - kubeswift-gateway
+          - gpu-discovery
+          - sandbox-materialize
+          - snapshot-s3
+          - snapshot-oras
+          - migration-stunnel
+          - kubeswift-dra-driver
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: images/${{ matrix.image }}/Containerfile
+          push: false
+          load: true
+          tags: scan-target:${{ matrix.image }}
+
+      # Trivy is driven as a CLI rather than through trivy-action. The action
+      # writes its report via inputs whose contract differs across versions —
+      # the first run here produced no SARIF at all and the upload step failed
+      # on a missing path, with nothing scanned. Invoking the binary keeps the
+      # output contract ours, and removes a third-party action from a workflow
+      # that holds security-events: write.
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: '0.73.0'
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          /tmp/trivy --version
+
+      # Report pass: everything, never fails. Populates the Security tab,
+      # including the unfixable findings the gate deliberately ignores.
+      - name: Trivy (report)
+        run: |
+          /tmp/trivy image \
+            --format sarif \
+            --output "trivy-${{ matrix.image }}.sarif" \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --exit-code 0 \
+            "scan-target:${{ matrix.image }}"
+          test -s "trivy-${{ matrix.image }}.sarif"
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}
+
+      # Gating pass: only what we can actually act on.
+      #
+      # --skip-files exempts VENDORED THIRD-PARTY BINARIES from the gate (not
+      # from the report above). snapshot-oras and sandbox-materialize ship a
+      # prebuilt cosign release binary. Trivy reads the Go build info compiled
+      # into it and reports its dependencies as ours, but we do not build cosign
+      # and cannot bump what it links — only sigstore can, by cutting a release.
+      # Trivy's "fixed version" column means "a fix exists in the library", not
+      # "you can apply it", so --ignore-unfixed does not filter these.
+      #
+      # Concretely: cosign v2.6.5 (the newest 2.x, and 2.x is required — see the
+      # Containerfile note on --tlog-upload) still carries 24 fixable HIGH/
+      # CRITICAL findings. The only remedy available to us is to bump cosign,
+      # which is already done. Gating on the remainder would mean a permanently
+      # red build with no action attached, and the usual outcome of that is
+      # someone disables the scanner.
+      #
+      # This is scoped to one exact path, not a blanket suppression: everything
+      # we compile is still gated, and the report pass keeps the cosign findings
+      # visible in the Security tab. The real fix is to link cosign as a Go
+      # library so it becomes a managed go.mod dependency — tracked in #486.
+      - name: Trivy (gate on fixable HIGH/CRITICAL)
+        run: |
+          /tmp/trivy image \
+            --format table \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --skip-files usr/local/bin/cosign \
+            --exit-code 1 \
+            "scan-target:${{ matrix.image }}"
