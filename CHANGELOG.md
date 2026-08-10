@@ -4,7 +4,36 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.13.6] — 2026-08-10
+
+A correctness release. Every item is a case where the system did the wrong thing
+quietly — a seed silently discarded, a safety interlock watching the wrong field,
+a controller idling while reporting healthy, an RBAC subject that outlived its
+reason to exist.
+
+### Upgrade
+
+**Upgrade the chart, not just the image tag.** v0.13.6's controller watches
+ServiceAccounts (the launcher-SA work), and that rule ships in this version's
+chart RBAC. A controller image newer than its chart's RBAC cannot sync its
+informer cache — and as of this release it now **exits non-zero** rather than
+running idle, so the mismatch presents as CrashLoopBackOff instead of a cluster
+where nothing reconciles. That is the intended behaviour, but it means an
+image-only bump fails loudly where it used to fail silently.
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.6 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
+```
+
+Also note **`gateway.authMode: insecure` now refuses to render alongside any
+chart-managed exposure** — `gateway.ingress`, `ui.ingress`, or a
+LoadBalancer/NodePort Service for either. If you are running that combination
+today you are serving an unauthenticated control plane; switch to
+`authMode: oidc`, drop the exposure and use port-forward, or set
+`gateway.allowInsecureIngress=true` to accept the risk deliberately.
+
 
 ### Fixed
 
@@ -62,6 +91,42 @@ All notable changes to KubeSwift are documented here.
   construction — only the RBAC-denied case was invisible.
 
 ### Added
+
+- **Launcher pods run as dedicated ServiceAccounts** (#456). Until now they used
+  the workload namespace's `default`, and the reporter ClusterRole was bound to
+  it — so every Job, sidecar, CronJob and debug pod in that namespace silently
+  inherited `pods: patch` on a **privileged** launcher. Guests and sandboxes now
+  get separate SAs (`kubeswift-launcher`, `kubeswift-sandbox-launcher`), and a
+  sandbox launcher no longer receives `swiftguests/status` at all — it never
+  needed it, and granting it would let an escaped sandbox forge conditions on any
+  guest in the namespace.
+
+  The binding *converges* rather than being created once: the new SA is always
+  bound, and `default` stays bound only while a launcher pod is still running as
+  it, so an in-place upgrade does not break VMs that keep their original SA until
+  they next stop or migrate.
+
+  **If you attach `imagePullSecrets` to the namespace `default` ServiceAccount**
+  for a private registry, launchers no longer inherit them. Set
+  `swiftletd.imagePullSecrets` so the chart puts them on the pod, where they
+  apply regardless of SA — otherwise the first guest after upgrade is
+  `ImagePullBackOff`.
+
+  Read the scope honestly: Kubernetes has no RBAC gate on which ServiceAccount a
+  pod may reference, so this removes *incidental* inheritance and makes the grant
+  auditable — it does not stop someone who can create pods from naming the SA.
+  See `docs/security-audit.md` and #443.
+
+- **`swiftctl image publish` survives a registry rate limit** (#455). A 429 —
+  or a 403 whose body says rate limit, which is how GitHub signals its secondary
+  limit — aborted the whole publish and threw away every chunk already uploaded.
+  It now retries with jittered exponential backoff and scales chunk size with
+  artifact size. A plain 403 is still permission-denied and still fails fast;
+  retrying it would just be a slow way to reach the same error.
+
+- **Operator guide for apiserver audit logging** (#454) —
+  `docs/operator/audit-logging.md`, including why a VM platform needs it and the
+  k0s file-permission trap that makes the apiserver refuse to start.
 
 - **`spec.schedulerName` on SwiftGuest**, and therefore on every SwiftGuestPool
   replica (the pool copies its template spec wholesale). It sets
