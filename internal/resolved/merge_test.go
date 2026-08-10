@@ -119,3 +119,76 @@ func TestMerge_NoSeedWhenSwiftSeedProfileNotReferenced(t *testing.T) {
 		t.Errorf("Seed = %v, want nil", rg.Seed)
 	}
 }
+
+// --- NoCloud meta-data defaulting (#457) ---
+//
+// NoCloud is only recognised when the seed disk carries meta-data. Without it
+// cloud-init falls back to DataSourceNone and silently discards user-data, while
+// the guest still boots and reports Ready — so these cover the defaulting rather
+// than leaving the failure to a cluster to discover.
+
+func seedMergeFixture(t *testing.T, profile *seedv1alpha1.SwiftSeedProfile) *ResolvedGuest {
+	t.Helper()
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-01", Namespace: "prod"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			SeedProfileRef: &corev1.LocalObjectReference{Name: "sp"},
+			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
+			GuestClassRef:  corev1.LocalObjectReference{Name: "gc"},
+		},
+	}
+	guestClass := &swiftv1alpha1.SwiftGuestClass{Spec: swiftv1alpha1.SwiftGuestClassSpec{
+		CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"),
+		RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw},
+	}}
+	image := &imagev1alpha1.SwiftImage{Status: imagev1alpha1.SwiftImageStatus{
+		Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw},
+	}}
+	return Merge(guest, guestClass, image, profile)
+}
+
+func TestMerge_NoCloudWithoutMetaDataGetsADefault(t *testing.T) {
+	rg := seedMergeFixture(t, &seedv1alpha1.SwiftSeedProfile{Spec: seedv1alpha1.SwiftSeedProfileSpec{
+		Datasource: seedv1alpha1.DatasourceNoCloud,
+		UserData:   "#cloud-config\nusers: []",
+	}})
+	want := "instance-id: prod-web-01\nlocal-hostname: web-01\n"
+	if rg.Seed.MetaData != want {
+		t.Errorf("Seed.MetaData = %q, want %q — without it cloud-init ignores user-data entirely", rg.Seed.MetaData, want)
+	}
+}
+
+func TestMerge_ExplicitMetaDataIsNotOverridden(t *testing.T) {
+	rg := seedMergeFixture(t, &seedv1alpha1.SwiftSeedProfile{Spec: seedv1alpha1.SwiftSeedProfileSpec{
+		Datasource: seedv1alpha1.DatasourceNoCloud,
+		UserData:   "#cloud-config",
+		MetaData:   "instance-id: operator-chose-this\n",
+	}})
+	if rg.Seed.MetaData != "instance-id: operator-chose-this\n" {
+		t.Errorf("Seed.MetaData = %q; defaulting must fill a gap, never override", rg.Seed.MetaData)
+	}
+}
+
+// metaDataFrom is resolved later by the renderer, so an empty MetaData string
+// here does NOT mean the operator supplied nothing — defaulting would shadow the
+// Secret/ConfigMap they pointed at.
+func TestMerge_MetaDataFromSuppressesTheDefault(t *testing.T) {
+	rg := seedMergeFixture(t, &seedv1alpha1.SwiftSeedProfile{Spec: seedv1alpha1.SwiftSeedProfileSpec{
+		Datasource:   seedv1alpha1.DatasourceNoCloud,
+		UserData:     "#cloud-config",
+		MetaDataFrom: &seedv1alpha1.SeedDataValueFrom{},
+	}})
+	if rg.Seed.MetaData != "" {
+		t.Errorf("Seed.MetaData = %q, want empty: metaDataFrom supplies it at render time", rg.Seed.MetaData)
+	}
+}
+
+func TestMerge_NonNoCloudDatasourceIsUntouched(t *testing.T) {
+	rg := seedMergeFixture(t, &seedv1alpha1.SwiftSeedProfile{Spec: seedv1alpha1.SwiftSeedProfileSpec{
+		Datasource: "ConfigDrive",
+		UserData:   "#cloud-config",
+	}})
+	if rg.Seed.MetaData != "" {
+		t.Errorf("Seed.MetaData = %q, want empty: the meta-data requirement is NoCloud's", rg.Seed.MetaData)
+	}
+}

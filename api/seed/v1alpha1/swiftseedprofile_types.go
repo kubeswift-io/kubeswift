@@ -27,10 +27,18 @@ type SeedDataValueFrom struct {
 
 // SwiftSeedProfileSpec defines the desired state of SwiftSeedProfile.
 type SwiftSeedProfileSpec struct {
-	Datasource      DatasourceType     `json:"datasource"`
-	UserData        string             `json:"userData"` // Inline; use UserDataFrom for ref
-	UserDataFrom    *SeedDataValueFrom `json:"userDataFrom,omitempty"`
-	MetaData        string             `json:"metaData,omitempty"` // Inline; use MetaDataFrom for ref
+	Datasource   DatasourceType     `json:"datasource"`
+	UserData     string             `json:"userData"` // Inline; use UserDataFrom for ref
+	UserDataFrom *SeedDataValueFrom `json:"userDataFrom,omitempty"`
+	// MetaData is inline NoCloud instance metadata (use MetaDataFrom for a ref).
+	//
+	// Optional because it is DEFAULTED, not because NoCloud works without it: a
+	// NoCloud seed disk with no meta-data file is not recognised as a datasource
+	// at all, and cloud-init then discards userData wholesale while the guest
+	// still boots and reports Ready (#457). When neither this nor MetaDataFrom is
+	// set, the controller synthesizes `instance-id: <namespace>-<guest>` +
+	// `local-hostname: <guest>`. Set it only to override that.
+	MetaData        string             `json:"metaData,omitempty"`
 	MetaDataFrom    *SeedDataValueFrom `json:"metaDataFrom,omitempty"`
 	NetworkData     string             `json:"networkData,omitempty"` // Inline; use NetworkDataFrom for ref
 	NetworkDataFrom *SeedDataValueFrom `json:"networkDataFrom,omitempty"`
