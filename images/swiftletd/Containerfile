@@ -4,7 +4,7 @@
 # us build both the Rust launcher (under rust/) and the small Go
 # snapshot-stager init-container helper (under cmd/snapshot-stager,
 # which depends on internal/snapshot/configjson) from the same image.
-FROM rust:1-bookworm AS builder
+FROM rust:1.97.1-bookworm AS builder
 WORKDIR /build
 
 ARG VERSION=dev

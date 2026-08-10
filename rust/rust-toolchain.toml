@@ -1,0 +1,28 @@
+# Pin the Rust toolchain.
+#
+# Before this file, nothing pinned the compiler. CI used
+# dtolnay/rust-toolchain@stable and images/swiftletd/Containerfile used
+# `FROM rust:1-bookworm` — both floating. Two consequences:
+#
+#   - Builds were not reproducible. The same commit compiled with a different
+#     compiler depending on when you built it.
+#   - A Rust stable release could change what we ship, or turn CI red one
+#     morning, with no pull request and nothing to review. Dependabot manages
+#     our crates (see .github/dependabot.yml), but the compiler itself was
+#     outside any of that.
+#
+# CI runs every cargo command from this directory, so rustup reads this file and
+# uses the pinned toolchain regardless of what the workflow's setup action
+# installed. This file is the single source of truth.
+#
+# Bumping it: images/swiftletd/Containerfile pins the SAME version, and that one
+# IS tracked by Dependabot (docker ecosystem, /images/swiftletd). So a Rust
+# release shows up as a Containerfile bump PR — treat that PR as the prompt to
+# move this file to match. The two must not drift: the container build and CI
+# would then be compiling with different compilers.
+[toolchain]
+channel = "1.97.1"
+# rustfmt only — CI runs `cargo fmt --check` but not clippy. Add clippy here if
+# it is ever added to the workflow, so the component is installed for the
+# pinned toolchain rather than resolved against whatever else is on the box.
+components = ["rustfmt"]
