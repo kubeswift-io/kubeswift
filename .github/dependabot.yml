@@ -24,6 +24,26 @@ updates:
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
     groups:
+      # kube and k8s-openapi are VERSION-LOCKED — kube declares an exact-minor
+      # requirement on k8s-openapi (kube 0.92 -> ^0.22, kube 4.2 -> ^0.28), so
+      # bumping either alone always breaks the build. Ungrouped, Dependabot
+      # opened them as two separate PRs (#484, #485) that could not pass
+      # individually AND did not combine into a working pair: #484 offered
+      # k8s-openapi 0.24 while #485's kube 4.2 needed 0.28. Both were closed.
+      #
+      # Listed FIRST because Dependabot assigns a dependency to the first group
+      # it matches, and rust-minor-patch below has no `patterns` so it would
+      # otherwise swallow the minor/patch updates of these two.
+      #
+      # update-types includes major so the pair also travels together across a
+      # major bump — the case that actually broke.
+      kube-rs:
+        patterns:
+          - "kube"
+          - "kube-*"
+          - "k8s-openapi"
+        update-types: [major, minor, patch]
+
       rust-minor-patch:
         update-types: [minor, patch]
 
