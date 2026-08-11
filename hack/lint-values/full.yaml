@@ -1,0 +1,46 @@
+# Lint profile: every optional component enabled.
+#
+# WHY THIS FILE EXISTS. Almost everything in this chart is off by default. A
+# `helm template charts/kubeswift | <linter>` with no values renders exactly ONE
+# pod-bearing workload (controller-manager) out of five, and passes — which
+# looks like coverage and is not. This profile turns all five on so the manifest
+# checks actually see what we ship.
+#
+# The values below are LINT FIXTURES, not a deployment example. Do not copy this
+# for a real install; see docs/install.md.
+#
+# The OIDC values in particular are placeholders that exist only to get the
+# gateway to render at all: gateway/deployment.yaml fail-closes with
+# "gateway.oidc.issuerURL is required when gateway.authMode=oidc" and again for
+# clientID. That guard is correct and deliberate — but it means a job using
+# ad-hoc --set flags either errors out or silently skips the gateway, which is
+# precisely the coverage gap this file closes.
+#
+# Keep in sync with hack/verify-render-coverage.sh, which asserts that the
+# expected workloads really did render.
+
+gateway:
+  enabled: true
+  oidc:
+    # Placeholders. Never resolved — nothing in the lint path talks to an IdP.
+    issuerURL: https://idp.invalid/realms/lint
+    clientID: kubeswift-lint
+
+ui:
+  enabled: true
+
+dra:
+  enabled: true
+
+gpuDiscovery:
+  enabled: true
+
+webhook:
+  enabled: true
+
+monitoring:
+  enabled: true
+
+migration:
+  mtls:
+    enabled: true
