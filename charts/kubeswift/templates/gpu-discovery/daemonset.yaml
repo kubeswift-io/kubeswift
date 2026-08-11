@@ -4,6 +4,13 @@ kind: DaemonSet
 metadata:
   name: gpu-discovery
   namespace: {{ .Values.namespace }}
+  annotations:
+    # Policy baseline (#493). Only the host mount is excused here — this
+    # DaemonSet IS non-root (uid 65534) and keeps the run-as-non-root check.
+    ignore-check.kube-linter.io/sensitive-host-mounts: >-
+      /sys is read for GPU, PCI, NUMA, IOMMU and hugepage topology. Inherent to
+      a node-inspecting DaemonSet: it reads world-readable sysfs only, writes
+      nothing, needs no /dev, runs as uid 65534 and drops ALL capabilities.
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: gpu-discovery
