@@ -90,8 +90,18 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      # The three codeql-action/* pins below (init, analyze, upload-sarif) MUST
+      # move together. init writes a config file stamped with its own version and
+      # analyze refuses to read one written by a different version:
+      #
+      #   Loaded a configuration file for version '4.31.0', but running version '4.37.6'
+      #
+      # Dependabot treats each sub-action as its own dependency, so it opens a PR
+      # bumping only the one whose path changed (#506 bumped analyze alone and the
+      # job failed on exactly that error). When a bump lands, check all three SHAs
+      # match before merging.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           languages: go
           # The DEFAULT query suite, not security-extended. #466 chose this for
@@ -111,7 +121,7 @@ jobs:
         run: go build ./api/... ./internal/... ./cmd/...
 
       - name: Analyze
-        uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           category: codeql-go
 
@@ -150,7 +160,7 @@ jobs:
           test -s gosec.sarif
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         if: always()
         with:
           sarif_file: gosec.sarif
