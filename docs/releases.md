@@ -17,7 +17,7 @@ KubeSwift uses three release types: **dev** (main branch), **RC** (release candi
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.0.0-dev.a1b2c3d -n kubeswift-system --create-namespace
 
 # Stable
-helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.6 -n kubeswift-system --create-namespace
+helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.7 -n kubeswift-system --create-namespace
 ```
 
 ## CI workflows
@@ -111,6 +111,20 @@ Release artifacts (rc and stable) are signed and attested:
 - **swiftctl binaries** (stable releases) — `SHA256SUMS` is cosign-signed
   (`SHA256SUMS.sig` + `SHA256SUMS.pem` release assets); the checksums then
   cover each binary.
+
+**Coverage floor: v0.13.7.** All nine images are signed from v0.13.7 onward. In
+earlier releases the sign list was maintained by hand and covered eight of nine —
+`sandbox-materialize` was omitted and shipped **unsigned in every release up to
+and including v0.13.6** (checked at v0.12.0, v0.13.0, v0.13.2, v0.13.4 and
+v0.13.6; every other image at those tags verifies). Verifying the full set
+against an older tag will fail on that one image, and that failure is expected
+rather than a sign of tampering. From v0.13.7 the list is derived from the same
+digest-pinned refs the build emits, and the release verifies its own signatures
+before publishing, so a miss fails the release instead of shipping quietly.
+
+To re-check a published tag at any time, run the **Verify release** workflow
+(Actions → Verify release) with that tag; it verifies signatures and attestation
+presence for all nine images.
 
 Verify an image signature and inspect its provenance/SBOM:
 
