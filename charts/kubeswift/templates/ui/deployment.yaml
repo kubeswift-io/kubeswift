@@ -28,6 +28,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # The UI serves static assets; the BROWSER talks to the gateway, not this
+      # pod. It needs no Kubernetes API identity at all. Without these two lines
+      # it falls back to the namespace `default` ServiceAccount and mounts its
+      # token — verified on the dev cluster, where /var/run/secrets/kubernetes.io/
+      # serviceaccount/{token,ca.crt,namespace} were all present in the running
+      # pod. A dedicated empty SA plus automount:false removes a credential the
+      # workload has no use for.
+      serviceAccountName: kubeswift-ui
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile:
