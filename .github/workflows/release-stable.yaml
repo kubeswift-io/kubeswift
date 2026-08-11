@@ -427,10 +427,20 @@ jobs:
 
             ## Images
 
+            All nine are signed and verified by this workflow before the release
+            is published. Keep this list in step with the `refs` step above — it
+            listed four of nine until v0.13.7, which is precisely the kind of
+            hand-maintained list that let sandbox-materialize ship unsigned.
+
             - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/snapshot-s3:${{ needs.build-and-push.outputs.tag }}`
+            - `ghcr.io/kubeswift-io/kubeswift/snapshot-oras:${{ needs.build-and-push.outputs.tag }}`
 
             ## swiftctl
 
