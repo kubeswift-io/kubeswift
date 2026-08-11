@@ -4,6 +4,129 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.7] — 2026-08-11
+
+A supply-chain release. Nothing in the runtime changed; what changed is how much
+of the release you have to take on trust. Every prior version asked you to
+believe that the images in the registry are what this repository built. This one
+proves it in the same job that publishes them — and building that proof
+immediately turned up an image that had never been signed at all.
+
+### Upgrade
+
+**`ui.image.tag` must be `v0.12.3` or newer**, and the chart now ships pinned to
+it rather than tracking `latest`. The UI Deployment sets
+`readOnlyRootFilesystem: true`, which earlier UI images cannot survive: they
+generate their runtime config inside the web root, a directory no volume can make
+writable without hiding the application. An older tag fails closed and loudly:
+
+```
+30-kubeswift-config-js.sh: can't create /usr/share/nginx/html/config.js: Read-only file system
+```
+
+If you override `ui.image.tag`, raise it in the same step as the chart upgrade.
+The tag is still not chart-derived — kubeswift-ui releases on its own cadence, so
+a chart upgrade will not move it for you.
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.7 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml) \
+  --set ui.image.tag=v0.12.3
+kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
+```
+
+Otherwise this is a drop-in upgrade from v0.13.6. No CRD schema changes, no API
+changes, no controller behaviour changes.
+
+### Fixed
+
+- **`sandbox-materialize` was shipping unsigned, and had been since it entered
+  the release set** (#497). The sign list in `release-stable.yaml` was written by
+  hand and covered eight of the nine published images. Probing the registry
+  directly at v0.12.0, v0.13.0, v0.13.2, v0.13.4 and v0.13.6 finds no signature
+  at any of them, while every other image at those same tags verifies — so
+  anyone running `cosign verify` across the full set has been getting a failure
+  on that one image for five releases, and every release job reported success.
+
+  The sign list is now derived from the same digest-pinned refs the build step
+  emits, so an image cannot be published without also being signed; and the
+  release **verifies its own signatures and attestations before finishing**, so a
+  signing failure now fails the release instead of producing a quietly unsigned
+  artifact. v0.13.7 is the first release in which all nine images are signed.
+
+  Re-verify any deployment that pinned digests on the assumption the whole set
+  was signed. The images themselves were never in question — only the signatures.
+
+- **The image scan queued 117 jobs on a single push** (#489). `paths:` filtering
+  was applied to the `pull_request` trigger but not to `push`, so every merge to
+  `main` re-scanned all nine images regardless of whether anything in them
+  changed. Both triggers now carry the same filter.
+
+### Added
+
+- **The CI security programme (#466) is complete — five phases, four of them
+  gating.** Each answers a different question, and they are deliberately gated
+  differently, because a scanner that cries wolf gets deleted rather than tuned:
+
+  | Phase | Asks | Gate |
+  |---|---|---|
+  | 1 — dependencies + secrets (#467) | is something we depend on known-vulnerable? is a credential committed? | fails the build |
+  | 2 — images (#480) | is something *in the published image* vulnerable? | fails on **fixable** findings only |
+  | 3 — SAST (#487) | did we write a bug? | **report-only** |
+  | 4 — manifests + chart (#494, #495, #496) | would this chart render something we would reject in review? | fails the build |
+  | 5 — signing + attestation (#497) | is what we published what we built? | fails the release |
+
+  Phase 3 is report-only on purpose: gosec reports 86 findings on the current
+  tree, all triaged and recorded as a baseline in the workflow header. Turning
+  that red on day one would mean 86 things to clear before anyone could merge.
+
+  Phase 4's policy baseline lives as per-object
+  `ignore-check.kube-linter.io/<check>` annotations rather than a config-level
+  `exclude:`, so a suppression is visible next to the object it excuses and
+  applies only there. Each was verified by removing it and confirming the check
+  actually fires. It also asserts what it renders: a default `helm template`
+  covers one of five workloads, so a coverage check fails if a new workload is
+  added without being linted.
+
+- **`Verify release` workflow** — re-verify any published tag's signatures and
+  attestations on demand (Actions → Verify release). Deliberately not on a
+  schedule yet; see the header for why, and for what has to be true first.
+
+- **Toolchains are pinned** — Go `1.26.5` (#488) and Rust `1.97.1` (#490),
+  matching the builder images. A floating toolchain changes scanner output
+  without anyone touching the repository, which makes a recorded baseline
+  meaningless.
+
+### Changed
+
+- **The web console runs with a read-only root filesystem** (#507), with
+  `emptyDir` volumes at `/tmp` and `/etc/nginx/conf.d` — the only two paths the
+  image writes. See Upgrade above for the tag floor this requires.
+
+- **The web console has its own empty ServiceAccount**, with
+  `automountServiceAccountToken: false` (#495). It serves static assets; the
+  browser talks to the gateway, not this pod, so it needs no Kubernetes identity
+  at all. Previously it fell back to the namespace `default` ServiceAccount and
+  mounted that token — verified present in the running pod before the fix.
+
+- **`gpu-discovery` asserts `runAsNonRoot` + `RuntimeDefault` seccomp** (#495).
+  The image already ran as uid 65534; the pod spec now states it, so a future
+  base-image change cannot silently regress it.
+
+- **kube and k8s-openapi are grouped for Dependabot** (#498). They are
+  version-locked (kube 0.92 → k8s-openapi ^0.22, kube 4.2 → ^0.28), so ungrouped
+  updates arrived as two PRs that could not build individually *and* did not
+  combine into a working pair. Both were closed; the pair now travels together,
+  including across a major bump.
+
+- **The orphaned `webhook-server` image was removed** (#492). Admission webhooks
+  are served by the controller-manager; nothing referenced it.
+
+- Roughly twenty dependency updates across base images, GitHub Actions, Go and
+  Rust — the routine half of Phase 1 doing its job.
+
+---
+
 ## [v0.13.6] — 2026-08-10
 
 A correctness release. Every item is a case where the system did the wrong thing

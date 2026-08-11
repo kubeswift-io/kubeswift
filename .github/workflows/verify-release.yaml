@@ -10,15 +10,18 @@ name: Verify release
 #
 # WHY workflow_dispatch AND NOT A SCHEDULE, for now:
 #
-# v0.13.6 verifies for eight of nine images; sandbox-materialize was missing
-# from release-stable's sign list and shipped unsigned. A scheduled run today
-# would therefore be red on the newest release for a reason already fixed but
-# not yet re-released — and a permanently red job is one nobody looks at.
+# Every release up to and including v0.13.6 verifies for eight of nine images:
+# sandbox-materialize was missing from release-stable's sign list and shipped
+# unsigned. Probed at v0.12.0, v0.13.0, v0.13.2, v0.13.4 and v0.13.6 — no
+# signature at any of them, while every other image at those same tags verifies.
+# A scheduled run would be red on every historical tag for a reason fixed in
+# v0.13.7, and a permanently red job is one nobody looks at.
 #
-# Move this onto a schedule once a release cut WITH that fix has shipped; at
-# that point red means something really changed. Verified by hand at the time
-# of writing: all nine v0.13.6 images except sandbox-materialize pass the exact
-# cosign verify below.
+# v0.13.7 is the first release with all nine signed. Move this onto a schedule
+# once that tag has shipped AND been verified by hand with this workflow; from
+# then on, red means something really changed rather than something never was.
+# Note a schedule also needs a default tag to verify — the tag input is
+# currently required, so resolving "the latest release" is part of that change.
 #
 # Usage: Actions -> Verify release -> Run workflow -> enter a tag, e.g. v0.13.7
 

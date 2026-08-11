@@ -281,8 +281,11 @@ jobs:
       # Producing signatures and never checking them means an image that misses
       # signing is indistinguishable from one that got it. That is not
       # hypothetical: sandbox-materialize was absent from the sign list above and
-      # shipped UNSIGNED in v0.13.6, while the other eight verified fine and the
-      # release job reported success. Nothing anywhere flagged it.
+      # shipped UNSIGNED in EVERY release up to and including v0.13.6 — probed at
+      # v0.12.0, v0.13.0, v0.13.2, v0.13.4 and v0.13.6, no signature at any of
+      # them, while every other image at those same tags verifies. For all of
+      # those releases the job reported success and nothing flagged it. v0.13.7
+      # is the first release in which all nine are signed.
       #
       # Because the list is now derived from the same `refs` output the signing
       # loop uses, an image cannot be built-and-published without also being
