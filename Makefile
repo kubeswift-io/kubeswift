@@ -70,6 +70,7 @@ help:
 	@echo "  print-version         Print version info from hack/version.sh"
 	@echo "  generate              Generate CRDs and deepcopy (also syncs charts/ + runs verify-crd-sync)"
 	@echo "  verify-crd-sync       Fail if config/crd/kustomization.yaml drifts from config/crd/bases/"
+	@echo "  verify-render-coverage Fail if the lint profile stops rendering a workload CI expects to scan"
 	@echo "  deploy                Deploy controller-manager (minimal install, no webhooks). Use deploy-with-webhook for webhook-enabled deploys (requires cert-manager)."
 	@echo "  deploy-with-webhook   Deploy controller-manager with admission webhooks enabled (requires cert-manager cluster-side; applies config/overlays/webhook on top of the minimal install)"
 	@echo "  deploy-with-mtls      Deploy controller-manager with live-migration mTLS cert provisioner enabled (Phase 3c; requires cert-manager cluster-side; applies config/overlays/migration-mtls on top of the minimal install)"
@@ -196,6 +197,9 @@ generate:
 
 verify-crd-sync:
 	./hack/verify-crd-sync.sh
+
+verify-render-coverage:
+	./hack/verify-render-coverage.sh
 
 .PHONY: proto proto-lint
 proto: ## Regenerate Go (messages + connect handlers) from proto/ into gen/.
