@@ -9,20 +9,6 @@ kind: Deployment
 metadata:
   name: kubeswift-ui
   namespace: {{ .Values.namespace }}
-  annotations:
-    # Policy baseline (#493).
-    ignore-check.kube-linter.io/latest-tag: >-
-      ui.image.tag defaults to "latest" deliberately: kubeswift-ui is released
-      from its own repo on its own cadence, so the chart cannot know a current
-      version. values.yaml documents pinning sha-<short> or vX.Y.Z for
-      production, and the fleet does pin it. Revisit if the two repos ever
-      release together.
-    ignore-check.kube-linter.io/no-read-only-root-fs: >-
-      TEMPORARY — remove this when kubeswift-io/kubeswift-ui#43 lands. The
-      entrypoint writes /usr/share/nginx/html/config.js (the web root) for the
-      runtime gateway URL, so no volume can be mounted there without masking the
-      application; /tmp and /etc/nginx/conf.d alone are not enough. Needs an
-      image change to emit the runtime config somewhere mountable.
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: ui
@@ -100,12 +86,38 @@ spec:
             periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
-            # nginx regenerates /usr/share/nginx/html/config.js and writes temp
-            # files at startup, so the root filesystem stays writable (the image
-            # runs unprivileged, non-root, with all capabilities dropped).
+            # Read-only root as of kubeswift-ui v0.12.3. Before that the
+            # entrypoint wrote the runtime config to
+            # /usr/share/nginx/html/config.js — inside the directory the SPA is
+            # baked into, which cannot be made writable by mounting over it
+            # without hiding the application. kubeswift-io/kubeswift-ui#43 moved
+            # it to /tmp/kubeswift-ui/config.js, served by an nginx alias.
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            # The two paths this image still has to write, and the ONLY two.
+            #
+            # /tmp                  nginx's pid plus all five *_temp_path dirs,
+            #                       and now the generated config.js.
+            # /etc/nginx/conf.d     20-envsubst-on-templates.sh renders
+            #                       default.conf here from the template at
+            #                       startup. The directory holds nothing else in
+            #                       the image, so an emptyDir masks nothing.
+            #
+            # Both must be writable by uid 101. An emptyDir is created 0777, so
+            # it is; a docker --tmpfs defaults to root-owned 0775 and is NOT,
+            # which is worth knowing if you reproduce this outside Kubernetes.
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-conf-d
+              mountPath: /etc/nginx/conf.d
           resources:
             {{- toYaml .Values.ui.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-conf-d
+          emptyDir: {}
 {{- end }}

@@ -24,7 +24,9 @@ them — re-apply `config/crd/bases/*.yaml` after a chart upgrade that changes a
 **Image tags** — the operator images default to `tag: latest`, which the chart
 rewrites to the chart's own `v<appVersion>` for a release (or `sha-<commit>` for a
 dev build). Only override for locally-built images. The `kubeswift-ui` image is
-released from a separate repo and is **not** chart-derived — pin `ui.image.tag`.
+released from a separate repo and is **not** chart-derived: `ui.image.tag` ships
+pinned, and a chart upgrade does not move it — raise it when you want a newer
+console. `v0.12.3` is the floor (the UI Deployment runs read-only-root).
 See [`docs/install/helm-oci.md`](../../docs/install/helm-oci.md).
 
 ## Common configurations
@@ -152,7 +154,7 @@ point `ui.gateway.url` at an externally reachable gateway).
 |---|---|---|
 | `ui.enabled` | Deploy the web console (auto-on for `role=hub`) | `false` |
 | `ui.image.repository` | UI image repo (a top-level package, not chart-derived) | `ghcr.io/kubeswift-io/kubeswift-ui` |
-| `ui.image.tag` | Published UI tag — **pin a version for production** | `latest` |
+| `ui.image.tag` | Published UI tag (not chart-derived; `v0.12.3` is the floor for read-only-root) | `v0.12.3` |
 | `ui.image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `ui.imagePullSecrets` | Pull Secret(s) if the UI package is private | `[]` |
 | `ui.replicas` | UI replicas | `1` |
