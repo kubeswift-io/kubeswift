@@ -104,3 +104,46 @@ jobs:
             -kubernetes-version 1.34.0 \
             -ignore-missing-schemas \
             /tmp/rendered.yaml
+
+      - name: Install kube-linter
+        env:
+          KUBE_LINTER_VERSION: '0.8.3'
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/kube-linter.tar.gz \
+            "https://github.com/stackrox/kube-linter/releases/download/v${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz"
+          tar -xzf /tmp/kube-linter.tar.gz -C /tmp kube-linter
+          /tmp/kube-linter version
+
+      # STEPS 4-5 of #493, landed together rather than report-only-then-gate.
+      #
+      # The report-only cycle in that plan was a proxy for "we do not know the
+      # finding volume". We do now: the default check set finds FIVE issues on
+      # the full render, every one of them understood, and the baseline below
+      # accounts for all five. There is no unknown noise to discover, so an
+      # intermediate cycle would only delay the gate. Contrast Phase 3 (#487),
+      # which stayed report-only because gosec found 86.
+      #
+      # THE BASELINE LIVES ON THE OBJECTS, NOT HERE. Each excused finding is an
+      # `ignore-check.kube-linter.io/<check>` annotation on the specific workload,
+      # carrying the reason:
+      #
+      #   dra-driver     run-as-non-root        root by design (kubelet plugin
+      #                                         sockets, /var/run/cdi)
+      #   dra-driver     sensitive-host-mounts  /sys for GPU/PCI topology
+      #   gpu-discovery  sensitive-host-mounts  /sys, read-only, uid 65534
+      #   kubeswift-ui   latest-tag             UI released from its own repo
+      #   kubeswift-ui   no-read-only-root-fs   TEMPORARY, kubeswift-ui#43
+      #
+      # That is the whole point of the design: a config-level `exclude:` would
+      # switch a check off everywhere, so a NEW privileged container or host
+      # mount would sail through. Verified it does not — with the baseline in
+      # place the chart reports 0 findings, but injecting privileged + root +
+      # hostPath:/etc into controller-manager produces 4 findings and exit 1,
+      # including the two checks the DaemonSets are excused from.
+      #
+      # gpu-discovery is excused ONLY for the host mount; it keeps run-as-non-root
+      # because it genuinely runs as uid 65534. dra-driver looks identical to a
+      # linter but must keep its exemption — see #495.
+      - name: kube-linter
+        run: /tmp/kube-linter lint /tmp/rendered.yaml

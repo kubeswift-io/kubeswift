@@ -14,6 +14,20 @@ kind: DaemonSet
 metadata:
   name: kubeswift-dra-driver
   namespace: {{ .Values.namespace }}
+  annotations:
+    # Policy baseline (#493). Scoped to THIS object and carrying the reason, so
+    # the checks stay live for every other workload — a new root container or a
+    # new host mount anywhere else still fails the build.
+    ignore-check.kube-linter.io/run-as-non-root: >-
+      Runs as root by design: the kubelet plugin socket under
+      /var/lib/kubelet/plugins and /var/run/cdi are root-owned host paths.
+      Confirmed uid=0 at runtime on the dev cluster. NOT privileged, and all
+      capabilities are dropped. Contrast gpu-discovery, which looks identical to
+      a linter but is genuinely non-root (uid 65534) — adding runAsNonRoot HERE
+      breaks kubelet plugin registration.
+    ignore-check.kube-linter.io/sensitive-host-mounts: >-
+      /sys is read for GPU and PCI topology. Inherent to a node-inspecting
+      DaemonSet; the mount is read-only and the container drops ALL capabilities.
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: dra-driver

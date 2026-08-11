@@ -9,6 +9,20 @@ kind: Deployment
 metadata:
   name: kubeswift-ui
   namespace: {{ .Values.namespace }}
+  annotations:
+    # Policy baseline (#493).
+    ignore-check.kube-linter.io/latest-tag: >-
+      ui.image.tag defaults to "latest" deliberately: kubeswift-ui is released
+      from its own repo on its own cadence, so the chart cannot know a current
+      version. values.yaml documents pinning sha-<short> or vX.Y.Z for
+      production, and the fleet does pin it. Revisit if the two repos ever
+      release together.
+    ignore-check.kube-linter.io/no-read-only-root-fs: >-
+      TEMPORARY — remove this when kubeswift-io/kubeswift-ui#43 lands. The
+      entrypoint writes /usr/share/nginx/html/config.js (the web root) for the
+      runtime gateway URL, so no volume can be mounted there without masking the
+      application; /tmp and /etc/nginx/conf.d alone are not enough. Needs an
+      image change to emit the runtime config somewhere mountable.
   labels:
     app.kubernetes.io/name: kubeswift
     app.kubernetes.io/component: ui
