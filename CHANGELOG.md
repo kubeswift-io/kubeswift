@@ -6,11 +6,13 @@ All notable changes to KubeSwift are documented here.
 
 ## [v0.13.7] — 2026-08-11
 
-A supply-chain release. Nothing in the runtime changed; what changed is how much
-of the release you have to take on trust. Every prior version asked you to
-believe that the images in the registry are what this repository built. This one
-proves it in the same job that publishes them — and building that proof
-immediately turned up an image that had never been signed at all.
+A supply-chain release. Not one line of Go or Rust changed between v0.13.6 and
+v0.13.7 — the diff is workflows, the chart, docs and dependency lockfiles. What
+changed is how much of the release you have to take on trust: every prior
+version asked you to believe that the images in the registry are what this
+repository built, and this one proves it in the same job that publishes them.
+Building that proof immediately turned up an image that had never been signed
+at all.
 
 ### Upgrade
 
@@ -35,8 +37,10 @@ helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1
 kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
 ```
 
-Otherwise this is a drop-in upgrade from v0.13.6. No CRD schema changes, no API
-changes, no controller behaviour changes.
+Otherwise this is a drop-in upgrade from v0.13.6: no CRD schema changes, no API
+changes, and no KubeSwift source changes at all. The binaries are rebuilt, so
+they do carry the dependency updates and toolchain pins below, but no KubeSwift
+logic differs from v0.13.6.
 
 ### Fixed
 
