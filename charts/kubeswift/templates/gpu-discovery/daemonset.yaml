@@ -21,6 +21,22 @@ spec:
       serviceAccountName: kubeswift-gpu-discovery
       hostPID: false
       hostNetwork: false
+      # Asserting a property the image already has, rather than changing
+      # behaviour: images/gpu-discovery/Containerfile ends in `USER 65534:65534`,
+      # and the pod on the dev GPU node (boba) reports uid=65534(nobody) while
+      # discovering the GTX 1080 correctly. runAsNonRoot makes the kubelet refuse
+      # to start it if that ever regresses to root.
+      #
+      # NOTE the contrast with the DRA driver, which looks identical to a linter
+      # (both were "missing runAsNonRoot") but must NOT get this: it runs as root
+      # by design for kubelet plugin sockets and /var/run/cdi — see the comment in
+      # dra-driver/daemonset.yaml. Adding runAsNonRoot there breaks plugin
+      # registration. Discovery only reads world-readable sysfs, writes nothing,
+      # and needs no /dev.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       nodeSelector:
         kubeswift.io/gpu-node: "true"
       tolerations:
