@@ -273,9 +273,18 @@ ui:
     # Full image repository (kubeswift-ui is a top-level package, not under the
     # ghcr.io/kubeswift-io/kubeswift/ prefix the operator images use).
     repository: ghcr.io/kubeswift-io/kubeswift-ui
-    # Pin a published tag (sha-<short> or vX.Y.Z). "latest" tracks the
-    # kubeswift-ui main branch; fine for dev, pin a version for production.
-    tag: latest
+    # A published kubeswift-ui tag (vX.Y.Z, or sha-<short> for a dev build).
+    #
+    # Pinned, not "latest". The Deployment sets readOnlyRootFilesystem: true,
+    # and v0.12.3 is the FLOOR for that — earlier images write their runtime
+    # config into the web root, which no volume can make writable without
+    # hiding the SPA, so nginx never starts (kubeswift-io/kubeswift-ui#43).
+    # A floating tag would let that regress silently on a redeploy.
+    #
+    # kubeswift-ui releases on its own cadence from its own repo, so this is
+    # NOT chart-derived and a chart bump does not move it: check the UI repo's
+    # releases and raise this when you want a newer console.
+    tag: v0.12.3
     pullPolicy: IfNotPresent
   # New ghcr packages default PRIVATE; until the kubeswift-ui package is made
   # public (one-time, web UI), reference a docker-registry pull Secret here,
