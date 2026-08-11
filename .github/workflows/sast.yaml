@@ -111,7 +111,7 @@ jobs:
         run: go build ./api/... ./internal/... ./cmd/...
 
       - name: Analyze
-        uses: github/codeql-action/analyze@4e94bd11f71e507f7f87df81788dff88d1dacbfb # v4
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           category: codeql-go
 
