@@ -19,6 +19,7 @@ vendor/
 /webhook-server
 /snapshot-stager
 /snapshot-s3
+/snapshot-oras
 
 .claude/
 .cursor/
@@ -34,4 +35,3 @@ docs/design/*spike*.md
 /docs/design/
 /docs/reports/
 /bin/
-snapshot-oras
