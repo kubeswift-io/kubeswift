@@ -9,7 +9,7 @@ require (
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-containerregistry v0.21.9
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.19.2
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.6.0
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/opencontainers/go-digest v1.0.0
