@@ -228,6 +228,15 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          # PIN the cosign BINARY, not just the installer action. Unpinned, the
+          # action installs the newest cosign, and cosign 3.x moved where a
+          # signature lands: 2.x writes a `sha256-<digest>.sig` tag, 3.x writes
+          # `sha256-<digest>` with no suffix. Anything that looks for a signature
+          # by tag name silently stops finding one across that boundary.
+          # 2.6.5 also matches the cosign vendored into snapshot-oras and
+          # sandbox-materialize, so the project speaks one cosign version.
+          cosign-release: 'v2.6.5'
 
       # Keyless signing: the signing identity is THIS workflow run's GitHub
       # OIDC identity (repo + workflow path + tag ref); the signature and
@@ -236,18 +245,82 @@ jobs:
       #   cosign verify <image>@<digest> \
       #     --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      # The nine refs, digest-pinned, shared by the sign and verify steps below
+      # so the two can never drift. sandbox-materialize used to be missing from
+      # the sign list — eight of nine were signed and nothing said so.
+      - name: Collect image refs
+        id: refs
+        run: |
+          {
+            echo 'list<<EOF'
+            echo "${{ env.IMAGE_PREFIX }}/controller-manager@${{ steps.build-controller-manager.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/gpu-discovery@${{ steps.build-gpu-discovery.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/snapshot-s3@${{ steps.build-snapshot-s3.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/snapshot-oras@${{ steps.build-snapshot-oras.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/kubeswift-dra-driver@${{ steps.build-dra-driver.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/sandbox-materialize@${{ steps.build-sandbox-materialize.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
+            echo "${{ env.IMAGE_PREFIX }}/kubeswift-gateway@${{ steps.build-gateway.outputs.digest }}"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
       - name: Sign images (cosign keyless)
         env:
           COSIGN_YES: "true"
         run: |
-          cosign sign "${{ env.IMAGE_PREFIX }}/controller-manager@${{ steps.build-controller-manager.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/gpu-discovery@${{ steps.build-gpu-discovery.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/snapshot-s3@${{ steps.build-snapshot-s3.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/snapshot-oras@${{ steps.build-snapshot-oras.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/kubeswift-dra-driver@${{ steps.build-dra-driver.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/swiftletd@${{ steps.build-swiftletd.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/migration-stunnel@${{ steps.build-migration-stunnel.outputs.digest }}"
-          cosign sign "${{ env.IMAGE_PREFIX }}/kubeswift-gateway@${{ steps.build-gateway.outputs.digest }}"
+          set -euo pipefail
+          echo "${{ steps.refs.outputs.list }}" | while read -r ref; do
+            [ -n "$ref" ] || continue
+            echo "signing $ref"
+            cosign sign "$ref"
+          done
+
+      # VERIFY WHAT WE JUST SIGNED — the point of Phase 5 (#466).
+      #
+      # Producing signatures and never checking them means an image that misses
+      # signing is indistinguishable from one that got it. That is not
+      # hypothetical: sandbox-materialize was absent from the sign list above and
+      # shipped UNSIGNED in v0.13.6, while the other eight verified fine and the
+      # release job reported success. Nothing anywhere flagged it.
+      #
+      # Because the list is now derived from the same `refs` output the signing
+      # loop uses, an image cannot be built-and-published without also being
+      # signed and verified — the three steps cannot drift apart.
+      #
+      # The identity is this workflow's own OIDC identity, so it is pinned to
+      # the exact workflow file and repo rather than "anything Sigstore signed".
+      - name: Verify signatures (fail the release if signing did not take)
+        run: |
+          set -euo pipefail
+          echo "${{ steps.refs.outputs.list }}" | while read -r ref; do
+            [ -n "$ref" ] || continue
+            echo "verifying $ref"
+            cosign verify "$ref" \
+              --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-stable\.yaml@.*$' \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              > /dev/null
+          done
+          echo "all $(echo "${{ steps.refs.outputs.list }}" | grep -c .) images verified"
+
+      # The SBOM and SLSA provenance are attached by BuildKit (provenance:
+      # mode=max, sbom: true on every build above) as an attestation manifest
+      # inside the image INDEX — not as a cosign attestation, so `cosign
+      # verify-attestation` does not see them. This is a presence check on the
+      # index, which is what BuildKit's output actually supports.
+      - name: Verify SBOM + provenance are attached
+        run: |
+          set -euo pipefail
+          echo "${{ steps.refs.outputs.list }}" | while read -r ref; do
+            [ -n "$ref" ] || continue
+            n=$(docker buildx imagetools inspect --raw "$ref" \
+                 | grep -c 'attestation-manifest' || true)
+            if [ "$n" -eq 0 ]; then
+              echo "::error::$ref has no attestation manifest (provenance/SBOM missing)"
+              exit 1
+            fi
+            echo "$ref: $n attestation manifest(s)"
+          done
 
       - name: Set up Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
@@ -314,6 +387,15 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          # PIN the cosign BINARY, not just the installer action. Unpinned, the
+          # action installs the newest cosign, and cosign 3.x moved where a
+          # signature lands: 2.x writes a `sha256-<digest>.sig` tag, 3.x writes
+          # `sha256-<digest>` with no suffix. Anything that looks for a signature
+          # by tag name silently stops finding one across that boundary.
+          # 2.6.5 also matches the cosign vendored into snapshot-oras and
+          # sandbox-materialize, so the project speaks one cosign version.
+          cosign-release: 'v2.6.5'
 
       # Keyless blob signing of the checksums file. Verifying SHA256SUMS via
       # the .sig/.pem pair transitively authenticates every binary it lists.
