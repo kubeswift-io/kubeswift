@@ -15,8 +15,15 @@ api/
 
 cmd/
   swiftctl/             CLI (cobra commands)
-  controller-manager/   Main entry point
-  webhook-server/       Admission webhook entry point
+  controller-manager/   Main entry point; also serves the admission webhooks
+  gpu-discovery/        Per-node GPU inventory DaemonSet
+  kubeswift-dra-driver/ DRA kubelet plugin + ResourceSlice publisher
+  kubeswift-gateway/    Multi-cluster fleet gateway (Connect/proto)
+  kubeswift-guest-agent/ In-guest vsock agent (identity regen, exec)
+  sandbox-materialize/  SwiftSandbox OCI rootfs init container
+  snapshot-s3/          S3 snapshot upload/download Job
+  snapshot-oras/        OCI/ORAS snapshot upload/download Job
+  snapshot-stager/      Snapshot staging helper
 
 internal/
   controller/swiftguest/   SwiftGuest controller

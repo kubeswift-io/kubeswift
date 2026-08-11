@@ -16,7 +16,6 @@ vendor/
 /controller-manager
 /gpu-discovery
 /kubeswift-dra-driver
-/webhook-server
 /snapshot-stager
 /snapshot-s3
 
