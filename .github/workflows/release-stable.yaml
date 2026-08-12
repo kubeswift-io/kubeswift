@@ -418,6 +418,12 @@ jobs:
           name: KubeSwift ${{ github.ref_name }}
           generate_release_notes: true
           files: dist/*
+          # MAINTAINERS: the image list in the body below is hand-maintained and
+          # must stay in step with the `refs` step above. It listed four of nine
+          # until v0.13.7 — the same kind of hand-maintained list that let
+          # sandbox-materialize ship unsigned for five releases. Keep the note
+          # here, in the workflow: everything under `body:` is published to the
+          # release page, where guidance aimed at us is just noise for readers.
           body: |
             ## Install
 
@@ -427,10 +433,7 @@ jobs:
 
             ## Images
 
-            All nine are signed and verified by this workflow before the release
-            is published. Keep this list in step with the `refs` step above — it
-            listed four of nine until v0.13.7, which is precisely the kind of
-            hand-maintained list that let sandbox-materialize ship unsigned.
+            All nine are signed, and verified by the release workflow before publishing.
 
             - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
             - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
