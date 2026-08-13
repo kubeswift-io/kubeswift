@@ -22,10 +22,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Fetch a pinned cosign for the verify-before-boot path (spec.verifyKeySecretRef).
 # Verified against the release checksums so a tampered binary fails the build.
 #
-# Stay on the 2.x line — see the note in images/snapshot-oras/Containerfile:
-# cosign 3.x rejects `--tlog-upload=false` at runtime, which internal/oci.SignArgs
-# needs, and the two images must ship the same cosign so a signature produced by
-# one verifies with the other.
+# Pinned to the 2.x line, but NOT for the reason previously recorded here. This
+# comment used to claim the two images must ship the same cosign so that a
+# signature made by one verifies with the other. hack/cosign-interop.sh was
+# built to test exactly that (#486) and it is not true: cosign v3.1.3 verifies a
+# v2.6.5-made signature under our own VerifyArgs, and correctly rejects a
+# foreign key, so its verification is real rather than a no-op.
+#
+# The 3.x blocker is signing only — `--tlog-upload=false` is rejected at runtime
+# — and this image never signs (cmd/sandbox-materialize calls oci.Verify alone).
+# So this pin is conservatism, not a constraint, and lifting it is tracked in
+# #486: v3.1.3 carries 4 fixable CVEs against v2.6.5's 48. Re-check with
+# `COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh` before moving it.
 ARG COSIGN_VERSION=v2.6.5
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
