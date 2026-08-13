@@ -2,8 +2,8 @@ apiVersion: v2
 name: kubeswift
 description: KubeSwift - Cloud Hypervisor-first Kubernetes VM operator
 type: application
-version: 0.13.7
-appVersion: "0.13.7"
+version: 0.13.8
+appVersion: "0.13.8"
 keywords:
   - kubeswift
   - cloud-hypervisor

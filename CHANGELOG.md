@@ -4,6 +4,105 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.8] — 2026-08-13
+
+Closes a privilege escalation. Anyone who could create an ordinary Pod in a
+namespace where a guest or sandbox ran could reach **node root** — no SwiftGuest
+required, no CRD access needed. If you run multi-tenant namespaces, this is the
+release to take.
+
+### Upgrade
+
+Drop-in from v0.13.7 — no CRD schema changes, no API changes, no values changes
+required.
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.8 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
+```
+
+The new admission policy is **on by default** and cluster-scoped. It renders
+only where the cluster serves `admissionregistration.k8s.io/v1
+ValidatingAdmissionPolicy` (Kubernetes **1.30+**); on older clusters it is
+silently skipped and nothing changes. Disable with
+`launcherSAGate.enabled=false` if a policy engine of your own enforces the same
+rule — but read the trust-boundary note in `docs/security-audit.md` first,
+because turning it off restores the escalation.
+
+### Fixed
+
+- **A tenant who can create a Pod can no longer reach node root** (#443, #514).
+
+  Launcher pods run `privileged: true` and are a node-level trust boundary.
+  swiftletd needs `pods: patch` to report status, so the launcher
+  ServiceAccounts carry it — and **Kubernetes has no RBAC gate on which
+  ServiceAccount a pod may name**. So anyone able to create an ordinary Pod
+  could write `serviceAccountName: kubeswift-launcher`, receive that token,
+  patch the privileged launcher's `image`, and get node root. kubelet restarts a
+  container whose spec hash changed regardless of `restartPolicy: Never`.
+
+  v0.13.6's dedicated ServiceAccounts removed *incidental* inheritance and made
+  the grant auditable, but did not close this. Neither would `resourceNames`
+  scoping, which is what the issue originally proposed: RBAC is additive and the
+  ServiceAccount is shared, so an attacker still inherits the union of every
+  launcher pod name in the namespace. Both were tested on a live cluster before
+  being ruled out.
+
+  What closes it is a `ValidatingAdmissionPolicy` supplying the missing gate:
+  only the KubeSwift controller may create a Pod naming a launcher
+  ServiceAccount. A policy rather than a webhook deliberately — the rule matches
+  every Pod CREATE, and a webhook with `failurePolicy: Fail` would make all pod
+  creation in the cluster depend on our webhook server being up. Admission
+  policies are evaluated in-tree.
+
+  Validated on three clusters and two CNIs with the gate live: guest boot, GPU
+  guest, live migration (including the `<guest>-mig-<uid>` destination pod),
+  sandbox, and warm-pool slots (whose names are random) all admitted normally;
+  both launcher ServiceAccounts refused to an ordinary pod. Zero unintended
+  denials across the whole exercise.
+
+- **RC releases were publishing an unsigned image** (#512, #513). `release-rc`
+  still signed from a hand-written list of seven while building eight, so every
+  RC shipped `sandbox-materialize` unsigned — the identical defect #497 fixed in
+  `release-stable`, which had shipped it unsigned for five releases. RC now
+  derives its sign list from the same digest-pinned refs the build emits and
+  verifies its own signatures before publishing. Its pre-release body had
+  drifted the same way, listing six of eight.
+
+### Changed
+
+- **The manifest policy checks render through one script**
+  (`hack/render-lint-profile.sh`). `helm template` has no
+  ValidatingAdmissionPolicy in its default capability set, so a
+  capability-guarded template renders to nothing — CI would have linted the new
+  security control without being able to see it, while reporting green. Both the
+  coverage check and the workflow now share one render, and the coverage check
+  asserts the policy is present.
+
+- `sigstore/cosign-installer` v3 → v4 (#502). The explicit
+  `cosign-release: 'v2.6.5'` pin is retained deliberately: v4 defaults to cosign
+  3.0.5, which rejects `--tlog-upload=false` at runtime — the flag the offline
+  artifact-signing path needs.
+
+### Known issues
+
+- **45 fixable CVEs (1 critical, 23 high) remain in the vendored `cosign`
+  binary** shipped inside `snapshot-oras` and `sandbox-materialize` (#486).
+  They are **not** in KubeSwift code and not in the VM runtime: they are in a
+  signing helper's frozen dependency tree, which nothing in our tooling can
+  bump. v2.6.5 is the newest 2.x, and 3.x needs the offline signing contract
+  redesigned.
+
+  Measured: linking cosign as a Go library instead of vendoring the binary would
+  resolve **30 of the 45, including the only critical**, because Go's minimal
+  version selection would build those packages at the newer versions this
+  repository already carries. The remaining 15 are cosign's own sigstore
+  dependencies. That work is gated on proving signature interop with signatures
+  already in users' registries, so it is tracked rather than rushed.
+
+---
+
 ## [v0.13.7] — 2026-08-11
 
 A supply-chain release. Not one line of Go or Rust changed between v0.13.6 and
