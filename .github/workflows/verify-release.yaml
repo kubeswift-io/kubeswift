@@ -17,11 +17,15 @@ name: Verify release
 # A scheduled run would be red on every historical tag for a reason fixed in
 # v0.13.7, and a permanently red job is one nobody looks at.
 #
-# v0.13.7 is the first release with all nine signed. Move this onto a schedule
-# once that tag has shipped AND been verified by hand with this workflow; from
-# then on, red means something really changed rather than something never was.
-# Note a schedule also needs a default tag to verify — the tag input is
-# currently required, so resolving "the latest release" is part of that change.
+# v0.13.7 is the first release with all nine signed, and its precondition for a
+# schedule is now MET: v0.13.7 shipped and was verified 9/9 by probing the
+# registry directly (each image's sha256-<digest>.sig tag), independently of
+# this workflow's own report.
+#
+# What still blocks the schedule is mechanical, not evidential: the `tag` input
+# is required, so a scheduled run has nothing to verify. Resolving "the latest
+# release" — and deciding whether the schedule should check only the newest tag
+# or the last N — is its own change. Until then this stays dispatch-only.
 #
 # Usage: Actions -> Verify release -> Run workflow -> enter a tag, e.g. v0.13.7
 
@@ -32,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to verify (e.g. v0.13.7)'
+        description: 'Release tag to verify (e.g. v0.13.8)'
         required: true
         type: string
 

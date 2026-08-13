@@ -20,6 +20,7 @@ them — re-apply `config/crd/bases/*.yaml` after a chart upgrade that changes a
 | `webhook.enabled`, `migration.mtls.enabled`, `ingress.tlsAuto` | cert-manager installed cluster-side |
 | `monitoring.enabled` | Prometheus Operator CRDs (e.g. kube-prometheus-stack); dashboards need a Grafana with the dashboard sidecar |
 | `gpuDiscovery.enabled` / `dra.enabled` | nodes labeled `kubeswift.io/gpu-node=true`; DRA also needs CDI enabled in the runtime + the `vfio-pci` module |
+| `launcherSAGate.enabled` (**on by default**) | Kubernetes ≥ 1.30 for `ValidatingAdmissionPolicy`. On older clusters it is silently skipped — see the note below |
 
 **Image tags** — the operator images default to `tag: latest`, which the chart
 rewrites to the chart's own `v<appVersion>` for a release (or `sha-<commit>` for a
@@ -177,6 +178,24 @@ point `ui.gateway.url` at an externally reachable gateway).
 | Parameter | Description | Default |
 |---|---|---|
 | `webhook.enabled` | Enable admission webhooks (runs the controller with `--webhook-enabled=true`). Requires cert-manager | `false` |
+| `launcherSAGate.enabled` | Refuse any Pod that names a launcher ServiceAccount unless the KubeSwift controller creates it. **Closes a privilege escalation — see below before disabling** | `true` |
+| `launcherSAGate.guestServiceAccountName` | Guest launcher SA the gate protects. Must match what the controller stamps | `kubeswift-launcher` |
+| `launcherSAGate.sandboxServiceAccountName` | Sandbox launcher SA the gate protects | `kubeswift-sandbox-launcher` |
+
+**Why `launcherSAGate` is on by default.** Launcher pods run privileged and are a
+node-level trust boundary. swiftletd needs `pods: patch` to report status, so the
+launcher ServiceAccounts carry it — and Kubernetes has **no RBAC gate on which
+ServiceAccount a pod may name**. Without this policy, anyone who can create a Pod
+in a namespace where a guest or sandbox runs can name that ServiceAccount, take
+its token, patch the privileged launcher's image, and reach node root. Scoping
+the RBAC with `resourceNames` does not close it (RBAC is additive and the
+ServiceAccount is shared).
+
+Turn it off only if a policy engine of your own enforces the same rule, or you
+already operate those namespaces as a trust boundary. Where it is off — including
+on clusters below Kubernetes 1.30, where it does not render — **treat anyone who
+can create a Pod in a KubeSwift workload namespace as a node administrator**. See
+`docs/security-audit.md`.
 
 ### Observability
 
