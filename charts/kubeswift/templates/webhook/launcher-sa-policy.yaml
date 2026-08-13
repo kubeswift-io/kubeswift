@@ -1,0 +1,88 @@
+{{- if .Values.launcherSAGate.enabled }}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+# Closes the residual escalation in #443.
+#
+# THE PROBLEM. Launcher pods run `privileged: true` and are a NODE-level trust
+# boundary. swiftletd needs `pods: get,patch` to report status by annotation, so
+# the launcher ServiceAccounts carry that grant. Kubernetes has **no RBAC gate on
+# which ServiceAccount a pod may reference**, so anyone who can create an
+# ordinary Pod in a namespace where a guest runs can write
+# `serviceAccountName: kubeswift-launcher`, receive the token, patch the
+# privileged launcher's `image`, and get node root — kubelet restarts a container
+# whose spec hash changed regardless of `restartPolicy: Never`.
+#
+# WHY resourceNames ALONE IS NOT THE FIX. Scoping the reporter Role with
+# `resourceNames` to the launcher pod names does narrow the blast radius (a
+# bystander pod becomes unpatchable) but does NOT close this: RBAC is additive
+# and the ServiceAccount is SHARED, so the attacker still inherits the union of
+# every launcher pod name in the namespace — including the one they want. Tested
+# on a live cluster; see #443.
+#
+# WHAT THIS DOES. Supplies the missing gate: only the KubeSwift controller may
+# create a Pod that names a launcher ServiceAccount. The attacker's pod is
+# rejected at admission, so they never receive the token.
+#
+# WHY ValidatingAdmissionPolicy AND NOT A WEBHOOK. This rule has to match every
+# Pod CREATE in the cluster. A webhook with `failurePolicy: Fail` would couple
+# all pod creation to our webhook server being up — an unacceptable blast radius
+# for a VM platform, and the failure mode is a cluster that cannot schedule
+# anything. VAP is evaluated in-tree by the apiserver: there is no server to be
+# down. The `Has` guard above keeps the chart installable on clusters without it
+# (VAP is GA in k8s 1.30+); on those, set launcherSAGate.enabled=false and see
+# docs/security-audit.md for the trust-boundary posture that replaces it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-launcher-sa-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  # Fail is safe here in a way it would not be for a webhook: a VAP failure is a
+  # CEL evaluation error, not an unreachable network service. The expression
+  # below is total — it guards `has()` before dereferencing — so the only way to
+  # reach the failure path is a malformed policy, which should block rather than
+  # silently admit.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        # CREATE only: `spec.serviceAccountName` is immutable on a Pod, so there
+        # is no UPDATE path that could introduce a launcher SA after admission.
+        operations: ["CREATE"]
+        resources: ["pods"]
+  variables:
+    - name: launcherSAs
+      expression: "['{{ .Values.launcherSAGate.guestServiceAccountName }}', '{{ .Values.launcherSAGate.sandboxServiceAccountName }}']"
+    - name: controllerUser
+      expression: "'system:serviceaccount:{{ .Values.namespace }}:controller-manager'"
+  validations:
+    - expression: >-
+        !(has(object.spec.serviceAccountName) &&
+          object.spec.serviceAccountName in variables.launcherSAs) ||
+        request.userInfo.username == variables.controllerUser
+      message: >-
+        this ServiceAccount is reserved for KubeSwift VM launcher pods, which run
+        privileged; only the KubeSwift controller may create pods that use it
+        (see kubeswift.io issue #443)
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-launcher-sa-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: kubeswift-launcher-sa-gate
+  # Deny, not Warn/Audit: a pod naming a launcher SA is either the controller
+  # (exempted in the expression) or an escalation attempt. There is no benign
+  # third case to be lenient about.
+  validationActions: [Deny]
+  # Cluster-wide by design. Guests and sandboxes run in arbitrary user
+  # namespaces, so scoping this to a namespace list would leave exactly the
+  # namespaces an attacker would pick.
+{{- end }}
+{{- end }}

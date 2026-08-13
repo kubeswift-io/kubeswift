@@ -518,6 +518,29 @@ From v0.13.6 launchers run as dedicated ServiceAccounts rather than the namespac
 `default`, which removes *incidental* inheritance: ordinary Jobs, sidecars,
 CronJobs and debug pods in the namespace no longer hold `pods: patch` by accident.
 
+**From v0.13.8 a ValidatingAdmissionPolicy closes the residual** (#443). The
+dedicated ServiceAccount removed *incidental* inheritance but did not close the
+escalation, because Kubernetes has no RBAC gate on which ServiceAccount a pod may
+name: anyone able to create a Pod could write `serviceAccountName:
+kubeswift-launcher`, receive the token, patch the privileged launcher's image,
+and reach node root. Scoping the reporter Role with `resourceNames` does not fix
+that either — RBAC is additive and the ServiceAccount is shared, so the attacker
+inherits the union of every launcher pod name in the namespace. Verified on a
+live cluster.
+
+`kubeswift-launcher-sa-gate` supplies the missing gate: only the KubeSwift
+controller may create a Pod naming a launcher ServiceAccount. It is a
+ValidatingAdmissionPolicy rather than a webhook deliberately — the rule must
+match every Pod CREATE, and a webhook with `failurePolicy: Fail` would make all
+pod creation depend on our webhook server being up. VAP is evaluated in-tree.
+
+The policy is rendered only where the cluster serves
+`admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy` (k8s 1.30+) and can
+be disabled with `launcherSAGate.enabled=false`. **Where it is off, the KubeSwift
+workload namespace is a trust boundary**: anyone who can create a Pod there can
+reach node root, and should be treated as equivalent to a node-level
+administrator. That is the same acceptance posture as SEC-01/02/03 above.
+
 **It does not close the escalation, and neither would `resourceNames` scoping.**
 Kubernetes has no RBAC gate on which ServiceAccount a pod may reference — there is
 no `serviceaccounts/use` subresource and no verb for it. A tenant who can create

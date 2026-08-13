@@ -346,6 +346,35 @@ ui:
 webhook:
   enabled: false
 
+# Launcher-ServiceAccount admission gate (#443). ON by default — it closes a
+# privilege escalation, and a security control that ships off is a security
+# control nobody has.
+#
+# Launcher pods run privileged and are a NODE-level trust boundary. swiftletd
+# needs `pods: patch` to report status, so the launcher ServiceAccounts carry
+# it — and Kubernetes has no RBAC gate on *which* ServiceAccount a pod may
+# name. Without this, anyone who can create a Pod in a namespace where a guest
+# runs can name the launcher SA, get its token, patch the privileged launcher's
+# image, and reach node root. Scoping the RBAC with resourceNames does NOT close
+# that (RBAC is additive and the SA is shared) — this gate does.
+#
+# Implemented as a ValidatingAdmissionPolicy, evaluated in-tree by the
+# apiserver, so unlike a webhook there is no server whose outage would block
+# pod creation cluster-wide. Rendered only when the cluster serves
+# admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (GA in k8s 1.30+);
+# on older clusters it is silently skipped and the namespace is a trust
+# boundary instead — see docs/security-audit.md.
+#
+# Turn OFF only if you operate the workload namespaces as a trust boundary
+# already, or a policy engine of your own enforces the same rule.
+launcherSAGate:
+  enabled: true
+  # Must match the constants the controller stamps on launcher pods
+  # (internal/controller/swiftguest/rbac.go). Change both together or the gate
+  # protects a ServiceAccount nothing uses while the real one stays open.
+  guestServiceAccountName: kubeswift-launcher
+  sandboxServiceAccountName: kubeswift-sandbox-launcher
+
 # Observability (optional). Requires the Prometheus Operator CRDs
 # (monitoring.coreos.com — e.g. kube-prometheus-stack) when enabled; the
 # dashboards additionally need a Grafana with the dashboard sidecar (the

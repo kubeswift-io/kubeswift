@@ -73,10 +73,17 @@ jobs:
       - name: Verify render coverage
         run: ./hack/verify-render-coverage.sh
 
+      # Rendered through the shared script, NOT an inline `helm template` line.
+      # verify-render-coverage above uses the same script, so the set of objects
+      # asserted-present and the set actually scanned cannot drift apart. They
+      # previously could: capability-guarded templates (the #443 admission gate)
+      # render to nothing unless --api-versions is passed, so an inline command
+      # here that lacked the flag would scan a security control it could not see
+      # while every check stayed green.
       - name: Render the full lint profile
         run: |
           set -euo pipefail
-          helm template kubeswift charts/kubeswift -f hack/lint-values/full.yaml > /tmp/rendered.yaml
+          ./hack/render-lint-profile.sh > /tmp/rendered.yaml
           test -s /tmp/rendered.yaml
 
       # STEP 1. -strict is the flag that matters: it rejects unknown and
