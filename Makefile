@@ -201,6 +201,11 @@ verify-crd-sync:
 verify-render-coverage:
 	./hack/verify-render-coverage.sh
 
+verify-cosign-interop: ## Cross-check that our cosign signatures verify (#486). Needs docker.
+	@# Not in any CI gate: it pulls release binaries and runs a local registry.
+	@# Run it before changing how anything is signed or verified.
+	./hack/cosign-interop.sh
+
 .PHONY: proto proto-lint
 proto: ## Regenerate Go (messages + connect handlers) from proto/ into gen/.
 	GOBIN=$(LOCALBIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
