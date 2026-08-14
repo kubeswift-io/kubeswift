@@ -1635,6 +1635,17 @@ async fn propagate_guest_ip_annotation(ip: &str) {
 /// affect the migration outcome — the controller's spec.timeout is
 /// the floor for stall detection.
 async fn report_guest_running_post_receive() {
+    // Same gate as the terminal/socket-ready reports in main.rs: when there is no
+    // SwiftGuest CR, do not patch one. This path cannot produce the sandbox 403 of
+    // #519 — it only runs on migration-receive, which sandboxes never take, and the
+    // guest-label lookup below would bail first — but every SwiftGuest-CR write
+    // should honour the same switch rather than each one guarding differently.
+    if !crate::report::report_guest_cr_enabled(
+        std::env::var("KUBESWIFT_REPORT_GUEST_CR").ok().as_deref(),
+    ) {
+        log::info!("w16_guest_running_skipped reason=guest_cr_reporting_disabled");
+        return;
+    }
     let (namespace, pod_name) = match (
         std::env::var("POD_NAMESPACE").ok(),
         std::env::var("POD_NAME").ok(),
