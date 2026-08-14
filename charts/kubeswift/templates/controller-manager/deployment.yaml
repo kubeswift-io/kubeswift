@@ -62,6 +62,9 @@ spec:
             {{- else }}
             - --webhook-enabled=false
             {{- end }}
+            {{- if .Values.scopedLauncherRBAC.enabled }}
+            - --scoped-launcher-rbac=true
+            {{- end }}
             {{- if .Values.migration.mtls.enabled }}
             - --migration-mtls-enabled=true
             {{- end }}

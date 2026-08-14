@@ -118,6 +118,28 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// Per-pod scoped grant (#515). Additive on its own: RBAC is a union, so
+	// while the namespace-wide binding above still exists this narrows nothing.
+	// It is created first so the narrowing — dropping that shared binding — is a
+	// separate, reversible step rather than a flag day.
+	//
+	// The launcher pod is named guest.Name (pod.go), so the scope is known here,
+	// and this runs well before buildPod — the grant is always in place before
+	// swiftletd's first status write.
+	if err := EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &guest, guest.Name, GuestLauncher); err != nil {
+		logger.Error(err, "failed to ensure scoped launcher RBAC", "guest", guest.Name)
+		return ctrl.Result{}, err
+	}
+
+	// The narrowing. Strictly AFTER the scoped grant above, so the launcher
+	// never has a window with neither. Off by default — see ScopedOnly.
+	if ScopedOnly {
+		if err := RemoveSharedLauncherBinding(ctx, r.Client, guest.Namespace, GuestLauncher); err != nil {
+			logger.Error(err, "failed to remove the shared launcher binding", "namespace", guest.Namespace)
+			return ctrl.Result{}, err
+		}
+	}
+
 	// cloneFromSnapshot (Snapshot Phase 4): a guest that boots as a clone of a
 	// SwiftSnapshot has no imageRef/kernelRef. Resolve the snapshot + the live
 	// source guest, self-stamp the clone-mode restore annotations, and resolve

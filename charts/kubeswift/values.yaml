@@ -367,6 +367,26 @@ webhook:
 #
 # Turn OFF only if you operate the workload namespaces as a trust boundary
 # already, or a policy engine of your own enforces the same rule.
+# scopedLauncherRBAC — per-launcher-pod RBAC (#515), defence in depth.
+#
+# The controller ALWAYS creates a per-pod Role+RoleBinding granting a launcher
+# get/patch on exactly its own pod. That alone narrows nothing: RBAC is a union,
+# so while the shared namespace-wide binding also exists the launcher keeps
+# namespace-wide access.
+#
+# Enabling this RETIRES that shared binding, leaving the per-pod grants as the
+# only access. It is off by default because turning it on DELETES a live grant.
+#
+# This is NOT what closes the #443 escalation — that is launcherSAGate below.
+# RBAC is additive on a shared ServiceAccount, so scoping alone cannot stop an
+# attacker who obtains the SA. This limits what the token is worth if they get
+# it another way.
+#
+# Guest launchers only. Sandbox launchers have no per-pod grant yet, so their
+# shared binding is left alone; enabling this does not affect them.
+scopedLauncherRBAC:
+  enabled: false
+
 launcherSAGate:
   enabled: true
   # Must match the constants the controller stamps on launcher pods
