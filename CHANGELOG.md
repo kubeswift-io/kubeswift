@@ -4,6 +4,67 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.9] — 2026-08-14
+
+A supply-chain release. Both cosign-bearing images drop from **48 fixable CVEs
+(1 critical, 24 high) to 4 (0 critical, 3 high)**, the Go toolchain picks up 7
+standard-library fixes, and a signing behaviour that could have leaked private
+artifact digests is now caught by a test rather than shipped quietly.
+
+No CRD schema changes, no API changes, no values changes.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.9 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
+```
+
+### Security
+
+- **cosign 2.6.5 → 3.1.3 in `sandbox-materialize` and `snapshot-oras`** (#486).
+  48 fixable CVEs → 4 on each image, measured on the built images; the critical
+  is gone. The four that remain are inside cosign's own build.
+
+  Both images were pinned to 2.x because 3.x rejects `--tlog-upload=false`, the
+  flag used to sign offline. **Dropping that flag is not the fix**: cosign 3.x
+  then signs successfully, exits 0, and uploads the artifact digest to the
+  **public Rekor**. For a private VM snapshot or an air-gapped golden image that
+  is a disclosure. The signer now passes a signing-config declaring no
+  transparency-log service, selects the dialect from the cosign major found at
+  run time (so `swiftctl image publish` still works against an operator's own
+  2.x install), and **refuses to sign** rather than falling back to the
+  silent-upload form.
+
+  Existing v2.6.5 signatures keep verifying. `hack/cosign-interop.sh` proves it
+  across both majors in both directions, with negative controls, and fails on
+  any transparency-log entry.
+
+- **go 1.26.5 → 1.26.6** — 7 standard-library advisories reachable from our code
+  (`net/url`, `html/template`, `crypto/tls`, `net/http`, `encoding/xml`,
+  `encoding/asn1`). Not a regression from any change here: the same commit
+  passed `govulncheck` and then failed it hours later on a database update.
+
+### Fixed
+
+- **swiftletd no longer logs a 403 at every sandbox exit** (#519). It was trying
+  to patch a `SwiftGuest` CR that does not exist for a sandbox. Cosmetic —
+  sandbox status was always reported correctly — but it named an RBAC denial on
+  every run, which invites granting the privileged launcher ServiceAccount
+  `swiftguests/status`. The existing `KUBESWIFT_REPORT_GUEST_CR` switch was
+  applied to one of the three places that write the CR; it now covers all three.
+  No RBAC change.
+
+### Documentation
+
+- The manual golden-image verify command was **wrong** and would have looked like
+  an invalid signature: it omitted `--insecure-ignore-tlog=true`, which offline
+  signatures require. Corrected, with an explanation of why the flag is not a
+  weakening here.
+
+---
+
 ## [v0.13.8] — 2026-08-13
 
 Closes a privilege escalation. Anyone who could create an ordinary Pod in a

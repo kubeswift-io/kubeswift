@@ -121,18 +121,29 @@ swiftctl image publish golden.raw \
   --to ghcr.io/acme/vm-images --tag base --sign-key cosign.key
 ```
 
-This attaches a cosign signature (default tag-based `sha256-<digest>.sig`) to the
-pushed manifest. Verify it manually today:
+This attaches a cosign signature to the pushed manifest. Verify it manually:
 
 ```bash
-cosign verify --key cosign.pub ghcr.io/acme/vm-images@sha256:1a2b...
+cosign verify --key cosign.pub --insecure-ignore-tlog=true \
+  ghcr.io/acme/vm-images@sha256:1a2b...
 ```
+
+> **`--insecure-ignore-tlog=true` is required, and is not a weakening here.**
+> KubeSwift signs **offline** — no entry is written to a transparency log,
+> deliberately, so publishing a private VM image does not disclose its digest to
+> a public log. `cosign verify` demands a log entry by default and exits non-zero
+> without this flag, which looks like an invalid signature but is not one. The
+> key check — that the signature was made by the key you pass — is unaffected.
 
 > **TLS is required for verification.** `cosign verify` speaks HTTPS only — it
 > does **not** honor `--insecure`/`--allow-http-registry` on the registry ping.
 > A signature *pushed* over a plaintext (`--insecure`) registry lands, but cannot
 > be verified until the registry is fronted with TLS. Use a TLS registry on the
 > production path.
+
+> **Signature format.** cosign 2.x writes a `sha256-<digest>.sig` tag; 3.x writes
+> a `sha256-<digest>` index holding a Sigstore bundle. Both cosign majors read
+> both forms, so which one you have does not affect the command above.
 
 ### Verify-on-pull
 
