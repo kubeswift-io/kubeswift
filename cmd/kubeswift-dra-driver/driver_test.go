@@ -116,7 +116,7 @@ func TestPrepareClaim(t *testing.T) {
 			Allocation: &resourceapi.AllocationResult{
 				Devices: resourceapi.DeviceAllocationResult{
 					Results: []resourceapi.DeviceRequestAllocationResult{
-						{Request: "gpu", Driver: driverName, Pool: "boba",
+						{Request: "gpu", Driver: driverName, Pool: "worker-1",
 							Device: gpualloc.EncodeDeviceName("0000:01:00.0")},
 						{Request: "x", Driver: "other.example.com", Pool: "p", Device: "d"},
 					},
@@ -124,7 +124,7 @@ func TestPrepareClaim(t *testing.T) {
 			},
 		},
 	}
-	d := &draDriver{nodeName: "boba", cdiDir: dir, kube: fake.NewSimpleClientset(claim)}
+	d := &draDriver{nodeName: "worker-1", cdiDir: dir, kube: fake.NewSimpleClientset(claim)}
 
 	res := d.prepareClaim(context.Background(), claim)
 	if res.Err != nil {
@@ -135,7 +135,7 @@ func TestPrepareClaim(t *testing.T) {
 		t.Fatalf("devices = %+v, want exactly ours", res.Devices)
 	}
 	dev := res.Devices[0]
-	if dev.DeviceName != gpualloc.EncodeDeviceName("0000:01:00.0") || dev.PoolName != "boba" {
+	if dev.DeviceName != gpualloc.EncodeDeviceName("0000:01:00.0") || dev.PoolName != "worker-1" {
 		t.Errorf("device = %+v", dev)
 	}
 	if len(dev.CDIDeviceIDs) != 1 || dev.CDIDeviceIDs[0] != "kubeswift.io/gpu=claim-uid-9" {

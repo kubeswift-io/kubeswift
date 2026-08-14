@@ -17,8 +17,8 @@ import (
 
 func TestClusterService_ListClusters_NamespaceScoped(t *testing.T) {
 	hub := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"}},
-		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "miles", Namespace: "kubeswift-system"}},
+		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "edge-1", Namespace: "kubeswift-system"}},
+		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "edge-2", Namespace: "kubeswift-system"}},
 		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "other"}},
 	).Build()
 
@@ -37,7 +37,7 @@ func TestClusterService_ListClusters_NamespaceScoped(t *testing.T) {
 	for _, c := range resp.Msg.Clusters {
 		names[c.Name] = true
 	}
-	if !names["boba"] || !names["miles"] || names["elsewhere"] {
+	if !names["edge-1"] || !names["edge-2"] || names["elsewhere"] {
 		t.Errorf("unexpected cluster set: %v", names)
 	}
 }
@@ -47,11 +47,11 @@ func TestClusterWatcher_EmitSubscribeUnsubscribe(t *testing.T) {
 	sub := w.subscribe()
 
 	w.emit(kubeswiftv1.EventType_EVENT_TYPE_ADDED,
-		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "boba"}})
+		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "edge-1"}})
 
 	select {
 	case ev := <-sub:
-		if ev.Type != kubeswiftv1.EventType_EVENT_TYPE_ADDED || ev.Cluster.GetName() != "boba" {
+		if ev.Type != kubeswiftv1.EventType_EVENT_TYPE_ADDED || ev.Cluster.GetName() != "edge-1" {
 			t.Errorf("unexpected event: %+v", ev)
 		}
 	default:
@@ -91,7 +91,7 @@ func (rejectingAuthenticator) Authenticate(context.Context, http.Header) (Identi
 // without an Authenticate call; these pin them.
 func TestClusterService_ListClusters_RequiresAuth(t *testing.T) {
 	hub := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"}},
+		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "edge-1", Namespace: "kubeswift-system"}},
 	).Build()
 
 	svc := NewClusterService(hub, "kubeswift-system", nil, nil, rejectingAuthenticator{})
@@ -106,7 +106,7 @@ func TestClusterService_ListClusters_RequiresAuth(t *testing.T) {
 
 func TestClusterService_WatchClusters_RequiresAuth(t *testing.T) {
 	hub := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"}},
+		&fleetv1alpha1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: "edge-1", Namespace: "kubeswift-system"}},
 	).Build()
 
 	// nil watcher + nil stream on purpose: the auth check must reject BEFORE

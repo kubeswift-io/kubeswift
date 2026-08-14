@@ -15,7 +15,7 @@ This document summarizes the root causes, fixes, and validation steps for the sm
 
 ### 2. Kube API client (Connect error)
 
-**Cause:** swiftletd used `kube::Client::try_default()` which uses `KUBERNETES_SERVICE_HOST` + `KUBERNETES_SERVICE_PORT`. In clusters with an external API server (e.g. `https://frida.labk8s.io:6443`), the cluster IP may be unreachable from pods. The patch to SwiftGuest status fails with `ServiceError: client error (Connect)`.
+**Cause:** swiftletd used `kube::Client::try_default()` which uses `KUBERNETES_SERVICE_HOST` + `KUBERNETES_SERVICE_PORT`. In clusters with an external API server (e.g. `https://k8s-api.example.com:6443`), the cluster IP may be unreachable from pods. The patch to SwiftGuest status fails with `ServiceError: client error (Connect)`.
 
 **Target:** `api.patch_status()` in `report.rs` → `PATCH /apis/swift.kubeswift.io/v1alpha1/namespaces/{ns}/swiftguests/{name}/status` → Kubernetes API server at `https://{KUBERNETES_SERVICE_HOST}:{PORT}` or `https://kubernetes.default.svc`.
 

@@ -1,7 +1,7 @@
 # Cross-node clone restore from the oci-backend snapshot.
 #
 # Because the artifact lives in the registry, this restore can land on ANY node
-# — set spec.targetNode to the node you want the clone to run on (here "boba";
+# — set spec.targetNode to the node you want the clone to run on (here "worker-1";
 # change to a node in your cluster). A node-pinned Job pulls the OCI artifact
 # (pinned by the digest in status.oci.manifestDigest) into that node's local
 # cache, then the standard restore path boots the clone.
@@ -23,7 +23,7 @@ spec:
     name: snapshot-oci-mem
   targetGuest:
     name: snapshot-oci-clone            # different from source => clone
-  targetNode: boba                      # pin the restore to this node
+  targetNode: worker-1                      # pin the restore to this node
   resumeAfterRestore: true
   identity:
     regenerate:

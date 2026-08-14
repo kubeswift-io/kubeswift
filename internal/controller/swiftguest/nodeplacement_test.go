@@ -30,8 +30,8 @@ var cpTaint = corev1.Taint{
 // launcher from landing there.
 func TestCheckNodePlacement_RefusesUntoleratedControlPlane(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node("frida", cpTaint)).Build()
-	guest := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "frida"}}
+		WithObjects(node("cp-1", cpTaint)).Build()
+	guest := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "cp-1"}}
 	err := checkNodePlacement(context.Background(), c, guest, &corev1.Pod{})
 	if err == nil {
 		t.Fatal("accepted an untolerated control-plane node")
@@ -45,8 +45,8 @@ func TestCheckNodePlacement_RefusesUntoleratedControlPlane(t *testing.T) {
 // — exactly as an ordinary pod would.
 func TestCheckNodePlacement_AllowsWithToleration(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node("frida", cpTaint)).Build()
-	guest := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "frida"}}
+		WithObjects(node("cp-1", cpTaint)).Build()
+	guest := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "cp-1"}}
 	pod := &corev1.Pod{Spec: corev1.PodSpec{Tolerations: []corev1.Toleration{{
 		Key:      "node-role.kubernetes.io/control-plane",
 		Operator: corev1.TolerationOpExists,
@@ -59,9 +59,9 @@ func TestCheckNodePlacement_AllowsWithToleration(t *testing.T) {
 
 func TestCheckNodePlacement_UntaintedAndUnpinned(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node("miles")).Build()
+		WithObjects(node("worker-2")).Build()
 	// Pinned to a clean node: fine.
-	g := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "miles"}}
+	g := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "worker-2"}}
 	if err := checkNodePlacement(context.Background(), c, g, &corev1.Pod{}); err != nil {
 		t.Errorf("clean node rejected: %v", err)
 	}
@@ -83,9 +83,9 @@ func TestCheckNodePlacement_MissingNode(t *testing.T) {
 // so enforcing it here would be stricter than Kubernetes itself.
 func TestCheckNodePlacement_IgnoresPreferNoSchedule(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(
-		node("miles", corev1.Taint{Key: "soft", Effect: corev1.TaintEffectPreferNoSchedule}),
+		node("worker-2", corev1.Taint{Key: "soft", Effect: corev1.TaintEffectPreferNoSchedule}),
 	).Build()
-	g := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "miles"}}
+	g := &swiftv1alpha1.SwiftGuest{Spec: swiftv1alpha1.SwiftGuestSpec{NodeName: "worker-2"}}
 	if err := checkNodePlacement(context.Background(), c, g, &corev1.Pod{}); err != nil {
 		t.Errorf("PreferNoSchedule should not block: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestTolerated_Wildcard(t *testing.T) {
 // the old call site inside buildPod and the guest stalled with no reason set.
 func TestCheckNodePlacementFor_RunsWithoutAPod(t *testing.T) {
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "frida"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cp-1"},
 		Spec: corev1.NodeSpec{Taints: []corev1.Taint{{
 			Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule,
 		}}},
@@ -113,7 +113,7 @@ func TestCheckNodePlacementFor_RunsWithoutAPod(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(node).Build()
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "g1"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "frida"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "cp-1"},
 	}
 
 	err := checkNodePlacementFor(context.Background(), c, guest, nil)
@@ -124,17 +124,17 @@ func TestCheckNodePlacementFor_RunsWithoutAPod(t *testing.T) {
 	if strings.Contains(err.Error(), "spec.tolerations") {
 		t.Errorf("error points at spec.tolerations, which SwiftGuest does not have: %v", err)
 	}
-	if !strings.Contains(err.Error(), "frida") {
+	if !strings.Contains(err.Error(), "cp-1") {
 		t.Errorf("error does not name the node: %v", err)
 	}
 }
 
 func TestCheckNodePlacementFor_UntaintedNodeIsFine(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "g1"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "miles"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{NodeName: "worker-2"},
 	}
 	if err := checkNodePlacementFor(context.Background(), c, guest, nil); err != nil {
 		t.Errorf("rejected an untainted node: %v", err)

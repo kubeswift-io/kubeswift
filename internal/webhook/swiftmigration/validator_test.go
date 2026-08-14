@@ -41,7 +41,7 @@ func newSwiftMigration(name, ns string) *migrationv1alpha1.SwiftMigration {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: migrationv1alpha1.SwiftMigrationSpec{
 			GuestRef: migrationv1alpha1.SwiftMigrationGuestRef{Name: "guest"},
-			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "miles"},
+			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "worker-2"},
 			Mode:     migrationv1alpha1.SwiftMigrationModeAuto,
 		},
 	}
@@ -55,7 +55,7 @@ func newSwiftGuest(name, ns string) *swiftv1alpha1.SwiftGuest {
 			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
 		},
 		Status: swiftv1alpha1.SwiftGuestStatus{
-			NodeName: "boba",
+			NodeName: "worker-1",
 		},
 	}
 }
@@ -394,7 +394,7 @@ func TestValidateClusterState_MigrationDisabled(t *testing.T) {
 	guest := newSwiftGuest("guest", "default")
 	disabled := false
 	guest.Spec.Migration = &swiftv1alpha1.MigrationSpec{Enabled: &disabled}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -417,17 +417,17 @@ func TestValidateClusterState_MigrationDisabled(t *testing.T) {
 // offline in auto_mode.go). The primary UDN withholds the migration channel from the pod.
 func TestValidateClusterState_ModelA_LiveRejected(t *testing.T) {
 	scheme := migrationScheme(t)
-	guest := newSwiftGuest("guest", "model-a") // status.NodeName = boba
+	guest := newSwiftGuest("guest", "model-a") // status.NodeName = worker1
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   "model-a",
 		Labels: map[string]string{"k8s.ovn.org/primary-user-defined-network": ""},
 	}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, ns, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, ns, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "model-a")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	mig.Spec.AllowIPChange = true
 	_, err := v.validate(context.Background(), mig)
 	if err == nil || !strings.Contains(err.Error(), "primary OVN-K UDN") {
@@ -437,12 +437,12 @@ func TestValidateClusterState_ModelA_LiveRejected(t *testing.T) {
 
 func TestValidateClusterState_SameNodeRejected(t *testing.T) {
 	scheme := migrationScheme(t)
-	guest := newSwiftGuest("guest", "default") // status.NodeName = boba
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("boba")).Build()
+	guest := newSwiftGuest("guest", "default") // status.NodeName = worker1
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-1")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
-	mig.Spec.Target.NodeName = "boba"
+	mig.Spec.Target.NodeName = "worker-1"
 	_, err := v.validate(context.Background(), mig)
 	if err == nil {
 		t.Fatal("validate same-node migration should reject")
@@ -450,7 +450,7 @@ func TestValidateClusterState_SameNodeRejected(t *testing.T) {
 	// Operators need to see both the target name and the source name in
 	// the message — names are how they diagnose "wait, that's where it
 	// is already." Lock both in.
-	if !strings.Contains(err.Error(), `"boba"`) {
+	if !strings.Contains(err.Error(), `"worker-1"`) {
 		t.Errorf("error should name the conflicting node; got %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), "same-node migration is meaningless") {
@@ -474,7 +474,7 @@ func TestValidateClusterState_TargetNodeMissing(t *testing.T) {
 func TestValidateClusterState_TargetNodeCordoned(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
-	cordoned := newReadyNode("miles")
+	cordoned := newReadyNode("worker-2")
 	cordoned.Spec.Unschedulable = true
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, cordoned).Build()
 	v := &Validator{Client: c}
@@ -490,7 +490,7 @@ func TestValidateClusterState_TargetNodeNotReady(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	notReady := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "miles"},
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-2"},
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{
 				{Type: corev1.NodeReady, Status: corev1.ConditionFalse},
@@ -512,7 +512,7 @@ func TestValidateClusterState_KernelBootMissingLabel(t *testing.T) {
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.ImageRef = nil
 	guest.Spec.KernelRef = &corev1.LocalObjectReference{Name: "kernel-1"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -530,7 +530,7 @@ func TestValidateClusterState_GPULiveRejected(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu-pcie"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -554,7 +554,7 @@ func TestValidateClusterState_GPUUnscheduledLiveRejected(t *testing.T) {
 	guest := newSwiftGuest("guest", "default")
 	guest.Status.NodeName = "" // unscheduled
 	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu-pcie"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -574,7 +574,7 @@ func TestValidateClusterState_SRIOVLiveRejected(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "data", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice"},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -593,7 +593,7 @@ func TestValidateClusterState_VFIOOfflineNotRejected(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "gpu-pcie"}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -613,7 +613,7 @@ func TestValidateClusterState_SRIOVOfflineRejected(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "data", Type: swiftv1alpha1.InterfaceTypeSRIOV, ResourceName: "intel.com/sriov_netdevice"},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -627,7 +627,7 @@ func TestValidateClusterState_SRIOVOfflineRejected(t *testing.T) {
 func TestValidateClusterState_DefaultNetworkingNeedsAllowIPChange(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default") // no spec.interfaces, default networking
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default") // allowIPChange=false (default)
@@ -640,7 +640,7 @@ func TestValidateClusterState_DefaultNetworkingNeedsAllowIPChange(t *testing.T) 
 func TestValidateClusterState_DefaultNetworkingWithAllowIPChange(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -672,7 +672,7 @@ func TestValidateClusterState_MultusInterface_NoIPChangeNeeded(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default") // allowIPChange=false; should still pass
@@ -691,7 +691,7 @@ func TestValidateClusterState_HappyPath(t *testing.T) {
 			NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -717,7 +717,7 @@ func TestValidateClusterState_SourceNotYetScheduled(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -739,7 +739,7 @@ func TestValidateClusterState_MixedInterfaces_DefaultPlusMultus(t *testing.T) {
 		{Name: "mgmt"}, // default node-local bridge = the primary IP
 		{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default") // allowIPChange=false
@@ -758,7 +758,7 @@ func TestValidateClusterState_PrimaryOnNAD(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "mgmt", Primary: true, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "ovn-l2", Namespace: "default"}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default") // allowIPChange=false
@@ -778,12 +778,12 @@ func TestValidateClusterState_PrimaryOnNAD(t *testing.T) {
 // error, not the less-specific "default networking" error.
 func TestValidateClusterState_SameNodeOnDefaultNet_RejectionOrdering(t *testing.T) {
 	scheme := migrationScheme(t)
-	guest := newSwiftGuest("guest", "default") // status.NodeName = boba, default networking
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("boba")).Build()
+	guest := newSwiftGuest("guest", "default") // status.NodeName = worker1, default networking
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-1")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
-	mig.Spec.Target.NodeName = "boba" // same node
+	mig.Spec.Target.NodeName = "worker-1" // same node
 	_, err := v.validate(context.Background(), mig)
 	if err == nil {
 		t.Fatal("validate same-node default-net migration should reject")
@@ -807,7 +807,7 @@ func TestValidateClusterState_SameNodeOnDefaultNet_RejectionOrdering(t *testing.
 func TestValidateClusterState_CrossNamespaceReferenceAsNotFound(t *testing.T) {
 	scheme := migrationScheme(t)
 	otherNsGuest := newSwiftGuest("guest", "other-namespace")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(otherNsGuest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(otherNsGuest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default") // namespace=default, guest.Name=guest, but guest is in other-namespace
@@ -845,12 +845,12 @@ func TestValidateUpdate_SpecImmutable(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles"), newReadyNode("frida")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2"), newReadyNode("cp-1")).Build()
 	v := &Validator{Client: c}
 
 	old := newSwiftMigration("m", "default")
 	new := newSwiftMigration("m", "default")
-	new.Spec.Target.NodeName = "frida" // changed
+	new.Spec.Target.NodeName = "cp-1" // changed
 	_, err := v.ValidateUpdate(context.Background(), old, new)
 	if err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Errorf("ValidateUpdate with spec change should reject as immutable; got %v", err)
@@ -863,7 +863,7 @@ func TestValidateUpdate_NoSpecChange(t *testing.T) {
 	guest.Spec.Interfaces = []swiftv1alpha1.GuestInterface{
 		{Name: "data", NetworkRef: &swiftv1alpha1.NetworkReference{Name: "macvlan", Namespace: "default"}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	old := newSwiftMigration("m", "default")
@@ -932,8 +932,8 @@ func TestValidateUpdate_DeletionTimestamp_NoClusterState(t *testing.T) {
 func TestValidateUpdate_TerminalPhase_NoClusterState(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
-	guest.Status.NodeName = "miles" // matches mig.Spec.Target.NodeName
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	guest.Status.NodeName = "worker-2" // matches mig.Spec.Target.NodeName
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	for _, phase := range []migrationv1alpha1.SwiftMigrationPhase{
@@ -1172,7 +1172,7 @@ func TestValidate_ModeLiveDiskBootRejectedByStorageGate(t *testing.T) {
 	scheme := migrationScheme(t)
 	guest := newSwiftGuest("guest", "default")
 	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -1201,7 +1201,7 @@ func TestValidate_ModeLiveKernelBootAcceptsAtStorageGate(t *testing.T) {
 	guest.Spec.ImageRef = nil
 	guest.Spec.KernelRef = &corev1.LocalObjectReference{Name: "faas-minimal"}
 	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyKernelNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyKernelNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -1225,19 +1225,19 @@ func TestValidate_ModeLivePerSourceNodeConcurrencyRejected(t *testing.T) {
 	guest2.Spec.ImageRef = nil
 	guest2.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
 	class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
-	// Existing live migration from sourceNode=boba.
+	// Existing live migration from sourceNode=worker1.
 	existing := newSwiftMigration("existing", "default")
 	existing.Spec.GuestRef.Name = "guest1"
 	existing.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	existing.Status.SourceNode = "boba"
+	existing.Status.SourceNode = "worker-1"
 	existing.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		guest1, guest2, class, newReadyKernelNode("miles"), existing,
+		guest1, guest2, class, newReadyKernelNode("worker-2"), existing,
 	).Build()
 	v := &Validator{Client: c}
 
-	// New migration also from sourceNode=boba (guest2 lives on boba).
+	// New migration also from sourceNode=worker1 (guest2 lives on worker1).
 	mig := newSwiftMigration("new", "default")
 	mig.Spec.GuestRef.Name = "guest2"
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -1269,11 +1269,11 @@ func TestValidate_ModeLivePerSourceNodeConcurrency_TerminalPeerOk(t *testing.T) 
 	completed := newSwiftMigration("completed", "default")
 	completed.Spec.GuestRef.Name = "guest1"
 	completed.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	completed.Status.SourceNode = "boba"
+	completed.Status.SourceNode = "worker-1"
 	completed.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseCompleted
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		guest1, guest2, class, newReadyKernelNode("miles"), completed,
+		guest1, guest2, class, newReadyKernelNode("worker-2"), completed,
 	).Build()
 	v := &Validator{Client: c}
 
@@ -1303,11 +1303,11 @@ func TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk(t *testing.T) {
 	offline := newSwiftMigration("offline", "default")
 	offline.Spec.GuestRef.Name = "guest1"
 	offline.Spec.Mode = migrationv1alpha1.SwiftMigrationModeOffline
-	offline.Status.SourceNode = "boba"
+	offline.Status.SourceNode = "worker-1"
 	offline.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		guest1, guest2, class, newReadyKernelNode("miles"), offline,
+		guest1, guest2, class, newReadyKernelNode("worker-2"), offline,
 	).Build()
 	v := &Validator{Client: c}
 
@@ -1331,7 +1331,7 @@ func TestValidateClusterState_VirtiofsLiveRejected(t *testing.T) {
 	guest.Spec.Filesystems = []swiftv1alpha1.Filesystem{
 		{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -1348,7 +1348,7 @@ func TestValidateClusterState_VhostUserDeviceLiveRejected(t *testing.T) {
 	guest.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{
 		{Name: "blk0", Type: swiftv1alpha1.VhostUserDeviceTypeBlk, Socket: "/run/spdk/0"},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -1366,7 +1366,7 @@ func TestValidateClusterState_VhostUserNICLiveRejected(t *testing.T) {
 		{Name: "mgmt"},
 		{Name: "fast0", Type: swiftv1alpha1.InterfaceTypeVhostUser, Socket: "/var/run/vhost/fast0.sock"},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")
@@ -1387,7 +1387,7 @@ func TestValidateClusterState_VirtiofsOfflineNotRejected(t *testing.T) {
 	guest.Spec.Filesystems = []swiftv1alpha1.Filesystem{
 		{Name: "data", Source: swiftv1alpha1.FilesystemSource{HostPath: &hp}},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("miles")).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newReadyNode("worker-2")).Build()
 	v := &Validator{Client: c}
 
 	mig := newSwiftMigration("m", "default")

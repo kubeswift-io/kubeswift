@@ -28,7 +28,7 @@ spec:
   cloneFromSnapshot:
     snapshotRef:
       name: my-snapshot        # a Ready SwiftSnapshot in the same namespace
-    targetNode: boba           # REQUIRED for a Tier C (s3) snapshot; ignored for Tier B
+    targetNode: worker-1           # REQUIRED for a Tier C (s3) snapshot; ignored for Tier B
     regenerate:                # identity reset on the clone (default: all four)
       - macAddresses
       - hostname
@@ -165,8 +165,8 @@ kubectl get swiftguest -l swift.kubeswift.io/pool-name=clone-pool -o wide -w
 
 ## Cluster walkthrough
 
-Validated on the dev cluster (k0s 1.34, CH v51.1, in-cluster MinIO, miles+boba).
-A `clone-source` (rocky9) on boba got a sentinel + a Tier C `clone-snap`
+Validated on the dev cluster (k0s 1.34, CH v51.1, in-cluster MinIO, worker-2+worker-1).
+A `clone-source` (rocky9) on worker-1 got a sentinel + a Tier C `clone-snap`
 (Ready); a 2-replica `clone-pool` then cloned it. The walkthrough caught **two
 real bugs** unit tests structurally cannot (the recurring **W5 pattern** —
 fake-client tests verify control flow, not on-cluster runtime behavior); both
@@ -189,8 +189,8 @@ Results after the fixes:
 
 | | clone-pool-0 | clone-pool-1 |
 |---|---|---|
-| Assigned node | **boba** | **miles** (cross-node) |
-| Tier C download Job | on boba ✓ | on miles ✓ |
+| Assigned node | **worker-1** | **worker-2** (cross-node) |
+| Tier C download Job | on worker-1 ✓ | on worker-2 ✓ |
 | Phase | Running | Running |
 | Hypervisor MAC | `52:54:00:7e:0c:47` | `52:54:00:fd:c6:1a` (distinct) |
 | Sentinel `CLONE-POOL-…` | survived ✓ | survived ✓ |

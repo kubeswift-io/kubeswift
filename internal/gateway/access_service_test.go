@@ -51,7 +51,7 @@ func TestAccess_ListRoles_PredefinedAlwaysPresent(t *testing.T) {
 	unrelated := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "some-operator"}}
 	svc, _ := newFakeAccess(custom, unrelated)
 
-	resp, err := svc.ListRoles(context.Background(), connect.NewRequest(&kubeswiftv1.ListRolesRequest{Cluster: "boba"}))
+	resp, err := svc.ListRoles(context.Background(), connect.NewRequest(&kubeswiftv1.ListRolesRequest{Cluster: "edge-1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestAccess_AssignPredefined_ClusterWide_EnsuresRole(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := svc.AssignRole(ctx, connect.NewRequest(&kubeswiftv1.AssignRoleRequest{
-		Cluster: "boba", Role: "kubeswift-operator",
+		Cluster: "edge-1", Role: "kubeswift-operator",
 		Subject: &kubeswiftv1.Subject{Kind: "Group", Name: "team-a"},
 	}))
 	if err != nil {
@@ -119,7 +119,7 @@ func TestAccess_AssignNamespaced(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := svc.AssignRole(ctx, connect.NewRequest(&kubeswiftv1.AssignRoleRequest{
-		Cluster: "boba", Role: "kubeswift-viewer", Namespace: "team-a",
+		Cluster: "edge-1", Role: "kubeswift-viewer", Namespace: "team-a",
 		Subject: &kubeswiftv1.Subject{Kind: "User", Name: "alice@example.com"},
 	}))
 	if err != nil {
@@ -139,7 +139,7 @@ func TestAccess_CreateRole_ComposesRules(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := svc.CreateRole(ctx, connect.NewRequest(&kubeswiftv1.CreateRoleRequest{
-		Cluster: "boba", Name: "vm-console-only", DisplayName: "VM + console",
+		Cluster: "edge-1", Name: "vm-console-only", DisplayName: "VM + console",
 		Capabilities: []string{"view-vms", "console", "bogus-cap"}, // bogus dropped
 	}))
 	if err != nil {
@@ -173,12 +173,12 @@ func TestAccess_CreateRole_Validation(t *testing.T) {
 	svc, _ := newFakeAccess()
 	ctx := context.Background()
 	// A predefined name is rejected.
-	_, err := svc.CreateRole(ctx, connect.NewRequest(&kubeswiftv1.CreateRoleRequest{Cluster: "boba", Name: "kubeswift-admin", Capabilities: []string{"view-vms"}}))
+	_, err := svc.CreateRole(ctx, connect.NewRequest(&kubeswiftv1.CreateRoleRequest{Cluster: "edge-1", Name: "kubeswift-admin", Capabilities: []string{"view-vms"}}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("predefined name: want InvalidArgument, got %v", err)
 	}
 	// No valid capabilities is rejected.
-	_, err = svc.CreateRole(ctx, connect.NewRequest(&kubeswiftv1.CreateRoleRequest{Cluster: "boba", Name: "empty", Capabilities: []string{"bogus"}}))
+	_, err = svc.CreateRole(ctx, connect.NewRequest(&kubeswiftv1.CreateRoleRequest{Cluster: "edge-1", Name: "empty", Capabilities: []string{"bogus"}}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("no valid caps: want InvalidArgument, got %v", err)
 	}
@@ -188,13 +188,13 @@ func TestAccess_ListAssignments_Roundtrip(t *testing.T) {
 	svc, _ := newFakeAccess()
 	ctx := context.Background()
 	_, err := svc.AssignRole(ctx, connect.NewRequest(&kubeswiftv1.AssignRoleRequest{
-		Cluster: "boba", Role: "kubeswift-admin",
+		Cluster: "edge-1", Role: "kubeswift-admin",
 		Subject: &kubeswiftv1.Subject{Kind: "User", Name: "root@example.com"},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := svc.ListAssignments(ctx, connect.NewRequest(&kubeswiftv1.ListAssignmentsRequest{Cluster: "boba"}))
+	resp, err := svc.ListAssignments(ctx, connect.NewRequest(&kubeswiftv1.ListAssignmentsRequest{Cluster: "edge-1"}))
 	if err != nil {
 		t.Fatal(err)
 	}

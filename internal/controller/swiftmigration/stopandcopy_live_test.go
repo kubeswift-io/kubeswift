@@ -26,7 +26,7 @@ func stopAndCopyFixture(t *testing.T, srcUID types.UID) (*migrationv1alpha1.Swif
 	t.Helper()
 	mig := newMigrationWithUID("m1", "default", "abcdef1234567890abcdef1234567890")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
 	mig.Status.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Status.SourcePodUID = srcUID
@@ -50,7 +50,7 @@ func stopAndCopyFixture(t *testing.T, srcUID types.UID) (*migrationv1alpha1.Swif
 			Name:      "guest-mig-abcdef",
 			Namespace: "default",
 		},
-		Spec: corev1.PodSpec{NodeName: "miles"},
+		Spec: corev1.PodSpec{NodeName: "worker-2"},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 			PodIP: "10.244.1.42",
@@ -774,7 +774,7 @@ func TestStopAndCopyLive_PostCutoverStep1_RaceReconcile_DoesNotFalseFireUIDCheck
 // chain-safe.
 //
 // Discovered on cluster during Phase 3a PR 1 disk-boot E12 validation
-// (S1 run 2, miles→boba→miles). Same code path runs for kernel-boot
+// (S1 run 2, worker2→worker1→worker2). Same code path runs for kernel-boot
 // and disk-boot — workload-class-independent bug; disk-boot validation
 // happened to exercise back-to-back migrations and surface it.
 func TestStopAndCopyLive_ChainMigration_SrcResolvesToPriorDstPod_NoFalseFire_W26(t *testing.T) {

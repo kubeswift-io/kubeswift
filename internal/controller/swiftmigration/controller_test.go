@@ -39,7 +39,7 @@ func newMigration(name, ns string) *migrationv1alpha1.SwiftMigration {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: migrationv1alpha1.SwiftMigrationSpec{
 			GuestRef: migrationv1alpha1.SwiftMigrationGuestRef{Name: "guest"},
-			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "miles"},
+			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "worker-2"},
 			Mode:     migrationv1alpha1.SwiftMigrationModeOffline,
 		},
 	}

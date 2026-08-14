@@ -83,7 +83,7 @@ func makeLocalSnap(name, ns, sourceGuest, hostPath, hypervisorVersion string) *s
 		Status: snapshotv1alpha1.SwiftSnapshotStatus{
 			Phase:             snapshotv1alpha1.SwiftSnapshotPhaseReady,
 			HypervisorVersion: hypervisorVersion,
-			NodeName:          "boba",
+			NodeName:          "worker-1",
 		},
 	}
 }
@@ -234,7 +234,7 @@ func TestLocal_Pending_Clone_ReentrantReconcileDoesNotConflict(t *testing.T) {
 	// and not fail with TargetConflict.
 	snap := makeLocalSnap("snap1", "default", "src", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseReady
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	restore := makeRestore("restore-clone", "default", "snap1", "clone-a", true)
 	restore.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{
 		Regenerate: []snapshotv1alpha1.IdentityRegenerationItem{
@@ -274,7 +274,7 @@ func TestLocal_Pending_Clone_ExistingSwiftGuestNotOwnedByUs_StillConflicts(t *te
 	// over someone else's resource.
 	snap := makeLocalSnap("snap1", "default", "src", "/var/lib/kubeswift/snapshots/default-snap1", "v51.1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseReady
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	restore := makeRestore("restore-clone", "default", "snap1", "clone-a", true)
 	restore.Spec.Identity = &snapshotv1alpha1.IdentityRegeneration{
 		Regenerate: []snapshotv1alpha1.IdentityRegenerationItem{
@@ -335,7 +335,7 @@ func TestRestoreAnnotations_Clone_SetsRuntimeDirPrefixAndNullifyHostMAC(t *testi
 				Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/default-snap1"},
 			},
 		},
-		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "boba"},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "worker-1"},
 	}
 	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
 
@@ -377,7 +377,7 @@ func TestRestoreAnnotations_InPlace_DoesNotSetCloneOnlyAnnotations(t *testing.T)
 				Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/default-snap1"},
 			},
 		},
-		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "boba"},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "worker-1"},
 	}
 	source := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "default"}}
 

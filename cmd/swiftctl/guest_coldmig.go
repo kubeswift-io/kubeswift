@@ -81,7 +81,7 @@ The referenced SwiftSnapshot must be Ready in this namespace. --guest-class is
 required (a clone needs a guestClassRef even though CPU/memory come from the
 snapshot); --target-node pins where the clone runs (and where its disk is
 downloaded).`,
-	Example: `  swiftctl guest import db2 --from-snapshot db-export --target-node boba --guest-class ft-small --wait`,
+	Example: `  swiftctl guest import db2 --from-snapshot db-export --target-node worker-1 --guest-class ft-small --wait`,
 	Args:    cobra.ExactArgs(1),
 	RunE:    runGuestImport,
 }

@@ -470,8 +470,8 @@ func TestGPUIntentDeviceConstruction(t *testing.T) {
 // time, so this branch normally never fires; the check exists to catch
 // any webhook bypass or future Phase 4 controller bug.
 func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
-	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
-	guest.Spec.NodeName = "boba" // disagrees with status.GPU.NodeName
+	guest := gpuGuest("worker-2", []string{"0000:01:00.0"}, -1)
+	guest.Spec.NodeName = "worker-1" // disagrees with status.GPU.NodeName
 	// Mark GPUAllocated=True so the dispatcher reaches the GPU branch
 	// (not strictly necessary — the precedence check fires first — but
 	// matches the realistic state).
@@ -487,7 +487,7 @@ func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
@@ -502,8 +502,8 @@ func TestBuildPodDispatcher_NodeNameGPUDisagreement(t *testing.T) {
 	if !strings.Contains(err.Error(), "must commit both together") {
 		t.Errorf("error message should mention the cutover-consistency assertion; got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "boba") || !strings.Contains(err.Error(), "miles") {
-		t.Errorf("error message should name both spec.nodeName (boba) and status.gpu.nodeName (miles); got %q", err.Error())
+	if !strings.Contains(err.Error(), "worker-1") || !strings.Contains(err.Error(), "worker-2") {
+		t.Errorf("error message should name both spec.nodeName (worker-1) and status.gpu.nodeName (worker-2); got %q", err.Error())
 	}
 }
 
@@ -522,7 +522,7 @@ func TestBuildPodDispatcher_NodeNameSetGPUNil(t *testing.T) {
 			GuestClassRef:  corev1.LocalObjectReference{Name: "class"},
 			SeedProfileRef: &corev1.LocalObjectReference{Name: "seed"},
 			GPUProfileRef:  &corev1.LocalObjectReference{Name: "gpu-profile"},
-			NodeName:       "miles",
+			NodeName:       "worker-2",
 		},
 		// Status.GPU intentionally nil.
 	}
@@ -532,7 +532,7 @@ func TestBuildPodDispatcher_NodeNameSetGPUNil(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	// Precedence check should NOT fire (status.GPU is nil). The dispatcher
@@ -569,7 +569,7 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 			ImageRef:       &corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef:  corev1.LocalObjectReference{Name: "class"},
 			SeedProfileRef: &corev1.LocalObjectReference{Name: "seed"},
-			NodeName:       "miles",
+			NodeName:       "worker-2",
 		},
 	}
 	rg := &resolved.ResolvedGuest{
@@ -583,7 +583,7 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
@@ -593,8 +593,8 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 	if pod == nil {
 		t.Fatal("buildPod returned nil pod on restore branch")
 	}
-	if pod.Spec.NodeName != "miles" {
-		t.Errorf("restore-branch pod.Spec.NodeName = %q, want miles (applyNodeName must run on restore branch)", pod.Spec.NodeName)
+	if pod.Spec.NodeName != "worker-2" {
+		t.Errorf("restore-branch pod.Spec.NodeName = %q, want worker-2 (applyNodeName must run on restore branch)", pod.Spec.NodeName)
 	}
 }
 
@@ -602,8 +602,8 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 // spec.NodeName matches status.GPU.NodeName, the dispatcher builds the
 // pod normally (does not error out).
 func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
-	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
-	guest.Spec.NodeName = "miles" // matches status.GPU.NodeName
+	guest := gpuGuest("worker-2", []string{"0000:01:00.0"}, -1)
+	guest.Spec.NodeName = "worker-2" // matches status.GPU.NodeName
 	guest.Status.Conditions = []metav1.Condition{
 		{Type: swiftv1alpha1.ConditionGPUAllocated, Status: metav1.ConditionTrue},
 	}
@@ -632,7 +632,7 @@ func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
 	}
 	// The node must exist: buildPod resolves spec.NodeName for the taint check.
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(profile,
-		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}).Build()
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
@@ -647,8 +647,8 @@ func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
 	// validated on Hetzner by switching the GPU path to direct binding;
 	// the precedence check above guarantees the pinned node matches either
 	// way.
-	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "miles" {
-		t.Errorf("GPU pod NodeSelector hostname = %q, want miles", pod.Spec.NodeSelector["kubernetes.io/hostname"])
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-2" {
+		t.Errorf("GPU pod NodeSelector hostname = %q, want worker-2", pod.Spec.NodeSelector["kubernetes.io/hostname"])
 	}
 	// Lock in the architect's "GPU pods stay on selector, not direct
 	// binding" decision: pod.Spec.NodeName must remain empty even when
@@ -665,7 +665,7 @@ func TestBuildPodDispatcher_NodeNameGPUAgreement(t *testing.T) {
 // GPU branch. The precedence guard short-circuits cleanly. This is the
 // pre-Phase-1 GPU happy path and must not regress.
 func TestBuildPodDispatcher_GPUOnlyNoMigrationNodeName(t *testing.T) {
-	guest := gpuGuest("miles", []string{"0000:01:00.0"}, -1)
+	guest := gpuGuest("worker-2", []string{"0000:01:00.0"}, -1)
 	// spec.NodeName intentionally empty.
 	guest.Status.Conditions = []metav1.Condition{
 		{Type: swiftv1alpha1.ConditionGPUAllocated, Status: metav1.ConditionTrue},
@@ -700,8 +700,8 @@ func TestBuildPodDispatcher_GPUOnlyNoMigrationNodeName(t *testing.T) {
 	if pod == nil {
 		t.Fatal("buildPod returned nil pod")
 	}
-	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "miles" {
-		t.Errorf("GPU pod NodeSelector hostname = %q, want miles", pod.Spec.NodeSelector["kubernetes.io/hostname"])
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-2" {
+		t.Errorf("GPU pod NodeSelector hostname = %q, want worker-2", pod.Spec.NodeSelector["kubernetes.io/hostname"])
 	}
 }
 

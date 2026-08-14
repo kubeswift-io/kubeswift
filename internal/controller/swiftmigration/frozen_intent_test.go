@@ -109,7 +109,7 @@ func TestEnsureFrozenDstIntent_MissingLiveCM_SkipsGracefully(t *testing.T) {
 func TestNewDstPod_RepointsRuntimeIntentVolume(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"}}
 	src := templateSrcPod("guest", "default")
 	// Source carries the runtime-intent volume pointing at the live CM.

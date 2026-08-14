@@ -6,13 +6,13 @@
 ## Cluster Info
 
 - **Cluster version:** k0s v1.34.3
-- **Nodes:** frida (control-plane), miles (worker)
+- **Nodes:** cp-1 (control-plane), worker-2 (worker)
 - **OS:** Ubuntu 24.04.4 LTS
-- **Kernel:** 6.8.0-101-generic (miles)
+- **Kernel:** 6.8.0-101-generic (worker-2)
 - **Container runtime:** containerd 1.7.30
 - **GPU hardware:** None (validation covers host topology discovery without GPUs)
 - **Image used:** `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:sha-111f3d2`
-- **Node under test:** miles
+- **Node under test:** worker-2
 
 ## Validation Checks
 
@@ -20,7 +20,7 @@
 
 | Check | Expected | Actual | Status |
 |-------|----------|--------|--------|
-| Pod scheduled on labeled node | Running, 0 restarts | Running, 0 restarts on miles | PASS |
+| Pod scheduled on labeled node | Running, 0 restarts | Running, 0 restarts on worker-2 | PASS |
 | Pod image pulled | gpu-discovery image | sha-111f3d2 pulled successfully | PASS |
 
 Note: The DaemonSet manifest uses `:latest` but that tag does not exist in ghcr.io.
@@ -29,7 +29,7 @@ be updated to use a CI-managed tag or the Helm chart's image tag override.
 
 ### 1b. SwiftGPUNode Creation
 
-SwiftGPUNode `miles` created within first discovery cycle (~60s).
+SwiftGPUNode `worker-2` created within first discovery cycle (~60s).
 
 | Field | Expected | Actual | Status |
 |-------|----------|--------|--------|
@@ -64,18 +64,18 @@ SwiftGPUNode `miles` created within first discovery cycle (~60s).
 | Check | Expected | Actual | Status |
 |-------|----------|--------|--------|
 | Pod terminates after label removal | Terminating/gone | Pod gone ("No resources found") | PASS |
-| SwiftGPUNode resource persists | Still exists | `miles` still present with Phase=Ready | PASS |
+| SwiftGPUNode resource persists | Still exists | `worker-2` still present with Phase=Ready | PASS |
 
 ## Pod Logs (excerpt)
 
 ```
-I0403 12:11:28.713366  1 main.go:40] "gpu-discovery starting" node="miles" interval="1m0s"
-I0403 12:11:28.713414  1 main.go:59] "starting discovery cycle" node="miles"
+I0403 12:11:28.713366  1 main.go:40] "gpu-discovery starting" node="worker-2" interval="1m0s"
+I0403 12:11:28.713414  1 main.go:59] "starting discovery cycle" node="worker-2"
 I0403 12:11:29.614646  1 main.go:254] "Fabric Manager discovery skipped" reason="fmpm not in PATH"
-I0403 12:11:29.861800  1 main.go:110] "discovery cycle complete" node="miles" gpuCount=0 freeGPUs=0 phase="Ready"
-I0403 12:12:28.742032  1 main.go:59] "starting discovery cycle" node="miles"
+I0403 12:11:29.861800  1 main.go:110] "discovery cycle complete" node="worker-2" gpuCount=0 freeGPUs=0 phase="Ready"
+I0403 12:12:28.742032  1 main.go:59] "starting discovery cycle" node="worker-2"
 I0403 12:12:29.448111  1 main.go:254] "Fabric Manager discovery skipped" reason="fmpm not in PATH"
-I0403 12:12:29.540906  1 main.go:110] "discovery cycle complete" node="miles" gpuCount=0 freeGPUs=0 phase="Ready"
+I0403 12:12:29.540906  1 main.go:110] "discovery cycle complete" node="worker-2" gpuCount=0 freeGPUs=0 phase="Ready"
 ```
 
 ## Issues Found

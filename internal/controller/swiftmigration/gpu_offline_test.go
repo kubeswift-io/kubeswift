@@ -72,7 +72,7 @@ func gpuMig() *migrationv1alpha1.SwiftMigration {
 		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
 		Spec: migrationv1alpha1.SwiftMigrationSpec{
 			GuestRef: migrationv1alpha1.SwiftMigrationGuestRef{Name: "g"},
-			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "boba"},
+			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "worker-1"},
 			Mode:     migrationv1alpha1.SwiftMigrationModeOffline,
 		},
 	}
@@ -100,26 +100,26 @@ func nodeAllocTo(t *testing.T, c client.Client, node, pci string) string {
 }
 
 func TestReserveTargetGPUs(t *testing.T) {
-	r, c := gpuReconciler(srcNode("miles", "default/g", "0000:aa:00.0"),
-		tgtNode("boba", "0000:bb:00.0", true), gpuProfileObj())
-	g := gpuGuestOnSrc("miles", "0000:aa:00.0")
+	r, c := gpuReconciler(srcNode("worker-2", "default/g", "0000:aa:00.0"),
+		tgtNode("worker-1", "0000:bb:00.0", true), gpuProfileObj())
+	g := gpuGuestOnSrc("worker-2", "0000:aa:00.0")
 
 	if res := r.reserveTargetGPUs(context.Background(), gpuMig(), g, &migrationv1alpha1.SwiftMigrationStatus{}); res != nil {
 		t.Fatalf("reserveTargetGPUs returned a phaseResult (failure): %+v", res)
 	}
 	// Target GPU is now reserved for the guest; source is still allocated.
-	if got := nodeAllocTo(t, c, "boba", "0000:bb:00.0"); got != "default/g" {
+	if got := nodeAllocTo(t, c, "worker-1", "0000:bb:00.0"); got != "default/g" {
 		t.Errorf("target GPU should be reserved for default/g; got %q", got)
 	}
-	if got := nodeAllocTo(t, c, "miles", "0000:aa:00.0"); got != "default/g" {
+	if got := nodeAllocTo(t, c, "worker-2", "0000:aa:00.0"); got != "default/g" {
 		t.Errorf("source GPU must stay allocated to default/g pre-cutover; got %q", got)
 	}
 }
 
 func TestReserveTargetGPUs_NotVfioReady_Fails(t *testing.T) {
-	r, _ := gpuReconciler(srcNode("miles", "default/g", "0000:aa:00.0"),
-		tgtNode("boba", "0000:bb:00.0", false), gpuProfileObj())
-	g := gpuGuestOnSrc("miles", "0000:aa:00.0")
+	r, _ := gpuReconciler(srcNode("worker-2", "default/g", "0000:aa:00.0"),
+		tgtNode("worker-1", "0000:bb:00.0", false), gpuProfileObj())
+	g := gpuGuestOnSrc("worker-2", "0000:aa:00.0")
 
 	if res := r.reserveTargetGPUs(context.Background(), gpuMig(), g, &migrationv1alpha1.SwiftMigrationStatus{}); res == nil {
 		t.Errorf("reserve on a non-vfio-ready target must fail (before stopping the source)")
@@ -127,9 +127,9 @@ func TestReserveTargetGPUs_NotVfioReady_Fails(t *testing.T) {
 }
 
 func TestCutoverGPUs_ReleasesSourceAndStampsTarget(t *testing.T) {
-	g := gpuGuestOnSrc("miles", "0000:aa:00.0")
-	r, c := gpuReconciler(srcNode("miles", "default/g", "0000:aa:00.0"),
-		tgtNode("boba", "0000:bb:00.0", true), gpuProfileObj(), g)
+	g := gpuGuestOnSrc("worker-2", "0000:aa:00.0")
+	r, c := gpuReconciler(srcNode("worker-2", "default/g", "0000:aa:00.0"),
+		tgtNode("worker-1", "0000:bb:00.0", true), gpuProfileObj(), g)
 	mig := gpuMig()
 
 	// Reserve first (as Preparing would), then cut over.
@@ -141,10 +141,10 @@ func TestCutoverGPUs_ReleasesSourceAndStampsTarget(t *testing.T) {
 	}
 
 	// Source freed, target committed.
-	if got := nodeAllocTo(t, c, "miles", "0000:aa:00.0"); got != "" {
+	if got := nodeAllocTo(t, c, "worker-2", "0000:aa:00.0"); got != "" {
 		t.Errorf("source GPU must be freed at cutover; got %q", got)
 	}
-	if got := nodeAllocTo(t, c, "boba", "0000:bb:00.0"); got != "default/g" {
+	if got := nodeAllocTo(t, c, "worker-1", "0000:bb:00.0"); got != "default/g" {
 		t.Errorf("target GPU must stay allocated to default/g; got %q", got)
 	}
 	// guest.status.GPU stamped to the target.
@@ -152,8 +152,8 @@ func TestCutoverGPUs_ReleasesSourceAndStampsTarget(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "g"}, &gg); err != nil {
 		t.Fatalf("get guest: %v", err)
 	}
-	if gg.Status.GPU == nil || gg.Status.GPU.NodeName != "boba" {
-		t.Fatalf("status.GPU.NodeName must be boba after cutover; got %+v", gg.Status.GPU)
+	if gg.Status.GPU == nil || gg.Status.GPU.NodeName != "worker-1" {
+		t.Fatalf("status.GPU.NodeName must be worker-1 after cutover; got %+v", gg.Status.GPU)
 	}
 	if len(gg.Status.GPU.Devices) != 1 || gg.Status.GPU.Devices[0] != "0000:bb:00.0" {
 		t.Errorf("status.GPU.Devices must be the target device; got %v", gg.Status.GPU.Devices)
@@ -164,13 +164,13 @@ func TestCutoverGPUs_ReleasesSourceAndStampsTarget(t *testing.T) {
 }
 
 func TestCutoverGPUs_Idempotent(t *testing.T) {
-	g := gpuGuestOnSrc("miles", "0000:aa:00.0")
-	r, c := gpuReconciler(srcNode("miles", "default/g", "0000:aa:00.0"),
-		tgtNode("boba", "0000:bb:00.0", true), gpuProfileObj(), g)
+	g := gpuGuestOnSrc("worker-2", "0000:aa:00.0")
+	r, c := gpuReconciler(srcNode("worker-2", "default/g", "0000:aa:00.0"),
+		tgtNode("worker-1", "0000:bb:00.0", true), gpuProfileObj(), g)
 	mig := gpuMig()
 	_ = r.reserveTargetGPUs(context.Background(), mig, g, &migrationv1alpha1.SwiftMigrationStatus{})
 	_ = r.cutoverGPUs(context.Background(), mig, g, &migrationv1alpha1.SwiftMigrationStatus{})
-	// Re-fetch the guest (status.GPU now boba) and cut over again — no-op.
+	// Re-fetch the guest (status.GPU now worker1) and cut over again — no-op.
 	var gg swiftv1alpha1.SwiftGuest
 	_ = c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "g"}, &gg)
 	if res := r.cutoverGPUs(context.Background(), mig, &gg, &migrationv1alpha1.SwiftMigrationStatus{}); res != nil {
@@ -179,9 +179,9 @@ func TestCutoverGPUs_Idempotent(t *testing.T) {
 }
 
 func TestReleaseTargetReservation(t *testing.T) {
-	r, c := gpuReconciler(srcNode("miles", "default/g", "0000:aa:00.0"),
-		tgtNode("boba", "0000:bb:00.0", true), gpuProfileObj())
-	g := gpuGuestOnSrc("miles", "0000:aa:00.0")
+	r, c := gpuReconciler(srcNode("worker-2", "default/g", "0000:aa:00.0"),
+		tgtNode("worker-1", "0000:bb:00.0", true), gpuProfileObj())
+	g := gpuGuestOnSrc("worker-2", "0000:aa:00.0")
 	mig := gpuMig()
 	if res := r.reserveTargetGPUs(context.Background(), mig, g, &migrationv1alpha1.SwiftMigrationStatus{}); res != nil {
 		t.Fatalf("reserve: %+v", res)
@@ -189,23 +189,23 @@ func TestReleaseTargetReservation(t *testing.T) {
 	if err := r.releaseTargetReservation(context.Background(), mig, g); err != nil {
 		t.Fatalf("releaseTargetReservation: %v", err)
 	}
-	if got := nodeAllocTo(t, c, "boba", "0000:bb:00.0"); got != "" {
+	if got := nodeAllocTo(t, c, "worker-1", "0000:bb:00.0"); got != "" {
 		t.Errorf("target reservation must be released; got %q", got)
 	}
 	// Source untouched (the guest resumes there).
-	if got := nodeAllocTo(t, c, "miles", "0000:aa:00.0"); got != "default/g" {
+	if got := nodeAllocTo(t, c, "worker-2", "0000:aa:00.0"); got != "default/g" {
 		t.Errorf("source must stay allocated after a pre-cutover release; got %q", got)
 	}
 }
 
 func TestGPUPreflight(t *testing.T) {
-	r, _ := gpuReconciler(tgtNode("boba", "0000:bb:00.0", true), gpuProfileObj())
-	if res := r.gpuPreflight(context.Background(), gpuMig(), gpuGuestOnSrc("miles", "0000:aa:00.0")); res != nil {
+	r, _ := gpuReconciler(tgtNode("worker-1", "0000:bb:00.0", true), gpuProfileObj())
+	if res := r.gpuPreflight(context.Background(), gpuMig(), gpuGuestOnSrc("worker-2", "0000:aa:00.0")); res != nil {
 		t.Errorf("pre-flight on a vfio-ready target with free GPUs should pass; got %+v", res)
 	}
 
-	r2, _ := gpuReconciler(tgtNode("boba", "0000:bb:00.0", false), gpuProfileObj())
-	if res := r2.gpuPreflight(context.Background(), gpuMig(), gpuGuestOnSrc("miles", "0000:aa:00.0")); res == nil {
+	r2, _ := gpuReconciler(tgtNode("worker-1", "0000:bb:00.0", false), gpuProfileObj())
+	if res := r2.gpuPreflight(context.Background(), gpuMig(), gpuGuestOnSrc("worker-2", "0000:aa:00.0")); res == nil {
 		t.Errorf("pre-flight on a non-vfio-ready target should fail")
 	}
 }

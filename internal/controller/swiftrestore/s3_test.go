@@ -31,7 +31,7 @@ func s3ReadySnap(name, ns, sourceGuest string) *snapshotv1alpha1.SwiftSnapshot {
 		},
 		Status: snapshotv1alpha1.SwiftSnapshotStatus{
 			Phase:    snapshotv1alpha1.SwiftSnapshotPhaseReady,
-			NodeName: "miles",
+			NodeName: "worker-2",
 			S3:       &snapshotv1alpha1.S3SnapshotStatus{Location: "s3://backups/kubeswift/team-a/snap1/"},
 		},
 	}
@@ -50,7 +50,7 @@ func s3Restore(name, ns, snapName, target, targetNode string) *snapshotv1alpha1.
 
 func TestS3Restore_Helpers(t *testing.T) {
 	snap := s3ReadySnap("snap1", "team-a", "g1")
-	restore := s3Restore("r1", "team-a", "snap1", "g1", "boba")
+	restore := s3Restore("r1", "team-a", "snap1", "g1", "worker-1")
 	if got := s3RestoreLocalDir(snap); got != "/var/lib/kubeswift/snapshots/team-a-snap1" {
 		t.Errorf("localDir = %q", got)
 	}
@@ -67,8 +67,8 @@ func TestResolveS3RestoreNode(t *testing.T) {
 
 	t.Run("targetNode wins", func(t *testing.T) {
 		r, _ := newReconciler(t)
-		node, failMsg, err := r.resolveS3RestoreNode(context.Background(), s3Restore("r", "ns", "snap1", "g1", "boba"), snap)
-		if err != nil || failMsg != "" || node != "boba" {
+		node, failMsg, err := r.resolveS3RestoreNode(context.Background(), s3Restore("r", "ns", "snap1", "g1", "worker-1"), snap)
+		if err != nil || failMsg != "" || node != "worker-1" {
 			t.Fatalf("node=%q failMsg=%q err=%v", node, failMsg, err)
 		}
 	})
@@ -76,11 +76,11 @@ func TestResolveS3RestoreNode(t *testing.T) {
 	t.Run("in-place falls back to guest node", func(t *testing.T) {
 		guest := &swiftv1alpha1.SwiftGuest{
 			ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "ns"},
-			Status:     swiftv1alpha1.SwiftGuestStatus{NodeName: "miles"},
+			Status:     swiftv1alpha1.SwiftGuestStatus{NodeName: "worker-2"},
 		}
 		r, _ := newReconciler(t, guest)
 		node, failMsg, err := r.resolveS3RestoreNode(context.Background(), s3Restore("r", "ns", "snap1", "g1", ""), snap)
-		if err != nil || failMsg != "" || node != "miles" {
+		if err != nil || failMsg != "" || node != "worker-2" {
 			t.Fatalf("node=%q failMsg=%q err=%v", node, failMsg, err)
 		}
 	})
@@ -109,10 +109,10 @@ func TestBuildDownloadJob(t *testing.T) {
 	snap.Spec.Backend.S3.ForcePathStyle = true
 	snap.Spec.Backend.S3.Insecure = true
 	snap.Spec.IncludeMemory = true
-	job := buildDownloadJob(s3Restore("r1", "team-a", "snap1", "g1", "boba"), snap, "ghcr.io/x/snapshot-s3:t", "boba")
+	job := buildDownloadJob(s3Restore("r1", "team-a", "snap1", "g1", "worker-1"), snap, "ghcr.io/x/snapshot-s3:t", "worker-1")
 	pod := job.Spec.Template.Spec
 
-	if pod.NodeName != "boba" {
+	if pod.NodeName != "worker-1" {
 		t.Errorf("download Job must pin to the resolved node; got %q", pod.NodeName)
 	}
 	if pod.RestartPolicy != corev1.RestartPolicyOnFailure {
@@ -168,7 +168,7 @@ func TestHandlePendingS3(t *testing.T) {
 		snap := s3ReadySnap("snap1", "ns", "g1")
 		r, c := newReconciler(t, snap)
 		r.SnapshotS3Image = "img"
-		restore := s3Restore("r1", "ns", "snap1", "clone-a", "boba")
+		restore := s3Restore("r1", "ns", "snap1", "clone-a", "worker-1")
 		status := restore.Status.DeepCopy()
 		advanced, _, err := r.handlePendingS3(context.Background(), restore, snap, status)
 		if err != nil || !advanced {
@@ -189,7 +189,7 @@ func TestHandlePendingS3(t *testing.T) {
 		r, _ := newReconciler(t, snap)
 		r.SnapshotS3Image = "img"
 		status := &snapshotv1alpha1.SwiftRestoreStatus{}
-		advanced, _, err := r.handlePendingS3(context.Background(), s3Restore("r1", "ns", "snap1", "g1", "boba"), snap, status)
+		advanced, _, err := r.handlePendingS3(context.Background(), s3Restore("r1", "ns", "snap1", "g1", "worker-1"), snap, status)
 		if err != nil || !advanced || status.Phase != snapshotv1alpha1.SwiftRestorePhaseFailed {
 			t.Fatalf("advanced=%v phase=%s err=%v", advanced, status.Phase, err)
 		}
@@ -217,7 +217,7 @@ func downloadJobWith(restore *snapshotv1alpha1.SwiftRestore, cond batchv1.JobCon
 
 func TestHandleDownloading(t *testing.T) {
 	snap := s3ReadySnap("snap1", "ns", "g1")
-	restore := s3Restore("r1", "ns", "snap1", "clone-a", "boba")
+	restore := s3Restore("r1", "ns", "snap1", "clone-a", "worker-1")
 
 	t.Run("failed -> errMsg", func(t *testing.T) {
 		r, _ := newReconciler(t, snap, downloadJobWith(restore, batchv1.JobFailed))

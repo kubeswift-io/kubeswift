@@ -43,8 +43,8 @@ func newStateReader(t *testing.T, objs ...client.Object) client.Reader {
 // every phase.
 func TestStateCollector_GuestGauges(t *testing.T) {
 	c := NewStateCollector(newStateReader(t,
-		guest("a", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "miles", "cloud-hypervisor"),
-		guest("a", "g2", swiftv1alpha1.SwiftGuestPhaseRunning, "boba", "qemu"),
+		guest("a", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "worker-2", "cloud-hypervisor"),
+		guest("a", "g2", swiftv1alpha1.SwiftGuestPhaseRunning, "worker-1", "qemu"),
 		guest("a", "g3", swiftv1alpha1.SwiftGuestPhaseFailed, "", ""),
 		guest("b", "g4", swiftv1alpha1.SwiftGuestPhasePending, "", ""),
 	))
@@ -68,8 +68,8 @@ kubeswift_guests{namespace="b",phase="Scheduling"} 0
 kubeswift_guests{namespace="b",phase="Stopped"} 0
 # HELP kubeswift_guests_by_node Scheduled SwiftGuests by node and hypervisor
 # TYPE kubeswift_guests_by_node gauge
-kubeswift_guests_by_node{hypervisor="cloud-hypervisor",node="miles"} 1
-kubeswift_guests_by_node{hypervisor="qemu",node="boba"} 1
+kubeswift_guests_by_node{hypervisor="cloud-hypervisor",node="worker-2"} 1
+kubeswift_guests_by_node{hypervisor="qemu",node="worker-1"} 1
 `
 	if err := testutil.CollectAndCompare(c, strings.NewReader(expected),
 		"kubeswift_guests", "kubeswift_guests_by_node", "kubeswift_guest_running_total"); err != nil {
@@ -86,8 +86,8 @@ kubeswift_guests_by_node{hypervisor="qemu",node="boba"} 1
 // cluster reports identical values with NO transitions ever observed.
 func TestStateCollector_SurvivesRestart(t *testing.T) {
 	reader := newStateReader(t,
-		guest("prod", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "miles", "cloud-hypervisor"),
-		guest("prod", "g2", swiftv1alpha1.SwiftGuestPhaseRunning, "boba", "cloud-hypervisor"),
+		guest("prod", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "worker-2", "cloud-hypervisor"),
+		guest("prod", "g2", swiftv1alpha1.SwiftGuestPhaseRunning, "worker-1", "cloud-hypervisor"),
 	)
 
 	first := NewStateCollector(reader)
@@ -130,7 +130,7 @@ func TestStateCollector_PoolsImagesMigrationsGPU(t *testing.T) {
 			Status:     migrationv1alpha1.SwiftMigrationStatus{Phase: migrationv1alpha1.SwiftMigrationPhaseCompleted, Mode: migrationv1alpha1.SwiftMigrationModeLive},
 		},
 		&gpuv1alpha1.SwiftGPUNode{
-			ObjectMeta: metav1.ObjectMeta{Name: "boba"},
+			ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
 			Status: gpuv1alpha1.SwiftGPUNodeStatus{
 				GPUCount: 1, FreeGPUs: 1, GPUModel: "GTX 1080", VfioReady: true,
 				LastDiscovery: &lastDiscovery,
@@ -145,14 +145,14 @@ func TestStateCollector_PoolsImagesMigrationsGPU(t *testing.T) {
 	expected := `
 # HELP kubeswift_gpu_node_gpus GPUs per SwiftGPUNode by state (total|free)
 # TYPE kubeswift_gpu_node_gpus gauge
-kubeswift_gpu_node_gpus{node="boba",state="free"} 1
-kubeswift_gpu_node_gpus{node="boba",state="total"} 1
+kubeswift_gpu_node_gpus{node="worker-1",state="free"} 1
+kubeswift_gpu_node_gpus{node="worker-1",state="total"} 1
 # HELP kubeswift_gpu_node_info SwiftGPUNode inventory info (value is always 1)
 # TYPE kubeswift_gpu_node_info gauge
-kubeswift_gpu_node_info{model="GTX 1080",node="boba",vfio_ready="true"} 1
+kubeswift_gpu_node_info{model="GTX 1080",node="worker-1",vfio_ready="true"} 1
 # HELP kubeswift_gpu_node_last_discovery_timestamp_seconds Unix time of the last successful GPU discovery per node
 # TYPE kubeswift_gpu_node_last_discovery_timestamp_seconds gauge
-kubeswift_gpu_node_last_discovery_timestamp_seconds{node="boba"} 1.7e+09
+kubeswift_gpu_node_last_discovery_timestamp_seconds{node="worker-1"} 1.7e+09
 # HELP kubeswift_migrations_active In-flight (non-terminal) SwiftMigrations by mode
 # TYPE kubeswift_migrations_active gauge
 kubeswift_migrations_active{mode="live"} 1
@@ -190,7 +190,7 @@ kubeswift_images{namespace="a",phase="Validating"} 0
 // naming/label conventions.
 func TestStateCollector_Lint(t *testing.T) {
 	c := NewStateCollector(newStateReader(t,
-		guest("a", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "miles", "cloud-hypervisor"),
+		guest("a", "g1", swiftv1alpha1.SwiftGuestPhaseRunning, "worker-2", "cloud-hypervisor"),
 	))
 	problems, err := testutil.CollectAndLint(c)
 	if err != nil {

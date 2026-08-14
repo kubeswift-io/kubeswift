@@ -7,7 +7,7 @@
 # hand-trigger the send action via annotations).
 #
 # Destination: hand-crafted from `kubectl get pod <src> -o yaml`,
-# with metadata reset + nodeName=boba + KUBESWIFT_MIGRATION_ROLE=
+# with metadata reset + nodeName=worker-1 + KUBESWIFT_MIGRATION_ROLE=
 # receiver env added. This mirrors what `newDstPod` does at runtime
 # (Phase 3a dst_pod.go::newDstPod, LBA-1) — we replicate the spec
 # by hand for PR 1's controller-less manual demo, then PR 2 wires
@@ -16,8 +16,8 @@ set -euo pipefail
 
 NS="${NS:-phase-3b-pr1-demo}"
 GUEST_NAME="${GUEST_NAME:-pr1-guest}"
-SRC_NODE="${SRC_NODE:-miles}"
-DST_NODE="${DST_NODE:-boba}"
+SRC_NODE="${SRC_NODE:-worker-2}"
+DST_NODE="${DST_NODE:-worker-1}"
 DST_POD_NAME="${GUEST_NAME}-dst"
 
 step() { printf '\n[%s] %s\n' "$1" "$2"; }

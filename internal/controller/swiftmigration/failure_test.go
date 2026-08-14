@@ -24,7 +24,7 @@ import (
 func TestCancellation_PreCutover_RestoresRunPolicy(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped // set by Preparing
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
@@ -79,7 +79,7 @@ func TestCancellation_PostCutover_ClearsAnnotationOnly(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
-	guest.Spec.NodeName = "miles" // post-cutover
+	guest.Spec.NodeName = "worker-2" // post-cutover
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
 	}
@@ -105,8 +105,8 @@ func TestCancellation_PostCutover_ClearsAnnotationOnly(t *testing.T) {
 		t.Fatalf("Get guest: %v", err)
 	}
 	// nodeName patch must NOT be rolled back.
-	if got.Spec.NodeName != "miles" {
-		t.Errorf("post-cutover cancellation should not roll back nodeName: got %q, want miles", got.Spec.NodeName)
+	if got.Spec.NodeName != "worker-2" {
+		t.Errorf("post-cutover cancellation should not roll back nodeName: got %q, want worker-2", got.Spec.NodeName)
 	}
 	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
 		t.Errorf("post-cutover cancellation should leave runPolicy=Running: got %q", got.Spec.RunPolicy)
@@ -123,7 +123,7 @@ func TestCancellation_PostCutover_ClearsAnnotationOnly(t *testing.T) {
 func TestCancellation_NoMatchingAnnotation_NoOp(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
 	// Annotation names a DIFFERENT migration.
 	guest.Annotations = map[string]string{
@@ -234,7 +234,7 @@ func TestEnsureFinalizer_Idempotent(t *testing.T) {
 func TestOnTerminalPhase_FailedPreCutover_RestoresRunPolicy(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
@@ -249,8 +249,8 @@ func TestOnTerminalPhase_FailedPreCutover_RestoresRunPolicy(t *testing.T) {
 
 	status := &migrationv1alpha1.SwiftMigrationStatus{
 		Phase:           migrationv1alpha1.SwiftMigrationPhaseFailed,
-		SourceNode:      "boba",
-		DestinationNode: "miles",
+		SourceNode:      "worker-1",
+		DestinationNode: "worker-2",
 	}
 	// guest.Spec.NodeName is "" → pre-cutover.
 	if err := r.onTerminalPhase(context.Background(), mig, status); err != nil {
@@ -272,7 +272,7 @@ func TestOnTerminalPhase_FailedPreCutover_RestoresRunPolicy(t *testing.T) {
 func TestOnTerminalPhase_FailedPreCutoverLive_DeletesDstPod_W17(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "miles"
+	guest.Status.NodeName = "worker-2"
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
 	}
@@ -293,8 +293,8 @@ func TestOnTerminalPhase_FailedPreCutoverLive_DeletesDstPod_W17(t *testing.T) {
 	status := &migrationv1alpha1.SwiftMigrationStatus{
 		Phase:           migrationv1alpha1.SwiftMigrationPhaseFailed,
 		Mode:            migrationv1alpha1.SwiftMigrationModeLive,
-		SourceNode:      "miles",
-		DestinationNode: "boba",
+		SourceNode:      "worker-2",
+		DestinationNode: "worker-1",
 		DestinationPodRef: &migrationv1alpha1.SwiftMigrationPodRef{
 			Name: "guest-mig-abcdef",
 		},
@@ -346,7 +346,7 @@ func TestOnTerminalPhase_FailedPostCutoverLive_PreservesDstPod_W17(t *testing.T)
 	status := &migrationv1alpha1.SwiftMigrationStatus{
 		Phase:      migrationv1alpha1.SwiftMigrationPhaseFailed,
 		Mode:       migrationv1alpha1.SwiftMigrationModeLive,
-		SourceNode: "miles",
+		SourceNode: "worker-2",
 		Conditions: mig.Status.Conditions,
 		DestinationPodRef: &migrationv1alpha1.SwiftMigrationPodRef{
 			Name: "guest-mig-abcdef",

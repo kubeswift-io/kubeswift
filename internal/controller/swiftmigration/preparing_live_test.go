@@ -28,7 +28,7 @@ func preparingLiveFixture(t *testing.T, srcUID types.UID) (*migrationv1alpha1.Sw
 	t.Helper()
 	mig := newMigrationWithUID("m1", "default", "abcdef1234567890abcdef1234567890")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
 	mig.Status.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Status.SourcePodUID = srcUID
@@ -71,8 +71,8 @@ func TestPreparingLive_FirstReconcile_CreatesDstPodAndStampsTimestamp(t *testing
 	if err := c.Get(context.Background(), client.ObjectKey{Name: "guest-mig-abcdef", Namespace: "default"}, &dst); err != nil {
 		t.Fatalf("dst pod not created: %v", err)
 	}
-	if dst.Spec.NodeName != "miles" {
-		t.Errorf("dst NodeName: want miles, got %q", dst.Spec.NodeName)
+	if dst.Spec.NodeName != "worker-2" {
+		t.Errorf("dst NodeName: want worker-2, got %q", dst.Spec.NodeName)
 	}
 	if dst.Annotations[AnnotationMigrationPhase2Ack] != AnnotationMigrationPhase2AckValue {
 		t.Errorf("ack annotation missing on created dst pod")
@@ -235,7 +235,7 @@ func TestPreparingLive_ExistingPodWrongShape_Fails(t *testing.T) {
 			Namespace: "default",
 			Labels:    map[string]string{"unrelated": "yes"},
 		},
-		Spec: corev1.PodSpec{NodeName: "miles"},
+		Spec: corev1.PodSpec{NodeName: "worker-2"},
 	}
 
 	c := fake.NewClientBuilder().
@@ -364,7 +364,7 @@ func preExistingDstPod(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alph
 			}},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      "miles",
+			NodeName:      "worker-2",
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{
 				Name:  LauncherContainerName,

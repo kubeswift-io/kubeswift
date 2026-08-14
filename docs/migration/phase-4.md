@@ -113,34 +113,34 @@ guest's eviction is blocked by the PDB with no auto-evacuation.
 
 ```bash
 # 1. Drain a worker; SwiftGuest VMs evacuate automatically.
-kubectl drain miles --ignore-daemonsets --delete-emptydir-data
+kubectl drain worker-2 --ignore-daemonsets --delete-emptydir-data
 #   evicting pod default/web-1
 #   error when evicting pod "web-1" (will retry after 5s): admission webhook
 #     "veviction.kubeswift.io" denied the request: SwiftGuest "web-1" on node
-#     "miles" is being migrated off before eviction; retry
-#   ... (the guest live-migrates to boba) ...
+#     "worker-2" is being migrated off before eviction; retry
+#   ... (the guest live-migrates to worker-1) ...
 #   pod/web-1 evicted
-#   node/miles drained
+#   node/worker-2 drained
 
 # 2. Watch the auto-created migration.
 kubectl get swiftmigration -w        # <guest>-drain-<hash>, reason=node-drain
 
 # 3. Confirm the guest landed on the other node.
-kubectl get swiftguest web-1 -o jsonpath='{.status.nodeName}{"\n"}'   # boba
+kubectl get swiftguest web-1 -o jsonpath='{.status.nodeName}{"\n"}'   # worker-1
 
 # 4. Done; uncordon.
-kubectl uncordon miles
+kubectl uncordon worker-2
 ```
 
-## Empirical results (dev cluster, miles/boba, CH v51.1, image sha-04c054d)
+## Empirical results (dev cluster, worker-2/worker-1, CH v51.1, image sha-04c054d)
 
 PR 5 cluster walkthrough (2026-06-02), kernel-boot guest, default node-local
 networking, live-migration mTLS enabled:
 
 | Scenario | Result |
 |---|---|
-| **Drain → auto-migrate** (`drainPolicy: Migrate`) | `kubectl drain miles` → eviction denied 429 (~6 retries at 5s) → drain controller created `phase4-migrate-drain-96888133` (`reason=node-drain`, resolved **mode=live**, target=boba, `allowIPChange=true`) → guest live-migrated to boba, marker cleared → **`node/miles drained`** (exit 0). **observedDowntime 2.30s**, observedTransferDuration 38.48s. |
-| **Block** (`drainPolicy: Block`) | eviction denied `... drainPolicy=Block ... handle this guest manually`; **no marker, no migration**; guest stayed Running on miles; drain stalls (operator `--force`s or moves manually). |
+| **Drain → auto-migrate** (`drainPolicy: Migrate`) | `kubectl drain worker-2` → eviction denied 429 (~6 retries at 5s) → drain controller created `phase4-migrate-drain-96888133` (`reason=node-drain`, resolved **mode=live**, target=worker-1, `allowIPChange=true`) → guest live-migrated to worker-1, marker cleared → **`node/worker-2 drained`** (exit 0). **observedDowntime 2.30s**, observedTransferDuration 38.48s. |
+| **Block** (`drainPolicy: Block`) | eviction denied `... drainPolicy=Block ... handle this guest manually`; **no marker, no migration**; guest stayed Running on worker-2; drain stalls (operator `--force`s or moves manually). |
 | **Webhook down** (controller scaled to 0) | webhook skipped (`failurePolicy: Ignore`) → the `maxUnavailable:0` PDB denied the eviction (`Cannot evict pod as it would violate the pod's disruption budget`) → drain stalls **safely**, VM protected. |
 | **Per-guest PDB** | every guest got a `maxUnavailable:0` PDB (ALLOWED DISRUPTIONS 0), owned by the SwiftGuest, selecting its launcher pod; GC'd with the guest. |
 

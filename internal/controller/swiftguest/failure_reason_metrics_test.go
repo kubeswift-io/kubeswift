@@ -29,11 +29,11 @@ func TestRecordGuestMetrics_FailureReasonIsBoundedToken(t *testing.T) {
 		Conditions: []metav1.Condition{
 			// A healthy True condition whose Reason must NOT be picked.
 			{Type: "PodScheduled", Status: metav1.ConditionTrue, Reason: "PodScheduled",
-				Message: "pod scheduled to node miles"},
+				Message: "pod scheduled to node worker-2"},
 			// The failing condition: Reason is the bounded token, Message the
 			// free text that previously leaked into the label.
 			{Type: "GuestRunning", Status: metav1.ConditionFalse, Reason: "PodFailed",
-				Message: "launcher pod g-mig-abc123 failed on node miles: init container gpu-init exited 1"},
+				Message: "launcher pod g-mig-abc123 failed on node worker-2: init container gpu-init exited 1"},
 		},
 	}
 

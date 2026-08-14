@@ -24,10 +24,10 @@ func resumingLiveFixture(t *testing.T) (*migrationv1alpha1.SwiftMigration, *swif
 	t.Helper()
 	mig := newMigrationWithUID("m1", "default", "abcdef1234567890abcdef1234567890")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
 	mig.Status.Mode = migrationv1alpha1.SwiftMigrationModeLive
-	mig.Status.DestinationNode = "miles"
+	mig.Status.DestinationNode = "worker-2"
 	startedAt := metav1.NewTime(time.Now().Add(-30 * time.Second))
 	mig.Status.StartedAt = &startedAt
 
@@ -43,7 +43,7 @@ func resumingLiveFixture(t *testing.T) (*migrationv1alpha1.SwiftMigration, *swif
 			Name:      dstName,
 			Namespace: "default",
 		},
-		Spec: corev1.PodSpec{NodeName: "miles"},
+		Spec: corev1.PodSpec{NodeName: "worker-2"},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 		},

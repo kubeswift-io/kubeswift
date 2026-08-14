@@ -377,7 +377,7 @@ func TestCutover_Step2_ChainMigration_DeletesPriorSrcPodNotDstPod_W26(t *testing
 		migrationStatusComplete, sendActionID(mig), "ok")
 	thisDst := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: thisDstName, Namespace: "default", UID: "uid-THIS-DST"},
-		Spec:       corev1.PodSpec{NodeName: "miles"},
+		Spec:       corev1.PodSpec{NodeName: "worker-2"},
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.244.1.43"},
 	}
 

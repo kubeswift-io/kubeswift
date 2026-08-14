@@ -11,11 +11,11 @@ import (
 )
 
 func TestClusterService_ListNodes(t *testing.T) {
-	boba := fakeDyn(uNode("worker-1", true, true), uNode("worker-2", true, false)) // worker-2 cordoned
+	edge1 := fakeDyn(uNode("worker-1", true, true), uNode("worker-2", true, false)) // worker2 cordoned
 	svc := NewClusterService(nil, "kubeswift-system", nil,
-		&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+		&fakeProvider{clients: map[string]dynamic.Interface{"edge-1": edge1}}, NewInsecureAuthenticator())
 
-	resp, err := svc.ListNodes(context.Background(), connect.NewRequest(&kubeswiftv1.ListNodesRequest{Cluster: "boba"}))
+	resp, err := svc.ListNodes(context.Background(), connect.NewRequest(&kubeswiftv1.ListNodesRequest{Cluster: "edge-1"}))
 	if err != nil {
 		t.Fatalf("ListNodes: %v", err)
 	}

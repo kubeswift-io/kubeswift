@@ -58,7 +58,7 @@ func TestRenderMigrationDescribe_CompletedLive(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "default"},
 		Spec: migrationv1alpha1.SwiftMigrationSpec{
 			GuestRef: migrationv1alpha1.SwiftMigrationGuestRef{Name: "g"},
-			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "boba"},
+			Target:   migrationv1alpha1.SwiftMigrationTarget{NodeName: "worker-1"},
 			Mode:     migrationv1alpha1.SwiftMigrationModeLive,
 		},
 		Status: migrationv1alpha1.SwiftMigrationStatus{

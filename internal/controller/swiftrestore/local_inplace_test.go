@@ -88,7 +88,7 @@ func TestLocal_Pending_InPlaceRestore_StampsExistingGuestAndAdvances(t *testing.
 		t.Errorf("restore mode = %q, want %s",
 			refreshed.Annotations[swiftguestctrl.AnnotationRestoreMode], swiftguestctrl.RestoreModeInPlace)
 	}
-	if refreshed.Annotations[swiftguestctrl.AnnotationRestoreNodeName] != "boba" {
+	if refreshed.Annotations[swiftguestctrl.AnnotationRestoreNodeName] != "worker-1" {
 		t.Errorf("node name annotation = %q", refreshed.Annotations[swiftguestctrl.AnnotationRestoreNodeName])
 	}
 	// In-place path must NOT set MAC rewrites or cmdline marker.

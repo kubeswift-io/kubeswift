@@ -55,7 +55,7 @@ func newLauncherPod(guestName, namespace string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: guestName, Namespace: namespace},
 		Spec: corev1.PodSpec{
-			NodeName: "boba",
+			NodeName: "worker-1",
 			Containers: []corev1.Container{
 				{Name: "launcher", Image: "ghcr.io/kubeswift-io/kubeswift/swiftletd:test"},
 			},
@@ -72,7 +72,7 @@ func newLauncherPod(guestName, namespace string) *corev1.Pod {
 func TestPreparing_FirstEntry_ClaimsGuestAndDeletesPod(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	pod := newLauncherPod("guest", "default")
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
@@ -135,7 +135,7 @@ func TestPreparing_FirstEntry_ClaimsGuestAndDeletesPod(t *testing.T) {
 func TestPreparing_AfterLiveMigration_DeletesRenamedSourcePod(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	// Prior live migration renamed the canonical pod.
 	const renamedPodName = "guest-mig-511016"
 	guest.Status.PodRef = &corev1.ObjectReference{Name: renamedPodName, Namespace: "default"}
@@ -198,7 +198,7 @@ func TestPreparing_AfterLiveMigration_DeletesRenamedSourcePod(t *testing.T) {
 func TestPreparing_AnnotationConflict_RejectedClearly(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -243,7 +243,7 @@ func TestPreparing_AnnotationConflict_RejectedClearly(t *testing.T) {
 func TestPreparing_NilAnnotationsMap(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Annotations = nil // nil map, not empty map
 	pod := newLauncherPod("guest", "default")
 	mig := newMigration("m", "default")
@@ -278,7 +278,7 @@ func TestPreparing_NilAnnotationsMap(t *testing.T) {
 func TestPreparing_PodHasDeletionTimestamp_DoesNotReDelete(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -328,7 +328,7 @@ func TestPreparing_PodHasDeletionTimestamp_DoesNotReDelete(t *testing.T) {
 func TestPreparing_ReentryWithMatchingAnnotation_NoOpClaim(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -367,14 +367,14 @@ func TestPreparing_ReentryWithMatchingAnnotation_NoOpClaim(t *testing.T) {
 func TestPreparing_PodGone_VAStillPresent_DoesNotAdvance(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
 	guest.Annotations[migrationv1alpha1.AnnotationMigrationInProgress] = "m"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
 	pvc := newPVCBoundTo("swiftguest-root-guest", "default", "pv-1")
-	va := newVolumeAttachment("va-stale", "pv-1", "boba") // still attached on source node
+	va := newVolumeAttachment("va-stale", "pv-1", "worker-1") // still attached on source node
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
 
@@ -409,7 +409,7 @@ func TestPreparing_PodGone_VAStillPresent_DoesNotAdvance(t *testing.T) {
 func TestPreparing_PodGoneAndVAGone_Advances(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -473,7 +473,7 @@ func TestPreparing_GuestDeletedMidFlight(t *testing.T) {
 func TestPreparing_PVCNotYetBound_AdvancesGracefully(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -511,7 +511,7 @@ func TestPreparing_PVCNotYetBound_AdvancesGracefully(t *testing.T) {
 func TestPreparing_VAForOtherPVNotMatched(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	if guest.Annotations == nil {
 		guest.Annotations = map[string]string{}
 	}
@@ -519,7 +519,7 @@ func TestPreparing_VAForOtherPVNotMatched(t *testing.T) {
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
 	pvc := newPVCBoundTo("swiftguest-root-guest", "default", "pv-1")
 	// VA for a totally unrelated PV.
-	otherVA := newVolumeAttachment("va-other", "pv-other", "miles")
+	otherVA := newVolumeAttachment("va-other", "pv-other", "worker-2")
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
 

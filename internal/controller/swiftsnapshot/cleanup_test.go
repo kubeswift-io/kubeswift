@@ -152,7 +152,7 @@ func TestHandleDeletion_CreatesCleanupPod(t *testing.T) {
 	now := metav1.Now()
 	snap.DeletionTimestamp = &now
 	snap.Finalizers = []string{HostPathFinalizer}
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	r, c := newReconciler(t, snap)
 
 	done, err := r.handleDeletion(context.Background(), snap)
@@ -168,8 +168,8 @@ func TestHandleDeletion_CreatesCleanupPod(t *testing.T) {
 		client.ObjectKey{Name: cleanupPodName(snap), Namespace: "default"}, &pod); err != nil {
 		t.Fatalf("cleanup pod not created: %v", err)
 	}
-	if pod.Spec.NodeName != "boba" {
-		t.Errorf("cleanup pod node = %q, want boba", pod.Spec.NodeName)
+	if pod.Spec.NodeName != "worker-1" {
+		t.Errorf("cleanup pod node = %q, want worker-1", pod.Spec.NodeName)
 	}
 	args := strings.Join(pod.Spec.Containers[0].Args, " ")
 	if !strings.Contains(args, "default-snap1") {
@@ -188,7 +188,7 @@ func TestHandleLocalDeletion_Retain(t *testing.T) {
 	now := metav1.Now()
 	snap.DeletionTimestamp = &now
 	snap.Finalizers = []string{HostPathFinalizer}
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	snap.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
 	r, c := newReconciler(t, snap)
 
@@ -213,7 +213,7 @@ func TestHandleDeletion_PodSucceeded_RemovesFinalizer(t *testing.T) {
 	now := metav1.Now()
 	snap.DeletionTimestamp = &now
 	snap.Finalizers = []string{HostPathFinalizer}
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cleanupPodName(snap),
@@ -246,7 +246,7 @@ func TestHandleDeletion_PodFailed_RetainsFinalizer(t *testing.T) {
 	now := metav1.Now()
 	snap.DeletionTimestamp = &now
 	snap.Finalizers = []string{HostPathFinalizer}
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cleanupPodName(snap),
@@ -278,7 +278,7 @@ func TestHandleDeletion_MalformedHostPath_DropsFinalizer(t *testing.T) {
 	now := metav1.Now()
 	snap.DeletionTimestamp = &now
 	snap.Finalizers = []string{HostPathFinalizer}
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	snap.Spec.Backend.Local.HostPath = "/tmp/something-weird"
 	r, c := newReconciler(t, snap)
 

@@ -54,13 +54,13 @@ dra-gpu-vm-gpu-vkt4l   allocated,reserved   1m
 
 $ kubectl get swiftguest dra-gpu-vm
 NAME         PHASE     NODE   IP              AGE
-dra-gpu-vm   Running   boba   192.168.99.13   2m
+dra-gpu-vm   Running   worker-1   192.168.99.13   2m
 
 $ kubectl get swiftguest dra-gpu-vm -o jsonpath='{.status.gpu}'
-{"devices":["0000:01:00.0"],"hypervisor":"cloud-hypervisor","nodeName":"boba","partitionId":-1}
+{"devices":["0000:01:00.0"],"hypervisor":"cloud-hypervisor","nodeName":"worker-1","partitionId":-1}
 ```
 
-- Condition `GPUAllocated=True` (`allocated 1 GPU(s) on node boba`); while the
+- Condition `GPUAllocated=True` (`allocated 1 GPU(s) on node worker-1`); while the
   scheduler is still deciding, the guest shows `GPUClaimPending` instead.
 - Inside the guest: `lspci | grep -i nvidia` shows the GPU.
 

@@ -159,7 +159,7 @@ reboot via the seed profile's bootcmd. See
 ## Cluster walkthrough
 
 Validated on the dev cluster (k0s 1.34, CH v51.1, in-cluster MinIO) with a 2Gi
-rocky9 memory snapshot. Source guest on **boba**, restore target **miles**
+rocky9 memory snapshot. Source guest on **worker-1**, restore target **worker-2**
 (cross-node). The walkthrough caught **two real bugs** that unit tests
 structurally cannot (the recurring "W5 pattern" — fake-client tests verify
 control flow, not on-cluster kubelet/filesystem/network behavior); both are
@@ -197,16 +197,16 @@ was driven entirely by the controllers (no manual Jobs):
 
 | Step | Result |
 |---|---|
-| Sentinel written into source (boba) | `S3-RT-FULL-1780557632`, md5 `2b945b3e57ba25efd687bb370953eff0` |
+| Sentinel written into source (worker-1) | `S3-RT-FULL-1780557632`, md5 `2b945b3e57ba25efd687bb370953eff0` |
 | SwiftSnapshot (s3) | `Pending → Capturing → Uploading → Ready` (~20s); `status.s3.location = s3://kubeswift-snapshots/demo/default/s3-clean/` |
 | MinIO objects | `config.json` + `state.json` + 2GiB `memory-ranges` + `manifest.json`, per-artifact sha256 |
-| SwiftRestore (`targetNode: miles`, clone) | `Pending → Downloading → Restoring → Resuming → Ready` |
-| Download → miles (cross-node) | all 3 artifacts **sha256-verified** against the manifest |
-| Clone guest | **Running on miles** (cross-node from boba), `GuestRunning=True` |
+| SwiftRestore (`targetNode: worker-2`, clone) | `Pending → Downloading → Restoring → Resuming → Ready` |
+| Download → worker-2 (cross-node) | all 3 artifacts **sha256-verified** against the manifest |
+| Clone guest | **Running on worker-2** (cross-node from worker-1), `GuestRunning=True` |
 | **Sentinel on the clone** | `S3-RT-FULL-1780557632`, md5 `2b945b3e57ba25efd687bb370953eff0` — **byte-identical** ✅ |
 
 Guest state survived the full Tier C round-trip **across nodes via object
-storage**: capture on boba → upload to MinIO → cross-node download on miles →
+storage**: capture on worker-1 → upload to MinIO → cross-node download on worker-2 →
 `CH --restore` → resume, with the in-guest sentinel preserved exactly.
 
 ### Tracked follow-up

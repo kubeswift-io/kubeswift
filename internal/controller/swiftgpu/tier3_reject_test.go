@@ -27,7 +27,7 @@ func gpuAllocatedReason(guest *swiftv1alpha1.SwiftGuest) string {
 // silent failure. LOAD-BEARING: if a future change wires NVSwitches and lifts this
 // rejection, it must be hardware-validated first.
 func TestReconcile_HGXFull_RejectedNotSilentlyBooted(t *testing.T) {
-	node := testGPUNode("boba", eightGPUs(), &gpuv1alpha1.FabricManagerStatus{
+	node := testGPUNode("worker-1", eightGPUs(), &gpuv1alpha1.FabricManagerStatus{
 		Installed: true, Running: true, Version: "550.90.07",
 		Partitions: []gpuv1alpha1.FMPartitionStatus{{ID: 0, GPUIndices: []int{0, 1, 2, 3, 4, 5, 6, 7}, Active: true}},
 	})
@@ -53,7 +53,7 @@ func TestReconcile_HGXFull_RejectedNotSilentlyBooted(t *testing.T) {
 		t.Errorf("GPUAllocated reason = %q, want UnsupportedTier", reason)
 	}
 	// No GPUs may have been allocated on the node (the tier check precedes allocation).
-	n, _ := getGPUNode(r, "boba")
+	n, _ := getGPUNode(r, "worker-1")
 	if n.Status.FreeGPUs != 8 {
 		t.Errorf("Tier 3 rejection must not allocate GPUs: node free = %d, want 8", n.Status.FreeGPUs)
 	}
@@ -66,7 +66,7 @@ func TestReconcile_HGXFull_RejectedNotSilentlyBooted(t *testing.T) {
 // Tier 2 (hgx-shared) is NOT rejected by the tier gate — it uses the host Fabric
 // Manager and passes no NVSwitches into the guest, so it stays allocatable.
 func TestReconcile_HGXShared_NotRejectedByTierGate(t *testing.T) {
-	node := testGPUNode("boba", eightGPUs(), &gpuv1alpha1.FabricManagerStatus{
+	node := testGPUNode("worker-1", eightGPUs(), &gpuv1alpha1.FabricManagerStatus{
 		Installed: true, Running: true, Version: "550.90.07",
 		Partitions: []gpuv1alpha1.FMPartitionStatus{{ID: 0, GPUIndices: []int{0, 1, 2, 3, 4, 5, 6, 7}, Active: true}},
 	})

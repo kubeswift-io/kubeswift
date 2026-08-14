@@ -11,9 +11,9 @@
 |----------|-------|
 | Date | 2026-04-03 |
 | Kubernetes | v1.34.3+k0s |
-| Nodes | frida (control-plane+worker), miles (worker) |
+| Nodes | cp-1 (control-plane+worker), worker-2 (worker) |
 | Node OS | Ubuntu 24.04.4 LTS |
-| Node kernels | 6.8.0-106-generic (frida), 6.8.0-101-generic (miles) |
+| Node kernels | 6.8.0-106-generic (cp-1), 6.8.0-101-generic (worker-2) |
 | Container runtime | containerd 1.7.30 |
 | Controller image | `ghcr.io/kubeswift-io/kubeswift/controller-manager:sha-3c5c476` |
 | Swiftletd image | `ghcr.io/kubeswift-io/kubeswift/swiftletd:sha-3c5c476` |

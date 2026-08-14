@@ -35,7 +35,7 @@ The demo:
 
 ## Prerequisites
 
-- Two-node cluster with both nodes labelled `kubeswift.io/launcher-node=true` (the smoke-test cluster — miles + boba — is the validated configuration).
+- Two-node cluster with both nodes labelled `kubeswift.io/launcher-node=true` (the smoke-test cluster — worker-2 + worker-1 — is the validated configuration).
 - The same swiftletd image deployed to all nodes. Phase 2 mandates exact-image-tag match across source and destination CH (Decision 3 — `spec.allowVersionSkew` lands in Phase 3).
 - A running SwiftGuest on the SOURCE node with a sentinel marker the operator can verify post-migration. Example:
   ```
@@ -70,7 +70,7 @@ SWIFTGUEST=my-guest NAMESPACE=default ./source.sh
 
 # 2. Destination prep: render the dst pod YAML, apply it, wait for Ready.
 #    Provide the target node hostname (must be different from the src pod's node).
-TARGET_NODE=boba ./destination.sh
+TARGET_NODE=worker-1 ./destination.sh
 
 # 3. End-to-end orchestration: write start-receive on dst, observe listening,
 #    write start-send on src, observe terminal statuses on both.

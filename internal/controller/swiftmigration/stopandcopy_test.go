@@ -22,7 +22,7 @@ import (
 func TestStopAndCopy_FirstEntry_PatchesAtomically(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped // set by Preparing
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
@@ -58,8 +58,8 @@ func TestStopAndCopy_FirstEntry_PatchesAtomically(t *testing.T) {
 	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
 		t.Errorf("runPolicy = %q, want Running (atomicity)", got.Spec.RunPolicy)
 	}
-	if got.Spec.NodeName != "miles" {
-		t.Errorf("nodeName = %q, want miles (atomicity)", got.Spec.NodeName)
+	if got.Spec.NodeName != "worker-2" {
+		t.Errorf("nodeName = %q, want worker-2 (atomicity)", got.Spec.NodeName)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestStopAndCopy_FirstEntry_PatchesAtomically(t *testing.T) {
 func TestStopAndCopy_MissingAnnotation_Fails(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	// No annotation — Preparing should have set it but somehow didn't.
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
@@ -97,16 +97,16 @@ func TestStopAndCopy_MissingAnnotation_Fails(t *testing.T) {
 func TestStopAndCopy_PodOnDestination_Advances(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning // already patched
-	guest.Spec.NodeName = "miles"                         // already patched
+	guest.Spec.NodeName = "worker-2"                      // already patched
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "miles",
+			NodeName: "worker-2",
 			Containers: []corev1.Container{
 				{Name: "launcher", Image: "ghcr.io/kubeswift-io/kubeswift/swiftletd:test"},
 			},
@@ -148,16 +148,16 @@ func TestStopAndCopy_PodOnDestination_Advances(t *testing.T) {
 func TestStopAndCopy_PodOnWrongNode_Fails(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
-	guest.Spec.NodeName = "miles"
+	guest.Spec.NodeName = "worker-2"
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
 	}
 	wrongPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "boba", // landed on the wrong node!
+			NodeName: "worker-1", // landed on the wrong node!
 			Containers: []corev1.Container{
 				{Name: "launcher", Image: "ghcr.io/kubeswift-io/kubeswift/swiftletd:test"},
 			},
@@ -188,15 +188,15 @@ func TestStopAndCopy_PodOnWrongNode_Fails(t *testing.T) {
 func TestStopAndCopy_GPUPodUnscheduled_NodeSelectorTarget_Requeues(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
-	guest.Spec.NodeName = "miles"
+	guest.Spec.NodeName = "worker-2"
 	guest.Annotations = map[string]string{migrationv1alpha1.AnnotationMigrationInProgress: "m"}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
 		Spec: corev1.PodSpec{
 			NodeName:     "", // not yet scheduled (GPU pod pins via nodeSelector)
-			NodeSelector: map[string]string{"kubernetes.io/hostname": "miles"},
+			NodeSelector: map[string]string{"kubernetes.io/hostname": "worker-2"},
 			Containers:   []corev1.Container{{Name: "launcher", Image: "x"}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodPending},
@@ -226,15 +226,15 @@ func TestStopAndCopy_GPUPodUnscheduled_NodeSelectorTarget_Requeues(t *testing.T)
 func TestStopAndCopy_GPUPodNodeSelectorWrongNode_Fails(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
-	guest.Spec.NodeName = "miles"
+	guest.Spec.NodeName = "worker-2"
 	guest.Annotations = map[string]string{migrationv1alpha1.AnnotationMigrationInProgress: "m"}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
 		Spec: corev1.PodSpec{
 			NodeName:     "",
-			NodeSelector: map[string]string{"kubernetes.io/hostname": "boba"}, // pinned to the WRONG node
+			NodeSelector: map[string]string{"kubernetes.io/hostname": "worker-1"}, // pinned to the WRONG node
 			Containers:   []corev1.Container{{Name: "launcher", Image: "x"}},
 		},
 	}
@@ -282,9 +282,9 @@ func TestStopAndCopy_GuestDeleted_Fails(t *testing.T) {
 func TestStopAndCopy_Idempotent_PatchAlreadyApplied(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "boba"
+	guest.Status.NodeName = "worker-1"
 	guest.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning // already patched
-	guest.Spec.NodeName = "miles"                         // already patched
+	guest.Spec.NodeName = "worker-2"                      // already patched
 	guest.Annotations = map[string]string{
 		migrationv1alpha1.AnnotationMigrationInProgress: "m",
 	}
@@ -312,7 +312,7 @@ func TestStopAndCopy_Idempotent_PatchAlreadyApplied(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKey{Name: "guest", Namespace: "default"}, &got); err != nil {
 		t.Fatalf("Get guest: %v", err)
 	}
-	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning || got.Spec.NodeName != "miles" {
+	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning || got.Spec.NodeName != "worker-2" {
 		t.Errorf("idempotent re-entry corrupted spec: runPolicy=%q nodeName=%q", got.Spec.RunPolicy, got.Spec.NodeName)
 	}
 }

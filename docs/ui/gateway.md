@@ -68,7 +68,7 @@ and a `Cluster` object. The simplest credential is a kubeconfig:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: boba-kubeconfig
+  name: edge-1-kubeconfig
   namespace: kubeswift-system
 type: Opaque
 stringData:
@@ -78,14 +78,14 @@ stringData:
 apiVersion: fleet.kubeswift.io/v1alpha1
 kind: Cluster
 metadata:
-  name: boba
+  name: edge-1
   namespace: kubeswift-system
 spec:
-  server: https://boba.example.com:6443       # optional if the kubeconfig has it
+  server: https://edge-1.example.com:6443       # optional if the kubeconfig has it
   credentialSecretRef:
-    name: boba-kubeconfig
+    name: edge-1-kubeconfig
   prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (see below)
-  displayName: Boba (lab)
+  displayName: Edge 1 (lab)
 ```
 
 Alternatively the Secret may carry a `token` (+ optional `ca.crt`) instead of a
@@ -113,7 +113,7 @@ The gateway picks the member up immediately, probes it, and writes status:
 ```bash
 kubectl -n kubeswift-system get clusters
 # NAME   SERVER                          READY   K8S       GUESTS   AGE
-# boba   https://boba.example.com:6443   True    v1.34.3   7        1m
+# edge-1   https://edge-1.example.com:6443   True    v1.34.3   7        1m
 ```
 
 ## Authentication (decision D1)

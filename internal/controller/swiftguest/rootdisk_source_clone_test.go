@@ -27,7 +27,7 @@ func localCloneSnap() *snapshotv1alpha1.SwiftSnapshot {
 		},
 		Status: snapshotv1alpha1.SwiftSnapshotStatus{
 			Phase:    snapshotv1alpha1.SwiftSnapshotPhaseReady,
-			NodeName: "boba",
+			NodeName: "worker-1",
 		},
 	}
 }
