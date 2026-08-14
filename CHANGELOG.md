@@ -6,6 +6,31 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **swiftletd: kube-rs 0.92 → 4.2, k8s-openapi 0.22 → 0.28** (#499, #501). Four
+  majors of kube-rs, no source changes required: swiftletd only uses the stable
+  core of the client — `Api::namespaced`, `patch`, `patch_status`, a
+  `DynamicObject` for the one `GuestRunning` status patch, and
+  `Config::incluster_dns` — and none of those changed signature.
+
+  The `runtime` and `derive` features were enabled but never used by a single
+  line; swiftletd is a launcher, not a controller. Dropping them removes
+  `kube-runtime`, `kube-derive`, `schemars`, `serde_yaml`, `json-patch`,
+  `parking_lot`, `rand`, `backoff` and their subtrees — **237 → 211 unique
+  crates** (51 removed, 25 added).
+
+  `k8s-openapi` moves to the `v1_34` feature, matching the fleet, instead of
+  trailing it by six minors on `v1_28`. Only `core/v1 Pod` is used.
+
+  Two behaviour notes, neither of which affects the shipped path: kube 4.x adds
+  an OS-native trust-store fallback via `rustls-platform-verifier`, which engages
+  only when no CA is configured — `incluster_dns` always supplies the
+  service-account CA, so the shipped path is unchanged. And `Client::try_from`
+  now requires a Tokio reactor; `create_client` is async, so it always has one.
+  A unit test pins both, plus the rustls-0.23 crypto-provider trap that would
+  otherwise be a runtime panic on first status write.
+
 ### Security
 
 - **Per-launcher-pod scoped RBAC** (#515), behind `scopedLauncherRBAC.enabled`
