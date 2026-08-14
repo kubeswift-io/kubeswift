@@ -13,7 +13,7 @@ import (
 // drainPolicy. The in-flight duplicate guard means a second reconcile must
 // not re-count.
 func TestReconcile_CreatesMigration_CountsDrainMetric(t *testing.T) {
-	r, c := newR(guest("mg", drain("miles"), statusNode("miles")), node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("mg", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1"), smallClass())
 
 	before := testutil.ToFloat64(metrics.DrainMigrationsTotal.WithLabelValues("Migrate", "created"))
 	reconcileGuest(t, r, "mg")

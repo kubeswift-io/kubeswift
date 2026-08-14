@@ -69,7 +69,7 @@ func newGuestForValidating(name, ns, classRef string) *swiftv1alpha1.SwiftGuest 
 			},
 		},
 		Status: swiftv1alpha1.SwiftGuestStatus{
-			NodeName: "boba",
+			NodeName: "worker-1",
 		},
 	}
 }
@@ -78,7 +78,7 @@ func TestValidating_HappyPath(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -107,8 +107,8 @@ func TestValidating_HappyPath(t *testing.T) {
 	if status.Mode != migrationv1alpha1.SwiftMigrationModeOffline {
 		t.Errorf("mode = %q, want offline", status.Mode)
 	}
-	if status.SourceNode != "boba" || status.DestinationNode != "miles" {
-		t.Errorf("source/destination = %s→%s, want boba→miles", status.SourceNode, status.DestinationNode)
+	if status.SourceNode != "worker-1" || status.DestinationNode != "worker-2" {
+		t.Errorf("source/destination = %s→%s, want worker-1→worker-2", status.SourceNode, status.DestinationNode)
 	}
 	// Compatible condition must be True.
 	found := false
@@ -155,7 +155,7 @@ func TestValidating_TargetNodeMissing(t *testing.T) {
 	status := mig.Status.DeepCopy()
 	result := r.handleValidating(context.Background(), mig, status)
 	errMsg := result.FailureMsg
-	if !strings.Contains(errMsg, "no longer exists") || !strings.Contains(errMsg, "miles") {
+	if !strings.Contains(errMsg, "no longer exists") || !strings.Contains(errMsg, "worker-2") {
 		t.Errorf("errMsg = %q, want mention of missing target node", errMsg)
 	}
 }
@@ -164,7 +164,7 @@ func TestValidating_InsufficientCPU(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "big-class")
 	class := newGuestClass("big-class", 64, 2048) // 64 CPU
-	node := newSpaciousNode("miles", 8, 65536)    // 8 allocatable
+	node := newSpaciousNode("worker-2", 8, 65536) // 8 allocatable
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -188,7 +188,7 @@ func TestValidating_InsufficientMemory(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "big-class")
 	// 64Gi memory request — node has 4Gi.
 	class := newGuestClass("big-class", 1, 64*1024)
-	node := newSpaciousNode("miles", 8, 4096)
+	node := newSpaciousNode("worker-2", 8, 4096)
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -207,12 +207,12 @@ func TestValidating_ExistingPodsCountedInCapacity(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 4, 4096)
-	node := newSpaciousNode("miles", 6, 8192) // headroom only just enough for 1 guest
-	// Existing pod consumes 4 CPU on miles, leaving 2 CPU headroom < 4 needed.
+	node := newSpaciousNode("worker-2", 6, 8192) // headroom only just enough for 1 guest
+	// Existing pod consumes 4 CPU on worker2, leaving 2 CPU headroom < 4 needed.
 	hogger := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "hogger", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "miles",
+			NodeName: "worker-2",
 			Containers: []corev1.Container{{
 				Name: "c",
 				Resources: corev1.ResourceRequirements{
@@ -243,12 +243,12 @@ func TestValidating_FailedPodsExcludedFromCapacity(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 4, 4096)
-	// A Failed pod on miles should NOT count toward used resources.
+	node := newSpaciousNode("worker-2", 4, 4096)
+	// A Failed pod on worker2 should NOT count toward used resources.
 	failed := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "failed", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "miles",
+			NodeName: "worker-2",
 			Containers: []corev1.Container{{
 				Name: "c",
 				Resources: corev1.ResourceRequirements{
@@ -282,7 +282,7 @@ func TestValidating_AllowIPChangeSetsCondition(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "class-default")
 	guest.Spec.Interfaces = nil // default networking
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Spec.AllowIPChange = true
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
@@ -310,7 +310,7 @@ func TestValidating_MigrationDisabledMidFlight(t *testing.T) {
 	disabled := false
 	guest.Spec.Migration = &swiftv1alpha1.MigrationSpec{Enabled: &disabled}
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -330,7 +330,7 @@ func TestValidating_NodeMissingAllocatable(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
 	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "miles"},
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-2"},
 		Status: corev1.NodeStatus{
 			// Allocatable intentionally empty.
 			Conditions: []corev1.NodeCondition{
@@ -356,7 +356,7 @@ func TestValidating_GuestClassNotFound(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "ghost-class")
 	// SwiftGuestClass intentionally absent.
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -375,7 +375,7 @@ func TestValidating_InsufficientMemory_NeedHaveSubstrings(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "big-class")
 	class := newGuestClass("big-class", 1, 64*1024) // 64 GiB memory
-	node := newSpaciousNode("miles", 8, 4096)       // 4 GiB allocatable
+	node := newSpaciousNode("worker-2", 8, 4096)    // 4 GiB allocatable
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -398,11 +398,11 @@ func TestValidating_InitContainerRequestsCounted(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 4, 4096)
-	node := newSpaciousNode("miles", 6, 8192)
+	node := newSpaciousNode("worker-2", 6, 8192)
 	initHog := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "init-hog", Namespace: "default"},
 		Spec: corev1.PodSpec{
-			NodeName: "miles",
+			NodeName: "worker-2",
 			InitContainers: []corev1.Container{{
 				Name: "init",
 				Resources: corev1.ResourceRequirements{
@@ -437,7 +437,7 @@ func TestValidating_Idempotent(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
@@ -471,7 +471,7 @@ func TestValidating_NodeCordonedMidFlight(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	node.Spec.Unschedulable = true
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
@@ -492,7 +492,7 @@ func TestValidating_NodeNotReadyMidFlight(t *testing.T) {
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
 	notReady := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "miles"},
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-2"},
 		Status: corev1.NodeStatus{
 			Allocatable: corev1.ResourceList{
 				corev1.ResourceCPU:    *resource.NewQuantity(8, resource.DecimalSI),
@@ -548,16 +548,16 @@ func TestHandleValidating_AutoMode_FullPath_EntersLivePath(t *testing.T) {
 	guest := newGuestForValidating("dbg-guest", "default", "live-class")
 	guest.Spec.Migration = &swiftv1alpha1.MigrationSpec{Enabled: &enabled, PreferredMode: "auto"}
 	guest.Spec.Interfaces = nil // default node-local networking
-	guest.Status.NodeName = "miles"
+	guest.Status.NodeName = "worker-2"
 	class := newGuestClass("live-class", 2, 4096)
-	node := newSpaciousNode("boba", 8, 65536)
+	node := newSpaciousNode("worker-1", 8, 65536)
 	// canonicalPodNameForGuest returns guest.Name (no status.PodRef),
 	// so the src pod must be named "dbg-guest".
 	srcPod := newSourcePod("dbg-guest", "default", "src-uid-1")
 
 	mig := newMigration("m", "default")
 	mig.Spec.GuestRef.Name = "dbg-guest"
-	mig.Spec.Target.NodeName = "boba"
+	mig.Spec.Target.NodeName = "worker-1"
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeAuto
 	mig.Spec.AllowIPChange = true
 	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9} // satisfies MinLiveTimeout

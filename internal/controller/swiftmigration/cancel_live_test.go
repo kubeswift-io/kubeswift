@@ -25,7 +25,7 @@ func cancelFixture(t *testing.T, dstAge time.Duration) (*migrationv1alpha1.Swift
 	mig := newMigrationWithUID("m1", "default", "abcdef1234567890abcdef1234567890")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Spec.CancelRequested = true
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhasePreparing
 	mig.Status.Mode = migrationv1alpha1.SwiftMigrationModeLive
 
@@ -38,7 +38,7 @@ func cancelFixture(t *testing.T, dstAge time.Duration) (*migrationv1alpha1.Swift
 			Namespace:         "default",
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-dstAge)),
 		},
-		Spec:   corev1.PodSpec{NodeName: "miles"},
+		Spec:   corev1.PodSpec{NodeName: "worker-2"},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	return mig, guest, dst

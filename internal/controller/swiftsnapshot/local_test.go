@@ -55,7 +55,7 @@ func makeLauncherPod(ns, name, node string) *corev1.Pod {
 func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 
 	r, c := newReconciler(t, snap, guest, pod)
 	reconcile(t, r, "snap1", "default")
@@ -64,8 +64,8 @@ func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing
 	if got.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing {
 		t.Fatalf("phase = %s, want Capturing", got.Status.Phase)
 	}
-	if got.Status.NodeName != "boba" {
-		t.Errorf("status.nodeName = %q, want boba", got.Status.NodeName)
+	if got.Status.NodeName != "worker-1" {
+		t.Errorf("status.nodeName = %q, want worker-1", got.Status.NodeName)
 	}
 	if got.Status.SnapshotDirVersion != SnapshotDirVersionV1 {
 		t.Errorf("status.snapshotDirVersion = %q, want %q", got.Status.SnapshotDirVersion, SnapshotDirVersionV1)
@@ -127,7 +127,7 @@ func TestLocal_Pending_PodNotYetPresent_StaysPending(t *testing.T) {
 func TestLocal_Pending_PodNotRunning_StaysPending(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Status.Phase = corev1.PodPending
 
 	r, c := newReconciler(t, snap, guest, pod)
@@ -143,7 +143,7 @@ func TestLocal_Capturing_StatusIDMismatch_Requeues(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	// Annotations carry a stale status-id from a prior run.
 	pod.Annotations = map[string]string{
 		annoStatusID: "snap1-OLD",
@@ -162,9 +162,9 @@ func TestLocal_Capturing_StatusIDMismatch_Requeues(t *testing.T) {
 func TestLocal_Capturing_StatusReady_FinalizesWithPauseWindow(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
-	snap.Status.NodeName = "boba"
+	snap.Status.NodeName = "worker-1"
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Annotations = map[string]string{
 		annoStatusID:      "snap1-deadbeef",
 		annoStatus:        "ready",
@@ -194,7 +194,7 @@ func TestLocal_Capturing_StatusFailed_TransitionsToFailed(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Annotations = map[string]string{
 		annoStatusID:     "snap1-deadbeef",
 		annoStatus:       "failed",
@@ -217,7 +217,7 @@ func TestLocal_Capturing_StatusRejected_TransitionsToFailed(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Annotations = map[string]string{
 		annoStatusID:     "snap1-deadbeef",
 		annoStatus:       "rejected",
@@ -240,7 +240,7 @@ func TestLocal_Capturing_PodPhaseFailed_Surfaces_Failed(t *testing.T) {
 	snap := makeLocalSnap("snap1", "default", "g1")
 	snap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Status.Phase = corev1.PodFailed
 
 	r, c := newReconciler(t, snap, guest, pod)
@@ -263,7 +263,7 @@ func TestLocal_Capturing_DeadlineExceeded_TransitionsToFailed(t *testing.T) {
 		Time: metav1.Now().Add(-(time.Duration(DefaultCaptureDeadlineSeconds) + 60) * time.Second),
 	}
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Annotations = map[string]string{
 		annoStatusID: "snap1-deadbeef",
 		annoStatus:   "running",
@@ -292,7 +292,7 @@ func TestLocal_Capturing_AnnotationOverride_ExtendsDeadline(t *testing.T) {
 		Time: metav1.Now().Add(-(time.Duration(DefaultCaptureDeadlineSeconds) + 60) * time.Second),
 	}
 	guest := makeGuest("default", "g1")
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 	pod.Annotations = map[string]string{
 		annoStatusID: "snap1-deadbeef",
 		annoStatus:   "running",
@@ -312,7 +312,7 @@ func TestLocal_PodWatcher_MapsCapturingSnapshotsOnly(t *testing.T) {
 	// the pod's namespace and guest-name. Pending or terminal phases
 	// are filtered out so we don't waste reconcile budget on snapshots
 	// that don't observe Pod state.
-	pod := makeLauncherPod("default", "g1", "boba")
+	pod := makeLauncherPod("default", "g1", "worker-1")
 
 	cap := makeLocalSnap("cap-snap", "default", "g1")
 	cap.Status.Phase = snapshotv1alpha1.SwiftSnapshotPhaseCapturing

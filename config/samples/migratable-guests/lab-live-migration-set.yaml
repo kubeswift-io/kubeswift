@@ -4,7 +4,7 @@
 #   - disk-boot guests use the live-migratable class (RWX + Block storage)
 #   - kernel-boot has no PVC, so it's live-migratable on default storage
 #
-# Spread across the two worker nodes (frida is tainted control-plane).
+# Spread across the two worker nodes (cp-1 is tainted control-plane).
 # Migrate one with:  swiftctl migrate <name> --to <worker> --allow-ip-change
 # (default node-local networking changes the IP cross-node).
 ---

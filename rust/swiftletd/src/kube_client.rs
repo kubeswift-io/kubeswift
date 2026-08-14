@@ -5,7 +5,7 @@ use kube::Client;
 
 /// Creates a kube Client. Tries Config::incluster_dns first (https://kubernetes.default.svc),
 /// then Client::try_default as fallback. Some clusters (e.g. external API server at
-/// frida.labk8s.io:6443) have KUBERNETES_SERVICE_HOST set but the cluster IP unreachable
+/// k8s-api.example.com:6443) have KUBERNETES_SERVICE_HOST set but the cluster IP unreachable
 /// from pods; kubernetes.default.svc DNS often resolves and routes correctly.
 pub async fn create_client() -> Result<Client, kube::Error> {
     // Prefer incluster_dns: uses kubernetes.default.svc, more reliable when cluster IP is unreachable

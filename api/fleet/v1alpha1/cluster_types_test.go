@@ -32,12 +32,12 @@ func TestClusterConditionConstants(t *testing.T) {
 func TestClusterDeepCopy(t *testing.T) {
 	count := int32(3)
 	orig := &Cluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "edge-1", Namespace: "kubeswift-system"},
 		Spec: ClusterSpec{
 			Server:              "https://10.0.0.1:6443",
-			CredentialSecretRef: &corev1.LocalObjectReference{Name: "boba-kubeconfig"},
-			PrometheusEndpoint:  "http://prometheus.boba:9090",
-			DisplayName:         "Boba (lab)",
+			CredentialSecretRef: &corev1.LocalObjectReference{Name: "edge-1-kubeconfig"},
+			PrometheusEndpoint:  "http://prometheus.edge-1:9090",
+			DisplayName:         "Edge 1 (lab)",
 		},
 		Status: ClusterStatus{
 			KubernetesVersion: "v1.34.3",

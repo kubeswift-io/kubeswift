@@ -10,7 +10,7 @@ A live migration's pre-copy progress is surfaced on the SwiftMigration:
 ```bash
 kubectl get swiftmigration
 # NAME        GUEST  FROM   TO    MODE  PHASE        PROGRESS  DOWNTIME  TRANSFER  AGE
-# web-1-mig   web-1  miles  boba  live  StopAndCopy  52        <none>    <none>    14s
+# web-1-mig   web-1  worker-2  worker-1  live  StopAndCopy  52        <none>    <none>    14s
 ```
 
 `status.transferProgress` (the **Progress** column) is an integer percentage,

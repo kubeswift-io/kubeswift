@@ -17,14 +17,14 @@ import (
 // ReleaseFromNode for EVERY SwiftGPUNode on every finalizer reconcile).
 func TestReleaseFromNode_CountsOnlyChangedReleases(t *testing.T) {
 	g := gpuGuest("metrics-g")
-	c := newClient(gpuNodeWithDevices("boba", true, dev(0, "0000:01:00.0", 0)), g)
+	c := newClient(gpuNodeWithDevices("worker-1", true, dev(0, "0000:01:00.0", 0)), g)
 
-	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "boba"); err != nil {
+	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "worker-1"); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
 
 	before := testutil.ToFloat64(metrics.GPUReleasesTotal)
-	if err := ReleaseFromNode(context.Background(), c, g, "boba"); err != nil {
+	if err := ReleaseFromNode(context.Background(), c, g, "worker-1"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	if got := testutil.ToFloat64(metrics.GPUReleasesTotal); got != before+1 {
@@ -32,7 +32,7 @@ func TestReleaseFromNode_CountsOnlyChangedReleases(t *testing.T) {
 	}
 
 	// Idempotent re-release: nothing left to free, counter must not move.
-	if err := ReleaseFromNode(context.Background(), c, g, "boba"); err != nil {
+	if err := ReleaseFromNode(context.Background(), c, g, "worker-1"); err != nil {
 		t.Fatalf("no-op release: %v", err)
 	}
 	if got := testutil.ToFloat64(metrics.GPUReleasesTotal); got != before+1 {

@@ -28,7 +28,7 @@ func readyNode(name string) *corev1.Node {
 }
 
 func TestMigratePreflight_PrimaryOnNAD_NoBlockers(t *testing.T) {
-	migrateTargetNode = "miles"
+	migrateTargetNode = "worker-2"
 	migrateAllowIPChange = false
 	defer func() { migrateTargetNode = ""; migrateAllowIPChange = false }()
 
@@ -40,14 +40,14 @@ func TestMigratePreflight_PrimaryOnNAD_NoBlockers(t *testing.T) {
 				{Name: "app", Primary: true, NetworkRef: &swiftv1alpha1.NetworkReference{Name: "ovn-l2"}},
 			},
 		},
-		Status: swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning, NodeName: "boba"},
+		Status: swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning, NodeName: "worker-1"},
 	}
 	class := &swiftv1alpha1.SwiftGuestClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "cls"},
 		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("4Gi")},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(guest, class, readyNode("miles"), readyNode("boba")).Build()
+		WithObjects(guest, class, readyNode("worker-2"), readyNode("worker-1")).Build()
 
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
@@ -65,7 +65,7 @@ func TestMigratePreflight_PrimaryOnNAD_NoBlockers(t *testing.T) {
 }
 
 func TestMigratePreflight_LiveWithSRIOV_IsBlocker(t *testing.T) {
-	migrateTargetNode = "miles"
+	migrateTargetNode = "worker-2"
 	defer func() { migrateTargetNode = "" }()
 
 	guest := &swiftv1alpha1.SwiftGuest{
@@ -74,14 +74,14 @@ func TestMigratePreflight_LiveWithSRIOV_IsBlocker(t *testing.T) {
 			GuestClassRef: corev1.LocalObjectReference{Name: "cls"},
 			Interfaces:    []swiftv1alpha1.GuestInterface{{Name: "rdma", Type: swiftv1alpha1.InterfaceTypeSRIOV}},
 		},
-		Status: swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning, NodeName: "boba"},
+		Status: swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning, NodeName: "worker-1"},
 	}
 	class := &swiftv1alpha1.SwiftGuestClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "cls"},
 		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("4Gi")},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(guest, class, readyNode("miles"), readyNode("boba")).Build()
+		WithObjects(guest, class, readyNode("worker-2"), readyNode("worker-1")).Build()
 
 	cmd := &cobra.Command{}
 	var buf bytes.Buffer
@@ -96,7 +96,7 @@ func TestMigratePreflight_LiveWithSRIOV_IsBlocker(t *testing.T) {
 }
 
 func TestMigratePreflight_GuestNotFound(t *testing.T) {
-	migrateTargetNode = "miles"
+	migrateTargetNode = "worker-2"
 	defer func() { migrateTargetNode = "" }()
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
 	cmd := &cobra.Command{}

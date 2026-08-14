@@ -20,7 +20,7 @@ spec:
     name: default
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   runPolicy: Running
-  nodeName: miles          # start on miles so `kubectl drain miles` moves it
+  nodeName: worker-2          # start on worker-2 so `kubectl drain worker-2` moves it
   migration:
     enabled: true
     drainPolicy: Migrate    # Migrate | LiveMigrate | Block

@@ -19,7 +19,7 @@ func minimalGuest() *swiftv1alpha1.SwiftGuest {
 			Annotations: map[string]string{
 				AnnotationActiveRestore:       "r1",
 				AnnotationRestoreSnapshotPath: "/var/lib/kubeswift/snapshots/default-snap1",
-				AnnotationRestoreNodeName:     "boba",
+				AnnotationRestoreNodeName:     "worker-1",
 			},
 		},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
@@ -210,7 +210,7 @@ func TestBuildRestorePod_InPlaceFastPath_NoStagerInitContainer(t *testing.T) {
 	rg := minimalResolved()
 	params := RestoreParams{
 		SnapshotPath: "/var/lib/kubeswift/snapshots/default-snap1",
-		NodeName:     "boba",
+		NodeName:     "worker-1",
 		Mode:         RestoreModeInPlace,
 	}
 
@@ -219,8 +219,8 @@ func TestBuildRestorePod_InPlaceFastPath_NoStagerInitContainer(t *testing.T) {
 	if pod.Name != "g1" {
 		t.Errorf("pod.Name = %q, want g1", pod.Name)
 	}
-	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "boba" {
-		t.Errorf("nodeSelector hostname = %q, want boba", pod.Spec.NodeSelector["kubernetes.io/hostname"])
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-1" {
+		t.Errorf("nodeSelector hostname = %q, want worker-1", pod.Spec.NodeSelector["kubernetes.io/hostname"])
 	}
 	if findInit(pod, SnapshotStagerInitContainerName) != nil {
 		t.Errorf("in-place must NOT include a snapshot-stager init container")
@@ -257,7 +257,7 @@ func TestBuildRestorePod_CloneAddsStagerAndStagingVolume(t *testing.T) {
 	rg := minimalResolved()
 	params := RestoreParams{
 		SnapshotPath:        "/var/lib/kubeswift/snapshots/default-snap1",
-		NodeName:            "boba",
+		NodeName:            "worker-1",
 		Mode:                RestoreModeClone,
 		MACRewrites:         "52:54:00:aa:bb:01",
 		AppendCmdlineMarker: true,
@@ -461,7 +461,7 @@ func TestBuildRestorePod_AttachesDataDisks(t *testing.T) {
 	rg.DataDisks = []resolved.ResolvedDataDisk{
 		{Name: "scratch", PVCName: "g1-data-scratch", Block: true, HostPath: "/dev/kubeswift-data-scratch", Format: "raw", Ready: true},
 	}
-	params := RestoreParams{SnapshotPath: "/snap", NodeName: "boba", Mode: RestoreModeInPlace}
+	params := RestoreParams{SnapshotPath: "/snap", NodeName: "worker-1", Mode: RestoreModeInPlace}
 
 	pod := BuildRestorePod(guest, rg, "", "g1-runtime-intent", nil, params)
 

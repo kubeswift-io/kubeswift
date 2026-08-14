@@ -73,7 +73,7 @@ func uSecret(ns, name string) *unstructured.Unstructured {
 }
 
 func TestResourceService_ListResourceKinds(t *testing.T) {
-	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}, NewInsecureAuthenticator())
+	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn()}}, NewInsecureAuthenticator())
 	resp, err := svc.ListResourceKinds(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourceKindsRequest{}))
 	if err != nil {
 		t.Fatal(err)
@@ -108,10 +108,10 @@ func TestResourceService_ListResourceKinds(t *testing.T) {
 // TestResourceService_SecretRedaction is the load-bearing E4 test: Secret values
 // (base64 or decoded) must never reach the response — only key names + type.
 func TestResourceService_SecretRedaction(t *testing.T) {
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(uSecret("default", "db-creds"))}}
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn(uSecret("default", "db-creds"))}}
 	svc := NewResourceService(prov, NewInsecureAuthenticator())
 
-	resp, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "boba", Kind: "secrets"}))
+	resp, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "edge-1", Kind: "secrets"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +137,10 @@ func TestResourceService_SecretRedaction(t *testing.T) {
 }
 
 func TestResourceService_NodeProjection(t *testing.T) {
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(mkNode("miles", true))}}
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn(mkNode("edge-2", true))}}
 	svc := NewResourceService(prov, NewInsecureAuthenticator())
 
-	resp, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "boba", Kind: "nodes"}))
+	resp, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "edge-1", Kind: "nodes"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestResourceService_NodeProjection(t *testing.T) {
 		t.Fatalf("want 1 node, got %d", len(resp.Msg.Resources))
 	}
 	r := resp.Msg.Resources[0]
-	if r.Ref.Cluster != "boba" || r.Ref.Name != "miles" {
+	if r.Ref.Cluster != "edge-1" || r.Ref.Name != "edge-2" {
 		t.Errorf("ref = %+v", r.Ref)
 	}
 	for k, want := range map[string]string{"status": "Ready", "roles": "control-plane", "version": "v1.34.3", "internalIP": "10.0.0.1"} {
@@ -159,10 +159,10 @@ func TestResourceService_NodeProjection(t *testing.T) {
 }
 
 func TestResourceService_UnknownKindAndCluster(t *testing.T) {
-	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}, NewInsecureAuthenticator())
+	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn()}}, NewInsecureAuthenticator())
 
 	// Unknown kind -> hard InvalidArgument (a client bug, not a cluster problem).
-	_, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "boba", Kind: "frobnicators"}))
+	_, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "edge-1", Kind: "frobnicators"}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("unknown kind: want InvalidArgument, got %v", err)
 	}
@@ -184,10 +184,10 @@ func TestResourceService_UnknownKindAndCluster(t *testing.T) {
 // GetResource on a Secret must also redact values (E4) — it returns the FULL
 // object, so without the redaction it would leak what ListResources hides.
 func TestResourceService_GetResource_RedactsSecret(t *testing.T) {
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(uSecret("default", "db-creds"))}}
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn(uSecret("default", "db-creds"))}}
 	svc := NewResourceService(prov, NewInsecureAuthenticator())
 	resp, err := svc.GetResource(context.Background(), connect.NewRequest(&kubeswiftv1.GetResourceRequest{
-		Cluster: "boba", Kind: "secrets", Namespace: "default", Name: "db-creds",
+		Cluster: "edge-1", Kind: "secrets", Namespace: "default", Name: "db-creds",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -203,36 +203,36 @@ func TestResourceService_GetResource_RedactsSecret(t *testing.T) {
 }
 
 func TestResourceService_DeleteResource(t *testing.T) {
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn(mkNode("miles", true))}}
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn(mkNode("edge-2", true))}}
 	svc := NewResourceService(prov, NewInsecureAuthenticator())
 
 	// Missing name -> InvalidArgument.
-	_, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "boba", Kind: "nodes"}))
+	_, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "edge-1", Kind: "nodes"}))
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("missing name: want InvalidArgument, got %v", err)
 	}
 	// Delete then confirm gone.
-	if _, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "boba", Kind: "nodes", Name: "miles"})); err != nil {
+	if _, err := svc.DeleteResource(context.Background(), connect.NewRequest(&kubeswiftv1.DeleteResourceRequest{Cluster: "edge-1", Kind: "nodes", Name: "edge-2"})); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	list, _ := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "boba", Kind: "nodes"}))
+	list, _ := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "edge-1", Kind: "nodes"}))
 	if len(list.Msg.Resources) != 0 {
 		t.Errorf("node should be deleted, got %d", len(list.Msg.Resources))
 	}
 }
 
 func TestResourceService_ApplyResource_Validation(t *testing.T) {
-	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}, NewInsecureAuthenticator())
+	svc := NewResourceService(&fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn()}}, NewInsecureAuthenticator())
 	cases := []struct {
 		name string
 		req  *kubeswiftv1.ApplyResourceRequest
 	}{
 		{"missing cluster", &kubeswiftv1.ApplyResourceRequest{Kind: "nodes", Yaml: "apiVersion: v1\nkind: Node\nmetadata:\n  name: x"}},
-		{"unknown kind", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "frobnicators", Yaml: "x"}},
-		{"empty yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "   "}},
-		{"non-object yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "- a\n- b"}},
-		{"no identity", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: "metadata: {}"}},
-		{"namespaced needs ns", &kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "secrets", Yaml: "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s"}},
+		{"unknown kind", &kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "frobnicators", Yaml: "x"}},
+		{"empty yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "nodes", Yaml: "   "}},
+		{"non-object yaml", &kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "nodes", Yaml: "- a\n- b"}},
+		{"no identity", &kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "nodes", Yaml: "metadata: {}"}},
+		{"namespaced needs ns", &kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "secrets", Yaml: "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s"}},
 	}
 	for _, tc := range cases {
 		_, err := svc.ApplyResource(context.Background(), connect.NewRequest(tc.req))
@@ -244,10 +244,10 @@ func TestResourceService_ApplyResource_Validation(t *testing.T) {
 
 // ApplyResource server-side-applies a (cluster-scoped) object as the user.
 func TestResourceService_ApplyResource_Creates(t *testing.T) {
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": fakeExplorerDyn()}}
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn()}}
 	svc := NewResourceService(prov, NewInsecureAuthenticator())
 	y := "apiVersion: v1\nkind: Node\nmetadata:\n  name: newnode\n  resourceVersion: \"999\"\n"
-	resp, err := svc.ApplyResource(context.Background(), connect.NewRequest(&kubeswiftv1.ApplyResourceRequest{Cluster: "boba", Kind: "nodes", Yaml: y}))
+	resp, err := svc.ApplyResource(context.Background(), connect.NewRequest(&kubeswiftv1.ApplyResourceRequest{Cluster: "edge-1", Kind: "nodes", Yaml: y}))
 	if err != nil {
 		t.Skipf("fake dynamic client SSA Apply unsupported in this client-go: %v", err)
 	}

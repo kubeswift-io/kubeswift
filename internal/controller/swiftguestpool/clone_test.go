@@ -36,16 +36,16 @@ func poolReconciler(t *testing.T, objs ...client.Object) *SwiftGuestPoolReconcil
 
 func TestAssignCloneTargetNode_RoundRobin(t *testing.T) {
 	r := poolReconciler(t,
-		node("boba", true, nil),
-		node("miles", true, nil),
-		node("frida", true, func(n *corev1.Node) { // control-plane: excluded
+		node("worker-1", true, nil),
+		node("worker-2", true, nil),
+		node("cp-1", true, func(n *corev1.Node) { // control-plane: excluded
 			n.Labels = map[string]string{"node-role.kubernetes.io/control-plane": ""}
 		}),
 		node("down", false, nil), // not ready: excluded
 		node("cordoned", true, func(n *corev1.Node) { n.Spec.Unschedulable = true }), // excluded
 	)
-	// schedulable workers sorted: [boba, miles]. Round-robin by index.
-	want := []string{"boba", "miles", "boba", "miles"}
+	// schedulable workers sorted: [worker1, worker2]. Round-robin by index.
+	want := []string{"worker-1", "worker-2", "worker-1", "worker-2"}
 	for i, w := range want {
 		spec := &swiftv1alpha1.SwiftGuestSpec{
 			CloneFromSnapshot: &swiftv1alpha1.CloneFromSnapshotSource{
@@ -62,7 +62,7 @@ func TestAssignCloneTargetNode_RoundRobin(t *testing.T) {
 }
 
 func TestAssignCloneTargetNode_NonCloneNoop(t *testing.T) {
-	r := poolReconciler(t, node("boba", true, nil))
+	r := poolReconciler(t, node("worker-1", true, nil))
 	spec := &swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}}
 	if err := r.assignCloneTargetNode(context.Background(), spec, 0); err != nil {
 		t.Fatalf("non-clone should be a no-op: %v", err)
@@ -70,7 +70,7 @@ func TestAssignCloneTargetNode_NonCloneNoop(t *testing.T) {
 }
 
 func TestAssignCloneTargetNode_NoSchedulableNodes(t *testing.T) {
-	r := poolReconciler(t, node("frida", true, func(n *corev1.Node) {
+	r := poolReconciler(t, node("cp-1", true, func(n *corev1.Node) {
 		n.Labels = map[string]string{"node-role.kubernetes.io/control-plane": ""}
 	}))
 	spec := &swiftv1alpha1.SwiftGuestSpec{

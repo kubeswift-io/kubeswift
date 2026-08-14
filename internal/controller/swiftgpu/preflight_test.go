@@ -44,37 +44,37 @@ func TestGPUNodeHasCapacity(t *testing.T) {
 		},
 		{
 			name:    "not vfio-ready",
-			node:    gpuNode("boba", false, 1, "GeForce GTX 1080"),
+			node:    gpuNode("worker-1", false, 1, "GeForce GTX 1080"),
 			profile: profile(1, "", "isolated"),
 			wantErr: true,
 		},
 		{
 			name:    "insufficient free GPUs",
-			node:    gpuNode("boba", true, 0, "GeForce GTX 1080"),
+			node:    gpuNode("worker-1", true, 0, "GeForce GTX 1080"),
 			profile: profile(1, "", "isolated"),
 			wantErr: true,
 		},
 		{
 			name:    "model mismatch",
-			node:    gpuNode("boba", true, 1, "GeForce GTX 1080"),
+			node:    gpuNode("worker-1", true, 1, "GeForce GTX 1080"),
 			profile: profile(1, "H200", "isolated"),
 			wantErr: true,
 		},
 		{
 			name:    "fits (empty model matches any)",
-			node:    gpuNode("boba", true, 1, "GeForce GTX 1080"),
+			node:    gpuNode("worker-1", true, 1, "GeForce GTX 1080"),
 			profile: profile(1, "", "isolated"),
 			wantErr: false,
 		},
 		{
 			name:    "fits (model substring match)",
-			node:    gpuNode("boba", true, 2, "NVIDIA Corporation GP104 [GeForce GTX 1080]"),
+			node:    gpuNode("worker-1", true, 2, "NVIDIA Corporation GP104 [GeForce GTX 1080]"),
 			profile: profile(2, "GTX 1080", "isolated"),
 			wantErr: false,
 		},
 		{
 			name:    "shared mode without FM partition",
-			node:    gpuNode("boba", true, 4, "H200 SXM"),
+			node:    gpuNode("worker-1", true, 4, "H200 SXM"),
 			profile: profile(2, "", "shared"),
 			wantErr: true,
 		},
@@ -88,7 +88,7 @@ func TestGPUNodeHasCapacity(t *testing.T) {
 			}
 			c := b.Build()
 
-			err := GPUNodeHasCapacity(context.Background(), c, "boba", tc.profile)
+			err := GPUNodeHasCapacity(context.Background(), c, "worker-1", tc.profile)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("GPUNodeHasCapacity err = %v, wantErr = %v", err, tc.wantErr)
 			}

@@ -25,7 +25,7 @@ func gpuPool(name, ns, profileName string) *sandboxv1alpha1.SwiftSandboxPool {
 }
 
 func TestAllocateSlotGPU_StampsSlotAndConsumesNode(t *testing.T) {
-	node := oneGPUNode("boba")
+	node := oneGPUNode("worker-1")
 	profile := pcieProfile("gtx", "default")
 	pool := gpuPool("gp", "default", "gtx")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
@@ -38,18 +38,18 @@ func TestAllocateSlotGPU_StampsSlotAndConsumesNode(t *testing.T) {
 	}
 	if slot.Spec.GPUProfileRef == nil || slot.Status.GPU == nil ||
 		len(slot.Status.GPU.Devices) != 1 || slot.Status.GPU.Devices[0] != "0000:01:00.0" ||
-		slot.Status.GPU.NodeName != "boba" {
+		slot.Status.GPU.NodeName != "worker-1" {
 		t.Fatalf("slot not stamped for GPU: spec.gpuProfileRef=%v status.gpu=%+v", slot.Spec.GPUProfileRef, slot.Status.GPU)
 	}
 	var after gpuv1alpha1.SwiftGPUNode
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "boba"}, &after)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-1"}, &after)
 	if after.Status.FreeGPUs != 0 || after.Status.GPUs[0].AllocatedTo != "sandbox:default/gp-slot-aaaaa" {
 		t.Errorf("node not allocated to the slot: free=%d allocatedTo=%q", after.Status.FreeGPUs, after.Status.GPUs[0].AllocatedTo)
 	}
 }
 
 func TestAllocateSlotGPU_RejectsHGXTier(t *testing.T) {
-	node := oneGPUNode("boba")
+	node := oneGPUNode("worker-1")
 	profile := pcieProfile("hgx", "default")
 	profile.Spec.Tier = "hgx-shared"
 	pool := gpuPool("gp", "default", "hgx")
@@ -66,7 +66,7 @@ func TestAllocateSlotGPU_RejectsHGXTier(t *testing.T) {
 // The GC sweep releases the GPU of a slot whose pod is gone, and keeps the GPU
 // of a slot whose pod still exists.
 func TestReconcileSlotGPUGC_ReleasesOrphanedSlots(t *testing.T) {
-	node := oneGPUNode("boba")
+	node := oneGPUNode("worker-1")
 	// Pre-allocate the GPU to a slot whose pod is gone.
 	node.Status.FreeGPUs = 0
 	node.Status.GPUs[0].Allocated = true
@@ -81,7 +81,7 @@ func TestReconcileSlotGPUGC_ReleasesOrphanedSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	var after gpuv1alpha1.SwiftGPUNode
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "boba"}, &after)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-1"}, &after)
 	if after.Status.FreeGPUs != 1 || after.Status.GPUs[0].AllocatedTo != "" {
 		t.Fatalf("orphaned slot GPU not released: free=%d allocatedTo=%q", after.Status.FreeGPUs, after.Status.GPUs[0].AllocatedTo)
 	}
@@ -94,7 +94,7 @@ func TestReconcileSlotGPUGC_ReleasesOrphanedSlots(t *testing.T) {
 	if err := r.reconcileSlotGPUGC(context.Background(), pool, map[string]bool{"gp-slot-live": true}); err != nil {
 		t.Fatal(err)
 	}
-	_ = c.Get(context.Background(), client.ObjectKey{Name: "boba"}, &after)
+	_ = c.Get(context.Background(), client.ObjectKey{Name: "worker-1"}, &after)
 	if after.Status.GPUs[0].AllocatedTo != "sandbox:default/gp-slot-live" {
 		t.Errorf("a live slot's GPU must NOT be released, got allocatedTo=%q", after.Status.GPUs[0].AllocatedTo)
 	}

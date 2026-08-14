@@ -17,7 +17,7 @@ import (
 )
 
 // oneGPUNode is a single-GPU (GTX 1080-class) Tier-1 SwiftGPUNode — the dev
-// lab's boba shape.
+// lab's worker1 shape.
 func oneGPUNode(name string) *gpuv1alpha1.SwiftGPUNode {
 	return &gpuv1alpha1.SwiftGPUNode{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -49,7 +49,7 @@ func nativeGPUSandbox(name, ns, profileName string) *sandboxv1alpha1.SwiftSandbo
 }
 
 func TestReconcileNativeGPU_AllocatesAndReleases(t *testing.T) {
-	node := oneGPUNode("boba")
+	node := oneGPUNode("worker-1")
 	profile := pcieProfile("gtx", "default")
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
 
@@ -70,15 +70,15 @@ func TestReconcileNativeGPU_AllocatesAndReleases(t *testing.T) {
 	if sb.Status.GPU == nil || len(sb.Status.GPU.Devices) != 1 || sb.Status.GPU.Devices[0] != "0000:01:00.0" {
 		t.Fatalf("status.gpu = %+v, want 1 device 0000:01:00.0", sb.Status.GPU)
 	}
-	if sb.Status.GPU.NodeName != "boba" || sb.Status.GPU.Hypervisor != "cloud-hypervisor" {
-		t.Errorf("status.gpu node/hypervisor = %q/%q, want boba/cloud-hypervisor", sb.Status.GPU.NodeName, sb.Status.GPU.Hypervisor)
+	if sb.Status.GPU.NodeName != "worker-1" || sb.Status.GPU.Hypervisor != "cloud-hypervisor" {
+		t.Errorf("status.gpu node/hypervisor = %q/%q, want worker-1/cloud-hypervisor", sb.Status.GPU.NodeName, sb.Status.GPU.Hypervisor)
 	}
 	if !controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
 		t.Error("release finalizer must be added on native allocation")
 	}
 	// Node capacity consumed.
 	var after gpuv1alpha1.SwiftGPUNode
-	if err := c.Get(ctx, client.ObjectKey{Name: "boba"}, &after); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "worker-1"}, &after); err != nil {
 		t.Fatal(err)
 	}
 	if after.Status.FreeGPUs != 0 || after.Status.GPUs[0].AllocatedTo != "sandbox:default/gpu-sb" {
@@ -89,7 +89,7 @@ func TestReconcileNativeGPU_AllocatesAndReleases(t *testing.T) {
 	if err := r.releaseNativeGPU(ctx, sb); err != nil {
 		t.Fatalf("releaseNativeGPU: %v", err)
 	}
-	if err := c.Get(ctx, client.ObjectKey{Name: "boba"}, &after); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "worker-1"}, &after); err != nil {
 		t.Fatal(err)
 	}
 	if after.Status.FreeGPUs != 1 || after.Status.GPUs[0].AllocatedTo != "" {
@@ -100,7 +100,7 @@ func TestReconcileNativeGPU_AllocatesAndReleases(t *testing.T) {
 // A hgx-shared profile is rejected for a sandbox (mode-3 is CH-only), not
 // silently allocated on a QEMU-less runtime.
 func TestReconcileNativeGPU_HGXTierRejected(t *testing.T) {
-	node := oneGPUNode("boba")
+	node := oneGPUNode("worker-1")
 	profile := pcieProfile("hgx", "default")
 	profile.Spec.Tier = "hgx-shared"
 	profile.Spec.PartitionMode = "shared"
@@ -128,7 +128,7 @@ func TestReconcileNativeGPU_HGXTierRejected(t *testing.T) {
 
 func TestBuildIntent_NativeGPU_ExplicitDevices(t *testing.T) {
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
-	sb.Status.GPU = gpuStatus("boba", "0000:01:00.0")
+	sb.Status.GPU = gpuStatus("worker-1", "0000:01:00.0")
 	ri := buildIntent(sb, "gpu-sandbox", "/cache/x.ext4", "", execSpec{Argv: []string{"/bin/sh"}}, false)
 	if ri.GPU == nil {
 		t.Fatal("native sandbox must carry a GPU intent")
@@ -146,10 +146,10 @@ func TestBuildIntent_NativeGPU_ExplicitDevices(t *testing.T) {
 
 func TestBuildPod_NativeGPU_PinnedWithGpuInitEnv(t *testing.T) {
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
-	sb.Status.GPU = gpuStatus("boba", "0000:01:00.0")
+	sb.Status.GPU = gpuStatus("worker-1", "0000:01:00.0")
 	pod := buildPod(sb, "gpu-sandbox")
 
-	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "boba" {
+	if pod.Spec.NodeSelector["kubernetes.io/hostname"] != "worker-1" {
 		t.Errorf("native GPU pod must pin to the allocated node; nodeSelector=%v", pod.Spec.NodeSelector)
 	}
 	if pod.Spec.NodeSelector[kernelNodeLabel] != "true" {

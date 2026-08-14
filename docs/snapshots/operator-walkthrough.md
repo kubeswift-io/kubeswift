@@ -28,8 +28,8 @@ The accompanying sample manifests live in
 
 ## Cluster used for this walkthrough
 
-The output captured below comes from a 3-node k0s cluster (`boba`,
-`frida`, `miles`) running Longhorn as the default StorageClass with
+The output captured below comes from a 3-node k0s cluster (`worker-1`,
+`cp-1`, `worker-2`) running Longhorn as the default StorageClass with
 two `VolumeSnapshotClass`es: `longhorn-snapshot` (Retain) and
 `longhorn-snapshot-delete` (Delete). KubeSwift controller-manager is
 built from `main`.

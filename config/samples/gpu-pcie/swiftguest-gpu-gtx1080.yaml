@@ -1,11 +1,11 @@
-# SwiftGuest with GTX 1080 GPU passthrough on node boba.
+# SwiftGuest with GTX 1080 GPU passthrough on node worker-1.
 # Uses Cloud Hypervisor (Tier 1 PCIe) — boots Ubuntu Noble with CLOUDHV.fd.
 # gpu-init binds the GPU + IOMMU group peers (audio controller) to vfio-pci.
 #
 # Prerequisites:
 #   1. SwiftImage ubuntu-noble in Ready state
 #   2. SwiftGPUProfile gtx1080-single created
-#   3. SwiftGPUNode for boba populated by discovery DaemonSet
+#   3. SwiftGPUNode for worker-1 populated by discovery DaemonSet
 #   4. SwiftGuestClass default and SwiftSeedProfile minimal created
 #
 # Apply order:
@@ -16,13 +16,13 @@
 #   5. kubectl apply -f swiftguest-gpu-gtx1080.yaml
 #
 # Verify:
-#   kubectl get swiftguest gpu-test-boba -w
-#   kubectl logs gpu-test-boba -c gpu-init
-#   swiftctl ssh gpu-test-boba -- lspci | grep -i nvidia
+#   kubectl get swiftguest gpu-test-worker-1 -w
+#   kubectl logs gpu-test-worker-1 -c gpu-init
+#   swiftctl ssh gpu-test-worker-1 -- lspci | grep -i nvidia
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:
-  name: gpu-test-boba
+  name: gpu-test-worker-1
   namespace: default
 spec:
   imageRef:

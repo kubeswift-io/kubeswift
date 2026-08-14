@@ -48,14 +48,14 @@ func getCert(ctx context.Context, c client.Client, ns, name string) (*unstructur
 }
 
 func TestMigrationNodeNames(t *testing.T) {
-	if got := MigrationNodeCertName("miles"); got != "kubeswift-migration-node-miles" {
+	if got := MigrationNodeCertName("worker-2"); got != "kubeswift-migration-node-worker-2" {
 		t.Errorf("MigrationNodeCertName = %q", got)
 	}
-	if got := MigrationNodeSecretName("miles"); got != "kubeswift-migration-node-miles" {
+	if got := MigrationNodeSecretName("worker-2"); got != "kubeswift-migration-node-worker-2" {
 		t.Errorf("MigrationNodeSecretName = %q", got)
 	}
 	// SAN/checkHost pin value MUST be exactly the node name (Option B).
-	if got := MigrationNodeCertSAN("miles"); got != "miles" {
+	if got := MigrationNodeCertSAN("worker-2"); got != "worker-2" {
 		t.Errorf("MigrationNodeCertSAN = %q, want node name verbatim", got)
 	}
 }
@@ -65,12 +65,12 @@ func TestMigrationNodeNames(t *testing.T) {
 // is dst-server in one migration and src-client in another), and the CA
 // Issuer reference. A regression here silently breaks SAN pinning.
 func TestNewNodeCertificate_Fields(t *testing.T) {
-	u := newNodeCertificate(testSystemNS, "boba")
+	u := newNodeCertificate(testSystemNS, "worker-1")
 
 	if u.GetNamespace() != testSystemNS {
 		t.Errorf("namespace = %q, want %q", u.GetNamespace(), testSystemNS)
 	}
-	if u.GetName() != "kubeswift-migration-node-boba" {
+	if u.GetName() != "kubeswift-migration-node-worker-1" {
 		t.Errorf("name = %q", u.GetName())
 	}
 	if u.GetAPIVersion() != "cert-manager.io/v1" || u.GetKind() != "Certificate" {
@@ -78,16 +78,16 @@ func TestNewNodeCertificate_Fields(t *testing.T) {
 	}
 
 	secretName, _, _ := unstructured.NestedString(u.Object, "spec", "secretName")
-	if secretName != "kubeswift-migration-node-boba" {
+	if secretName != "kubeswift-migration-node-worker-1" {
 		t.Errorf("spec.secretName = %q", secretName)
 	}
 	cn, _, _ := unstructured.NestedString(u.Object, "spec", "commonName")
-	if cn != "boba" {
-		t.Errorf("spec.commonName = %q, want boba", cn)
+	if cn != "worker-1" {
+		t.Errorf("spec.commonName = %q, want worker-1", cn)
 	}
 	dnsNames, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "dnsNames")
-	if len(dnsNames) != 1 || dnsNames[0] != "boba" {
-		t.Errorf("spec.dnsNames = %v, want [boba]", dnsNames)
+	if len(dnsNames) != 1 || dnsNames[0] != "worker-1" {
+		t.Errorf("spec.dnsNames = %v, want [worker-1]", dnsNames)
 	}
 	usages, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "usages")
 	if len(usages) != 2 || usages[0] != "server auth" || usages[1] != "client auth" {
@@ -158,57 +158,57 @@ func TestEnsureNodeCertificate_CreatesWhenAbsent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
-	if err := ensureNodeCertificate(ctx, c, testSystemNS, "miles"); err != nil {
+	if err := ensureNodeCertificate(ctx, c, testSystemNS, "worker-2"); err != nil {
 		t.Fatalf("ensureNodeCertificate: %v", err)
 	}
-	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-miles"); err != nil {
+	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-worker-2"); err != nil {
 		t.Fatalf("expected certificate to exist: %v", err)
 	}
 }
 
 func TestEnsureNodeCertificate_IdempotentWhenPresent(t *testing.T) {
 	scheme := certScheme(t)
-	pre := newNodeCertificate(testSystemNS, "miles")
+	pre := newNodeCertificate(testSystemNS, "worker-2")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pre).Build()
 	ctx := context.Background()
 
-	if err := ensureNodeCertificate(ctx, c, testSystemNS, "miles"); err != nil {
+	if err := ensureNodeCertificate(ctx, c, testSystemNS, "worker-2"); err != nil {
 		t.Fatalf("ensureNodeCertificate (idempotent): %v", err)
 	}
-	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-miles"); err != nil {
+	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-worker-2"); err != nil {
 		t.Fatalf("certificate should still exist: %v", err)
 	}
 }
 
 func TestDeleteNodeCertificate(t *testing.T) {
 	scheme := certScheme(t)
-	pre := newNodeCertificate(testSystemNS, "miles")
+	pre := newNodeCertificate(testSystemNS, "worker-2")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pre).Build()
 	ctx := context.Background()
 
-	if err := deleteNodeCertificate(ctx, c, testSystemNS, "miles"); err != nil {
+	if err := deleteNodeCertificate(ctx, c, testSystemNS, "worker-2"); err != nil {
 		t.Fatalf("deleteNodeCertificate: %v", err)
 	}
-	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-miles"); !apierrors.IsNotFound(err) {
+	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-worker-2"); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected NotFound after delete, got %v", err)
 	}
 	// Idempotent: deleting again tolerates NotFound.
-	if err := deleteNodeCertificate(ctx, c, testSystemNS, "miles"); err != nil {
+	if err := deleteNodeCertificate(ctx, c, testSystemNS, "worker-2"); err != nil {
 		t.Fatalf("deleteNodeCertificate (NotFound) must be tolerated: %v", err)
 	}
 }
 
 func TestReconcile_WorkerNode_CreatesCert(t *testing.T) {
 	scheme := certScheme(t)
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "miles"}}
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node).Build()
 	r := &MigrationCertReconciler{Client: c, SystemNamespace: testSystemNS}
 	ctx := context.Background()
 
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "miles"}}); err != nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "worker-2"}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-miles"); err != nil {
+	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-worker-2"); err != nil {
 		t.Fatalf("worker node should get a certificate: %v", err)
 	}
 }
@@ -216,19 +216,19 @@ func TestReconcile_WorkerNode_CreatesCert(t *testing.T) {
 func TestReconcile_ControlPlaneNode_DeletesStaleCert(t *testing.T) {
 	scheme := certScheme(t)
 	// A node that was a worker (has a cert) and is now control-plane.
-	staleCert := newNodeCertificate(testSystemNS, "frida")
+	staleCert := newNodeCertificate(testSystemNS, "cp-1")
 	cpNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-		Name:   "frida",
+		Name:   "cp-1",
 		Labels: map[string]string{controlPlaneRoleLabel: ""},
 	}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpNode, staleCert).Build()
 	r := &MigrationCertReconciler{Client: c, SystemNamespace: testSystemNS}
 	ctx := context.Background()
 
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "frida"}}); err != nil {
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "cp-1"}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-frida"); !apierrors.IsNotFound(err) {
+	if _, err := getCert(ctx, c, testSystemNS, "kubeswift-migration-node-cp-1"); !apierrors.IsNotFound(err) {
 		t.Fatalf("control-plane node's stale cert should be deleted, got %v", err)
 	}
 }

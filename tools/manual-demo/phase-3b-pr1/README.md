@@ -19,7 +19,7 @@ set it for you. Phase 3c+ adds mTLS for production use.
 ## What this demonstrates
 
 End-to-end live migration of a 4Gi RWX+Block Ubuntu Noble guest from
-`miles` to `boba` via Cloud Hypervisor's `vm.send-migration` /
+`worker-2` to `worker-1` via Cloud Hypervisor's `vm.send-migration` /
 `vm.receive-migration` RPCs over the default pod network, with:
 
 - **Pre-dispatch `receive-ready` annotation** emitted by swiftletd on
@@ -47,7 +47,7 @@ The companion walkthrough captured the 8-test matrix.
 
 ## Prerequisites
 
-- 3-node k0s cluster `miles` + `boba` + `frida` (CP) with the
+- 3-node k0s cluster `worker-2` + `worker-1` + `cp-1` (CP) with the
   `longhorn-migratable` StorageClass present
   (`parameters.migratable: "true"`).
 - swiftletd image carrying Phase 3b PR 1 deployed cluster-wide
@@ -82,11 +82,11 @@ mid-flow interrupt requires `cleanup.sh` first to reset state.
 [1/5] namespace phase-3b-pr1-demo created
 [2/5] SwiftImage ubuntu-noble Ready (~90s)
 [3/5] SwiftSeedProfile + SwiftGuestClass applied
-[4/5] SwiftGuest pr1-guest reaches phase=Running on miles (~140s); IP=192.168.99.X
-[5/5] Destination pod pr1-guest-dst created on boba, phase=Running
+[4/5] SwiftGuest pr1-guest reaches phase=Running on worker-2 (~140s); IP=192.168.99.X
+[5/5] Destination pod pr1-guest-dst created on worker-1, phase=Running
 
-source pod:      pr1-guest         (node=miles)
-destination pod: pr1-guest-dst     (node=boba)
+source pod:      pr1-guest         (node=worker-2)
+destination pod: pr1-guest-dst     (node=worker-1)
 guest IP:        192.168.99.X
 ```
 

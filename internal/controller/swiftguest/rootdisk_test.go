@@ -64,11 +64,11 @@ func TestCreateCloneJob_PinsToLauncherNode(t *testing.T) {
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
 	rg := &resolved.ResolvedGuest{} // Filesystem (VolumeMode "")
 
-	// Clone pinned (via the restore-node annotation) to "miles".
+	// Clone pinned (via the restore-node annotation) to "worker-2".
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "clone-a", Namespace: "default",
-			Annotations: map[string]string{AnnotationRestoreNodeName: "miles"},
+			Annotations: map[string]string{AnnotationRestoreNodeName: "worker-2"},
 		},
 	}
 	if err := r.createCloneJob(context.Background(), guest, rg, "job-clone-a", "src", "dst", resource.MustParse("10Gi")); err != nil {
@@ -78,8 +78,8 @@ func TestCreateCloneJob_PinsToLauncherNode(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKey{Name: "job-clone-a", Namespace: "default"}, &job); err != nil {
 		t.Fatal(err)
 	}
-	if got := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]; got != "miles" {
-		t.Errorf("clone Job nodeSelector hostname = %q, want miles (must co-locate with the launcher)", got)
+	if got := job.Spec.Template.Spec.NodeSelector["kubernetes.io/hostname"]; got != "worker-2" {
+		t.Errorf("clone Job nodeSelector hostname = %q, want worker-2 (must co-locate with the launcher)", got)
 	}
 
 	// Unpinned guest -> no nodeSelector (the scheduler places it freely).

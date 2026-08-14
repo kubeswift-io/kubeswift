@@ -46,7 +46,7 @@ func TestEnsureMigrationIdentitySecret_SameNamespaceNoop(t *testing.T) {
 
 	// No source secret present; same-namespace must still be a no-op
 	// (it returns before any Get).
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, testSystemNS, "miles"); err != nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, testSystemNS, "worker-2"); err != nil {
 		t.Fatalf("same-namespace must be a no-op, got: %v", err)
 	}
 }
@@ -61,23 +61,23 @@ func TestEnsureMigrationIdentitySecret_SourceMissingErrors(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	ctx := context.Background()
 
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "miles"); err == nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "worker-2"); err == nil {
 		t.Fatal("expected error when source secret missing (precondition not ready)")
 	}
 }
 
 func TestEnsureMigrationIdentitySecret_CopiesToTarget(t *testing.T) {
 	scheme := secretScheme(t)
-	src := sourceSecret(testSystemNS, "miles", tlsData)
+	src := sourceSecret(testSystemNS, "worker-2", tlsData)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(src).Build()
 	ctx := context.Background()
 
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "miles"); err != nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "worker-2"); err != nil {
 		t.Fatalf("EnsureMigrationIdentitySecret: %v", err)
 	}
 
 	var copied corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-miles"}, &copied); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-worker-2"}, &copied); err != nil {
 		t.Fatalf("expected copied secret in team-a: %v", err)
 	}
 	if copied.Type != corev1.SecretTypeTLS {
@@ -103,9 +103,9 @@ func TestEnsureMigrationIdentitySecret_CopiesToTarget(t *testing.T) {
 // copy rather than leaving a stale cert in the guest namespace.
 func TestEnsureMigrationIdentitySecret_UpdatesOnRotation(t *testing.T) {
 	scheme := secretScheme(t)
-	src := sourceSecret(testSystemNS, "miles", tlsData)
+	src := sourceSecret(testSystemNS, "worker-2", tlsData)
 	staleCopy := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "kubeswift-migration-node-miles", Namespace: "team-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kubeswift-migration-node-worker-2", Namespace: "team-a"},
 		Type:       corev1.SecretTypeTLS,
 		Data: map[string][]byte{
 			migrationSecretTLSCert: []byte("OLD-CERT"),
@@ -116,12 +116,12 @@ func TestEnsureMigrationIdentitySecret_UpdatesOnRotation(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(src, staleCopy).Build()
 	ctx := context.Background()
 
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "miles"); err != nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "worker-2"); err != nil {
 		t.Fatalf("EnsureMigrationIdentitySecret (rotation): %v", err)
 	}
 
 	var refreshed corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-miles"}, &refreshed); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-worker-2"}, &refreshed); err != nil {
 		t.Fatalf("get refreshed: %v", err)
 	}
 	if string(refreshed.Data[migrationSecretTLSCert]) != "CERT" {
@@ -133,18 +133,18 @@ func TestEnsureMigrationIdentitySecret_UpdatesOnRotation(t *testing.T) {
 // second call with matching data performs no update (no churn).
 func TestEnsureMigrationIdentitySecret_IdempotentWhenCurrent(t *testing.T) {
 	scheme := secretScheme(t)
-	src := sourceSecret(testSystemNS, "miles", tlsData)
+	src := sourceSecret(testSystemNS, "worker-2", tlsData)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(src).Build()
 	ctx := context.Background()
 
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "miles"); err != nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "worker-2"); err != nil {
 		t.Fatalf("first copy: %v", err)
 	}
-	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "miles"); err != nil {
+	if err := EnsureMigrationIdentitySecret(ctx, c, testSystemNS, "team-a", "worker-2"); err != nil {
 		t.Fatalf("second copy (idempotent): %v", err)
 	}
 	var copied corev1.Secret
-	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-miles"}, &copied); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "team-a", Name: "kubeswift-migration-node-worker-2"}, &copied); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if string(copied.Data[migrationSecretTLSCert]) != "CERT" {

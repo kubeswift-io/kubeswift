@@ -132,7 +132,7 @@ func getGuest(t *testing.T, c client.Client, name string) *swiftv1alpha1.SwiftGu
 // --- tests ---
 
 func TestReconcile_NoMarker_NoOp(t *testing.T) {
-	r, c := newR(guest("g"), node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g"), node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("no marker → no migration; got %d", len(migs))
@@ -140,7 +140,7 @@ func TestReconcile_NoMarker_NoOp(t *testing.T) {
 }
 
 func TestReconcile_GuestMovedOff_ClearsMarker(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("boba")), node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-1")), node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 	g := getGuest(t, c, "g")
 	if _, ok := g.Annotations[swiftv1alpha1.AnnotationDrainRequested]; ok {
@@ -166,10 +166,10 @@ func swiftGPUNode(name string, vfioReady bool, free int) *gpuv1alpha1.SwiftGPUNo
 }
 
 func TestReconcile_GPUGuest_NoGPUTarget_NoMigration(t *testing.T) {
-	// GPU guest, profile exists, but boba is not a GPU node (no SwiftGPUNode)
+	// GPU guest, profile exists, but worker1 is not a GPU node (no SwiftGPUNode)
 	// → no schedulable GPU target → no migration; marker stays.
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
-		node("miles"), node("boba"), smallClass(), gpuProfileFixture())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), vfio()),
+		node("worker-2"), node("worker-1"), smallClass(), gpuProfileFixture())
 	res := reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("no GPU target → no migration; got %d", len(migs))
@@ -177,24 +177,24 @@ func TestReconcile_GPUGuest_NoGPUTarget_NoMigration(t *testing.T) {
 	if res.RequeueAfter == 0 {
 		t.Errorf("no GPU target should requeue")
 	}
-	if getGuest(t, c, "g").Annotations[swiftv1alpha1.AnnotationDrainRequested] != "miles" {
+	if getGuest(t, c, "g").Annotations[swiftv1alpha1.AnnotationDrainRequested] != "worker-2" {
 		t.Errorf("marker must stay when there is no GPU target")
 	}
 }
 
 func TestReconcile_GPUGuest_CreatesOfflineMigration(t *testing.T) {
-	// GPU guest with a vfio-ready GPU target (boba) → creates an offline
+	// GPU guest with a vfio-ready GPU target (worker1) → creates an offline
 	// (auto→offline) migration via release-and-reallocate.
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
-		node("miles"), node("boba"), smallClass(), gpuProfileFixture(),
-		swiftGPUNode("boba", true, 1))
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), vfio()),
+		node("worker-2"), node("worker-1"), smallClass(), gpuProfileFixture(),
+		swiftGPUNode("worker-1", true, 1))
 	reconcileGuest(t, r, "g")
 	migs := listMigs(t, c)
 	if len(migs) != 1 {
 		t.Fatalf("GPU guest with a vfio-ready GPU target should create 1 migration; got %d", len(migs))
 	}
-	if migs[0].Spec.Target.NodeName != "boba" {
-		t.Errorf("target = %q, want boba (the vfio-ready GPU node)", migs[0].Spec.Target.NodeName)
+	if migs[0].Spec.Target.NodeName != "worker-1" {
+		t.Errorf("target = %q, want worker-1 (the vfio-ready GPU node)", migs[0].Spec.Target.NodeName)
 	}
 	if migs[0].Spec.Mode != migrationv1alpha1.SwiftMigrationModeAuto {
 		t.Errorf("mode = %q, want auto (resolves to offline for VFIO)", migs[0].Spec.Mode)
@@ -202,11 +202,11 @@ func TestReconcile_GPUGuest_CreatesOfflineMigration(t *testing.T) {
 }
 
 func TestReconcile_GPUGuest_NonVfioReadyTarget_NoMigration(t *testing.T) {
-	// boba is a GPU node but NOT vfio-ready → GPUNodeHasCapacity rejects it →
+	// worker1 is a GPU node but NOT vfio-ready → GPUNodeHasCapacity rejects it →
 	// no GPU target → no migration.
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), vfio()),
-		node("miles"), node("boba"), smallClass(), gpuProfileFixture(),
-		swiftGPUNode("boba", false, 1))
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), vfio()),
+		node("worker-2"), node("worker-1"), smallClass(), gpuProfileFixture(),
+		swiftGPUNode("worker-1", false, 1))
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("a non-vfio-ready GPU node is not a valid target; got %d migrations", len(migs))
@@ -214,7 +214,7 @@ func TestReconcile_GPUGuest_NonVfioReadyTarget_NoMigration(t *testing.T) {
 }
 
 func TestReconcile_CreatesMigration(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 
 	migs := listMigs(t, c)
@@ -222,14 +222,14 @@ func TestReconcile_CreatesMigration(t *testing.T) {
 		t.Fatalf("expected 1 migration created; got %d", len(migs))
 	}
 	m := migs[0]
-	if want := drainMigrationName("g", "miles"); m.Name != want {
+	if want := drainMigrationName("g", "worker-2"); m.Name != want {
 		t.Errorf("migration name = %q, want %q", m.Name, want)
 	}
 	if m.Spec.GuestRef.Name != "g" {
 		t.Errorf("guestRef = %q, want g", m.Spec.GuestRef.Name)
 	}
-	if m.Spec.Target.NodeName != "boba" {
-		t.Errorf("target = %q, want boba (the non-draining peer)", m.Spec.Target.NodeName)
+	if m.Spec.Target.NodeName != "worker-1" {
+		t.Errorf("target = %q, want worker-1 (the non-draining peer)", m.Spec.Target.NodeName)
 	}
 	if m.Spec.Mode != migrationv1alpha1.SwiftMigrationModeAuto {
 		t.Errorf("mode = %q, want auto (default Migrate policy)", m.Spec.Mode)
@@ -249,8 +249,8 @@ func TestReconcile_CreatesMigration(t *testing.T) {
 }
 
 func TestReconcile_LiveMigratePolicy_LiveMode(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), policy(swiftv1alpha1.DrainPolicyLiveMigrate)),
-		node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), policy(swiftv1alpha1.DrainPolicyLiveMigrate)),
+		node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 	migs := listMigs(t, c)
 	if len(migs) != 1 {
@@ -262,8 +262,8 @@ func TestReconcile_LiveMigratePolicy_LiveMode(t *testing.T) {
 }
 
 func TestReconcile_MigrationInFlight_NoDuplicate(t *testing.T) {
-	existing := drainMig(drainMigrationName("g", "miles"), migrationv1alpha1.SwiftMigrationPhaseValidating)
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), existing, node("miles"), node("boba"), smallClass())
+	existing := drainMig(drainMigrationName("g", "worker-2"), migrationv1alpha1.SwiftMigrationPhaseValidating)
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), existing, node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 1 {
 		t.Errorf("in-flight migration must not be duplicated; got %d", len(migs))
@@ -271,22 +271,22 @@ func TestReconcile_MigrationInFlight_NoDuplicate(t *testing.T) {
 }
 
 func TestReconcile_MigrationFailed_MarkerStays_NoNew(t *testing.T) {
-	failed := drainMig(drainMigrationName("g", "miles"), migrationv1alpha1.SwiftMigrationPhaseFailed)
+	failed := drainMig(drainMigrationName("g", "worker-2"), migrationv1alpha1.SwiftMigrationPhaseFailed)
 	failed.Status.FailureMessage = "boom"
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), failed, node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), failed, node("worker-2"), node("worker-1"), smallClass())
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 1 {
 		t.Errorf("failed migration must not trigger a new one (no retry storm); got %d", len(migs))
 	}
 	g := getGuest(t, c, "g")
-	if g.Annotations[swiftv1alpha1.AnnotationDrainRequested] != "miles" {
+	if g.Annotations[swiftv1alpha1.AnnotationDrainRequested] != "worker-2" {
 		t.Errorf("marker must stay after a failed migration (VM stays protected)")
 	}
 }
 
 func TestReconcile_NoTarget_Requeue(t *testing.T) {
 	// Only the draining node exists → no schedulable peer.
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), node("miles"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), smallClass())
 	res := reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("no target → no migration; got %d", len(migs))
@@ -297,7 +297,7 @@ func TestReconcile_NoTarget_Requeue(t *testing.T) {
 }
 
 func TestReconcile_CordonedPeer_NoTarget(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), node("miles"), node("boba", cordoned), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1", cordoned), smallClass())
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("cordoned peer is not a valid target; got %d migrations", len(migs))
@@ -305,7 +305,7 @@ func TestReconcile_CordonedPeer_NoTarget(t *testing.T) {
 }
 
 func TestReconcile_NotReadyPeer_NoTarget(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles")), node("miles"), node("boba", notReady), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1", notReady), smallClass())
 	reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("not-Ready peer is not a valid target; got %d migrations", len(migs))
@@ -313,8 +313,8 @@ func TestReconcile_NotReadyPeer_NoTarget(t *testing.T) {
 }
 
 func TestReconcile_OtherMigrationInProgress_Defers(t *testing.T) {
-	r, c := newR(guest("g", drain("miles"), statusNode("miles"), inProgress("some-other-mig")),
-		node("miles"), node("boba"), smallClass())
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), inProgress("some-other-mig")),
+		node("worker-2"), node("worker-1"), smallClass())
 	res := reconcileGuest(t, r, "g")
 	if migs := listMigs(t, c); len(migs) != 0 {
 		t.Errorf("must not create a second migration while one is in flight; got %d", len(migs))
@@ -325,18 +325,18 @@ func TestReconcile_OtherMigrationInProgress_Defers(t *testing.T) {
 }
 
 func TestDrainMigrationName_DeterministicAndBounded(t *testing.T) {
-	a := drainMigrationName("guest", "miles")
-	if a != drainMigrationName("guest", "miles") {
+	a := drainMigrationName("guest", "worker-2")
+	if a != drainMigrationName("guest", "worker-2") {
 		t.Errorf("name must be deterministic for the same (guest, node)")
 	}
-	if a == drainMigrationName("guest", "boba") {
+	if a == drainMigrationName("guest", "worker-1") {
 		t.Errorf("name must differ across draining nodes")
 	}
 	long := ""
 	for i := 0; i < 80; i++ {
 		long += "x"
 	}
-	n := drainMigrationName(long, "miles")
+	n := drainMigrationName(long, "worker-2")
 	if len(n) > maxMigrationNameLen {
 		t.Errorf("name %q (len %d) exceeds the %d-char label-value bound", n, len(n), maxMigrationNameLen)
 	}
@@ -357,9 +357,9 @@ func TestDrainMode(t *testing.T) {
 // guard: a SwiftMigration get error other than NotFound is surfaced.
 func TestObserveMigration_InProgress_NoOp(t *testing.T) {
 	r, _ := newR()
-	g := guest("g", drain("miles"))
+	g := guest("g", drain("worker-2"))
 	m := drainMig("x", migrationv1alpha1.SwiftMigrationPhasePreparing)
-	res, err := r.observeMigration(context.Background(), g, m, "miles")
+	res, err := r.observeMigration(context.Background(), g, m, "worker-2")
 	if err != nil {
 		t.Fatalf("observeMigration: %v", err)
 	}

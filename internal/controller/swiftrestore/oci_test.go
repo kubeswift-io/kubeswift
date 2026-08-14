@@ -35,7 +35,7 @@ func ociRestore() *snapshotv1alpha1.SwiftRestore {
 		Spec: snapshotv1alpha1.SwiftRestoreSpec{
 			SnapshotRef: snapshotv1alpha1.SwiftRestoreSnapshotRef{Name: "snap1"},
 			TargetGuest: snapshotv1alpha1.SwiftRestoreTarget{Name: "g1"},
-			TargetNode:  "miles",
+			TargetNode:  "worker-2",
 		},
 	}
 }
@@ -52,12 +52,12 @@ func TestOCIRestoreTag(t *testing.T) {
 }
 
 func TestBuildOCIDownloadJob(t *testing.T) {
-	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(true), "img:tag", "miles")
+	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(true), "img:tag", "worker-2")
 	if job.Name != "r1-oci-download" || job.Namespace != "team-a" {
 		t.Errorf("job meta = %s/%s", job.Namespace, job.Name)
 	}
 	pod := job.Spec.Template.Spec
-	if pod.NodeName != "miles" {
+	if pod.NodeName != "worker-2" {
 		t.Errorf("not pinned to restore node: %q", pod.NodeName)
 	}
 	c := pod.Containers[0]
@@ -93,7 +93,7 @@ func TestBuildOCIDownloadJob(t *testing.T) {
 }
 
 func TestBuildOCIDownloadJob_Anonymous(t *testing.T) {
-	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(false), "img:tag", "miles")
+	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(false), "img:tag", "worker-2")
 	pod := job.Spec.Template.Spec
 	for _, e := range pod.Containers[0].Env {
 		if e.Name == "DOCKER_CONFIG" {

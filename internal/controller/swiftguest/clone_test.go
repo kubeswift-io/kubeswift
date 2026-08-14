@@ -70,7 +70,7 @@ func localSnap(phase snapshotv1alpha1.SwiftSnapshotPhase) *snapshotv1alpha1.Swif
 				Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/ns-snap"},
 			},
 		},
-		Status: snapshotv1alpha1.SwiftSnapshotStatus{Phase: phase, NodeName: "boba"},
+		Status: snapshotv1alpha1.SwiftSnapshotStatus{Phase: phase, NodeName: "worker-1"},
 	}
 }
 
@@ -101,7 +101,7 @@ func TestPrepareCloneFromSnapshot_TierB(t *testing.T) {
 	}
 	if got.Annotations[AnnotationActiveRestore] != "snap" ||
 		got.Annotations[AnnotationRestoreMode] != RestoreModeClone ||
-		got.Annotations[AnnotationRestoreNodeName] != "boba" ||
+		got.Annotations[AnnotationRestoreNodeName] != "worker-1" ||
 		got.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns-snap" ||
 		got.Annotations[AnnotationRestoreMACRewrites] == "" ||
 		got.Annotations[AnnotationRestoreNullifyHostMAC] != "true" {
@@ -150,7 +150,7 @@ func TestPrepareCloneFromSnapshot_TierC_RequiresTargetNode(t *testing.T) {
 
 func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "miles"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-2"
 	r, c := newCloneReconciler(t, g, sourceGuest(), s3CloneSnap())
 	r.SnapshotS3Image = "img"
 
@@ -160,12 +160,12 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 		t.Fatalf("first pass should create the download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
 	var job batchv1.Job
-	wantJob := cloneDownloadJobName(s3CloneSnap(), "miles")
+	wantJob := cloneDownloadJobName(s3CloneSnap(), "worker-2")
 	if err := c.Get(context.Background(), client.ObjectKey{Name: wantJob, Namespace: "ns"}, &job); err != nil {
 		t.Fatalf("download Job not created: %v", err)
 	}
-	if job.Spec.Template.Spec.NodeName != "miles" {
-		t.Errorf("download Job must pin to targetNode miles; got %q", job.Spec.Template.Spec.NodeName)
+	if job.Spec.Template.Spec.NodeName != "worker-2" {
+		t.Errorf("download Job must pin to targetNode worker-2; got %q", job.Spec.Template.Spec.NodeName)
 	}
 	// The shared Job is owned by the clone guest that created it.
 	if oc := metav1.GetControllerOf(&job); oc == nil || oc.Kind != "SwiftGuest" || oc.Name != "clone-a" {
@@ -181,7 +181,7 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 	if err != nil || fail != "" || requeue || eff == nil {
 		t.Fatalf("after download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
-	if g.Annotations[AnnotationRestoreNodeName] != "miles" ||
+	if g.Annotations[AnnotationRestoreNodeName] != "worker-2" ||
 		g.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns-snap" {
 		t.Errorf("Tier C restore annotations wrong: %+v", g.Annotations)
 	}
@@ -222,7 +222,7 @@ func TestPrepareCloneFromSnapshot_OCI_RequiresTargetNode(t *testing.T) {
 
 func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	r, c := newCloneReconciler(t, g, sourceGuest(), ociCloneSnap())
 	r.SnapshotORASImage = "img"
 
@@ -232,7 +232,7 @@ func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 		t.Fatalf("first pass should create the oci download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
 	var job batchv1.Job
-	wantJob := cloneDownloadJobName(ociCloneSnap(), "boba")
+	wantJob := cloneDownloadJobName(ociCloneSnap(), "worker-1")
 	if err := c.Get(context.Background(), client.ObjectKey{Name: wantJob, Namespace: "ns"}, &job); err != nil {
 		t.Fatalf("oci download Job not created: %v", err)
 	}
@@ -240,8 +240,8 @@ func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 	if !strings.Contains(args, "--mode=download") || !strings.Contains(args, "--repository=zot.svc:5000/vmsnap") || !strings.Contains(args, "--digest=sha256:abc") {
 		t.Errorf("download Job is not an oci pull-by-digest: %q", args)
 	}
-	if job.Spec.Template.Spec.NodeName != "boba" {
-		t.Errorf("oci download Job must pin to targetNode boba; got %q", job.Spec.Template.Spec.NodeName)
+	if job.Spec.Template.Spec.NodeName != "worker-1" {
+		t.Errorf("oci download Job must pin to targetNode worker-1; got %q", job.Spec.Template.Spec.NodeName)
 	}
 
 	// Mark the Job complete; second pass should proceed (effective + stamped).
@@ -258,20 +258,20 @@ func TestPrepareCloneFromSnapshot_OCI_DownloadsThenProceeds(t *testing.T) {
 func TestCloneDownloadJobName_PerNodeSnapshot(t *testing.T) {
 	snap := s3CloneSnap()
 	// Deterministic + DNS-1123 valid + guest-independent.
-	if a, b := cloneDownloadJobName(snap, "miles"), cloneDownloadJobName(snap, "miles"); a != b {
+	if a, b := cloneDownloadJobName(snap, "worker-2"), cloneDownloadJobName(snap, "worker-2"); a != b {
 		t.Errorf("name must be deterministic; got %q vs %q", a, b)
 	}
-	if !strings.HasPrefix(cloneDownloadJobName(snap, "miles"), "clone-dl-") {
-		t.Errorf("name must carry the clone-dl- prefix; got %q", cloneDownloadJobName(snap, "miles"))
+	if !strings.HasPrefix(cloneDownloadJobName(snap, "worker-2"), "clone-dl-") {
+		t.Errorf("name must carry the clone-dl- prefix; got %q", cloneDownloadJobName(snap, "worker-2"))
 	}
 	// Different node → different Job (each node's cache is a separate hostPath).
-	if cloneDownloadJobName(snap, "miles") == cloneDownloadJobName(snap, "boba") {
+	if cloneDownloadJobName(snap, "worker-2") == cloneDownloadJobName(snap, "worker-1") {
 		t.Error("different nodes must yield different download Job names")
 	}
 	// Different snapshot → different Job.
 	other := s3CloneSnap()
 	other.Name = "snap2"
-	if cloneDownloadJobName(snap, "miles") == cloneDownloadJobName(other, "miles") {
+	if cloneDownloadJobName(snap, "worker-2") == cloneDownloadJobName(other, "worker-2") {
 		t.Error("different snapshots must yield different download Job names")
 	}
 }
@@ -287,9 +287,9 @@ func TestEnsureCloneDownloadJob_DedupPerNodeSnapshot(t *testing.T) {
 	r, c := newCloneReconciler(t, gA, gB, snap)
 	r.SnapshotS3Image = "img"
 
-	// Two distinct clone guests, both targeting node "miles".
+	// Two distinct clone guests, both targeting node "worker-2".
 	for _, g := range []*swiftv1alpha1.SwiftGuest{gA, gB} {
-		done, fail, err := r.ensureCloneDownloadJob(context.Background(), g, snap, "miles")
+		done, fail, err := r.ensureCloneDownloadJob(context.Background(), g, snap, "worker-2")
 		if err != nil || fail != "" || done {
 			t.Fatalf("%s: expected in-progress (not done, no fail); done=%v fail=%q err=%v", g.Name, done, fail, err)
 		}
@@ -300,11 +300,11 @@ func TestEnsureCloneDownloadJob_DedupPerNodeSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(jobs.Items) != 1 {
-		t.Fatalf("expected exactly ONE shared download Job for (miles, snap); got %d: %v", len(jobs.Items), jobNames(jobs))
+		t.Fatalf("expected exactly ONE shared download Job for (worker-2, snap); got %d: %v", len(jobs.Items), jobNames(jobs))
 	}
 	job := jobs.Items[0]
-	if job.Name != cloneDownloadJobName(snap, "miles") {
-		t.Errorf("shared Job name = %q, want %q", job.Name, cloneDownloadJobName(snap, "miles"))
+	if job.Name != cloneDownloadJobName(snap, "worker-2") {
+		t.Errorf("shared Job name = %q, want %q", job.Name, cloneDownloadJobName(snap, "worker-2"))
 	}
 	// Owned by the race-winner (clone-a, created first here); the sibling reads it.
 	if oc := metav1.GetControllerOf(&job); oc == nil || oc.Kind != "SwiftGuest" || oc.Name != "clone-a" {
@@ -312,7 +312,7 @@ func TestEnsureCloneDownloadJob_DedupPerNodeSnapshot(t *testing.T) {
 	}
 
 	// A clone on a DIFFERENT node gets its own Job (separate node-local cache).
-	if _, _, err := r.ensureCloneDownloadJob(context.Background(), gA, snap, "boba"); err != nil {
+	if _, _, err := r.ensureCloneDownloadJob(context.Background(), gA, snap, "worker-1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.List(context.Background(), &jobs, client.InNamespace("ns")); err != nil {
@@ -435,7 +435,7 @@ func completeCloneDownload(t *testing.T, r *SwiftGuestReconciler, c client.Clien
 		t.Fatalf("first pass should create the oci download Job + requeue; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
 	var job batchv1.Job
-	if err := c.Get(context.Background(), client.ObjectKey{Name: cloneDownloadJobName(snap, "boba"), Namespace: "ns"}, &job); err != nil {
+	if err := c.Get(context.Background(), client.ObjectKey{Name: cloneDownloadJobName(snap, "worker-1"), Namespace: "ns"}, &job); err != nil {
 		t.Fatalf("oci download Job not created: %v", err)
 	}
 	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
@@ -446,7 +446,7 @@ func completeCloneDownload(t *testing.T, r *SwiftGuestReconciler, c client.Clien
 
 func TestPrepareCloneFromSnapshot_SourceGone_FullState_ResolvesFromCaptured(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "cls"}
 	snap := fullStateSnap()
 	// NO source guest in the cluster — the source-independent path must fire.
@@ -492,7 +492,7 @@ func TestPrepareCloneFromSnapshot_SourceGone_FullState_ResolvesFromCaptured(t *t
 
 func TestPrepareCloneFromSnapshot_SourceGone_MemoryOnly_Fails(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	snap := ociCloneSnap() // memory-only: no status.oci.disk, no captured surface
 	r, c := newCloneReconciler(t, g, snap)
 	r.SnapshotORASImage = "img"
@@ -509,7 +509,7 @@ func TestPrepareCloneFromSnapshot_SourceGone_MemoryOnly_Fails(t *testing.T) {
 
 func TestPrepareCloneFromSnapshot_SourceGone_DataDisks_Fails(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "cls"}
 	snap := fullStateSnap()
 	snap.Status.GuestSpec.HasDataDisks = true
@@ -528,7 +528,7 @@ func TestPrepareCloneFromSnapshot_SourceGone_DataDisks_Fails(t *testing.T) {
 
 func TestPrepareCloneFromSnapshot_SourceGone_NoGuestClass_Fails(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	g.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "missing-cls"}
 	snap := fullStateSnap()
 	r, c := newCloneReconciler(t, g, snap) // class NOT in the cluster

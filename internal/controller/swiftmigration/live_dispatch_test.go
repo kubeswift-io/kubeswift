@@ -26,7 +26,7 @@ func TestDispatch_Validating_LiveMode_RoutesToLiveBody(t *testing.T) {
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
-		Status:     swiftv1alpha1.SwiftGuestStatus{NodeName: "miles"},
+		Status:     swiftv1alpha1.SwiftGuestStatus{NodeName: "worker-2"},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).

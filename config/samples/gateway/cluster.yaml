@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: boba-kubeconfig
+  name: edge-1-kubeconfig
   namespace: kubeswift-system
 type: Opaque
 stringData:
@@ -16,31 +16,31 @@ stringData:
     apiVersion: v1
     kind: Config
     clusters:
-      - name: boba
+      - name: edge-1
         cluster:
-          server: https://boba.example.com:6443
+          server: https://edge-1.example.com:6443
           # certificate-authority-data: <base64 CA>
     users:
       - name: kubeswift-gateway
         user:
           token: <member service-account token>
     contexts:
-      - name: boba
+      - name: edge-1
         context:
-          cluster: boba
+          cluster: edge-1
           user: kubeswift-gateway
-    current-context: boba
+    current-context: edge-1
 ---
 apiVersion: fleet.kubeswift.io/v1alpha1
 kind: Cluster
 metadata:
-  name: boba
+  name: edge-1
   namespace: kubeswift-system
 spec:
   # Optional when the kubeconfig already names the server.
-  server: https://boba.example.com:6443
+  server: https://edge-1.example.com:6443
   credentialSecretRef:
-    name: boba-kubeconfig
+    name: edge-1-kubeconfig
   # Optional: per-member Prometheus for VM telemetry (P1).
   # prometheusEndpoint: http://prometheus.monitoring.svc:9090
-  displayName: Boba (lab)
+  displayName: Edge 1 (lab)

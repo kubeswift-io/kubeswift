@@ -35,7 +35,7 @@ func readyDstPod(name, ns, node string) *corev1.Pod {
 // Resuming test.
 func guestRunning(name, ns string, ip string) *swiftv1alpha1.SwiftGuest {
 	g := newGuestForValidating(name, ns, "class-default")
-	g.Status.NodeName = "miles"
+	g.Status.NodeName = "worker-2"
 	g.Status.Conditions = []metav1.Condition{
 		{Type: guestRunningConditionType, Status: metav1.ConditionTrue},
 	}
@@ -56,12 +56,12 @@ func TestResuming_GuestRunningPlusIP_TransitionsToCompleted(t *testing.T) {
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
 	startedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
 	mig.Status.StartedAt = &startedAt
-	mig.Status.SourceNode = "boba"
-	mig.Status.DestinationNode = "miles"
+	mig.Status.SourceNode = "worker-1"
+	mig.Status.DestinationNode = "worker-2"
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "worker-2")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -118,7 +118,7 @@ func TestResuming_GuestRunningButNoIP_StaysInResuming(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "worker-2")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -144,7 +144,7 @@ func TestResuming_GuestRunningButNoIP_StaysInResuming(t *testing.T) {
 func TestResuming_GuestNotRunning_StaysInResuming(t *testing.T) {
 	scheme := preparingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
-	guest.Status.NodeName = "miles"
+	guest.Status.NodeName = "worker-2"
 	// No GuestRunning condition; or False.
 	guest.Status.Conditions = []metav1.Condition{
 		{Type: guestRunningConditionType, Status: metav1.ConditionFalse},
@@ -157,7 +157,7 @@ func TestResuming_GuestNotRunning_StaysInResuming(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(mig, guest, readyDstPod("guest", "default", "miles")).
+		WithObjects(mig, guest, readyDstPod("guest", "default", "worker-2")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
@@ -207,11 +207,11 @@ func TestResuming_DstInitFailed_Fails(t *testing.T) {
 	guest := guestRunning("guest", "default", "10.244.125.17") // stale True + IP from source
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
-	mig.Status.DestinationNode = "miles"
+	mig.Status.DestinationNode = "worker-2"
 
 	dstPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
-		Spec:       corev1.PodSpec{NodeName: "miles"},
+		Spec:       corev1.PodSpec{NodeName: "worker-2"},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodPending,
 			InitContainerStatuses: []corev1.ContainerStatus{
@@ -241,11 +241,11 @@ func TestResuming_DstLauncherNotReady_StaysInResuming(t *testing.T) {
 	guest := guestRunning("guest", "default", "10.244.125.17") // stale True + IP
 	mig := newMigration("m", "default")
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseResuming
-	mig.Status.DestinationNode = "miles"
+	mig.Status.DestinationNode = "worker-2"
 
 	dstPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
-		Spec:       corev1.PodSpec{NodeName: "miles", Containers: []corev1.Container{{Name: "launcher"}}},
+		Spec:       corev1.PodSpec{NodeName: "worker-2", Containers: []corev1.Container{{Name: "launcher"}}},
 		Status: corev1.PodStatus{
 			Phase:             corev1.PodRunning,
 			ContainerStatuses: []corev1.ContainerStatus{{Name: "launcher", Ready: false}}, // not ready yet

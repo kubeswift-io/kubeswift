@@ -45,13 +45,13 @@ func TestBuildOCIPushJob_WithCredentials(t *testing.T) {
 		o.Insecure = true
 		o.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
 	})
-	job := buildOCIPushJob(snap, "img:tag", "boba")
+	job := buildOCIPushJob(snap, "img:tag", "worker-1")
 
 	if job.Name != "snap1-oci-push" || job.Namespace != "team-a" {
 		t.Errorf("job meta = %s/%s", job.Namespace, job.Name)
 	}
 	pod := job.Spec.Template.Spec
-	if pod.NodeName != "boba" {
+	if pod.NodeName != "worker-1" {
 		t.Errorf("not pinned to capture node: %q", pod.NodeName)
 	}
 	c := pod.Containers[0]
@@ -97,7 +97,7 @@ func TestBuildOCIPushJob_WithCredentials(t *testing.T) {
 }
 
 func TestBuildOCIPushJob_Anonymous(t *testing.T) {
-	job := buildOCIPushJob(ociSnap(nil), "img:tag", "miles")
+	job := buildOCIPushJob(ociSnap(nil), "img:tag", "worker-2")
 	pod := job.Spec.Template.Spec
 	for _, e := range pod.Containers[0].Env {
 		if e.Name == "DOCKER_CONFIG" {
@@ -138,7 +138,7 @@ func TestBuildOCIPushJob_WithSigning(t *testing.T) {
 	snap := ociSnap(func(o *snapshotv1alpha1.OCIBackend) {
 		o.SigningKeySecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "cosign-key"}
 	})
-	pod := buildOCIPushJob(snap, "img:tag", "boba").Spec.Template.Spec
+	pod := buildOCIPushJob(snap, "img:tag", "worker-1").Spec.Template.Spec
 	c := pod.Containers[0]
 
 	if !strings.Contains(strings.Join(c.Args, " "), "--sign-key=/oras-signing-key/cosign.key") {

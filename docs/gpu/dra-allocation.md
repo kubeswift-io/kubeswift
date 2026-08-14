@@ -126,7 +126,7 @@ sysfs (no NVIDIA userspace needed), and publishes one `ResourceSlice` per node:
 ```
 $ kubectl get resourceslice
 NAME                          NODE   DRIVER             POOL   AGE
-boba-gpu.kubeswift.io-mg7pp   boba   gpu.kubeswift.io   boba   18m
+worker-1-gpu.kubeswift.io-mg7pp   worker-1   gpu.kubeswift.io   worker-1   18m
 ```
 
 Each device carries the attributes `pciAddress`, `vendorDevice` (PCI
@@ -191,10 +191,10 @@ dra-gpu-vm-gpu-vkt4l   allocated,reserved   1m
 
 $ kubectl get swiftguest dra-gpu-vm
 NAME         PHASE     NODE   IP              AGE
-dra-gpu-vm   Running   boba   192.168.99.13   2m
+dra-gpu-vm   Running   worker-1   192.168.99.13   2m
 
 $ kubectl get swiftguest dra-gpu-vm -o jsonpath='{.status.gpu}'
-{"devices":["0000:01:00.0"],"hypervisor":"cloud-hypervisor","nodeName":"boba","partitionId":-1}
+{"devices":["0000:01:00.0"],"hypervisor":"cloud-hypervisor","nodeName":"worker-1","partitionId":-1}
 
 $ swiftctl ssh dra-gpu-vm -- lspci | grep -i nvidia
 01:00.0 VGA compatible controller: NVIDIA Corporation GP104 [GeForce GTX 1080]
@@ -259,7 +259,7 @@ mutually exclusive with `gpuProfileRef`, `kernelRef`, `cloneFromSnapshot`, and
 - **`GPUClaimPending=True`** — the guest is DRA-backed and the scheduler has
   not allocated yet (or the controller hasn't observed it). The launcher pod
   exists and is what the scheduler is placing. Cleared once resolved.
-- **`GPUAllocated=True`** (`allocated 1 GPU(s) on node boba`) — the allocation
+- **`GPUAllocated=True`** (`allocated 1 GPU(s) on node worker-1`) — the allocation
   was read back from the claim into `status.gpu`
   (`devices`, `nodeName`, `hypervisor`, `partitionId: -1`).
 - `kubectl get resourceclaim` shows the authoritative allocation state

@@ -531,7 +531,7 @@ func TestBuildPod_NodeName_DiskBoot(t *testing.T) {
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			ImageRef:      &corev1.LocalObjectReference{Name: "img"},
 			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
-			NodeName:      "miles",
+			NodeName:      "worker-2",
 		},
 	}
 	rg := &resolved.ResolvedGuest{
@@ -542,8 +542,8 @@ func TestBuildPod_NodeName_DiskBoot(t *testing.T) {
 
 	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
-	if pod.Spec.NodeName != "miles" {
-		t.Errorf("pod.Spec.NodeName = %q, want miles", pod.Spec.NodeName)
+	if pod.Spec.NodeName != "worker-2" {
+		t.Errorf("pod.Spec.NodeName = %q, want worker-2", pod.Spec.NodeName)
 	}
 	if pod.Spec.NodeSelector != nil {
 		t.Errorf("disk-boot pod should not have NodeSelector when spec.NodeName is set; got %v", pod.Spec.NodeSelector)
@@ -561,7 +561,7 @@ func TestBuildPod_NodeName_KernelBoot(t *testing.T) {
 		Spec: swiftv1alpha1.SwiftGuestSpec{
 			KernelRef:     &corev1.LocalObjectReference{Name: "k"},
 			GuestClassRef: corev1.LocalObjectReference{Name: "class"},
-			NodeName:      "miles",
+			NodeName:      "worker-2",
 		},
 	}
 	rg := &resolved.ResolvedGuest{
@@ -575,8 +575,8 @@ func TestBuildPod_NodeName_KernelBoot(t *testing.T) {
 
 	pod := BuildPod(guest, rg, "", "test-intent", nil)
 
-	if pod.Spec.NodeName != "miles" {
-		t.Errorf("pod.Spec.NodeName = %q, want miles", pod.Spec.NodeName)
+	if pod.Spec.NodeName != "worker-2" {
+		t.Errorf("pod.Spec.NodeName = %q, want worker-2", pod.Spec.NodeName)
 	}
 	if pod.Spec.NodeSelector["kubeswift.io/kernel-node"] != "true" {
 		t.Errorf("kubeswift.io/kernel-node selector should be preserved; got %v", pod.Spec.NodeSelector)
@@ -852,11 +852,11 @@ func TestApplySchedulerName_EmptyLeavesClusterDefault(t *testing.T) {
 // would be inert text in the pod spec that reads as if it took effect.
 func TestApplySchedulerName_NodeNameWins(t *testing.T) {
 	pod := &corev1.Pod{}
-	guest := schedulerNameGuest("least-allocated", "boba")
+	guest := schedulerNameGuest("least-allocated", "worker-1")
 	applyNodeName(pod, guest)
 	applySchedulerName(pod, guest)
-	if pod.Spec.NodeName != "boba" {
-		t.Fatalf("nodeName = %q, want boba", pod.Spec.NodeName)
+	if pod.Spec.NodeName != "worker-1" {
+		t.Fatalf("nodeName = %q, want worker-1", pod.Spec.NodeName)
 	}
 	if pod.Spec.SchedulerName != "" {
 		t.Fatalf("schedulerName = %q, want empty: direct binding skips the scheduler", pod.Spec.SchedulerName)

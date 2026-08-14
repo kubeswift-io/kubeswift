@@ -29,15 +29,15 @@ func fakeProm() *httptest.Server {
 func TestTelemetryService_GetGuestMetrics(t *testing.T) {
 	prom := fakeProm()
 	defer prom.Close()
-	boba := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
+	edge1 := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
 	prov := &fakeProvider{
-		clients: map[string]dynamic.Interface{"boba": boba},
-		prom:    map[string]string{"boba": prom.URL},
+		clients: map[string]dynamic.Interface{"edge-1": edge1},
+		prom:    map[string]string{"edge-1": prom.URL},
 	}
 	svc := NewTelemetryService(prov, NewInsecureAuthenticator())
 
 	resp, err := svc.GetGuestMetrics(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestMetricsRequest{
-		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "edge-1", Namespace: "default", Name: "vm-a"},
 	}))
 	if err != nil {
 		t.Fatalf("GetGuestMetrics: %v", err)
@@ -63,18 +63,18 @@ func TestTelemetryService_GetGuestMetrics(t *testing.T) {
 }
 
 func TestTelemetryService_NoEndpoint(t *testing.T) {
-	boba := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
-	prov := &fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}} // no prom endpoint
+	edge1 := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": edge1}} // no prom endpoint
 	svc := NewTelemetryService(prov, NewInsecureAuthenticator())
 
 	resp, err := svc.GetGuestMetrics(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestMetricsRequest{
-		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "edge-1", Namespace: "default", Name: "vm-a"},
 	}))
 	if err != nil {
 		t.Fatalf("GetGuestMetrics: %v", err)
 	}
 	// No silent empty chart: an unconfigured endpoint surfaces as a cluster error.
-	if resp.Msg.Error == nil || resp.Msg.Error.Cluster != "boba" {
+	if resp.Msg.Error == nil || resp.Msg.Error.Cluster != "edge-1" {
 		t.Errorf("want a cluster error for the missing endpoint, got %+v", resp.Msg.Error)
 	}
 }
@@ -95,15 +95,15 @@ func TestTelemetryService_GetNodeMetrics_ValidPromQL(t *testing.T) {
 	}))
 	defer prom.Close()
 
-	boba := fakeExplorerDyn(mkNode("boba", true)) // mkNode sets InternalIP 10.0.0.1
+	edge1 := fakeExplorerDyn(mkNode("edge-1", true)) // mkNode sets InternalIP 10.0.0.1
 	prov := &fakeProvider{
-		clients: map[string]dynamic.Interface{"boba": boba},
-		prom:    map[string]string{"boba": prom.URL},
+		clients: map[string]dynamic.Interface{"edge-1": edge1},
+		prom:    map[string]string{"edge-1": prom.URL},
 	}
 	svc := NewTelemetryService(prov, NewInsecureAuthenticator())
 
 	resp, err := svc.GetNodeMetrics(context.Background(), connect.NewRequest(&kubeswiftv1.GetNodeMetricsRequest{
-		Cluster: "boba", Node: "boba",
+		Cluster: "edge-1", Node: "edge-1",
 	}))
 	if err != nil {
 		t.Fatalf("GetNodeMetrics: %v", err)
@@ -136,15 +136,15 @@ func TestTelemetryService_GetNodeMetrics_ValidPromQL(t *testing.T) {
 func TestTelemetryService_StoppedGuestNoPod(t *testing.T) {
 	prom := fakeProm()
 	defer prom.Close()
-	boba := fakeDyn(uGuest("default", "vm-a", "Stopped")) // no launcher pod
+	edge1 := fakeDyn(uGuest("default", "vm-a", "Stopped")) // no launcher pod
 	prov := &fakeProvider{
-		clients: map[string]dynamic.Interface{"boba": boba},
-		prom:    map[string]string{"boba": prom.URL},
+		clients: map[string]dynamic.Interface{"edge-1": edge1},
+		prom:    map[string]string{"edge-1": prom.URL},
 	}
 	svc := NewTelemetryService(prov, NewInsecureAuthenticator())
 
 	resp, err := svc.GetGuestMetrics(context.Background(), connect.NewRequest(&kubeswiftv1.GetGuestMetricsRequest{
-		Ref: &kubeswiftv1.ObjectRef{Cluster: "boba", Namespace: "default", Name: "vm-a"},
+		Ref: &kubeswiftv1.ObjectRef{Cluster: "edge-1", Namespace: "default", Name: "vm-a"},
 	}))
 	if err != nil {
 		t.Fatalf("GetGuestMetrics: %v", err)

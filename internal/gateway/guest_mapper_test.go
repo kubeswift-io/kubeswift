@@ -22,7 +22,7 @@ func TestGuestToProto(t *testing.T) {
 		},
 		Status: swiftv1alpha1.SwiftGuestStatus{
 			Phase:    swiftv1alpha1.SwiftGuestPhaseRunning,
-			NodeName: "miles",
+			NodeName: "edge-2",
 			Runtime:  &swiftv1alpha1.GuestRuntimeStatus{Hypervisor: "cloud-hypervisor"},
 			Network:  &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.168.99.11"},
 			Conditions: []metav1.Condition{
@@ -30,14 +30,14 @@ func TestGuestToProto(t *testing.T) {
 			},
 		},
 	}
-	got := guestToProto("boba", g)
-	if got.GetRef().GetCluster() != "boba" || got.GetRef().GetNamespace() != "default" || got.GetRef().GetName() != "vm-a" {
+	got := guestToProto("edge-1", g)
+	if got.GetRef().GetCluster() != "edge-1" || got.GetRef().GetNamespace() != "default" || got.GetRef().GetName() != "vm-a" {
 		t.Errorf("ref wrong: %+v", got.GetRef())
 	}
 	if got.Phase != "Running" {
 		t.Errorf("Phase = %q", got.Phase)
 	}
-	if got.NodeName != "miles" {
+	if got.NodeName != "edge-2" {
 		t.Errorf("NodeName = %q", got.NodeName)
 	}
 	if got.Hypervisor != "cloud-hypervisor" {

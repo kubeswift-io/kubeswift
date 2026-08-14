@@ -25,14 +25,14 @@ func uMigration(ns, name, guest, target, phase string, progress int64) *unstruct
 			"phase":            phase,
 			"transferProgress": progress,
 			"observedDowntime": "1.8s",
-			"sourceNode":       "boba",
+			"sourceNode":       "edge-1",
 		},
 	}}
 }
 
 func TestMigrationService_ListMigrations(t *testing.T) {
-	boba := fakeDyn(uMigration("default", "m1", "vm-a", "miles", "StopAndCopy", 65))
-	svc := NewMigrationService(&fakeProvider{clients: map[string]dynamic.Interface{"boba": boba}}, NewInsecureAuthenticator())
+	edge1 := fakeDyn(uMigration("default", "m1", "vm-a", "edge-2", "StopAndCopy", 65))
+	svc := NewMigrationService(&fakeProvider{clients: map[string]dynamic.Interface{"edge-1": edge1}}, NewInsecureAuthenticator())
 
 	resp, err := svc.ListMigrations(context.Background(), connect.NewRequest(&kubeswiftv1.ListMigrationsRequest{}))
 	if err != nil {
@@ -42,7 +42,7 @@ func TestMigrationService_ListMigrations(t *testing.T) {
 		t.Fatalf("want 1 migration, got %d", len(resp.Msg.Migrations))
 	}
 	m := resp.Msg.Migrations[0]
-	if m.GetGuest() != "vm-a" || m.GetTargetNode() != "miles" || m.GetSourceNode() != "boba" {
+	if m.GetGuest() != "vm-a" || m.GetTargetNode() != "edge-2" || m.GetSourceNode() != "edge-1" {
 		t.Errorf("node/guest mapping wrong: %+v", m)
 	}
 	if m.GetPhase() != "StopAndCopy" || m.GetMode() != "live" {
@@ -54,7 +54,7 @@ func TestMigrationService_ListMigrations(t *testing.T) {
 	if d := m.GetObservedDowntimeSeconds(); d < 1.7 || d > 1.9 {
 		t.Errorf("observedDowntime = %v, want ~1.8 (parsed from \"1.8s\")", d)
 	}
-	if m.GetRef().GetCluster() != "boba" {
+	if m.GetRef().GetCluster() != "edge-1" {
 		t.Errorf("cluster dimension missing: %+v", m.GetRef())
 	}
 }

@@ -138,7 +138,7 @@ func TestMigrate_CreatesSwiftMigration(t *testing.T) {
 	created, err := Migrate(context.Background(), dyn, MigrateParams{
 		Namespace:     "default",
 		GuestName:     "vm-a",
-		TargetNode:    "miles",
+		TargetNode:    "worker-2",
 		Mode:          "offline",
 		AllowIPChange: true,
 		Reason:        "test",
@@ -167,7 +167,7 @@ func TestMigrate_CreatesSwiftMigration(t *testing.T) {
 	reason, _, _ := unstructured.NestedString(m.Object, "spec", "reason")
 	timeout, _, _ := unstructured.NestedString(m.Object, "spec", "timeout")
 	ttl, _, _ := unstructured.NestedString(m.Object, "spec", "ttl")
-	if guestName != "vm-a" || node != "miles" || mode != "offline" || !allowIP || reason != "test" {
+	if guestName != "vm-a" || node != "worker-2" || mode != "offline" || !allowIP || reason != "test" {
 		t.Errorf("spec wrong: guest=%q node=%q mode=%q allowIP=%v reason=%q", guestName, node, mode, allowIP, reason)
 	}
 	if timeout != "10m0s" || ttl != "1h0m0s" {
@@ -183,7 +183,7 @@ func TestMigrate_DefaultsModeAndName(t *testing.T) {
 	if _, err := Migrate(context.Background(), dyn, MigrateParams{
 		Namespace:  "default",
 		GuestName:  "vm-a",
-		TargetNode: "miles",
+		TargetNode: "worker-2",
 	}); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestMigrate_ExplicitName(t *testing.T) {
 	created, err := Migrate(context.Background(), dyn, MigrateParams{
 		Namespace:  "default",
 		GuestName:  "vm-a",
-		TargetNode: "miles",
+		TargetNode: "worker-2",
 		Name:       "vm-a-rebalance",
 	})
 	if err != nil {

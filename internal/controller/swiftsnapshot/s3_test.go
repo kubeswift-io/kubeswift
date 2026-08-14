@@ -61,10 +61,10 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 		s.Spec.Backend.S3.ForcePathStyle = true
 		s.Spec.Backend.S3.Insecure = true
 	})
-	job := buildUploadJob(s, "ghcr.io/x/snapshot-s3:t", "boba")
+	job := buildUploadJob(s, "ghcr.io/x/snapshot-s3:t", "worker-1")
 	pod := job.Spec.Template.Spec
 
-	if pod.NodeName != "boba" {
+	if pod.NodeName != "worker-1" {
 		t.Errorf("job must pin to the capture node; got %q", pod.NodeName)
 	}
 	if pod.RestartPolicy != corev1.RestartPolicyOnFailure {
@@ -122,7 +122,7 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 func TestBuildUploadJob_OptionalFlagsOmitted(t *testing.T) {
 	// No region/endpoint/path-style/memory => those flags absent.
 	s := s3Snap("snap1", "ns", nil)
-	job := buildUploadJob(s, "img", "miles")
+	job := buildUploadJob(s, "img", "worker-2")
 	a := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
 	for _, absent := range []string{"--region", "--endpoint", "--path-style", "--insecure", "--include-memory"} {
 		if strings.Contains(a, absent) {
@@ -141,7 +141,7 @@ func uploadJobWith(snap *snapshotv1alpha1.SwiftSnapshot, cond batchv1.JobConditi
 
 func TestHandleUploading(t *testing.T) {
 	base := s3Snap("snap1", "ns", nil)
-	base.Status.NodeName = "boba"
+	base.Status.NodeName = "worker-1"
 
 	t.Run("complete -> Ready + status.S3", func(t *testing.T) {
 		snap := base.DeepCopy()

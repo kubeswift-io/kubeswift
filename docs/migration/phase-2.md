@@ -47,7 +47,7 @@ Operators on production clusters should not use this workflow. The unsafe-plaint
 
 ## Prerequisites
 
-- Two-node cluster with both nodes labelled `kubeswift.io/launcher-node=true`. The smoke-test miles + boba pair is the validated configuration.
+- Two-node cluster with both nodes labelled `kubeswift.io/launcher-node=true`. The smoke-test worker-2 + worker-1 pair is the validated configuration.
 - The same swiftletd image deployed cluster-wide. Phase 2 mandates exact-image-tag match across source and destination CH (Phase 2 Decision 3 — `spec.allowVersionSkew` lands in Phase 3).
 - A running SwiftGuest on the source node with a known sentinel marker file the operator can verify post-migration.
 - Operator-level RBAC on the namespace (pods/get, pods/patch, pods/exec, pods/log, swiftguests/get).

@@ -246,7 +246,7 @@ func TestStampSourceMigrationInputs_PatchesAndIsIdempotent(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(5)}
 	ctx := context.Background()
 
-	if err := r.stampSourceMigrationInputs(ctx, src, "10.0.0.9", "miles"); err != nil {
+	if err := r.stampSourceMigrationInputs(ctx, src, "10.0.0.9", "worker-2"); err != nil {
 		t.Fatalf("stamp: %v", err)
 	}
 	var got corev1.Pod
@@ -256,11 +256,11 @@ func TestStampSourceMigrationInputs_PatchesAndIsIdempotent(t *testing.T) {
 	if got.Annotations[migrationsidecar.AnnotationDstPodIP] != "10.0.0.9" {
 		t.Errorf("dst-ip annotation: got %q", got.Annotations[migrationsidecar.AnnotationDstPodIP])
 	}
-	if got.Annotations[migrationsidecar.AnnotationPeerSAN] != "miles" {
+	if got.Annotations[migrationsidecar.AnnotationPeerSAN] != "worker-2" {
 		t.Errorf("peer-san annotation: got %q", got.Annotations[migrationsidecar.AnnotationPeerSAN])
 	}
 	// Idempotent: second call with same values is a no-op (no error).
-	if err := r.stampSourceMigrationInputs(ctx, &got, "10.0.0.9", "miles"); err != nil {
+	if err := r.stampSourceMigrationInputs(ctx, &got, "10.0.0.9", "worker-2"); err != nil {
 		t.Errorf("idempotent stamp errored: %v", err)
 	}
 }
@@ -272,7 +272,7 @@ func TestPopulateSourceIdentity_CopiesNodeIdentityIntoPerGuestSecret(t *testing.
 	const sysNS = "kubeswift-system"
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "team-a", UID: "guest-uid"}}
 	srcNodeSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: migrationcert.MigrationNodeSecretName("boba"), Namespace: sysNS},
+		ObjectMeta: metav1.ObjectMeta{Name: migrationcert.MigrationNodeSecretName("worker-1"), Namespace: sysNS},
 		Type:       corev1.SecretTypeTLS,
 		Data:       map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY"), "ca.crt": []byte("CA")},
 	}
@@ -280,7 +280,7 @@ func TestPopulateSourceIdentity_CopiesNodeIdentityIntoPerGuestSecret(t *testing.
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, SystemNamespace: sysNS}
 	ctx := context.Background()
 
-	if err := r.populateSourceIdentity(ctx, guest, "boba"); err != nil {
+	if err := r.populateSourceIdentity(ctx, guest, "worker-1"); err != nil {
 		t.Fatalf("populateSourceIdentity: %v", err)
 	}
 	var s corev1.Secret
@@ -294,7 +294,7 @@ func TestPopulateSourceIdentity_CopiesNodeIdentityIntoPerGuestSecret(t *testing.
 		t.Errorf("per-guest identity must be guest-owned; got %+v", s.OwnerReferences)
 	}
 	// Idempotent: second call with identical source is a no-op.
-	if err := r.populateSourceIdentity(ctx, guest, "boba"); err != nil {
+	if err := r.populateSourceIdentity(ctx, guest, "worker-1"); err != nil {
 		t.Errorf("idempotent populate errored: %v", err)
 	}
 }
@@ -304,7 +304,7 @@ func TestPopulateSourceIdentity_UpdatesExistingPlaceholder(t *testing.T) {
 	const sysNS = "kubeswift-system"
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "team-a", UID: "guest-uid"}}
 	srcNodeSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: migrationcert.MigrationNodeSecretName("boba"), Namespace: sysNS},
+		ObjectMeta: metav1.ObjectMeta{Name: migrationcert.MigrationNodeSecretName("worker-1"), Namespace: sysNS},
 		Type:       corev1.SecretTypeTLS,
 		Data:       map[string][]byte{"tls.crt": []byte("CRT"), "tls.key": []byte("KEY"), "ca.crt": []byte("CA")},
 	}
@@ -317,7 +317,7 @@ func TestPopulateSourceIdentity_UpdatesExistingPlaceholder(t *testing.T) {
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, SystemNamespace: sysNS}
 	ctx := context.Background()
 
-	if err := r.populateSourceIdentity(ctx, guest, "boba"); err != nil {
+	if err := r.populateSourceIdentity(ctx, guest, "worker-1"); err != nil {
 		t.Fatalf("populateSourceIdentity: %v", err)
 	}
 	var s corev1.Secret
@@ -334,7 +334,7 @@ func TestPopulateSourceIdentity_MissingSourceErrors(t *testing.T) {
 	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "team-a", UID: "guest-uid"}}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest).Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, SystemNamespace: "kubeswift-system"}
-	if err := r.populateSourceIdentity(context.Background(), guest, "boba"); err == nil {
+	if err := r.populateSourceIdentity(context.Background(), guest, "worker-1"); err == nil {
 		t.Errorf("missing source node identity must error; got nil")
 	}
 }

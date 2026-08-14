@@ -86,8 +86,8 @@ swiftctl guest export db --to ghcr.io/acme/vm-snapshots --credentials-secret reg
 #   disk:   ghcr.io/acme/vm-snapshots:default-db-export-disk (sha256:...)
 
 # Resume it as a new guest on another node.
-swiftctl guest import db2 --from-snapshot db-export --target-node boba --guest-class ft-small --wait
-# ... Running on boba (IP 192.168.99.x)
+swiftctl guest import db2 --from-snapshot db-export --target-node worker-1 --guest-class ft-small --wait
+# ... Running on worker-1 (IP 192.168.99.x)
 ```
 
 `--sign-key <secret>` on export cosign-signs the artifacts (supply-chain
@@ -116,7 +116,7 @@ spec:
       # signingKeySecretRef: {name: cosign-key}
 ```
 
-`swiftctl guest import db2 --from-snapshot db-export --target-node boba
+`swiftctl guest import db2 --from-snapshot db-export --target-node worker-1
 --guest-class ft-small` creates:
 
 ```yaml
@@ -127,7 +127,7 @@ metadata:
 spec:
   cloneFromSnapshot:
     snapshotRef: {name: db-export}
-    targetNode: boba           # required for an oci snapshot
+    targetNode: worker-1           # required for an oci snapshot
   guestClassRef: {name: ft-small}  # required even for a clone (resources come
   runPolicy: Running               # from the snapshot, but a class ref is mandatory)
 ```

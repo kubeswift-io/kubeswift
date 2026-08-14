@@ -50,15 +50,15 @@ func TestBuildExportSnapshot_InsecureCredsSignTag(t *testing.T) {
 }
 
 func TestBuildImportGuest_CloneFromSnapshot(t *testing.T) {
-	g := buildImportGuest("db2", "team-a", "db-export", "boba", "ft-small")
+	g := buildImportGuest("db2", "team-a", "db-export", "worker-1", "ft-small")
 	if g.Spec.CloneFromSnapshot == nil {
 		t.Fatal("import guest must set cloneFromSnapshot")
 	}
 	if g.Spec.CloneFromSnapshot.SnapshotRef.Name != "db-export" {
 		t.Errorf("snapshotRef = %q, want db-export", g.Spec.CloneFromSnapshot.SnapshotRef.Name)
 	}
-	if g.Spec.CloneFromSnapshot.TargetNode != "boba" {
-		t.Errorf("targetNode = %q, want boba", g.Spec.CloneFromSnapshot.TargetNode)
+	if g.Spec.CloneFromSnapshot.TargetNode != "worker-1" {
+		t.Errorf("targetNode = %q, want worker-1", g.Spec.CloneFromSnapshot.TargetNode)
 	}
 	// guestClassRef is required by the CRD/webhook even for a clone.
 	if g.Spec.GuestClassRef.Name != "ft-small" {

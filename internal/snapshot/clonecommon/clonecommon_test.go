@@ -77,11 +77,11 @@ func TestBuildDownloadJob(t *testing.T) {
 	s.Spec.Backend.S3.Insecure = true
 	s.Spec.IncludeMemory = true
 	job := BuildDownloadJob(DownloadJobParams{
-		Snapshot: s, Image: "img", Name: "dl", Namespace: "team-a", Node: "boba",
+		Snapshot: s, Image: "img", Name: "dl", Namespace: "team-a", Node: "worker-1",
 		Component: "snapshot-s3-download", ExtraLabels: map[string]string{"owner": "x"},
 	})
 	pod := job.Spec.Template.Spec
-	if pod.NodeName != "boba" || pod.RestartPolicy != corev1.RestartPolicyOnFailure {
+	if pod.NodeName != "worker-1" || pod.RestartPolicy != corev1.RestartPolicyOnFailure {
 		t.Errorf("node/restart wrong: %q %q", pod.NodeName, pod.RestartPolicy)
 	}
 	if job.Labels["owner"] != "x" || job.Labels["app.kubernetes.io/component"] != "snapshot-s3-download" {

@@ -94,30 +94,30 @@ func TestHandle(t *testing.T) {
 		},
 		{
 			name:        "non-guest pod allows",
-			objects:     []client.Object{plainPod("app", ns, "miles")},
+			objects:     []client.Object{plainPod("app", ns, "worker-2")},
 			req:         evictReq(ns, "app", false),
 			wantAllowed: true,
 		},
 		{
 			name:        "guest pod without SwiftGuest CR allows (orphan)",
-			objects:     []client.Object{guestPod("g-pod", ns, "g", "miles")},
+			objects:     []client.Object{guestPod("g-pod", ns, "g", "worker-2")},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: true,
 		},
 		{
 			name: "migratable default policy denies and marks",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				swiftGuest("g", ns, nil), // nil migration → defaults (enabled, Migrate)
 			},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,
-			wantMarked:  "miles",
+			wantMarked:  "worker-2",
 		},
 		{
 			name: "dry-run denies but does not mark",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				swiftGuest("g", ns, nil),
 			},
 			req:         evictReq(ns, "g-pod", true),
@@ -127,7 +127,7 @@ func TestHandle(t *testing.T) {
 		{
 			name: "migration disabled denies without marking",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				swiftGuest("g", ns, &swiftv1alpha1.MigrationSpec{Enabled: boolPtr(false)}),
 			},
 			req:         evictReq(ns, "g-pod", false),
@@ -137,7 +137,7 @@ func TestHandle(t *testing.T) {
 		{
 			name: "drainPolicy Block denies without marking",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				swiftGuest("g", ns, &swiftv1alpha1.MigrationSpec{DrainPolicy: swiftv1alpha1.DrainPolicyBlock}),
 			},
 			req:         evictReq(ns, "g-pod", false),
@@ -147,7 +147,7 @@ func TestHandle(t *testing.T) {
 		{
 			name: "VFIO guest with LiveMigrate denies without marking",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				vfioGuestSpec("g", swiftv1alpha1.DrainPolicyLiveMigrate),
 			},
 			req:         evictReq(ns, "g-pod", false),
@@ -157,17 +157,17 @@ func TestHandle(t *testing.T) {
 		{
 			name: "GPU guest with Migrate marks (offline release-and-reallocate)",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				vfioGuestSpec("g", swiftv1alpha1.DrainPolicyMigrate),
 			},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,
-			wantMarked:  "miles",
+			wantMarked:  "worker-2",
 		},
 		{
 			name: "SR-IOV guest with Migrate denies without marking (NIC reattach unsupported)",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				sriovGuest("g", swiftv1alpha1.DrainPolicyMigrate),
 			},
 			req:         evictReq(ns, "g-pod", false),
@@ -177,12 +177,12 @@ func TestHandle(t *testing.T) {
 		{
 			name: "LiveMigrate on non-VFIO guest denies and marks",
 			objects: []client.Object{
-				guestPod("g-pod", ns, "g", "miles"),
+				guestPod("g-pod", ns, "g", "worker-2"),
 				swiftGuest("g", ns, &swiftv1alpha1.MigrationSpec{DrainPolicy: swiftv1alpha1.DrainPolicyLiveMigrate}),
 			},
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,
-			wantMarked:  "miles",
+			wantMarked:  "worker-2",
 		},
 	}
 
@@ -218,17 +218,17 @@ func TestHandle_MarkerIdempotent(t *testing.T) {
 	const ns = "default"
 	s := scheme.Scheme
 	g := swiftGuest("g", ns, nil)
-	g.Annotations = map[string]string{swiftv1alpha1.AnnotationDrainRequested: "miles"}
+	g.Annotations = map[string]string{swiftv1alpha1.AnnotationDrainRequested: "worker-2"}
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(guestPod("g-pod", ns, "g", "miles"), g).Build()
+		WithObjects(guestPod("g-pod", ns, "g", "worker-2"), g).Build()
 	h := &Handler{Client: c}
 
 	resp := h.Handle(context.Background(), evictReq(ns, "g-pod", false))
 	if resp.Allowed {
 		t.Fatalf("already-marked migratable guest must still be denied; got allowed")
 	}
-	if got := markerOf(t, c, ns, "g"); got != "miles" {
-		t.Errorf("marker = %q, want miles (unchanged)", got)
+	if got := markerOf(t, c, ns, "g"); got != "worker-2" {
+		t.Errorf("marker = %q, want worker-2 (unchanged)", got)
 	}
 }
 

@@ -61,10 +61,10 @@ func allocatedTo(n *gpuv1alpha1.SwiftGPUNode, pci string) string {
 
 func TestReserveOnNode_MarksWithoutTouchingStatus(t *testing.T) {
 	g := gpuGuest("g")
-	n := gpuNodeWithDevices("boba", true, dev(0, "0000:01:00.0", 0))
+	n := gpuNodeWithDevices("worker-1", true, dev(0, "0000:01:00.0", 0))
 	c := newClient(n, g)
 
-	devs, _, partID, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "boba")
+	devs, _, partID, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "worker-1")
 	if err != nil {
 		t.Fatalf("ReserveOnNode: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestReserveOnNode_MarksWithoutTouchingStatus(t *testing.T) {
 		t.Errorf("partitionID = %d, want -1 (isolated)", partID)
 	}
 
-	got := getNode(t, c, "boba")
+	got := getNode(t, c, "worker-1")
 	if allocatedTo(got, "0000:01:00.0") != "default/g" {
 		t.Errorf("GPU must be AllocatedTo default/g; got %q", allocatedTo(got, "0000:01:00.0"))
 	}
@@ -92,34 +92,34 @@ func TestReserveOnNode_MarksWithoutTouchingStatus(t *testing.T) {
 
 func TestReserveOnNode_Idempotent(t *testing.T) {
 	g := gpuGuest("g")
-	n := gpuNodeWithDevices("boba", true, dev(0, "0000:01:00.0", 0))
+	n := gpuNodeWithDevices("worker-1", true, dev(0, "0000:01:00.0", 0))
 	c := newClient(n, g)
 
-	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "boba"); err != nil {
+	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "worker-1"); err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
-	devs, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "boba")
+	devs, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "worker-1")
 	if err != nil {
 		t.Fatalf("re-reserve must be idempotent, not error: %v", err)
 	}
 	if len(devs) != 1 {
 		t.Errorf("re-reserve returned %d devices, want the existing 1", len(devs))
 	}
-	if got := getNode(t, c, "boba"); got.Status.FreeGPUs != 0 {
+	if got := getNode(t, c, "worker-1"); got.Status.FreeGPUs != 0 {
 		t.Errorf("FreeGPUs = %d, want 0 (no double-allocation on re-reserve)", got.Status.FreeGPUs)
 	}
 }
 
 func TestReserveOnNode_NotVfioReady(t *testing.T) {
-	c := newClient(gpuNodeWithDevices("boba", false, dev(0, "0000:01:00.0", 0)), gpuGuest("g"))
-	if _, _, _, err := ReserveOnNode(context.Background(), c, gpuGuest("g"), profile(1, "", "isolated"), "boba"); err == nil {
+	c := newClient(gpuNodeWithDevices("worker-1", false, dev(0, "0000:01:00.0", 0)), gpuGuest("g"))
+	if _, _, _, err := ReserveOnNode(context.Background(), c, gpuGuest("g"), profile(1, "", "isolated"), "worker-1"); err == nil {
 		t.Errorf("expected error reserving on a non-vfio-ready node")
 	}
 }
 
 func TestReserveOnNode_Insufficient(t *testing.T) {
-	c := newClient(gpuNodeWithDevices("boba", true), gpuGuest("g")) // no GPUs
-	if _, _, _, err := ReserveOnNode(context.Background(), c, gpuGuest("g"), profile(1, "", "isolated"), "boba"); err == nil {
+	c := newClient(gpuNodeWithDevices("worker-1", true), gpuGuest("g")) // no GPUs
+	if _, _, _, err := ReserveOnNode(context.Background(), c, gpuGuest("g"), profile(1, "", "isolated"), "worker-1"); err == nil {
 		t.Errorf("expected error reserving when no GPUs are free")
 	}
 }
@@ -128,27 +128,27 @@ func TestReserveOnNode_Insufficient(t *testing.T) {
 // guest A reserves the only GPU, guest B cannot reserve on the same node.
 func TestReserveOnNode_HoldsAgainstOtherGuests(t *testing.T) {
 	gA, gB := gpuGuest("a"), gpuGuest("b")
-	c := newClient(gpuNodeWithDevices("boba", true, dev(0, "0000:01:00.0", 0)), gA, gB)
+	c := newClient(gpuNodeWithDevices("worker-1", true, dev(0, "0000:01:00.0", 0)), gA, gB)
 
-	if _, _, _, err := ReserveOnNode(context.Background(), c, gA, profile(1, "", "isolated"), "boba"); err != nil {
+	if _, _, _, err := ReserveOnNode(context.Background(), c, gA, profile(1, "", "isolated"), "worker-1"); err != nil {
 		t.Fatalf("guest A reserve: %v", err)
 	}
-	if _, _, _, err := ReserveOnNode(context.Background(), c, gB, profile(1, "", "isolated"), "boba"); err == nil {
+	if _, _, _, err := ReserveOnNode(context.Background(), c, gB, profile(1, "", "isolated"), "worker-1"); err == nil {
 		t.Errorf("guest B must NOT be able to reserve the GPU A holds")
 	}
 }
 
 func TestReleaseFromNode(t *testing.T) {
 	g := gpuGuest("g")
-	c := newClient(gpuNodeWithDevices("boba", true, dev(0, "0000:01:00.0", 0)), g)
+	c := newClient(gpuNodeWithDevices("worker-1", true, dev(0, "0000:01:00.0", 0)), g)
 
-	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "boba"); err != nil {
+	if _, _, _, err := ReserveOnNode(context.Background(), c, g, profile(1, "", "isolated"), "worker-1"); err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
-	if err := ReleaseFromNode(context.Background(), c, g, "boba"); err != nil {
+	if err := ReleaseFromNode(context.Background(), c, g, "worker-1"); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	got := getNode(t, c, "boba")
+	got := getNode(t, c, "worker-1")
 	if allocatedTo(got, "0000:01:00.0") != "" {
 		t.Errorf("GPU must be freed; AllocatedTo = %q", allocatedTo(got, "0000:01:00.0"))
 	}

@@ -33,7 +33,7 @@ func templateSrcPod(guestName, ns string) *corev1.Pod {
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      "boba",
+			NodeName:      "worker-1",
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{{
 				Name:  LauncherContainerName,
@@ -108,7 +108,7 @@ func TestDstPodName_OversizeName_Errors(t *testing.T) {
 func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -166,8 +166,8 @@ func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 		t.Errorf("ownerRef.Controller: want true")
 	}
 	// NodeName overridden to dst node
-	if dst.Spec.NodeName != "miles" {
-		t.Errorf("NodeName: want miles, got %q", dst.Spec.NodeName)
+	if dst.Spec.NodeName != "worker-2" {
+		t.Errorf("NodeName: want worker-2, got %q", dst.Spec.NodeName)
 	}
 	// KUBESWIFT_MIGRATION_ROLE=receiver added; preserved env preserved
 	envs := dst.Spec.Containers[0].Env
@@ -205,7 +205,7 @@ func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 func TestNewDstPod_NoLauncherContainer_Errors(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("m", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -236,7 +236,7 @@ func TestNewDstPod_PreservesMultusAnnotation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			scheme := testScheme(t)
 			mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-			mig.Spec.Target.NodeName = "miles"
+			mig.Spec.Target.NodeName = "worker-2"
 			guest := &swiftv1alpha1.SwiftGuest{
 				ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 			}
@@ -245,8 +245,8 @@ func TestNewDstPod_PreservesMultusAnnotation(t *testing.T) {
 
 			dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
 				mtlsEnabled: tc.mtls,
-				srcNodeName: "boba",
-				dstNodeName: "miles",
+				srcNodeName: "worker-1",
+				dstNodeName: "worker-2",
 			}, "", nil)
 			if err != nil {
 				t.Fatalf("newDstPod: %v", err)
@@ -269,7 +269,7 @@ func TestNewDstPod_PreservesMultusAnnotation(t *testing.T) {
 func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -277,8 +277,8 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 
 	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
 		mtlsEnabled: true,
-		srcNodeName: "boba",  // source node — dst pins this SAN
-		dstNodeName: "miles", // destination node — dst presents this identity
+		srcNodeName: "worker-1", // source node — dst pins this SAN
+		dstNodeName: "worker-2", // destination node — dst presents this identity
 	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod (mTLS): %v", err)
@@ -309,8 +309,8 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 	if env[envStunnelRole] != stunnelRoleServer {
 		t.Errorf("sidecar role: want %q, got %q", stunnelRoleServer, env[envStunnelRole])
 	}
-	if env[envStunnelCheckHost] != "boba" {
-		t.Errorf("sidecar CHECK_HOST: want source node %q, got %q", "boba", env[envStunnelCheckHost])
+	if env[envStunnelCheckHost] != "worker-1" {
+		t.Errorf("sidecar CHECK_HOST: want source node %q, got %q", "worker-1", env[envStunnelCheckHost])
 	}
 	if _, present := env[envStunnelDstPodIP]; present {
 		t.Errorf("server-role sidecar must NOT set DST_POD_IP (that is client-only, PR 3b)")
@@ -323,8 +323,8 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 			wantVols[v.Name] = true
 		}
 		if v.Name == stunnelCertVolumeName {
-			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-miles" {
-				t.Errorf("identity volume must mount the DST node Secret kubeswift-migration-node-miles; got %+v", v.Secret)
+			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-worker-2" {
+				t.Errorf("identity volume must mount the DST node Secret kubeswift-migration-node-worker-2; got %+v", v.Secret)
 			}
 		}
 		if v.Name == stunnelConfigVolumeName {
@@ -350,7 +350,7 @@ func TestNewDstPod_MTLS_InjectsServerSidecar(t *testing.T) {
 func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -371,7 +371,7 @@ func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 	)
 
 	dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
-		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
+		mtlsEnabled: true, srcNodeName: "worker-1", dstNodeName: "worker-2",
 	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod: %v", err)
@@ -406,7 +406,7 @@ func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 			t.Errorf("dst must not carry the client downward-API input volume")
 		}
 		if v.Name == stunnelCertVolumeName {
-			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-miles" {
+			if v.Secret == nil || v.Secret.SecretName != "kubeswift-migration-node-worker-2" {
 				t.Errorf("dst cert volume must be the dst per-node Secret; got %+v", v.Secret)
 			}
 		}
@@ -423,7 +423,7 @@ func TestNewDstPod_MTLS_FlipsInheritedClientSidecarToServer(t *testing.T) {
 func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -438,7 +438,7 @@ func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
 	}
 
 	on, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
-		mtlsEnabled: true, srcNodeName: "boba", dstNodeName: "miles",
+		mtlsEnabled: true, srcNodeName: "worker-1", dstNodeName: "worker-2",
 	}, "", nil)
 	if err != nil {
 		t.Fatalf("newDstPod (mTLS): %v", err)
@@ -451,7 +451,7 @@ func TestNewDstPod_MTLS_OmitsPlaintextAck(t *testing.T) {
 func TestNewDstPod_MTLS_EmptyNode_Errors(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("m", "default", "abcdef1234567890abcdef1234567890")
-	mig.Spec.Target.NodeName = "miles"
+	mig.Spec.Target.NodeName = "worker-2"
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
 	}
@@ -460,7 +460,7 @@ func TestNewDstPod_MTLS_EmptyNode_Errors(t *testing.T) {
 	if _, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{
 		mtlsEnabled: true,
 		srcNodeName: "", // unresolved
-		dstNodeName: "miles",
+		dstNodeName: "worker-2",
 	}, "", nil); err == nil {
 		t.Errorf("expected error when mTLS enabled but source node name empty")
 	}

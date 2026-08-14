@@ -13,7 +13,7 @@ import (
 func TestClusterToProto(t *testing.T) {
 	now := metav1.NewTime(time.Now())
 	c := &fleetv1alpha1.Cluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "boba", Namespace: "kubeswift-system"},
+		ObjectMeta: metav1.ObjectMeta{Name: "edge-1", Namespace: "kubeswift-system"},
 		Spec:       fleetv1alpha1.ClusterSpec{Server: "https://10.0.0.1:6443"},
 		Status: fleetv1alpha1.ClusterStatus{
 			KubernetesVersion: "v1.34.3",
@@ -26,11 +26,11 @@ func TestClusterToProto(t *testing.T) {
 		},
 	}
 	got := clusterToProto(c)
-	if got.Name != "boba" {
+	if got.Name != "edge-1" {
 		t.Errorf("Name = %q", got.Name)
 	}
-	if got.DisplayName != "boba" {
-		t.Errorf("DisplayName fallback = %q, want boba", got.DisplayName)
+	if got.DisplayName != "edge-1" {
+		t.Errorf("DisplayName fallback = %q, want edge-1", got.DisplayName)
 	}
 	if got.Server != "https://10.0.0.1:6443" {
 		t.Errorf("Server = %q", got.Server)
@@ -57,12 +57,12 @@ func TestClusterToProto(t *testing.T) {
 
 func TestClusterToProto_ExplicitDisplayNameAndNoCounts(t *testing.T) {
 	c := &fleetv1alpha1.Cluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "boba"},
-		Spec:       fleetv1alpha1.ClusterSpec{DisplayName: "Boba (lab)"},
+		ObjectMeta: metav1.ObjectMeta{Name: "edge-1"},
+		Spec:       fleetv1alpha1.ClusterSpec{DisplayName: "Edge 1 (lab)"},
 	}
 	got := clusterToProto(c)
-	if got.DisplayName != "Boba (lab)" {
-		t.Errorf("DisplayName = %q, want Boba (lab)", got.DisplayName)
+	if got.DisplayName != "Edge 1 (lab)" {
+		t.Errorf("DisplayName = %q, want Edge 1 (lab)", got.DisplayName)
 	}
 	// No status: ready/reachable false, guestCount 0, lastConnected nil.
 	if got.Ready || got.Reachable || got.GuestCount != 0 || got.LastConnected != nil {

@@ -36,9 +36,9 @@ func fsRG() *resolved.ResolvedGuest {
 
 func TestBuildDiskFromOCIJob_Filesystem(t *testing.T) {
 	guest := cloneGuest()
-	job := buildDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "miles", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
+	job := buildDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
 	pod := job.Spec.Template.Spec
-	if pod.NodeName != "miles" {
+	if pod.NodeName != "worker-2" {
 		t.Errorf("download Job must pin to the clone node; got %q", pod.NodeName)
 	}
 	c := pod.Containers[0]
@@ -77,7 +77,7 @@ func TestBuildDiskFromOCIJob_Filesystem(t *testing.T) {
 }
 
 func TestBuildDiskFromOCIJob_Block(t *testing.T) {
-	job := buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "boba", "j", "swiftguest-root-clone-a", "sha256:disk123", true)
+	job := buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "worker-1", "j", "swiftguest-root-clone-a", "sha256:disk123", true)
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--file="+DiskRootDevicePath) {
 		t.Errorf("Block root must download to the raw device; got %q", strings.Join(c.Args, " "))
@@ -99,7 +99,7 @@ func TestBuildDiskFromOCIJob_Block(t *testing.T) {
 func TestBuildDiskFromOCIJob_Creds(t *testing.T) {
 	snap := fullStateCloneSnap()
 	snap.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
-	job := buildDiskFromOCIJob(cloneGuest(), snap, "oras:img", "miles", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
+	job := buildDiskFromOCIJob(cloneGuest(), snap, "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
 	c := job.Spec.Template.Spec.Containers[0]
 	var dockerCfg bool
 	for _, e := range c.Env {
@@ -126,7 +126,7 @@ func TestBuildDiskFromOCIJob_Creds(t *testing.T) {
 // falls through to the base-image clone path.
 func TestMaybeRootDiskFromOCI_NotFullState(t *testing.T) {
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	r, _ := newCloneReconciler(t, g, ociCloneSnap()) // no status.oci.disk
 	r.SnapshotORASImage = "img"
 	handled, res, err := r.maybeRootDiskFromOCI(context.Background(), g, fsRG())
@@ -149,7 +149,7 @@ func TestMaybeRootDiskFromOCI_NoClone(t *testing.T) {
 func TestMaybeRootDiskFromOCI_MaterializesDiskThenReady(t *testing.T) {
 	ctx := context.Background()
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	r, c := newCloneReconciler(t, g, fullStateCloneSnap())
 	r.SnapshotORASImage = "img"
 	cloneName := RootDiskCloneName(g.Name)
@@ -184,8 +184,8 @@ func TestMaybeRootDiskFromOCI_MaterializesDiskThenReady(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: jobName, Namespace: "ns"}, &job); err != nil {
 		t.Fatalf("download Job not created: %v", err)
 	}
-	if job.Spec.Template.Spec.NodeName != "boba" {
-		t.Errorf("download Job must pin to targetNode boba; got %q", job.Spec.Template.Spec.NodeName)
+	if job.Spec.Template.Spec.NodeName != "worker-1" {
+		t.Errorf("download Job must pin to targetNode worker-1; got %q", job.Spec.Template.Spec.NodeName)
 	}
 	if !strings.Contains(strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "), "--digest=sha256:disk123") {
 		t.Errorf("download Job must pull the disk artifact by digest; args=%v", job.Spec.Template.Spec.Containers[0].Args)
@@ -229,7 +229,7 @@ func fullStateWithDataDisk() *snapshotv1alpha1.SwiftSnapshot {
 func TestMaybeRootDiskFromOCI_MaterializesDataDisks(t *testing.T) {
 	ctx := context.Background()
 	g := cloneGuest()
-	g.Spec.CloneFromSnapshot.TargetNode = "boba"
+	g.Spec.CloneFromSnapshot.TargetNode = "worker-1"
 	r, c := newCloneReconciler(t, g, fullStateWithDataDisk())
 	r.SnapshotORASImage = "img"
 	cloneName := RootDiskCloneName(g.Name)

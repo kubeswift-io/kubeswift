@@ -30,7 +30,7 @@ spec:
       hostNetwork: false
       # Asserting a property the image already has, rather than changing
       # behaviour: images/gpu-discovery/Containerfile ends in `USER 65534:65534`,
-      # and the pod on the dev GPU node (boba) reports uid=65534(nobody) while
+      # and the pod on the dev GPU node (worker-1) reports uid=65534(nobody) while
       # discovering the GTX 1080 correctly. runAsNonRoot makes the kubelet refuse
       # to start it if that ever regresses to root.
       #

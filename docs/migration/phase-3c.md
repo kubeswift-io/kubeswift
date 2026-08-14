@@ -127,7 +127,7 @@ TLSv1.3 ciphersuite: TLS_AES_256_GCM_SHA384 (256-bit encryption)
 
 ## 5. Validated baseline (PR 5 cluster walkthrough)
 
-Kernel-boot guest (4 Gi class), default node-local networking, `miles→boba`:
+Kernel-boot guest (4 Gi class), default node-local networking, `worker-2→worker-1`:
 
 | Metric | mTLS | Plaintext (Phase 3b) |
 |---|---|---|

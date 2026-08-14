@@ -72,7 +72,7 @@ func newSourcePod(guestName, ns, uid string) *corev1.Pod {
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName: "boba",
+			NodeName: "worker-1",
 		},
 	}
 }
@@ -81,7 +81,7 @@ func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -113,11 +113,11 @@ func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 	if status.SourcePodUID != "src-pod-uid-1" {
 		t.Errorf("SourcePodUID: want src-pod-uid-1, got %q", status.SourcePodUID)
 	}
-	if status.SourceNode != "boba" {
-		t.Errorf("SourceNode: want boba, got %q", status.SourceNode)
+	if status.SourceNode != "worker-1" {
+		t.Errorf("SourceNode: want worker-1, got %q", status.SourceNode)
 	}
-	if status.DestinationNode != "miles" {
-		t.Errorf("DestinationNode: want miles, got %q", status.DestinationNode)
+	if status.DestinationNode != "worker-2" {
+		t.Errorf("DestinationNode: want worker-2, got %q", status.DestinationNode)
 	}
 }
 
@@ -131,15 +131,15 @@ func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
 	const sysNS = "kubeswift-system"
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
-	srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1")) // src node "boba"
+	node := newSpaciousNode("worker-2", 8, 65536)
+	srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1")) // src node "worker-1"
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
-	srcSecret := migrationNodeIdentitySecret(sysNS, "boba")
-	dstSecret := migrationNodeIdentitySecret(sysNS, "miles")
+	srcSecret := migrationNodeIdentitySecret(sysNS, "worker-1")
+	dstSecret := migrationNodeIdentitySecret(sysNS, "worker-2")
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -160,7 +160,7 @@ func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
 		t.Fatal("expected Advanced=true with both identities present")
 	}
 	// Both node identity Secrets copied into the guest namespace.
-	for _, n := range []string{"boba", "miles"} {
+	for _, n := range []string{"worker-1", "worker-2"} {
 		var s corev1.Secret
 		if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: migrationcert.MigrationNodeSecretName(n)}, &s); err != nil {
 			t.Errorf("identity Secret for node %q not distributed into guest namespace: %v", n, err)
@@ -176,7 +176,7 @@ func TestValidatingLive_MTLS_IdentityMissing_FailsNotReady(t *testing.T) {
 	const sysNS = "kubeswift-system"
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	srcPod := withClientStunnelSidecar(newSourcePod("guest", "default", "src-pod-uid-1"))
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -184,7 +184,7 @@ func TestValidatingLive_MTLS_IdentityMissing_FailsNotReady(t *testing.T) {
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
 
 	// Only the source-node Secret present; destination-node Secret missing.
-	srcSecret := migrationNodeIdentitySecret(sysNS, "boba")
+	srcSecret := migrationNodeIdentitySecret(sysNS, "worker-1")
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -217,7 +217,7 @@ func TestValidatingLive_MTLS_SourceNotSidecarReady_Fails(t *testing.T) {
 	const sysNS = "kubeswift-system"
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	srcPod := newSourcePod("guest", "default", "src-pod-uid-1") // NO sidecar
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -227,7 +227,7 @@ func TestValidatingLive_MTLS_SourceNotSidecarReady_Fails(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(mig, guest, class, node, srcPod,
-			migrationNodeIdentitySecret(sysNS, "boba"), migrationNodeIdentitySecret(sysNS, "miles")).
+			migrationNodeIdentitySecret(sysNS, "worker-1"), migrationNodeIdentitySecret(sysNS, "worker-2")).
 		WithStatusSubresource(mig).
 		Build()
 	r := &SwiftMigrationReconciler{
@@ -249,7 +249,7 @@ func TestValidatingLive_MTLSDisabled_SkipsPrecondition(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
@@ -278,7 +278,7 @@ func TestValidatingLive_NoSourcePod_FailsWithClearMessage(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
@@ -331,7 +331,7 @@ func TestValidatingLive_TargetNodeCordoned_Fails(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	cordonedNode := newSpaciousNode("miles", 8, 65536)
+	cordonedNode := newSpaciousNode("worker-2", 8, 65536)
 	cordonedNode.Spec.Unschedulable = true
 	srcPod := newSourcePod("guest", "default", "uid")
 	mig := newMigration("m", "default")
@@ -360,7 +360,7 @@ func TestValidatingLive_ImageTagMatch_HappyPath(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	// Pin the launcher image via env so the test asserts on a stable
 	// value (independent of LauncherImageDefault drift).
 	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v1.0.0")
@@ -399,7 +399,7 @@ func TestValidatingLive_ImageTagMatch_Mismatch_FailsWithImageTagMismatch(t *test
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v2.0.0")
 	// src pod runs the OLD launcher image; controller default is v2.0.0.
 	srcPod := newSourcePodWithLauncherImage("guest", "default", "uid", "ghcr.io/test/swiftletd:v1.0.0")
@@ -435,7 +435,7 @@ func TestValidatingLive_ImageTagMatch_NoLauncherContainer_DefensiveSkip(t *testi
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	t.Setenv(swiftguest.LauncherImageEnv, "ghcr.io/test/swiftletd:v1.0.0")
 	// newSourcePod produces a pod with NO containers, so
 	// launcherContainerImage returns "" → defensive skip.
@@ -472,7 +472,7 @@ func TestValidatingLive_MigrationDisabled_FailsWithEligibilityMismatch(t *testin
 	disabled := false
 	guest.Spec.Migration = &swiftv1alpha1.MigrationSpec{Enabled: &disabled}
 	class := newGuestClass("class-default", 2, 2048)
-	node := newSpaciousNode("miles", 8, 65536)
+	node := newSpaciousNode("worker-2", 8, 65536)
 	srcPod := newSourcePod("guest", "default", "uid")
 	mig := newMigration("m", "default")
 	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive

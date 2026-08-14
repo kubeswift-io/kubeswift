@@ -71,13 +71,13 @@ Apply a SwiftMigration manifest:
 apiVersion: migration.kubeswift.io/v1alpha1
 kind: SwiftMigration
 metadata:
-  name: my-guest-to-boba
+  name: my-guest-to-worker-1
   namespace: workloads
 spec:
   guestRef:
     name: my-guest
   target:
-    nodeName: boba
+    nodeName: worker-1
   mode: live
   timeout: 5m   # default; raise for very large guests
 ```
@@ -85,7 +85,7 @@ spec:
 Or via swiftctl (after PR 2 ships):
 
 ```sh
-swiftctl migrate my-guest --to boba --mode live
+swiftctl migrate my-guest --to worker-1 --mode live
 ```
 
 `mode: auto` (the default) resolves to `live` for non-VFIO
@@ -178,7 +178,7 @@ will land in "few seconds" range.
 To cancel:
 
 ```sh
-kubectl patch smig my-guest-to-boba \
+kubectl patch smig my-guest-to-worker-1 \
   --type merge -p '{"spec":{"cancelRequested":true}}'
 ```
 
@@ -279,11 +279,11 @@ Common debug commands:
 
 ```sh
 # Inspect the migration:
-kubectl describe smig my-guest-to-boba -n workloads
+kubectl describe smig my-guest-to-worker-1 -n workloads
 
 # Inspect the pods:
 kubectl get pod -l swift.kubeswift.io/guest=my-guest -n workloads
-kubectl get pod -l kubeswift.io/migration=my-guest-to-boba -n workloads
+kubectl get pod -l kubeswift.io/migration=my-guest-to-worker-1 -n workloads
 
 # Source/destination launcher logs:
 kubectl logs <src-pod> -c launcher -n workloads --tail=200
