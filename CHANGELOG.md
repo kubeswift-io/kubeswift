@@ -4,7 +4,27 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.13.10] — 2026-08-14
+
+An observability-and-hygiene release. A guest that never gets an IP now says why
+instead of looking healthy forever; per-launcher-pod RBAC covers every launcher
+class; swiftletd moves four majors of kube-rs and sheds 26 crates.
+
+No CRD schema changes, no API changes. One new values key
+(`scopedLauncherRBAC.enabled`, default `false`).
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.10 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # helm does not upgrade CRDs
+```
+
+The controller ClusterRole gains `roles` and `delete` on `rolebindings` (needed
+by `scopedLauncherRBAC`). `helm upgrade` applies it; a controller image newer
+than its ClusterRole logs the failure and keeps running rather than blocking
+workloads.
 
 ### Fixed
 
@@ -36,6 +56,14 @@ All notable changes to KubeSwift are documented here.
   prohibition. No CRD schema change (conditions are not schema).
 
 ### Changed
+
+- **Lab infrastructure names replaced with placeholders across tests, samples
+  and docs** (#529). Node names are now `worker-1` / `worker-2` / `cp-1`, fleet
+  members `edge-1` / `edge-2` / `edge-3`, and the external-API-server example
+  `k8s-api.example.com`. 95 files, 800 insertions and 800 deletions — a pure
+  rename with no behaviour, logic or schema change. Affects nothing at run time;
+  listed because sample manifests and docs an operator copies from now use the
+  placeholder names.
 
 - **swiftletd: kube-rs 0.92 → 4.2, k8s-openapi 0.22 → 0.28** (#499, #501). Four
   majors of kube-rs, no source changes required: swiftletd only uses the stable
