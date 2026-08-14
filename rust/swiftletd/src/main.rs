@@ -223,8 +223,22 @@ fn main() {
                 );
             }
 
+            // Gate the SwiftGuest CR status patch (default on). A SwiftSandbox launcher
+            // sets KUBESWIFT_REPORT_GUEST_CR=false — there is NO SwiftGuest CR for a
+            // sandbox, so patching one is guaranteed to 403. Computed here, above
+            // report_running, because BOTH the terminal reports below and the
+            // on_socket_ready report further down need it; when only the latter was
+            // gated, every sandbox ended its log with an ERROR-level 403 that read like
+            // an RBAC bug and invited widening the launcher SA's grants (#519).
+            let report_cr = report::report_guest_cr_enabled(
+                env::var("KUBESWIFT_REPORT_GUEST_CR").ok().as_deref(),
+            );
+            if !report_cr {
+                log::info!("guest-CR reporting disabled: no SwiftGuest CR to patch");
+            }
+
             let report_running = |running: bool, reason: Option<&str>| {
-                if is_primary_udn {
+                if is_primary_udn || !report_cr {
                     return;
                 }
                 let (Some(ns), Some(n)) = (&namespace, &name) else {
@@ -310,12 +324,8 @@ fn main() {
             // operators verify destination success via the
             // migration-status: ready annotation OR via vm_info
             // directly.
-            // Gate the SwiftGuest CR status patch (default on). A SwiftSandbox
-            // launcher sets KUBESWIFT_REPORT_GUEST_CR=false — there is no SwiftGuest
-            // CR to patch; the pod-annotation report + lease poller still run.
-            let report_cr = report::report_guest_cr_enabled(
-                env::var("KUBESWIFT_REPORT_GUEST_CR").ok().as_deref(),
-            );
+            // report_cr is computed once above, next to report_running — the pod-annotation
+            // report + lease poller still run when it is false.
             let on_socket_ready = if intent.is_migration_receiver() || is_primary_udn {
                 None
             } else {
