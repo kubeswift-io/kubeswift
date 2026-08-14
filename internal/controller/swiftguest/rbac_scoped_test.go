@@ -2,14 +2,18 @@ package swiftguest
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
@@ -153,6 +157,152 @@ func TestEnsureScopedLauncherRBAC_ConvergesWidenedRules(t *testing.T) {
 	}
 	if len(reconverged.Rules[0].ResourceNames) != 1 || reconverged.Rules[0].ResourceNames[0] != "g3" {
 		t.Errorf("a widened Role must re-converge to [g3]; got %v", reconverged.Rules[0].ResourceNames)
+	}
+}
+
+// The warm-slot handover (#515). A pool slot's grant must be created BEFORE its
+// pod exists — so the pool owns it first — and then move onto the pod, which is
+// the only owner whose lifetime matches the slot's across a checkout re-parent.
+//
+// This fails against the obvious implementation. controllerutil.SetControllerReference
+// refuses to change an existing controller owner (AlreadyOwnedError), and
+// createOrUpdateRole only copies Rules, so without adoptControllerRef the Role
+// stays pool-owned forever: one leaked Role per churned slot, and a grant that
+// outlives the pod it was minted for.
+func TestEnsureScopedLauncherRBAC_HandsOwnershipToPod(t *testing.T) {
+	sch := scheme.Scheme
+	ctx := context.Background()
+	pool := &sandboxv1alpha1.SwiftSandboxPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "ns", UID: types.UID("uid-pool")},
+	}
+	slot := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-slot-abcde", Namespace: "ns", UID: types.UID("uid-slot")},
+	}
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(pool, slot).Build()
+
+	// Phase one: pool-owned, pod does not exist yet.
+	if err := EnsureScopedLauncherRBAC(ctx, c, sch, pool, slot.Name, SandboxLauncher); err != nil {
+		t.Fatalf("phase one: %v", err)
+	}
+	key := types.NamespacedName{Namespace: "ns", Name: ScopedRoleNameFor(slot.Name)}
+	var role rbacv1.Role
+	if err := c.Get(ctx, key, &role); err != nil {
+		t.Fatal(err)
+	}
+	if ref := metav1.GetControllerOf(&role); ref == nil || ref.Kind != "SwiftSandboxPool" {
+		t.Fatalf("phase one must leave the pool as owner (the fail-safe); got %v", role.OwnerReferences)
+	}
+
+	// Phase two: the pod now exists and takes over.
+	if err := EnsureScopedLauncherRBAC(ctx, c, sch, slot, slot.Name, SandboxLauncher); err != nil {
+		t.Fatalf("phase two: %v", err)
+	}
+	for _, obj := range []client.Object{&rbacv1.Role{}, &rbacv1.RoleBinding{}} {
+		if err := c.Get(ctx, key, obj); err != nil {
+			t.Fatalf("%T: %v", obj, err)
+		}
+		ref := metav1.GetControllerOf(obj)
+		if ref == nil || ref.Kind != "Pod" || ref.UID != slot.UID {
+			t.Errorf("%T must be owned by the slot pod after handover; got %v", obj, obj.GetOwnerReferences())
+		}
+		if n := len(obj.GetOwnerReferences()); n != 1 {
+			t.Errorf("%T: handover must REPLACE the pool ref, not append; got %d refs", obj, n)
+		}
+	}
+}
+
+// Ownership convergence must not defeat the no-op guard: once the pod owns the
+// grant, re-ensuring with the same owner writes nothing.
+func TestEnsureScopedLauncherRBAC_HandoverIsIdempotent(t *testing.T) {
+	sch := scheme.Scheme
+	ctx := context.Background()
+	slot := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-slot-fghij", Namespace: "ns", UID: types.UID("uid-slot2")},
+	}
+	c := fake.NewClientBuilder().WithScheme(sch).WithObjects(slot).Build()
+	if err := EnsureScopedLauncherRBAC(ctx, c, sch, slot, slot.Name, SandboxLauncher); err != nil {
+		t.Fatal(err)
+	}
+	key := types.NamespacedName{Namespace: "ns", Name: ScopedRoleNameFor(slot.Name)}
+	var first rbacv1.Role
+	if err := c.Get(ctx, key, &first); err != nil {
+		t.Fatal(err)
+	}
+	// The pool census re-ensures every live slot on every reconcile.
+	for i := 0; i < 3; i++ {
+		if err := EnsureScopedLauncherRBAC(ctx, c, sch, slot, slot.Name, SandboxLauncher); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var after rbacv1.Role
+	if err := c.Get(ctx, key, &after); err != nil {
+		t.Fatal(err)
+	}
+	if first.ResourceVersion != after.ResourceVersion {
+		t.Errorf("census re-ensure rewrote the Role (rv %s -> %s) — the pool would spin",
+			first.ResourceVersion, after.ResourceVersion)
+	}
+}
+
+// An operator may add a non-controller ownerReference; the handover replaces the
+// CONTROLLER ref only.
+func TestAdoptControllerRef_PreservesNonControllerRefs(t *testing.T) {
+	yes, no := true, false
+	existing := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+		{Kind: "SwiftSandboxPool", Name: "pool", UID: "uid-pool", Controller: &yes},
+		{Kind: "ConfigMap", Name: "keep-me", UID: "uid-cm", Controller: &no},
+	}}}
+	want := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{OwnerReferences: []metav1.OwnerReference{
+		{Kind: "Pod", Name: "pool-slot-x", UID: "uid-slot", Controller: &yes},
+	}}}
+	if !adoptControllerRef(existing, want) {
+		t.Fatal("a differing controller ref must report a change")
+	}
+	refs := existing.GetOwnerReferences()
+	if len(refs) != 2 || refs[0].Kind != "Pod" {
+		t.Fatalf("want [Pod, ConfigMap]; got %v", refs)
+	}
+	if refs[1].Name != "keep-me" {
+		t.Errorf("a non-controller ownerReference is not ours to remove; got %v", refs[1])
+	}
+	if adoptControllerRef(existing, want) {
+		t.Error("adopting an already-adopted ref must report no change")
+	}
+}
+
+// Upgrade-order safety. A controller new enough to mint these grants can be
+// running against a ClusterRole too old to allow `roles` — an ordinary upgrade
+// order, since helm applies both but not atomically. While the gate is OFF the
+// shared binding still covers every launcher, so that failure must not stop
+// guests and sandboxes from booting over an object doing no work yet. With the
+// gate ON the grant IS the access, and creating the pod without it would produce
+// a workload that boots and then silently 403s every status write.
+func TestEnsureScopedLauncherRBAC_FatalOnlyWhenLoadBearing(t *testing.T) {
+	sch := scheme.Scheme
+	guest := scopedTestGuest("g5")
+	denied := errors.New("roles.rbac.authorization.k8s.io is forbidden")
+	newClient := func() client.Client {
+		return fake.NewClientBuilder().WithScheme(sch).WithObjects(guest).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+					if _, ok := obj.(*rbacv1.Role); ok {
+						return denied
+					}
+					return nil
+				},
+			}).Build()
+	}
+
+	defer func(prev bool) { ScopedOnly = prev }(ScopedOnly)
+
+	ScopedOnly = false
+	if err := EnsureScopedLauncherRBAC(context.Background(), newClient(), sch, guest, "g5", GuestLauncher); err != nil {
+		t.Errorf("gate off: a failed grant must not block the workload, the shared binding still covers it; got %v", err)
+	}
+
+	ScopedOnly = true
+	if err := EnsureScopedLauncherRBAC(context.Background(), newClient(), sch, guest, "g5", GuestLauncher); err == nil {
+		t.Error("gate on: the grant is the only access — failing to create it MUST stop pod creation")
 	}
 }
 

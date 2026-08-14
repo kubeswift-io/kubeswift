@@ -79,8 +79,9 @@ func main() {
 	migrationMTLSEnabled := flag.Bool("migration-mtls-enabled", false, "Enable the live-migration mTLS cert provisioner (Phase 3c; requires cert-manager)")
 	leaderElect := flag.Bool("leader-elect", false, "Enable leader election for controller manager")
 	scopedLauncherRBAC := flag.Bool("scoped-launcher-rbac", false,
-		"Retire the namespace-wide guest-launcher RoleBinding and rely solely on the per-pod scoped Roles (#515). "+
-			"Off by default: enabling it DELETES a live grant. Guest launchers only — sandboxes are not scoped yet.")
+		"Retire the namespace-wide launcher RoleBindings and rely solely on the per-pod scoped Roles (#515). "+
+			"Covers guests, migration targets, sandboxes and warm pool slots. "+
+			"Off by default: enabling it DELETES a live grant.")
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")

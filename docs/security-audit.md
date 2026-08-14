@@ -578,17 +578,34 @@ Practically:
   access; namespace-admin there is cluster-significant.
 - Node isolation (taints/affinity) bounds *which* nodes are exposed, not whether.
 
-### What would actually close it
+### What closes it
 
-- **Admission control** — reject a pod referencing a launcher ServiceAccount
-  unless it is a genuine controller-created launcher. This closes it, at the cost
-  of a `pods` CREATE webhook the apiserver calls for every pod creation in the
-  cluster.
+- **Admission control — SHIPPED in v0.13.8.** `kubeswift-launcher-sa-gate`
+  rejects any Pod naming a launcher ServiceAccount unless the KubeSwift
+  controller created it (see above). This is what closes the escalation. The
+  paragraphs above describe the posture where it is disabled.
 - **Removing the grant** — move swiftletd's status reporting off pod annotations
-  onto a channel that needs no write access to its own pod. Closes it properly;
-  a rework of the status path in both the runtime and the controller.
+  onto a channel that needs no write access to its own pod. Would close it at the
+  source rather than by admission; a rework of the status path in both the
+  runtime and the controller. Not implemented.
 
-Neither is implemented. #443 tracks the decision.
+### Defence in depth: per-launcher-pod scoping (#515)
+
+From the `scopedLauncherRBAC` gate (default off), each launcher pod holds a Role
+scoped with `resourceNames` to exactly its own pod, and the shared namespace-wide
+RoleBinding is retired. Guests, migration targets, sandboxes and warm pool slots
+are all covered.
+
+Read this for what it is. It does **not** close the escalation — that is the VAP
+above, and the reason is unchanged: RBAC is additive on a shared ServiceAccount,
+so an attacker who obtains the SA still inherits the union of every launcher
+grant in the namespace. What it buys is that the token is worth one pod rather
+than the namespace when it leaks by some route other than SA-naming — a stolen
+projected token, a compromised node, a mounted secret.
+
+A sandbox launcher is granted no `swiftguests/status` at all: it runs untrusted
+code and has no SwiftGuest CR, so the grant would only let an escaped sandbox
+forge guest status on someone else's VM.
 
 ## Cross-Cutting Observations
 

@@ -382,8 +382,12 @@ webhook:
 # attacker who obtains the SA. This limits what the token is worth if they get
 # it another way.
 #
-# Guest launchers only. Sandbox launchers have no per-pod grant yet, so their
-# shared binding is left alone; enabling this does not affect them.
+# Covers every launcher: guests, migration targets, sandboxes, and warm pool
+# slots. A pool converges grants for the slots it already has, so enabling this
+# on a running pool does not cut off live slots.
+#
+# Cost is two objects (a Role and a RoleBinding) per launcher pod, created and
+# garbage-collected with it.
 scopedLauncherRBAC:
   enabled: false
 

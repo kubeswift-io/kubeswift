@@ -1,6 +1,74 @@
 package swiftsandbox
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/scheme"
+)
+
+// The upgrade case (#515). Slots warmed BEFORE the scoped-RBAC change have no
+// per-pod grant, and createWarmSlot never revisits them — it only runs for slots
+// it is creating now. If the pool did not converge grants for the slots it
+// already has, an operator enabling the gate would retire the shared binding out
+// from under running slots and every annotation write on them would 403: warm
+// slots stop reporting Ready, checkouts stop finding them, and the pool looks
+// empty for no visible reason.
+func TestPoolReconcile_GrantsExistingSlotsOnUpgrade(t *testing.T) {
+	s := scheme.Scheme
+	ctx := context.Background()
+	pool := &sandboxv1alpha1.SwiftSandboxPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"},
+		Spec:       sandboxv1alpha1.SwiftSandboxPoolSpec{Image: "busybox:1", MinWarm: 0},
+		// Non-empty digest so the reconcile skips the registry resolve.
+		Status: sandboxv1alpha1.SwiftSandboxPoolStatus{
+			Rootfs: &sandboxv1alpha1.SandboxRootfsStatus{Digest: "sha256:deadbeef"},
+		},
+	}
+	// A slot that predates the change: no scoped Role exists for it.
+	slot := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "p-slot-old01", Namespace: "ns", UID: types.UID("uid-old01"),
+		Labels: map[string]string{PoolLabelKey: "p", SlotStateLabelKey: slotStateWarm},
+	}}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, slot).
+		WithStatusSubresource(pool).Build()
+	r := &SwiftSandboxPoolReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "p"},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	key := types.NamespacedName{Namespace: "ns", Name: swiftguest.ScopedRoleNameFor(slot.Name)}
+	var role rbacv1.Role
+	if err := c.Get(ctx, key, &role); err != nil {
+		t.Fatalf("pre-existing slot got no scoped grant: %v", err)
+	}
+	if len(role.Rules) != 1 || len(role.Rules[0].ResourceNames) != 1 ||
+		role.Rules[0].ResourceNames[0] != slot.Name {
+		t.Errorf("grant must name exactly the slot pod; got %v", role.Rules)
+	}
+	// Owned by the POD, not the pool: the checkout re-parents the pod to a
+	// SwiftSandbox, and only pod ownership survives that with exact GC.
+	if ref := metav1.GetControllerOf(&role); ref == nil || ref.Kind != "Pod" || ref.UID != slot.UID {
+		t.Errorf("grant must be owned by the slot pod; got %v", role.OwnerReferences)
+	}
+	var rb rbacv1.RoleBinding
+	if err := c.Get(ctx, key, &rb); err != nil {
+		t.Fatalf("pre-existing slot got no scoped binding: %v", err)
+	}
+}
 
 func TestSlotsToCreate(t *testing.T) {
 	cases := []struct {

@@ -168,17 +168,18 @@ func EnsureLauncherRBAC(ctx context.Context, c client.Client, namespace string, 
 		return err
 	}
 
-	// ScopedOnly (#515) retires the namespace-wide binding for GUEST launchers,
-	// whose per-pod grants the SwiftGuest and SwiftMigration controllers create.
-	// Without this skip the guest reconcile would recreate the binding that
-	// RemoveSharedLauncherBinding then deletes, every pass — a create/delete
-	// loop rather than a narrowing.
+	// ScopedOnly (#515) retires the namespace-wide binding entirely: every
+	// launcher pod now gets a per-pod grant from the controller that creates it —
+	// SwiftGuest and SwiftMigration for guests, SwiftSandbox and SwiftSandboxPool
+	// for sandboxes and warm slots. Without this skip the reconcile would recreate
+	// the binding that RemoveSharedLauncherBinding then deletes, every pass — a
+	// create/delete loop rather than a narrowing.
 	//
-	// Restricted to GuestLauncher on purpose: sandbox launchers have no per-pod
-	// grant yet, so retiring THEIR shared binding would leave them with nothing
-	// and break every sandbox. Widening this switch to sandboxes must wait until
-	// they are scoped too.
-	if ScopedOnly && class == GuestLauncher {
+	// Both classes are covered only as of the sandbox slice; while guests were
+	// scoped and sandboxes were not, this deliberately excluded SandboxLauncher,
+	// because retiring a shared binding for pods that have no per-pod grant leaves
+	// them with no access at all.
+	if ScopedOnly {
 		return nil
 	}
 	return ensureConvergedBinding(ctx, c, namespace, bindingName, clusterRole, saName)

@@ -4,6 +4,49 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **Per-launcher-pod scoped RBAC** (#515), behind `scopedLauncherRBAC.enabled`
+  (default `false`). Every launcher pod — SwiftGuest, migration target,
+  SwiftSandbox, and warm pool slot — now gets its own Role + RoleBinding
+  granting `pods: get,patch` on **exactly its own pod** (and, for a guest,
+  `swiftguests/status` on its own CR). Enabling the gate retires the shared
+  namespace-wide RoleBinding, leaving those per-pod grants as the only access.
+
+  This is **defence in depth, not the fix for #443**. RBAC is additive and the
+  launcher ServiceAccount is shared, so scoping alone cannot stop an attacker who
+  obtains the SA — the ValidatingAdmissionPolicy (`launcherSAGate`, v0.13.8) is
+  what does. This bounds what the token is worth if it leaks another way.
+
+  Scope was validated before the mechanism was built: a guest ran its full
+  lifecycle on a live cluster under a hand-made self-only Role — boot, IP
+  discovery, status reporting, stop — with zero RBAC denials, while
+  `patch pod/<other>` was denied.
+
+  A sandbox launcher is granted **no** `swiftguests/status`: it runs untrusted
+  code and has no SwiftGuest CR to report to, so granting it would let an escaped
+  sandbox forge guest status.
+
+  Warm pool slots take two phases, because a slot pod is created by the pool but
+  re-parented to a SwiftSandbox on checkout, so neither CR owns it for its whole
+  life. The pool creates the grant owned by itself (the pod does not exist yet,
+  and the grant must precede it), then hands ownership to the slot pod, which is
+  the only owner whose lifetime matches. A pool also converges grants for slots
+  it already has, so enabling the gate on a running pool does not cut off live
+  slots.
+
+  Object cost is two per launcher pod, garbage-collected with it. Failure to
+  retire the shared binding is logged at ERROR and never blocks a workload from
+  booting — the exposure in that case is exactly the pre-change posture.
+
+  Requires `roles` and `delete` on `rolebindings` in the controller ClusterRole;
+  `helm upgrade` covers this, but a controller image newer than its ClusterRole
+  will log the failure and keep running.
+
+---
+
 ## [v0.13.9] — 2026-08-14
 
 A supply-chain release. Both cosign-bearing images drop from **48 fixable CVEs
