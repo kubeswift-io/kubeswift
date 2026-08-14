@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Per-launcher-pod RBAC (#515) — defence in depth after #443.
@@ -35,6 +36,16 @@ import (
 // patch. Owning them by the pod would invert that: the pod must exist first,
 // reintroducing the race this design exists to avoid. Owning them by the CR also
 // gives exact garbage collection, since the pod never outlives its workload.
+//
+// WARM POOL SLOTS ARE THE EXCEPTION, and take two phases. A slot pod is created
+// by the POOL but re-parented to a SwiftSandbox on checkout (checkout.go), so
+// neither CR owns it for its whole life: pool-owned leaks a Role per churned
+// slot, sandbox-owned does not exist yet at create time. So the pool creates the
+// grant owned by ITSELF (ordering preserved, and a crash mid-sequence still
+// reaps with the pool), then re-parents it onto the slot pod once that exists.
+// Pod ownership is stable across the checkout re-parent and GCs exactly.
+// EnsureScopedLauncherRBAC converges the controller ownerReference, so phase two
+// is the same call with a different owner.
 //
 // SCOPE VALIDATED, MECHANISM NOT. A guest was booted on dev under a Role scoped
 // to exactly its own name and completed its full lifecycle — boot, IP discovery,
@@ -87,6 +98,39 @@ func RemoveSharedLauncherBinding(ctx context.Context, c client.Client, namespace
 		return fmt.Errorf("delete shared binding %s/%s: %w", namespace, bindingName, err)
 	}
 	return nil
+}
+
+// NarrowToScopedRBAC retires the shared namespace-wide binding for a launcher
+// class when the gate is on. A no-op when it is off.
+//
+// It returns NOTHING, and that is the point. This was learned on a cluster
+// rather than reasoned out: the first version returned an error, the guest
+// reconcile propagated it, and every guest stuck in Scheduling with no pod at
+// all — because the failing call sat above pod creation. A defence-in-depth
+// tidy-up must never stop VMs from booting, so the signature makes "fatal"
+// unspellable rather than leaving it to each caller to remember.
+//
+// The exposure when it fails is exactly the pre-change posture — the shared
+// namespace-wide binding, which is what ships by default — so continuing is
+// strictly no worse than never having enabled the gate. It is logged at ERROR
+// every reconcile so it cannot pass unnoticed.
+//
+// The realistic trigger is an upgrade-order mistake: a controller image new
+// enough to have the gate, running against a ClusterRole too old to grant
+// `delete` on rolebindings. That must degrade, not take the cluster down.
+//
+// MUST be called strictly AFTER the scoped grant for the pod about to be
+// created, so a launcher never has a window with neither.
+func NarrowToScopedRBAC(ctx context.Context, c client.Client, namespace string, class LauncherClass) {
+	if !ScopedOnly {
+		return
+	}
+	if err := RemoveSharedLauncherBinding(ctx, c, namespace, class); err != nil {
+		log.FromContext(ctx).Error(err, "scoped-launcher-rbac is enabled but the shared launcher binding could NOT be removed; "+
+			"launchers keep namespace-wide pod access (the pre-change posture). "+
+			"Check that the controller ClusterRole grants delete on rolebindings.",
+			"namespace", namespace)
+	}
 }
 
 // scopedRulesFor returns the rules a launcher of the given class may exercise,
@@ -190,14 +234,49 @@ func createOrUpdateRole(ctx context.Context, c client.Client, want *rbacv1.Role)
 	}
 	// No-op guard: without it every reconcile writes, the watch re-enqueues and
 	// the controller spins — the same trap ensureConvergedBinding documents.
-	if rulesEqual(existing.Rules, want.Rules) {
+	changed := false
+	if !rulesEqual(existing.Rules, want.Rules) {
+		existing.Rules = want.Rules
+		changed = true
+	}
+	if adoptControllerRef(&existing, want) {
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-	existing.Rules = want.Rules
 	if err := c.Update(ctx, &existing); err != nil {
 		return fmt.Errorf("update scoped role %s/%s: %w", want.Namespace, want.Name, err)
 	}
 	return nil
+}
+
+// adoptControllerRef moves the controller ownerReference of an existing object
+// onto want's owner, reporting whether anything changed.
+//
+// This is what makes the warm-slot handover work: the pool creates the grant
+// owned by itself, then the same Ensure call with the slot pod as owner takes
+// ownership over. SetControllerReference alone cannot do this — it refuses when
+// a DIFFERENT controller already owns the object (AlreadyOwnedError), which is
+// precisely the handover case.
+//
+// Non-controller ownerReferences are preserved: they are not ours to remove.
+func adoptControllerRef(existing, want metav1.Object) bool {
+	wantRef := metav1.GetControllerOf(want)
+	if wantRef == nil {
+		return false
+	}
+	if cur := metav1.GetControllerOf(existing); cur != nil && cur.UID == wantRef.UID {
+		return false
+	}
+	refs := []metav1.OwnerReference{*wantRef}
+	for _, ref := range existing.GetOwnerReferences() {
+		if ref.Controller == nil || !*ref.Controller {
+			refs = append(refs, ref)
+		}
+	}
+	existing.SetOwnerReferences(refs)
+	return true
 }
 
 func createOrUpdateBinding(ctx context.Context, c client.Client, want *rbacv1.RoleBinding) error {
@@ -212,12 +291,19 @@ func createOrUpdateBinding(ctx context.Context, c client.Client, want *rbacv1.Ro
 	if err != nil {
 		return fmt.Errorf("get scoped rolebinding %s/%s: %w", want.Namespace, want.Name, err)
 	}
-	if subjectsEqual(existing.Subjects, want.Subjects) {
+	changed := false
+	if !subjectsEqual(existing.Subjects, want.Subjects) {
+		// roleRef is immutable, so only subjects can be converged. A binding whose
+		// roleRef drifted must be deleted by an operator; we do not delete RBAC.
+		existing.Subjects = want.Subjects
+		changed = true
+	}
+	if adoptControllerRef(&existing, want) {
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-	// roleRef is immutable, so only subjects can be converged. A binding whose
-	// roleRef drifted must be deleted by an operator; we do not delete RBAC.
-	existing.Subjects = want.Subjects
 	if err := c.Update(ctx, &existing); err != nil {
 		return fmt.Errorf("update scoped rolebinding %s/%s: %w", want.Namespace, want.Name, err)
 	}

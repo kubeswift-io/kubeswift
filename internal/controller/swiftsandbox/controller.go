@@ -70,6 +70,23 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// Per-pod scoped grant (#515) for the COLD pod, which is named sb.Name.
+	//
+	// A pooled sandbox that claims a warm slot runs under the SLOT's pod, whose
+	// grant the pool created and which the slot pod owns — so no grant is minted
+	// here for it, and the checkout does not have to move one. Only a sandbox that
+	// will (or already did) boot cold needs this. createLaunch ensures it again
+	// unconditionally, which is what actually guarantees grant-before-pod on a
+	// first-reconcile cold-fallback; this call converges drift thereafter.
+	if sb.Spec.PoolRef == nil || sb.Status.PodRef == sb.Name {
+		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &sb, sb.Name, swiftguest.SandboxLauncher); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// The narrowing — strictly after the grants above, never fatal.
+	swiftguest.NarrowToScopedRBAC(ctx, r.Client, sb.Namespace, swiftguest.SandboxLauncher)
+
 	// Native SwiftGPU (spec.gpuProfileRef): allocate the device(s) at CONTROLLER
 	// time and stamp status.gpu BEFORE the pod is built (the pod pins to
 	// status.gpu.nodeName and gpu-init binds status.gpu.devices). A no-op for the
@@ -145,6 +162,14 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	pod := buildPod(sb, kernelName)
+	// The scoped grant must exist before the pod does, or swiftletd's first
+	// annotation write 403s and the sandbox looks healthy while reporting nothing.
+	// Reconcile only mints it for a sandbox already known to be cold; a pool miss
+	// reaches here on the SAME reconcile that discovered it, so this is the call
+	// that actually orders the two for a cold-fallback.
+	if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, sb, pod.Name, swiftguest.SandboxLauncher); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}

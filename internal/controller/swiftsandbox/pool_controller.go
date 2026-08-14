@@ -110,6 +110,15 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if p.DeletionTimestamp != nil || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}
+		// Converge the scoped grant (#515) for every LIVE slot, warm or claimed.
+		// createWarmSlot only covers slots this controller is creating now; slots
+		// that predate the gate have no grant at all, and retiring the shared
+		// binding under them would 403 every annotation write on a running slot.
+		// Also the self-heal for a create that crashed between the two phases —
+		// owner is the pod, so this adopts a still-pool-owned grant.
+		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher); err != nil {
+			return ctrl.Result{}, err
+		}
 		if p.Labels[SlotStateLabelKey] == slotStateWarm {
 			warmLive++
 			warmPods = append(warmPods, p)
@@ -120,6 +129,10 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
 		}
 	}
+
+	// The narrowing — only once every LIVE slot above holds its own grant, so no
+	// running slot loses access. Never fatal.
+	swiftguest.NarrowToScopedRBAC(ctx, r.Client, pool.Namespace, swiftguest.SandboxLauncher)
 
 	// Release the GPU of any slot whose pod is gone (drain / checkout completion /
 	// churn). Runs before warming so freed GPUs are available for new slots.
@@ -304,8 +317,26 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	if err := controllerutil.SetControllerReference(pool, pod, r.Scheme); err != nil {
 		return err
 	}
+
+	// Scoped grant (#515), phase one: owned by the POOL, because the pod it names
+	// does not exist yet and the grant must precede it. Phase two below re-parents
+	// it onto the pod. Pool ownership is the fail-safe: a crash between the two
+	// leaves a grant that still GCs with the pool, and the census in Reconcile
+	// re-parents it on the next pass.
+	if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher); err != nil {
+		return err
+	}
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
+	}
+	// Phase two. The slot pod outlives neither CR cleanly — checkout re-parents it
+	// from the pool to a SwiftSandbox — so the POD is the only owner whose lifetime
+	// matches the grant's in both states. Skipped on AlreadyExists (no UID to bind
+	// to); the census picks that up.
+	if pod.UID != "" {
+		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, pod, pod.Name, swiftguest.SandboxLauncher); err != nil {
+			return err
+		}
 	}
 
 	if networked(slot) {
