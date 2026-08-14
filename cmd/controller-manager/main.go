@@ -78,6 +78,9 @@ func main() {
 	webhookEnabled := flag.Bool("webhook-enabled", false, "Enable admission webhooks (requires TLS certs)")
 	migrationMTLSEnabled := flag.Bool("migration-mtls-enabled", false, "Enable the live-migration mTLS cert provisioner (Phase 3c; requires cert-manager)")
 	leaderElect := flag.Bool("leader-elect", false, "Enable leader election for controller manager")
+	scopedLauncherRBAC := flag.Bool("scoped-launcher-rbac", false,
+		"Retire the namespace-wide guest-launcher RoleBinding and rely solely on the per-pod scoped Roles (#515). "+
+			"Off by default: enabling it DELETES a live grant. Guest launchers only — sandboxes are not scoped yet.")
 	webhookPort := flag.Int("webhook-port", defaultWebhookPort, "Port for webhook server")
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
@@ -96,6 +99,12 @@ func main() {
 		fmt.Printf("controller-manager %s (git %s)\n", version.Version, version.GitCommit)
 		os.Exit(0)
 	}
+
+	// Published as a package var rather than threaded through every reconciler:
+	// the switch is read at two points in two controllers (swiftguest and
+	// swiftmigration), and passing it through both constructors would widen
+	// their signatures for a value that never changes after startup.
+	swiftguest.ScopedOnly = *scopedLauncherRBAC
 
 	certDir := *webhookCertDir
 	if envCertDir := os.Getenv(webhookCertDirEnv); envCertDir != "" {

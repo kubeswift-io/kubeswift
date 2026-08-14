@@ -131,6 +131,15 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// The narrowing. Strictly AFTER the scoped grant above, so the launcher
+	// never has a window with neither. Off by default — see ScopedOnly.
+	if ScopedOnly {
+		if err := RemoveSharedLauncherBinding(ctx, r.Client, guest.Namespace, GuestLauncher); err != nil {
+			logger.Error(err, "failed to remove the shared launcher binding", "namespace", guest.Namespace)
+			return ctrl.Result{}, err
+		}
+	}
+
 	// cloneFromSnapshot (Snapshot Phase 4): a guest that boots as a clone of a
 	// SwiftSnapshot has no imageRef/kernelRef. Resolve the snapshot + the live
 	// source guest, self-stamp the clone-mode restore annotations, and resolve

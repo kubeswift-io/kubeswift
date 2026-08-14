@@ -49,6 +49,46 @@ func ScopedRoleNameFor(podName string) string {
 	return "swiftletd-scoped-" + podName
 }
 
+// ScopedOnly reports whether the shared namespace-wide launcher binding should
+// be REMOVED, leaving the per-pod scoped grants as the only access.
+//
+// This is the switch that actually narrows anything. Creating scoped Roles
+// alongside the shared binding changes no effective permission — RBAC is a
+// union — so without this the feature is inert. Off by default: turning it on
+// deletes a live grant, and an operator should choose that moment.
+//
+// Set from the controller flag wired to the chart's
+// `scopedLauncherRBAC.enabled`.
+var ScopedOnly bool
+
+// RemoveSharedLauncherBinding deletes the namespace-wide RoleBinding for a
+// launcher class, and is a no-op when it is already gone.
+//
+// Called only when ScopedOnly is set, and only AFTER the per-pod grant for the
+// pod about to be created exists — otherwise a launcher briefly has neither.
+//
+// Deleting RBAC is not something a controller should do lightly, and it is done
+// here for a specific reason: the alternative is to stop *creating* the shared
+// binding and leave any pre-existing one in place, which on every upgraded
+// cluster means the operator flips the switch, believes they are narrowed, and
+// is not. A security control that silently does nothing is worse than one that
+// is visibly off.
+func RemoveSharedLauncherBinding(ctx context.Context, c client.Client, namespace string, class LauncherClass) error {
+	_, _, bindingName := launcherRBACNames(class)
+	var rb rbacv1.RoleBinding
+	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: bindingName}, &rb)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get shared binding %s/%s: %w", namespace, bindingName, err)
+	}
+	if err := c.Delete(ctx, &rb); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete shared binding %s/%s: %w", namespace, bindingName, err)
+	}
+	return nil
+}
+
 // scopedRulesFor returns the rules a launcher of the given class may exercise,
 // narrowed to podName.
 //
