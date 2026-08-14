@@ -16,7 +16,7 @@ func TestSignArgs(t *testing.T) {
 		key    = "/oras-signing-key/cosign.key"
 	)
 
-	secure := SignArgs(repo, digest, key, false)
+	secure := SignArgs(repo, digest, key, false, "")
 	joined := strings.Join(secure, " ")
 	for _, want := range []string{
 		"sign",
@@ -42,12 +42,148 @@ func TestSignArgs(t *testing.T) {
 		t.Errorf("digest ref must be the final arg; got %q", secure[len(secure)-1])
 	}
 
-	insecure := SignArgs(repo, digest, key, true)
+	insecure := SignArgs(repo, digest, key, true, "")
 	if !strings.Contains(strings.Join(insecure, " "), "--allow-http-registry") {
 		t.Errorf("insecure args must carry --allow-http-registry; got: %v", insecure)
 	}
 	if insecure[len(insecure)-1] != repo+"@"+digest {
 		t.Errorf("digest ref must remain the final arg even with --allow-http-registry; got %q", insecure[len(insecure)-1])
+	}
+}
+
+// TestSignArgs_OfflineIsAlwaysExpressed is the leak guard. Every argv this
+// builds must say "do not use a transparency log" in the dialect of whichever
+// cosign will run it. An argv carrying NEITHER form still signs successfully on
+// 3.x — and publishes the artifact digest to the public Rekor (#486). That is
+// the failure this test exists to make impossible.
+func TestSignArgs_OfflineIsAlwaysExpressed(t *testing.T) {
+	const repo, digest, key = "ghcr.io/org/x", "sha256:abc", "/k/cosign.key"
+
+	for _, tc := range []struct {
+		name          string
+		signingConfig string
+		want, notWant string
+	}{
+		{"cosign 2.x: the flag", "", "--tlog-upload=false", "--signing-config"},
+		{"cosign 3.x: a no-tlog signing-config", "/tmp/sc.json", "--signing-config /tmp/sc.json", "--tlog-upload"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(SignArgs(repo, digest, key, false, tc.signingConfig), " ")
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("missing %q; got: %s", tc.want, got)
+			}
+			if strings.Contains(got, tc.notWant) {
+				t.Errorf("must not mix dialects — found %q; got: %s", tc.notWant, got)
+			}
+		})
+	}
+}
+
+func TestCosignMajor(t *testing.T) {
+	for _, tc := range []struct {
+		out     string
+		want    int
+		wantErr bool
+	}{
+		{"GitVersion:    v2.6.5\n", 2, false},
+		{"GitVersion:    v3.1.3\n", 3, false},
+		{"GitVersion:    3.1.3\n", 3, false},
+		{"some banner with no version", 0, true},
+	} {
+		got, err := cosignMajor(tc.out)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("cosignMajor(%q) should have failed", tc.out)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("cosignMajor(%q) = %d, %v; want %d", tc.out, got, err, tc.want)
+		}
+	}
+}
+
+// On cosign 3.x, Sign must pass a signing-config. If it ever calls cosign
+// without one, the signature silently lands in the public transparency log.
+func TestSign_Cosign3PassesSigningConfig(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "cosign.key")
+	if err := os.WriteFile(keyPath, []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	origRun, origVer := CosignRun, CosignVersionOutput
+	defer func() { CosignRun, CosignVersionOutput = origRun, origVer }()
+	CosignVersionOutput = func(context.Context) (string, error) { return "GitVersion:    v3.1.3\n", nil }
+
+	var got []string
+	CosignRun = func(_ context.Context, args []string) error { got = args; return nil }
+
+	if err := Sign(context.Background(), "ghcr.io/org/x", "sha256:abc", keyPath, false); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--signing-config") {
+		t.Errorf("cosign 3.x must be given --signing-config, else the digest goes to the public Rekor; got: %s", joined)
+	}
+	if strings.Contains(joined, "--tlog-upload") {
+		t.Errorf("cosign 3.x rejects --tlog-upload at runtime; got: %s", joined)
+	}
+
+	// And the file handed over must actually declare no transparency log.
+	idx := -1
+	for i, a := range got {
+		if a == "--signing-config" {
+			idx = i + 1
+		}
+	}
+	if idx < 0 || idx >= len(got) {
+		t.Fatal("--signing-config had no path argument")
+	}
+	// Sign removes the temp file on return, so assert on the embedded source.
+	if !strings.Contains(string(offlineSigningConfig), `"rekorTlogConfig": {}`) {
+		t.Errorf("embedded signing-config must declare NO tlog services; got: %s", offlineSigningConfig)
+	}
+}
+
+func TestSign_Cosign2UsesFlag(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "cosign.key")
+	if err := os.WriteFile(keyPath, []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origRun, origVer := CosignRun, CosignVersionOutput
+	defer func() { CosignRun, CosignVersionOutput = origRun, origVer }()
+	CosignVersionOutput = func(context.Context) (string, error) { return "GitVersion:    v2.6.5\n", nil }
+
+	var got []string
+	CosignRun = func(_ context.Context, args []string) error { got = args; return nil }
+	if err := Sign(context.Background(), "ghcr.io/org/x", "sha256:abc", keyPath, false); err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if !strings.Contains(strings.Join(got, " "), "--tlog-upload=false") {
+		t.Errorf("cosign 2.x must keep --tlog-upload=false; got: %v", got)
+	}
+}
+
+// An unreadable/unparseable cosign must fail the sign, not proceed blind.
+func TestSign_UnknownCosignVersionFails(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "cosign.key")
+	if err := os.WriteFile(keyPath, []byte("k"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origRun, origVer := CosignRun, CosignVersionOutput
+	defer func() { CosignRun, CosignVersionOutput = origRun, origVer }()
+	CosignVersionOutput = func(context.Context) (string, error) { return "no version here", nil }
+
+	called := false
+	CosignRun = func(context.Context, []string) error { called = true; return nil }
+	if err := Sign(context.Background(), "ghcr.io/org/x", "sha256:abc", keyPath, false); err == nil {
+		t.Error("Sign must fail when the cosign version cannot be determined")
+	}
+	if called {
+		t.Error("cosign must not be invoked when its version is unknown")
 	}
 }
 
@@ -76,9 +212,12 @@ func TestSign_InvokesCosignWithDigest(t *testing.T) {
 	}
 
 	var gotArgs []string
-	orig := CosignRun
+	orig, origVer := CosignRun, CosignVersionOutput
 	CosignRun = func(_ context.Context, args []string) error { gotArgs = args; return nil }
-	defer func() { CosignRun = orig }()
+	// Stub the version probe too: Sign now asks cosign which major it is, and a
+	// unit test must not depend on a cosign existing on the machine running it.
+	CosignVersionOutput = func(context.Context) (string, error) { return "GitVersion:    v2.6.5\n", nil }
+	defer func() { CosignRun, CosignVersionOutput = orig, origVer }()
 
 	if err := Sign(context.Background(), "ghcr.io/org/s", "sha256:deadbeef", key, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)

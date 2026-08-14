@@ -14,12 +14,18 @@
 // signature produced by implementation A verify with implementation B? This
 // runs that matrix against a real registry.
 //
+// It also answers a second question the exit code cannot: was the signature
+// made OFFLINE? See assertNoTransparencyLogEntry — on cosign 3.x a signature
+// can succeed while publishing the artifact digest to the public Rekor, which
+// for a private snapshot is a disclosure. Every signer is checked for that.
+//
 // WHY IT LIVES HERE, not in hack/ as a shell script: it must exercise the argv
 // that `SignArgs`/`VerifyArgs` actually produce. A hand-written `cosign sign`
 // in a shell script would test cosign, not us — and the flags are the whole
-// point (`--tlog-upload=false` on sign, `--insecure-ignore-tlog` on verify).
-// Being in-package also lets it swap implementations by overriding the
-// `CosignRun` var, rather than manipulating PATH.
+// point (the no-transparency-log dialect on sign, which differs per major, and
+// `--insecure-ignore-tlog` on verify). Being in-package also lets it swap
+// implementations by overriding the `CosignRun`/`CosignVersionOutput` vars,
+// rather than manipulating PATH.
 //
 // NOT RUN BY DEFAULT. Build-tagged `interop`: it needs a live registry, a
 // keypair, and cosign binaries on disk. Drive it with hack/cosign-interop.sh,
@@ -28,7 +34,10 @@ package oci
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -58,6 +67,15 @@ func runWith(bin string) func(context.Context, []string) error {
 	}
 }
 
+// versionOf returns a CosignVersionOutput bound to a specific binary, so Sign
+// picks the offline dialect that binary actually accepts.
+func versionOf(bin string) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		out, err := exec.CommandContext(ctx, bin, "version").CombinedOutput()
+		return string(out), err
+	}
+}
+
 func envOrSkip(t *testing.T, key string) string {
 	t.Helper()
 	v := os.Getenv(key)
@@ -65,6 +83,82 @@ func envOrSkip(t *testing.T, key string) string {
 		t.Skipf("%s not set — run via hack/cosign-interop.sh", key)
 	}
 	return v
+}
+
+// assertNoTransparencyLogEntry is the leak guard, and it is the reason this
+// harness earns its keep beyond interop.
+//
+// "Signed offline" is not observable from cosign's exit code: on 3.x, an argv
+// missing the offline dialect signs successfully AND publishes the artifact
+// digest to the public Rekor. The only way to tell the two apart is to read the
+// signature back off the registry and look for transparency-log entries. For a
+// private VM snapshot or an air-gapped golden image, that upload is a
+// disclosure — so a signature carrying one fails the test.
+//
+// Only 3.x's Sigstore-bundle form can carry them; 2.x's legacy `.sig` tag has
+// nowhere to put one, so its absence there is structural rather than checked.
+func assertNoTransparencyLogEntry(t *testing.T, registry, repo, digest, impl string) {
+	t.Helper()
+	repoPath := strings.TrimPrefix(repo, registry+"/")
+	tag := "sha256-" + strings.TrimPrefix(digest, "sha256:")
+
+	get := func(ref, accept string) []byte {
+		req, err := http.NewRequest("GET", fmt.Sprintf("https://%s/v2/%s/%s", registry, repoPath, ref), nil)
+		if err != nil {
+			return nil
+		}
+		req.Header.Set("Accept", accept)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return nil
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return b
+	}
+
+	idx := get("manifests/"+tag, "application/vnd.oci.image.index.v1+json")
+	if idx == nil {
+		t.Logf("  %s: no bundle-form signature at %s (legacy .sig form cannot carry a tlog entry)", impl, tag)
+		return
+	}
+	var index struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(idx, &index); err != nil || len(index.Manifests) == 0 {
+		return
+	}
+	man := get("manifests/"+index.Manifests[0].Digest, "application/vnd.oci.image.manifest.v1+json")
+	var manifest struct {
+		Layers []struct {
+			Digest string `json:"digest"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(man, &manifest); err != nil || len(manifest.Layers) == 0 {
+		return
+	}
+	var bundle struct {
+		VerificationMaterial struct {
+			TlogEntries []struct {
+				LogIndex string `json:"logIndex"`
+			} `json:"tlogEntries"`
+		} `json:"verificationMaterial"`
+	}
+	if err := json.Unmarshal(get("blobs/"+manifest.Layers[0].Digest, "*/*"), &bundle); err != nil {
+		return
+	}
+	if n := len(bundle.VerificationMaterial.TlogEntries); n > 0 {
+		t.Errorf("LEAK: %s published this artifact to a transparency log — %d entr(y|ies), first logIndex=%s. "+
+			"Offline signing must produce none; a public Rekor entry discloses the digest of a private artifact.",
+			impl, n, bundle.VerificationMaterial.TlogEntries[0].LogIndex)
+		return
+	}
+	t.Logf("  %s: signed offline (tlogEntries=0)", impl)
 }
 
 // TestSignatureInterop signs one artifact with every implementation and then
@@ -98,8 +192,8 @@ func TestSignatureInterop(t *testing.T) {
 		t.Fatal("no implementations to test")
 	}
 
-	orig := CosignRun
-	t.Cleanup(func() { CosignRun = orig })
+	origRun, origVer := CosignRun, CosignVersionOutput
+	t.Cleanup(func() { CosignRun, CosignVersionOutput = origRun, origVer })
 
 	// Each signer gets its own repository so signatures cannot be confused with
 	// one another — cosign stores them at a digest-derived tag, so two signers
@@ -110,11 +204,13 @@ func TestSignatureInterop(t *testing.T) {
 		repo := fmt.Sprintf("%s/interop-%s/test", registry, strings.ToLower(s.name))
 		t.Run("sign/"+s.name, func(t *testing.T) {
 			CosignRun = runWith(s.path)
+			CosignVersionOutput = versionOf(s.path)
 			if err := Sign(context.Background(), repo, digest, keyPath, false); err != nil {
 				t.Errorf("%s could not sign: %v", s.name, err)
 				return
 			}
 			signed[s.name] = repo
+			assertNoTransparencyLogEntry(t, registry, repo, digest, s.name)
 		})
 	}
 
