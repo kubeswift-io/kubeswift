@@ -22,19 +22,29 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Fetch a pinned cosign for the verify-before-boot path (spec.verifyKeySecretRef).
 # Verified against the release checksums so a tampered binary fails the build.
 #
-# Pinned to the 2.x line, but NOT for the reason previously recorded here. This
-# comment used to claim the two images must ship the same cosign so that a
-# signature made by one verifies with the other. hack/cosign-interop.sh was
-# built to test exactly that (#486) and it is not true: cosign v3.1.3 verifies a
-# v2.6.5-made signature under our own VerifyArgs, and correctly rejects a
-# foreign key, so its verification is real rather than a no-op.
+# DELIBERATELY 3.x HERE while images/snapshot-oras/Containerfile stays on 2.x.
+# The two images no longer match, so the reasoning is worth stating (#486):
 #
-# The 3.x blocker is signing only — `--tlog-upload=false` is rejected at runtime
-# — and this image never signs (cmd/sandbox-materialize calls oci.Verify alone).
-# So this pin is conservatism, not a constraint, and lifting it is tracked in
-# #486: v3.1.3 carries 4 fixable CVEs against v2.6.5's 48. Re-check with
-# `COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh` before moving it.
-ARG COSIGN_VERSION=v2.6.5
+#   - This image only ever VERIFIES — cmd/sandbox-materialize calls oci.Verify
+#     alone and has no signing path. The 3.x blocker is signing: it rejects
+#     `--tlog-upload=false` at runtime, which internal/oci.SignArgs needs.
+#     snapshot-oras signs, so it cannot move; this image is not affected.
+#
+#   - Verification stays compatible in the direction that matters. cosign 3.x
+#     verifies a v2.6.5-made signature under our own VerifyArgs, so signatures
+#     already sitting in users' registries keep verifying after an upgrade.
+#     hack/cosign-interop.sh exists to prove that and is the gate on changing
+#     this line — including the negative control that 3.x still REJECTS a
+#     foreign key, so the compatibility is real rather than permissive.
+#
+#   - The reason to move: v2.6.5 carries 48 fixable CVEs (1 critical, 24 high)
+#     in cosign's own frozen dependency tree, none of them reachable by our
+#     tooling. v3.1.3 carries 4 (0 critical, 3 high).
+#
+# Re-run `COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh` before moving
+# this again. It is EXPECTED to exit non-zero on the v3.1.3 sign row; what must
+# stay green is the "signed by v2.6.5 / verified by v3.1.3" cell.
+ARG COSIGN_VERSION=v3.1.3
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" -o cosign_checksums.txt \
