@@ -16,6 +16,67 @@ const (
 	ConditionPodScheduled = "PodScheduled"
 )
 
+// MapNetworkReadyCondition surfaces the guest's IP-acquisition outcome on the CR
+// (#527). Call AFTER MapPodToStatus, which is what populates status.Network.
+//
+// The bug this closes: a guest whose NIC never came up sat at Running with
+// GuestRunning=True and an empty IP indefinitely. swiftletd's lease poller gave
+// up after ~4 minutes into a `log::warn!` and told nobody, so nothing on the CR
+// distinguished "never going to get an IP" from "still booting". Diagnosing it
+// meant reading launcher logs and attaching to a serial console.
+//
+// Takes the guest, not just the pod, because the most common cause is knowable
+// from the spec: a disk-boot guest with no seedProfileRef gets no NoCloud seed,
+// so cloud-init finds no datasource, never writes netplan, and the interface is
+// never configured — no DHCP request is ever sent. Naming that in the message is
+// the difference between a dead end and a fix.
+//
+// Deliberately NOT a webhook rejection of "disk-boot without a seed": an image
+// that self-configures (baked-in static addressing, a different init) is a valid
+// configuration. Make the failure visible; do not forbid the shape.
+func MapNetworkReadyCondition(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
+	if pod == nil || guest == nil {
+		return
+	}
+	hasIP := status.Network != nil && status.Network.PrimaryIP != ""
+	if hasIP {
+		// Covers a lease that landed after the poller had already reported a
+		// timeout (a late DHCP, or an operator fixing the guest in place): the
+		// condition must recover, not latch False forever.
+		setNetworkCondition(status, swiftv1alpha1.ConditionNetworkReady, true,
+			"IPAcquired", "guest acquired "+status.Network.PrimaryIP)
+		return
+	}
+	raw, reported := pod.Annotations[PodAnnotationNetworkUnready]
+	if !reported {
+		// No IP and no timeout report yet — still within the poll window. Not a
+		// failure, and asserting one here would make every booting guest look
+		// broken for its first minute.
+		return
+	}
+	setNetworkCondition(status, swiftv1alpha1.ConditionNetworkReady, false,
+		"DHCPTimeout", dhcpTimeoutMessage(guest, raw))
+}
+
+// dhcpTimeoutMessage composes the operator-facing explanation.
+func dhcpTimeoutMessage(guest *swiftv1alpha1.SwiftGuest, raw string) string {
+	msg := "no DHCP lease"
+	var report struct {
+		AfterSeconds int64 `json:"afterSeconds"`
+	}
+	if err := json.Unmarshal([]byte(raw), &report); err == nil && report.AfterSeconds > 0 {
+		msg += " after " + strconv.FormatInt(report.AfterSeconds, 10) + "s"
+	}
+	msg += "; the guest booted but never requested one"
+	if guest.Spec.ImageRef != nil && guest.Spec.SeedProfileRef == nil {
+		msg += ". This guest is disk-boot with no seedProfileRef, so it gets no " +
+			"NoCloud seed: cloud-init finds no datasource, never writes netplan, " +
+			"and the interface is never configured. Set spec.seedProfileRef, or " +
+			"use an image that configures its own networking"
+	}
+	return msg
+}
+
 // MapPodToStatus updates status from pod phase and conditions.
 func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	if pod == nil {

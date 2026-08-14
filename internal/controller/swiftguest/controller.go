@@ -594,6 +594,10 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Pod exists; update status from pod
 		podForMetrics = &existingPod
 		MapPodToStatus(&existingPod, status)
+		// AFTER MapPodToStatus, which is what populates status.Network: surface
+		// whether the guest ever acquired an IP, so "Running with no IP forever"
+		// stops being invisible on the CR (#527).
+		MapNetworkReadyCondition(&guest, &existingPod, status)
 		// In-guest identity agent (PR 4): for an agent-enabled cloneFromSnapshot
 		// clone, drive the one-shot identity-regen over vsock once it is Running.
 		// MUST run BEFORE the IP-not-discovered requeue below: a fresh clone has

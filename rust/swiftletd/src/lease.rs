@@ -9,6 +9,17 @@ use std::time::Duration;
 
 pub const ANNOTATION_GUEST_IP: &str = "kubeswift.io/guest-ip";
 pub const ANNOTATION_GUEST_INTERFACES: &str = "kubeswift.io/guest-interfaces";
+/// Written when the lease poller gives up without ever seeing a DHCP lease
+/// (#527). The controller maps it to a NetworkReady=False condition.
+///
+/// This exists because the timeout used to be a bare `log::warn!` and nothing
+/// else. The guest reached Running with GuestRunning=True and simply never
+/// reported an IP — no condition, no event, nothing on the CR. A real case cost
+/// hours: an Ubuntu disk-boot guest with no `seedProfileRef` gets no NoCloud
+/// seed, so cloud-init never writes netplan, the NIC is never configured, and no
+/// DHCP request is ever sent. Everything looked healthy. Design principle 6 says
+/// status fields reflect real state; a launcher-log warning is not status.
+pub const ANNOTATION_NETWORK_UNREADY: &str = "kubeswift.io/guest-network-unready";
 /// Egress reachability: "true"/"false" written by the launcher entrypoint's
 /// cluster-DNS-ClusterIP probe (service exposure §4 — egress observability).
 /// The controller maps it to status.network.egress + the EgressReady condition.
@@ -161,8 +172,61 @@ pub fn spawn_lease_poller(
             }
             // else: continue polling; transient error or RBAC gap.
         }
-        log::warn!("lease_poll_timeout");
+        let waited_secs = (max_attempts as u64).saturating_mul(INTERVAL.as_secs());
+        log::warn!("lease_poll_timeout after {}s", waited_secs);
+        report_network_unready(&namespace, &pod_name, waited_secs);
     });
+}
+
+/// Patches the network-unready annotation so the timeout reaches the CR (#527).
+///
+/// Retried, for the same reason spawn_lease_poller retries its IP patch (W4): a
+/// 403 during namespace RBAC setup or a momentarily unavailable apiserver must
+/// not swallow the report. Failing to report a silent failure silently would be
+/// the same bug one level up — so a give-up here logs at ERROR.
+///
+/// Bounded, unlike the IP poller: this runs once at the end of the poll window
+/// and there is nothing further to wait for.
+fn report_network_unready(namespace: &str, pod_name: &str, waited_secs: u64) {
+    const ATTEMPTS: u32 = 5;
+    const BACKOFF: Duration = Duration::from_secs(2);
+
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        log::error!("failed to create runtime for network-unready patch");
+        return;
+    };
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            thread::sleep(BACKOFF);
+        }
+        let ok = rt.block_on(async {
+            let client = match crate::kube_client::create_client().await {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("kube client unavailable for network-unready patch ({e})");
+                    return false;
+                }
+            };
+            match patch_network_unready(&client, namespace, pod_name, waited_secs).await {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!("network_unready_patch_failed (will retry): {e}");
+                    false
+                }
+            }
+        });
+        if ok {
+            log::info!("pod_annotation_patched {ANNOTATION_NETWORK_UNREADY}=DHCPTimeout");
+            return;
+        }
+    }
+    log::error!(
+        "could not report the DHCP timeout to the pod after {ATTEMPTS} attempts; \
+         the guest will show as Running with no IP and no reason"
+    );
 }
 
 /// Build the interfaces JSON for pod annotation.
@@ -220,9 +284,60 @@ async fn patch_pod_annotation(
     Ok(())
 }
 
+/// Builds the network-unready annotation value.
+///
+/// JSON rather than a bare string so the controller can surface the wait
+/// duration in its condition message without the operator having to know what
+/// the poll window is. `serde_json::json!`, not `format!` — the repo convention
+/// for annotation payloads.
+fn network_unready_value(waited_secs: u64) -> String {
+    serde_json::to_string(&json!({
+        "reason": "DHCPTimeout",
+        "afterSeconds": waited_secs,
+    }))
+    .unwrap_or_else(|_| r#"{"reason":"DHCPTimeout"}"#.to_string())
+}
+
+async fn patch_network_unready(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    waited_secs: u64,
+) -> Result<(), kube::Error> {
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
+    let patch = json!({
+        "metadata": {
+            "annotations": {
+                ANNOTATION_NETWORK_UNREADY: network_unready_value(waited_secs),
+            }
+        }
+    });
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The controller parses this payload to build its NetworkReady message
+    // (#527). A change here that the Go side does not expect silently degrades
+    // the message back to a bare "no DHCP lease" — which is the dead end this
+    // whole change exists to remove.
+    #[test]
+    fn network_unready_value_carries_reason_and_wait() {
+        let v = network_unready_value(240);
+        let parsed: serde_json::Value = serde_json::from_str(&v).expect("must be valid JSON");
+        assert_eq!(
+            parsed["reason"], "DHCPTimeout",
+            "controller matches on reason"
+        );
+        assert_eq!(
+            parsed["afterSeconds"], 240,
+            "the wait duration is what makes the message actionable"
+        );
+    }
 
     #[test]
     fn parse_first_lease_skips_blank_and_comment_lines() {

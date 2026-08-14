@@ -6,6 +6,35 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A guest that never gets an IP now says so** (#527). `NetworkReady=False` with
+  reason `DHCPTimeout` appears on the SwiftGuest once swiftletd's lease poller
+  gives up, instead of the guest sitting at `Running` / `GuestRunning=True` with
+  an empty `status.network.primaryIP` indefinitely.
+
+  Previously the timeout was a single `log::warn!("lease_poll_timeout")` in the
+  launcher and nothing else — nothing on the CR distinguished "never going to get
+  an IP" from "still booting", so diagnosing it meant reading launcher logs and
+  attaching to a serial console.
+
+  The condition message names the likely cause. The common one is knowable from
+  the spec: a **disk-boot guest with no `seedProfileRef` gets no NoCloud seed**,
+  so cloud-init finds no datasource, never writes netplan, and the interface is
+  never configured — the guest boots fine to `multi-user.target` and simply never
+  sends a DHCP request. That case now reads:
+
+  > no DHCP lease after 240s; the guest booted but never requested one. This
+  > guest is disk-boot with no seedProfileRef, so it gets no NoCloud seed:
+  > cloud-init finds no datasource, never writes netplan, and the interface is
+  > never configured. Set spec.seedProfileRef, or use an image that configures
+  > its own networking
+
+  The condition recovers to `True` if a lease arrives late, so it never latches
+  false. Deliberately **not** a webhook rejection of "disk-boot without a seed" —
+  an image that self-configures is a valid shape; the goal is visibility, not
+  prohibition. No CRD schema change (conditions are not schema).
+
 ### Changed
 
 - **swiftletd: kube-rs 0.92 → 4.2, k8s-openapi 0.22 → 0.28** (#499, #501). Four
