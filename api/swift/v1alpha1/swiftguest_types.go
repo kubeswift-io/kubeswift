@@ -70,6 +70,15 @@ const ConditionServiceReady = "ServiceReady"
 // the pod-netns signal (the VM's forwarded traffic can bypass the eth0 hook).
 const ConditionEgressReady = "EgressReady"
 
+// ConditionNetworkReady reports whether the guest obtained an IP (#527).
+//
+// It exists because "Running with no IP" was previously indistinguishable from
+// "Running, still booting" — forever. The lease poller gave up after ~4 minutes
+// with only a launcher-log warning, so a guest whose NIC never came up looked
+// completely healthy on the CR. False here means the poller timed out with no
+// DHCP lease; the message carries the likely cause.
+const ConditionNetworkReady = "NetworkReady"
+
 // SwiftGuestPhase is the phase of a SwiftGuest.
 // +kubebuilder:validation:Enum=Pending;Scheduling;Running;Stopped;Failed
 type SwiftGuestPhase string

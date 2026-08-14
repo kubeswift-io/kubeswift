@@ -1,6 +1,7 @@
 package swiftguest
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -170,4 +171,116 @@ func hasCondition(status *swiftv1alpha1.SwiftGuestStatus, condType string, condS
 		}
 	}
 	return false
+}
+
+// #527: the whole point of this condition is that "Running with no IP forever"
+// used to be indistinguishable from "Running, still booting". These pin the
+// three states apart.
+
+func networkTestGuest(diskBoot, withSeed bool) *swiftv1alpha1.SwiftGuest {
+	g := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+	}
+	if diskBoot {
+		g.Spec.ImageRef = &corev1.LocalObjectReference{Name: "img"}
+	} else {
+		g.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+	}
+	if withSeed {
+		g.Spec.SeedProfileRef = &corev1.LocalObjectReference{Name: "seed"}
+	}
+	return g
+}
+
+func networkCond(status *swiftv1alpha1.SwiftGuestStatus) *metav1.Condition {
+	for i := range status.Conditions {
+		if status.Conditions[i].Type == swiftv1alpha1.ConditionNetworkReady {
+			return &status.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// A booting guest must NOT look broken. Without this guard the obvious
+// implementation ("no IP => NetworkReady=False") would mark every guest failed
+// for the first minute of its life.
+func TestMapNetworkReadyCondition_SilentWhileStillBooting(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}}
+	status := &swiftv1alpha1.SwiftGuestStatus{}
+	MapNetworkReadyCondition(networkTestGuest(true, true), pod, status)
+	if c := networkCond(status); c != nil {
+		t.Errorf("no IP and no timeout report yet is not a failure; got %s/%s", c.Status, c.Reason)
+	}
+}
+
+func TestMapNetworkReadyCondition_TrueOnceIPAcquired(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"}}
+	status := &swiftv1alpha1.SwiftGuestStatus{
+		Network: &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "10.0.0.5"},
+	}
+	MapNetworkReadyCondition(networkTestGuest(true, true), pod, status)
+	c := networkCond(status)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != "IPAcquired" {
+		t.Fatalf("want NetworkReady=True/IPAcquired; got %+v", c)
+	}
+}
+
+// The condition must RECOVER. A lease can land after the poller already reported
+// a timeout (late DHCP, or an operator fixing the guest in place); latching
+// False forever would be a new silent lie in the opposite direction.
+func TestMapNetworkReadyCondition_RecoversWhenLeaseArrivesLate(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "g", Namespace: "ns",
+		Annotations: map[string]string{
+			PodAnnotationNetworkUnready: `{"reason":"DHCPTimeout","afterSeconds":240}`,
+		},
+	}}
+	status := &swiftv1alpha1.SwiftGuestStatus{
+		Network: &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "10.0.0.5"},
+	}
+	MapNetworkReadyCondition(networkTestGuest(true, true), pod, status)
+	c := networkCond(status)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("an IP must win over a stale timeout report; got %+v", c)
+	}
+}
+
+// The message is the deliverable. A bare "no DHCP lease" sends the operator to
+// the launcher logs and a serial console — which is exactly the cost this change
+// exists to remove.
+func TestMapNetworkReadyCondition_NamesTheMissingSeed(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "g", Namespace: "ns",
+		Annotations: map[string]string{
+			PodAnnotationNetworkUnready: `{"reason":"DHCPTimeout","afterSeconds":240}`,
+		},
+	}}
+
+	// disk-boot, no seed: the cause is knowable from the spec, so say it.
+	status := &swiftv1alpha1.SwiftGuestStatus{}
+	MapNetworkReadyCondition(networkTestGuest(true, false), pod, status)
+	c := networkCond(status)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "DHCPTimeout" {
+		t.Fatalf("want NetworkReady=False/DHCPTimeout; got %+v", c)
+	}
+	if !strings.Contains(c.Message, "240s") {
+		t.Errorf("message should carry how long it waited; got %q", c.Message)
+	}
+	if !strings.Contains(c.Message, "seedProfileRef") {
+		t.Errorf("disk-boot with no seed MUST name seedProfileRef — that is the fix; got %q", c.Message)
+	}
+
+	// disk-boot WITH a seed: the seed hint would be wrong, so it must not appear.
+	status = &swiftv1alpha1.SwiftGuestStatus{}
+	MapNetworkReadyCondition(networkTestGuest(true, true), pod, status)
+	if c := networkCond(status); c == nil || strings.Contains(c.Message, "seedProfileRef") {
+		t.Errorf("a guest that HAS a seed must not be told to set one; got %+v", c)
+	}
+
+	// kernel-boot: no cloud-init involved, so the seed hint is irrelevant.
+	status = &swiftv1alpha1.SwiftGuestStatus{}
+	MapNetworkReadyCondition(networkTestGuest(false, false), pod, status)
+	if c := networkCond(status); c == nil || strings.Contains(c.Message, "seedProfileRef") {
+		t.Errorf("kernel-boot has no cloud-init; the seed hint must not appear; got %+v", c)
+	}
 }

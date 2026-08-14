@@ -22,6 +22,11 @@ const PodAnnotationGuestIP = "kubeswift.io/guest-ip"
 // PodAnnotationGuestInterfaces is the annotation key for guest network interfaces JSON (set by swiftletd lease poller).
 const PodAnnotationGuestInterfaces = "kubeswift.io/guest-interfaces"
 
+// PodAnnotationNetworkUnready is written by swiftletd when the lease poller
+// gives up without ever seeing a DHCP lease (#527). Value is
+// `{"reason":"DHCPTimeout","afterSeconds":N}`. Maps to NetworkReady=False.
+const PodAnnotationNetworkUnready = "kubeswift.io/guest-network-unready"
+
 // PodAnnotationGuestRuntimePID is the annotation key for the CH process PID (set by swiftletd on socket ready).
 const PodAnnotationGuestRuntimePID = "kubeswift.io/guest-runtime-pid"
 
