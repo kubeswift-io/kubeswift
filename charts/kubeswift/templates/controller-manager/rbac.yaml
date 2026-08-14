@@ -197,7 +197,10 @@ rules:
     verbs: ["get", "list", "watch", "create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "list", "watch", "create", "update"]
+    # `delete` is for the #515 narrowing only: retiring the shared
+    # namespace-wide launcher binding once per-pod grants exist. Scoped
+    # Roles/RoleBindings are reaped by ownerReference GC, not by us.
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   # rbac.authorization.k8s.io Roles — the per-launcher-pod scoped grant (#515):
   # a Role naming exactly one pod in resourceNames, owned by the workload CR.
   #

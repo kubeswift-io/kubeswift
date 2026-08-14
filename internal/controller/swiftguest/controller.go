@@ -133,10 +133,27 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// The narrowing. Strictly AFTER the scoped grant above, so the launcher
 	// never has a window with neither. Off by default — see ScopedOnly.
+	//
+	// NOT fatal to the reconcile, deliberately, and this was learned on a
+	// cluster rather than reasoned out: returning the error here skips
+	// everything below it, including pod creation, so a controller that cannot
+	// delete the binding leaves every guest stuck in Scheduling with no pod. A
+	// defence-in-depth tidy-up must not stop VMs from booting.
+	//
+	// The exposure when it fails is exactly the pre-change posture — the shared
+	// namespace-wide binding, which is what ships by default anyway — so
+	// continuing is strictly no worse than not having enabled the gate. It is
+	// logged at ERROR on every reconcile so it cannot pass unnoticed.
+	//
+	// The realistic trigger is an upgrade-order mistake: a controller image new
+	// enough to have the gate, running against a ClusterRole too old to grant
+	// `delete` on rolebindings. That must degrade, not take the cluster down.
 	if ScopedOnly {
 		if err := RemoveSharedLauncherBinding(ctx, r.Client, guest.Namespace, GuestLauncher); err != nil {
-			logger.Error(err, "failed to remove the shared launcher binding", "namespace", guest.Namespace)
-			return ctrl.Result{}, err
+			logger.Error(err, "scoped-launcher-rbac is enabled but the shared launcher binding could NOT be removed; "+
+				"launchers keep namespace-wide pod access (the pre-change posture). "+
+				"Check that the controller ClusterRole grants delete on rolebindings.",
+				"namespace", guest.Namespace)
 		}
 	}
 
