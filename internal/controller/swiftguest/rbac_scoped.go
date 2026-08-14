@@ -163,10 +163,23 @@ func scopedRulesFor(class LauncherClass, podName string) []rbacv1.PolicyRule {
 // EnsureScopedLauncherRBAC creates (or converges) a Role + RoleBinding granting
 // the launcher SA access to exactly podName, owned by owner.
 //
-// MUST be called before the launcher pod is created. Callers must not proceed to
-// pod creation if it fails: without the grant the pod boots and looks healthy
-// while every status write 403s, which reaches the operator as a guest that
-// never reports an IP.
+// MUST be called before the launcher pod is created.
+//
+// It returns an error only when the grant is LOAD-BEARING — that is, when
+// ScopedOnly has retired the shared binding and this is the launcher's only
+// access. Then the caller must not create the pod: without the grant it boots and
+// looks healthy while every status write 403s, which reaches the operator as a
+// guest that never reports an IP.
+//
+// With the gate off the shared namespace-wide binding still covers the launcher,
+// so a failure here costs nothing at run time and is logged rather than
+// propagated. The case this exists for is an upgrade-order mistake — a controller
+// image new enough to mint these grants against a ClusterRole too old to allow
+// `roles` — which must not stop every guest and sandbox in the cluster from
+// booting over an object that is not doing any work yet.
+//
+// An empty pod name stays fatal in both modes: that is a programming error, and
+// the alternative is a grant scoped to nothing or to everything.
 func EnsureScopedLauncherRBAC(
 	ctx context.Context,
 	c client.Client,
@@ -178,6 +191,26 @@ func EnsureScopedLauncherRBAC(
 	if podName == "" {
 		return fmt.Errorf("scoped launcher RBAC: empty pod name")
 	}
+	err := ensureScopedLauncherRBAC(ctx, c, scheme, owner, podName, class)
+	if err == nil || ScopedOnly {
+		return err
+	}
+	log.FromContext(ctx).Error(err, "could not create the per-pod scoped launcher grant; "+
+		"continuing because scoped-launcher-rbac is OFF and the shared namespace-wide binding still covers this launcher. "+
+		"Enabling the gate in this state would break the workload. "+
+		"Check that the controller ClusterRole grants create/update on roles and rolebindings.",
+		"pod", podName, "namespace", owner.GetNamespace())
+	return nil
+}
+
+func ensureScopedLauncherRBAC(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	owner client.Object,
+	podName string,
+	class LauncherClass,
+) error {
 	namespace := owner.GetNamespace()
 	saName, _, _ := launcherRBACNames(class)
 	name := ScopedRoleNameFor(podName)

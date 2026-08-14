@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -265,6 +267,42 @@ func TestAdoptControllerRef_PreservesNonControllerRefs(t *testing.T) {
 	}
 	if adoptControllerRef(existing, want) {
 		t.Error("adopting an already-adopted ref must report no change")
+	}
+}
+
+// Upgrade-order safety. A controller new enough to mint these grants can be
+// running against a ClusterRole too old to allow `roles` — an ordinary upgrade
+// order, since helm applies both but not atomically. While the gate is OFF the
+// shared binding still covers every launcher, so that failure must not stop
+// guests and sandboxes from booting over an object doing no work yet. With the
+// gate ON the grant IS the access, and creating the pod without it would produce
+// a workload that boots and then silently 403s every status write.
+func TestEnsureScopedLauncherRBAC_FatalOnlyWhenLoadBearing(t *testing.T) {
+	sch := scheme.Scheme
+	guest := scopedTestGuest("g5")
+	denied := errors.New("roles.rbac.authorization.k8s.io is forbidden")
+	newClient := func() client.Client {
+		return fake.NewClientBuilder().WithScheme(sch).WithObjects(guest).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+					if _, ok := obj.(*rbacv1.Role); ok {
+						return denied
+					}
+					return nil
+				},
+			}).Build()
+	}
+
+	defer func(prev bool) { ScopedOnly = prev }(ScopedOnly)
+
+	ScopedOnly = false
+	if err := EnsureScopedLauncherRBAC(context.Background(), newClient(), sch, guest, "g5", GuestLauncher); err != nil {
+		t.Errorf("gate off: a failed grant must not block the workload, the shared binding still covers it; got %v", err)
+	}
+
+	ScopedOnly = true
+	if err := EnsureScopedLauncherRBAC(context.Background(), newClient(), sch, guest, "g5", GuestLauncher); err == nil {
+		t.Error("gate on: the grant is the only access — failing to create it MUST stop pod creation")
 	}
 }
 
