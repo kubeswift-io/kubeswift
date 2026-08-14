@@ -197,6 +197,29 @@ on clusters below Kubernetes 1.30, where it does not render — **treat anyone w
 can create a Pod in a KubeSwift workload namespace as a node administrator**. See
 `docs/security-audit.md`.
 
+### Per-launcher-pod RBAC
+
+| Parameter | Description | Default |
+|---|---|---|
+| `scopedLauncherRBAC.enabled` | Retire the shared namespace-wide launcher RoleBinding, leaving each launcher pod with a Role scoped to **only its own pod**. Defence in depth — read below | `false` |
+
+The controller **always** creates the per-pod Role + RoleBinding, for guests,
+migration targets, sandboxes and warm pool slots alike. That alone narrows
+nothing: RBAC is a union, so while the shared binding also exists a launcher
+keeps namespace-wide access. Enabling this deletes that shared binding.
+
+It is **not** what closes the escalation above — the `launcherSAGate` policy is.
+RBAC is additive on a shared ServiceAccount, so scoping cannot stop an attacker
+who obtains the token by naming the SA. What it buys is that a token leaked some
+*other* way (a stolen projected token, a compromised node) is worth one pod
+rather than the whole namespace.
+
+Off by default because turning it on deletes a live grant. A pool converges
+grants for the slots it already has, so enabling it on a running pool does not
+cut off live slots. Cost is two objects per launcher pod, garbage-collected with
+it. If the shared binding cannot be removed the controller logs at ERROR and
+keeps going — it never blocks a workload from booting.
+
 ### Observability
 
 | Parameter | Description | Default |

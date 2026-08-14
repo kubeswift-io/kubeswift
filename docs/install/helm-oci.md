@@ -31,7 +31,7 @@ Stored artifact: `ghcr.io/kubeswift-io/charts/kubeswift:<version>`.
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.13.9 \
+  --version 0.13.10 \
   -n kubeswift-system \
   --create-namespace
 ```
@@ -56,7 +56,7 @@ Requires [cert-manager](https://cert-manager.io/):
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.13.9 \
+  --version 0.13.10 \
   -n kubeswift-system \
   --create-namespace \
   --set webhook.enabled=true
@@ -66,13 +66,13 @@ helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.13.9 \
+  --version 0.13.10 \
   -n kubeswift-system \
   --create-namespace \
   --set controllerManager.image.registry=my-registry.io \
-  --set controllerManager.image.tag=v0.13.9 \
+  --set controllerManager.image.tag=v0.13.10 \
   --set swiftletd.image.registry=my-registry.io \
-  --set swiftletd.image.tag=v0.13.9
+  --set swiftletd.image.tag=v0.13.10
 ```
 
 ## Migration: previously published charts
