@@ -24,18 +24,26 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Fetch a pinned cosign for provenance signing (P2). Verified against the
 # release checksums file so a tampered/corrupt binary fails the build.
 #
-# Stay on the 2.x line. cosign 3.x REJECTS `--tlog-upload=false` ("not supported
-# with --signing-config"), which internal/oci.SignArgs relies on to sign offline
-# with no Rekor entry. The flag still appears in `cosign 3 sign --help`, so this
-# only shows up at runtime. Moving to 3.x means reworking SignArgs onto a
-# signing-config file first.
+# 3.x, matching sandbox-materialize. This image SIGNS, which is why it stayed on
+# 2.x longer than the verifier did (#486):
 #
-# NOTE this image and sandbox-materialize now ship DIFFERENT cosign majors, and
-# that is intentional: sandbox-materialize only verifies, and 3.x verifies 2.x
-# signatures fine, so it took the 3.x CVE reduction. This image signs, so it
-# cannot. `hack/cosign-interop.sh` (#486) is what proves the two still
-# interoperate — run it before changing either pin.
-ARG COSIGN_VERSION=v2.6.5
+# cosign 3.x rejects `--tlog-upload=false`, the flag internal/oci.SignArgs used
+# to sign offline. The trap is that simply dropping the flag "works" — cosign
+# exits 0 — while uploading the artifact digest to the PUBLIC Rekor. Measured:
+# a signature made that way carries tlogEntries=1 with a real public logIndex.
+# For a private snapshot or an air-gapped golden image that is a disclosure, not
+# a convenience.
+#
+# SignArgs therefore passes `--signing-config` with a config declaring no
+# transparency-log service (embedded at internal/oci/signing-config.json,
+# verified to produce tlogEntries=0). It picks the dialect from the cosign major
+# it finds at run time, so `swiftctl image publish` still works against an
+# operator's own 2.x install, and REFUSES to sign on 3.x if it cannot supply the
+# config rather than quietly logging the digest.
+#
+# Signatures made either way verify with both majors — that is what
+# hack/cosign-interop.sh exists to prove, and it is the gate on changing this.
+ARG COSIGN_VERSION=v3.1.3
 RUN cd /tmp \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" -o cosign-linux-amd64 \
     && curl -sSfL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt" -o cosign_checksums.txt \

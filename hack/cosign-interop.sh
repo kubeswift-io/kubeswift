@@ -10,28 +10,34 @@
 # Everything is torn down on exit. Nothing here touches a real registry, a real
 # cluster, or the operator's cosign install.
 #
+# The artifact it signs is a synthetic throwaway built fresh each run, and that
+# is deliberate rather than incidental: if the offline dialect is ever broken,
+# cosign uploads the signed digest to the PUBLIC Rekor — which is exactly the
+# failure this harness detects, and the reason it must never be pointed at a
+# real private artifact. Do not add a flag to sign an existing image with it.
+#
 # Usage:
 #   hack/cosign-interop.sh                            # baseline — must be green
 #   COSIGN_VERSIONS="v2.6.5 v3.1.3" hack/cosign-interop.sh   # evaluate a candidate
 #
 # Exit status is the test's: non-zero means a signature did not verify.
 #
-# KNOWN RESULT, recorded so nobody re-derives it: adding v3.1.3 fails, and it
-# fails at SIGN, not at verify. cosign 3.x rejects `--tlog-upload=false` at
-# runtime ("not supported with --signing-config"), so it cannot produce an
-# offline signature under our contract at all. Migrating to 3.x therefore means
-# adopting a signing-config file first — a contract change, not a version bump.
-# That is why the default matrix is the baseline alone: a script that is red out
-# of the box is a script nobody trusts.
+# Both majors are in the default matrix and both must pass. That was not always
+# true: cosign 3.x rejects `--tlog-upload=false`, so it could not sign under our
+# contract at all until SignArgs learned to pass a no-transparency-log
+# `--signing-config` instead. The trap it avoids is worth stating, because the
+# obvious shortcut is worse than the blocker — simply DROPPING the flag on 3.x
+# signs happily and uploads the artifact digest to the PUBLIC Rekor. The harness
+# checks for that directly (assertNoTransparencyLogEntry), so the shortcut fails
+# a test instead of silently disclosing private artifact digests.
 
 set -euo pipefail
 
-# The versions to cross-check. v2.6.5 is what we vendor and what every existing
-# signature in users' registries was made with, so it is always in the set: it
-# is the baseline every other implementation is judged against, and it generates
-# the keypair.
+# The versions to cross-check. v2.6.5 is what every existing signature in users'
+# registries was made with, so it is always in the set: it is the baseline every
+# other implementation is judged against, and it generates the keypair.
 BASELINE="v2.6.5"
-COSIGN_VERSIONS="${COSIGN_VERSIONS:-$BASELINE}"
+COSIGN_VERSIONS="${COSIGN_VERSIONS:-$BASELINE v3.1.3}"
 case " $COSIGN_VERSIONS " in
   *" $BASELINE "*) ;;
   *) COSIGN_VERSIONS="$BASELINE $COSIGN_VERSIONS" ;;
@@ -117,25 +123,38 @@ push_blob() {
   printf '%s' "$dgst"
 }
 
-REPO="interop/subject"
 CFG_DATA='{}'
 LAYER_DATA='kubeswift signature interop harness'
-CFG_DGST=$(push_blob "$REPO" "$CFG_DATA")
-LAYER_DGST=$(push_blob "$REPO" "$LAYER_DATA")
 
-MANIFEST=$(jq -nc \
-  --arg cd "$CFG_DGST" --argjson cs "${#CFG_DATA}" \
-  --arg ld "$LAYER_DGST" --argjson ls "${#LAYER_DATA}" '{
-    schemaVersion: 2,
-    mediaType: "application/vnd.oci.image.manifest.v1+json",
-    config: {mediaType: "application/vnd.oci.image.config.v1+json", digest: $cd, size: $cs},
-    layers: [{mediaType: "application/vnd.oci.image.layer.v1.tar", digest: $ld, size: $ls}]
-  }')
-DIGEST="sha256:$(printf '%s' "$MANIFEST" | sha256sum | awk '{print $1}')"
-printf '%s' "$MANIFEST" | "${CURL[@]}" -X PUT \
-  -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' \
-  --data-binary @- -o /dev/null "https://$REG/v2/$REPO/manifests/v1"
-log "$REG/$REPO@$DIGEST"
+# The subject must exist in EVERY repository a signer will sign into, not just
+# one. Each signer gets its own repo so their signatures cannot be confused, and
+# cosign 3.x HEADs the subject manifest before signing — it refuses to sign a
+# digest the repository does not hold. cosign 2.x does not check, so an earlier
+# version of this script signed into empty repos and only looked correct.
+push_subject() {
+  local repo="$1" cfg layer manifest
+  cfg=$(push_blob "$repo" "$CFG_DATA")
+  layer=$(push_blob "$repo" "$LAYER_DATA")
+  manifest=$(jq -nc \
+    --arg cd "$cfg" --argjson cs "${#CFG_DATA}" \
+    --arg ld "$layer" --argjson ls "${#LAYER_DATA}" '{
+      schemaVersion: 2,
+      mediaType: "application/vnd.oci.image.manifest.v1+json",
+      config: {mediaType: "application/vnd.oci.image.config.v1+json", digest: $cd, size: $cs},
+      layers: [{mediaType: "application/vnd.oci.image.layer.v1.tar", digest: $ld, size: $ls}]
+    }')
+  printf '%s' "$manifest" | "${CURL[@]}" -X PUT \
+    -H 'Content-Type: application/vnd.oci.image.manifest.v1+json' \
+    --data-binary @- -o /dev/null "https://$REG/v2/$repo/manifests/v1"
+  printf 'sha256:%s' "$(printf '%s' "$manifest" | sha256sum | awk '{print $1}')"
+}
+
+DIGEST=$(push_subject "interop/subject")
+# Mirror it into each signer's repo. Must match the naming in interop_test.go.
+for v in $COSIGN_VERSIONS; do
+  push_subject "interop-$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')/test" >/dev/null
+done
+log "$REG/interop/subject@$DIGEST (mirrored into each signer's repo)"
 
 step "signing key"
 # Generated by the baseline on purpose: the key format is part of what is under
