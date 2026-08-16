@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
@@ -125,9 +126,30 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 		targetSize = resource.MustParse("40Gi")
 	}
 
-	// Branch: snapshot path requires status.cloneSeed.Kind = VolumeSnapshot.
+	// Branch: snapshot path requires status.cloneSeed.Kind = VolumeSnapshot,
+	// AND that the clone keeps the source volume's volumeMode.
+	//
+	// A CSI VolumeSnapshot clones the SOURCE VOLUME. The SwiftImage import PVC
+	// is Filesystem-mode and holds the disk as a FILE inside it (image.raw), so
+	// restoring that snapshot into a Block root disk yields a block device whose
+	// content is a filesystem, not a disk. clone-grow-init's `sgdisk -e` then
+	// finds no GPT and writes a fresh empty one, and the guest boots nothing.
+	//
+	// Nothing errors along the way: drivers that honour allow-volume-mode-change
+	// (Ceph RBD) bind the PVC happily, so the guest reaches Running with
+	// StorageReady=True and simply never boots. Fall back to the copy path,
+	// which reads image.raw and writes the disk itself and is mode-agnostic.
 	if seed := rg.PreparedImage.CloneSeed; seed != nil && seed.Kind == "VolumeSnapshot" && seed.Name != "" {
-		return r.ensureRootDiskCloneFromSnapshot(ctx, guest, rg, sourcePVC, cloneName, targetSize, seed)
+		mismatch, err := r.cloneSeedModeMismatch(ctx, guest.Namespace, sourcePVC, rg)
+		if err != nil {
+			return nil, err
+		}
+		if mismatch == "" {
+			return r.ensureRootDiskCloneFromSnapshot(ctx, guest, rg, sourcePVC, cloneName, targetSize, seed)
+		}
+		log.FromContext(ctx).Info("clone strategy downgraded from snapshot to copy",
+			"guest", guest.Name, "reason", mismatch,
+			"hint", "a CSI snapshot clone cannot change volumeMode; set cloneStrategy: copy on the SwiftImage to silence this")
 	}
 
 	// Legacy Copy Job path. Behavior preserved byte-for-byte EXCEPT for the
@@ -135,6 +157,44 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 	// storageClassName) flowing into PVC creation. Defaults preserve the
 	// pre-PR-32 behaviour: RWO + Filesystem + class-of-source-image.
 	return r.ensureRootDiskCloneFromCopy(ctx, guest, rg, sourcePVC, cloneName, targetSize)
+}
+
+// cloneSeedModeMismatch reports why a CSI snapshot clone of sourcePVC cannot
+// serve this guest's root disk, or "" when the snapshot path is safe.
+//
+// The only disqualifier is a volumeMode change: the snapshot carries the source
+// volume's bytes, and a Filesystem volume holds the disk as a file rather than
+// being the disk. Anything else (size, access mode, storage class) the snapshot
+// path already handles.
+//
+// A missing source PVC is NOT treated as a mismatch — that is a separate
+// failure the snapshot path reports with a better message.
+func (r *SwiftGuestReconciler) cloneSeedModeMismatch(
+	ctx context.Context,
+	namespace, sourcePVC string,
+	rg *resolved.ResolvedGuest,
+) (string, error) {
+	var src corev1.PersistentVolumeClaim
+	if err := r.Get(ctx, client.ObjectKey{Name: sourcePVC, Namespace: namespace}, &src); err != nil {
+		if errors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get source PVC %s: %w", sourcePVC, err)
+	}
+	srcMode := corev1.PersistentVolumeFilesystem
+	if src.Spec.VolumeMode != nil {
+		srcMode = *src.Spec.VolumeMode
+	}
+	dstMode := corev1.PersistentVolumeFilesystem
+	if m := resolvedVolumeMode(rg); m != nil {
+		dstMode = *m
+	}
+	if srcMode == dstMode {
+		return "", nil
+	}
+	return fmt.Sprintf("image PVC %s is volumeMode=%s but the root disk is volumeMode=%s; "+
+		"a CSI snapshot clone would reinterpret the source bytes and produce an unbootable disk",
+		sourcePVC, srcMode, dstMode), nil
 }
 
 // ensureRootDiskCloneFromCopy is the legacy copy path. Behaviour is
