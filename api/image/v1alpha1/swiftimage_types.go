@@ -196,6 +196,22 @@ type SwiftImageSpec struct {
 	// +kubebuilder:default=copy
 	// +optional
 	CloneStrategy CloneStrategy `json:"cloneStrategy,omitempty"`
+	// ImportStorageClassName selects the storage class for the IMPORT PVC —
+	// the one holding the prepared raw disk. Empty (default) uses the cluster
+	// default StorageClass, which is the pre-existing behaviour, so existing
+	// images are unaffected.
+	//
+	// Set it when the image must live on a specific backend. Without it an
+	// image is effectively pinned to whatever the cluster default is, and
+	// because CloneStorageClassName defaults to the import PVC's class — and
+	// most CSI drivers cannot clone across classes — that pins the guests too.
+	// The alternative is flipping the cluster-wide default around the import,
+	// which races anything else provisioning at the same time.
+	//
+	// Immutable once the import PVC exists: a bound PVC's class cannot change.
+	// +optional
+	ImportStorageClassName string `json:"importStorageClassName,omitempty"`
+
 	// CloneStorageClassName overrides the storage class used for per-guest
 	// clone PVCs. Defaults to the import PVC's storage class. Most CSI
 	// drivers cannot snapshot/clone across storage classes, so changing

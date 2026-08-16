@@ -171,5 +171,14 @@ func validateSwiftImageUpdate(oldImg, img *imagev1alpha1.SwiftImage) error {
 		oldImg.Status.Phase != imagev1alpha1.SwiftImagePhasePending {
 		return fmt.Errorf("spec.cloneStrategy is immutable once import has started (current phase=%s)", oldImg.Status.Phase)
 	}
+	// ImportStorageClassName is immutable for the same reason, and a harder
+	// one: the import PVC is created on the first reconcile and a bound PVC's
+	// storage class cannot change. Silently keeping the old class would leave
+	// spec and reality disagreeing.
+	if oldImg.Spec.ImportStorageClassName != img.Spec.ImportStorageClassName &&
+		oldImg.Status.Phase != "" &&
+		oldImg.Status.Phase != imagev1alpha1.SwiftImagePhasePending {
+		return fmt.Errorf("spec.importStorageClassName is immutable once import has started (current phase=%s); delete and recreate the SwiftImage to move it to another storage class", oldImg.Status.Phase)
+	}
 	return nil
 }
