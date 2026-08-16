@@ -92,10 +92,20 @@ The behaviour you observe depends on what your CSI driver does for `VolumeSnapsh
 | CSI driver | Snapshot semantics | Clone semantics | Speedup vs copy |
 |---|---|---|---|
 | **Longhorn (validated)** | Block-level snapshot | Full-copy from snapshot at clone time | ≈3–10× depending on source size |
-| **Rook Ceph RBD** (untested in Phase 0) | RBD snapshot (CoW) | RBD clone (CoW) | Expected: very large (instantaneous clones) |
+| **Rook Ceph RBD** (validated 2026-08-16) | RBD snapshot (CoW) | RBD clone (CoW) | Measured ~1.5x to first boot at a 6 GiB source; the clone PVC itself binds with no data movement. **Filesystem root disks only — see the warning below.** |
 | **AWS EBS** (untested in Phase 0) | EBS snapshot | EBS clone (CoW with hydration) | Expected: large (no full data copy) |
 | **GCE PD** (untested in Phase 0) | PD snapshot | PD clone | Expected: large |
 | **local-path / NFS / hostPath** | Not supported — must use `cloneStrategy: copy` | n/a | n/a |
+
+> **Rook Ceph RBD: `snapshot` is unsafe for a `volumeMode: Block` root disk.**
+> The SwiftImage import PVC holds the disk as a *file inside* an ext4
+> filesystem, so a volume snapshot captures the filesystem, not the disk. Ceph
+> accepts the Filesystem→Block mode change (it honours
+> `allow-volume-mode-change`), the PVC binds with **no error**, and
+> `clone-grow-init`'s `sgdisk -e` then writes a fresh empty GPT over it. The
+> guest reaches `Running` and never boots. Use `cloneStrategy: copy` for any
+> Block root disk — which includes every RWX+Block class used for live
+> migration. Filesystem→Filesystem clones are unaffected and boot normally.
 
 If your driver isn't listed and you validate it, please send a PR adding a row.
 
