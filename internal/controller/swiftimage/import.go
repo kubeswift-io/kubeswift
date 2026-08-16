@@ -175,6 +175,11 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 			},
 		},
 	}
+	// Empty leaves StorageClassName nil so the cluster default applies — the
+	// behaviour every existing SwiftImage relies on.
+	if sc := img.Spec.ImportStorageClassName; sc != "" {
+		pvc.Spec.StorageClassName = &sc
+	}
 	if err := controllerutil.SetControllerReference(img, pvc, r.Scheme); err != nil {
 		return nil, err
 	}
