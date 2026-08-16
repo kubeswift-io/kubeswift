@@ -4,6 +4,46 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.11] — 2026-08-16
+
+### Fixed
+- **Rook Ceph RBD is usable end to end** (#532). Two defects, both of which left
+  a guest broken while reporting nothing wrong. Neither is Ceph-specific in
+  origin — Ceph *enforces* where Longhorn tolerates, so it is the driver that
+  exposed them.
+  - `cloneStrategy: snapshot` silently produced an **unbootable Block root
+    disk**. A CSI VolumeSnapshot clones the source *volume*, and the SwiftImage
+    import PVC is Filesystem-mode holding the disk as a file inside it, so
+    cloning it into a Block root disk yields a block device whose content is a
+    filesystem. `clone-grow-init`'s `sgdisk -e` then found no GPT and wrote a
+    fresh empty one. Drivers honouring `allow-volume-mode-change` bind the PVC
+    happily, so the guest reached `Running` with `StorageReady=True` and never
+    booted. The clone path now compares the image PVC's volumeMode against the
+    resolved root-disk volumeMode and falls back to the copy path when they
+    differ, logging why. Matching modes keep the CoW path. This had made every
+    RWX+Block class — the shape live migration requires — unusable with a
+    snapshot-strategy image.
+  - **Restore always provisioned RWO+Filesystem** regardless of the source disk,
+    so restoring a Block+RWX guest asked the driver to reinterpret the snapshot
+    bytes. Ceph refuses the mode change and the PVC never bound, leaving
+    `SwiftRestore` in `Restoring` indefinitely; once forced past that the
+    launcher failed permanently with `volume root-disk has volumeMode
+    Filesystem, but is specified in volumeDevices`. The restore now reproduces
+    the source disk's accessMode, volumeMode and storageClass.
+
+### Added
+- **`SwiftImage.spec.importStorageClassName`** (#534, closes #533) — selects the
+  storage class for the import PVC. Empty keeps the previous behaviour (cluster
+  default StorageClass), so existing images are unaffected. Without it an image
+  was pinned to the default backend, and since `cloneStorageClassName` defaults
+  to the import PVC's class, so were its guests — the only workaround was
+  flipping the cluster-wide default around the import. Immutable once the import
+  has started, since a bound PVC's storage class cannot change.
+
+### Changed
+- Clone-strategy compatibility matrix records Rook Ceph RBD as validated, with
+  the Block-mode caveat (#531).
+
 ## [v0.13.10] — 2026-08-14
 
 An observability-and-hygiene release. A guest that never gets an IP now says why
