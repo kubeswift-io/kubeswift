@@ -57,7 +57,8 @@ func findRootDisk(status *snapshotv1alpha1.SwiftSnapshotStatus) *snapshotv1alpha
 func (r *SwiftRestoreReconciler) ensureRestorePVC(
 	ctx context.Context,
 	restore *snapshotv1alpha1.SwiftRestore,
-	pvcName, vsName, storageClassName string,
+	pvcName, vsName string,
+	shape sourceDiskShape,
 	sizeBytes int64,
 ) error {
 	var existing corev1.PersistentVolumeClaim
@@ -86,8 +87,11 @@ func (r *SwiftRestoreReconciler) ensureRestorePVC(
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			StorageClassName: ptrString(storageClassName),
+			// Reproduce the source disk's shape rather than assuming
+			// RWO+Filesystem — see sourceDiskShape.
+			AccessModes:      shape.AccessModes,
+			VolumeMode:       shape.VolumeMode,
+			StorageClassName: ptrString(shape.StorageClassName),
 			DataSource: &corev1.TypedLocalObjectReference{
 				APIGroup: &apiGroup,
 				Kind:     "VolumeSnapshot",
@@ -157,15 +161,39 @@ func (r *SwiftRestoreReconciler) ensureTargetGuest(
 // sourceStorageClass returns the source per-guest PVC's StorageClassName,
 // or an error if the PVC is missing / has no class set. This determines the
 // class used for the restored PVC.
-func (r *SwiftRestoreReconciler) sourceStorageClass(ctx context.Context, namespace, sourceGuestName string) (string, error) {
+// sourceDiskShape is the storage shape of the disk a snapshot was taken from.
+// The restored disk must reproduce it exactly: a VolumeSnapshot clones the
+// SOURCE VOLUME, so restoring it under a different volumeMode asks the CSI
+// driver to reinterpret the bytes. Drivers that enforce
+// allow-volume-mode-change (Ceph RBD) refuse outright and the PVC never binds;
+// and even where the PVC does bind, the launcher pod builder derives Block or
+// Filesystem from the guest's resolved storage, so a mismatched PVC fails to
+// mount for the lifetime of the guest.
+type sourceDiskShape struct {
+	StorageClassName string
+	AccessModes      []corev1.PersistentVolumeAccessMode
+	VolumeMode       *corev1.PersistentVolumeMode
+}
+
+func (r *SwiftRestoreReconciler) sourceDiskShapeFor(ctx context.Context, namespace, sourceGuestName string) (sourceDiskShape, error) {
 	var pvc corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, client.ObjectKey{Name: rootPVCName(sourceGuestName), Namespace: namespace}, &pvc); err != nil {
-		return "", fmt.Errorf("get source per-guest PVC: %w", err)
+		return sourceDiskShape{}, fmt.Errorf("get source per-guest PVC: %w", err)
 	}
 	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName == "" {
-		return "", fmt.Errorf("source PVC %s has no storage class", pvc.Name)
+		return sourceDiskShape{}, fmt.Errorf("source PVC %s has no storage class", pvc.Name)
 	}
-	return *pvc.Spec.StorageClassName, nil
+	shape := sourceDiskShape{StorageClassName: *pvc.Spec.StorageClassName}
+	if len(pvc.Spec.AccessModes) > 0 {
+		shape.AccessModes = append([]corev1.PersistentVolumeAccessMode(nil), pvc.Spec.AccessModes...)
+	} else {
+		shape.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+	if pvc.Spec.VolumeMode != nil {
+		mode := *pvc.Spec.VolumeMode
+		shape.VolumeMode = &mode
+	}
+	return shape, nil
 }
 
 func ptrString(s string) *string { return &s }

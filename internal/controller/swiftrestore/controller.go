@@ -294,14 +294,14 @@ func (r *SwiftRestoreReconciler) handleRestoring(
 		return false, 0, "", err
 	}
 
-	storageClass, err := r.sourceStorageClass(ctx, restore.Namespace, source.Name)
+	shape, err := r.sourceDiskShapeFor(ctx, restore.Namespace, source.Name)
 	if err != nil {
 		return false, 0, "", err
 	}
 
 	// Create the per-guest restore PVC.
 	pvcName := rootPVCName(restore.Spec.TargetGuest.Name)
-	if err := r.ensureRestorePVC(ctx, restore, pvcName, vsName, storageClass, rootDisk.SizeBytes); err != nil {
+	if err := r.ensureRestorePVC(ctx, restore, pvcName, vsName, shape, rootDisk.SizeBytes); err != nil {
 		return false, 0, "", err
 	}
 
