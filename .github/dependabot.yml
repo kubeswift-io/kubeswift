@@ -54,6 +54,22 @@ updates:
     directory: /
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
+    groups:
+      # codeql-action/{init,analyze,upload-sarif} are ONE tool split across three
+      # action paths, and init/analyze refuse to interoperate across versions:
+      #
+      #   Loaded a configuration file for version '4.31.0', but running version '4.37.6'
+      #
+      # Ungrouped, Dependabot opens a PR per sub-action, and each one is red on
+      # its own because it desyncs the trio. That happened twice: #506 (analyze
+      # alone) and #540/#541 (analyze and init, as two PRs that still could not
+      # be combined into a complete set — the third bump never even appeared,
+      # because five other github-actions PRs were open and hit the limit above).
+      #
+      # Grouped, the trio arrives as one mergeable PR and the pins cannot drift.
+      codeql-action:
+        patterns: ["github/codeql-action*"]
+        update-types: [major, minor, patch]
 
   # Base images for the 9 published containers. swiftletd is the one to watch:
   # it carries Cloud Hypervisor and QEMU and runs privileged.

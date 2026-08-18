@@ -96,12 +96,14 @@ jobs:
       #
       #   Loaded a configuration file for version '4.31.0', but running version '4.37.6'
       #
-      # Dependabot treats each sub-action as its own dependency, so it opens a PR
-      # bumping only the one whose path changed (#506 bumped analyze alone and the
-      # job failed on exactly that error). When a bump lands, check all three SHAs
-      # match before merging.
+      # Dependabot treats each sub-action as its own dependency, so left to
+      # itself it opens a PR bumping only the one whose path changed, and that
+      # PR is red on arrival (#506 bumped analyze alone; #540/#541 then did it
+      # again as two PRs). They are now grouped in .github/dependabot.yml under
+      # `codeql-action`, so the trio arrives as a single PR — keep that group if
+      # you touch these pins, it is what keeps them in step.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: go
           # The DEFAULT query suite, not security-extended. #466 chose this for
@@ -121,7 +123,7 @@ jobs:
         run: go build ./api/... ./internal/... ./cmd/...
 
       - name: Analyze
-        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: codeql-go
 
@@ -160,7 +162,7 @@ jobs:
           test -s gosec.sarif
 
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         if: always()
         with:
           sarif_file: gosec.sarif
