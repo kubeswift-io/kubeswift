@@ -6,5 +6,7 @@ resources:
   - classes/gpu-pcie.yaml
   - images/ubuntu-noble.yaml
   - images/rocky9.yaml
+  - images/golden-noble-oci.yaml
+  - kernels/sandbox.yaml
   - seeds/default.yaml
   - gpu/pcie-single.yaml

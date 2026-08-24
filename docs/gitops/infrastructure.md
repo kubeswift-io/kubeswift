@@ -7,6 +7,10 @@ environment differences belong in the workloads layer or in per-cluster patches.
 
 Working examples: [`examples/gitops-flux/infrastructure/kubeswift/`](../../examples/gitops-flux/infrastructure/kubeswift/).
 
+Images and kernels can both come from an OCI registry rather than a vendor
+URL, which is worth doing under GitOps for the digest-pinning alone. See
+[oci-artifacts.md](oci-artifacts.md).
+
 ## SwiftImage lifecycle nuances under GitOps
 
 - **Imports are slow and asynchronous** (download → qcow2-to-raw → resize).

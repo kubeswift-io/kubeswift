@@ -1,0 +1,32 @@
+# The sandbox kernel, pulled per node from an OCI artifact.
+#
+# Third artifact type out of the same registry: the chart (Flux), the golden VM
+# disk (golden-noble-oci.yaml), and now a kernel + initramfs. Required by the
+# SwiftSandboxPool in workloads/<env>/.
+#
+# Nodes opt in with the label `kubeswift.io/kernel-node=true`. The controller
+# runs one pull Job per labelled node and reports per-node status; nodes without
+# the label are skipped entirely.
+#
+# THE ONE THING THAT WILL CATCH YOU OUT UNDER GITOPS
+#
+# The pull Job is named `swiftkernel-pull-<name>-<node>`, so re-pull is keyed on
+# (name, node) and NOT on spec.ociRef.image. Editing the tag below to
+# `sandbox:6.6.14` and committing will update this object and download nothing:
+# the Job already exists on every node, so the reconciler reports success while
+# the kernel on disk stays exactly as it was.
+#
+# Roll a kernel the way you roll a golden image: add a NEW SwiftKernel under a
+# new name and repoint the pools at it. Deleting the Jobs by hand also works and
+# is the wrong habit, because it needs doing again on the next tag.
+apiVersion: kernel.kubeswift.io/v1alpha1
+kind: SwiftKernel
+metadata:
+  name: sandbox
+spec:
+  ociRef:
+    # Digest-pinnable like any OCI reference, and worth doing for the same
+    # reason as the golden disk. Kept as a tag here because this artifact is
+    # published by the KubeSwift project rather than by you.
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13
+  profile: sandbox

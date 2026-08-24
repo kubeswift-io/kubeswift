@@ -77,7 +77,11 @@ spec:
       backend: { type: csi-volume-snapshot }
 ```
 
-More variants in [`config/samples/snapshot-schedule/`](../../config/samples/snapshot-schedule/).
+More variants in [`config/samples/snapshot-schedule/`](../../config/samples/snapshot-schedule/),
+and a second schedule exporting to an OCI registry in
+[`examples/gitops-flux/workloads/production/db-snapshot-schedules.yaml`](../../examples/gitops-flux/workloads/production/db-snapshot-schedules.yaml).
+An OCI export is the portable one: a CSI snapshot is trapped in the cluster
+that took it. See [oci-artifacts.md](oci-artifacts.md).
 
 `suspend: true` is the GitOps-friendly way to pause backups: a reviewed commit
 rather than a `kubectl` edit that the next reconcile reverts. Retention is

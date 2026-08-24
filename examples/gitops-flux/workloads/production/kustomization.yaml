@@ -4,3 +4,5 @@ namespace: default
 resources:
   - web-pool.yaml
   - db-guest.yaml
+  - db-snapshot-schedules.yaml
+  - ci-sandbox-pool.yaml
