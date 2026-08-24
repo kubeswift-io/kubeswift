@@ -26,6 +26,7 @@ on:
       - 'config/crd/**'
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
+      - 'hack/verify-image-tags.sh'
       - '.github/workflows/manifests.yaml'
   push:
     branches: [main]
@@ -43,6 +44,7 @@ on:
       - 'config/crd/**'
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
+      - 'hack/verify-image-tags.sh'
       - '.github/workflows/manifests.yaml'
 
 jobs:
