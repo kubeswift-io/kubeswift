@@ -1,7 +1,7 @@
 # Multi-stage build for sandbox-materialize (the SwiftSandbox rootfs init
 # container: OCI image -> node-local read-only ext4 / unpacked tree, keyed by
 # digest). See docs/design/swiftsandbox-design.md and cmd/sandbox-materialize.
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 WORKDIR /build
 
 ARG VERSION=dev
