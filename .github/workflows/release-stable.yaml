@@ -431,6 +431,22 @@ jobs:
             helm install kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} -n kubeswift-system --create-namespace
             ```
 
+            ## Upgrade
+
+            `helm upgrade` does **not** upgrade CRDs — Helm treats `crds/` as
+            install-only and offers no flag to change it. Apply them yourself
+            after every upgrade, or the API server silently drops any field a
+            stale schema does not know:
+
+            ```bash
+            helm upgrade kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} \
+              -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+            kubectl apply -k https://github.com/kubeswift-io/kubeswift/config/crd?ref=${{ github.ref_name }}
+            ```
+
+            Check the CHANGELOG entry for this release before upgrading: it says
+            whether any CRD actually changed.
+
             ## Images
 
             All nine are signed, and verified by the release workflow before publishing.

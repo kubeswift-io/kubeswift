@@ -4,6 +4,101 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.12] — 2026-08-24
+
+A bug-fix release, and the headline is that a documented feature has never
+worked on any released version. `SwiftSeedProfile.spec.userDataFrom` — the
+Secret-backed seed path, which is what the docs tell you to use so cloud-init
+credentials stay out of Git — was rejected by the apiserver on every version up
+to and including v0.13.11.
+
+**The fix is a CRD schema change, so `helm upgrade` alone does not deliver it.**
+Helm treats `crds/` as install-only, with no flag to change that.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.12 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # REQUIRED this release — the CRD *is* the fix
+```
+
+One CRD changes (`swiftseedprofiles.seed.kubeswift.io`). No values keys added or
+removed, no controller behaviour change, no image changes beyond the routine
+dependency bumps below. The schema change only *relaxes* a constraint, so
+existing SwiftSeedProfiles remain valid and need no edit.
+
+### Fixed
+- **`SwiftSeedProfile.spec.userDataFrom` was impossible to use** (#546).
+  `UserData` was a bare required field in the schema, so the apiserver rejected
+  every `userDataFrom`-only profile with `spec.userData: Required value` —
+  *before* admission ran, which meant the validating webhook's own (correct)
+  either-or check never saw the object. The path was implemented end to end
+  (`internal/seed/render.go`, `internal/resolved/merge.go`), shipped a sample,
+  and is what `docs/gitops/secrets.md` recommends; none of it was reachable. The
+  Go type had said so since it was written: `// Inline; use UserDataFrom for
+  ref`.
+
+  `userData` becomes optional and the either-or moves into a CEL
+  `XValidation` rule on the spec, so it is enforced in-tree by the apiserver
+  rather than by the webhook — which matters because `webhook.enabled` is
+  `false` by default, and a rule that only holds when the webhook is on is not a
+  rule. Verified on a cluster in all four cases: neither field rejected,
+  `userData` alone accepted, `userDataFrom` alone accepted (previously
+  impossible), and `userData: ""` rejected.
+
+  Found by validating every shipped manifest against the CRD schemas
+  *client-side*. That is the configuration the defect lives in: `kubectl apply
+  --dry-run=server` against a webhook-enabled cluster cannot see this class,
+  because the defaulting webhook papers over it.
+
+- **The chart rendered image tags as `vv0.13.11` when used from a checkout**
+  (#545). `Chart.yaml` carried `appVersion: "v0.13.11"` and `kubeswift.imageTag`
+  prepends `v`, producing a tag that was never published — for the controller
+  and for the five launcher images it passes on by env var, so an affected
+  install would fail to start VMs, not merely fail to start. **Released charts
+  were never affected**: the release workflows package with
+  `--app-version "${TAG#v}"`, and the flag wins over the file. Only
+  `helm install ./charts/kubeswift`, `helm template` for review, and
+  install-from-source were hit, which is how it survived several releases.
+
+  Fixed in three places, because the value alone would be correct only until the
+  next hand-edit: the value is bare with the constraint written at the point of
+  edit, `imageTag` trims a stray leading `v`, and `hack/verify-image-tags.sh`
+  fails the build on any rendered tag that is not `vX.Y.Z`, `sha-<hex>` or
+  `latest`. Nothing else in the manifests job covered this — kubeconform checks
+  schema, kube-linter checks policy, and a nonexistent tag is valid under both.
+
+- **`config/samples/golden-image/swiftimage-oci.yaml` could not apply without
+  the webhook** (#546). It omitted `spec.format`, which is required in the
+  schema and supplied only by the defaulting webhook, so it worked on a default
+  install and was rejected wherever `webhook.enabled=false`. Now set explicitly.
+
+### Changed
+- `golang.org/x/net` 0.57.0 → 0.58.0 and `google.golang.org/protobuf` to the
+  1.36.12 release (#536, #537). Routine grouped bumps, no security advisory;
+  govulncheck reports no affecting vulnerabilities.
+- CI action pins moved forward (#538, #539, #542, #543). The
+  `github/codeql-action/*` sub-actions are now grouped for Dependabot: they must
+  share a version or `analyze` refuses the config `init` wrote, and ungrouped
+  they arrived one at a time, red on arrival. Twice.
+
+### Documentation
+- **GitOps docs refreshed for v0.13.x** (#544), having last been written at
+  v0.5. The three-layer model covered six of the fifteen CRDs; it now covers all
+  of them, plus the inverse — the kinds that must *not* be committed, because
+  roughly half the CRD surface is one-shot or controller-owned and Git-managing
+  it produces a reconcile loop rather than a mess.
+- **`docs/gitops/oci-artifacts.md`** — the registry as the artifact store. Four
+  artifact types come out of one registry: the chart, a golden VM disk
+  (`SwiftImage.spec.source.oci`), a kernel (`SwiftKernel.spec.ociRef`), and VM
+  snapshots pushed back out (`SwiftSnapshot` `backend.type: oci`). Digest-pin
+  them for the same reason you pin the chart.
+- The Flux reference repo gains a golden OCI image, a kernel, snapshot schedules
+  (CSI and OCI) and a warm sandbox pool, and its chart pin moves off
+  `semver: ">=0.1.0"` — which on a pre-1.0 project with `v1alpha1` APIs let a
+  reconciler roll the platform across a breaking minor unattended.
+
 ## [v0.13.11] — 2026-08-16
 
 ### Fixed
