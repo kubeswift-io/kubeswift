@@ -1557,7 +1557,7 @@ secondary-UDN) path.
   Detected from the `k8s.ovn.org/primary-user-defined-network` namespace label — no
   SwiftGuest spec change. The launcher datapath (`setup_primary_udn_nic`) bridge-binds
   the pod's `ovn-udn1` interface to the VM's tap so the VM adopts OVN's IP-derived MAC +
-  IP (the KubeVirt bridge-binding pattern; OVN `port_security` pins them). Because the
+  IP (the standard bridge-binding pattern; OVN `port_security` pins them). Because the
   primary UDN is bridged to the guest and the pod's `eth0` is infrastructure-locked,
   swiftletd cannot reach the apiserver — so the **controller derives status**:
   `status.network.primaryIP` from the pod's `k8s.ovn.org/pod-networks` annotation,
@@ -1667,7 +1667,8 @@ zero-touch, no manual `ovn-nbctl`. Cluster-validated end-to-end on image
     guest's bridged MAC, not the pod NIC's) and, once known,
     `<provider>.kubernetes.io/ip_address: <guest IP>` (a stable static IP across
     pod recreate). The live-migration **destination** pod additionally gets
-    `kubevirt.io/migrationJobName`, which makes kube-ovn's IPAM skip the conflict
+    the migration-job annotation kube-ovn's IPAM recognises
+    (`swiftguest.MigrationJobNameAnnotation`), which makes it skip the conflict
     check so the dst acquires the **same** static IP the source still holds through
     cutover. Reads NADs read-only (new
     `k8s.cni.cncf.io/network-attachment-definitions` get RBAC). No-op for every
@@ -1678,7 +1679,7 @@ zero-touch, no manual `ovn-nbctl`. Cluster-validated end-to-end on image
     makes the kernel add a permanent fdb entry `<guest-mac> -> NIC` that **shadows
     the tap** (the bridge sends the guest's return traffic to the NIC, not the
     guest). `network-init` now re-MACs the NIC to a dummy **before** enslaving it
-    (the KubeVirt bridge-binding pattern); the OVN port keeps the guest MAC, so OVN
+    (the standard bridge-binding pattern); the OVN port keeps the guest MAC, so OVN
     still delivers the guest's frames `NIC -> br0 -> tap`. A no-op for any NAD whose
     IPAM gives the NIC its own distinct MAC.
   - **Validation.** Cluster-validated **zero-touch end-to-end** on image
