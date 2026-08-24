@@ -16,7 +16,7 @@ import (
 )
 
 // exposedServiceName is the per-guest Service name. One Service per guest carries
-// all exposed ports (matches `virtctl expose`; design §3, §5).
+// all exposed ports (the conventional expose model; design §3, §5).
 func exposedServiceName(guest *swiftv1alpha1.SwiftGuest) string {
 	return guest.Name + "-svc"
 }

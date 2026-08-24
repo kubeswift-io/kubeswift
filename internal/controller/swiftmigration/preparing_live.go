@@ -181,7 +181,7 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 			return phaseTransient(fmt.Errorf("ensure frozen dst intent: %w", frozenErr))
 		}
 		// Resolve the OVN backend's dst-pod identity annotations from the guest
-		// (kube-ovn: the LSP MAC + IP pin + kubevirt.io/migrationJobName so the dst
+		// (kube-ovn: the LSP MAC + IP pin + MigrationJobNameAnnotation so the dst
 		// keeps the src's IP through cutover). Empty for non-OVN guests. Fail closed
 		// on a NAD Get error: a dst that boots without its OVN identity is
 		// unreachable on the segment, so requeue rather than build a broken pod.

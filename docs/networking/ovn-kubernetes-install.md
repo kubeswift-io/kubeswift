@@ -66,7 +66,7 @@ makes the guest reachable on the segment and preserves its IP across a migration
 - **Datapath re-MAC.** Because the pod NIC now carries the guest's MAC, enslaving
   it to `br0` would make the kernel add a permanent fdb entry `<guest-mac> -> net1`
   that shadows the guest's tap. `network-init` re-MACs the pod NIC to a dummy
-  **before** enslaving it (the KubeVirt bridge-binding pattern); the OVN port keeps
+  **before** enslaving it (the standard bridge-binding pattern); the OVN port keeps
   the guest MAC, so OVN still delivers `net1 -> br0 -> tap`.
 - **Live migration.** The destination pod inherits the same Multus annotation (so
   the same guest MAC + the same claim reference). OVN-Kubernetes allows the
@@ -100,7 +100,7 @@ bridge, non-OVN-K NAD, SR-IOV). Both the **controller-manager** and the launcher
   dependency is being removed; until then, install them if you want snapshots and
   it is harmless to install them regardless.)
 - **RWX + Block storage** (a migratable CSI StorageClass) if you want to **live**
-  migrate the guest — the live-migration storage requirement (KubeVirt model). On
+  migrate the guest — the shared-storage live-migration requirement. On
   Longhorn this is a StorageClass with `parameters.migratable: "true"`.
 - KubeSwift **≥ the release carrying the OVN-Kubernetes backend** (OVN-K arc P2,
   `#244`) — both the controller stamping/IPAMClaim and the launcher `network-init`
@@ -312,7 +312,7 @@ kubectl get swiftguest -n default ovnk-vm \
   the source's `k8s.v1.cni.cncf.io/networks` annotation (the `#235` carry-through)
   and that `network-init` ran on the dst.
 - **`IPAMClaim.status.ownerPod` looks stale after a migration.** This is advisory
-  only — there is no kubevirt-ipam-claims controller updating it on an OVN-K-primary
+  only — there is no third-party IPAM-claims controller updating it on an OVN-K-primary
   cluster, and IP delivery follows the live pod regardless. The KubeSwift backend
   owns the claim lifecycle (and GCs it with the guest via owner-ref).
 - **Controller crash-loops on a bare OVN-K cluster.** Historically caused by missing

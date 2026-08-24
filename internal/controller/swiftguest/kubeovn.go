@@ -25,7 +25,7 @@ import (
 // without telling kube-ovn the guest's MAC, OVN delivers the guest's traffic to
 // the wrong MAC and the guest is unreachable on the segment. This was diagnosed
 // and fixed-by-hand on the multi-node-L2 OVN validation spike; this makes it
-// automatic — the KubeVirt model: program the LSP identity to be the guest.
+// automatic: program the LSP identity to be the guest.
 //
 // Mechanism (all pod annotations; no CNI/datapath change):
 //   - "<provider>.kubernetes.io/mac_address" = the guest's primary MAC  -> the LSP
@@ -33,7 +33,7 @@ import (
 //   - "<provider>.kubernetes.io/ip_address"  = the guest's current IP   -> a stable
 //     static IP across pod recreate (and, with the migration path below, across a
 //     live migration).
-//   - (migration dst only) "kubevirt.io/migrationJobName" -> kube-ovn skips the IPAM
+//   - (migration dst only) MigrationJobNameAnnotation -> kube-ovn skips the IPAM
 //     conflict check so the dst pod can acquire the SAME static IP the src still
 //     holds during the cutover overlap.
 //
@@ -51,14 +51,18 @@ const (
 	KubeOVNMACAnnotationSuffix = ".kubernetes.io/mac_address"
 	KubeOVNIPAnnotationSuffix  = ".kubernetes.io/ip_address"
 
-	// MigrationJobNameAnnotation is the (KubeVirt-originated) annotation kube-ovn
-	// reads to recognise a live-migration TARGET pod: present -> its IPAM skips the
-	// conflict check, letting the dst pod share the src's still-held static IP
-	// across the cutover overlap. kube-ovn (pkg/controller/pod.go) sets its
-	// AllowLiveMigration flag purely from this annotation's presence — no KubeVirt
-	// object is consulted on that path — so a non-KubeVirt controller can use it by
-	// setting the annotation alone. The migration controller sets it on the dst pod
-	// with the SwiftMigration name as the (synthetic) value.
+	// MigrationJobNameAnnotation is the annotation kube-ovn reads to recognise a
+	// live-migration TARGET pod: present -> its IPAM skips the conflict check,
+	// letting the dst pod share the src's still-held static IP across the cutover
+	// overlap. kube-ovn (pkg/controller/pod.go) sets its AllowLiveMigration flag
+	// purely from this annotation's PRESENCE and consults no other object on that
+	// path, so any controller can use it by setting the annotation alone. The
+	// migration controller sets it on the dst pod with the SwiftMigration name as
+	// the (synthetic) value.
+	//
+	// The key string is not ours to choose: kube-ovn matches this exact name, so
+	// it is fixed by the CNI. Keep it behind this constant and refer to the
+	// constant everywhere else.
 	MigrationJobNameAnnotation = "kubevirt.io/migrationJobName"
 )
 

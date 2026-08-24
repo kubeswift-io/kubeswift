@@ -257,7 +257,7 @@ The partition ID is passed to the gpu-init container via environment variable `G
 
 **Blast radius:** Low direct security risk since KVM is designed for multi-tenant use. However, this blocks adoption of Pod Security Standards and prevents proper resource tracking.
 
-**Recommended fix:** Use the KVM device plugin (`github.com/kubevirt/kubernetes-device-plugins/cmd/kvm`) which exposes `devices.kubevirt.io/kvm` as a schedulable resource. This integrates with PSS Restricted profile and enables proper resource accounting.
+**Recommended fix:** Expose `/dev/kvm` through a KVM device plugin rather than a hostPath, so it becomes a schedulable resource the kubelet accounts for. Several exist in the ecosystem; any of them integrates with the PSS Restricted profile and enables proper resource accounting, which a hostPath mount cannot.
 
 ---
 

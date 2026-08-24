@@ -117,7 +117,7 @@ type RootDisk struct {
 // source SwiftImage's PVC storage class).
 //
 // IsLiveMigrationCapable returns true iff AccessMode=ReadWriteMany AND
-// VolumeMode=Block — the canonical KubeVirt-style rule. The SwiftMigration
+// VolumeMode=Block — the canonical shared-storage rule. The SwiftMigration
 // webhook's ValidateCreate calls it directly to gate live mode; the
 // controller writes the AccessMode/VolumeMode/StorageClassName onto
 // SwiftGuest.status.storage as an informational echo only.

@@ -32,7 +32,7 @@ type StorageSpec struct {
 	AccessMode corev1.PersistentVolumeAccessMode `json:"accessMode,omitempty"`
 
 	// VolumeMode is the PVC volumeMode. Defaults to Filesystem. Block is
-	// required for live-migration-capable RWX (KubeVirt model) and for
+	// required for live-migration-capable RWX and for
 	// some CSI drivers' raw-device passthrough; the value flows to PVC
 	// spec verbatim.
 	// +kubebuilder:validation:Enum=Filesystem;Block
@@ -91,9 +91,9 @@ const (
 
 // IsLiveMigrationCapable returns true iff the resolved storage spec
 // permits live migration of disk-boot guests. The rule is RWX+Block —
-// see KubeVirt's RWX-required-for-live-migration model and Longhorn's
+// RWX+Block is what shared-storage live migration requires; see Longhorn's
 // distinction between Generic (Filesystem, NFS-based, NOT migratable)
-// and Migratable (Block, KubeVirt-style live-migration-ready) RWX.
+// and Migratable (Block, live-migration-ready) RWX.
 //
 // This is the canonical implementation. The SwiftMigration webhook,
 // swiftctl describe, and any future migration-mode auto-selection logic

@@ -7,7 +7,7 @@ DNAT `podIP:port → vmIP:targetPort` makes a VM port a normal Kubernetes
 ecosystem (ClusterIP/NodePort/LoadBalancer, Gateway API, NetworkPolicy, service
 mesh, Tailscale) composes on top of it.
 
-This is the KubeVirt masquerade + `virtctl expose` model. For third-party
+This is the standard masquerade + service-expose model. For third-party
 integrations see [Ecosystem integrations](ecosystem-integrations.md).
 
 ---
@@ -72,8 +72,8 @@ without `expose` on a bridge guest is allowed (e.g. for NetworkPolicy targeting)
     the host netfilter path the VM traffic transits.
   - **eBPF kube-proxy-replacement** (Cilium / Calico-eBPF): the ClusterIP hook is
     on the pod's `eth0`; VM traffic forwarded out `eth0` bypasses it. This is a
-    known upstream gap ([KubeVirt #10388](https://github.com/kubevirt/kubevirt/issues/10388),
-    [Cilium #37669](https://github.com/cilium/cilium/issues/37669)) and is a
+    known upstream gap ([Cilium #37669](https://github.com/cilium/cilium/issues/37669))
+    and is a
     KubeSwift **roadmap** item (`egressMode: clusterServices`, needs a Cilium
     cluster to spike).
 

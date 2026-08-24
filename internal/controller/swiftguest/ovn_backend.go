@@ -39,7 +39,7 @@ type ovnIdentity struct {
 	// the guest MAC, plus an optional static IP pin once it is known).
 	PodAnnotations map[string]string
 	// MigrationDstAnnotations to add to the live-migration DST pod so it keeps the
-	// src's IP through cutover (kube-ovn: the IP pin + kubevirt.io/migrationJobName,
+	// src's IP through cutover (kube-ovn: the IP pin + MigrationJobNameAnnotation,
 	// which lets its IPAM skip the conflict check). Empty when the backend needs
 	// nothing beyond the carried-over Multus annotation, or has no live-overlap
 	// mechanism (the latter would make live migration offline-only — surfaced by the

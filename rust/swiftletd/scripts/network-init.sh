@@ -303,7 +303,7 @@ setup_secondary_nad_nic() {
 #
 # Datapath is cluster-validated (kube-ovn primary NAD: zero-touch cross-node
 # reachability + IP-preserving live migration; see docs/networking/multi-node-l2.md
-# and docs/networking/ovn-l2-install.md). It implements the KubeVirt-style "bridge
+# and docs/networking/ovn-l2-install.md). It implements standard "bridge
 # binding": the NAD's CNI assigns the pod's Multus interface an IP; we hand that
 # exact IP to the GUEST so the guest's primary IP is the NAD's portable IP
 # (survives a move between nodes).
@@ -377,7 +377,7 @@ setup_primary_nad_nic() {
     # bridge makes the kernel add a permanent fdb entry <guest-mac> -> NIC, which
     # SHADOWS the guest's tap: the bridge delivers the guest's return traffic (and
     # unicast DHCP) to the NIC instead of the tap, so the guest is unreachable.
-    # Re-MAC the NIC to a dummy BEFORE enslaving (the KubeVirt bridge-binding
+    # Re-MAC the NIC to a dummy BEFORE enslaving (the bridge-binding
     # pattern). The NIC's kernel MAC is not load-bearing once it is a bridge port;
     # the OVN LSP keeps the guest MAC, so OVN still delivers the guest's frames to
     # the NIC -> bridge -> tap. No-op for every NAD whose IPAM gives the NIC its own
@@ -410,7 +410,7 @@ setup_primary_nad_nic() {
 # automatically, driven by the namespace label; eth0 stays on the cluster default
 # (role infrastructure-locked) for the swiftletd->apiserver control path + egress.
 #
-# Same KubeVirt bridge-binding as setup_primary_nad_nic, with ONE Model-A specific:
+# Same bridge-binding as setup_primary_nad_nic, with ONE Model-A specific:
 # the OVN logical-switch-port PINS MAC+IP in port_security, and that MAC is IP-DERIVED
 # and immutable (0a:58:<ip-octets-hex>). The guest CANNOT present its own 52:54:.. MAC
 # -- OVN drops it. So the guest ADOPTS OVN's MAC: capture it here, hand it to swiftletd
@@ -483,7 +483,7 @@ setup_primary_udn_nic() {
     # The guest adopts OVN's MAC (udn_mac), so the pod NIC's kernel MAC (== udn_mac)
     # would add a permanent fdb entry <udn_mac> -> ovn-udn1 that SHADOWS the guest's
     # tap (return traffic + unicast DHCP go to the NIC, not the guest). Re-MAC the NIC
-    # to a DISTINCT dummy before enslaving (KubeVirt bridge-binding). The OVN LSP keeps
+    # to a DISTINCT dummy before enslaving (bridge binding). The OVN LSP keeps
     # udn_mac, so OVN still delivers the guest's frames NIC -> bridge -> tap. Per-pod
     # netns, so the dummy need only differ from udn_mac within this pod.
     dummy="0a:fe:${udn_mac#*:*:}"

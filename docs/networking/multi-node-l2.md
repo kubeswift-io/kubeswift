@@ -228,7 +228,7 @@ So for a kube-ovn-class primary NAD the controller stamps
 `<provider>.kubernetes.io/mac_address` (the guest MAC) — making the OVN port
 identity the guest — plus `<provider>.kubernetes.io/ip_address` (a stable static
 IP) once known. On a live migration the destination pod also gets
-`kubevirt.io/migrationJobName`, which tells kube-ovn to let the dst share the
+the migration marker kube-ovn recognises, which tells it to let the dst share the
 source's still-held IP through cutover. The launcher datapath then re-MACs the pod
 NIC off the guest MAC before bridging it (so the NIC doesn't shadow the guest's tap
 on `br0`). This is automatic; it is a no-op for every other networking mode.

@@ -64,7 +64,7 @@ func resolvedStorageClassName(rg *resolved.ResolvedGuest, srcPVC *corev1.Persist
 const LonghornCSIProvisioner = "driver.longhorn.io"
 
 // LonghornMigratableParameter is the StorageClass parameter Longhorn
-// requires for KubeVirt-style RWX live migration. We do not auto-mutate
+// requires for RWX live migration. We do not auto-mutate
 // the StorageClass — operators set it once at cluster setup; the
 // controller surfaces a status condition when the chosen class lacks it.
 const LonghornMigratableParameter = "migratable"

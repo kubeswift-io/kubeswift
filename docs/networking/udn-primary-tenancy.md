@@ -106,7 +106,7 @@ Full sample set: [`config/samples/model-a/`](../../config/samples/model-a/).
 
 - **Datapath (bridge-binding):** OVN-K assigns the launcher pod a UDN IP + an IP-derived
   MAC (`0a:58:<ip-hex>`); `network-init` bridges `ovn-udn1` to the VM's tap so the **VM
-  adopts that exact IP+MAC** (OVN `port_security` pins them). This is the KubeVirt
+  adopts that exact IP+MAC** (OVN `port_security` pins them). This is the standard
   bridge-binding pattern.
 - **Status (controller-derived):** because the UDN is bridged to the VM and `eth0` is
   infrastructure-locked, swiftletd **cannot reach the apiserver** from the pod. So the

@@ -726,7 +726,7 @@ type GuestNetworkInterface struct {
 type GuestNetworkSpec struct {
 	// Binding selects the primary interface's relationship to the pod network:
 	//   nat    (default) — VM behind the pod IP; ports are Service-exposable via
-	//                      an in-pod DNAT (KubeVirt masquerade model).
+	//                      an in-pod DNAT (the masquerade model).
 	//   bridge          — primary rides a multi-node-L2 NAD (portable IP); ports
 	//                      are NOT in-pod-DNAT'd (they reach the NAD IP). expose
 	//                      is rejected for bridge; ports without expose are
