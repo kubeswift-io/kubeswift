@@ -11,6 +11,11 @@ kind: SwiftImage
 metadata:
   name: golden-noble
 spec:
+  # Set explicitly rather than leaning on the defaulting webhook: format is a
+  # required field in the CRD schema, so a manifest omitting it applies on a
+  # webhook-enabled cluster and is rejected by the apiserver on one where
+  # webhook.enabled=false. raw is what `swiftctl image publish` produces.
+  format: raw
   source:
     oci:
       repository: zot.registry.svc:5000/vm-images

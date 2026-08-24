@@ -26,9 +26,36 @@ type SeedDataValueFrom struct {
 }
 
 // SwiftSeedProfileSpec defines the desired state of SwiftSeedProfile.
+//
+// UserData and UserDataFrom are alternatives, and the rule below is what says
+// so to the apiserver. Until it existed, UserData was a bare required field, so
+// the CRD schema rejected every userDataFrom-only profile with
+// "spec.userData: Required value" — before admission ran, which meant the
+// validating webhook's own (correct) either-or check never got to see the
+// object. The Secret-backed path was implemented, sampled and documented as the
+// way to keep credentials out of Git, and could not be used at all.
+//
+// Expressed as CEL rather than left to the webhook because the webhook is off
+// by default: a rule that only holds when webhook.enabled=true is not a rule.
+//
+// The emptiness test is size(...) and not a comparison against a quoted empty
+// string ON PURPOSE. gofmt rewrites a doubled apostrophe inside a comment to a
+// typographic closing quote, and a kubebuilder marker IS a comment: writing the
+// CEL literal the obvious way silently turns the rule into a comparison against
+// a curly quote the next time anyone runs gofmt, and controller-gen then bakes
+// that into the CRD. CI runs gofmt, so CI would have been the thing that broke
+// it. size() needs no quotes and cannot be rewritten.
+// +kubebuilder:validation:XValidation:rule="(has(self.userData) && size(self.userData) > 0) || has(self.userDataFrom)",message="one of spec.userData or spec.userDataFrom is required"
 type SwiftSeedProfileSpec struct {
-	Datasource   DatasourceType     `json:"datasource"`
-	UserData     string             `json:"userData"` // Inline; use UserDataFrom for ref
+	Datasource DatasourceType `json:"datasource"`
+	// UserData is inline cloud-init user-data.
+	//
+	// Optional at the schema level, but a profile needs EITHER this or
+	// UserDataFrom: see the XValidation rule on this struct. Prefer
+	// UserDataFrom for anything carrying credentials, so the content lives in
+	// a Secret rather than in the manifest (docs/gitops/secrets.md).
+	// +optional
+	UserData     string             `json:"userData,omitempty"`
 	UserDataFrom *SeedDataValueFrom `json:"userDataFrom,omitempty"`
 	// MetaData is inline NoCloud instance metadata (use MetaDataFrom for a ref).
 	//
