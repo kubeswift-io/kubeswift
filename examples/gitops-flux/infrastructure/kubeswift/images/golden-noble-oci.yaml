@@ -1,0 +1,90 @@
+# Golden VM disk pulled from an OCI registry.
+#
+# This is the same distribution channel Flux already uses for the KubeSwift
+# chart, pointed at a different artifact type. One registry, one credential,
+# one signing key, for the platform and the VM disks both.
+#
+# Why prefer this over the http source (see ubuntu-noble.yaml): that one
+# downloads a vendor cloud image and converts it on every cluster. This pulls a
+# disk you built once, already qcow2-to-raw converted, already carrying your
+# agent/CA/hardening, and it is content-addressable and signable.
+#
+# PRODUCER SIDE, once, from a workstation. No cluster involved:
+#
+#   swiftctl image publish noble-hardened.raw \
+#     --to ghcr.io/example-org/vm-images \
+#     --tag noble-24.04 \
+#     --sign-key cosign.key
+#
+# It prints the manifest digest. Put THAT below, not the tag: see the comment
+# on `digest`.
+apiVersion: image.kubeswift.io/v1alpha1
+kind: SwiftImage
+metadata:
+  name: golden-noble
+spec:
+  source:
+    oci:
+      repository: ghcr.io/example-org/vm-images
+
+      # Replace both of these when you fork this repo.
+      #
+      # A TAG IS MUTABLE, which is the same reason you pin the chart in
+      # clusters/<env>/kubeswift-platform.yaml. Someone re-pushing
+      # `noble-24.04` changes what every future guest boots, with no commit in
+      # this repository to show for it, and the change lands only on clusters
+      # that happen to import after the re-push. A digest cannot do that: the
+      # bytes are the name.
+      #
+      # Pin by digest in production and treat a new disk as a new commit:
+      #   digest: sha256:<the digest swiftctl printed>
+      tag: noble-24.04
+
+      # cosign verify BEFORE the bytes are trusted. The import fails closed if
+      # the signature does not verify, so an unsigned or tampered golden disk
+      # never becomes a root disk. Mirrors Flux's own OCIRepository
+      # `spec.verify` — same discipline, same registry, one layer down.
+      #
+      # The Secret holds the PUBLIC key under the key "cosign.pub", and belongs
+      # in Git (a public key is not a secret). Create it with:
+      #   kubectl create secret generic vm-image-cosign-pub \
+      #     --from-file=cosign.pub=cosign.pub
+      verifyKeySecretRef:
+        name: vm-image-cosign-pub
+
+      # Private registry auth. kubernetes.io/dockerconfigjson, same namespace.
+      # This one IS a secret: SOPS-encrypt it, see docs/gitops/secrets.md.
+      # credentialsSecretRef:
+      #   name: regcreds
+
+  # Set explicitly, even though the defaulting webhook would fill in "raw".
+  # A manifest that relies on that default applies cleanly on a webhook-enabled
+  # cluster and is REJECTED by the apiserver on one where webhook.enabled is
+  # false, because format is a required field in the CRD schema. Git-managed
+  # manifests get applied to whichever cluster the reconciler points at, so
+  # spell out anything a webhook would otherwise supply.
+  #
+  # raw is what `swiftctl image publish` produces; qcow2 is for vendor cloud
+  # images fetched over http, which KubeSwift converts on import.
+  format: raw
+
+  # Pin the storage class of the IMPORT PVC rather than inheriting the cluster
+  # default, which is a different class on every cluster this repo targets and
+  # can be changed by someone else entirely. Immutable once the import starts.
+  importStorageClassName: standard
+
+  # Snapshot cloning gives per-guest root disks in seconds instead of a copy
+  # Job. Immutable once the import starts, like importStorageClassName.
+  #
+  # The webhook requires volumeSnapshotClassName whenever cloneStrategy is
+  # snapshot, and rejects the object without it rather than silently falling
+  # back — so both of these names have to be real on every cluster this repo
+  # targets. They are cluster-specific in a layer that is otherwise shared, so
+  # if your environments run different CSI drivers, patch these two per cluster
+  # rather than editing them here. On a driver with no snapshot support, drop
+  # both lines and take the copy path.
+  cloneStrategy: snapshot
+  volumeSnapshotClassName: csi-snapclass
+
+  rootDisk:
+    size: 40Gi

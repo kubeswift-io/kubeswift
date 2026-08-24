@@ -1,0 +1,39 @@
+# A warm pool of pre-booted microVMs for CI jobs.
+#
+# The pool is desired state and belongs in Git. The sandboxes that check out of
+# it are NOT: a SwiftSandbox runs its workload once and goes terminal, so your
+# CI system creates those imperatively (or from a Job) and they never appear in
+# this repository. See docs/gitops/overview.md.
+#
+# What this buys: a checkout from a warm slot starts in sub-second time instead
+# of paying the cold materialize-and-boot, which is roughly fifteen seconds. A
+# slot is a Pod, not a custom resource, so do not look for one per slot.
+#
+# Requires the `sandbox` SwiftKernel from the infrastructure layer and at least
+# one node labelled kubeswift.io/kernel-node=true.
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandboxPool
+metadata:
+  name: ci-runners
+spec:
+  # Digest-pin the runner image for the same reason the golden disk is pinned:
+  # a mutable tag changes what every future job runs, with no commit here to
+  # show for it. Slots also re-materialize on a digest change, so an unpinned
+  # tag makes pool churn nondeterministic.
+  image: ghcr.io/example-org/ci-runner:v1.4.0
+  cpu: 2
+  memory: 2Gi
+
+  # minWarm backs a `scale` subresource, so `kubectl scale` and an HPA write the
+  # same field this manifest declares. Pick ONE owner. If you want the pool to
+  # scale to zero when the queue is quiet, drop minWarm from this manifest and
+  # let an autoscaler own it; leaving both in place makes the pool oscillate on
+  # the reconcile interval while every Kustomization stays green.
+  minWarm: 3
+  maxWarm: 10
+
+  # restricted is the default and the right one for CI: a job gets egress to
+  # what it needs and nothing else. `open` gives full egress; `none` isolates
+  # completely. This is a real VM boundary either way, not a namespace.
+  network:
+    mode: restricted

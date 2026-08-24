@@ -1,0 +1,79 @@
+# Backups as desired state.
+#
+# A SwiftSnapshot is a one-shot verb and must NOT be committed: it goes terminal,
+# and a reconciler that owns it either recreates it forever or holds a finished
+# object that can never run again. A SCHEDULE is the declarative counterpart, and
+# is exactly the kind of thing that belongs in Git: the retention policy and the
+# cron line are reviewed, versioned, and identical on every cluster this repo
+# targets.
+#
+# Two schedules, because they answer different questions.
+---
+# 1. Nightly, local to the cluster's CSI driver. Fast, cheap, and what you
+#    actually restore from day to day. Disk-only and crash-consistent; the VM is
+#    never paused.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshotSchedule
+metadata:
+  name: db-nightly
+spec:
+  schedule: "0 2 * * *"           # 5-field cron, UTC
+  concurrencyPolicy: Forbid       # skip a tick if the previous capture still runs
+  retention:
+    keepLast: 7
+  template:
+    metadata:
+      labels:
+        tier: db                  # merged onto every SwiftSnapshot it creates
+    spec:
+      guestRef:
+        name: db
+      backend:
+        type: csi-volume-snapshot
+---
+# 2. Weekly, exported to the OCI registry. The fourth artifact type out of the
+#    same registry as the chart, the golden disk and the kernel.
+#
+#    This is the one that earns its keep in a GitOps estate: a CSI snapshot is
+#    trapped in the cluster that took it, but an OCI artifact is portable. The
+#    same registry your reconciler already pulls the chart from becomes the
+#    channel for moving VM state to another cluster, to an edge site, or into
+#    cold storage, with no bespoke transport.
+#
+#    Restore is a SwiftRestore referencing the pushed artifact by digest, and is
+#    imperative: it is a one-shot verb, so it does not belong in this directory.
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshotSchedule
+metadata:
+  name: db-weekly-oci
+spec:
+  schedule: "0 4 * * 0"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600   # after an outage, skip a tick missed by >1h
+  retention:
+    keepLast: 4
+  template:
+    spec:
+      guestRef:
+        name: db
+      backend:
+        type: oci
+        oci:
+          repository: ghcr.io/example-org/vm-snapshots
+          # An empty tag defaults to "<namespace>-<snapshot>". status.oci records
+          # the pushed reference AND the manifest digest, which is what a restore
+          # should pin.
+          #
+          # credentialsSecretRef is the same dockerconfigjson Secret the golden
+          # image uses. SOPS-encrypt it: docs/gitops/secrets.md.
+          # credentialsSecretRef:
+          #   name: regcreds
+          #
+          # Sign every pushed snapshot with the cosign PRIVATE key (cosign.key +
+          # cosign.password). This one is genuinely secret, unlike the public key
+          # the golden image verifies with.
+          # signingKeySecretRef:
+          #   name: cosign-key
+      # Disk-only keeps the artifact small and avoids pausing the VM. Set true
+      # to capture RAM as well, which makes the export a resumable full state.
+      includeMemory: false
