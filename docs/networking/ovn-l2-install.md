@@ -234,8 +234,8 @@ kubectl get swiftmigration -n <namespace> -w
 
 Expect `Completed`, `observedDowntime` a few seconds, the guest on the target node
 with the **same** IP, and reachability from a third node afterward. The controller
-sets `kubevirt.io/migrationJobName` on the destination pod so kube-ovn lets the
-destination keep the source's static IP through the cutover.
+sets the migration marker kube-ovn recognises on the destination pod, so kube-ovn
+lets the destination keep the source's static IP through the cutover.
 
 ---
 
@@ -263,7 +263,7 @@ destination keep the source's static IP through the cutover.
   was programmed caches an incomplete entry; `ip neigh flush all` (or just wait)
   and re-ping.
 - **dst pod can't get the IP during migration.** Ensure the controller image is
-  `#239`+ (it sets `kubevirt.io/migrationJobName`) and ensure `--keep-vm-ip=true`
+  `#239`+ (it sets the migration marker) and ensure `--keep-vm-ip=true`
   is enabled in kube-ovn.
 
 ## Uninstall (return to primary-CNI-only)

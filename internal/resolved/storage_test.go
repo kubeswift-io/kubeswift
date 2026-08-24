@@ -138,7 +138,7 @@ func TestMergeStorage_GuestNilFieldFallsThroughToClass(t *testing.T) {
 }
 
 func TestStorage_IsLiveMigrationCapable(t *testing.T) {
-	// IsLiveMigrationCapable is the canonical KubeVirt-style rule:
+	// IsLiveMigrationCapable is the canonical shared-storage rule:
 	// RWX+Block, nothing else. Any other combination is non-live-
 	// migratable (including RWX+Filesystem, which the CRD admission
 	// rejects but which the function still classifies correctly as a

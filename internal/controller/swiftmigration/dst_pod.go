@@ -303,7 +303,7 @@ func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool, 
 	// swiftguest.OVNMigrationDstAnnotations before this clone, so the per-CNI
 	// knowledge stays single-sourced in the swiftguest OVN backend, not here. For
 	// kube-ovn that map is the LSP identity MAC + the guest's current IP pin +
-	// kubevirt.io/migrationJobName (so its IPAM skips the conflict check and the dst
+	// MigrationJobNameAnnotation (so its IPAM skips the conflict check and the dst
 	// shares the src's still-held static IP across the cutover overlap). It is empty
 	// for every non-OVN networking mode, so this merge is inert there. Offline
 	// migration is unaffected (it rebuilds the pod via the SwiftGuest pod builder,

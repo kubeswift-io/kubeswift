@@ -60,8 +60,8 @@ spec:
 > Unlike the OVN-Kubernetes UDN path, kube-ovn needs **no persistent-IP flag** (no
 > `allowPersistentIPs` / `ipam.lifecycle: Persistent`). KubeSwift's kube-ovn backend
 > pins the guest's IP via the `<provider>.kubernetes.io/ip_address` annotation and
-> lets the migration destination acquire it through a `kubevirt.io/migrationJobName`
-> marker — so live-migration IP-keep works out of the box.
+> lets the migration destination acquire it through the migration marker kube-ovn
+> recognises — so live-migration IP-keep works out of the box.
 
 ### 2. Reference the NAD from a SwiftGuest
 

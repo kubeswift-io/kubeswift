@@ -133,7 +133,7 @@ spec:
                   volumeMode:
                     description: |-
                       VolumeMode is the PVC volumeMode. Defaults to Filesystem. Block is
-                      required for live-migration-capable RWX (KubeVirt model) and for
+                      required for live-migration-capable RWX and for
                       some CSI drivers' raw-device passthrough; the value flows to PVC
                       spec verbatim.
                     enum:

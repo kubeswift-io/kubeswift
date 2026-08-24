@@ -474,7 +474,7 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	// adjustment).
 	//
 	// Live migration of disk-boot guests requires RWX+Block storage
-	// (KubeVirt's model and Longhorn's Migratable RWX). Filesystem RWX
+	// (the shared-storage rule; Longhorn calls it Migratable RWX). Filesystem RWX
 	// is NOT live-migration-capable. Kernel-boot guests (kernelRef set,
 	// no root-disk PVC) have no shared storage to coordinate at all,
 	// so the storage gate doesn't apply — they're live-capable by
@@ -548,7 +548,7 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 //     reject INCAPABLE storage, not to require storage where none
 //     exists.
 //
-//  2. Disk-boot guests with RWX+Block storage (KubeVirt's model;
+//  2. Disk-boot guests with RWX+Block storage (the shared-storage rule;
 //     Longhorn's Migratable RWX). Filesystem RWX is NOT
 //     live-migration-capable.
 //
@@ -585,7 +585,7 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 		return nil
 	}
 	return fmt.Errorf(
-		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (KubeVirt-style live migration; Filesystem RWX is not live-migration-capable). "+
+		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (Filesystem RWX is not live-migration-capable). "+
 			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline.",
 		guest.Name, storage.AccessMode, storage.VolumeMode,
 	)

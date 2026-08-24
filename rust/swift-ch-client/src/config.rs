@@ -291,7 +291,7 @@ impl VmConfig {
             // release). Being explicit avoids the deprecation warning and the
             // autodetection sector-0 probe (W10).
             //
-            // direct=on (O_DIRECT, KubeVirt cache=none parity) on the ROOT and
+            // direct=on (O_DIRECT, cache=none parity) on the ROOT and
             // DATA disks bypasses the host page cache for guest disk I/O. The
             // guest already caches its own blocks in guest RAM, so the host copy
             // is a wasteful double-cache; bypassing it makes the launcher's memory

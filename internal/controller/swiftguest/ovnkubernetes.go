@@ -26,7 +26,7 @@ import (
 //     equivalent — empirically a foreign MAC requested here is honored and reachable
 //     cross-node).
 //   - "ipam-claim-reference": <claim> -> pins the IP via a pre-created IPAMClaim
-//     (OVN-K does NOT auto-create it — there is no kubevirt-ipam-claims webhook here,
+//     (OVN-K does NOT auto-create it — there is no third-party IPAM-claims webhook here,
 //     so this backend creates+owns it per guest; spike P0-c / §8).
 //
 // Both fields land on the guest's PRIMARY NAD entry of k8s.v1.cni.cncf.io/networks
