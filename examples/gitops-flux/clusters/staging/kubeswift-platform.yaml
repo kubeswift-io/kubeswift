@@ -10,7 +10,11 @@ spec:
   interval: 10m
   url: oci://ghcr.io/kubeswift-io/charts/kubeswift
   ref:
-    semver: ">=0.1.0"
+    # Pin to a MINOR range, not ">=0.1.0". KubeSwift is pre-1.0 with v1alpha1
+    # APIs, so a wide-open range lets Flux roll the platform across a breaking
+    # minor unattended. "0.13.x" takes patches automatically and makes a minor
+    # bump a reviewed commit; pin exactly (0.13.11) to gate patches too.
+    semver: "0.13.x"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
