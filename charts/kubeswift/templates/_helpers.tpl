@@ -3,16 +3,27 @@ Default image tag: matches what CI publishes.
 - Dev (0.0.0-dev.<sha>): sha-<sha>
 - RC/Stable (X.Y.Z): vX.Y.Z
 Override with controllerManager.image.tag / swiftletd.image.tag when using local builds (e.g. latest).
+
+appVersion is expected BARE (X.Y.Z). The release workflows pass it that way
+(`--app-version "${TAG#v}"`), but Chart.yaml is hand-edited at release time and
+once carried "v0.13.11", which this helper then turned into the tag `vv0.13.11`:
+a nonexistent image for the controller AND for the five launcher images it
+passes on by env var. Released charts were unaffected (the workflow flag wins),
+so only `helm install`/`helm template` from a checkout broke — quietly, and only
+at pod-pull time. trimPrefix makes the leading "v" unspellable rather than
+merely currently-absent; hack/verify-image-tags.sh fails the build if a rendered
+tag is malformed anyway.
 */}}
 {{- define "kubeswift.imageTag" -}}
 {{- $tag := .tag | default "latest" -}}
 {{- if ne $tag "latest" -}}
 {{- $tag -}}
 {{- else -}}
-{{- if hasPrefix "0.0.0-dev." .appVersion -}}
-{{- printf "sha-%s" (trimPrefix "0.0.0-dev." .appVersion) -}}
+{{- $app := trimPrefix "v" .appVersion -}}
+{{- if hasPrefix "0.0.0-dev." $app -}}
+{{- printf "sha-%s" (trimPrefix "0.0.0-dev." $app) -}}
 {{- else -}}
-{{- printf "v%s" .appVersion -}}
+{{- printf "v%s" $app -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

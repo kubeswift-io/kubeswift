@@ -201,6 +201,9 @@ verify-crd-sync:
 verify-render-coverage:
 	./hack/verify-render-coverage.sh
 
+verify-image-tags:
+	./hack/verify-image-tags.sh
+
 verify-cosign-interop: ## Cross-check that our cosign signatures verify (#486). Needs docker.
 	@# Not in any CI gate: it pulls release binaries and runs a local registry.
 	@# Run it before changing how anything is signed or verified.

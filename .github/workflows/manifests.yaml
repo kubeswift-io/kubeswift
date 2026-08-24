@@ -26,6 +26,7 @@ on:
       - 'config/crd/**'
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
+      - 'hack/verify-image-tags.sh'
       - '.github/workflows/manifests.yaml'
   push:
     branches: [main]
@@ -43,6 +44,7 @@ on:
       - 'config/crd/**'
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
+      - 'hack/verify-image-tags.sh'
       - '.github/workflows/manifests.yaml'
 
 jobs:
@@ -85,6 +87,14 @@ jobs:
           set -euo pipefail
           ./hack/render-lint-profile.sh > /tmp/rendered.yaml
           test -s /tmp/rendered.yaml
+
+      # Tag plausibility, which no other check in this job covers: kubeconform
+      # validates schema and kube-linter validates policy, and a nonexistent
+      # image tag is valid under both. It only fails later, on a node, at pull
+      # time. `vv0.13.11` shipped on the install-from-a-checkout path for
+      # several releases exactly this way.
+      - name: Verify image tags
+        run: ./hack/verify-image-tags.sh
 
       # STEP 1. -strict is the flag that matters: it rejects unknown and
       # duplicate fields, which is exactly the class that bites this project —

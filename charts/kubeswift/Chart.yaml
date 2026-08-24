@@ -3,7 +3,13 @@ name: kubeswift
 description: KubeSwift - Cloud Hypervisor-first Kubernetes VM operator
 type: application
 version: 0.13.11
-appVersion: "v0.13.11"
+# Bare X.Y.Z, with NO leading "v". The imageTag helper adds the "v" when it
+# derives a default image tag, so "v0.13.11" here renders "vv0.13.11" and every
+# image points at a tag that was never published. The helper now trims a stray
+# "v" and hack/verify-image-tags.sh fails the build on a malformed tag, but
+# write it bare: the release workflows pass `--app-version "${TAG#v}"`, and this
+# line should match what they publish.
+appVersion: "0.13.11"
 keywords:
   - kubeswift
   - cloud-hypervisor
