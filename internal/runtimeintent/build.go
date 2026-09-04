@@ -32,6 +32,8 @@ type ResolvedGuest interface {
 	GetFilesystems() []FilesystemIntent
 	GetVhostUserDevices() []VhostUserDeviceIntent
 	GetCoreScheduling() string
+	GetCPUPinning() string
+	GetSMTPolicy() string
 	// GetVsockCID returns the vsock CID for a SOURCE guest that opted into the
 	// in-guest identity agent, or 0 when the agent is not enabled (or the guest
 	// is a clone — a clone reopens the captured vsock device from config.json).
@@ -48,6 +50,13 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 	filesystems := rg.GetFilesystems()
 	vhostUserDevices := rg.GetVhostUserDevices()
 	coreScheduling := rg.GetCoreScheduling()
+	cpuPinning := rg.GetCPUPinning()
+	// smtPolicy is only meaningful alongside cpuPinning; keep the intent
+	// clean by omitting it when the guest is not pinned.
+	smtPolicy := ""
+	if cpuPinning != "" {
+		smtPolicy = rg.GetSMTPolicy()
+	}
 
 	var vsock *VsockIntent
 	if cid := rg.GetVsockCID(); cid != 0 {
@@ -76,6 +85,8 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 			Filesystems:         filesystems,
 			VhostUserDevices:    vhostUserDevices,
 			CoreScheduling:      coreScheduling,
+			CPUPinning:          cpuPinning,
+			SMTPolicy:           smtPolicy,
 			Vsock:               vsock,
 			KernelBoot: &KernelBootSpec{
 				KernelPath:    rg.GetKernelPath(),
@@ -122,6 +133,8 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		Filesystems:         filesystems,
 		VhostUserDevices:    vhostUserDevices,
 		CoreScheduling:      coreScheduling,
+		CPUPinning:          cpuPinning,
+		SMTPolicy:           smtPolicy,
 		Vsock:               vsock,
 	}
 }

@@ -459,3 +459,32 @@ func TestGetVsockCID(t *testing.T) {
 		t.Errorf("disabled guest CID = %d, want 0", cid)
 	}
 }
+
+func TestGetCPUPinning(t *testing.T) {
+	// "none" and "" both mean unpinned, and must produce the empty string so
+	// the CH --cpus arg carries no affinity param at all — the behaviour every
+	// existing SwiftGuestClass relies on.
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"none", ""},
+		{"static", "static"},
+	} {
+		rg := &ResolvedGuest{CPUPinning: tc.in}
+		if got := rg.GetCPUPinning(); got != tc.want {
+			t.Errorf("GetCPUPinning(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestGetSMTPolicy_DefaultsToSpread(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", "spread"},
+		{"spread", "spread"},
+		{"pack", "pack"},
+	} {
+		rg := &ResolvedGuest{SMTPolicy: tc.in}
+		if got := rg.GetSMTPolicy(); got != tc.want {
+			t.Errorf("GetSMTPolicy(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

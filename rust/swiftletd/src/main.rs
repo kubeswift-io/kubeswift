@@ -1,4 +1,5 @@
 mod action;
+mod cpuset;
 mod intent;
 mod kube_client;
 mod launch;

@@ -53,6 +53,18 @@ pub struct VmConfig {
     /// vCPU core-scheduling policy ("vm"/"vcpu"), appended to --cpus as
     /// core_scheduling=<v>. None = off (param omitted). SMT side-channel mitigation.
     pub core_scheduling: Option<String>,
+    /// vCPU -> host-CPU pinning, appended to --cpus as
+    /// `affinity=[<vcpu>@[<cpuset>],...]`. Empty = unpinned (param omitted).
+    ///
+    /// The bracketing is not cosmetic: CH's option parser splits `--cpus` on
+    /// commas, so the affinity list must be wrapped in `[...]` for its own
+    /// commas to be read as list separators rather than as new --cpus keys.
+    /// Verified against the v53.0 binary — the unbracketed form is accepted as
+    /// a key but fails value conversion (`ParseCpus(Conversion("affinity"))`).
+    ///
+    /// swiftletd computes the mapping from the launcher pod's effective cpuset;
+    /// this crate only renders what it is given.
+    pub cpu_affinity: Vec<(u32, Vec<u32>)>,
     /// Path for Cloud Hypervisor API socket.
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
@@ -217,6 +229,22 @@ impl VmConfig {
                     // vCPU core-scheduling (SMT side-channel mitigation): "vm"
                     // or "vcpu". Omitted when off.
                     cpus.push_str(&format!(",core_scheduling={}", cs));
+                }
+                if !self.cpu_affinity.is_empty() {
+                    let list = self
+                        .cpu_affinity
+                        .iter()
+                        .map(|(vcpu, hosts)| {
+                            let set = hosts
+                                .iter()
+                                .map(|c| c.to_string())
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            format!("{}@[{}]", vcpu, set)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    cpus.push_str(&format!(",affinity=[{}]", list));
                 }
                 cpus
             },
@@ -444,6 +472,7 @@ mod tests {
             cpus: 2,
             kvm_hyperv: false,
             core_scheduling: None,
+            cpu_affinity: Vec::new(),
             api_socket: "/tmp/ch.sock".to_string(),
             seed_path: "/data/seed".to_string(),
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
@@ -635,6 +664,36 @@ mod tests {
     }
 
     #[test]
+    /// The affinity list MUST be wrapped in `[...]`. CH's option parser splits
+    /// --cpus on commas, so an unbracketed list is read as stray --cpus keys and
+    /// fails value conversion. Verified against the v53.0 binary:
+    ///   affinity=[0@[0],1@[1]]  -> accepted
+    ///   affinity=0@[0]:1@[1]    -> ParseCpus(Conversion("affinity"))
+    /// This test is what keeps that shape from regressing.
+    #[test]
+    fn test_cpu_affinity_emits_bracketed_list_on_cpus() {
+        let mut cfg = make_disk_boot_config();
+        cfg.cpu_affinity = vec![(0, vec![2]), (1, vec![3])];
+        let joined = cfg.to_args().join(" ");
+        assert!(
+            joined.contains(",affinity=[0@[2],1@[3]]"),
+            "affinity must be a bracketed list: {}",
+            joined
+        );
+
+        // A multi-CPU set for one vCPU stays inside that vCPU's brackets.
+        let mut multi = make_disk_boot_config();
+        multi.cpu_affinity = vec![(0, vec![0, 4])];
+        assert!(
+            multi.to_args().join(" ").contains(",affinity=[0@[0,4]]"),
+            "multi-cpu set mis-rendered"
+        );
+
+        // Empty -> no affinity param at all (the unpinned default).
+        let none = make_disk_boot_config().to_args().join(" ");
+        assert!(!none.contains("affinity"), "unexpected affinity: {}", none);
+    }
+
     fn test_core_scheduling_emits_on_cpus() {
         let mut cfg = make_disk_boot_config();
         cfg.core_scheduling = Some("vm".to_string());

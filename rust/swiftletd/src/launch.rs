@@ -424,6 +424,32 @@ where
         }
     });
 
+    // vCPU pinning (cpuPinning=static). Computed here, not in the controller:
+    // the map must come from THIS pod's effective cpuset, which is only known
+    // once the kubelet has admitted the pod. A failure is fatal rather than
+    // best-effort — a guest that asked to be pinned and silently was not is the
+    // degradation this feature exists to remove.
+    let cpu_affinity: Vec<(u32, Vec<u32>)> = match intent
+        .cpu_pinning
+        .as_deref()
+        .filter(|s| !s.is_empty() && *s != "none")
+    {
+        None => Vec::new(),
+        Some(_) => {
+            let policy = crate::cpuset::SmtPolicy::from_intent(intent.smt_policy.as_deref());
+            let plan = crate::cpuset::plan(intent.cpu.max(1), policy)?;
+            log::info!(
+                "cpuPinning=static ({:?}): {}",
+                policy,
+                plan.iter()
+                    .map(|a| format!("vcpu{}->cpu{:?}", a.vcpu, a.host_cpus))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            plan.into_iter().map(|a| (a.vcpu, a.host_cpus)).collect()
+        }
+    };
+
     let config = if intent.has_kernel() {
         let kb = intent.kernel_boot.as_ref().unwrap();
         VmConfig {
@@ -435,6 +461,7 @@ where
                 .core_scheduling
                 .clone()
                 .filter(|s| !s.is_empty() && s != "off"),
+            cpu_affinity: cpu_affinity.clone(),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path: String::new(),
             serial_socket_path: Some(serial_socket_path.clone()),
@@ -465,6 +492,7 @@ where
                 .core_scheduling
                 .clone()
                 .filter(|s| !s.is_empty() && s != "off"),
+            cpu_affinity: cpu_affinity.clone(),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path,
             serial_socket_path: Some(serial_socket_path.clone()),
@@ -519,6 +547,21 @@ fn run_qemu<F>(
 where
     F: FnOnce(u32, String, String),
 {
+    // cpuPinning is a Cloud-Hypervisor-path control (CH --cpus affinity=). The
+    // QEMU path is only taken for HGX GPU guests, which derive their own vCPU
+    // pinning from GPU NUMA locality below. Say so rather than letting the
+    // class's setting look effective when nothing here reads it.
+    if intent
+        .cpu_pinning
+        .as_deref()
+        .is_some_and(|s| !s.is_empty() && s != "none")
+    {
+        log::warn!(
+            "cpuPinning is ignored on the QEMU path: this guest's vCPU pinning \
+             comes from its GPU NUMA topology instead"
+        );
+    }
+
     let serial_socket = runtime_dir.root().join("serial.sock");
     let qmp_socket = runtime_dir.root().join("qmp.sock");
     let ovmf_vars = runtime_dir.root().join("OVMF_VARS.fd");

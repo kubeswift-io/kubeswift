@@ -127,6 +127,9 @@ Cluster-scoped template defining default CPU, memory, and disk resources for VMs
 | `memory` | Quantity | Yes | Memory size (e.g. `"2Gi"`). |
 | `rootDisk.size` | Quantity | Yes | Root disk PVC size (e.g. `"40Gi"`). Should match SwiftImage's `rootDisk.size`. |
 | `rootDisk.format` | enum | Yes | `raw` only at runtime. |
+| `coreScheduling` | enum | No | `off` (default), `vm`, `vcpu` — SMT side-channel isolation: who may share a physical core. |
+| `cpuPinning` | enum | No | `none` (default), `static` — pin each vCPU to one host CPU from the launcher pod's cpuset. See [CPU pinning](performance/cpu-pinning.md). |
+| `smtPolicy` | enum | No | `spread` (default), `pack` — which SMT siblings a pinned guest uses. Ignored unless `cpuPinning: static`. |
 
 ### Example
 

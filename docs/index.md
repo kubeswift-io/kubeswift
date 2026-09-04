@@ -32,6 +32,10 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 
 - [virtiofs & vhost-user devices](virtiofs.md) — shared filesystems (virtiofs), vhost-user-net/blk/generic (operator backends)
 
+### Performance
+
+- [CPU pinning and SMT placement](performance/cpu-pinning.md) — pin vCPUs to dedicated host CPUs, choose hyper-thread siblings, interaction with the kubelet CPU Manager
+
 ### Sandboxes
 
 - [Ephemeral OCI-rootfs sandboxes](sandbox/overview.md) — SwiftSandbox: run an OCI image as a microVM (CI runners, agent/code execution, untrusted code)

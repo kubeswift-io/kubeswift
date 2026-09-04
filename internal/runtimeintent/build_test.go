@@ -24,6 +24,8 @@ type mockResolvedGuest struct {
 	filesystems         []FilesystemIntent
 	vhostUserDevices    []VhostUserDeviceIntent
 	coreScheduling      string
+	cpuPinning          string
+	smtPolicy           string
 	vsockCID            uint32
 	primaryUDNInterface string
 }
@@ -56,7 +58,14 @@ func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 	return m.vhostUserDevices
 }
 func (m *mockResolvedGuest) GetCoreScheduling() string { return m.coreScheduling }
-func (m *mockResolvedGuest) GetVsockCID() uint32       { return m.vsockCID }
+func (m *mockResolvedGuest) GetCPUPinning() string     { return m.cpuPinning }
+func (m *mockResolvedGuest) GetSMTPolicy() string {
+	if m.smtPolicy == "" {
+		return "spread"
+	}
+	return m.smtPolicy
+}
+func (m *mockResolvedGuest) GetVsockCID() uint32 { return m.vsockCID }
 
 func TestBuild_VsockSetWhenCIDNonZero(t *testing.T) {
 	// disk boot with an agent CID -> intent carries Vsock
@@ -506,5 +515,38 @@ func TestBuild_CoreScheduling(t *testing.T) {
 	none := Build(&mockResolvedGuest{hasSeed: true, format: "raw", guestID: "x"})
 	if none.CoreScheduling != "" {
 		t.Errorf("CoreScheduling = %q, want empty", none.CoreScheduling)
+	}
+}
+
+// The intent must carry the POLICY, not a vCPU->host-CPU map: the map depends
+// on the launcher pod's cpuset, which does not exist when this runs.
+func TestBuild_CPUPinningPolicyReachesTheIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		kernel               bool
+		pinning, smt         string
+		wantPinning, wantSMT string
+	}{
+		{name: "unpinned omits both", wantPinning: "", wantSMT: ""},
+		{name: "static defaults to spread", pinning: "static", wantPinning: "static", wantSMT: "spread"},
+		{name: "static honours pack", pinning: "static", smt: "pack", wantPinning: "static", wantSMT: "pack"},
+		{name: "kernel boot carries it too", kernel: true, pinning: "static", wantPinning: "static", wantSMT: "spread"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &mockResolvedGuest{guestID: "default/pin", cpuPinning: tc.pinning, smtPolicy: tc.smt}
+			if tc.kernel {
+				m.hasKernel = true
+				m.kernelPath, m.initramfsPath = "/k/bzImage", "/k/initrd"
+			}
+			got := Build(m)
+			if got.CPUPinning != tc.wantPinning {
+				t.Errorf("CPUPinning = %q, want %q", got.CPUPinning, tc.wantPinning)
+			}
+			// smtPolicy must be absent when unpinned — emitting a placement
+			// policy for a guest that is not pinned would misreport how it ran.
+			if got.SMTPolicy != tc.wantSMT {
+				t.Errorf("SMTPolicy = %q, want %q", got.SMTPolicy, tc.wantSMT)
+			}
+		})
 	}
 }

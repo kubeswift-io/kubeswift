@@ -40,6 +40,48 @@ const (
 	CoreSchedulingVCPU CoreScheduling = "vcpu"
 )
 
+// CPUPinning selects how a guest's vCPUs are placed on host CPUs
+// (Cloud Hypervisor `--cpus affinity=`).
+//
+//	none   (default) vCPU threads float across every CPU the launcher pod is
+//	       allowed to use; the host scheduler places them.
+//	static each vCPU is pinned to one distinct host CPU, chosen from the
+//	       launcher pod's OWN cpuset. Trades scheduler flexibility for
+//	       run-to-run latency predictability.
+//
+// The candidate CPUs are always the launcher pod's effective cpuset, never the
+// node's full CPU list: under the kubelet CPU Manager `static` policy that set
+// is the pod's exclusive allocation, and pinning outside it would be clamped or
+// rejected by the kernel. With the policy at `none` the set is simply every
+// host CPU, so the same code is correct either way.
+//
+// +kubebuilder:validation:Enum=none;static
+type CPUPinning string
+
+const (
+	CPUPinningNone   CPUPinning = "none"
+	CPUPinningStatic CPUPinning = "static"
+)
+
+// SMTPolicy selects which SMT (hyper-thread) siblings a statically pinned
+// guest's vCPUs land on. Ignored unless cpuPinning is static.
+//
+//	spread (default) use one thread per physical core before any core's
+//	       second thread — each vCPU gets a core's full pipeline and L1/L2.
+//	pack   fill both siblings of a core before moving to the next core —
+//	       touches fewer cores, leaving whole cores free for other work.
+//
+// This is placement, and is independent of coreScheduling, which decides who
+// may share a core (an isolation control). A guest can set both.
+//
+// +kubebuilder:validation:Enum=spread;pack
+type SMTPolicy string
+
+const (
+	SMTPolicySpread SMTPolicy = "spread"
+	SMTPolicyPack   SMTPolicy = "pack"
+)
+
 // SwiftGuestClassSpec defines the desired state of SwiftGuestClass.
 type SwiftGuestClassSpec struct {
 	CPU      resource.Quantity `json:"cpu"`
@@ -58,6 +100,18 @@ type SwiftGuestClassSpec struct {
 	// +kubebuilder:default=off
 	// +optional
 	CoreScheduling CoreScheduling `json:"coreScheduling,omitempty"`
+	// CPUPinning pins guests of this class 1:1 onto host CPUs drawn from the
+	// launcher pod's own cpuset. Default none (the host scheduler places
+	// vCPUs). Requires at least as many CPUs in that cpuset as the class
+	// requests vCPUs; the launcher refuses to start rather than pin partially.
+	// +kubebuilder:default=none
+	// +optional
+	CPUPinning CPUPinning `json:"cpuPinning,omitempty"`
+	// SMTPolicy selects sibling placement when cpuPinning is static, and is
+	// ignored otherwise. Default spread.
+	// +kubebuilder:default=spread
+	// +optional
+	SMTPolicy SMTPolicy `json:"smtPolicy,omitempty"`
 }
 
 // SwiftGuestClass is the Schema for the swiftguestclasses API.

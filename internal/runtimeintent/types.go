@@ -15,8 +15,21 @@ type RuntimeIntent struct {
 	OSType     string          `json:"osType,omitempty"`     // "linux" (default) or "windows" — windows adds kvm_hyperv on the CH --cpus arg
 	// CoreScheduling is the CH vCPU core-scheduling policy ("vm"/"vcpu"), empty
 	// when off. When set, swiftletd appends core_scheduling=<v> to --cpus.
-	CoreScheduling string     `json:"coreScheduling,omitempty"`
-	GPU            *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
+	CoreScheduling string `json:"coreScheduling,omitempty"`
+	// CPUPinning is the vCPU placement policy ("static"), empty when none.
+	//
+	// This carries the POLICY, not a vCPU->host-CPU map: the map is computed in
+	// swiftletd from the launcher pod's own effective cpuset, which the
+	// controller cannot know. Under the kubelet CPU Manager `static` policy the
+	// pod's exclusive CPUs are assigned at admission, after this intent is
+	// written, and pinning to controller-chosen CPUs outside that set would be
+	// clamped or rejected by the kernel.
+	CPUPinning string `json:"cpuPinning,omitempty"`
+	// SMTPolicy is the sibling-placement policy ("spread"/"pack") used when
+	// CPUPinning is set. Emitted whenever CPUPinning is, so the intent records
+	// which policy the guest actually ran under.
+	SMTPolicy string     `json:"smtPolicy,omitempty"`
+	GPU       *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
 	// DataDisks are the secondary VM disks, in deterministic order. Each becomes
 	// one CH --disk and enumerates in the guest as /dev/vdc, /dev/vdd, ... in
 	// this order. Path is opaque to swiftletd (a file for Filesystem disks, a
