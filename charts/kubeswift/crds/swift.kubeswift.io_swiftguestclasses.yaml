@@ -71,6 +71,17 @@ spec:
                 - type: string
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              cpuPinning:
+                default: none
+                description: |-
+                  CPUPinning pins guests of this class 1:1 onto host CPUs drawn from the
+                  launcher pod's own cpuset. Default none (the host scheduler places
+                  vCPUs). Requires at least as many CPUs in that cpuset as the class
+                  requests vCPUs; the launcher refuses to start rather than pin partially.
+                enum:
+                - none
+                - static
+                type: string
               memory:
                 anyOf:
                 - type: integer
@@ -96,6 +107,15 @@ spec:
                 - format
                 - size
                 type: object
+              smtPolicy:
+                default: spread
+                description: |-
+                  SMTPolicy selects sibling placement when cpuPinning is static, and is
+                  ignored otherwise. Default spread.
+                enum:
+                - spread
+                - pack
+                type: string
               storage:
                 description: |-
                   Storage is the cluster default for PVCs the SwiftGuest controller

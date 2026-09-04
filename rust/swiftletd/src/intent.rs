@@ -52,6 +52,16 @@ pub struct RuntimeIntent {
     /// swiftletd appends core_scheduling=<v> to the CH --cpus arg.
     #[serde(default)]
     pub core_scheduling: Option<String>,
+    /// vCPU placement policy ("static"); absent/empty = unpinned. swiftletd
+    /// computes the concrete vCPU->host-CPU map from the launcher pod's own
+    /// effective cpuset (see `cpuset`), because the controller cannot know
+    /// which CPUs the kubelet will hand this pod.
+    #[serde(default)]
+    pub cpu_pinning: Option<String>,
+    /// SMT sibling-placement policy ("spread"/"pack") used when cpu_pinning is
+    /// set. Absent = spread.
+    #[serde(default)]
+    pub smt_policy: Option<String>,
     /// Optional secondary data disk (appears as /dev/vdb in guest).
     /// LEGACY singular field — superseded by `data_disks`. Retained so a
     /// new swiftletd still honors intent JSON written by an older

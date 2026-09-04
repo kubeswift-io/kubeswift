@@ -34,6 +34,10 @@ func Merge(
 	// means no core_scheduling on the CH --cpus args.
 	if guestClass != nil {
 		rg.CoreScheduling = string(guestClass.Spec.CoreScheduling)
+		// CPU placement: also from GuestClass. Empty/none means the CH --cpus
+		// args carry no affinity param, i.e. today's behaviour.
+		rg.CPUPinning = string(guestClass.Spec.CPUPinning)
+		rg.SMTPolicy = string(guestClass.Spec.SMTPolicy)
 	}
 
 	// RootDisk: from GuestClass

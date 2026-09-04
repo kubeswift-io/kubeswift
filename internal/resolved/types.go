@@ -75,6 +75,12 @@ type ResolvedGuest struct {
 	// CoreScheduling is the vCPU core-scheduling policy from the SwiftGuestClass
 	// ("off"/"vm"/"vcpu"). Empty/"off" omits the CH --cpus core_scheduling param.
 	CoreScheduling string `json:"coreScheduling,omitempty"`
+	// CPUPinning is the vCPU placement policy from the SwiftGuestClass
+	// ("none"/"static"). Empty/"none" omits the CH --cpus affinity param.
+	CPUPinning string `json:"cpuPinning,omitempty"`
+	// SMTPolicy is the sibling-placement policy from the SwiftGuestClass
+	// ("spread"/"pack"), meaningful only when CPUPinning is "static".
+	SMTPolicy string `json:"smtPolicy,omitempty"`
 	// GuestAgentEnabled is true for a SOURCE guest that opted into the in-guest
 	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
 	// The resolver sets it false for a clone (cloneFromSnapshot): a clone
@@ -330,6 +336,27 @@ func (r *ResolvedGuest) GetCoreScheduling() string {
 		return ""
 	}
 	return r.CoreScheduling
+}
+
+// GetCPUPinning returns the vCPU placement policy ("static"), or "" when the
+// class asks for none. "" leaves the CH --cpus arg without an affinity param,
+// which is the pre-existing behaviour for every class that never sets it.
+func (r *ResolvedGuest) GetCPUPinning() string {
+	if r.CPUPinning == "" || r.CPUPinning == string(swiftv1alpha1.CPUPinningNone) {
+		return ""
+	}
+	return r.CPUPinning
+}
+
+// GetSMTPolicy returns the sibling-placement policy, defaulting to "spread".
+// It is only consulted when GetCPUPinning() is non-empty, but defaulting here
+// (rather than in swiftletd) keeps the emitted intent explicit about which
+// policy a guest actually ran under.
+func (r *ResolvedGuest) GetSMTPolicy() string {
+	if r.SMTPolicy == "" {
+		return string(swiftv1alpha1.SMTPolicySpread)
+	}
+	return r.SMTPolicy
 }
 
 // IsWindows reports whether the resolved guest is a Windows guest.

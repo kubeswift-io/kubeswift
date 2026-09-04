@@ -12,6 +12,9 @@ SwiftGuestClass is a **cluster-scoped template** for CPU, memory, and root disk.
 | `memory` | Yes | Memory request (e.g. `"2Gi"`, `"512Mi"`) |
 | `rootDisk.size` | Yes | Root disk size (e.g. `"10Gi"`); must fit imported image |
 | `rootDisk.format` | Yes | `raw` or `qcow2` — must match SwiftImage format |
+| `coreScheduling` | No | `off` (default), `vm`, `vcpu` — SMT side-channel isolation |
+| `cpuPinning` | No | `none` (default), `static` — pin vCPUs to host CPUs ([guide](../performance/cpu-pinning.md)) |
+| `smtPolicy` | No | `spread` (default), `pack` — sibling placement when pinned |
 
 ```yaml
 apiVersion: swift.kubeswift.io/v1alpha1

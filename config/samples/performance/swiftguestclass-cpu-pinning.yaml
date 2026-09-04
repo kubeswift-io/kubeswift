@@ -1,0 +1,33 @@
+# A guest class that pins each vCPU to a dedicated host CPU.
+#
+# cpuPinning: static tells the launcher to pin vCPU N to one host CPU, chosen
+# from the launcher pod's OWN cpuset — not from the node's full CPU list. That
+# matters when the kubelet CPU Manager `static` policy is enabled: the pod's
+# exclusive CPUs are assigned at admission, and anything pinned outside that set
+# is clamped or rejected by the kernel. With the policy at `none` the cpuset is
+# every host CPU, so this class behaves sensibly either way.
+#
+# smtPolicy chooses which SMT siblings get used:
+#   spread (default) one thread per physical core before any core's second
+#          thread — each vCPU gets a whole core's pipeline and L1/L2.
+#   pack   both siblings of a core before moving on — touches fewer cores.
+#
+# The class must fit: cpuPinning=static needs at least `cpu` CPUs in the
+# launcher pod's cpuset. If it does not fit, the launcher fails to start with an
+# explicit error rather than quietly running the guest unpinned.
+#
+# This is placement. coreScheduling (see ../security/) is isolation — it decides
+# who may share a core. They are independent and can be combined.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: latency-sensitive
+spec:
+  cpu: 2
+  memory: 4Gi
+  rootDisk: { format: raw, size: 20Gi }
+  cpuPinning: static
+  smtPolicy: spread
+  # Optional: combine with core-scheduling so the sibling of each pinned core
+  # cannot run another tenant's vCPU.
+  coreScheduling: vm
