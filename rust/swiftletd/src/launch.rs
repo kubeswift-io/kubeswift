@@ -547,6 +547,21 @@ fn run_qemu<F>(
 where
     F: FnOnce(u32, String, String),
 {
+    // cpuPinning is a Cloud-Hypervisor-path control (CH --cpus affinity=). The
+    // QEMU path is only taken for HGX GPU guests, which derive their own vCPU
+    // pinning from GPU NUMA locality below. Say so rather than letting the
+    // class's setting look effective when nothing here reads it.
+    if intent
+        .cpu_pinning
+        .as_deref()
+        .is_some_and(|s| !s.is_empty() && s != "none")
+    {
+        log::warn!(
+            "cpuPinning is ignored on the QEMU path: this guest's vCPU pinning \
+             comes from its GPU NUMA topology instead"
+        );
+    }
+
     let serial_socket = runtime_dir.root().join("serial.sock");
     let qmp_socket = runtime_dir.root().join("qmp.sock");
     let ovmf_vars = runtime_dir.root().join("OVMF_VARS.fd");
