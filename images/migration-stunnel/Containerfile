@@ -21,7 +21,18 @@ LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
 LABEL org.opencontainers.image.title="kubeswift-migration-stunnel"
 LABEL org.opencontainers.image.description="stunnel mTLS sidecar for KubeSwift live migration (Phase 3c)"
 
-RUN apk add --no-cache stunnel
+# `apk upgrade` before the install, not just `apk add`.
+#
+# The CVEs that fail the image-scan gate on this image are in packages the
+# BASE LAYER already ships (openssl/libcrypto3), not in stunnel or its
+# dependencies. `apk add` only resolves what it is asked for and leaves an
+# already-installed package at whatever version the base image froze, so a
+# fixed package sitting in the same repo is never picked up and the image
+# stays vulnerable however often it is rebuilt.
+#
+# CVE-2026-14456 is the worked example: alpine:3.24 ships libcrypto3
+# 3.5.7-r0 while v3.24/main already carries the fixed 3.5.8-r0.
+RUN apk upgrade --no-cache && apk add --no-cache stunnel
 
 COPY images/migration-stunnel/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
