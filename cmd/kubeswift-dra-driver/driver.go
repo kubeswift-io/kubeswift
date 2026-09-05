@@ -22,6 +22,13 @@ import (
 // DeviceClasses select on (device.driver == driverName).
 const driverName = "gpu.kubeswift.io"
 
+// Compile-time proof that draDriver still satisfies the helper's interface.
+// The interface GAINED a method in v0.37 (WatchHealthStatus) and the failure
+// only surfaced at the kubeletplugin.Start call site in main.go, as an
+// argument-type error that named neither the interface nor the driver clearly.
+// This makes the next such change fail here, on the type, instead.
+var _ kubeletplugin.DRAPlugin = (*draDriver)(nil)
+
 // draDriver implements kubeletplugin.DRAPlugin for the KubeSwift reference
 // GPU driver. The SCHEDULER allocates (structured parameters) — this plugin
 // only (1) publishes the node's GPU inventory as ResourceSlices and (2) at
@@ -111,6 +118,29 @@ func (d *draDriver) UnprepareResourceClaims(ctx context.Context, claims []kubele
 // retrying; nothing here is fatal for a single-pool node-local inventory.
 func (d *draDriver) HandleError(ctx context.Context, err error, msg string) {
 	utilruntime.HandleErrorWithContext(ctx, err, msg)
+}
+
+// WatchHealthStatus implements kubeletplugin.DRAPlugin (required as of
+// k8s.io/dynamic-resource-allocation v0.37).
+//
+// This driver does not report per-device health, so it returns the sentinel
+// the API provides for exactly that case: the helper fails the kubelet's
+// health stream with codes.Unimplemented, and the kubelet stops watching. It
+// must return promptly and send nothing.
+//
+// The alternative — claiming health we do not measure — is worse than saying
+// nothing. A driver that answers this call is promising the kubelet a fresh
+// report inside each device's HealthCheckTimeout (30s by default), and the
+// kubelet marks a device Unknown when that lapses. Returning a hardcoded
+// "Healthy" would report a GPU as usable while its vfio-pci binding was gone,
+// which is the silent-failure pattern this project treats as a defect.
+//
+// Reporting real health means watching vfio-pci bind state and driver
+// readiness per device. That is a feature, not part of a dependency bump, and
+// it wants multi-GPU hardware to validate — so it is deliberately left for a
+// change that can be verified rather than guessed at.
+func (d *draDriver) WatchHealthStatus(ctx context.Context, reports chan<- kubeletplugin.DeviceHealthReport) error {
+	return kubeletplugin.ErrHealthNotSupported
 }
 
 // publishDeviceStatus writes AllocatedDeviceStatus.Data {"pciAddress": ...}
