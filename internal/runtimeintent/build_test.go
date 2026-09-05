@@ -26,6 +26,7 @@ type mockResolvedGuest struct {
 	coreScheduling      string
 	cpuPinning          string
 	smtPolicy           string
+	hugepages           string
 	vsockCID            uint32
 	primaryUDNInterface string
 }
@@ -59,6 +60,7 @@ func (m *mockResolvedGuest) GetVhostUserDevices() []VhostUserDeviceIntent {
 }
 func (m *mockResolvedGuest) GetCoreScheduling() string { return m.coreScheduling }
 func (m *mockResolvedGuest) GetCPUPinning() string     { return m.cpuPinning }
+func (m *mockResolvedGuest) GetHugepages() string      { return m.hugepages }
 func (m *mockResolvedGuest) GetSMTPolicy() string {
 	if m.smtPolicy == "" {
 		return "spread"

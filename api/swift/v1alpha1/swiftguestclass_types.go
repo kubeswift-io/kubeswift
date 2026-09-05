@@ -82,6 +82,33 @@ const (
 	SMTPolicyPack   SMTPolicy = "pack"
 )
 
+// Hugepages selects the page size backing a guest's RAM
+// (Cloud Hypervisor `--memory hugepages=on,hugepage_size=`).
+//
+//	""    (default) guest RAM is ordinary 4K pages.
+//	2Mi   back guest RAM with 2MiB hugepages.
+//	1Gi   back guest RAM with 1GiB hugepages.
+//
+// Hugepages cut TLB misses and page-table walks for memory-heavy guests, and
+// are a prerequisite for DPDK-style workloads inside the guest. They are also
+// never swapped, so guest RAM stays resident.
+//
+// The node must have the pages reserved BEFORE the guest is scheduled: the
+// kubelet advertises them as a `hugepages-2Mi` / `hugepages-1Gi` resource, and
+// the launcher pod requests that resource instead of ordinary memory. A class
+// asking for a size the node has not reserved simply will not schedule, which
+// is the intended failure mode — it is visible, and it happens before any VM
+// starts.
+//
+// +kubebuilder:validation:Enum="";"2Mi";"1Gi"
+type Hugepages string
+
+const (
+	HugepagesNone Hugepages = ""
+	Hugepages2Mi  Hugepages = "2Mi"
+	Hugepages1Gi  Hugepages = "1Gi"
+)
+
 // SwiftGuestClassSpec defines the desired state of SwiftGuestClass.
 type SwiftGuestClassSpec struct {
 	CPU      resource.Quantity `json:"cpu"`
@@ -112,6 +139,13 @@ type SwiftGuestClassSpec struct {
 	// +kubebuilder:default=spread
 	// +optional
 	SMTPolicy SMTPolicy `json:"smtPolicy,omitempty"`
+	// Hugepages backs this class's guest RAM with hugepages of the given size.
+	// Empty (default) keeps ordinary 4K pages. The launcher pod then requests
+	// `hugepages-<size>` equal to the guest's memory instead of that much
+	// ordinary memory, so the node must have the pages reserved or the pod will
+	// not schedule.
+	// +optional
+	Hugepages Hugepages `json:"hugepages,omitempty"`
 }
 
 // SwiftGuestClass is the Schema for the swiftguestclasses API.

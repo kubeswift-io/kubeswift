@@ -35,6 +35,7 @@ KubeSwift runs Linux and Windows VMs on Kubernetes. [Cloud Hypervisor](https://w
 ### Performance
 
 - [CPU pinning and SMT placement](performance/cpu-pinning.md) — pin vCPUs to dedicated host CPUs, choose hyper-thread siblings, interaction with the kubelet CPU Manager
+- [Hugepage-backed guest memory](performance/hugepages.md) — back guest RAM with 2MiB/1GiB pages, node reservation, and how the launcher accounts for it
 
 ### Sandboxes
 

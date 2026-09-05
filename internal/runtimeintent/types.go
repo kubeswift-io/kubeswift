@@ -28,7 +28,11 @@ type RuntimeIntent struct {
 	// SMTPolicy is the sibling-placement policy ("spread"/"pack") used when
 	// CPUPinning is set. Emitted whenever CPUPinning is, so the intent records
 	// which policy the guest actually ran under.
-	SMTPolicy string     `json:"smtPolicy,omitempty"`
+	SMTPolicy string `json:"smtPolicy,omitempty"`
+	// Hugepages is the guest-RAM page size in CLOUD HYPERVISOR units ("2M"/"1G"),
+	// empty for ordinary pages. swiftletd appends
+	// hugepages=on,hugepage_size=<v> to --memory.
+	Hugepages string     `json:"hugepages,omitempty"`
 	GPU       *GPUIntent `json:"gpu,omitempty"` // populated when gpuProfileRef is set
 	// DataDisks are the secondary VM disks, in deterministic order. Each becomes
 	// one CH --disk and enumerates in the guest as /dev/vdc, /dev/vdd, ... in
