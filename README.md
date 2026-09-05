@@ -25,6 +25,7 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 
 - **Boot paths** — disk boot from cloud images (Linux and Windows) and direct kernel boot from OCI artifacts (sub-second microVMs).
 - **GPU passthrough** — whole-GPU VFIO passthrough with two allocation backends: the native SwiftGPU model (discovery DaemonSet + profiles) or Kubernetes [DRA](docs/gpu/dra-allocation.md) ResourceClaims. PCIe GPUs on Cloud Hypervisor; HGX SXM on QEMU.
+- **Performance tuning** — pin each vCPU to a dedicated host CPU with hyper-thread-aware placement (`cpuPinning`, `smtPolicy`) and back guest RAM with 2MiB or 1GiB hugepages (`hugepages`), set on the guest class. The pinning map is drawn from the launcher pod's own cpuset, so it stays correct under the kubelet CPU Manager; a class asking for hugepages a node has not reserved does not schedule rather than booting slower. See [`docs/performance/cpu-pinning.md`](docs/performance/cpu-pinning.md) and [`docs/performance/hugepages.md`](docs/performance/hugepages.md).
 - **Networking** — tap + bridge + DHCP with the guest IP surfaced in status; multi-NIC via Multus; SR-IOV NIC passthrough; OVN backends supported: OVN-Kubernetes and multi-node L2 with IP-preserving cross-node live migration (kube-ovn primary-on-NAD — see [`docs/networking/ovn-l2-install.md`](docs/networking/ovn-l2-install.md)).
 - **Services** — expose guest ports as Kubernetes Services via `spec.network.ports` (ClusterIP/NodePort/LoadBalancer), a load-balanced Service across pool replicas via `SwiftGuestPool.spec.service`, and a VM→cluster egress reachability probe surfaced as `EgressReady`.
 - **Storage** — per-guest root-disk cloning sized from a class; optional data disks (blank/sized, image-backed, or attached PVC); RWX+Block for live-migration-capable volumes.
@@ -68,6 +69,7 @@ Start at the **[documentation index](docs/index.md)**. Common entry points:
 - [Networking operations](docs/networking/operations-guide.md)
 - [Snapshots](docs/snapshots/csi-snapshots.md) · [Live migration](docs/migration/overview.md)
 - [Sandboxes](docs/sandbox/overview.md) — ephemeral OCI-rootfs microVMs
+- [CPU pinning](docs/performance/cpu-pinning.md) · [Hugepages](docs/performance/hugepages.md) — per-guest performance tuning
 - [swiftctl CLI](docs/swiftctl.md) · [Observability](docs/observability/README.md)
 - [Install (Helm/OCI)](docs/install/helm-oci.md)
 

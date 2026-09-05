@@ -130,6 +130,7 @@ Cluster-scoped template defining default CPU, memory, and disk resources for VMs
 | `coreScheduling` | enum | No | `off` (default), `vm`, `vcpu` — SMT side-channel isolation: who may share a physical core. |
 | `cpuPinning` | enum | No | `none` (default), `static` — pin each vCPU to one host CPU from the launcher pod's cpuset. See [CPU pinning](performance/cpu-pinning.md). |
 | `smtPolicy` | enum | No | `spread` (default), `pack` — which SMT siblings a pinned guest uses. Ignored unless `cpuPinning: static`. |
+| `hugepages` | enum | No | `""` (default), `2Mi`, `1Gi` — back guest RAM with hugepages instead of 4K pages. The launcher then requests `hugepages-<size>` equal to the guest's memory, so the node must have the pages reserved or the pod will not schedule. See [hugepages](performance/hugepages.md). |
 
 ### Example
 
