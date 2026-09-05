@@ -27,6 +27,9 @@ on:
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
       - 'hack/verify-image-tags.sh'
+      - 'hack/verify-doc-versions.sh'
+      - 'README.md'
+      - 'docs/**'
       - '.github/workflows/manifests.yaml'
   push:
     branches: [main]
@@ -45,6 +48,9 @@ on:
       - 'hack/lint-values/**'
       - 'hack/verify-render-coverage.sh'
       - 'hack/verify-image-tags.sh'
+      - 'hack/verify-doc-versions.sh'
+      - 'README.md'
+      - 'docs/**'
       - '.github/workflows/manifests.yaml'
 
 jobs:
@@ -95,6 +101,14 @@ jobs:
       # several releases exactly this way.
       - name: Verify image tags
         run: ./hack/verify-image-tags.sh
+
+      # The docs equivalent of the tag check above. README.md and eight pages
+      # sat on `--version 0.13.10` across three releases, so anyone following
+      # the quickstart installed a chart three versions old and got a CRD
+      # without the fields the page described. Bumping them is a manual release
+      # step nobody owned; now it fails the build instead.
+      - name: Verify docs pin the current chart version
+        run: ./hack/verify-doc-versions.sh
 
       # STEP 1. -strict is the flag that matters: it rejects unknown and
       # duplicate fields, which is exactly the class that bites this project —
