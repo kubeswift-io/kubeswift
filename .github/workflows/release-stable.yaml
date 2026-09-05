@@ -411,6 +411,99 @@ jobs:
             --output-certificate dist/SHA256SUMS.pem \
             dist/SHA256SUMS
 
+      # The release page carried the boilerplate below plus GitHub's
+      # auto-generated "What's Changed" commit list, and nothing that said what
+      # the release DOES. A reader had to leave the page and find the CHANGELOG
+      # to learn whether a CRD changed -- which the Upgrade section then told
+      # them to go and check. This pulls that entry onto the page.
+      #
+      # A missing entry is fatal: shipping a release whose notes are a bare
+      # commit list is the thing being fixed, and it should not degrade back to
+      # that silently.
+      - name: Assemble release notes from the CHANGELOG
+        id: notes
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          awk -v t="## [$tag]" 'index($0,t)==1{f=1;print;next} f && /^## \[/{exit} f{print}' \
+            CHANGELOG.md > changelog-section.md
+          if [ ! -s changelog-section.md ]; then
+            echo "::error::no CHANGELOG.md entry found for $tag -- add one before tagging"
+            exit 1
+          fi
+          echo "extracted $(wc -l < changelog-section.md) lines for $tag"
+
+          # Full page: what the release does, then how to install it. The
+          # boilerplate below is unchanged from the previous inline `body:`.
+          {
+            cat changelog-section.md
+            echo
+            cat <<'BOILERPLATE_END'
+          ## Install
+
+          ```bash
+          helm install kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} -n kubeswift-system --create-namespace
+          ```
+
+          ## Upgrade
+
+          `helm upgrade` does **not** upgrade CRDs — Helm treats `crds/` as
+          install-only and offers no flag to change it. Apply them yourself
+          after every upgrade, or the API server silently drops any field a
+          stale schema does not know:
+
+          ```bash
+          helm upgrade kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} \
+            -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+          kubectl apply -k https://github.com/kubeswift-io/kubeswift/config/crd?ref=${{ github.ref_name }}
+          ```
+
+          Check the CHANGELOG entry for this release before upgrading: it says
+          whether any CRD actually changed.
+
+          ## Images
+
+          All nine are signed, and verified by the release workflow before publishing.
+
+          - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/snapshot-s3:${{ needs.build-and-push.outputs.tag }}`
+          - `ghcr.io/kubeswift-io/kubeswift/snapshot-oras:${{ needs.build-and-push.outputs.tag }}`
+
+          ## swiftctl
+
+          Download the `swiftctl` binary for your platform from the Assets below.
+
+          ## Supply chain
+
+          Images and the Helm chart are **cosign-signed** (keyless, GitHub OIDC)
+          and carry **SLSA build provenance + SPDX SBOM** attestations attached
+          in-registry by BuildKit. Verify an image:
+
+          ```bash
+          cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} \
+            --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          docker buildx imagetools inspect ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} --format '{{ json .Provenance }}'
+          ```
+
+          Verify the binaries (SHA256SUMS is cosign-signed; the checksums then cover each binary):
+
+          ```bash
+          cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+            --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-stable.yaml@.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ```
+          BOILERPLATE_END
+          } > release-body.md
+          echo "release body: $(wc -l < release-body.md) lines"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -424,67 +517,6 @@ jobs:
           # sandbox-materialize ship unsigned for five releases. Keep the note
           # here, in the workflow: everything under `body:` is published to the
           # release page, where guidance aimed at us is just noise for readers.
-          body: |
-            ## Install
-
-            ```bash
-            helm install kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} -n kubeswift-system --create-namespace
-            ```
-
-            ## Upgrade
-
-            `helm upgrade` does **not** upgrade CRDs — Helm treats `crds/` as
-            install-only and offers no flag to change it. Apply them yourself
-            after every upgrade, or the API server silently drops any field a
-            stale schema does not know:
-
-            ```bash
-            helm upgrade kubeswift ${{ env.CHART_OCI_INSTALL }} --version ${{ needs.build-and-push.outputs.version }} \
-              -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
-            kubectl apply -k https://github.com/kubeswift-io/kubeswift/config/crd?ref=${{ github.ref_name }}
-            ```
-
-            Check the CHANGELOG entry for this release before upgrading: it says
-            whether any CRD actually changed.
-
-            ## Images
-
-            All nine are signed, and verified by the release workflow before publishing.
-
-            - `ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/swiftletd:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/gpu-discovery:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/migration-stunnel:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/kubeswift-gateway:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/kubeswift-dra-driver:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/sandbox-materialize:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/snapshot-s3:${{ needs.build-and-push.outputs.tag }}`
-            - `ghcr.io/kubeswift-io/kubeswift/snapshot-oras:${{ needs.build-and-push.outputs.tag }}`
-
-            ## swiftctl
-
-            Download the `swiftctl` binary for your platform from the Assets below.
-
-            ## Supply chain
-
-            Images and the Helm chart are **cosign-signed** (keyless, GitHub OIDC)
-            and carry **SLSA build provenance + SPDX SBOM** attestations attached
-            in-registry by BuildKit. Verify an image:
-
-            ```bash
-            cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} \
-              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com
-            docker buildx imagetools inspect ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ github.ref_name }} --format '{{ json .Provenance }}'
-            ```
-
-            Verify the binaries (SHA256SUMS is cosign-signed; the checksums then cover each binary):
-
-            ```bash
-            cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
-              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-stable.yaml@.*' \
-              --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
-            sha256sum -c SHA256SUMS
-            ```
+          body_path: release-body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
