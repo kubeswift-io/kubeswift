@@ -81,6 +81,9 @@ type ResolvedGuest struct {
 	// SMTPolicy is the sibling-placement policy from the SwiftGuestClass
 	// ("spread"/"pack"), meaningful only when CPUPinning is "static".
 	SMTPolicy string `json:"smtPolicy,omitempty"`
+	// Hugepages is the guest-RAM page size from the SwiftGuestClass, in
+	// Kubernetes units ("2Mi"/"1Gi"); empty means ordinary 4K pages.
+	Hugepages string `json:"hugepages,omitempty"`
 	// GuestAgentEnabled is true for a SOURCE guest that opted into the in-guest
 	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
 	// The resolver sets it false for a clone (cloneFromSnapshot): a clone
@@ -352,6 +355,33 @@ func (r *ResolvedGuest) GetCPUPinning() string {
 // It is only consulted when GetCPUPinning() is non-empty, but defaulting here
 // (rather than in swiftletd) keeps the emitted intent explicit about which
 // policy a guest actually ran under.
+// GetHugepages returns the guest-RAM page size in CLOUD HYPERVISOR units
+// ("2M"/"1G"), or "" for ordinary pages.
+//
+// The CRD speaks Kubernetes units ("2Mi"/"1Gi") because that is what the
+// matching node resource is called; Cloud Hypervisor rejects those outright
+// (`ParseMemory(Conversion("hugepage_size", "2Mi"))`, verified against v53.0),
+// so the translation happens here — the same split the GPU path already uses.
+func (r *ResolvedGuest) GetHugepages() string {
+	switch r.Hugepages {
+	case string(swiftv1alpha1.Hugepages2Mi):
+		return "2M"
+	case string(swiftv1alpha1.Hugepages1Gi):
+		return "1G"
+	default:
+		return ""
+	}
+}
+
+// GetHugepagesResourceName returns the Kubernetes node resource backing this
+// class ("hugepages-2Mi"/"hugepages-1Gi"), or "" when unset.
+func (r *ResolvedGuest) GetHugepagesResourceName() string {
+	if r.Hugepages == "" {
+		return ""
+	}
+	return "hugepages-" + r.Hugepages
+}
+
 func (r *ResolvedGuest) GetSMTPolicy() string {
 	if r.SMTPolicy == "" {
 		return string(swiftv1alpha1.SMTPolicySpread)

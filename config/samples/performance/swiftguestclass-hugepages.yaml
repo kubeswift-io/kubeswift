@@ -1,0 +1,46 @@
+# A guest class whose RAM is backed by hugepages.
+#
+# Hugepages cut TLB misses and page-table walks for memory-heavy guests, keep
+# guest RAM permanently resident (hugepages are never swapped), and are a
+# prerequisite for DPDK-style workloads running inside the guest.
+#
+# THE NODE MUST RESERVE THE PAGES FIRST. The kubelet only advertises
+# hugepages-2Mi / hugepages-1Gi that are already reserved on the host, and it
+# reads them at startup:
+#
+#   # 8GiB as 2MiB pages, persisted across reboot
+#   sysctl -w vm.nr_hugepages=4096
+#   echo "vm.nr_hugepages = 4096" > /etc/sysctl.d/90-kubeswift-hugepages.conf
+#   # then restart the kubelet so it re-reads capacity
+#
+# 1Gi pages generally cannot be reserved reliably at runtime on a host that has
+# been up for a while — memory is too fragmented. Reserve them at boot instead:
+#
+#   GRUB_CMDLINE_LINUX="... default_hugepagesz=1G hugepagesz=1G hugepages=8"
+#
+# Confirm the node advertises them before creating a guest:
+#
+#   kubectl get node <node> -o jsonpath='{.status.allocatable}' | tr ',' '\n' | grep hugepages
+#
+# A class asking for a size the node has not reserved simply will not schedule.
+# That is the intended failure mode: it is visible, and it happens before any
+# VM starts rather than halfway through boot.
+#
+# ACCOUNTING: guest RAM MOVES to the hugepages resource, it is not requested
+# twice. The launcher pod requests `hugepages-2Mi: <memory>` plus only its own
+# overhead as ordinary memory — the kubelet already subtracts reserved
+# hugepages from the node's allocatable memory, so booking both would consume
+# twice the guest's RAM from the node.
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: hugepage-backed
+spec:
+  cpu: 2
+  memory: 4Gi
+  rootDisk: { format: raw, size: 20Gi }
+  hugepages: 2Mi
+  # Hugepages compose with the CPU-placement knobs — a latency-sensitive guest
+  # typically wants both.
+  cpuPinning: static
+  smtPolicy: spread

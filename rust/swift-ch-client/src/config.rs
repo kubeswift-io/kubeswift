@@ -65,6 +65,13 @@ pub struct VmConfig {
     /// swiftletd computes the mapping from the launcher pod's effective cpuset;
     /// this crate only renders what it is given.
     pub cpu_affinity: Vec<(u32, Vec<u32>)>,
+    /// Guest-RAM hugepage size ("2M"/"1G"). None = ordinary 4K pages.
+    /// Appended to --memory as `hugepages=on,hugepage_size=<v>`.
+    ///
+    /// CH units, NOT Kubernetes units: `hugepage_size=2Mi` is rejected with
+    /// `ParseMemory(Conversion("hugepage_size", "2Mi"))` (verified against
+    /// v53.0). The controller does the translation.
+    pub hugepages: Option<String>,
     /// Path for Cloud Hypervisor API socket.
     pub api_socket: String,
     /// Optional path to seed media (NoCloud dir or ISO). Empty = no seed.
@@ -217,7 +224,18 @@ impl VmConfig {
             // requests the full guest RAM, so a scheduled guest's node has it; this
             // only trips on real node-level memory pressure, which is exactly when
             // we want to refuse to start rather than OOM later.
-            format!("size={}M,shared=on,reserve=on", self.memory_mib),
+            {
+                // reserve=on is load-bearing WITH hugepages, not just without.
+                // On a node with no pages reserved, `hugepages=on` without
+                // reserve=on SIGBUSes the VMM (exit 135); with reserve=on the
+                // same config fails cleanly as GuestMemoryRegion(Mmap(OutOfMemory)).
+                // Verified against v53.0 -- keep them together.
+                let mut m = format!("size={}M,shared=on,reserve=on", self.memory_mib);
+                if let Some(ref hp) = self.hugepages {
+                    m.push_str(&format!(",hugepages=on,hugepage_size={}", hp));
+                }
+                m
+            },
             "--cpus".to_string(),
             {
                 let mut cpus = format!("boot={}", self.cpus.max(1));
@@ -473,6 +491,7 @@ mod tests {
             kvm_hyperv: false,
             core_scheduling: None,
             cpu_affinity: Vec::new(),
+            hugepages: None,
             api_socket: "/tmp/ch.sock".to_string(),
             seed_path: "/data/seed".to_string(),
             serial_socket_path: Some("/tmp/serial.sock".to_string()),
@@ -671,6 +690,41 @@ mod tests {
     ///   affinity=0@[0]:1@[1]    -> ParseCpus(Conversion("affinity"))
     /// This test is what keeps that shape from regressing.
     #[test]
+    /// hugepage_size must be CH units ("2M"/"1G"). Kubernetes units are
+    /// rejected by CH (`Conversion("hugepage_size", "2Mi")`), so if a
+    /// translation is ever lost upstream this test is where it surfaces.
+    ///
+    /// reserve=on must SURVIVE alongside hugepages: without it, a node with no
+    /// reserved pages SIGBUSes the VMM instead of failing cleanly.
+    #[test]
+    fn test_hugepages_emit_on_memory_and_keep_reserve() {
+        let mut cfg = make_disk_boot_config();
+        cfg.hugepages = Some("2M".to_string());
+        let joined = cfg.to_args().join(" ");
+        assert!(
+            joined
+                .contains("--memory size=2048M,shared=on,reserve=on,hugepages=on,hugepage_size=2M"),
+            "hugepages must append to --memory and keep reserve=on: {}",
+            joined
+        );
+
+        let mut g = make_disk_boot_config();
+        g.hugepages = Some("1G".to_string());
+        assert!(g
+            .to_args()
+            .join(" ")
+            .contains(",hugepages=on,hugepage_size=1G"));
+
+        // None -> byte-identical to the pre-feature arg.
+        let none = make_disk_boot_config().to_args().join(" ");
+        assert!(
+            none.contains("--memory size=2048M,shared=on,reserve=on")
+                && !none.contains("hugepages"),
+            "unpinned memory arg changed: {}",
+            none
+        );
+    }
+
     fn test_cpu_affinity_emits_bracketed_list_on_cpus() {
         let mut cfg = make_disk_boot_config();
         cfg.cpu_affinity = vec![(0, vec![2]), (1, vec![3])];

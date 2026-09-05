@@ -82,6 +82,18 @@ spec:
                 - none
                 - static
                 type: string
+              hugepages:
+                description: |-
+                  Hugepages backs this class's guest RAM with hugepages of the given size.
+                  Empty (default) keeps ordinary 4K pages. The launcher pod then requests
+                  `hugepages-<size>` equal to the guest's memory instead of that much
+                  ordinary memory, so the node must have the pages reserved or the pod will
+                  not schedule.
+                enum:
+                - ""
+                - 2Mi
+                - 1Gi
+                type: string
               memory:
                 anyOf:
                 - type: integer

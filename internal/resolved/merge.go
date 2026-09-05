@@ -38,6 +38,7 @@ func Merge(
 		// args carry no affinity param, i.e. today's behaviour.
 		rg.CPUPinning = string(guestClass.Spec.CPUPinning)
 		rg.SMTPolicy = string(guestClass.Spec.SMTPolicy)
+		rg.Hugepages = string(guestClass.Spec.Hugepages)
 	}
 
 	// RootDisk: from GuestClass

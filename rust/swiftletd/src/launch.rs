@@ -462,6 +462,7 @@ where
                 .clone()
                 .filter(|s| !s.is_empty() && s != "off"),
             cpu_affinity: cpu_affinity.clone(),
+            hugepages: intent.hugepages.clone().filter(|s| !s.is_empty()),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path: String::new(),
             serial_socket_path: Some(serial_socket_path.clone()),
@@ -493,6 +494,7 @@ where
                 .clone()
                 .filter(|s| !s.is_empty() && s != "off"),
             cpu_affinity: cpu_affinity.clone(),
+            hugepages: intent.hugepages.clone().filter(|s| !s.is_empty()),
             api_socket: runtime_dir.api_socket().to_string_lossy().to_string(),
             seed_path,
             serial_socket_path: Some(serial_socket_path.clone()),

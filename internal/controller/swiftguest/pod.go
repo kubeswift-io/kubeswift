@@ -476,6 +476,13 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 	}
 	AddSRIOVResourceLimits(&resources, guest)
 
+	// Hugepage-backed guest RAM moves the guest's memory from `memory` to
+	// `hugepages-<size>` and hands the launcher a hugetlbfs mount.
+	if hpVol, hpMount := applyHugepages(&resources, rg, mem); hpVol != nil {
+		volumes = append(volumes, *hpVol)
+		mounts = append(mounts, *hpMount)
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        guest.Name,
@@ -604,6 +611,13 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 		},
 	}
 	AddSRIOVResourceLimits(&resources, guest)
+
+	// Hugepage-backed guest RAM moves the guest's memory from `memory` to
+	// `hugepages-<size>` and hands the launcher a hugetlbfs mount.
+	if hpVol, hpMount := applyHugepages(&resources, rg, mem); hpVol != nil {
+		volumes = append(volumes, *hpVol)
+		mounts = append(mounts, *hpMount)
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
