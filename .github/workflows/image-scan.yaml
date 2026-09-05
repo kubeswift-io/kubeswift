@@ -55,6 +55,85 @@ on:
     - cron: '43 5 * * *'
 
 jobs:
+  # The watcher for the cosign pin. Two things make this necessary rather than
+  # nice-to-have:
+  #
+  #   * Dependabot cannot see it. COSIGN_VERSION is a Containerfile ARG consumed
+  #     by a curl, not a FROM, so the docker ecosystem never looks at it. In the
+  #     repo's whole history Dependabot has opened exactly one cosign PR, and it
+  #     was for the sigstore/cosign-installer ACTION, not this binary.
+  #   * The Trivy report pass used to be the accidental watcher -- a stale pin
+  #     showed up as CVEs attributed to the vendored binary. That is now skipped
+  #     (it was 16 permanently-unactionable alerts describing sigstore's build),
+  #     so this job carries the signal explicitly instead.
+  #
+  # Failure policy mirrors the scan job's: fail on what is actionable now, warn
+  # on what needs a decision.
+  #
+  #   pins disagree  -> ERROR always. Two images signing with different cosign
+  #                     builds is our bug and fixable in one edit.
+  #   pin is behind  -> ERROR on the nightly schedule, WARNING on a PR. Bumping
+  #                     cosign means re-running hack/cosign-interop.sh first, so
+  #                     it is a deliberate change, and an unrelated PR should not
+  #                     go red because sigstore shipped a release this morning.
+  #                     The nightly exists for exactly this class of "the world
+  #                     changed while the repo did not".
+  cosign-freshness:
+    name: cosign freshness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare the pinned cosign against the latest upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          pins=$(sed -n 's/^ARG COSIGN_VERSION=\(.*\)$/\1/p' images/*/Containerfile | sort -u)
+          if [ -z "$pins" ]; then
+            echo "::error::no ARG COSIGN_VERSION found in images/*/Containerfile"
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "$pins" | wc -l)" -ne 1 ]; then
+            echo "::error::cosign pins disagree across images: $(printf '%s ' $pins)"
+            exit 1
+          fi
+          echo "pinned:  $pins"
+
+          # A flaky/rate-limited API must not fail the build -- this job reports
+          # staleness, it does not verify anything about the current commit.
+          if ! latest=$(gh api repos/sigstore/cosign/releases/latest --jq .tag_name 2>/dev/null) || [ -z "$latest" ]; then
+            echo "::warning::could not reach the sigstore/cosign releases API; skipping the freshness comparison"
+            exit 0
+          fi
+          echo "latest:  $latest"
+
+          if [ "$pins" = "$latest" ]; then
+            echo "cosign $pins is current"
+            echo "cosign \`$pins\` is current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          msg="pinned cosign $pins is behind the latest release $latest. Re-run hack/cosign-interop.sh, then bump ARG COSIGN_VERSION in images/*/Containerfile."
+          {
+            echo "### cosign is behind"
+            echo
+            echo "| pinned | latest |"
+            echo "|---|---|"
+            echo "| \`$pins\` | \`$latest\` |"
+            echo
+            echo "Bumping requires re-running \`hack/cosign-interop.sh\` first (see the note in images/sandbox-materialize/Containerfile)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "::error::$msg"
+            exit 1
+          fi
+          echo "::warning::$msg"
+
   scan:
     name: ${{ matrix.image }}
     runs-on: ubuntu-latest
@@ -103,12 +182,27 @@ jobs:
 
       # Report pass: everything, never fails. Populates the Security tab,
       # including the unfixable findings the gate deliberately ignores.
+      # --skip-files matches the gate below, and for the same reason: cosign is a
+      # VENDORED third-party binary, and Trivy reads the module versions baked
+      # into it and attributes them to us. Every one of those findings describes
+      # sigstore's build, not ours -- the clearest example being x/crypto, where
+      # the binary reports v0.53.0 while our own go.mod is already on the fixed
+      # v0.55.0. They are unactionable here: the pin is always the latest cosign
+      # release, so there is nothing to bump.
+      #
+      # This does narrow "nothing is hidden" above, so the signal those findings
+      # were carrying -- "the pinned cosign is behind" -- moves to the
+      # cosign-freshness job below, which checks that directly instead of
+      # inferring it from CVE noise. Dependabot cannot see COSIGN_VERSION (it is
+      # a Containerfile ARG, not a FROM), so without that job the pin would have
+      # no watcher at all.
       - name: Trivy (report)
         run: |
           /tmp/trivy image \
             --format sarif \
             --output "trivy-${{ matrix.image }}.sarif" \
             --severity MEDIUM,HIGH,CRITICAL \
+            --skip-files usr/local/bin/cosign \
             --exit-code 0 \
             "scan-target:${{ matrix.image }}"
           test -s "trivy-${{ matrix.image }}.sarif"
