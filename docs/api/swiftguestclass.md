@@ -15,6 +15,7 @@ SwiftGuestClass is a **cluster-scoped template** for CPU, memory, and root disk.
 | `coreScheduling` | No | `off` (default), `vm`, `vcpu` — SMT side-channel isolation |
 | `cpuPinning` | No | `none` (default), `static` — pin vCPUs to host CPUs ([guide](../performance/cpu-pinning.md)) |
 | `smtPolicy` | No | `spread` (default), `pack` — sibling placement when pinned |
+| `hugepages` | No | `""` (default), `2Mi`, `1Gi` — back guest RAM with hugepages ([guide](../performance/hugepages.md)). The node must reserve them first, or the guest will not schedule. |
 
 ```yaml
 apiVersion: swift.kubeswift.io/v1alpha1

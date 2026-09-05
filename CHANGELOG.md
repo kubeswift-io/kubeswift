@@ -4,6 +4,109 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.13] — 2026-09-05
+
+A feature release: guests can now be pinned to dedicated host CPUs and backed
+by hugepages, both set on the guest class. Also clears the two fixable HIGH
+CVEs that had failed the nightly image scan every night since 2026-08-30, and
+moves the whole build onto Go 1.27.
+
+**Two new SwiftGuestClass fields, so `helm upgrade` alone does not deliver
+them.** Helm treats `crds/` as install-only.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.13 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # REQUIRED this release — the new fields live here
+```
+
+One CRD gains fields (`swiftguestclasses.swift.kubeswift.io`). No values keys
+added or removed. Every new field defaults to today's behaviour, so existing
+guest classes are unchanged and need no edit: `cpuPinning` defaults to `none`
+and `hugepages` to unset, which emit byte-identical Cloud Hypervisor arguments
+to v0.13.12.
+
+### Added
+
+- **vCPU pinning and SMT placement** (#566). `SwiftGuestClass.spec.cpuPinning:
+  static` pins each vCPU to one host CPU, and `smtPolicy` (`spread`/`pack`)
+  chooses which hyper-thread siblings it uses — rendered as Cloud Hypervisor
+  `--cpus affinity=`.
+
+  The map is computed in swiftletd from the **launcher pod's own effective
+  cpuset**, not controller-side from node topology. Under the kubelet CPU
+  Manager `static` policy a pod's exclusive CPUs are assigned at admission,
+  after the controller has written the runtime intent, so a CPU chosen earlier
+  falls outside the pod's cgroup and is clamped or rejected — the guest would
+  run unpinned while still reporting as pinned. Reading the cpuset at launch is
+  correct under both policies. A cpuset smaller than the vCPU count fails the
+  launch with an explicit message rather than pinning partially.
+  [`docs/performance/cpu-pinning.md`](docs/performance/cpu-pinning.md).
+
+- **Hugepage-backed guest memory** (#569). `SwiftGuestClass.spec.hugepages`
+  (`2Mi`/`1Gi`) backs guest RAM with hugepages via `--memory hugepages=on`.
+
+  Guest RAM **moves** to the `hugepages-<size>` resource rather than being
+  requested twice: the kubelet already subtracts reserved hugepages from the
+  node's allocatable memory, so a pod booking both would consume twice the
+  guest's RAM and stop scheduling long before the pages ran out. The launcher
+  requests the guest's memory as hugepages plus only its own overhead as
+  ordinary memory, and gets a size-qualified `emptyDir` at `/dev/hugepages`.
+  A class requesting a size the node has not reserved does not schedule — the
+  failure is visible, and it happens before any VM starts.
+  [`docs/performance/hugepages.md`](docs/performance/hugepages.md).
+
+- **`cosign freshness` CI job** (#574). Checks the pinned cosign against the
+  latest upstream release and that the images agree with each other.
+  `COSIGN_VERSION` is a Containerfile `ARG`, invisible to Dependabot, so the
+  pin previously had no watcher at all.
+
+### Fixed
+
+- **Two fixable HIGH CVEs that had failed the nightly image scan since
+  2026-08-30** (#567). `kubeswift-dra-driver` carried
+  `google.golang.org/grpc` CVE-2026-84304, and `migration-stunnel` carried
+  `libcrypto3`/`libssl3` CVE-2026-14456.
+
+  Neither would have fixed itself. grpc is an **indirect** requirement, and
+  Dependabot only proposed direct ones. libcrypto3 lives in the **base layer**,
+  outside stunnel's dependency closure, and `apk add` leaves an
+  already-installed package at whatever version the base image froze — the
+  fixed package sat in the Alpine repo the whole time and no rebuild would ever
+  have picked it up. The image now runs `apk upgrade` before installing, which
+  closes the class rather than the instance.
+
+- **DRA driver did not compile against k8s.io 0.37** (#568).
+  `kubeletplugin.DRAPlugin` gained `WatchHealthStatus`. The driver declines
+  health reporting with `ErrHealthNotSupported` rather than reporting a
+  hardcoded `Healthy`: answering that call promises the kubelet a fresh report
+  inside each device's `HealthCheckTimeout`, so a GPU whose vfio-pci binding
+  had gone would keep reading as usable. A compile-time interface assertion now
+  makes the next such change fail on the type rather than at a call site.
+
+- **`golang.org/x/mod` CVE-2026-56864/56865** (#568), pulled in transitively by
+  the k8s 0.37 bump.
+
+### Changed
+
+- **All nine images build on Go 1.27** (#549–#556), and swiftletd's Rust
+  builder moves to 1.98 (#563).
+- **Dependabot can see indirect Go dependencies, and the `kubernetes` group
+  actually fires** (#570). That group had existed since Phase 1 without ever
+  producing a PR — every `k8s.io` bump arrived inside `go-minor-patch`
+  instead, so an API-breaking Kubernetes minor shipped alongside routine
+  patches. Both catch-all groups now exclude what their paired specific group
+  owns, which is correct regardless of group evaluation order.
+- **Trivy's report pass skips the vendored cosign binary** (#574). It was
+  uploading 16 permanently-unactionable alerts describing sigstore's build
+  rather than ours — the clearest being an `x/crypto` CRITICAL reporting
+  v0.53.0 while KubeSwift's own module graph was already on the fixed v0.55.0.
+  The gate had skipped that file all along.
+- Third-party project references removed across the tree (#548, #560). CRD
+  descriptions only; no schema change.
+
 ## [v0.13.12] — 2026-08-24
 
 A bug-fix release, and the headline is that a documented feature has never
