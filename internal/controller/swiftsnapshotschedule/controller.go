@@ -7,7 +7,6 @@ package swiftsnapshotschedule
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -20,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/cronspec"
 )
 
 const (
@@ -117,26 +117,11 @@ func (r *SwiftSnapshotScheduleReconciler) Reconcile(ctx context.Context, req ctr
 
 // parseScheduleUTC parses a 5-field cron expression, pinned to UTC.
 //
-// ParseStandard defaults an unzoned expression to time.Local, and Next() then
-// evaluates it in the zone of the time it is given — always local here, since
-// metav1.Time decodes to time.Local. A pod with a timezone would otherwise run
-// every schedule on local wall-clock, while spec.schedule documents UTC.
-// An explicit TZ=/CRON_TZ= prefix keeps the zone it names.
+// Delegates to cronspec.Parse so the controller and the admission webhook
+// cannot drift: the webhook is off by default, which makes this the path a
+// malformed spec.schedule actually reaches.
 func parseScheduleUTC(spec string) (cron.Schedule, error) {
-	sched, err := cron.ParseStandard(spec)
-	if err != nil {
-		return nil, err
-	}
-	// @every parses to a plain interval, with no location to pin.
-	if ss, ok := sched.(*cron.SpecSchedule); ok && !namesTimezone(spec) {
-		ss.Location = time.UTC
-	}
-	return sched, nil
-}
-
-// namesTimezone reports whether spec carries a zone prefix ParseStandard honours.
-func namesTimezone(spec string) bool {
-	return strings.HasPrefix(spec, "TZ=") || strings.HasPrefix(spec, "CRON_TZ=")
+	return cronspec.Parse(spec)
 }
 
 // mostRecentDue returns the latest scheduled time in (earliest, now], and

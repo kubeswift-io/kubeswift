@@ -8,11 +8,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/robfig/cron/v3"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/cronspec"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 )
 
@@ -50,7 +50,7 @@ func (v *Validator) ValidateDelete(_ context.Context, _ runtime.Object) (admissi
 }
 
 func validateSchedule(s *snapshotv1alpha1.SwiftSnapshotSchedule) error {
-	if _, err := cron.ParseStandard(s.Spec.Schedule); err != nil {
+	if _, err := cronspec.Parse(s.Spec.Schedule); err != nil {
 		return fmt.Errorf("spec.schedule is not a valid 5-field cron expression: %w", err)
 	}
 	if len(s.Name) > maxScheduleNameLen {
