@@ -95,7 +95,11 @@ type SwiftSnapshotScheduleStatus struct {
 	// Active lists the names of in-flight (non-terminal) scheduled snapshots.
 	// +optional
 	Active []string `json:"active,omitempty"`
-	// Conditions exposes Ready.
+	// Conditions exposes Ready: True once spec.schedule parses and the schedule
+	// is live, False with reason InvalidSchedule when it does not parse, and
+	// False with reason Suspended while spec.suspend is set. An unparseable
+	// schedule is otherwise invisible -- nothing else in spec or status changes,
+	// and the schedule simply never fires.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -106,6 +110,7 @@ type SwiftSnapshotScheduleStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=swiftsnapshotschedules,scope=Namespaced,shortName=sss
 // +kubebuilder:printcolumn:name="Schedule",type=string,JSONPath=`.spec.schedule`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Suspend",type=boolean,JSONPath=`.spec.suspend`
 // +kubebuilder:printcolumn:name="Guest",type=string,JSONPath=`.spec.template.spec.guestRef.name`
 // +kubebuilder:printcolumn:name="Last-Schedule",type=date,JSONPath=`.status.lastScheduleTime`
@@ -131,4 +136,5 @@ type SwiftSnapshotScheduleList struct {
 const ScheduleLabel = "snapshot.kubeswift.io/schedule"
 
 // SwiftSnapshotScheduleConditionReady is the schedule's Ready condition type.
+// Reasons: Scheduled (True); InvalidSchedule or Suspended (False).
 const SwiftSnapshotScheduleConditionReady = "Ready"

@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.schedule
       name: Schedule
       type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .spec.suspend
       name: Suspend
       type: boolean
@@ -350,7 +353,12 @@ spec:
                   type: string
                 type: array
               conditions:
-                description: Conditions exposes Ready.
+                description: |-
+                  Conditions exposes Ready: True once spec.schedule parses and the schedule
+                  is live, False with reason InvalidSchedule when it does not parse, and
+                  False with reason Suspended while spec.suspend is set. An unparseable
+                  schedule is otherwise invisible -- nothing else in spec or status changes,
+                  and the schedule simply never fires.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

@@ -82,6 +82,28 @@ keep-N safety:
 - **local**: ⚠️ writes a **fixed `hostPath`**, so scheduled local snapshots
   overwrite each other — **don't schedule the local backend**; use csi or s3.
 
+## Status
+
+`kubectl get sss` shows a `Ready` column, taken from the schedule's `Ready`
+condition:
+
+| Ready | Reason | Meaning |
+|---|---|---|
+| `True` | `Scheduled` | `spec.schedule` parses; a snapshot is created on each tick. |
+| `False` | `InvalidSchedule` | `spec.schedule` does not parse — the schedule will never fire. `message` carries the parse error. |
+| `False` | `Suspended` | `spec.suspend` is set. |
+
+`InvalidSchedule` is the one to watch for. The admission webhook that rejects a
+bad cron expression is off by default (`webhook.enabled=false`), so a malformed
+`spec.schedule` reaches the controller instead. Before this condition existed
+the only trace was a controller log line: the schedule read as healthy under
+`kubectl get` and silently never fired.
+
+```bash
+kubectl get sss nightly-db \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}'
+```
+
 ## Observability
 
 `kubeswift_snapshot_schedule_pruned_total` counts keep-N deletions. Scheduled
@@ -95,4 +117,6 @@ latency/size metrics (see [`observability.md`](observability.md)).
   Kubernetes' 63-character limit.
 - The cron expression and the `template.spec` are validated at schedule-create
   by the admission webhook (a bad template is rejected up front, not at the
-  first tick).
+  first tick) — **when the webhook is enabled**. `webhook.enabled` is false by
+  default; with it off, a bad cron expression is caught by the controller and
+  reported as `Ready=False` / `InvalidSchedule` instead (see [Status](#status)).

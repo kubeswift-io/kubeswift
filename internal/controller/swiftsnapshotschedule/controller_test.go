@@ -9,6 +9,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/robfig/cron/v3"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -306,5 +307,123 @@ func TestMergeLabels(t *testing.T) {
 	// schedule label always wins / is set even with nil template labels.
 	if got := mergeLabels(nil, "s")[snapshotv1alpha1.ScheduleLabel]; got != "s" {
 		t.Errorf("schedule label not set on nil template labels; got %q", got)
+	}
+}
+
+func readyCond(t *testing.T, c client.Client) *metav1.Condition {
+	t.Helper()
+	var s snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &s); err != nil {
+		t.Fatal(err)
+	}
+	return apimeta.FindStatusCondition(s.Status.Conditions, snapshotv1alpha1.SwiftSnapshotScheduleConditionReady)
+}
+
+// The defect the Ready condition exists for.
+//
+// An unparseable spec.schedule was logged and dropped: nothing in spec or
+// status changed, so the object read as perfectly healthy under `kubectl get`
+// and silently never fired. The validating webhook that would reject it is off
+// by default, which makes the controller the path a malformed schedule
+// actually reaches.
+func TestReconcile_InvalidSchedule_SurfacesReadyFalse(t *testing.T) {
+	sched := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		s.Generation = 4
+		s.Spec.Schedule = "not a cron"
+	})
+	r, c := newSched(t, baseTime, sched)
+	res, err := r.Reconcile(context.Background(), req())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Still no hot-loop — the fix is visibility, not retry. The schedule is
+	// re-reconciled by its own watch when the spec is corrected.
+	if res.RequeueAfter != 0 {
+		t.Errorf("requeue = %v, want 0", res.RequeueAfter)
+	}
+	if n := len(listSnaps(t, c)); n != 0 {
+		t.Errorf("invalid schedule must not create snapshots; got %d", n)
+	}
+
+	cond := readyCond(t, c)
+	if cond == nil {
+		t.Fatal("no Ready condition — an invalid schedule is invisible again")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Ready = %v, want False", cond.Status)
+	}
+	if cond.Reason != "InvalidSchedule" {
+		t.Errorf("reason = %q, want InvalidSchedule", cond.Reason)
+	}
+	// The parse error is the only thing that tells an operator what to fix.
+	if !strings.Contains(cond.Message, "not a cron") && cond.Message == "" {
+		t.Errorf("message must carry the parse error, got %q", cond.Message)
+	}
+	if cond.ObservedGeneration != 4 {
+		t.Errorf("observedGeneration = %d, want 4 (must track the spec it judged)", cond.ObservedGeneration)
+	}
+}
+
+func TestReconcile_ValidSchedule_SetsReadyTrue(t *testing.T) {
+	r, c := newSched(t, baseTime, schedule(nil))
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	cond := readyCond(t, c)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready = %v, want True", cond)
+	}
+	if cond.Reason != "Scheduled" {
+		t.Errorf("reason = %q, want Scheduled", cond.Reason)
+	}
+}
+
+func TestReconcile_Suspend_SetsReadyFalse(t *testing.T) {
+	sched := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) { s.Spec.Suspend = true })
+	r, c := newSched(t, baseTime, sched)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	cond := readyCond(t, c)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %v, want False", cond)
+	}
+	if cond.Reason != "Suspended" {
+		t.Errorf("reason = %q, want Suspended", cond.Reason)
+	}
+}
+
+// A steady-state reconcile must not write status. persistStatus compares whole
+// statuses, so anything in a condition that varies between two identical
+// reconciles turns every requeue into an API write. Verified red by building the
+// Ready message from time.Now() instead of from spec, which moves the
+// resourceVersion on the second pass.
+//
+// Note this catches wall-clock drift specifically: r.clock() is pinned in tests,
+// so a message derived from the injected clock would stay stable here.
+func TestReconcile_SteadyStateDoesNotRewriteStatus(t *testing.T) {
+	sched := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		lt := metav1.NewTime(baseTime)
+		s.Status.LastScheduleTime = &lt // nothing is due at baseTime
+	})
+	r, c := newSched(t, baseTime, sched)
+
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	var first snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	var second snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.ResourceVersion != second.ResourceVersion {
+		t.Errorf("status rewritten on an idle reconcile: rv %s -> %s",
+			first.ResourceVersion, second.ResourceVersion)
 	}
 }
