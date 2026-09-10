@@ -39,8 +39,10 @@ credentials) — see [`config/samples/snapshot-schedule/02-schedule-s3-ttl.yaml`
 
 ## Semantics
 
-- **Cron** is standard 5-field, evaluated in **UTC** — whatever timezone the
-  controller pod itself runs in. After a controller outage the schedule fires
+- **Cron** is standard 5-field, evaluated in **UTC** regardless of the timezone
+  the controller pod runs in. To schedule in another zone, prefix the expression
+  with `CRON_TZ=`: `CRON_TZ=Europe/Rome 0 2 * * *` fires at 02:00 Rome time,
+  shifting against UTC across DST. After a controller outage the schedule fires
   **at most one** catch-up snapshot (the most recent missed tick), never a
   backlog.
 - **`concurrencyPolicy: Forbid`** (default) skips a tick while a prior scheduled

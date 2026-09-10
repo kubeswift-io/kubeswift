@@ -50,8 +50,12 @@ type SnapshotTemplate struct {
 
 // SwiftSnapshotScheduleSpec defines the desired state of a SwiftSnapshotSchedule.
 type SwiftSnapshotScheduleSpec struct {
-	// Schedule is a standard 5-field cron expression, evaluated in UTC.
+	// Schedule is a standard 5-field cron expression, evaluated in UTC
+	// regardless of the controller pod's own timezone.
 	// Example: "0 2 * * *" (daily at 02:00 UTC).
+	// To schedule in another zone, prefix with CRON_TZ=, e.g.
+	// "CRON_TZ=Europe/Rome 0 2 * * *" — that fires at 02:00 Rome time and
+	// shifts against UTC across DST.
 	Schedule string `json:"schedule"`
 
 	// Suspend pauses the schedule (no new snapshots) without deleting it or its

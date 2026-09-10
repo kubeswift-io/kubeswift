@@ -494,7 +494,7 @@ Cron-creates SwiftSnapshots of a guest and prunes to a kept count (composes with
 
 | Key field | Type | Description |
 |-----------|------|-------------|
-| `schedule` | string | Standard cron expression (UTC). |
+| `schedule` | string | Standard cron expression, evaluated in UTC regardless of the controller pod's timezone. Prefix with `CRON_TZ=` to use another zone (e.g. `CRON_TZ=Europe/Rome 0 2 * * *`). |
 | `suspend` | bool | Pause the schedule without deleting it. |
 | `concurrencyPolicy` | enum | `Forbid` (default) skips a tick while a prior snapshot is in-flight. |
 | `startingDeadlineSeconds` | int64 | Skip a missed tick older than this. |
