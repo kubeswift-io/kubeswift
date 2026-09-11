@@ -155,7 +155,7 @@ point `ui.gateway.url` at an externally reachable gateway).
 |---|---|---|
 | `ui.enabled` | Deploy the web console (auto-on for `role=hub`) | `false` |
 | `ui.image.repository` | UI image repo (a top-level package, not chart-derived) | `ghcr.io/kubeswift-io/kubeswift-ui` |
-| `ui.image.tag` | Published UI tag (not chart-derived; `v0.12.3` is the floor for read-only-root) | `v0.12.3` |
+| `ui.image.tag` | Published UI tag (not chart-derived; `v0.12.3` is the floor for read-only-root) | `v0.12.4` |
 | `ui.image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `ui.imagePullSecrets` | Pull Secret(s) if the UI package is private | `[]` |
 | `ui.replicas` | UI replicas | `1` |

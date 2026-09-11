@@ -284,7 +284,7 @@ ui:
     # kubeswift-ui releases on its own cadence from its own repo, so this is
     # NOT chart-derived and a chart bump does not move it: check the UI repo's
     # releases and raise this when you want a newer console.
-    tag: v0.12.3
+    tag: v0.12.4
     pullPolicy: IfNotPresent
   # New ghcr packages default PRIVATE; until the kubeswift-ui package is made
   # public (one-time, web UI), reference a docker-registry pull Secret here,

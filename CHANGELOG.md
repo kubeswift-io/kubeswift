@@ -4,6 +4,88 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.14] — 2026-09-11
+
+A bug-fix release for scheduled snapshots. Three separate defects in
+`SwiftSnapshotSchedule`, each of which let a schedule stop doing its job without
+saying so: a cron expression evaluated in the wrong timezone, a parser panic on
+one input shape, and an unparseable schedule that was logged and discarded.
+
+Also moves the chart's console to kubeswift-ui v0.12.4, which clears every
+outstanding npm advisory in the UI (27 to 0, including an Angular i18n XSS and a
+cache-key ambiguity that leaked responses across requests).
+
+**One CRD gains a print column.** No new fields, so a stale schema drops
+nothing -- but `kubectl get sss` will not show READY until you apply the CRDs.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.14 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+kubectl apply -f charts/kubeswift/crds/    # for the READY column on schedules
+```
+
+`ui.image.tag` moves from `v0.12.3` to `v0.12.4`. No values keys were added or
+removed.
+
+### Fixed
+
+- **Schedules ran on the pod's local wall-clock, not UTC** (#580).
+  `spec.schedule` is documented as UTC in the Go type, `docs/crds.md` and the
+  guide, but `cron.ParseStandard` leaves an unzoned expression at `time.Local`
+  and `metav1.Time` decodes to local, so `Next()` evaluated every schedule
+  locally. Under `Europe/Rome`, `0 2 * * *` fired at 00:00 UTC and shifted again
+  across DST; with `startingDeadlineSeconds` set, a displaced tick is skipped --
+  so the snapshot is not late, it is missing. The shipped distroless image
+  carries no tzdata and resolves `time.Local` to UTC, so a default install was
+  unaffected; a mounted `/etc/localtime`, a different base image, or running
+  outside a container was not. A `CRON_TZ=`/`TZ=` prefix still selects another
+  zone.
+
+- **A `TZ=` prefix with no cron fields panicked the controller** (#583).
+  cron v3.0.1 extracts the zone with `spec[eq+1:i]`, where `i` is the index of
+  the first space; with no space `i` is -1 and the slice panics with
+  `slice bounds out of range [:-1]`. `spec.schedule` is user-supplied, so
+  `TZ=Europe/Rome` with nothing after it reached that line straight from a CR.
+  The controller and the webhook now parse through one guarded helper, so a
+  check added to one cannot miss the other. Reported upstream as
+  `robfig/cron#470` (also `robfig/cron#566`, `robfig/cron#574`), all still open,
+  with the project last pushed in July 2024 -- so guarding locally is the fix,
+  not a stopgap.
+
+- **An unparseable schedule was logged and dropped** (#584). The reconciler
+  returned without touching status, so the object read as healthy under
+  `kubectl get` -- schedule, suspend, guest and age all populated -- and simply
+  never fired. A schedule now reports a `Ready` condition (`Scheduled`,
+  `InvalidSchedule` or `Suspended`) carrying the parse error in its message,
+  surfaced as a `READY` print column. The `Conditions` field and its `Ready`
+  constant had been declared and documented since the kind shipped, and
+  populated nowhere.
+
+### Changed
+
+- `ui.image.tag` now defaults to `v0.12.4` (was `v0.12.3`).
+- `sigs.k8s.io/controller-runtime` 0.24.1 to 0.25.0 (#577); and
+  `go-containerregistry` 0.22.1, `docker/cli` 29.8.0, `go-jose/v4` 4.1.5,
+  `golang.org/x/crypto` 0.56.0 (#578). govulncheck reports no reachable
+  vulnerabilities and the image scan is clean.
+
+### Docs
+
+- `ADOPTERS.md` and `CONTRIBUTING.md` (#579).
+- The UTC wording on `spec.schedule` is now unambiguous and the `CRON_TZ=`
+  escape hatch is documented (#582).
+- Install commands are checked against the chart version by
+  `hack/verify-doc-versions.sh`, after the README and eight pages sat three
+  releases behind (#576).
+- `docs/snapshots/scheduled-snapshots.md` gains a Status section for the new
+  condition, and the claim that the webhook validates the cron expression up
+  front is corrected -- that holds only when `webhook.enabled` is on, which by
+  default it is not.
+
+---
+
 ## [v0.13.13] — 2026-09-05
 
 A feature release: guests can now be pinned to dedicated host CPUs and backed
