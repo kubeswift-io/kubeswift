@@ -300,9 +300,9 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err != nil {
 		return nil, err
 	}
-	// Re-apply the host-path allowlist here, not only in the webhook: the
-	// webhook is off by default, and the launcher is privileged. See
-	// hostpathguard.go.
+	// Backstop for the host-path allowlist: Reconcile rejects a disallowed path
+	// before it gets here, but no caller may build a privileged launcher that
+	// mounts one. See hostpathguard.go.
 	if err := checkHostPaths(guest, r.AllowedHostPathPrefixes); err != nil {
 		return nil, err
 	}
@@ -342,8 +342,8 @@ func (r *SwiftGuestReconciler) buildBasePod(
 	// BOTH together (ReleaseFromNode(source) + stamp status.GPU=target, THEN
 	// patch spec.NodeName=target), so by the time the dst pod is built they
 	// agree. A disagreement here is therefore a real bug or an out-of-band
-	// edit — refuse to build, surfaced as Resolved=False via the controller's
-	// ResolutionError mapping.
+	// edit — refuse to build. Note the error is only logged and retried by
+	// Reconcile; nothing is written to the guest's status.
 	//
 	// LOAD-BEARING (W26-class): do NOT weaken this to "trust spec.NodeName
 	// alone" — status.GPU.NodeName must stay the binding source, or a

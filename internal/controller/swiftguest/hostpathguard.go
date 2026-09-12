@@ -18,8 +18,10 @@ import (
 //
 // Since the launcher is privileged, an unconfined host path is node-root. A
 // guard that only runs in an optional component is not a guard, so it is
-// enforced here too: the controller refuses to build the pod, which surfaces
-// as a Resolved=False condition rather than a silently over-privileged VM.
+// enforced here too. Reconcile checks it before the root-disk clone: a guest
+// with no launcher pod goes Failed with the violation on Resolved=False, and a
+// launcher that already runs is left alone but not recreated. buildPod checks
+// again as a backstop.
 func checkHostPaths(guest *swiftv1alpha1.SwiftGuest, allowed []string) error {
 	spec := &guest.Spec
 	for i := range spec.Filesystems {

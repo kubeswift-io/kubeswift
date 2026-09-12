@@ -485,6 +485,36 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	// Host-path allowlist, BEFORE the root-disk clone. buildPod checks it too,
+	// but too late: a disk-boot guest has cloned its root disk by then, and a
+	// buildPod error is only logged and retried, so a rejected guest showed no
+	// reason at all (a fresh one had no phase and no conditions). With the
+	// webhook off (the chart default), the controller is the only enforcement.
+	//
+	// A launcher pod that already exists predates the allowlist change. The
+	// controller never edits a live launcher, so it is left running and keeps
+	// being reported, with the violation on Resolved. It is not recreated.
+	hostPathErr := checkHostPaths(&guest, r.AllowedHostPathPrefixes)
+	if hostPathErr != nil {
+		SetResolvedCondition(status, false, hostPathErr.Error())
+		var live corev1.Pod
+		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &live)
+		if podErr != nil && !apierrors.IsNotFound(podErr) {
+			return ctrl.Result{}, podErr
+		}
+		if apierrors.IsNotFound(podErr) {
+			status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
+			recordGuestMetrics(&guest, &guest.Status, status, nil)
+			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			logger.Info("rejected guest: host path outside the allowlist", "error", hostPathErr.Error())
+			return ctrl.Result{}, nil
+		}
+		logger.Info("host path outside the allowlist; leaving the running launcher pod, which will not be recreated",
+			"pod", live.Name, "error", hostPathErr.Error())
+	}
+
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
 	// RootDisk.FromOCI (a source-independent full-state clone) has NO prepared
 	// image — its disk is materialized from the snapshot's oci disk artifact
@@ -540,23 +570,28 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// Build and create/update pod
-	desiredPod, err := r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
-	if err != nil {
-		logger.Error(err, "failed to build pod spec")
-		return ctrl.Result{}, err
-	}
-	// OVN primary-on-NAD: stamp the guest's MAC (+ pinned IP) so the OVN
-	// logical-switch port identity is the guest, not the pod NIC — otherwise the
-	// bridged guest MAC is unreachable on the segment. Dispatches to the backend
-	// that owns the guest's primary network (kube-ovn today). No-op for every other
-	// networking mode. Fails closed on a NAD Get error (boot-time correctness).
-	if err := r.stampOVNIdentity(ctx, &guest, desiredPod); err != nil {
-		logger.Error(err, "failed to stamp OVN primary-NAD identity")
-		return ctrl.Result{}, err
-	}
-	if err := controllerutil.SetControllerReference(&guest, desiredPod, r.Scheme); err != nil {
-		return ctrl.Result{}, err
+	// Build and create/update pod. The desired pod is only ever used to create a
+	// missing launcher, so it is not built past a host-path rejection: that gets
+	// here only with a launcher already running (see the allowlist check above).
+	var desiredPod *corev1.Pod
+	if hostPathErr == nil {
+		desiredPod, err = r.buildPod(ctx, &guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone)
+		if err != nil {
+			logger.Error(err, "failed to build pod spec")
+			return ctrl.Result{}, err
+		}
+		// OVN primary-on-NAD: stamp the guest's MAC (+ pinned IP) so the OVN
+		// logical-switch port identity is the guest, not the pod NIC — otherwise the
+		// bridged guest MAC is unreachable on the segment. Dispatches to the backend
+		// that owns the guest's primary network (kube-ovn today). No-op for every other
+		// networking mode. Fails closed on a NAD Get error (boot-time correctness).
+		if err := r.stampOVNIdentity(ctx, &guest, desiredPod); err != nil {
+			logger.Error(err, "failed to stamp OVN primary-NAD identity")
+			return ctrl.Result{}, err
+		}
+		if err := controllerutil.SetControllerReference(&guest, desiredPod, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	var existingPod corev1.Pod
@@ -565,6 +600,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
+		}
+		if desiredPod == nil {
+			// The launcher was running at the host-path check and has gone since.
+			// Retry: the next pass finds no pod and fails the guest with the
+			// reason instead of recreating the launcher.
+			return ctrl.Result{}, hostPathErr
 		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
