@@ -1,0 +1,274 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KubeSwift chart values",
+  "description": "Rejects keys the chart does not read, so a misspelt key fails the install or upgrade instead of being ignored. It checks key names only, not types. An object with additionalProperties false is a closed set of keys; {} accepts any value, including free-form maps such as annotations, labels and resources. global is accepted because Helm adds it to a chart's values whenever the chart is used as a dependency.",
+  "additionalProperties": false,
+  "properties": {
+    "global": {},
+    "namespace": {},
+    "createNamespace": {},
+    "controllerManager": {
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "replicas": {},
+        "resources": {}
+      }
+    },
+    "swiftletd": {
+      "additionalProperties": false,
+      "properties": {
+        "daemonset": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {}
+          }
+        },
+        "image": { "$ref": "#/definitions/image" },
+        "resources": {},
+        "imagePullSecrets": {}
+      }
+    },
+    "snapshotS3": {
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" }
+      }
+    },
+    "sandboxMaterialize": {
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" }
+      }
+    },
+    "snapshotORAS": {
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" }
+      }
+    },
+    "migrationStunnel": {
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" }
+      }
+    },
+    "gpuDiscovery": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "image": { "$ref": "#/definitions/image" },
+        "interval": {},
+        "resources": {}
+      }
+    },
+    "dra": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "image": { "$ref": "#/definitions/image" },
+        "deviceClass": {
+          "additionalProperties": false,
+          "properties": {
+            "create": {},
+            "name": {}
+          }
+        },
+        "resources": {}
+      }
+    },
+    "federation": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {},
+        "selfRegister": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "displayName": {},
+            "prometheusEndpoint": {}
+          }
+        },
+        "edge": {
+          "additionalProperties": false,
+          "properties": {
+            "applyMemberRBAC": {},
+            "operatorGroups": {},
+            "displayName": {}
+          }
+        }
+      }
+    },
+    "gateway": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "image": { "$ref": "#/definitions/image" },
+        "replicas": {},
+        "port": {},
+        "authMode": {},
+        "allowInsecureIngress": {},
+        "oidc": {
+          "additionalProperties": false,
+          "properties": {
+            "issuerURL": {},
+            "clientID": {},
+            "usernameClaim": {},
+            "groupsClaim": {},
+            "usernamePrefix": {},
+            "groupsPrefix": {},
+            "caSecret": {},
+            "caKey": {}
+          }
+        },
+        "corsAllowOrigin": {},
+        "prometheusDiscovery": {
+          "additionalProperties": false,
+          "properties": {
+            "namespaces": {}
+          }
+        },
+        "service": { "$ref": "#/definitions/service" },
+        "ingress": { "$ref": "#/definitions/ingress" },
+        "resources": {}
+      }
+    },
+    "ui": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "image": {
+          "additionalProperties": false,
+          "properties": {
+            "repository": {},
+            "tag": {},
+            "pullPolicy": {}
+          }
+        },
+        "imagePullSecrets": {},
+        "replicas": {},
+        "gateway": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {},
+            "service": {},
+            "port": {},
+            "url": {}
+          }
+        },
+        "oidc": {
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {},
+            "clientId": {}
+          }
+        },
+        "service": { "$ref": "#/definitions/service" },
+        "ingress": { "$ref": "#/definitions/ingress" },
+        "resources": {}
+      }
+    },
+    "webhook": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {}
+      }
+    },
+    "scopedLauncherRBAC": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {}
+      }
+    },
+    "launcherSAGate": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "guestServiceAccountName": {},
+        "sandboxServiceAccountName": {}
+      }
+    },
+    "monitoring": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "serviceMonitor": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "interval": {},
+            "additionalLabels": {}
+          }
+        },
+        "dashboards": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "label": {},
+            "namespace": {},
+            "annotations": {}
+          }
+        },
+        "prometheusRule": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "additionalLabels": {}
+          }
+        }
+      }
+    },
+    "migration": {
+      "additionalProperties": false,
+      "properties": {
+        "mtls": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {}
+          }
+        }
+      }
+    },
+    "swiftGuest": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedHostPathPrefixes": {}
+      }
+    }
+  },
+  "definitions": {
+    "image": {
+      "additionalProperties": false,
+      "properties": {
+        "registry": {},
+        "tag": {}
+      }
+    },
+    "service": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {},
+        "port": {}
+      }
+    },
+    "ingress": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "className": {},
+        "host": {},
+        "tlsAuto": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {},
+            "clusterIssuer": {},
+            "issuer": {},
+            "secretName": {}
+          }
+        },
+        "annotations": {},
+        "tls": {}
+      }
+    }
+  }
+}

@@ -52,6 +52,10 @@ helm upgrade kubeswift … --set monitoring.enabled=true \
 `helm upgrade` reuses previously-set values only when you pass none; pass
 `--reset-values` to drop old overrides.
 
+The chart rejects values keys it does not read (`values.schema.json`). A typo,
+or a stale key that `helm get values` carries into every upgrade, fails with the
+key named instead of being silently ignored. Delete the key.
+
 ## Values
 
 ### Core

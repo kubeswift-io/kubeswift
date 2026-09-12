@@ -28,6 +28,7 @@ on:
       - 'hack/verify-render-coverage.sh'
       - 'hack/verify-image-tags.sh'
       - 'hack/verify-doc-versions.sh'
+      - 'hack/verify-values-schema.sh'
       - 'README.md'
       - 'docs/**'
       - '.github/workflows/manifests.yaml'
@@ -49,6 +50,7 @@ on:
       - 'hack/verify-render-coverage.sh'
       - 'hack/verify-image-tags.sh'
       - 'hack/verify-doc-versions.sh'
+      - 'hack/verify-values-schema.sh'
       - 'README.md'
       - 'docs/**'
       - '.github/workflows/manifests.yaml'
@@ -80,6 +82,19 @@ jobs:
       # coverage is established before anything is judged.
       - name: Verify render coverage
         run: ./hack/verify-render-coverage.sh
+
+      # Helm ignores a values key no template reads, so a typo is a setting
+      # that never takes effect. `snapshotOras` (the real key is snapshotORAS)
+      # rode along in real values for four releases that way, with the snapshot
+      # image frozen underneath it. values.schema.json makes such a key an
+      # install/upgrade error.
+      #
+      # Every render in this job would still pass with that schema deleted or
+      # loosened, so none of them shows it works. This asserts misspelt keys
+      # FAIL at three depths, free-form maps and `global` still pass, and the
+      # schema has not drifted from values.yaml.
+      - name: Verify values schema
+        run: ./hack/verify-values-schema.sh
 
       # Rendered through the shared script, NOT an inline `helm template` line.
       # verify-render-coverage above uses the same script, so the set of objects
