@@ -65,13 +65,16 @@ ValidatingAdmissionPolicyBinding/kubeswift-launcher-sa-gate"
 
 for want in $GUARDED; do
   kind="${want%%/*}"; name="${want##*/}"
-  if ! printf '%s' "$rendered" | grep -q "^kind: ${kind}$"; then
+  # Here-strings, not `printf ... | grep -q`: grep -q exits at its first match,
+  # the still-writing printf takes SIGPIPE, and pipefail fails a check that
+  # matched. The render is ~160 KB, well past the pipe buffer, so that happened.
+  if ! grep -q "^kind: ${kind}$" <<<"$rendered"; then
     echo "verify-render-coverage: ${kind} is missing from the render." >&2
     echo "It is capability-guarded — check hack/render-lint-profile.sh passes" >&2
     echo "--api-versions for it, or the policy check is scanning nothing." >&2
     exit 1
   fi
-  printf '%s' "$rendered" | grep -q "name: ${name}$" || {
+  grep -q "name: ${name}$" <<<"$rendered" || {
     echo "verify-render-coverage: ${kind} rendered but not named ${name}." >&2
     exit 1
   }
