@@ -56,9 +56,9 @@ Three load-bearing choices:
 - **`webhook.enabled: true` needs cert-manager** on the cluster (the chart's
   Certificate/Issuer objects require its CRDs). Without cert-manager, set it
   false — admission validation is then skipped and the controllers' reconcile-
-  time checks are your only guard. Note that
-  `swiftGuest.allowedHostPathPrefixes` is webhook-enforced, so it does nothing
-  with the webhook off.
+  time checks are your only guard. `swiftGuest.allowedHostPathPrefixes` is one
+  of those checks: with the webhook off the controller still refuses to build a
+  launcher pod for a host path outside it.
 
 ### Image tags come from the chart version
 

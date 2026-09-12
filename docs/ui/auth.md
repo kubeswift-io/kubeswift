@@ -78,35 +78,52 @@ kcadm set-password -r kubeswift --username alice --new-password '<password>'
 
 ## 2. Point the gateway at the IdP
 
-Run the gateway in `oidc` mode (chart values or container args):
+`oidc` is the gateway's default auth mode, and the chart will not render it
+without an issuer and a client ID. In your values file (`kubeswift-values.yaml`):
 
-```bash
-helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  -n kubeswift-system \
-  --set gateway.enabled=true \
-  --set gateway.authMode=oidc
-# + the OIDC flags on the gateway container:
-#   --oidc-issuer-url=https://keycloak.example.com/realms/kubeswift
-#   --oidc-client-id=kubeswift-gateway
-#   --oidc-username-claim=email      (default; or preferred_username)
-#   --oidc-groups-claim=groups       (default)
-#   --oidc-username-prefix= / --oidc-groups-prefix=   (optional, mirror apiserver)
+```yaml
+gateway:
+  enabled: true
+  authMode: oidc
+  oidc:
+    issuerURL: https://keycloak.example.com/realms/kubeswift
+    clientID: kubeswift-gateway
+    usernameClaim: email   # default; or preferred_username
+    groupsClaim: groups    # default
 ```
+
+Optional: `usernamePrefix` and `groupsPrefix` mirror the apiserver's
+`--oidc-*-prefix` flags. `caSecret` (key `caKey`, default `ca.crt`) names a
+Secret in the KubeSwift namespace holding a private IdP CA for the gateway's
+JWKS fetch; it does nothing for the browser (see the note above).
 
 The gateway verifies tokens itself, so the **member API servers do not need
 `--oidc-*` flags**.
 
 ## 3. Point the UI at the IdP
 
-The UI reads two runtime globals (its `config.js`, injected by the chart from
-env). Setting both turns login on:
+Give the UI the same issuer and client. The key is `clientId` here and
+`clientID` on the gateway:
 
-```js
-window.__KUBESWIFT_OIDC_ISSUER__ = 'https://keycloak.example.com/realms/kubeswift';
-window.__KUBESWIFT_OIDC_CLIENT_ID__ = 'kubeswift-gateway';
+```yaml
+ui:
+  enabled: true
+  oidc:
+    issuer: https://keycloak.example.com/realms/kubeswift
+    clientId: kubeswift-gateway
 ```
 
-Unset → the UI runs with no login (dev/insecure mode).
+Install or upgrade with both blocks:
+
+```bash
+helm upgrade --install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
+  -n kubeswift-system -f kubeswift-values.yaml
+```
+
+The chart writes both values into the UI's runtime config
+(`window.__KUBESWIFT_OIDC_ISSUER__`, `window.__KUBESWIFT_OIDC_CLIENT_ID__`).
+Login is on only when both are set. With either empty the UI runs without login,
+and an `oidc` gateway refuses every request it makes.
 
 ## 4. Member-side RBAC (impersonation + the user's permissions)
 

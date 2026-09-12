@@ -36,8 +36,13 @@ See [`docs/install/helm-oci.md`](../../docs/install/helm-oci.md).
 # Minimal operator only (default)
 helm install kubeswift … 
 
-# Management hub: gateway + web console + self-register this cluster
-helm install kubeswift … --set federation.role=hub
+# Management hub: gateway + web console + self-register this cluster.
+# The gateway defaults to authMode=oidc, which needs your IdP (docs/ui/auth.md).
+helm install kubeswift … --set federation.role=hub \
+  --set gateway.oidc.issuerURL=https://keycloak.example.com/realms/kubeswift \
+  --set gateway.oidc.clientID=kubeswift-gateway \
+  --set ui.oidc.issuer=https://keycloak.example.com/realms/kubeswift \
+  --set ui.oidc.clientId=kubeswift-gateway
 
 # Federated member (edge): mints a join credential; NOTES prints the hub manifest
 helm install kubeswift … --set federation.role=edge \
@@ -72,6 +77,8 @@ key named instead of being silently ignored. Delete the key.
 | `swiftletd.image.registry` | Launcher image registry | `ghcr.io/kubeswift-io/kubeswift` |
 | `swiftletd.image.tag` | Launcher image tag (as above) | `latest` |
 | `swiftletd.resources` | Requests/limits | `100m`/`128Mi` … `2`/`2Gi` |
+| `swiftletd.imagePullSecrets` | Pull Secrets for the launcher image on a private registry. Launcher pods run as their own ServiceAccount, so they do not inherit Secrets patched onto `default` | `[]` |
+| `sandboxMaterialize.image.registry` / `.tag` | SwiftSandbox rootfs init container, injected into sandbox pods by the controller | `ghcr.io/kubeswift-io/kubeswift` / `latest` |
 
 ### Snapshot backend images
 
@@ -131,9 +138,10 @@ still adds that component in any role. See [`docs/ui/gateway.md`](../../docs/ui/
 | `gateway.image.registry` / `.tag` | Gateway image | `ghcr.io/kubeswift-io/kubeswift` / `latest` |
 | `gateway.replicas` | Gateway replicas | `1` |
 | `gateway.port` | Container port | `8080` |
-| `gateway.authMode` | End-user auth: `oidc` (verify IdP token, impersonate) · `token` (bearer via TokenReview) · `insecure` (no per-user impersonation — **dev/lab only**) | `insecure` |
-| `gateway.oidc.issuerURL` | (authMode=oidc) IdP issuer, reachable from browser **and** gateway | `""` |
-| `gateway.oidc.clientID` | Client ID / audience the ID token must carry | `""` |
+| `gateway.authMode` | End-user auth: `oidc` (verify IdP token, impersonate) · `token` (bearer via TokenReview) · `insecure` (no authentication at all — **dev/lab only**) | `oidc` |
+| `gateway.allowInsecureIngress` | Accept `authMode=insecure` on a reachable gateway (a gateway or UI ingress, or a LoadBalancer/NodePort Service for either). Without it the chart refuses that combination, which publishes an unauthenticated control plane | `false` |
+| `gateway.oidc.issuerURL` | (authMode=oidc, required) IdP issuer, reachable from browser **and** gateway | `""` |
+| `gateway.oidc.clientID` | (authMode=oidc, required) Client ID / audience the ID token must carry | `""` |
 | `gateway.oidc.usernameClaim` | Claim used as the impersonated username | `email` |
 | `gateway.oidc.groupsClaim` | Claim used as the impersonated groups | `groups` |
 | `gateway.oidc.usernamePrefix` / `.groupsPrefix` | Mirror the apiserver `--oidc-*-prefix` flags | `""` |
@@ -167,7 +175,7 @@ point `ui.gateway.url` at an externally reachable gateway).
 | `ui.gateway.service` / `.port` | (proxy mode) In-cluster gateway Service name + port | `kubeswift-gateway` / `8080` |
 | `ui.gateway.url` | (url mode) Absolute, browser-reachable gateway URL | `""` |
 | `ui.oidc.issuer` | Browser login issuer — must match `gateway.oidc.issuerURL` | `""` |
-| `ui.oidc.clientId` | Public OIDC client the browser logs in with | `""` |
+| `ui.oidc.clientId` | Public OIDC client the browser logs in with. Login is on only when this and `ui.oidc.issuer` are both set | `""` |
 | `ui.service.type` / `.port` | UI Service | `ClusterIP` / `80` |
 | `ui.ingress.enabled` | Create an Ingress for the UI | `false` |
 | `ui.ingress.className` | `ingressClassName` | `""` |
@@ -182,6 +190,7 @@ point `ui.gateway.url` at an externally reachable gateway).
 | Parameter | Description | Default |
 |---|---|---|
 | `webhook.enabled` | Enable admission webhooks (runs the controller with `--webhook-enabled=true`). Requires cert-manager | `false` |
+| `swiftGuest.allowedHostPathPrefixes` | Host-path prefixes a SwiftGuest may mount (virtio-fs `hostPath` shares, vhost-user socket directories). Empty denies every host path. Enforced by the controller, and at admission too when `webhook.enabled` | `[]` |
 | `launcherSAGate.enabled` | Refuse any Pod that names a launcher ServiceAccount unless the KubeSwift controller creates it. **Closes a privilege escalation — see below before disabling** | `true` |
 | `launcherSAGate.guestServiceAccountName` | Guest launcher SA the gate protects. Must match what the controller stamps | `kubeswift-launcher` |
 | `launcherSAGate.sandboxServiceAccountName` | Sandbox launcher SA the gate protects | `kubeswift-sandbox-launcher` |
