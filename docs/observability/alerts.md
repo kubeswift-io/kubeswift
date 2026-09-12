@@ -45,7 +45,9 @@ gives the aggregate cause.
 **warning · `kubeswift_guests{phase=~"Pending|Scheduling"} > 0` for 15m**
 A guest hasn't progressed past scheduling.
 → Check the referenced SwiftImage/SwiftKernel is `Ready`, the guest's node
-selector/capacity, and `kubectl describe swiftguest` conditions.
+selector/capacity, and `kubectl describe swiftguest` conditions. A guest pinned
+with `spec.nodeName` waits while that node is cordoned or tainted; its
+`PodScheduled` condition names the cause.
 
 ### KubeSwiftGuestCrashLooping
 **warning · `rate(kubeswift_vm_failures_total[15m]) > 0` for 15m**

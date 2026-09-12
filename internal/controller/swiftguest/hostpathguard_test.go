@@ -9,13 +9,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
-	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 )
@@ -75,62 +71,25 @@ func TestCheckHostPaths_VhostUserSockets(t *testing.T) {
 // above only prove the rule; a rejection that reaches nothing but the
 // controller log is not something anyone can act on.
 
-const hostPathGuestName = "g"
-
-var hostPathGuestKey = types.NamespacedName{Namespace: "ns", Name: hostPathGuestName}
-
-// hostPathGuest shares path into a kernel-boot guest, which needs only a class
-// and a Ready kernel to resolve.
+// hostPathGuest shares path into the kernel-boot test guest.
 func hostPathGuest(path string) *swiftv1alpha1.SwiftGuest {
-	return &swiftv1alpha1.SwiftGuest{
-		ObjectMeta: metav1.ObjectMeta{Name: hostPathGuestName, Namespace: "ns"},
-		Spec: swiftv1alpha1.SwiftGuestSpec{
-			KernelRef:     &corev1.LocalObjectReference{Name: "k"},
-			GuestClassRef: corev1.LocalObjectReference{Name: "cls"},
-			RunPolicy:     swiftv1alpha1.RunPolicyRunning,
-			Filesystems: []swiftv1alpha1.Filesystem{{
-				Name: "share", Source: swiftv1alpha1.FilesystemSource{HostPath: &path},
-			}},
-		},
-	}
-}
-
-func readyKernel() *kernelv1alpha1.SwiftKernel {
-	return &kernelv1alpha1.SwiftKernel{
-		ObjectMeta: metav1.ObjectMeta{Name: "k", Namespace: "ns"},
-		Status:     kernelv1alpha1.SwiftKernelStatus{Phase: kernelv1alpha1.SwiftKernelPhaseReady},
-	}
+	g := kernelGuest()
+	g.Spec.Filesystems = []swiftv1alpha1.Filesystem{{
+		Name: "share", Source: swiftv1alpha1.FilesystemSource{HostPath: &path},
+	}}
+	return g
 }
 
 func reconcileHostPathGuest(t *testing.T, allowed []string, objs ...client.Object) (*swiftv1alpha1.SwiftGuest, client.Client, ctrl.Result, error) {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(objs...).
-		WithStatusSubresource(&swiftv1alpha1.SwiftGuest{}).Build()
-	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme, AllowedHostPathPrefixes: allowed}
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: hostPathGuestKey})
-	var got swiftv1alpha1.SwiftGuest
-	if getErr := c.Get(context.Background(), hostPathGuestKey, &got); getErr != nil {
-		t.Fatalf("get guest: %v", getErr)
-	}
-	return &got, c, res, err
+	c := guestClientBuilder(objs...).Build()
+	got, res, err := reconcileGuest(t, &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme, AllowedHostPathPrefixes: allowed})
+	return got, c, res, err
 }
 
 func resolvedCondition(t *testing.T, g *swiftv1alpha1.SwiftGuest) metav1.Condition {
 	t.Helper()
-	c := findCondition(&g.Status, ConditionResolved)
-	if c == nil {
-		t.Fatalf("guest has no Resolved condition; status = %+v", g.Status)
-	}
-	return *c
-}
-
-func launcherPods(t *testing.T, c client.Client) []corev1.Pod {
-	t.Helper()
-	var pods corev1.PodList
-	if err := c.List(context.Background(), &pods, client.InNamespace("ns")); err != nil {
-		t.Fatal(err)
-	}
-	return pods.Items
+	return guestCondition(t, g, ConditionResolved)
 }
 
 // The control for the rejections below: the same guest with its path allowed
@@ -182,13 +141,9 @@ func TestReconcile_HostPathRejectionRecoversOnceAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rejecting pass: %v", err)
 	}
-	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme, AllowedHostPathPrefixes: []string{"/srv/vm"}}
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: hostPathGuestKey}); err != nil {
+	got, _, err := reconcileGuest(t, &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme, AllowedHostPathPrefixes: []string{"/srv/vm"}})
+	if err != nil {
 		t.Fatalf("pass after allowing the prefix: %v", err)
-	}
-	var got swiftv1alpha1.SwiftGuest
-	if err := c.Get(context.Background(), hostPathGuestKey, &got); err != nil {
-		t.Fatal(err)
 	}
 	if n := len(launcherPods(t, c)); n != 1 {
 		t.Fatalf("after allowing the prefix: %d launcher pods, want 1", n)
@@ -196,7 +151,7 @@ func TestReconcile_HostPathRejectionRecoversOnceAllowed(t *testing.T) {
 	if got.Status.Phase == swiftv1alpha1.SwiftGuestPhaseFailed {
 		t.Error("guest stayed Failed after its host path was allowed")
 	}
-	if cond := resolvedCondition(t, &got); cond.Status != metav1.ConditionTrue {
+	if cond := resolvedCondition(t, got); cond.Status != metav1.ConditionTrue {
 		t.Errorf("after allowing the prefix: Resolved=%s (%s)", cond.Status, cond.Message)
 	}
 }
@@ -204,21 +159,8 @@ func TestReconcile_HostPathRejectionRecoversOnceAllowed(t *testing.T) {
 // A disk-boot guest used to clone its root disk before buildPod rejected it,
 // then sat in Scheduling with Resolved=True. The check has to come first.
 func TestReconcile_DisallowedHostPathDoesNotCloneTheRootDisk(t *testing.T) {
-	guest := hostPathGuest("/etc")
-	guest.Spec.KernelRef = nil
-	guest.Spec.ImageRef = &corev1.LocalObjectReference{Name: "img"}
-	img := &imagev1alpha1.SwiftImage{
-		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
-		Status: imagev1alpha1.SwiftImageStatus{
-			Phase: imagev1alpha1.SwiftImagePhaseReady,
-			PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{
-				PVCRef: &imagev1alpha1.PVCObjectReference{Name: "img-prepared"},
-			},
-		},
-	}
-	prepared := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "img-prepared", Namespace: "ns"}}
-
-	got, c, _, err := reconcileHostPathGuest(t, nil, guest, testGuestClass(), img, prepared)
+	got, c, _, err := reconcileHostPathGuest(t, nil,
+		asDiskBoot(hostPathGuest("/etc")), testGuestClass(), readyImage(), preparedPVC())
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -226,7 +168,7 @@ func TestReconcile_DisallowedHostPathDoesNotCloneTheRootDisk(t *testing.T) {
 		t.Errorf("phase = %q, want Failed", got.Status.Phase)
 	}
 	var clone corev1.PersistentVolumeClaim
-	cloneErr := c.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: RootDiskCloneName(hostPathGuestName)}, &clone)
+	cloneErr := c.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: RootDiskCloneName(testGuestName)}, &clone)
 	if !apierrors.IsNotFound(cloneErr) {
 		t.Errorf("root disk clone PVC for a rejected guest: err = %v, want NotFound", cloneErr)
 	}
@@ -243,12 +185,8 @@ func TestReconcile_DisallowedHostPathDoesNotCloneTheRootDisk(t *testing.T) {
 // never edits a live launcher, so it must stay up and keep being reported --
 // not be marked Failed while the VM runs -- with the violation on Resolved.
 func TestReconcile_DisallowedHostPathLeavesARunningLauncherAlone(t *testing.T) {
-	running := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: hostPathGuestName, Namespace: "ns"},
-		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
-	}
 	got, c, _, err := reconcileHostPathGuest(t, nil,
-		hostPathGuest("/etc"), testGuestClass(), readyKernel(), running)
+		hostPathGuest("/etc"), testGuestClass(), readyKernel(), runningLauncher(""))
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}

@@ -468,28 +468,23 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// SwiftGPU controller's Resolve stamps status.GPU after scheduling
 	// (status-only, not load-bearing for the runtime). Design doc §A2/§A6.
 
-	// Node placement, BEFORE anything that pins to that node (issue #444).
-	//
-	// The root-disk clone Job below pins to spec.nodeName too. If that node is
-	// unschedulable, the Job's pod sits Pending forever, reconcile never reaches
-	// buildPod, and the guest stalls in Scheduling with nothing explaining why.
-	// Checking here turns a silent stall into a terminal failure with a reason.
-	if err := checkNodePlacementFor(ctx, r.Client, &guest, nil); err != nil {
-		status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
-		SetResolvedCondition(status, false, err.Error())
-		recordGuestMetrics(&guest, &guest.Status, status, nil)
-		if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		logger.Info("rejected guest: unschedulable spec.nodeName", "error", err.Error())
-		return ctrl.Result{}, nil
+	// The launcher pod, if one already exists. The allowlist and placement checks
+	// below decide whether a launcher may be CREATED; neither fails a guest whose
+	// launcher is already running.
+	var live corev1.Pod
+	liveErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &live)
+	if liveErr != nil && !apierrors.IsNotFound(liveErr) {
+		return ctrl.Result{}, liveErr
 	}
+	launcherExists := liveErr == nil
 
 	// Host-path allowlist, BEFORE the root-disk clone. buildPod checks it too,
 	// but too late: a disk-boot guest has cloned its root disk by then, and a
 	// buildPod error is only logged and retried, so a rejected guest showed no
 	// reason at all (a fresh one had no phase and no conditions). With the
 	// webhook off (the chart default), the controller is the only enforcement.
+	// It comes before node placement: a guest that can never run should say so,
+	// not wait for a node.
 	//
 	// A launcher pod that already exists predates the allowlist change. The
 	// controller never edits a live launcher, so it is left running and keeps
@@ -497,12 +492,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	hostPathErr := checkHostPaths(&guest, r.AllowedHostPathPrefixes)
 	if hostPathErr != nil {
 		SetResolvedCondition(status, false, hostPathErr.Error())
-		var live corev1.Pod
-		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &live)
-		if podErr != nil && !apierrors.IsNotFound(podErr) {
-			return ctrl.Result{}, podErr
-		}
-		if apierrors.IsNotFound(podErr) {
+		if !launcherExists {
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
 			recordGuestMetrics(&guest, &guest.Status, status, nil)
 			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
@@ -513,6 +503,20 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		logger.Info("host path outside the allowlist; leaving the running launcher pod, which will not be recreated",
 			"pod", live.Name, "error", hostPathErr.Error())
+	}
+
+	// Node placement, BEFORE anything that pins to that node (issue #444): the
+	// root-disk clone Job below pins to spec.nodeName too, and on a node that
+	// cannot take it, it would sit Pending forever with nothing saying why.
+	//
+	// Only for a guest with no launcher yet. A cordon or taint added under a
+	// running launcher does not evict it, and failing the guest for one marked
+	// every VM on a cordoned node Failed while it ran (a SwiftGuestPool then
+	// deleted it to replace it). Creation is checked again below.
+	if !launcherExists {
+		if err := checkNodePlacementFor(ctx, r.Client, &guest, nil); err != nil {
+			return r.holdForNodePlacement(ctx, &guest, status, err)
+		}
 	}
 
 	// For disk boot, ensure per-guest root disk clone exists and is ready.
@@ -616,6 +620,13 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// AlreadyExists (TFU #18 secondary trap). See staleMigrationPodRef.
 		if staleMigrationPodRef(&guest) {
 			status.PodRef = nil
+		}
+		// Placement again, at the moment of creation: spec.nodeName skips the
+		// scheduler's taint check, and the launcher is privileged. This also
+		// covers a launcher that existed at the lookup above and is gone now,
+		// such as one a drain has just evicted from a cordoned node.
+		if err := checkNodePlacement(ctx, r.Client, &guest, desiredPod); err != nil {
+			return r.holdForNodePlacement(ctx, &guest, status, err)
 		}
 		// Tolerate AlreadyExists. During the stale-PodRef self-heal above,
 		// the lookup name (canonicalPodName) and the create name

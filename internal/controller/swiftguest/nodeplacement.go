@@ -3,11 +3,14 @@ package swiftguest
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
@@ -49,6 +52,10 @@ func checkNodePlacement(ctx context.Context, c client.Reader, guest *swiftv1alph
 // created first and pins to the SAME node, its pod sits Pending forever, and
 // the reconcile never reaches buildPod where this check lived. The operator saw
 // a guest stuck in Scheduling with nothing saying why.
+//
+// It decides whether a NEW launcher may be created there. It says nothing about
+// a launcher already running: a cordon or taint added later does not evict it,
+// and Reconcile does not consult this for one.
 func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest, tolerations []corev1.Toleration) error {
 	if guest.Spec.NodeName == "" {
 		return nil // not pinned; the scheduler runs normally and applies taints itself
@@ -60,7 +67,22 @@ func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1a
 		}
 		return fmt.Errorf("resolve spec.nodeName=%q: %w", guest.Spec.NodeName, err)
 	}
-	if t, ok := untoleratedTaint(node.Spec.Taints, tolerations); ok {
+	// A cordon is spec.unschedulable, which the node lifecycle controller then
+	// mirrors as a taint. Either one alone counts: the taint lags behind both the
+	// cordon and the uncordon. It is routine and it passes, so it reads as a
+	// cordon, not as a taint the guest cannot tolerate -- and only once no other
+	// taint blocks, so an uncordon is not promised to fix a node it will not.
+	cordon := corev1.Taint{Key: corev1.TaintNodeUnschedulable, Effect: corev1.TaintEffectNoSchedule}
+	cordoned := node.Spec.Unschedulable && !tolerated(cordon, tolerations)
+	var others []corev1.Taint
+	for _, taint := range node.Spec.Taints {
+		if taint.Key != corev1.TaintNodeUnschedulable {
+			others = append(others, taint)
+		} else if _, blocks := untoleratedTaint([]corev1.Taint{taint}, tolerations); blocks {
+			cordoned = true
+		}
+	}
+	if t, ok := untoleratedTaint(others, tolerations); ok {
 		// NB: SwiftGuest has no spec.tolerations field — the launcher pod is
 		// built with none — so in practice a pinned guest cannot target a
 		// NoSchedule/NoExecute node at all. The message says that, rather than
@@ -71,7 +93,34 @@ func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1a
 				"pin the guest to an untainted node, or remove the taint",
 			guest.Spec.NodeName, t.Key, t.Value, t.Effect)
 	}
+	if cordoned {
+		return fmt.Errorf("spec.nodeName=%q is cordoned; the guest starts once the node is uncordoned", guest.Spec.NodeName)
+	}
 	return nil
+}
+
+// nodePlacementRetry is how often a guest held by its pinned node looks again.
+// Nothing watches Nodes, so this is what starts the guest once the node is
+// uncordoned or the taint is removed.
+const nodePlacementRetry = 30 * time.Second
+
+// holdForNodePlacement parks a pinned guest whose node cannot take a new
+// launcher: Pending, with the reason on PodScheduled, retried. It waits rather
+// than fails, like a pod whose only eligible node is cordoned. Cordons, pressure
+// taints and NotReady come and go, and Failed would count a VM failure and make
+// a SwiftGuestPool delete the guest. One that never gets placed still alerts, as
+// KubeSwiftGuestStuckPending.
+func (r *SwiftGuestReconciler) holdForNodePlacement(ctx context.Context, guest *swiftv1alpha1.SwiftGuest,
+	status *swiftv1alpha1.SwiftGuestStatus, cause error) (ctrl.Result, error) {
+	status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+	SetPodScheduledCondition(status, nil, false, cause.Error())
+	recordGuestMetrics(guest, &guest.Status, status, nil)
+	if err := r.patchStatus(ctx, guest, status); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.FromContext(ctx).Info("waiting for the pinned node to take a launcher",
+		"node", guest.Spec.NodeName, "reason", cause.Error())
+	return ctrl.Result{RequeueAfter: nodePlacementRetry}, nil
 }
 
 // untoleratedTaint returns the first NoSchedule/NoExecute taint not tolerated.

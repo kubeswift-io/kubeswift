@@ -306,11 +306,10 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err := checkHostPaths(guest, r.AllowedHostPathPrefixes); err != nil {
 		return nil, err
 	}
-	// spec.NodeName binds the pod directly, skipping the scheduler -- so the
-	// taint predicate never runs. Reproduce it here; see nodeplacement.go.
-	if err := checkNodePlacement(ctx, r.Client, guest, pod); err != nil {
-		return nil, err
-	}
+	// No node-placement check here. buildPod also runs for a launcher that is
+	// already up, and a cordon or taint added since must not fail that guest.
+	// Reconcile checks placement where it matters, just before creating a
+	// launcher; see nodeplacement.go.
 	if r.MigrationMTLSEnabled && migrationEligible(guest) {
 		applyMigrationSourceSidecar(pod, guest)
 	}
