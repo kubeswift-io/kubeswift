@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,7 +22,27 @@ import (
 // SwiftGuestPoolReconciler reconciles SwiftGuestPool objects.
 type SwiftGuestPoolReconciler struct {
 	client.Client
+	// Recorder reports failed-replica replacement on the pool. Optional.
+	Recorder record.EventRecorder
+
+	now func() time.Time // replacement back-off clock; nil means time.Now
 }
+
+// Replacing a Failed replica backs off the way the kubelet does for a crashing
+// container: 10s, doubling to a 5m cap, reset once a replica has lived 10m.
+//
+// It is measured from the replica's creation. A replica that fails as soon as it
+// exists usually hits something a new copy would hit too -- a template or policy
+// rejection, a missing image or class -- and replacing it at once only looped:
+// delete, recreate, fail, delete, as fast as the controllers could go. Now such
+// a replica stays visible with its reason and is retried at most every 5m, which
+// still picks up a fix made outside the template. A replica that ran fine for a
+// while and then failed is replaced at once, as before.
+const (
+	replacementBackoffBase  = 10 * time.Second
+	replacementBackoffCap   = 5 * time.Minute
+	replacementBackoffReset = 10 * time.Minute
+)
 
 // Reconcile maintains the desired number of SwiftGuest replicas for a pool,
 // handles rolling updates, and manages per-replica PVCs.
@@ -45,21 +66,40 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	currentHash := computeTemplateHash(&pool.Spec.Template)
 	requeueNeeded := false
 
-	// --- Failed VM replacement ---
+	// --- Failed VM replacement, with back-off ---
+	attempts := map[int]int{}        // index -> replacement attempt its new replica carries
+	var backoffRequeue time.Duration // soonest a deferred replacement falls due
 	for idx, guest := range indexMap {
-		if idx < desired && guest.Status.Phase == swiftv1alpha1.SwiftGuestPhaseFailed {
-			policy := guest.Spec.RunPolicy
-			if policy == swiftv1alpha1.RunPolicyRunning ||
-				policy == swiftv1alpha1.RunPolicyAlways ||
-				policy == swiftv1alpha1.RunPolicyRestartOnFailure {
-				klog.InfoS("deleting failed guest for replacement",
-					"pool", pool.Name, "guest", guest.Name, "index", idx)
-				if err := r.Delete(ctx, &guest); err != nil {
-					return ctrl.Result{}, err
-				}
-				delete(indexMap, idx)
-			}
+		if idx >= desired || guest.Status.Phase != swiftv1alpha1.SwiftGuestPhaseFailed {
+			continue
 		}
+		policy := guest.Spec.RunPolicy
+		if policy != swiftv1alpha1.RunPolicyRunning &&
+			policy != swiftv1alpha1.RunPolicyAlways &&
+			policy != swiftv1alpha1.RunPolicyRestartOnFailure {
+			continue
+		}
+		reason := replicaFailureReason(&guest)
+		wait, next := replacementDelay(&guest, currentHash, r.clock())
+		if wait > 0 {
+			klog.InfoS("failed replica in replacement back-off",
+				"pool", pool.Name, "guest", guest.Name, "index", idx, "retryIn", wait, "reason", reason)
+			r.event(&pool, corev1.EventTypeWarning, "BackOff",
+				"replica %s failed (%s); back-off %s before replacing it", guest.Name, reason, replacementBackoff(next-1))
+			if backoffRequeue == 0 || wait < backoffRequeue {
+				backoffRequeue = wait
+			}
+			continue
+		}
+		klog.InfoS("deleting failed guest for replacement",
+			"pool", pool.Name, "guest", guest.Name, "index", idx, "attempt", next, "reason", reason)
+		if err := r.Delete(ctx, &guest); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.event(&pool, corev1.EventTypeWarning, "ReplacedFailedReplica",
+			"replaced failed replica %s (%s)", guest.Name, reason)
+		delete(indexMap, idx)
+		attempts[idx] = next
 	}
 
 	// --- Scale down: delete highest indices first ---
@@ -77,7 +117,7 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	missing := findMissingIndices(indexMap, desired)
 	for _, idx := range missing {
 		klog.InfoS("creating replica", "pool", pool.Name, "index", idx)
-		if err := r.createSwiftGuest(ctx, &pool, idx, currentHash); err != nil {
+		if err := r.createSwiftGuest(ctx, &pool, idx, currentHash, attempts[idx]); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -102,10 +142,72 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	if requeueNeeded {
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	requeueAfter := backoffRequeue
+	if requeueNeeded && (requeueAfter == 0 || requeueAfter > 10*time.Second) {
+		requeueAfter = 10 * time.Second
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *SwiftGuestPoolReconciler) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *SwiftGuestPoolReconciler) event(pool *swiftv1alpha1.SwiftGuestPool, eventType, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(pool, eventType, reason, format, args...)
+	}
+}
+
+// replacementBackoff is the wait before replacing a replica carrying attempt.
+func replacementBackoff(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	d := replacementBackoffBase
+	for i := 0; i < attempt && d < replacementBackoffCap; i++ {
+		d *= 2
+	}
+	return min(d, replacementBackoffCap)
+}
+
+// replacementDelay says how long a Failed replica must still wait before it is
+// replaced (zero: now), and the attempt its replacement carries.
+func replacementDelay(g *swiftv1alpha1.SwiftGuest, currentHash string, now time.Time) (time.Duration, int) {
+	// A template change may be the fix, so it replaces at once and starts over.
+	if g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
+		return 0, 0
+	}
+	// A replica that lived a good while before failing failed on its own; its
+	// replacement starts over too. (A zero creationTimestamp, which only a test
+	// fake produces, counts as long-lived.)
+	age := now.Sub(g.CreationTimestamp.Time)
+	if g.CreationTimestamp.IsZero() || age >= replacementBackoffReset {
+		return 0, 0
+	}
+	attempt, err := strconv.Atoi(g.Annotations[swiftv1alpha1.AnnotationReplacementAttempt])
+	if err != nil || attempt < 0 {
+		attempt = 0
+	}
+	if wait := replacementBackoff(attempt) - age; wait > 0 {
+		return wait, attempt + 1
+	}
+	return 0, attempt + 1
+}
+
+// replicaFailureReason is the most specific reason a Failed replica reports.
+func replicaFailureReason(g *swiftv1alpha1.SwiftGuest) string {
+	for _, t := range []string{"Resolved", "GuestRunning", "PodScheduled"} {
+		for _, c := range g.Status.Conditions {
+			if c.Type == t && c.Status == metav1.ConditionFalse && c.Message != "" {
+				return c.Message
+			}
+		}
+	}
+	return "phase Failed"
 }
 
 // --- Rolling Update ---
@@ -196,7 +298,7 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 		klog.InfoS("rolling update: creating replacement",
 			"pool", pool.Name, "index", idx,
 			"surge", surge, "maxSurge", maxSurge)
-		if err := r.createSwiftGuest(ctx, pool, idx, currentHash); err != nil {
+		if err := r.createSwiftGuest(ctx, pool, idx, currentHash, 0); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -208,7 +310,7 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 
 // --- Guest Creation ---
 
-func (r *SwiftGuestPoolReconciler) createSwiftGuest(ctx context.Context, pool *swiftv1alpha1.SwiftGuestPool, index int, templateHash string) error {
+func (r *SwiftGuestPoolReconciler) createSwiftGuest(ctx context.Context, pool *swiftv1alpha1.SwiftGuestPool, index int, templateHash string, attempt int) error {
 	name := fmt.Sprintf("%s-%d", pool.Name, index)
 
 	// Ensure per-replica PVCs exist.
@@ -238,6 +340,11 @@ func (r *SwiftGuestPoolReconciler) createSwiftGuest(ctx context.Context, pool *s
 		annotations[k] = v
 	}
 	annotations[swiftv1alpha1.AnnotationTemplateHash] = templateHash
+	if attempt > 0 {
+		annotations[swiftv1alpha1.AnnotationReplacementAttempt] = strconv.Itoa(attempt)
+	} else {
+		delete(annotations, swiftv1alpha1.AnnotationReplacementAttempt) // never inherited from the template
+	}
 
 	spec := pool.Spec.Template.Spec.DeepCopy()
 

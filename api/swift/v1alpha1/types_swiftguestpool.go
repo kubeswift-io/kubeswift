@@ -235,6 +235,10 @@ const (
 	LabelPoolName          = "swift.kubeswift.io/pool"
 	LabelPoolIndex         = "swift.kubeswift.io/pool-index"
 	AnnotationTemplateHash = "swift.kubeswift.io/template-hash"
+	// AnnotationReplacementAttempt counts the replacements of a replica's index
+	// that each failed soon after being created. It sets how long the pool waits
+	// before replacing this replica if it fails too. Absent means zero.
+	AnnotationReplacementAttempt = "swift.kubeswift.io/replacement-attempt"
 )
 
 // SwiftGuestPoolList contains a list of SwiftGuestPool.
