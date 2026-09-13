@@ -26,7 +26,17 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Patch base-layer packages. `apt-get install` only resolves the packages named
+# below -- it never upgrades what the base image already ships, so a CVE fixed
+# in Debian but not yet rebuilt into debian:bookworm-slim stays in the image
+# forever. That is exactly how CVE-2026-86145 and CVE-2026-89161 (libpcre2-8-0
+# 10.42-1, fixed in 10.42-1+deb12u1) failed the nightly scan on all six
+# Debian-based images: upstream still ships the vulnerable build, and the fix is
+# only an `apt-get upgrade` away. Do not drop this line to make builds more
+# reproducible -- rebuilding without it re-ships the vulnerability.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     pciutils \
     && rm -rf /var/lib/apt/lists/*
 # lscpu is part of util-linux which is included in bookworm-slim by default.
