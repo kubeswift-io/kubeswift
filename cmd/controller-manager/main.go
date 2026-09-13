@@ -236,7 +236,8 @@ func main() {
 	}
 
 	if err = (&swiftguestpool.SwiftGuestPoolReconciler{
-		Client: mgr.GetClient(),
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorderFor("swiftguestpool-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftGuestPool controller")
 		os.Exit(1)

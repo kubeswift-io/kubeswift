@@ -19,7 +19,7 @@ For complete use-case manifests, see [swiftguestpool-use-cases.md](swiftguestpoo
 
 ### What is SwiftGuestPool
 
-SwiftGuestPool manages a fleet of identical SwiftGuest VMs. You provide a replica count and a template; the controller creates and maintains that many VMs. When you change the template, the controller performs a rolling update. When a VM fails, the controller replaces it.
+SwiftGuestPool manages a fleet of identical SwiftGuest VMs. You provide a replica count and a template; the controller creates and maintains that many VMs. When you change the template, the controller performs a rolling update. When a VM fails, the controller replaces it, backing off if replacements keep failing (see [Replica keeps failing](#replica-keeps-failing)).
 
 ### Prerequisites
 
@@ -549,6 +549,24 @@ Common causes:
 - The new template references an image that is not Ready.
 - The guest class does not have enough resources for the new spec.
 - Node capacity exhausted -- no room for new replicas.
+
+### Replica keeps failing
+
+Symptom: `FAILED` stays non-zero, the pool's events show `BackOff`.
+
+A replica that fails soon after it is created is not replaced straight away: a
+new copy usually fails the same way (a missing image or class, a host path the
+cluster does not allow). The pool waits 10s after creating it, doubling with each
+replacement that fails again, up to 5m. A replica that ran for 10m before failing
+is replaced at once, and so is a failed replica when you change the template.
+
+```bash
+kubectl describe sgpool <name>          # BackOff events carry the reason
+kubectl describe sg <pool>-<index>      # the Resolved condition says what failed
+```
+
+Fix the cause and the next replacement picks it up, or change the template to
+replace the replica immediately.
 
 ### PVC binding failures
 
