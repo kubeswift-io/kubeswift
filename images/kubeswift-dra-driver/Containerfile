@@ -19,6 +19,15 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+# Patch base-layer packages. This image installs nothing of its own, so every
+# package in it comes from debian:bookworm-slim -- and a CVE fixed in Debian but
+# not yet rebuilt into that tag would otherwise ship here untouched. That is how
+# CVE-2026-86145 and CVE-2026-89161 (libpcre2-8-0 10.42-1, fixed in
+# 10.42-1+deb12u1) failed the nightly scan: upstream still ships the vulnerable
+# build. Installing no packages is not the same as having no packages.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/kubeswift-dra-driver /kubeswift-dra-driver
 # Runs as root: the kubelet plugin sockets (/var/lib/kubelet/plugins*) and the
 # CDI dir (/var/run/cdi) are root-owned host paths. Capabilities are dropped in
