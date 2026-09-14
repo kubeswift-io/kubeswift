@@ -22,21 +22,23 @@ When to use disk boot:
 
 ## Where kernel artifacts come from
 
-Two kinds, and the difference matters before you copy a reference out of this
-page:
+All three kernels below are published by the project and can be referenced
+as-is:
 
-- **Published by the project.** The sandbox kernels —
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13` and
-  `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.2` — are built and
-  pushed by the maintainers and can be referenced as-is. SwiftSandbox uses them.
-- **Built by you.** `faas-minimal` is a *reference profile*, not a published
-  artifact. `build/kernels/faas-minimal/` is the Buildroot project; you build it
-  and push the result to a registry your cluster can pull from. Every
-  `faas` reference on this page uses `registry.example.com` to make that
-  explicit — substitute your own registry. There is no
-  `ghcr.io/kubeswift-io/kubeswift/kernels/faas` to pull.
+| Artifact | Use |
+|---|---|
+| `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3` | kernel-boot guests (the `faas-minimal` profile) |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13` | SwiftSandbox |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.2` | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y`) |
 
-Kernel artifacts are pushed manually with ORAS; they are not built by CI.
+They are pushed manually with ORAS and are **not** built by CI, so a new tag
+appears only when someone builds and pushes it.
+
+Building your own is the other path, and the rest of this page covers it:
+`build/kernels/faas-minimal/` is the Buildroot project behind the faas kernel,
+and the same steps work for any profile. The push and verification examples use
+`registry.example.com` because you cannot push to the project's namespace —
+substitute a registry your nodes can pull from.
 
 ## Node setup
 
@@ -108,7 +110,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: registry.example.com/kernels/faas:6.6.1
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```
@@ -234,7 +236,7 @@ Push from the directory containing the build outputs:
 ```bash
 cd output/images/
 
-oras push registry.example.com/kernels/faas:6.6.1 \
+oras push registry.example.com/kernels/faas:6.6.3 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
 ```
@@ -251,7 +253,7 @@ Pushing from the artifact directory ensures clean layer titles (`bzImage` and `r
 ### Verify the manifest
 
 ```bash
-oras manifest fetch registry.example.com/kernels/faas:6.6.1 | jq .
+oras manifest fetch registry.example.com/kernels/faas:6.6.3 | jq .
 ```
 
 Check that:
@@ -263,7 +265,7 @@ Check that:
 
 ```bash
 mkdir -p /tmp/kernel-test && cd /tmp/kernel-test
-oras pull registry.example.com/kernels/faas:6.6.1
+oras pull registry.example.com/kernels/faas:6.6.3
 ls -lh
 ```
 

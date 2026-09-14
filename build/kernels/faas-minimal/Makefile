@@ -10,6 +10,14 @@ BUILDROOT_DIR     := $(CURDIR)/buildroot
 OUTPUT_DIR        := $(CURDIR)/output
 EXTERNAL          := $(CURDIR)
 
+# The kernel stamps whoever built it into its version string, which `file
+# bzImage` and `uname -a` in every booted guest then report. Left alone that is
+# the builder's real user@host, published to anyone who pulls the artifact.
+# Pin it so the output does not depend on who ran make, and carries nothing
+# about the machine that did.
+export KBUILD_BUILD_USER := kubeswift
+export KBUILD_BUILD_HOST := kubeswift
+
 .PHONY: setup build clean distclean
 
 setup:
