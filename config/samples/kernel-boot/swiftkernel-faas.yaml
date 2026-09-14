@@ -5,6 +5,9 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.2
+    # Published by the project; pull it as-is. To run your own build instead,
+    # see docs/swiftkernel.md -- build/kernels/faas-minimal/ is the Buildroot
+    # project, and you push the result to a registry your nodes can reach.
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
