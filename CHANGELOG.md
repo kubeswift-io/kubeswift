@@ -4,6 +4,118 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.13.15] — 2026-09-14
+
+A bug-fix and hardening release. Three of these turned an ordinary operational
+action into a false failure: draining a node marked the VMs running on it
+Failed, a pool then deleted and recreated those replicas in a tight loop, and a
+rejected host path was never reported on the guest at all. Also clears two HIGH
+CVEs carried in the Debian-based images, and adds a schema that rejects values
+keys the chart does not read.
+
+**No CRD changed this release.** `kubectl apply -f charts/kubeswift/crds/` is
+harmless but not required — unlike v0.13.14, which added a print column.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.13.15 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+**`helm upgrade` can now FAIL where it previously succeeded.** The chart ships a
+`values.schema.json` that rejects keys it does not read, so a values file
+carrying a misspelt key is refused instead of silently ignoring it. If the
+upgrade errors with a schema message naming a key, remove that key: it was never
+doing anything. This is the intended behaviour — a mistyped `snapshotOras` (the
+real key is `snapshotORAS`) is exactly how an image pin can sit four releases
+stale while the values file looks current.
+
+No values keys were added or removed, and `ui.image.tag` stays at `v0.12.4`.
+
+### Security
+
+- **Two HIGH CVEs in the six Debian-based images** (#594) — `libpcre2-8-0`
+  CVE-2026-86145 (out-of-bounds write) and CVE-2026-89161 (memory corruption),
+  fixed in 10.42-1+deb12u1. `debian:bookworm-slim` still ships the vulnerable
+  build and `apt-get install` never upgrades what the base already carries, so
+  rebuilding alone would not have cleared it — the images now upgrade base
+  packages at build. The distroless and Alpine images were never affected.
+
+### Fixed
+
+- **A cordon marked running guests Failed, and pools deleted them** (#592). A
+  guest pinning `spec.nodeName` was checked against its node's taints on every
+  reconcile, before anything looked at its launcher, and any hit was terminal:
+  `Phase=Failed`, no requeue. So `kubectl cordon` — which adds
+  `node.kubernetes.io/unschedulable:NoSchedule` — failed every running guest
+  pinned to that node while its VM kept running, froze the guest's status, and
+  counted a VM failure. A SwiftGuestPool deletes Failed guests to replace them,
+  so a pooled pinned VM was deleted outright. Any taint under a running launcher
+  did the same: memory pressure, disk pressure, NotReady. Placement now gates
+  creating a launcher, never a running one.
+
+- **A pool replaced a failing replica in a tight loop** (#593). Replacement
+  deleted and recreated the same index in the same pass with no delay, so a
+  failure a new copy also hits — a missing SwiftImage, class or kernel, or a
+  rejected host path — became a delete/create loop, each turn recreating the
+  replica's owned objects and bumping `kubeswift_vm_failures_total`. It also hid
+  the failure, since the replica was gone before anyone could look. Replacement
+  now backs off like the kubelet does for a crashing container: 10s doubling to
+  a 5m cap, reset for a replica that lived 10m.
+
+- **A disallowed host path was never reported on the guest** (#591). With the
+  webhook off — the chart default — the allowlist was enforced only inside
+  `buildPod`, whose errors are logged and retried but never written to status. A
+  kernel-boot guest had no phase and no conditions at all; a disk-boot guest
+  first provisioned a full root-disk clone, then sat in Scheduling with
+  `Resolved=True` for good. The allowlist is now checked before the clone, and
+  sets the `Resolved=False` condition that was already promised.
+
+- **A schedule naming a date that never occurs spun the controller** (#586,
+  contributed by @dantonioluigi). Cron accepts `0 0 31 4 *` — 31 is a valid day
+  and 4 a valid month — and only discovers they never coincide while searching
+  forward, after which it returns the ZERO time rather than an error. The zero
+  time precedes every "now", so the tick always looked due: a snapshot named for
+  year 1, recreated a second after an operator deleted it, a requeue every
+  second, and a `Ready=True` saying it was all fine. Exactly six expressions are
+  impossible (30 and 31 February, and the 31st of April, June, September and
+  November); 29 February is not one of them and keeps working. The reconcile
+  loop also guards the zero time directly, since 29 February searched from 2097
+  genuinely has no next occurrence inside cron's five-year horizon.
+
+- **A CI check failed when it passed** (#590). `verify-render-coverage.sh` piped
+  a ~160 KB render into `grep -q`, which exits at its first match; under
+  `pipefail` the writer took SIGPIPE and the pipeline reported 141 for a check
+  that had matched, turning Render + validate red at random.
+
+### Added
+
+- **`charts/kubeswift/values.schema.json`** (#588) — Helm now rejects values keys
+  the chart does not read, at both the top level and inside each component
+  block. See the upgrade note above.
+
+### Changed
+
+- Dependencies: `connectrpc.com/connect` 1.21.0, `golang.org/x/net` 0.59.0,
+  `x/sys` 0.48.0, `x/term` 0.46.0 and 21 indirect updates (#595); the
+  codeql-action pins move to v4.38.0 (#596). govulncheck reports no reachable
+  vulnerabilities.
+
+### Docs
+
+- Chart documentation corrected where it had drifted from the chart (#589):
+  `gateway.authMode` has defaulted to `oidc` since the gateway became secure by
+  default, not `insecure`; the hub one-liner did not actually render, because
+  `role=hub` turns the gateway on and OIDC then requires an issuer and client
+  ID; and the auth guide told operators to add raw `--oidc-*` flags that the
+  chart's own guard rejects. Missing values rows filled in.
+- Install pins swept to 0.13.15, including the GitOps examples, which had sat on
+  0.13.11. `hack/verify-doc-versions.sh` now scans `examples/` as well as
+  `README.md` and `docs/`.
+
+---
+
 ## [v0.13.14] — 2026-09-11
 
 A bug-fix release for scheduled snapshots. Three separate defects in

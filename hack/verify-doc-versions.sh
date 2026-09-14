@@ -31,7 +31,7 @@ fi
 # Chart pins (--version X.Y.Z) and image pins (image.tag=vX.Y.Z), minus the
 # dev-channel placeholder which is deliberately not a real version.
 bad=$(grep -rnE -- '--version [0-9]+\.[0-9]+\.[0-9]+|image\.tag=v[0-9]+\.[0-9]+\.[0-9]+' \
-        README.md docs/ 2>/dev/null \
+        README.md docs/ examples/ 2>/dev/null \
       | grep -v '0\.0\.0-dev' \
       | grep -vE -- "--version ${chart//./\\.}([^0-9]|\$)|image\.tag=v${chart//./\\.}([^0-9]|\$)" \
       || true)
@@ -46,5 +46,5 @@ if [ -n "$bad" ]; then
 fi
 
 count=$(grep -rcE -- '--version [0-9]+\.[0-9]+\.[0-9]+|image\.tag=v[0-9]+\.[0-9]+\.[0-9]+' \
-          README.md docs/ 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
+          README.md docs/ examples/ 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
 echo "verify-doc-versions: $count install pins, all at $chart"
