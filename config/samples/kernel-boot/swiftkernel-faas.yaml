@@ -5,6 +5,10 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.2
+    # faas-minimal is a reference profile you BUILD, not a published artifact:
+    # there is no ghcr.io/kubeswift-io/kubeswift/kernels/faas to pull. Build
+    # build/kernels/faas-minimal/, push it with oras to a registry your nodes
+    # can reach, and put that reference here. See docs/swiftkernel.md.
+    image: registry.example.com/kernels/faas:6.6.1
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal

@@ -20,6 +20,24 @@ When to use disk boot:
 - Persistent root filesystems
 - Network configuration via DHCP and cloud-init
 
+## Where kernel artifacts come from
+
+Two kinds, and the difference matters before you copy a reference out of this
+page:
+
+- **Published by the project.** The sandbox kernels —
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13` and
+  `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.2` — are built and
+  pushed by the maintainers and can be referenced as-is. SwiftSandbox uses them.
+- **Built by you.** `faas-minimal` is a *reference profile*, not a published
+  artifact. `build/kernels/faas-minimal/` is the Buildroot project; you build it
+  and push the result to a registry your cluster can pull from. Every
+  `faas` reference on this page uses `registry.example.com` to make that
+  explicit — substitute your own registry. There is no
+  `ghcr.io/kubeswift-io/kubeswift/kernels/faas` to pull.
+
+Kernel artifacts are pushed manually with ORAS; they are not built by CI.
+
 ## Node setup
 
 SwiftKernel pulls artifacts only to nodes that opt in via the `kubeswift.io/kernel-node` label.
@@ -90,7 +108,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0
+    image: registry.example.com/kernels/faas:6.6.1
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```
@@ -216,7 +234,7 @@ Push from the directory containing the build outputs:
 ```bash
 cd output/images/
 
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0 \
+oras push registry.example.com/kernels/faas:6.6.1 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
 ```
@@ -233,7 +251,7 @@ Pushing from the artifact directory ensures clean layer titles (`bzImage` and `r
 ### Verify the manifest
 
 ```bash
-oras manifest fetch ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0 | jq .
+oras manifest fetch registry.example.com/kernels/faas:6.6.1 | jq .
 ```
 
 Check that:
@@ -245,7 +263,7 @@ Check that:
 
 ```bash
 mkdir -p /tmp/kernel-test && cd /tmp/kernel-test
-oras pull ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.0
+oras pull registry.example.com/kernels/faas:6.6.1
 ls -lh
 ```
 
