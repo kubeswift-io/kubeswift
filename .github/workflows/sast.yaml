@@ -150,7 +150,22 @@ jobs:
       - name: Install gosec
         env:
           GOSEC_VERSION: 'v2.28.0'
-        run: go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}
+        run: |
+          set -euo pipefail
+          # Retried: this reaches sum.golang.org to verify modules, and a run on
+          # main failed with "reading https://sum.golang.org/tile/...: stream
+          # error; INTERNAL_ERROR; received from peer". Nothing in this repo was
+          # wrong, but the job failed and left a configuration error against
+          # gosec on the Security tab that outlives the run.
+          for i in 1 2 3; do
+            if go install github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}; then
+              exit 0
+            fi
+            echo "gosec install attempt $i failed; retrying in $((i * 10))s"
+            sleep $((i * 10))
+          done
+          echo "::error::gosec install failed after 3 attempts"
+          exit 1
 
       # -no-fail is the whole gating policy in one flag. Remove it to gate,
       # but tune first (see the header).
@@ -161,9 +176,13 @@ jobs:
             ./api/... ./internal/... ./cmd/...
           test -s gosec.sarif
 
+        # always() so a scan that found something still publishes when a later
+        # step fails -- but NOT when the scan produced no file at all. Uploading a
+        # missing SARIF is what turns a transient install failure into a lasting
+        # configuration error against this tool on the Security tab.
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
-        if: always()
+        if: always() && hashFiles('gosec.sarif') != ''
         with:
           sarif_file: gosec.sarif
           category: gosec
@@ -174,6 +193,15 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          n=$(grep -o '"ruleId"' gosec.sarif 2>/dev/null | wc -l || echo 0)
+          # "0 findings" and "the scan never ran" are not the same thing, and
+          # the old wording could not tell them apart: a failed install printed
+          # "gosec reported 0 finding(s)" against a baseline of 86, which reads
+          # as a dramatic improvement rather than a broken job.
+          if [ ! -s gosec.sarif ]; then
+            echo "::warning::gosec produced no SARIF - the scan did NOT run. This is not a clean result."
+            echo "Report-only - this job does not fail the build. See the header of this workflow."
+            exit 0
+          fi
+          n=$(grep -o '"ruleId"' gosec.sarif | wc -l)
           echo "gosec reported $n finding(s). Baseline at landing: 86."
           echo "Report-only — this job does not fail the build. See the header of this workflow."
