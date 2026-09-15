@@ -204,3 +204,89 @@ func TestPull_OverExistingStaleDestination_ByteIdentical(t *testing.T) {
 		t.Errorf("pull over a stale destination must be byte-identical to source (len got=%d orig=%d); the stale tail must be truncated away", len(got), len(orig))
 	}
 }
+
+// A stored window that is MOSTLY zeros — the normal shape of a filesystem image
+// chunk — must reassemble byte-identical AND leave its zero runs unallocated.
+// Only all-zero WINDOWS are skipped at push time, so without sparse writes the
+// zeros inside a stored window became real allocated blocks, and every per-guest
+// root-disk clone copied them.
+func TestPull_ZeroRunsInsideAStoredChunk_AreNotAllocated(t *testing.T) {
+	const chunk = 8 * 1024 * 1024 // large enough that allocation is measurable
+	dir := t.TempDir()
+	src := filepath.Join(dir, "image.raw")
+
+	// One window: 4 KiB of data, a long zero run, 4 KiB of data at the end.
+	w := make([]byte, chunk)
+	copy(w[:sparseBlock], bytes.Repeat([]byte{0xAB}, sparseBlock))
+	copy(w[chunk-sparseBlock:], bytes.Repeat([]byte{0xCD}, sparseBlock))
+	writeDisk(t, src, [][]byte{w})
+
+	store := memory.New()
+	if _, _, err := ChunkAndPush(context.Background(), src, store, "v1", chunk, "raw", "linux"); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "out.raw")
+	if _, err := PullAndReassemble(context.Background(), store, "v1", dst); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(dst)
+	if !bytes.Equal(got, w) {
+		t.Fatal("reassembled chunk differs from the original")
+	}
+
+	allocated := allocatedBytes(t, dst)
+	if allocated < 0 {
+		t.Skip("filesystem does not report allocation")
+	}
+	// Two 4 KiB data blocks; allow generous filesystem overhead, but a dense write
+	// of the full 8 MiB must fail.
+	if allocated > chunk/4 {
+		t.Errorf("allocated %d bytes for a chunk with %d bytes of data — the zero run inside the stored window was written out", allocated, 2*sparseBlock)
+	}
+}
+
+// writeSparseAt must never lose data at block boundaries: non-zero bytes that
+// straddle, end, or start a block, and a final short block.
+func TestWriteSparseAt_BoundaryCases_ByteIdentical(t *testing.T) {
+	size := 3*sparseBlock + 123
+	cases := map[string]func([]byte){
+		"single byte at start":       func(b []byte) { b[0] = 1 },
+		"single byte at block end":   func(b []byte) { b[sparseBlock-1] = 1 },
+		"single byte at next start":  func(b []byte) { b[sparseBlock] = 1 },
+		"only in the short tail":     func(b []byte) { b[len(b)-1] = 1 },
+		"straddles a block boundary": func(b []byte) { b[sparseBlock-1], b[sparseBlock] = 1, 2 },
+		"all zero":                   func([]byte) {},
+		"all non-zero": func(b []byte) {
+			for i := range b {
+				b[i] = 0xFF
+			}
+		},
+	}
+	for name, fill := range cases {
+		t.Run(name, func(t *testing.T) {
+			want := make([]byte, size)
+			fill(want)
+			path := filepath.Join(t.TempDir(), "f.raw")
+			f, err := os.Create(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const off = 4 * sparseBlock // a non-zero starting offset, as for any chunk after the first
+			if err := f.Truncate(int64(off + size)); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeSparseAt(f, bytes.NewReader(want), off); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+			got, _ := os.ReadFile(path)
+			if !bytes.Equal(got[off:], want) {
+				t.Errorf("bytes differ after sparse write")
+			}
+			if !bytes.Equal(got[:off], make([]byte, off)) {
+				t.Errorf("bytes before the offset were touched")
+			}
+		})
+	}
+}

@@ -267,7 +267,7 @@ func PullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 		if err != nil {
 			return zero, fmt.Errorf("chunk %s missing/bad %s: %w", layer.Digest, ChunkOffsetAnnotation, err)
 		}
-		if err := fetchChunkAt(ctx, src, layer, f, off); err != nil {
+		if err := fetchChunkAt(ctx, src, layer, f, off, !isBlockDev); err != nil {
 			return zero, fmt.Errorf("chunk at offset %d: %w", off, err)
 		}
 	}
@@ -278,13 +278,33 @@ func PullAndReassemble(ctx context.Context, src oras.ReadOnlyTarget, ref, filePa
 // It streams (VerifyReader), NOT content.FetchAll, because FetchAll refuses any
 // blob larger than oras's 32 MiB in-memory cap (maxDescriptorSize) — chunks are
 // commonly 64 MiB — and streaming also avoids buffering the whole chunk.
-func fetchChunkAt(ctx context.Context, src oras.ReadOnlyTarget, layer ocispec.Descriptor, f *os.File, off int64) error {
+//
+// sparse skips the all-zero blocks INSIDE a chunk instead of writing them. Only
+// all-zero WINDOWS are omitted at push time, so a stored 256 MiB window that holds
+// a few MiB of filesystem data is mostly zeros — and writing those zeros out
+// allocates them. Measured on a 30 GiB guest image holding 5.69 GiB of non-zero
+// data: 43 of its 256 MiB windows contain data, so 10.75 GiB was written, and
+// every per-guest root-disk clone then copied all of it, because `cp` only
+// preserves holes the source file actually has.
+//
+// sparse is only correct where skipped bytes already read as zero: a regular file
+// that PullAndReassemble has just truncated. A block device is written densely,
+// exactly as before — it cannot be re-zeroed here, and widening the existing
+// reliance on a freshly-zeroed volume from whole windows to every zero block
+// inside them is not a trade to make silently.
+func fetchChunkAt(ctx context.Context, src oras.ReadOnlyTarget, layer ocispec.Descriptor, f *os.File, off int64, sparse bool) error {
 	rc, err := src.Fetch(ctx, layer)
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
 	vr := content.NewVerifyReader(rc, layer)
+	if sparse {
+		if err := writeSparseAt(f, vr, off); err != nil {
+			return err
+		}
+		return vr.Verify() // digest + size mismatch fails loudly
+	}
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return err
 	}
@@ -292,4 +312,49 @@ func fetchChunkAt(ctx context.Context, src oras.ReadOnlyTarget, layer ocispec.De
 		return err
 	}
 	return vr.Verify() // digest + size mismatch fails loudly
+}
+
+// sparseBlock is the granularity at which zero runs are skipped: the common
+// filesystem block size, so a skipped block is one the destination filesystem
+// can leave unallocated. Chunk offsets are multiples of the chunk size, hence
+// aligned to it.
+const sparseBlock = 4096
+
+// writeSparseAt copies r into f starting at off, writing only the blocks that
+// contain a non-zero byte and coalescing adjacent ones into a single write. Every
+// byte of r is still read, so the caller's digest verification sees the whole
+// chunk.
+func writeSparseAt(f *os.File, r io.Reader, off int64) error {
+	buf := make([]byte, 1<<20) // a multiple of sparseBlock
+	zero := make([]byte, sparseBlock)
+	for {
+		n, rerr := io.ReadFull(r, buf)
+		data := buf[:n]
+		for i := 0; i < len(data); {
+			end := min(i+sparseBlock, len(data))
+			if bytes.Equal(data[i:end], zero[:end-i]) {
+				i = end
+				continue
+			}
+			j := end
+			for j < len(data) {
+				e := min(j+sparseBlock, len(data))
+				if bytes.Equal(data[j:e], zero[:e-j]) {
+					break
+				}
+				j = e
+			}
+			if _, err := f.WriteAt(data[i:j], off+int64(i)); err != nil {
+				return err
+			}
+			i = j
+		}
+		off += int64(n)
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			return nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
 }
