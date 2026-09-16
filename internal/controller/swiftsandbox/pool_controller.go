@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +15,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -49,6 +52,44 @@ type SwiftSandboxPoolReconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Recorder  record.EventRecorder
+
+	// resolveFailures counts consecutive registry-resolve failures per pool, so
+	// the requeue can back off instead of asking again every poll interval. Keyed
+	// by pool NamespacedName; cleared on the first success. In memory on purpose:
+	// it is a retry rhythm, not state worth a status field or an API round trip.
+	resolveFailures sync.Map
+}
+
+const (
+	// resolveBackoffBase is the first wait after a resolve failure, and the step
+	// that doubles.
+	resolveBackoffBase = 10 * time.Second
+	// resolveBackoffMax caps it. Docker Hub's anonymous limit resets on the order
+	// of tens of minutes, so a capped 10 minutes keeps a stuck pool under ~11
+	// manifest requests an hour instead of ~360.
+	resolveBackoffMax = 10 * time.Minute
+)
+
+// nextResolveBackoff records one more consecutive resolve failure for this pool
+// and returns how long to wait before trying again: 10s, 20s, 40s ... capped at
+// 10m.
+func (r *SwiftSandboxPoolReconciler) nextResolveBackoff(key types.NamespacedName) time.Duration {
+	n := 1
+	if v, ok := r.resolveFailures.Load(key); ok {
+		n = v.(int) + 1
+	}
+	r.resolveFailures.Store(key, n)
+	d := time.Duration(float64(resolveBackoffBase) * math.Pow(2, float64(n-1)))
+	if d > resolveBackoffMax || d <= 0 {
+		d = resolveBackoffMax
+	}
+	return d
+}
+
+// clearResolveBackoff forgets a pool's failure streak after a successful
+// resolve, so a later failure starts from the base wait again.
+func (r *SwiftSandboxPoolReconciler) clearResolveBackoff(key types.NamespacedName) {
+	r.resolveFailures.Delete(key)
 }
 
 func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -152,8 +193,16 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		resolved, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth)
 		if err != nil {
-			return r.degraded(ctx, &pool, ready, claimed, "ImageResolveFailed", err.Error())
+			// Back off. resolveImage issues a manifest GET -- the request a
+			// registry counts as a pull -- and the old flat 10s requeue meant a
+			// pool that wanted a slot and could not resolve issued ~360 an hour
+			// against an anonymous allowance of 100, spending its whole retry
+			// budget arguing with a registry that had already said no.
+			wait := r.nextResolveBackoff(req.NamespacedName)
+			return r.degradedAfter(ctx, &pool, ready, claimed, "ImageResolveFailed",
+				fmt.Sprintf("%s (next attempt in %s)", err.Error(), wait), wait)
 		}
+		r.clearResolveBackoff(req.NamespacedName)
 		ri = &resolved
 		// Resolve the pool-shared model once (every warm slot shares the same
 		// node-cached tree). Its own registry entry (same imagePullSecret) so a
@@ -165,7 +214,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 			rm, merr := resolveModel(pool.Spec.Model, modelAuth)
 			if merr != nil {
-				return r.degraded(ctx, &pool, ready, claimed, "ModelResolveFailed", merr.Error())
+				// Same reasoning as the rootfs resolve above: this talks to a
+				// registry, so it must not retry at the poll rate.
+				wait := r.nextResolveBackoff(req.NamespacedName)
+				return r.degradedAfter(ctx, &pool, ready, claimed, "ModelResolveFailed",
+					fmt.Sprintf("%s (next attempt in %s)", merr.Error(), wait), wait)
 			}
 			modelPath = rm.TreePath
 		}
@@ -392,6 +445,17 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 
 // degraded surfaces a resolve/warm failure honestly (Resolved=False, phase=Degraded)
 // rather than stalling silently.
+// degradedAfter is degraded() with an explicit requeue, for the registry-facing
+// failures that must not retry at the normal poll rate.
+func (r *SwiftSandboxPoolReconciler) degradedAfter(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, reason, msg string, requeue time.Duration) (ctrl.Result, error) {
+	res, err := r.degraded(ctx, pool, ready, claimed, reason, msg)
+	if err != nil {
+		return res, err
+	}
+	res.RequeueAfter = requeue
+	return res, nil
+}
+
 func (r *SwiftSandboxPoolReconciler) degraded(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, ready, claimed int, reason, msg string) (ctrl.Result, error) {
 	pool.Status.WarmReplicas = int32(ready)
 	pool.Status.ClaimedReplicas = int32(claimed)
