@@ -42,9 +42,8 @@ spec:
 # Boots from the cloneStrategy: snapshot SwiftImage. Per-guest PVC
 # is provisioned via dataSource: VolumeSnapshot (clones the
 # SwiftImage's clone-seed VolumeSnapshot). On copy-on-write drivers
-# this is near-instantaneous; on Longhorn (full-copy) it's still
-# faster than the Copy Job because there's no apt-get install +
-# qemu-utils overhead.
+# this is near-instantaneous; on full-copy drivers such as Longhorn
+# it can be slower than the Copy Job.
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:
