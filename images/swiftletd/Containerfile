@@ -90,6 +90,8 @@ RUN apt-get update \
     dnsutils \
     qemu-system-x86 \
     ovmf \
+    qemu-utils \
+    gdisk \
     python3 \
     libseccomp2 \
     libcap-ng0 \
@@ -97,6 +99,9 @@ RUN apt-get update \
 
 # libseccomp2 + libcap-ng0 are the runtime libs the rust virtiofsd links
 # (built in the builder stage and copied below).
+
+# qemu-utils (qemu-img) + gdisk (sgdisk) are for the root-disk clone Job and
+# clone-grow-init, which run on this image instead of installing them per guest.
 
 # virtiofsd (rust-vmm) for the virtiofs (vhost-user-fs) path — copied from the
 # builder stage to /usr/libexec/virtiofsd, the default in swiftletd/src/launch.rs

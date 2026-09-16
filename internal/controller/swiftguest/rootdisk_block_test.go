@@ -283,3 +283,46 @@ func volumeMountNames(mounts []corev1.VolumeMount) []string {
 	}
 	return out
 }
+
+// The disk Jobs and clone-grow-init run on the launcher image, which ships
+// qemu-img and sgdisk, so no guest creation installs packages or needs the
+// network. The clone Job is its own pod, so it must also carry the launcher
+// pull secrets or a private-registry install hits ImagePullBackOff.
+func TestDiskSteps_UseLauncherImageWithoutPackageInstall(t *testing.T) {
+	const image = "registry.example/kubeswift/swiftletd:test"
+	t.Setenv(LauncherImageEnv, image)
+	t.Setenv(LauncherImagePullSecretsEnv, "regcred")
+
+	for _, mode := range []string{"Filesystem", "Block"} {
+		t.Run(mode, func(t *testing.T) {
+			rg := &resolved.ResolvedGuest{Storage: resolved.Storage{AccessMode: "ReadWriteOnce", VolumeMode: mode}}
+
+			guest := newGuestForCloneJob("g")
+			r := newReconcilerWithGuest(t, guest)
+			if err := r.createCloneJob(context.Background(), guest, rg, "clone", "src", "dst", resource.MustParse("40Gi")); err != nil {
+				t.Fatalf("createCloneJob: %v", err)
+			}
+			spec := getCreatedJob(t, r, "clone").Spec.Template.Spec
+			if got := spec.Containers[0].Image; got != image {
+				t.Errorf("clone Job image = %q, want %q", got, image)
+			}
+			if len(spec.ImagePullSecrets) != 1 || spec.ImagePullSecrets[0].Name != "regcred" {
+				t.Errorf("clone Job imagePullSecrets = %v, want [regcred]", spec.ImagePullSecrets)
+			}
+
+			grow := cloneGrowInitContainer(rg, 40<<30)
+			if grow.Image != image {
+				t.Errorf("clone-grow-init image = %q, want %q", grow.Image, image)
+			}
+
+			for name, script := range map[string]string{
+				"clone Job":       strings.Join(spec.Containers[0].Command, " "),
+				"clone-grow-init": strings.Join(grow.Command, " "),
+			} {
+				if strings.Contains(script, "apt-get") {
+					t.Errorf("%s must not install packages; got:\n%s", name, script)
+				}
+			}
+		})
+	}
+}

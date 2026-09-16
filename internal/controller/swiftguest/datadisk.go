@@ -177,11 +177,13 @@ echo "Fill complete: $(stat -c %%s /dst/image.raw) bytes"`, d.Name, bytes, bytes
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptr.To(false),
+					ImagePullSecrets:             LauncherImagePullSecrets(),
 					Containers: []corev1.Container{{
-						Name:         "fill",
-						Image:        CloneJobImage,
-						Command:      []string{"/bin/sh", "-c", script},
-						VolumeMounts: []corev1.VolumeMount{{Name: "dst", MountPath: "/dst"}},
+						Name:            "fill",
+						Image:           LauncherImage(),
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Command:         []string{"/bin/sh", "-c", script},
+						VolumeMounts:    []corev1.VolumeMount{{Name: "dst", MountPath: "/dst"}},
 					}},
 					Volumes: []corev1.Volume{{
 						Name: "dst",

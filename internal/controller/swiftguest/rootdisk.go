@@ -27,7 +27,6 @@ var swiftGuestGVK = schema.GroupVersionKind{
 const (
 	RootDiskPVCPrefix       = "swiftguest-root-"
 	CloneJobPrefix          = "swiftguest-rootclone-"
-	CloneJobImage           = "ubuntu:22.04"
 	ConditionRootDiskCloned = "RootDiskCloned"
 
 	// RestoreSeededLabel marks a per-guest root-disk PVC that was
@@ -528,7 +527,6 @@ func (r *SwiftGuestReconciler) createCloneJob(
 		// load-bearing.
 		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes, Block mode -> %s)"
-apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img convert -f raw -O raw /src/image.raw %s
 sgdisk -e %s
 sync
@@ -542,14 +540,13 @@ echo "Clone complete (Block mode)"`,
 			{Name: "dst", DevicePath: CloneJobBlockDevicePath},
 		}
 	} else {
-		// Filesystem destination — byte-identical to pre-W9 behaviour.
+		// Filesystem destination — the pre-W9 disk steps, in order.
 		// Reviewers: this branch is the regression contract; any change
-		// that alters the rendered Job for Filesystem-mode guests is a
-		// regression and the smoke test will catch it.
+		// to those steps for Filesystem-mode guests is a regression and
+		// the smoke test will catch it.
 		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes)"
 cp /src/image.raw /dst/image.raw
-apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img resize -f raw /dst/image.raw %d
 sgdisk -e /dst/image.raw
 sync
@@ -579,12 +576,16 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptr.To(false),
+					// The launcher image ships qemu-img and sgdisk, so the clone
+					// installs nothing. A separate pod, so it needs the pull secrets too.
+					ImagePullSecrets: LauncherImagePullSecrets(),
 					Containers: []corev1.Container{{
-						Name:          "clone",
-						Image:         CloneJobImage,
-						Command:       []string{"/bin/sh", "-c", script},
-						VolumeMounts:  volumeMounts,
-						VolumeDevices: volumeDevices,
+						Name:            "clone",
+						Image:           LauncherImage(),
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Command:         []string{"/bin/sh", "-c", script},
+						VolumeMounts:    volumeMounts,
+						VolumeDevices:   volumeDevices,
 					}},
 					Volumes: []corev1.Volume{
 						{
