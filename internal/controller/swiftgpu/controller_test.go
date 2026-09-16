@@ -466,3 +466,106 @@ func TestReconcile_HypervisorSelection_HGX(t *testing.T) {
 		t.Errorf("partitionID = %d, want 0", g.Status.GPU.PartitionID)
 	}
 }
+
+// launcherPod builds a launcher pod for a guest, the way podLabels() does.
+func launcherPod(guestName, ns string, terminating bool) *corev1.Pod {
+	p := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      guestName,
+			Namespace: ns,
+			Labels:    map[string]string{guestPodLabelKey: guestName},
+		},
+	}
+	if terminating {
+		now := metav1.Now()
+		p.DeletionTimestamp = &now
+		p.Finalizers = []string{"kubeswift.io/test-hold"}
+	}
+	return p
+}
+
+// The B1 reuse race: a terminating launcher's Cloud Hypervisor still holds the
+// VFIO group, so releasing the allocation while the pod exists publishes "free"
+// on the SwiftGPUNode for a device that is not. The next consumer then fails
+// with "failed to open /dev/vfio/<group> group: Resource busy".
+func TestReconcile_DeleteHoldsGPUWhileLauncherPodExists(t *testing.T) {
+	now := metav1.Now()
+	guest := testSwiftGuest("gpu-test", "default", &corev1.LocalObjectReference{Name: "pcie-profile"})
+	guest.DeletionTimestamp = &now
+	guest.Finalizers = []string{GPUFinalizerName}
+	guest.Status.GPU = &swiftv1alpha1.GPUStatus{
+		Devices: []string{"0000:17:00.0"}, Hypervisor: "cloud-hypervisor", NodeName: "gpu-node-1",
+	}
+	gpus := eightGPUs()
+	gpus[0].Allocated = true
+	gpus[0].AllocatedTo = "default/gpu-test"
+	node := testGPUNode("gpu-node-1", gpus, nil)
+
+	r := newReconciler(guest, node, launcherPod("gpu-test", "default", true))
+
+	res, err := reconcileGuest(r, "gpu-test", "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected a requeue while the launcher pod is still present")
+	}
+
+	n, _ := getGPUNode(r, "gpu-node-1")
+	stillHeld := false
+	for _, g := range n.Status.GPUs {
+		if g.AllocatedTo == "default/gpu-test" {
+			stillHeld = true
+		}
+	}
+	if !stillHeld {
+		t.Error("GPU was released while the launcher pod still exists; the next consumer would hit EBUSY on /dev/vfio")
+	}
+
+	g, _ := getGuest(r, "gpu-test", "default")
+	if !containsStr(g.Finalizers, GPUFinalizerName) {
+		t.Error("finalizer removed while the launcher pod still exists")
+	}
+}
+
+// Once the pod is gone the allocation must actually be released -- the wait
+// must not become a leak.
+func TestReconcile_DeleteReleasesOnceLauncherPodGone(t *testing.T) {
+	now := metav1.Now()
+	guest := testSwiftGuest("gpu-test", "default", &corev1.LocalObjectReference{Name: "pcie-profile"})
+	guest.DeletionTimestamp = &now
+	guest.Finalizers = []string{GPUFinalizerName}
+	guest.Status.GPU = &swiftv1alpha1.GPUStatus{
+		Devices: []string{"0000:17:00.0"}, Hypervisor: "cloud-hypervisor", NodeName: "gpu-node-1",
+	}
+	gpus := eightGPUs()
+	gpus[0].Allocated = true
+	gpus[0].AllocatedTo = "default/gpu-test"
+	node := testGPUNode("gpu-node-1", gpus, nil)
+
+	// No launcher pod: the pod object is gone, so CH is gone with it.
+	r := newReconciler(guest, node)
+
+	if _, err := reconcileGuest(r, "gpu-test", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	n, _ := getGPUNode(r, "gpu-node-1")
+	for _, g := range n.Status.GPUs {
+		if g.AllocatedTo == "default/gpu-test" {
+			t.Errorf("GPU %s still allocated after the launcher pod is gone", g.PCIAddress)
+		}
+	}
+	g, _ := getGuest(r, "gpu-test", "default")
+	if containsStr(g.Finalizers, GPUFinalizerName) {
+		t.Error("finalizer should be removed once the launcher pod is gone")
+	}
+}
+
+func containsStr(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}

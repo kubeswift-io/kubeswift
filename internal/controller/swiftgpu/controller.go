@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,9 +61,27 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	backend := r.backend(backendName)
 
-	// Handle deletion: release the allocation and remove the finalizer.
+	// Handle deletion: release the allocation and remove the finalizer -- but
+	// not before the launcher pod is gone.
+	//
+	// A terminating launcher's Cloud Hypervisor still holds the VFIO group, so
+	// releasing on DeletionTimestamp alone publishes "free" on the SwiftGPUNode
+	// while the device is not. The next consumer then allocates it and fails to
+	// boot with `failed to open /dev/vfio/<group> group: Resource busy`, and
+	// (for a pool slot) stays in Error holding the allocation. The sandbox pool
+	// already waits this way in reconcileSlotGPUGC; this is the same rule for
+	// the SwiftGuest path.
 	if !guest.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&guest, GPUFinalizerName) {
+			held, podName, err := r.launcherStillPresent(ctx, &guest)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if held {
+				logger.Info("GPU release deferred: launcher pod still present, it may still hold the VFIO group",
+					"guest", req.NamespacedName, "pod", podName)
+				return ctrl.Result{RequeueAfter: gpuReleaseWaitInterval}, nil
+			}
 			if err := backend.Release(ctx, &guest); err != nil {
 				logger.Error(err, "GPU release failed", "backend", backendName)
 				return ctrl.Result{}, err
@@ -254,4 +273,31 @@ func (r *SwiftGPUReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapGPUNodeToSwiftGuests),
 		).
 		Complete(r)
+}
+
+// guestPodLabelKey selects a guest's launcher pod. Matches podLabels() in the
+// swiftguest controller.
+const guestPodLabelKey = "swift.kubeswift.io/guest"
+
+// gpuReleaseWaitInterval is how often deletion re-checks whether the launcher
+// pod has gone. Short, because the wait is normally a few seconds of pod
+// termination and the GPU is unusable by anyone else until it ends.
+const gpuReleaseWaitInterval = 5 * time.Second
+
+// launcherStillPresent reports whether the guest's launcher pod still exists,
+// and its name for logging. A pod that is Terminating still counts: its Cloud
+// Hypervisor can hold the VFIO group right up to the moment the pod object
+// goes, which is precisely the window this guards.
+func (r *SwiftGPUReconciler) launcherStillPresent(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (bool, string, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(guest.Namespace),
+		client.MatchingLabels{guestPodLabelKey: guest.Name},
+	); err != nil {
+		return false, "", err
+	}
+	if len(pods.Items) == 0 {
+		return false, "", nil
+	}
+	return true, pods.Items[0].Name, nil
 }
