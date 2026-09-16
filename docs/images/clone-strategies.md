@@ -11,7 +11,7 @@ When a SwiftGuest boots from a SwiftImage, KubeSwift produces a per-guest root-d
 | `copy` (default) | Per-guest Copy Job: `cp` from the SwiftImage PVC to the new PVC, then `qemu-img resize` + `sgdisk -e` | Any CSI driver, including non-snapshot-capable ones (local-path, NFS, hostPath) |
 | `snapshot` | CSI VolumeSnapshot of the SwiftImage PVC + per-guest `dataSource: VolumeSnapshot` clones, expand-and-wait gate before guest pod schedule | Snapshot-capable CSI drivers (Longhorn, Rook Ceph, EBS, GCE PD) |
 
-The `snapshot` strategy is substantially faster on most snapshot-capable drivers because it skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble) and the Copy Job's `apt-get install qemu-utils`. On true copy-on-write drivers (Rook Ceph, EBS, GCE PD) the speedup is dramatic — the `dataSource` clone and the expand are metadata operations, not data copies.
+The `snapshot` strategy is substantially faster on most snapshot-capable drivers because it skips the per-guest `cp` (≈8–12 GiB read + write for Ubuntu Noble). On true copy-on-write drivers (Rook Ceph, EBS, GCE PD) the speedup is dramatic — the `dataSource` clone and the expand are metadata operations, not data copies.
 
 > **Caveat — full-copy drivers at single-guest scale can be *slower* with `snapshot`.**
 > On a full-copy driver like Longhorn the `dataSource` clone is itself a full

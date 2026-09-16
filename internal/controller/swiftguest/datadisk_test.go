@@ -69,6 +69,7 @@ func TestEnsureBlankDataDisks_CreatesBlockPVCThenGates(t *testing.T) {
 // TestEnsureBlankDataDisks_FilesystemRunsFillJob: a Filesystem blank disk binds,
 // then a fill Job is created and gated on.
 func TestEnsureBlankDataDisks_FilesystemRunsFillJob(t *testing.T) {
+	t.Setenv(LauncherImagePullSecretsEnv, "regcred")
 	scheme := rootdiskScheme(t)
 	fsMode := corev1.PersistentVolumeFilesystem
 	pvc := &corev1.PersistentVolumeClaim{
@@ -89,6 +90,10 @@ func TestEnsureBlankDataDisks_FilesystemRunsFillJob(t *testing.T) {
 	var job batchv1.Job
 	if err := c.Get(context.Background(), client.ObjectKey{Name: blankFillJobName("bg", "fs"), Namespace: "default"}, &job); err != nil {
 		t.Fatalf("fill Job not created: %v", err)
+	}
+	if spec := job.Spec.Template.Spec; spec.Containers[0].Image != LauncherImage() || len(spec.ImagePullSecrets) != 1 {
+		t.Errorf("fill Job must run on the launcher image with its pull secrets; got image %q, secrets %v",
+			spec.Containers[0].Image, spec.ImagePullSecrets)
 	}
 	script := job.Spec.Template.Spec.Containers[0].Command[2]
 	if !strings.Contains(script, "truncate -s") {
