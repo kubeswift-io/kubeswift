@@ -459,8 +459,8 @@ func TestBuildPod_CloneGrowInit_WhenNeedsGrowInit(t *testing.T) {
 	if grow.Name != "clone-grow-init" {
 		t.Errorf("initContainers[0] name = %q, want clone-grow-init", grow.Name)
 	}
-	if grow.Image != CloneGrowInitImage {
-		t.Errorf("initContainers[0] image = %q, want %q", grow.Image, CloneGrowInitImage)
+	if grow.Image != CloneGrowInitImage() {
+		t.Errorf("initContainers[0] image = %q, want %q", grow.Image, CloneGrowInitImage())
 	}
 	if pod.Spec.InitContainers[1].Name != "network-init" {
 		t.Errorf("initContainers[1] name = %q, want network-init (clone-grow-init must run first)", pod.Spec.InitContainers[1].Name)

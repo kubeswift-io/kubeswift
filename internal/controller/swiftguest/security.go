@@ -10,8 +10,12 @@ import (
 )
 
 // CloneGrowInitImage is the image used by clone-grow-init.
-// ubuntu:22.04 matches CloneJobImage and ships qemu-utils + gdisk via apt.
-const CloneGrowInitImage = "ubuntu:22.04"
+//
+// The launcher image: it carries qemu-img and sgdisk, and this container runs
+// as an init container in the launcher pod, which is pulling that image anyway.
+// It previously ran a stock ubuntu and apt-get installed them on every guest
+// start.
+func CloneGrowInitImage() string { return LauncherImage() }
 
 // privilegedContext returns a privileged security context.
 // Used by network-init, gpu-init, and launcher containers which need deep
@@ -90,8 +94,6 @@ func cloneGrowInitContainer(rg *resolved.ResolvedGuest, targetBytes int64) corev
 		// the raw image to the block device).
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: Block mode, target=%d bytes, device=%s"
-apt-get update -qq
-apt-get install -y -qq gdisk >/dev/null 2>&1
 sgdisk -e %s
 sync
 echo "clone-grow-init: complete (Block)"`,
@@ -105,8 +107,6 @@ echo "clone-grow-init: complete (Block)"`,
 		// every existing SwiftGuest (the default volumeMode).
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: target=%d bytes"
-apt-get update -qq
-apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img resize -f raw %s/image.raw %d
 sgdisk -e %s/image.raw
 sync
@@ -119,7 +119,7 @@ echo "clone-grow-init: complete ($(stat -c %%s %s/image.raw) bytes)"`,
 
 	return corev1.Container{
 		Name:            "clone-grow-init",
-		Image:           CloneGrowInitImage,
+		Image:           CloneGrowInitImage(),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Command:         []string{"/bin/sh", "-c", script},
 		SecurityContext: privilegedContext(),

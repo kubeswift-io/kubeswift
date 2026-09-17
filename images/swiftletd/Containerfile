@@ -64,6 +64,12 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${GIT_COMMIT}"
+# qemu-utils (qemu-img) and gdisk (sgdisk) are here for the root-disk clone
+# Job and the clone-grow-init container. They used to run a stock ubuntu and
+# apt-get install these on EVERY clone, which put a network round-trip and an
+# apt mirror in the path of every guest creation. This image is already on any
+# node that runs guests, so reusing it costs no pull either.
+#
 # Patch base-layer packages. `apt-get install` only resolves the packages named
 # below -- it never upgrades what the base image already ships, so a CVE fixed
 # in Debian but not yet rebuilt into debian:bookworm-slim stays in the image
@@ -89,6 +95,8 @@ RUN apt-get update \
     bash-completion \
     dnsutils \
     qemu-system-x86 \
+    qemu-utils \
+    gdisk \
     ovmf \
     python3 \
     libseccomp2 \
