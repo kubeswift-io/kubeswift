@@ -27,7 +27,6 @@ var swiftGuestGVK = schema.GroupVersionKind{
 const (
 	RootDiskPVCPrefix       = "swiftguest-root-"
 	CloneJobPrefix          = "swiftguest-rootclone-"
-	CloneJobImage           = "ubuntu:22.04"
 	ConditionRootDiskCloned = "RootDiskCloned"
 
 	// RestoreSeededLabel marks a per-guest root-disk PVC that was
@@ -528,7 +527,6 @@ func (r *SwiftGuestReconciler) createCloneJob(
 		// load-bearing.
 		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes, Block mode -> %s)"
-apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img convert -f raw -O raw /src/image.raw %s
 sgdisk -e %s
 sync
@@ -549,7 +547,6 @@ echo "Clone complete (Block mode)"`,
 		script = fmt.Sprintf(`set -e
 echo "Cloning root disk from %s to %s (%d bytes)"
 cp /src/image.raw /dst/image.raw
-apt-get update -qq && apt-get install -y -qq qemu-utils gdisk >/dev/null 2>&1
 qemu-img resize -f raw /dst/image.raw %d
 sgdisk -e /dst/image.raw
 sync
@@ -581,7 +578,7 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:          "clone",
-						Image:         CloneJobImage,
+						Image:         CloneJobImage(),
 						Command:       []string{"/bin/sh", "-c", script},
 						VolumeMounts:  volumeMounts,
 						VolumeDevices: volumeDevices,
@@ -638,3 +635,12 @@ func isJobFailed(job *batchv1.Job) bool {
 	}
 	return false
 }
+
+// CloneJobImage is the image the root-disk clone and data-disk fill Jobs run.
+//
+// The launcher image, which carries qemu-img and sgdisk. These Jobs used to run
+// a stock ubuntu and apt-get install those on every clone, putting a network
+// round-trip and an apt mirror in the path of every guest creation -- and
+// failing outright where nodes cannot reach one. Reusing the launcher also
+// costs no extra pull: any node that runs guests already has it.
+func CloneJobImage() string { return LauncherImage() }

@@ -179,7 +179,7 @@ echo "Fill complete: $(stat -c %%s /dst/image.raw) bytes"`, d.Name, bytes, bytes
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
 						Name:         "fill",
-						Image:        CloneJobImage,
+						Image:        CloneJobImage(),
 						Command:      []string{"/bin/sh", "-c", script},
 						VolumeMounts: []corev1.VolumeMount{{Name: "dst", MountPath: "/dst"}},
 					}},
