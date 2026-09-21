@@ -90,6 +90,24 @@ func (m *Manager) runner() Runner {
 	return execRunner{}
 }
 
+// dmsetup runs a dmsetup subcommand with udev synchronisation DISABLED.
+//
+// --noudevsync is not a tuning flag, it is the difference between working and
+// hanging forever. dmsetup creates a semaphore and waits for udev to signal
+// that it has finished processing the new device. Inside a container there is
+// no udev to answer, so the call blocks in __do_semtimedop and never returns —
+// observed on a dev node as `dmsetup create` wedged indefinitely while the
+// kernel-side device had in fact been created, leaving a pool nothing would
+// clean up.
+//
+// Every launcher and node component here runs in a pod, so this applies to all
+// of them, always. The cost is that /dev/mapper nodes are created by
+// device-mapper itself rather than by udev rules, which is what we want on a
+// node whose udev knows nothing about these devices anyway.
+func (m *Manager) dmsetup(ctx context.Context, args ...string) (string, error) {
+	return m.runner().Run(ctx, "dmsetup", append([]string{"--noudevsync"}, args...)...)
+}
+
 // poolTable builds the thin-pool table line.
 //
 // The feature arguments are the settled ones and each is load-bearing:
@@ -117,13 +135,13 @@ func (m *Manager) EnsurePool(ctx context.Context, lengthSectors uint64) error {
 	} else if ok {
 		return nil
 	}
-	_, err := m.runner().Run(ctx, "dmsetup", "create", m.Pool, "--table", m.poolTable(lengthSectors))
+	_, err := m.dmsetup(ctx, "create", m.Pool, "--table", m.poolTable(lengthSectors))
 	return err
 }
 
 // Status reads and parses the pool's status.
 func (m *Manager) Status(ctx context.Context) (Status, error) {
-	out, err := m.runner().Run(ctx, "dmsetup", "status", m.Pool)
+	out, err := m.dmsetup(ctx, "status", m.Pool)
 	if err != nil {
 		return Status{}, err
 	}
@@ -137,7 +155,7 @@ func (m *Manager) Status(ctx context.Context) (Status, error) {
 // is only needed while populating it. Guests derived from it do not reference
 // the device — see SnapshotBase.
 func (m *Manager) CreateBase(ctx context.Context, deviceID uint32, name string, sizeSectors uint64) error {
-	if _, err := m.runner().Run(ctx, "dmsetup", "message", m.devPath(m.Pool), "0",
+	if _, err := m.dmsetup(ctx, "message", m.Pool, "0",
 		fmt.Sprintf("create_thin %d", deviceID)); err != nil {
 		return fmt.Errorf("create_thin %d: %w", deviceID, err)
 	}
@@ -158,7 +176,7 @@ func (m *Manager) CreateBase(ctx context.Context, deviceID uint32, name string, 
 // no per-guest serialisation point across the node. Suspending a shared origin
 // for every guest creation would be exactly that.
 func (m *Manager) SnapshotBase(ctx context.Context, baseID, deviceID uint32, name string, sizeSectors uint64) error {
-	if _, err := m.runner().Run(ctx, "dmsetup", "message", m.devPath(m.Pool), "0",
+	if _, err := m.dmsetup(ctx, "message", m.Pool, "0",
 		fmt.Sprintf("create_snap %d %d", deviceID, baseID)); err != nil {
 		return fmt.Errorf("create_snap %d from %d: %w", deviceID, baseID, err)
 	}
@@ -166,9 +184,42 @@ func (m *Manager) SnapshotBase(ctx context.Context, baseID, deviceID uint32, nam
 }
 
 func (m *Manager) activate(ctx context.Context, name string, deviceID uint32, sizeSectors uint64) error {
-	table := fmt.Sprintf("0 %d thin %s %d", sizeSectors, m.devPath(m.Pool), deviceID)
-	_, err := m.runner().Run(ctx, "dmsetup", "create", name, "--table", table)
+	pool, err := m.poolDevRef(ctx)
+	if err != nil {
+		return err
+	}
+	table := fmt.Sprintf("0 %d thin %s %d", sizeSectors, pool, deviceID)
+	if _, err = m.dmsetup(ctx, "create", name, "--table", table); err != nil {
+		return err
+	}
+	// With udev sync disabled nothing creates /dev/mapper/<name>, and the
+	// launcher needs a real path to hand Cloud Hypervisor (--disk path=...).
+	// mknodes is the explicit form of what udev would have done.
+	_, err = m.dmsetup(ctx, "mknodes", name)
 	return err
+}
+
+// DevicePath is where an activated device appears. Valid only after the device
+// has been created, because the node is made by mknodes rather than by udev.
+func (m *Manager) DevicePath(name string) string { return "/dev/mapper/" + name }
+
+// poolDevRef returns the pool as "major:minor".
+//
+// Device-mapper accepts either a path or major:minor in a table, and this
+// deliberately avoids the path. With --noudevsync (which is mandatory in a
+// container, see dmsetup) nothing creates /dev/mapper/<name>, so a table
+// referring to that path fails with "not found" on a pool that exists and is
+// perfectly healthy. major:minor is what the kernel wants anyway.
+func (m *Manager) poolDevRef(ctx context.Context) (string, error) {
+	out, err := m.dmsetup(ctx, "info", "-c", "--noheadings", "-o", "major,minor", m.Pool)
+	if err != nil {
+		return "", fmt.Errorf("resolving pool %s: %w", m.Pool, err)
+	}
+	ref := strings.TrimSpace(out)
+	if ref == "" || !strings.Contains(ref, ":") {
+		return "", fmt.Errorf("pool %s: unexpected major,minor %q", m.Pool, ref)
+	}
+	return ref, nil
 }
 
 // RemoveDevice deactivates a thin device's node. The data is untouched; only
@@ -181,7 +232,7 @@ func (m *Manager) activate(ctx context.Context, name string, deviceID uint32, si
 // dmsetup's own retry loop is the fix rather than a sleep, because the
 // condition is "udev has let go", not "some duration has passed".
 func (m *Manager) RemoveDevice(ctx context.Context, name string) error {
-	_, err := m.runner().Run(ctx, "dmsetup", "remove", "--retry", name)
+	_, err := m.dmsetup(ctx, "remove", "--retry", name)
 	return err
 }
 
@@ -194,7 +245,7 @@ func (m *Manager) RemoveDevice(ctx context.Context, name string) error {
 // creating the NEXT guest, not a dependency of the running ones — which is why
 // eviction needs no policy beyond "oldest unused first".
 func (m *Manager) DeleteThin(ctx context.Context, deviceID uint32) error {
-	_, err := m.runner().Run(ctx, "dmsetup", "message", m.devPath(m.Pool), "0",
+	_, err := m.dmsetup(ctx, "message", m.Pool, "0",
 		fmt.Sprintf("delete %d", deviceID))
 	return err
 }
@@ -219,18 +270,17 @@ func (m *Manager) GrowMetadata(ctx context.Context, lengthSectors uint64) error 
 }
 
 func (m *Manager) reload(ctx context.Context, lengthSectors uint64) error {
-	r := m.runner()
-	if _, err := r.Run(ctx, "dmsetup", "suspend", m.Pool); err != nil {
+	if _, err := m.dmsetup(ctx, "suspend", m.Pool); err != nil {
 		return err
 	}
-	if _, err := r.Run(ctx, "dmsetup", "reload", m.Pool, "--table", m.poolTable(lengthSectors)); err != nil {
+	if _, err := m.dmsetup(ctx, "reload", m.Pool, "--table", m.poolTable(lengthSectors)); err != nil {
 		// Leaving the pool suspended would wedge every guest on the node, so
 		// resume even on a failed reload: the old table is still loaded and
 		// serving.
-		_, _ = r.Run(ctx, "dmsetup", "resume", m.Pool)
+		_, _ = m.dmsetup(ctx, "resume", m.Pool)
 		return err
 	}
-	_, err := r.Run(ctx, "dmsetup", "resume", m.Pool)
+	_, err := m.dmsetup(ctx, "resume", m.Pool)
 	return err
 }
 
@@ -245,7 +295,7 @@ func (m *Manager) reload(ctx context.Context, lengthSectors uint64) error {
 // `dmsetup ls` exits 0 either way and absence is simply a line that is not
 // there.
 func (m *Manager) exists(ctx context.Context, name string) (bool, error) {
-	out, err := m.runner().Run(ctx, "dmsetup", "ls")
+	out, err := m.dmsetup(ctx, "ls")
 	if err != nil {
 		return false, err
 	}
@@ -257,5 +307,3 @@ func (m *Manager) exists(ctx context.Context, name string) (bool, error) {
 	}
 	return false, nil
 }
-
-func (m *Manager) devPath(name string) string { return "/dev/mapper/" + name }
