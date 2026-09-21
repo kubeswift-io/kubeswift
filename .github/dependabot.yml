@@ -29,6 +29,25 @@ updates:
     # (weekly, grouped, capped) -- and the groups below absorb most of it.
     allow:
       - dependency-type: all
+    ignore:
+      # grpc 1.84.0 carries GO-2026-6443, and govulncheck finds it REACHABLE
+      # from the DRA driver:
+      #
+      #   cmd/kubeswift-dra-driver/main.go:78 -> kubeletplugin.Start
+      #     -> transport.http2Server.HandleStreams
+      #
+      # Upgrading to it would regress a tree that is currently clean on 1.83.2,
+      # and the fix exists only in a v1.85.0-dev pre-release. #610 proposed it
+      # and failed its own Go vulnerabilities gate, which is the system working
+      # -- but left to itself Dependabot re-proposes the same version weekly,
+      # and a gate that goes red every week for a known reason is a gate people
+      # start clicking past.
+      #
+      # Pinned to the ONE bad version, not the dependency: 1.85.0 and anything
+      # later is proposed as normal, so this lifts itself the moment a fixed
+      # release lands.
+      - dependency-name: "google.golang.org/grpc"
+        versions: ["1.84.0"]
     groups:
       # k8s libraries move in lockstep; separate PRs for each would not build.
       #
