@@ -208,6 +208,9 @@ verify-image-tags:
 verify-values-schema:
 	./hack/verify-values-schema.sh
 
+verify-chart-readme:
+	./hack/verify-chart-readme.sh
+
 verify-cosign-interop: ## Cross-check that our cosign signatures verify (#486). Needs docker.
 	@# Not in any CI gate: it pulls release binaries and runs a local registry.
 	@# Run it before changing how anything is signed or verified.
