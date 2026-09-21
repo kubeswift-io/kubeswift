@@ -138,7 +138,9 @@ dra:
 #   hub: the management plane — presets gateway.enabled + ui.enabled AND
 #     self-registers THIS cluster as a local fleet member (federation.selfRegister)
 #     so the UI lists the hub's own VMs with no hand-made credential Secret.
-#   edge: a federated member cluster (edge onboarding lands in a follow-up PR).
+#   edge: a federated member cluster — mints the member ServiceAccount, token
+#     Secret and member-RBAC, and prints the apply-ready Cluster + Secret to run
+#     on the hub (see federation.edge below).
 federation:
   role: standalone # standalone | hub | edge
   # Self-register this cluster as a local fleet member. Applies only to role=hub.
