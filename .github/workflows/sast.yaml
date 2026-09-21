@@ -103,7 +103,7 @@ jobs:
       # `codeql-action`, so the trio arrives as a single PR — keep that group if
       # you touch these pins, it is what keeps them in step.
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           languages: go
           # The DEFAULT query suite, not security-extended. #466 chose this for
@@ -123,7 +123,7 @@ jobs:
         run: go build ./api/... ./internal/... ./cmd/...
 
       - name: Analyze
-        uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           category: codeql-go
 
@@ -181,7 +181,7 @@ jobs:
         # missing SARIF is what turns a transient install failure into a lasting
         # configuration error against this tool on the Security tab.
       - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         if: always() && hashFiles('gosec.sarif') != ''
         with:
           sarif_file: gosec.sarif
