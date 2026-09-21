@@ -371,3 +371,110 @@ func trunc(b []byte) string {
 	}
 	return string(b)
 }
+
+// The fake runner can assert that direct I/O is verified; only this can show it
+// actually takes effect on a real filesystem. losetup accepts --direct-io=on
+// and can still leave it off, and the difference is whether a guest's
+// acknowledged write survives a node crash.
+func TestIntegration_LoopBackingEnablesDirectIO(t *testing.T) {
+	itEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.img")
+
+	b := Backing{File: path, FileBytes: 64 << 20}
+	dev, err := b.Resolve(context.Background(), execRunner{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("losetup", "-d", dev).Run() })
+
+	out, err := exec.Command("losetup", "-l", "--noheadings", "-O", "DIO", dev).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "1" {
+		t.Fatalf("loop %s reports DIO=%q, want 1 — writes would be acknowledged from the page cache", dev, got)
+	}
+
+	// Resolving again must reuse the same device rather than stacking a second
+	// loop over the same file, which would give the node two views of one pool.
+	again, err := b.Resolve(context.Background(), execRunner{})
+	if err != nil {
+		t.Fatalf("second Resolve: %v", err)
+	}
+	if again != dev {
+		t.Errorf("second Resolve attached %s as well as %s", again, dev)
+	}
+}
+
+// End to end through the pieces a node actually uses: backing file -> loop ->
+// pool -> registry-allocated base -> per-guest snapshot.
+func TestIntegration_NodeStateEndToEnd(t *testing.T) {
+	itEnv(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	data := Backing{File: filepath.Join(dir, "data.img"), FileBytes: 512 << 20}
+	meta := Backing{File: filepath.Join(dir, "meta.img"), FileBytes: 64 << 20}
+	dataDev, err := data.Resolve(ctx, execRunner{})
+	if err != nil {
+		t.Fatalf("data backing: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("losetup", "-d", dataDev).Run() })
+	metaDev, err := meta.Resolve(ctx, execRunner{})
+	if err != nil {
+		t.Fatalf("meta backing: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("losetup", "-d", metaDev).Run() })
+
+	pool := "ksit-nodestate"
+	_ = exec.Command("dmsetup", "remove", "-f", "--noudevsync", pool).Run()
+	m := &Manager{Pool: pool, DataDev: dataDev, MetaDev: metaDev}
+	t.Cleanup(func() { _ = exec.Command("dmsetup", "remove", "-f", "--noudevsync", pool).Run() })
+	if err := m.EnsurePool(ctx, (512<<20)/sector); err != nil {
+		t.Fatalf("EnsurePool: %v", err)
+	}
+
+	reg := NewRegistry(DefaultRegistryPath(dir))
+	const digest = "sha256:deadbeef"
+	baseID, fresh, err := reg.AllocateBase(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fresh {
+		t.Fatal("a digest this node has never seen reported not fresh")
+	}
+
+	const baseBytes = 16 << 20
+	if err := m.CreateBase(ctx, baseID, "ksit-ns-base", baseBytes/sector); err != nil {
+		t.Fatalf("CreateBase: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("dmsetup", "remove", "--retry", "--noudevsync", "ksit-ns-base").Run() })
+	content := bytes.Repeat([]byte("NODE-STATE-BASE!"), baseBytes/16)
+	ddWrite(t, m.DevicePath("ksit-ns-base"), content)
+	if err := m.RemoveDevice(ctx, "ksit-ns-base"); err != nil {
+		t.Fatal(err)
+	}
+
+	guestID, _, err := reg.AllocateGuest("ns/guest-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guestID == baseID {
+		t.Fatalf("guest and base share device id %d", guestID)
+	}
+	if err := m.SnapshotBase(ctx, baseID, guestID, "ksit-ns-g1", (64<<20)/sector); err != nil {
+		t.Fatalf("SnapshotBase: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("dmsetup", "remove", "--retry", "--noudevsync", "ksit-ns-g1").Run() })
+
+	if got := ddRead(t, m.DevicePath("ksit-ns-g1"), 0, len(content)); !bytes.Equal(got, content) {
+		t.Error("the guest does not see the base written through the registry-allocated id")
+	}
+	// A second guest from the same digest must reuse the base, not repopulate.
+	if _, fresh, err := reg.AllocateBase(digest); err != nil {
+		t.Fatal(err)
+	} else if fresh {
+		t.Error("the second guest reported the base as fresh; it would be written over a live one")
+	}
+}
