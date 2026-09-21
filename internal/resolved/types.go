@@ -84,6 +84,12 @@ type ResolvedGuest struct {
 	// Hugepages is the guest-RAM page size from the SwiftGuestClass, in
 	// Kubernetes units ("2Mi"/"1Gi"); empty means ordinary 4K pages.
 	Hugepages string `json:"hugepages,omitempty"`
+	// SharedBaseDisk is the SwiftGuestClass opt-in to a copy-on-write root disk
+	// over a node-local, digest-keyed base. It changes where the disk LIVES —
+	// a dm-thin pool on the node rather than a PVC — so it also decides which
+	// storage-layer features are available: no Tier A snapshot, no live
+	// migration, no replication.
+	SharedBaseDisk bool `json:"sharedBaseDisk,omitempty"`
 	// GuestAgentEnabled is true for a SOURCE guest that opted into the in-guest
 	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
 	// The resolver sets it false for a clone (cloneFromSnapshot): a clone

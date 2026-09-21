@@ -303,6 +303,9 @@ func newSchemeForMemoryTests(t *testing.T) *runtime.Scheme {
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSwift,
 		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		// The shared-base guard resolves a guest's class; without the class
+		// type registered the lookup panics instead of failing.
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
 	)
 	metav1.AddToGroupVersion(s, gvSwift)
 	return s
@@ -510,5 +513,56 @@ func TestValidate_IncludeDisk_RequiresMemory(t *testing.T) {
 	_, err := v.ValidateCreate(context.Background(), s)
 	if err == nil || !strings.Contains(err.Error(), "requires spec.includeMemory") {
 		t.Errorf("includeDisk without includeMemory must be rejected; got %v", err)
+	}
+}
+
+// Tier A captures a CSI VolumeSnapshot of the guest's root PVC, and a
+// shared-base guest has no root PVC — its disk is a thin snapshot in a
+// node-local pool. Refusing at admission gives the operator the answer when
+// they apply, instead of a snapshot that sits Pending and then fails claiming a
+// PVC "disappeared" that never existed.
+func TestValidate_CSIBackend_SharedBaseGuestIsRefused(t *testing.T) {
+	scheme := newSchemeForMemoryTests(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	// Cluster-scoped: no namespace.
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	err := v.validateSwiftSnapshot(context.Background(), makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot))
+	if err == nil {
+		t.Fatal("a csi snapshot of a sharedBaseDisk guest was accepted; it can never succeed")
+	}
+	for _, want := range []string{"sharedBaseDisk", "shared", "local"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal should mention %q: %v", want, err)
+		}
+	}
+}
+
+// Tier B and Tier C capture through the running guest, not the PVC, so they are
+// unaffected. Refusing them too would remove the only snapshot paths a
+// shared-base guest has.
+func TestValidate_LocalBackend_SharedBaseGuestIsAllowed(t *testing.T) {
+	scheme := newSchemeForMemoryTests(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	if err := v.validateSwiftSnapshot(context.Background(), makeSnap(snapshotv1alpha1.SnapshotBackendLocal)); err != nil {
+		t.Errorf("a local (Tier B) snapshot of a sharedBaseDisk guest must be allowed: %v", err)
 	}
 }

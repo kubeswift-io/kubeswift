@@ -16,6 +16,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // HypervisorOverrideAnnotation matches the constant in the SwiftGuest
@@ -128,6 +129,25 @@ func (v *Validator) validateSwiftSnapshot(ctx context.Context, snap *snapshotv1a
 	// bypassed the check while the capture included memory anyway.
 	if backendCapturesMemory(snap) && v.Client != nil {
 		return v.validateMemoryCaptureCompat(ctx, snap)
+	}
+	// Tier A needs a PVC, and a shared-base guest's root disk is a thin
+	// snapshot in a node-local pool. Refusing here gives the operator the
+	// answer at apply time; the controller refuses too, because this webhook is
+	// off by default (webhook.enabled=false) and a guard only one of them
+	// enforces is a guard that mostly does not run.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot && v.Client != nil {
+		return v.validateNotSharedBase(ctx, snap)
+	}
+	return nil
+}
+
+func (v *Validator) validateNotSharedBase(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) error {
+	shared, className, err := sharedbase.GuestUsesSharedBase(ctx, v.Client, snap.Namespace, snap.Spec.GuestRef.Name)
+	if err != nil {
+		return err
+	}
+	if shared {
+		return fmt.Errorf("%s", sharedbase.CSISnapshotRefusal(snap.Spec.GuestRef.Name, className))
 	}
 	return nil
 }

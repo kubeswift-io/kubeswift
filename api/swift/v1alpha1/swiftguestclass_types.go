@@ -139,6 +139,30 @@ type SwiftGuestClassSpec struct {
 	// +kubebuilder:default=spread
 	// +optional
 	SMTPolicy SMTPolicy `json:"smtPolicy,omitempty"`
+	// SharedBaseDisk gives guests of this class a root disk that is a
+	// copy-on-write thin snapshot of a node-local, digest-keyed base image,
+	// instead of a full private copy. Guests sharing an image then cost only
+	// what they write.
+	//
+	// The trade is storage-layer guarantees, and it is not subtle. The base and
+	// every overlay live in a node-local dm-thin pool, NOT in a PVC, so:
+	//
+	//   - the disk is not replicated — losing the node loses every guest on it,
+	//     where a CSI-backed root disk survives and reschedules;
+	//   - Tier A (CSI VolumeSnapshot) snapshots are refused, because there is no
+	//     PVC to snapshot;
+	//   - live migration is refused, because it relies on shared storage and
+	//     moving a node-local overlay would mean storage live migration.
+	//
+	// Tier B and Tier C snapshots, cold migration and rootDisk.size all work
+	// unchanged. This suits fleets of similar, rebuildable guests — pool
+	// replicas, CI workers, short-lived guests — and does not suit a guest
+	// whose disk is the thing that matters.
+	//
+	// +kubebuilder:default=false
+	// +optional
+	SharedBaseDisk bool `json:"sharedBaseDisk,omitempty"`
+
 	// Hugepages backs this class's guest RAM with hugepages of the given size.
 	// Empty (default) keeps ordinary 4K pages. The launcher pod then requests
 	// `hugepages-<size>` equal to the guest's memory instead of that much

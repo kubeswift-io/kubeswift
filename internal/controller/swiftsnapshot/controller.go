@@ -31,6 +31,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // SwiftSnapshotReconciler reconciles SwiftSnapshot resources.
@@ -215,6 +216,22 @@ func (r *SwiftSnapshotReconciler) handlePending(
 	//                       node-local dir), then upload to S3 in the Uploading phase
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
+		// A shared-base guest has no root PVC, so Tier A can never succeed for
+		// it. Fail TERMINALLY here rather than let it reach guestRootPVC and
+		// report a PVC that "disappeared" — the disk was never a PVC, and a
+		// misleading error is worse than none (Principle #6, #10). The webhook
+		// refuses this too, but it is off by default, so this is the path that
+		// actually runs.
+		shared, className, err := sharedbase.GuestUsesSharedBase(ctx, r.Client, snap.Namespace, snap.Spec.GuestRef.Name)
+		if err != nil {
+			return false, 0, err
+		}
+		if shared {
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonUnsupportedBackend,
+				sharedbase.CSISnapshotRefusal(snap.Spec.GuestRef.Name, className))
+			return true, 0, nil
+		}
 		// Falls through to the existing csi-volume-snapshot path.
 	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI:
 		return r.handlePendingLocal(ctx, snap, status)

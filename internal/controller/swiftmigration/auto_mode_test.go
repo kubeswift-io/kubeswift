@@ -169,3 +169,38 @@ func TestResolveAutoMode_NodeLocalVirtioBackends_ResolvesToOffline(t *testing.T)
 		t.Errorf("virtiofs guest must resolve auto→offline; got %q", mig.Status.Mode)
 	}
 }
+
+// A shared-base guest's root disk is a thin snapshot in a node-local pool, not
+// shared storage, so auto must resolve to offline — the same conservative rule
+// as VFIO and node-local virtio backends. Resolving to live here would start a
+// migration that cannot complete and fail later with an error about storage
+// rather than about the class setting that caused it.
+func TestResolveAutoMode_SharedBaseDisk_ResolvesToOffline(t *testing.T) {
+	scheme := testScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec: swiftv1alpha1.SwiftGuestSpec{
+			GuestClassRef: corev1.LocalObjectReference{Name: "shared"},
+		},
+	}
+	// SwiftGuestClass is cluster-scoped: no namespace on the fixture.
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	mig := newMigration("m", "default")
+	// allowIPChange is set so the networking rule cannot be what forces
+	// offline — without it this test would pass whether or not the shared-base
+	// check exists.
+	mig.Spec.AllowIPChange = true
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+
+	if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
+		t.Fatalf("expected nil result; got %+v", res)
+	}
+	if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeOffline {
+		t.Errorf("status.Mode: want offline for a sharedBaseDisk guest, got %q", mig.Status.Mode)
+	}
+}

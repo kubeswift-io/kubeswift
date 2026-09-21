@@ -2,6 +2,7 @@ package swiftsnapshot
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	volumesnapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
@@ -37,6 +38,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvSwift,
 		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		// The shared-base guard resolves a guest's class; an unregistered
+		// class type panics the fake client rather than failing the test.
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
 	)
 	metav1.AddToGroupVersion(s, gvSnap)
 	metav1.AddToGroupVersion(s, gvSwift)
@@ -366,4 +370,57 @@ func reasonOrEmpty(c *metav1.Condition) string {
 		return ""
 	}
 	return c.Reason
+}
+
+// Tier A of a shared-base guest must fail TERMINALLY at Pending, not proceed.
+//
+// This is the path that actually runs: the admission webhook refuses this too,
+// but it is off by default (webhook.enabled=false). Without the controller
+// guard the snapshot would reach guestRootPVC, find nothing, and report that
+// the root PVC "disappeared during snapshot" — a PVC that never existed, which
+// sends the operator looking for a storage fault instead of a class setting.
+func TestHandlePending_CSIBackend_SharedBaseGuestFailsTerminally(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	// Cluster-scoped: no namespace.
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef: snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "g1"},
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type:              snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot,
+				CSIVolumeSnapshot: &snapshotv1alpha1.CSIVolumeSnapshotBackend{},
+			},
+		},
+	}
+	r, _ := newReconciler(t, guest, class, snap)
+
+	var status snapshotv1alpha1.SwiftSnapshotStatus
+	done, requeue, err := r.handlePending(context.Background(), snap, &status)
+	if err != nil {
+		t.Fatalf("handlePending: %v", err)
+	}
+	if !done || requeue != 0 {
+		t.Errorf("want a terminal result (done, no requeue); got done=%v requeue=%v", done, requeue)
+	}
+	if status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Errorf("phase = %q, want Failed — a snapshot that can never succeed must not sit Pending", status.Phase)
+	}
+	var msg string
+	for _, c := range status.Conditions {
+		if c.Type == "Ready" {
+			msg = c.Message
+		}
+	}
+	for _, want := range []string{"sharedBaseDisk", "shared", "local"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("Ready condition should mention %q: %q", want, msg)
+		}
+	}
 }

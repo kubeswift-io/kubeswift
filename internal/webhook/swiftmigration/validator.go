@@ -42,6 +42,7 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // Phase 1 input bounds. These cap inputs the spec accepts for forward
@@ -580,6 +581,15 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 		return fmt.Errorf("look up SwiftGuestClass %q for live-mode storage check: %w",
 			guest.Spec.GuestClassRef.Name, err)
 	}
+	// A shared-base guest's root disk is a thin snapshot in a node-local pool,
+	// not a PVC at all, so the accessMode/volumeMode question below does not
+	// apply to it and would produce a misleading answer. Live migration relies
+	// on shared storage; moving a node-local overlay would mean implementing
+	// storage live migration, which this design exists to avoid.
+	if class.Spec.SharedBaseDisk {
+		return fmt.Errorf("%s", sharedbase.LiveMigrationRefusal(guest.Name, class.Name))
+	}
+
 	storage := resolved.MergeStorage(guest, &class)
 	if storage.IsLiveMigrationCapable() {
 		return nil

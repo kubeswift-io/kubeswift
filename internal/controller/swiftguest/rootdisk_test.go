@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -308,6 +309,35 @@ func TestEnsureRootDiskClone_RestoreSeededSkipsCopyJob(t *testing.T) {
 	for _, j := range jobs.Items {
 		if j.Name == CloneJobName(guest.Name) {
 			t.Errorf("Copy Job %s was created — restore-seeded path must skip it", j.Name)
+		}
+	}
+}
+
+// The opt-in is accepted by the API before the disk is built, so a guest on a
+// sharedBaseDisk class must be REFUSED rather than quietly handed an ordinary
+// private PVC. Falling through would give the operator none of the density they
+// asked for while still losing Tier A snapshots and live migration — strictly
+// worse than not setting it, and invisible.
+//
+// Delete this test with the guard when base materialisation lands.
+func TestEnsureRootDiskClone_SharedBaseDiskIsRefusedUntilImplemented(t *testing.T) {
+	r := &SwiftGuestReconciler{}
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	rg := &resolved.ResolvedGuest{SharedBaseDisk: true}
+
+	res, err := r.EnsureRootDiskClone(context.Background(), guest, rg)
+	if err == nil {
+		t.Fatal("a sharedBaseDisk guest was given a root disk; it must be refused until implemented")
+	}
+	if res != nil {
+		t.Error("a refused guest must not get a clone result")
+	}
+	for _, want := range []string{"sharedBaseDisk", "not implemented", "shared"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal should mention %q: %v", want, err)
 		}
 	}
 }
