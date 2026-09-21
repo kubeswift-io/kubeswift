@@ -29,6 +29,7 @@ on:
       - 'hack/verify-image-tags.sh'
       - 'hack/verify-doc-versions.sh'
       - 'hack/verify-values-schema.sh'
+      - 'hack/verify-chart-readme.sh'
       - 'README.md'
       - 'docs/**'
       - '.github/workflows/manifests.yaml'
@@ -51,6 +52,7 @@ on:
       - 'hack/verify-image-tags.sh'
       - 'hack/verify-doc-versions.sh'
       - 'hack/verify-values-schema.sh'
+      - 'hack/verify-chart-readme.sh'
       - 'README.md'
       - 'docs/**'
       - '.github/workflows/manifests.yaml'
@@ -124,6 +126,14 @@ jobs:
       # step nobody owned; now it fails the build instead.
       - name: Verify docs pin the current chart version
         run: ./hack/verify-doc-versions.sh
+
+      # The values table in charts/kubeswift/README.md is the one part of the
+      # chart's contract nothing checked. v0.13.14 shipped a stale ui.image.tag
+      # default there, caught only by reading ~60 rows by hand during the
+      # release sweep. Operators read that table to decide what to set, so a
+      # wrong default is wrong advice.
+      - name: Verify chart README defaults
+        run: ./hack/verify-chart-readme.sh
 
       # STEP 1. -strict is the flag that matters: it rejects unknown and
       # duplicate fields, which is exactly the class that bites this project —
