@@ -33,6 +33,7 @@ func (f *fakeRunner) joined() []string {
 
 func testManager() (*Manager, *fakeRunner) {
 	f := &fakeRunner{out: map[string]string{}, fail: map[string]error{}}
+	f.out["dmsetup --noudevsync info -c --noheadings -o major,minor kstest"] = "252:3\n"
 	return &Manager{Pool: "kstest", DataDev: "/dev/data", MetaDev: "/dev/meta", Run: f}, f
 }
 
@@ -63,12 +64,12 @@ func TestPoolTable_Shape(t *testing.T) {
 
 func TestEnsurePool_CreatesWhenAbsent(t *testing.T) {
 	m, f := testManager()
-	f.out["dmsetup ls"] = "some-other-dm-device\t(252:0)\n"
+	f.out["dmsetup --noudevsync ls"] = "some-other-dm-device\t(252:0)\n"
 
 	if err := m.EnsurePool(context.Background(), 4096); err != nil {
 		t.Fatalf("EnsurePool: %v", err)
 	}
-	if len(f.calls) != 2 || f.calls[1][1] != "create" {
+	if len(f.calls) != 2 || f.calls[1][2] != "create" {
 		t.Fatalf("expected a list then a create, got:\n  %s", strings.Join(f.joined(), "\n  "))
 	}
 }
@@ -78,7 +79,7 @@ func TestEnsurePool_CreatesWhenAbsent(t *testing.T) {
 // the difference between a no-op reconcile and an outage.
 func TestEnsurePool_IsIdempotent(t *testing.T) {
 	m, f := testManager()
-	f.out["dmsetup ls"] = "kstest\t(252:3)\nsomething-else\t(252:0)\n"
+	f.out["dmsetup --noudevsync ls"] = "kstest\t(252:3)\nsomething-else\t(252:0)\n"
 
 	if err := m.EnsurePool(context.Background(), 4096); err != nil {
 		t.Fatalf("EnsurePool: %v", err)
@@ -105,8 +106,10 @@ func TestSnapshotBase_DoesNotSuspendTheOrigin(t *testing.T) {
 		}
 	}
 	want := []string{
-		"dmsetup message /dev/mapper/kstest 0 create_snap 7 1",
-		"dmsetup create guest-7 --table 0 8192 thin /dev/mapper/kstest 7",
+		"dmsetup --noudevsync message kstest 0 create_snap 7 1",
+		"dmsetup --noudevsync info -c --noheadings -o major,minor kstest",
+		"dmsetup --noudevsync create guest-7 --table 0 8192 thin 252:3 7",
+		"dmsetup --noudevsync mknodes guest-7",
 	}
 	got := f.joined()
 	if len(got) != len(want) {
@@ -127,7 +130,7 @@ func TestSnapshotBase_HonoursTheGuestSize(t *testing.T) {
 	if err := m.SnapshotBase(context.Background(), 1, 9, "big", guestSectors); err != nil {
 		t.Fatal(err)
 	}
-	last := f.joined()[len(f.calls)-1]
+	last := f.joined()[len(f.calls)-2] // create; mknodes follows
 	if !strings.Contains(last, "0 1048576 thin") {
 		t.Errorf("guest device not created at the requested size: %s", last)
 	}
@@ -137,7 +140,7 @@ func TestSnapshotBase_HonoursTheGuestSize(t *testing.T) {
 // mapped through it, so a suspended pool is a node-wide stall.
 func TestReload_ResumesEvenWhenReloadFails(t *testing.T) {
 	m, f := testManager()
-	key := "dmsetup reload kstest --table " + m.poolTable(9999)
+	key := "dmsetup --noudevsync reload kstest --table " + m.poolTable(9999)
 	f.fail[key] = errNotFound{}
 
 	if err := m.GrowData(context.Background(), 9999); err == nil {
@@ -145,7 +148,7 @@ func TestReload_ResumesEvenWhenReloadFails(t *testing.T) {
 	}
 	var resumed bool
 	for _, c := range f.joined() {
-		if strings.HasPrefix(c, "dmsetup resume") {
+		if strings.Contains(c, " resume ") {
 			resumed = true
 		}
 	}
@@ -180,3 +183,35 @@ func TestMetadataSectorsFor(t *testing.T) {
 type errNotFound struct{}
 
 func (errNotFound) Error() string { return "Device kstest not found" }
+
+// --noudevsync must be on EVERY dmsetup call. Without it the command waits on a
+// udev semaphore that nothing in a container will ever signal: observed on a
+// dev node as `dmsetup create` hung in __do_semtimedop forever, with the
+// kernel-side pool created and no userspace left to clean it up. One call site
+// missing the flag is one way to wedge a node.
+func TestEveryDmsetupCallDisablesUdevSync(t *testing.T) {
+	m, f := testManager()
+	ctx := context.Background()
+	f.out["dmsetup --noudevsync ls"] = ""
+
+	_ = m.EnsurePool(ctx, 4096)
+	_ = m.CreateBase(ctx, 1, "b", 100)
+	_ = m.SnapshotBase(ctx, 1, 2, "g", 200)
+	_ = m.RemoveDevice(ctx, "g")
+	_ = m.DeleteThin(ctx, 2)
+	_ = m.GrowData(ctx, 8192)
+	f.out["dmsetup --noudevsync status kstest"] = "0 1 thin-pool 0 1/2 1/2 - rw discard_passdown queue_if_no_space - 1"
+	_, _ = m.Status(ctx)
+
+	if len(f.calls) == 0 {
+		t.Fatal("no commands recorded")
+	}
+	for _, c := range f.calls {
+		if c[0] != "dmsetup" {
+			continue
+		}
+		if len(c) < 2 || c[1] != "--noudevsync" {
+			t.Errorf("dmsetup call without --noudevsync: %s", strings.Join(c, " "))
+		}
+	}
+}

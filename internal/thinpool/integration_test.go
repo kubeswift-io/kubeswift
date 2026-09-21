@@ -40,11 +40,19 @@ const (
 
 // rig is one pool on two loop devices, torn down whatever happens.
 //
-// The pool name carries the test name because a fixed one is a trap: a teardown
-// that loses a race leaves the pool behind, the next run's EnsurePool finds it
-// and adopts it, and the test then fails on a device id the PREVIOUS run
-// created. That happened here, and the failure pointed at create_thin rather
-// than at the stale pool.
+// The pool name is DETERMINISTIC (test name only) and the rig force-removes it
+// before starting. Both halves matter, and the combination is deliberate:
+//
+//   - Without the force-remove, a teardown that loses a race leaves the pool
+//     behind, the next run's EnsurePool adopts it, and the test fails on a
+//     device id the PREVIOUS run created — pointing at create_thin rather than
+//     at the stale pool. That bit twice.
+//   - Making the name unique instead (a pid, say) looks like it fixes that and
+//     makes it worse: an aborted run's pool can then never be matched by any
+//     later run, so orphans accumulate on the node forever.
+//
+// Deterministic plus force-remove is self-healing: whatever the last run left,
+// this one reclaims.
 type rig struct {
 	t    *testing.T
 	pool string
@@ -75,6 +83,10 @@ func newRig(t *testing.T) *rig {
 		}
 		return r
 	}, t.Name())
+	// Defensive: never adopt a pool left by an aborted run. A crashed or
+	// timed-out test cannot run its own cleanup, and inheriting its device ids
+	// produces "File exists" from create_thin with nothing pointing at why.
+	_ = exec.Command("dmsetup", "remove", "-f", "--noudevsync", pool).Run()
 	r := &rig{t: t, pool: pool, data: losetup(t, dataPath), meta: losetup(t, metaPath)}
 	r.m = &Manager{Pool: pool, DataDev: r.data, MetaDev: r.meta}
 	t.Cleanup(r.teardown)
@@ -85,11 +97,16 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
+// teardown passes --noudevsync for the same reason every call in the package
+// does: without it dmsetup waits on a udev semaphore nothing in a container
+// will ever signal. Missing it HERE hangs the test rather than the product,
+// which is how it survived a local run and wedged on a node for 18 minutes
+// with load average 0.10 — blocked, not slow.
 func (r *rig) teardown() {
 	for i := len(r.devs) - 1; i >= 0; i-- {
-		_ = exec.Command("dmsetup", "remove", "--retry", r.devs[i]).Run()
+		_ = exec.Command("dmsetup", "remove", "--retry", "--noudevsync", r.devs[i]).Run()
 	}
-	_ = exec.Command("dmsetup", "remove", "--retry", r.pool).Run()
+	_ = exec.Command("dmsetup", "remove", "-f", "--noudevsync", r.pool).Run()
 	for _, d := range []string{r.data, r.meta} {
 		if d != "" {
 			_ = exec.Command("losetup", "-d", d).Run()
