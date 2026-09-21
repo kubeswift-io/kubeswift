@@ -74,11 +74,6 @@ type PVCCloneSource struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// UploadSource is a placeholder for future upload support. Not yet implemented.
-type UploadSource struct {
-	// Placeholder; upload UX to be defined later.
-}
-
 // SecretObjectReference names a Secret in the SwiftImage's namespace. Mirrors
 // the snapshot API's type so the OCI source reads symmetrically with the OCI
 // snapshot backend.
@@ -126,7 +121,6 @@ type OCIImageSource struct {
 // ImageSource defines the source of an image.
 type ImageSource struct {
 	HTTP     *HTTPSource     `json:"http,omitempty"`
-	Upload   *UploadSource   `json:"upload,omitempty"`
 	PVCClone *PVCCloneSource `json:"pvcClone,omitempty"`
 	// OCI pulls a golden raw disk artifact from an OCI registry (P3).
 	// +optional

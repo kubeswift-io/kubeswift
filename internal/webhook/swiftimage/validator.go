@@ -40,7 +40,7 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	//
 	// Note on why the rule fired here at all: validateSwiftImageUpdate
 	// compares Spec.Source with `!=`, which is a pointer-identity
-	// comparison over ImageSource's pointer fields (HTTP/Upload/PVCClone).
+	// comparison over ImageSource's pointer fields (HTTP/PVCClone/OCI).
 	// The old (etcd) and new (admission request) objects are independent
 	// decodes, so their Source pointers always differ — the immutability
 	// rule fires on EVERY update of a Ready image, including finalizer
@@ -70,9 +70,6 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 		if src.PVCClone.Name == "" {
 			return fmt.Errorf("spec.source.pvcClone.name is required when pvcClone source is specified")
 		}
-	}
-	if src.Upload != nil {
-		n++
 	}
 	if src.OCI != nil {
 		n++
@@ -154,7 +151,7 @@ func validateSwiftImageUpdate(oldImg, img *imagev1alpha1.SwiftImage) error {
 		// their Source pointers always differ; a `!=` pointer compare fired on
 		// EVERY update of a Ready image — including innocuous metadata edits
 		// (label/annotation) where the spec content is unchanged. DeepEqual
-		// compares the dereferenced HTTP/Upload/PVCClone content. Format/OSType
+		// compares the dereferenced HTTP/PVCClone/OCI content. Format/OSType
 		// are strings (value compare, no foot-gun).
 		if !apiequality.Semantic.DeepEqual(oldImg.Spec.Source, img.Spec.Source) ||
 			oldImg.Spec.Format != img.Spec.Format ||

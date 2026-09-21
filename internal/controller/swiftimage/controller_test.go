@@ -26,29 +26,6 @@ func testScheme() *runtime.Scheme {
 	return s
 }
 
-func TestStartImport_UploadReturnsPendingWithError(t *testing.T) {
-	scheme := testScheme()
-	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &SwiftImageReconciler{Client: client, Scheme: scheme}
-	img := &imagev1alpha1.SwiftImage{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
-		Spec: imagev1alpha1.SwiftImageSpec{
-			Format: imagev1alpha1.DiskFormatRaw,
-			Source: imagev1alpha1.ImageSource{Upload: &imagev1alpha1.UploadSource{}},
-		},
-	}
-	result, err := r.StartImport(context.Background(), img)
-	if err != nil {
-		t.Fatalf("StartImport: %v", err)
-	}
-	if result.Phase != imagev1alpha1.SwiftImagePhasePending {
-		t.Errorf("phase = %s, want Pending", result.Phase)
-	}
-	if result.Error != ReasonUploadNotImpl {
-		t.Errorf("error = %q, want %q", result.Error, ReasonUploadNotImpl)
-	}
-}
-
 func TestStartImport_NoSourceReturnsFailed(t *testing.T) {
 	scheme := testScheme()
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()

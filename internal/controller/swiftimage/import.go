@@ -147,8 +147,6 @@ func (r *SwiftImageReconciler) StartImport(ctx context.Context, img *imagev1alph
 		return r.importPVCClone(ctx, img)
 	case src.OCI != nil:
 		return r.importOCI(ctx, img)
-	case src.Upload != nil:
-		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhasePending, Error: ReasonUploadNotImpl}, nil
 	default:
 		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: "no valid source specified"}, nil
 	}

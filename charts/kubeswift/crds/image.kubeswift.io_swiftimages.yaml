@@ -201,10 +201,6 @@ spec:
                     required:
                     - name
                     type: object
-                  upload:
-                    description: UploadSource is a placeholder for future upload support.
-                      Not yet implemented.
-                    type: object
                 type: object
               volumeSnapshotClassName:
                 description: |-

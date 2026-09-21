@@ -104,9 +104,6 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if result.Phase == imagev1alpha1.SwiftImagePhaseFailed {
 				SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
 				SetFailedCondition(status, result.Error, result.Error)
-			} else if result.Error == ReasonUploadNotImpl {
-				SetFailedCondition(status, ReasonUploadNotImpl, "upload source not yet implemented")
-				// Remain in Pending
 			} else {
 				SetFailedCondition(status, result.Error, result.Error)
 			}
