@@ -7,7 +7,7 @@
 # Apply both, then create a SwiftGuest from each and compare cold-boot
 # time. On snapshot-capable CSI drivers (Longhorn, Rook Ceph, EBS,
 # GCE PD) the snapshot strategy is faster because it skips the
-# per-guest Copy Job's cp + apt-get install qemu-utils.
+# per-guest Copy Job's cp.
 ---
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage

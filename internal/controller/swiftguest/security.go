@@ -102,9 +102,9 @@ echo "clone-grow-init: complete (Block)"`,
 			{Name: "root-disk", DevicePath: DiskRootDevicePath},
 		}
 	} else {
-		// Filesystem path — byte-identical to pre-W9 behaviour. Reviewers:
-		// any change that alters this branch is a regression risk for
-		// every existing SwiftGuest (the default volumeMode).
+		// Filesystem path — the pre-W9 disk steps, in order. Reviewers: any
+		// change to those steps is a regression risk for every existing
+		// SwiftGuest (the default volumeMode).
 		script = fmt.Sprintf(`set -e
 echo "clone-grow-init: target=%d bytes"
 qemu-img resize -f raw %s/image.raw %d
