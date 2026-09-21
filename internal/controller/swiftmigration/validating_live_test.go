@@ -492,3 +492,34 @@ func TestValidatingLive_MigrationDisabled_FailsWithEligibilityMismatch(t *testin
 		t.Errorf("FailureMsg: want migration.enabled message, got %q", result.FailureMsg)
 	}
 }
+
+// Explicit mode=live on a shared-base guest must fail terminally in the
+// CONTROLLER, not only in the webhook — the webhook is off by default
+// (webhook.enabled=false), so this is the path that runs. Without it the
+// migration proceeds and fails later at the storage layer, reporting something
+// other than the cause.
+func TestHandleValidatingLive_SharedBaseDiskFails(t *testing.T) {
+	scheme := testScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	// Cluster-scoped: no namespace.
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+
+	res := r.handleValidatingLive(context.Background(), mig, &mig.Status)
+	if res == nil {
+		t.Fatal("live migration of a sharedBaseDisk guest was accepted")
+	}
+	if !strings.Contains(res.FailureMsg, "sharedBaseDisk") || !strings.Contains(res.FailureMsg, "offline") {
+		t.Errorf("failure should name sharedBaseDisk and point at offline: %q", res.FailureMsg)
+	}
+}

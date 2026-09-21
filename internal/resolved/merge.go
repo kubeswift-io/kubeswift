@@ -39,6 +39,9 @@ func Merge(
 		rg.CPUPinning = string(guestClass.Spec.CPUPinning)
 		rg.SMTPolicy = string(guestClass.Spec.SMTPolicy)
 		rg.Hugepages = string(guestClass.Spec.Hugepages)
+		// Shared base disk: the root disk becomes a thin snapshot of a
+		// node-local base instead of a private PVC.
+		rg.SharedBaseDisk = guestClass.Spec.SharedBaseDisk
 	}
 
 	// RootDisk: from GuestClass

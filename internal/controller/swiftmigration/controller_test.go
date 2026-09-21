@@ -26,7 +26,12 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("clientgoscheme: %v", err)
 	}
 	gvSwift := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
-	s.AddKnownTypes(gvSwift, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	// SwiftGuestClass is registered too: the shared-base guard resolves a
+	// guest's class, and a scheme missing it turns that lookup into a panic
+	// rather than a test failure.
+	s.AddKnownTypes(gvSwift,
+		&swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{},
+		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{})
 	metav1.AddToGroupVersion(s, gvSwift)
 	gvMig := schema.GroupVersion{Group: "migration.kubeswift.io", Version: "v1alpha1"}
 	s.AddKnownTypes(gvMig, &migrationv1alpha1.SwiftMigration{}, &migrationv1alpha1.SwiftMigrationList{})
