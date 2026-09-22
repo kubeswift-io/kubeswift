@@ -888,6 +888,16 @@ type SwiftGuestStatus struct {
 	// rationale. Use IsLiveMigrationCapable on the resolved spec.
 	// +optional
 	Storage *ResolvedStorageStatus `json:"storage,omitempty"`
+	// SharedBaseDisk records where a shared-base guest's root disk lives.
+	//
+	// Set ONCE, when the disk is first built, and never moved. That is the
+	// whole difference from nodeName, which follows whichever node the
+	// current launcher landed on: a shared-base disk is node-local, so every
+	// launcher for this guest is pinned to the node recorded here. A launcher
+	// started anywhere else would find no disk for the guest and be given a
+	// fresh snapshot of the base — a pristine disk, every write gone.
+	// +optional
+	SharedBaseDisk *SharedBaseDiskStatus `json:"sharedBaseDisk,omitempty"`
 	// DataDisks echoes the secondary data disks the controller resolved /
 	// provisioned for this guest (image-backed, attached PVC, or blank), in
 	// declaration order. Informational — confirms what was attached and its
@@ -942,4 +952,16 @@ type SwiftGuestList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SwiftGuest `json:"items"`
+}
+
+// SharedBaseDiskStatus locates a shared-base guest's root disk.
+type SharedBaseDiskStatus struct {
+	// Node holds the guest's thin device. The guest runs here or not at all:
+	// if the node is gone, so is the disk.
+	Node string `json:"node"`
+	// BaseKey identifies the base the disk was snapshotted from. Informational;
+	// the disk does not depend on the base still being present, because the
+	// pool reference-counts the blocks they share.
+	// +optional
+	BaseKey string `json:"baseKey,omitempty"`
 }

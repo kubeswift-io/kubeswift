@@ -272,8 +272,20 @@ func applyTopologyConstraints(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) 
 // when both are set; if they disagree the dispatcher returns an
 // error and applyNodeName never runs.
 func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
-	if guest.Spec.NodeName != "" {
-		pod.Spec.NodeName = guest.Spec.NodeName
+	node, _, err := pinnedNode(guest)
+	if err != nil {
+		// Pins disagree. The placement check holds the guest before a pod is
+		// ever built, so this is defence in depth — and if it is ever reached,
+		// the disk's node is the only safe answer. The alternative is a
+		// launcher the scheduler places freely, which for a shared-base guest
+		// is a fresh empty disk on whichever node it picks.
+		if guest.Status.SharedBaseDisk != nil && guest.Status.SharedBaseDisk.Node != "" {
+			pod.Spec.NodeName = guest.Status.SharedBaseDisk.Node
+		}
+		return
+	}
+	if node != "" {
+		pod.Spec.NodeName = node
 	}
 }
 
@@ -288,7 +300,12 @@ func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 // it did something. Leave the field empty in that case so the pod spec says
 // what actually happened.
 func applySchedulerName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
-	if guest.Spec.SchedulerName != "" && guest.Spec.NodeName == "" {
+	// Pinned by anything — spec.nodeName or a shared-base disk — means the
+	// scheduler is skipped, so a schedulerName would be inert.
+	if node, _, err := pinnedNode(guest); err != nil || node != "" {
+		return
+	}
+	if guest.Spec.SchedulerName != "" {
 		pod.Spec.SchedulerName = guest.Spec.SchedulerName
 	}
 }
