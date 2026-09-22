@@ -1328,6 +1328,19 @@ spec:
                       the disk does not depend on the base still being present, because the
                       pool reference-counts the blocks they share.
                     type: string
+                  created:
+                    description: |-
+                      Created is true once the disk has been built on Node.
+
+                      It is a separate fact from Node, and the difference is the point. Node is
+                      recorded as soon as the materialise Job is placed, so that a retry goes
+                      back to the same node rather than building a second disk elsewhere. But a
+                      first attempt can fail before building anything, and a retry must then be
+                      able to build it. Once Created is true the guest's VM may have run and
+                      written, so from then on a missing disk is an ERROR — never a fresh start,
+                      which would silently discard everything it wrote. It also means the image
+                      is no longer needed to start the guest.
+                    type: boolean
                   node:
                     description: |-
                       Node holds the guest's thin device. The guest runs here or not at all:

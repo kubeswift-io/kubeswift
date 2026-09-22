@@ -249,14 +249,7 @@ func BuildRestorePod(
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		},
-		{
-			Name: "root-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: pvcName,
-				},
-			},
-		},
+		rootDiskVolume(rg, pvcName),
 		{
 			Name: "runtime-intent",
 			VolumeSource: corev1.VolumeSource{

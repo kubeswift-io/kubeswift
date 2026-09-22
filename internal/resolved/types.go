@@ -90,6 +90,12 @@ type ResolvedGuest struct {
 	// storage-layer features are available: no Tier A snapshot, no live
 	// migration, no replication.
 	SharedBaseDisk bool `json:"sharedBaseDisk,omitempty"`
+	// SharedBaseDevicePath is where the guest's shared-base root disk is
+	// mapped on its node, set by the controller once the disk exists. When
+	// set, it IS the root disk: the launcher opens it directly instead of a
+	// PVC, and every pod builder mounts the device directory in place of the
+	// image or clone PVC.
+	SharedBaseDevicePath string `json:"sharedBaseDevicePath,omitempty"`
 	// GuestAgentEnabled is true for a SOURCE guest that opted into the in-guest
 	// identity agent (spec.guestAgentEnabled). It gates the CH --vsock device.
 	// The resolver sets it false for a clone (cloneFromSnapshot): a clone
@@ -302,6 +308,9 @@ func (r *ResolvedGuest) GetRootDiskFormat() string {
 // treated as "Filesystem" by callers (the pre-W9 default). Used by
 // runtimeintent.Build to decide whether RootDisk.Path resolves to a
 // filesystem path or a Block device path.
+// GetSharedBaseDevicePath returns the mapped shared-base root disk, or "".
+func (r *ResolvedGuest) GetSharedBaseDevicePath() string { return r.SharedBaseDevicePath }
+
 func (r *ResolvedGuest) GetRootDiskVolumeMode() string {
 	return r.Storage.VolumeMode
 }

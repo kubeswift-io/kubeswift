@@ -15,6 +15,9 @@ type ResolvedGuest interface {
 	// Cloud Hypervisor's --disk path=... which works for both file
 	// and device targets.
 	GetRootDiskVolumeMode() string
+	// GetSharedBaseDevicePath returns the mapped shared-base root disk, or
+	// "" for a guest whose root disk is a PVC.
+	GetSharedBaseDevicePath() string
 	GetCPU() int
 	GetMemoryMiB() int
 	GetLifecycle() string
@@ -114,6 +117,11 @@ func Build(rg ResolvedGuest) *RuntimeIntent {
 		// device); the kubelet surfaces the PVC at this path via
 		// VolumeDevices in the launcher pod (see pod.go::rootDiskMount).
 		rootDiskPath = DiskRootDevicePath
+	}
+	if p := rg.GetSharedBaseDevicePath(); p != "" {
+		// A shared-base root disk is a device-mapper thin device on the node,
+		// not a PVC. CH opens it as it would any block device.
+		rootDiskPath = p
 	}
 
 	return &RuntimeIntent{

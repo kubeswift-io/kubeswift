@@ -13,6 +13,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // IntentConfigMapSuffix is the suffix for the runtime intent ConfigMap name.
@@ -555,14 +556,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
 		},
-		{
-			Name: "root-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: rg.PreparedImage.PVCName,
-				},
-			},
-		},
+		rootDiskVolume(rg, rg.PreparedImage.PVCName),
 		{
 			Name: "runtime-intent",
 			VolumeSource: corev1.VolumeSource{
@@ -708,6 +702,14 @@ func VolumeMountPaths() (imagePath, seedPath, intentDir string) {
 // review) confirmed a single helper covers the four call sites without
 // per-site differentiation.
 func rootDiskMount(rg *resolved.ResolvedGuest) (*corev1.VolumeMount, *corev1.VolumeDevice) {
+	if rg.SharedBaseDevicePath != "" {
+		// The host's device-mapper directory, not a PVC: the guest's disk is a
+		// thin device in it, and the intent names it by path. The directory,
+		// rather than the device file, because after a node reboot the device
+		// does not exist until the reactivate init container maps it — and
+		// volumes are set up before any container runs.
+		return &corev1.VolumeMount{Name: "root-disk", MountPath: sharedbase.DeviceDir}, nil
+	}
 	if rg.Storage.VolumeMode == "Block" {
 		return nil, &corev1.VolumeDevice{Name: "root-disk", DevicePath: DiskRootDevicePath}
 	}
