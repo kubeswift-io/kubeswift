@@ -283,13 +283,16 @@ func (x *Materializer) HasGuest(guestKey string) (bool, error) {
 
 // ReleaseGuest destroys a guest's disk and frees what it alone was using.
 //
-// The mapping is forgotten BEFORE the thin device is deleted. A crash between
-// the two then leaks one guest's blocks in the pool — recoverable, and no worse
-// than a disk nobody is using. The other order leaves the registry pointing at
-// a device that no longer exists, and a guest later recreated under the same
-// name would try to reactivate it and fail on every start, permanently.
+// Idempotent, so an interrupted release is finished by running it again. That
+// is why the thin device is deleted BEFORE its mapping is forgotten: a release
+// cut short between the two leaves the registry still naming the id, and the
+// retry deletes it (an id already gone counts as deleted) and then forgets it.
+// The other order leaks the device for good, because once the mapping is gone
+// nothing names its id any more. The mapping can safely outlive its device for
+// that moment: the key carries the guest's UID, so no other guest can ever
+// look it up.
 func (x *Materializer) ReleaseGuest(ctx context.Context, guestKey, devName string) error {
-	id, ok, err := x.Reg.GuestID(guestKey)
+	id, known, err := x.Reg.GuestID(guestKey)
 	if err != nil {
 		return err
 	}
@@ -300,16 +303,23 @@ func (x *Materializer) ReleaseGuest(ctx context.Context, guestKey, devName strin
 			return fmt.Errorf("unmapping %s: %w", devName, err)
 		}
 	}
-	if !ok {
+	if !known {
 		return nil
 	}
-	if err := x.Reg.Forget(guestKey); err != nil {
-		return err
+	// A read-only pool refuses to delete anything, and says so only as
+	// "Operation not supported". Name the actual problem.
+	st, err := x.M.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("reading pool %s: %w", x.M.Pool, err)
 	}
-	if err := x.M.DeleteThin(ctx, id); err != nil {
-		return fmt.Errorf("deleting the thin device of guest %s (forgotten, so this leaks its blocks rather than wedging a recreated guest): %w", guestKey, err)
+	if st.Mode == ModeReadOnly {
+		return fmt.Errorf("pool %s is read-only (its metadata device is full, or it needs a check), and a "+
+			"read-only pool cannot delete devices; grow the metadata device and reload the pool, then retry", x.M.Pool)
 	}
-	return nil
+	if err := x.M.DeleteThin(ctx, id); err != nil && !errors.Is(err, ErrNoSuchThin) {
+		return fmt.Errorf("deleting the thin device of guest %s: %w", guestKey, err)
+	}
+	return x.Reg.Forget(guestKey)
 }
 
 // lockKey takes an exclusive per-key lock, returning its release.

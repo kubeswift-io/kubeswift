@@ -1,11 +1,14 @@
 // Command basedisk-materialize prepares a shared-base guest's root disk on the
-// node it runs on. It has two modes, used by two different pods:
+// node it runs on, and destroys it again. It has three modes, used by three
+// different pods:
 //
 //   - create      — the per-guest materialise Job. Mounts the SwiftImage's
 //     prepared PVC, writes the base into the node's thin pool if this node does
 //     not already hold it, and snapshots it for the guest. Runs ONCE per guest.
 //   - reactivate  — the launcher's init container. Re-maps the guest's existing
 //     disk, which is only work after a node reboot. Never needs the image.
+//   - release     — the per-guest release Job, when the guest is deleted. Frees
+//     the guest's disk. Never creates a pool.
 //
 // They are separate pods, not one init container, because the image PVC is
 // ReadWriteOnce and a PVC stays attached for the life of the pod that mounts
@@ -21,6 +24,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -33,6 +37,7 @@ import (
 const (
 	modeCreate     = "create"
 	modeReactivate = "reactivate"
+	modeRelease    = "release"
 )
 
 type config struct {
@@ -53,7 +58,7 @@ type config struct {
 
 func main() {
 	var cfg config
-	flag.StringVar(&cfg.mode, "mode", "", "create (materialise Job) or reactivate (launcher init container)")
+	flag.StringVar(&cfg.mode, "mode", "", "create (materialise Job), reactivate (launcher init container) or release (release Job)")
 	flag.StringVar(&cfg.root, "root", "/var/lib/kubeswift", "node state directory")
 	flag.StringVar(&cfg.pool, "pool", "kubeswift-pool", "device-mapper name of the node's thin pool")
 	flag.Uint64Var(&cfg.poolDataBytes, "pool-data-bytes", 0, "size of the pool's preallocated data file")
@@ -82,15 +87,19 @@ func (c config) validate() error {
 	req("--mode", c.mode != "")
 	req("--guest-key", c.guestKey != "")
 	req("--device", c.device != "")
-	req("--guest-bytes", c.guestBytes != 0)
-	req("--pool-data-bytes", c.poolDataBytes != 0)
 	switch c.mode {
 	case modeCreate:
+		req("--guest-bytes", c.guestBytes != 0)
+		req("--pool-data-bytes", c.poolDataBytes != 0)
 		req("--base-key", c.baseKey != "")
 		req("--image", c.image != "")
 	case modeReactivate, "":
+		req("--guest-bytes", c.guestBytes != 0)
+		req("--pool-data-bytes", c.poolDataBytes != 0)
+	case modeRelease:
+		// Sizes are for building a disk. Release only takes one away.
 	default:
-		return fmt.Errorf("unknown --mode %q: want %s or %s", c.mode, modeCreate, modeReactivate)
+		return fmt.Errorf("unknown --mode %q: want %s, %s or %s", c.mode, modeCreate, modeReactivate, modeRelease)
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required flags: %v", missing)
@@ -101,6 +110,9 @@ func (c config) validate() error {
 func run(ctx context.Context, cfg config, out io.Writer) error {
 	if err := cfg.validate(); err != nil {
 		return err
+	}
+	if cfg.mode == modeRelease {
+		return release(ctx, cfg, out)
 	}
 	x, err := openNode(ctx, cfg)
 	if err != nil {
@@ -177,11 +189,74 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 	return fmt.Errorf("unreachable: mode %q", cfg.mode)
 }
 
+// release frees the guest's disk on this node.
+//
+// It never creates a pool. The controller runs it on the node recorded for the
+// guest, which can be one the guest's materialise Job never reached, and a
+// release there must not leave a preallocated pool behind for nothing.
+func release(ctx context.Context, cfg config, out io.Writer) error {
+	dataPath, metaPath := poolFiles(cfg.root)
+	data, err := fileExists(dataPath)
+	if err != nil {
+		return err
+	}
+	meta, err := fileExists(metaPath)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !data && !meta:
+		fmt.Fprintf(out, "nothing to release: this node has no thin pool, so it holds no disk for %s\n", cfg.guestKey)
+		return nil
+	case !data || !meta:
+		// openNode would create the missing half, and a fresh metadata device
+		// under an existing data device is a pool that has forgotten every
+		// disk in it. Refuse rather than make that happen.
+		return fmt.Errorf("the thin pool's backing files are incomplete (%s: %t, %s: %t); refusing to touch it",
+			dataPath, data, metaPath, meta)
+	}
+	x, err := openNode(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	known, err := x.HasGuest(cfg.guestKey)
+	if err != nil {
+		return err
+	}
+	if err := x.ReleaseGuest(ctx, cfg.guestKey, cfg.device); err != nil {
+		return err
+	}
+	if !known {
+		fmt.Fprintf(out, "nothing to release: this node holds no disk for %s\n", cfg.guestKey)
+		return nil
+	}
+	fmt.Fprintf(out, "released %s\n", cfg.guestKey)
+	return nil
+}
+
+func poolFiles(root string) (data, meta string) {
+	dir := filepath.Join(root, "thinpool")
+	return filepath.Join(dir, "data.img"), filepath.Join(dir, "meta.img")
+}
+
+// fileExists answers only for a file that is there or is not. Any other error
+// is returned: an unreadable pool is not an absent one.
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	}
+	return false, err
+}
+
 // openNode brings up this node's pool — attaching its backing files and
 // reopening its metadata after a reboot, or creating it on first use.
 func openNode(ctx context.Context, cfg config) (*thinpool.Materializer, error) {
 	dir := filepath.Join(cfg.root, "thinpool")
-	dataPath, metaPath := filepath.Join(dir, "data.img"), filepath.Join(dir, "meta.img")
+	dataPath, metaPath := poolFiles(cfg.root)
 
 	// --pool-data-bytes sizes a pool when it is first CREATED. Once the backing
 	// file exists, its own size is the truth. Otherwise raising the configured

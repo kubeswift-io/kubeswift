@@ -3,6 +3,7 @@ package thinpool
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -428,5 +429,78 @@ func TestIntegration_RestartWorksAfterTheBaseIsEvicted(t *testing.T) {
 	}
 	if got := ddRead(t, path, 0, len(mine)); !bytes.Equal(got, mine) {
 		t.Error("the guest came back without its writes")
+	}
+}
+
+// What ReleaseGuest's retry depends on: the real kernel answers a delete of an
+// id the pool does not hold with the error ErrNoSuchThin recognises, and the
+// pool is unharmed by it.
+func TestIntegration_DeleteThinOfAnUnknownIDIsErrNoSuchThin(t *testing.T) {
+	itEnv(t)
+	x, _ := materializer(t)
+	ctx := context.Background()
+	if err := x.M.DeleteThin(ctx, 4000); !errors.Is(err, ErrNoSuchThin) {
+		t.Fatalf("deleting an id the pool never held: err = %v, want ErrNoSuchThin", err)
+	}
+	if st, err := x.M.Status(ctx); err != nil || !st.Healthy() {
+		t.Fatalf("pool after the failed delete: %+v, %v", st, err)
+	}
+}
+
+// A release interrupted after the delete, before the registry forgot the guest:
+// running it again finishes the job instead of failing on the missing device.
+func TestIntegration_ReleaseGuestFinishesAnInterruptedRelease(t *testing.T) {
+	itEnv(t)
+	x, _ := materializer(t)
+	ctx := context.Background()
+	img := image(8 << 20)
+	if _, err := x.EnsureBase(ctx, "sha256:interrupted", uint64(len(img)), opener(img)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.EnsureGuest(ctx, "sha256:interrupted", "ns/g", "ksit-interrupted", uint64(len(img))); err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := x.Reg.GuestID("ns/g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first attempt got this far and died.
+	if err := x.M.RemoveDevice(ctx, "ksit-interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.M.DeleteThin(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := x.ReleaseGuest(ctx, "ns/g", "ksit-interrupted"); err != nil {
+		t.Fatalf("finishing the interrupted release: %v", err)
+	}
+	if _, known, _ := x.Reg.GuestID("ns/g"); known {
+		t.Error("the guest is still in the registry")
+	}
+}
+
+// Released means gone from /dev/mapper too. The node was made by mknodes, not
+// udev, so nothing else removes it.
+func TestIntegration_ReleaseLeavesNoDeviceNode(t *testing.T) {
+	itEnv(t)
+	x, _ := materializer(t)
+	ctx := context.Background()
+	img := image(8 << 20)
+	if _, err := x.EnsureBase(ctx, "sha256:node", uint64(len(img)), opener(img)); err != nil {
+		t.Fatal(err)
+	}
+	path, err := x.EnsureGuest(ctx, "sha256:node", "ns/g", "ksit-nodegone", uint64(len(img)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the guest's device node is missing before release: %v", err)
+	}
+	if err := x.ReleaseGuest(ctx, "ns/g", "ksit-nodegone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("%s outlived its device (stat err = %v)", path, err)
 	}
 }

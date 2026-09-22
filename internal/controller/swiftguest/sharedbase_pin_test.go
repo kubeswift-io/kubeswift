@@ -46,7 +46,7 @@ func TestPinnedNode(t *testing.T) {
 		{"disk and spec agree", specOn(diskOn("a"), "a"), "a", "status.sharedBaseDisk.node", ""},
 		{"disk and GPU agree", gpuOn(diskOn("a"), "a"), "a", "status.sharedBaseDisk.node", ""},
 		// Disagreement is an error, never a silent choice.
-		{"spec disagrees", specOn(diskOn("a"), "b"), "", "", "fresh empty disk"},
+		{"spec disagrees", specOn(diskOn("a"), "b"), "", "", "has no copy of it"},
 		{"GPU disagrees", gpuOn(diskOn("a"), "b"), "", "", "only run where"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,10 +71,10 @@ func TestPinnedNode(t *testing.T) {
 }
 
 // The property that matters: a shared-base guest's launcher is NEVER left for
-// the scheduler to place, because any other node would give it a fresh empty
-// disk. Including when the pins disagree — the placement check should have held
-// the guest before a pod was built, but if this is ever reached, the disk's
-// node is the only safe answer.
+// the scheduler to place, because on any other node it cannot start. Including
+// when the pins disagree — the placement check should have held the guest
+// before a pod was built, but if this is ever reached, the disk's node is the
+// only safe answer.
 func TestApplyNodeName_NeverLeavesASharedBaseGuestUnpinned(t *testing.T) {
 	for name, g := range map[string]*swiftv1alpha1.SwiftGuest{
 		"disk only": diskOn("a"),

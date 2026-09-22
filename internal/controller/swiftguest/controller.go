@@ -105,6 +105,22 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A guest being deleted is only taken apart, never reconciled toward
+	// running. First, ahead of the RBAC bootstrap below: that creates objects,
+	// and a namespace being deleted refuses them.
+	if !guest.DeletionTimestamp.IsZero() {
+		return r.reconcileDeletion(ctx, &guest)
+	}
+	// A guest that records a shared-base disk must be able to release it.
+	// ensureSharedBaseDisk adds the finalizer before building one; this covers a
+	// guest that does not pass through there — one built before the finalizer
+	// existed and stopped since.
+	if guest.Status.SharedBaseDisk != nil {
+		if err := r.ensureSharedBaseFinalizer(ctx, &guest); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Per-namespace RBAC bootstrap: idempotently ensure the
 	// `swiftletd-reporter` RoleBinding exists in this SwiftGuest's
 	// namespace, so the launcher pod's `default` ServiceAccount has
@@ -220,10 +236,17 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Best-effort and informational — the check is a status condition,
 	// NOT an admission gate, because StorageClasses are cluster-admin
 	// resources and can be fixed without restarting the guest.
-	if reason, msg, ok := r.checkStorageReady(ctx, rg); ok {
-		SetStorageReadyCondition(status, true, "", "")
-	} else {
-		SetStorageReadyCondition(status, false, reason, msg)
+	//
+	// Not for a shared-base guest: its root disk is not a PVC, so this says
+	// nothing about it, and ensureSharedBaseDisk owns its StorageReady. Set
+	// here, the PVC wording would stand on every pass that returns before that
+	// — a stopped guest, one held for placement — describing a disk it lacks.
+	if !(rg.SharedBaseDisk && !rg.HasKernel()) {
+		if reason, msg, ok := r.checkStorageReady(ctx, rg); ok {
+			SetStorageReadyCondition(status, true, "", "")
+		} else {
+			SetStorageReadyCondition(status, false, reason, msg)
+		}
 	}
 
 	// Seed rendering: when ResolvedGuest has Seed, render and create ConfigMap
