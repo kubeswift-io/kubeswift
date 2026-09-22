@@ -105,6 +105,9 @@ func newRig(t *testing.T) *rig {
 func (r *rig) teardown() {
 	for i := len(r.devs) - 1; i >= 0; i-- {
 		_ = exec.Command("dmsetup", "remove", "--retry", "--noudevsync", r.devs[i]).Run()
+		// And its /dev/mapper node, which the product's activate made and
+		// udev therefore never removes (see RemoveDevice).
+		_ = exec.Command("dmsetup", "mknodes", "--noudevsync", r.devs[i]).Run()
 	}
 	// --retry as well as -f. -f alone, on a pool still briefly busy from the
 	// thin devices removed just above, does not remove it: it swaps in an

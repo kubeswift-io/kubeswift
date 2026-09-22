@@ -23,10 +23,10 @@ import (
 //
 // A shared-base disk is node-local, so for a guest that has one the disk's node
 // WINS, and every other pin must agree with it. A disagreement is an error, not
-// a choice. Obeying spec.nodeName would start the guest where its disk is not,
-// and that node — having never seen the guest — would hand it a fresh snapshot
-// of the base: a pristine disk, every write gone, booting as if new. Obeying the
-// disk would silently ignore an explicit request. So the guest is held, with
+// a choice. Obeying spec.nodeName would start the guest where its disk is not:
+// that node has no record of it, so the launcher's reactivate step refuses to
+// start rather than build a pristine disk, and the guest fails there. Obeying
+// the disk would silently ignore an explicit request. So the guest is held, with
 // the reason, until the pins agree.
 func pinnedNode(guest *swiftv1alpha1.SwiftGuest) (node, source string, err error) {
 	disk := ""
@@ -42,8 +42,8 @@ func pinnedNode(guest *swiftv1alpha1.SwiftGuest) (node, source string, err error
 	if s := guest.Spec.NodeName; s != "" && s != disk {
 		return "", "", fmt.Errorf(
 			"spec.nodeName=%q, but this guest's shared-base root disk lives on node %q "+
-				"(status.sharedBaseDisk.node) and cannot move; starting it on %q would give it a "+
-				"fresh empty disk. Set spec.nodeName to %q or clear it",
+				"(status.sharedBaseDisk.node) and cannot move; node %q has no copy of it, so the "+
+				"guest cannot start there. Set spec.nodeName to %q or clear it",
 			s, disk, s, disk)
 	}
 	if g := guest.Status.GPU; g != nil && g.NodeName != "" && g.NodeName != disk {

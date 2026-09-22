@@ -279,7 +279,7 @@ func applyNodeName(pod *corev1.Pod, guest *swiftv1alpha1.SwiftGuest) {
 		// ever built, so this is defence in depth — and if it is ever reached,
 		// the disk's node is the only safe answer. The alternative is a
 		// launcher the scheduler places freely, which for a shared-base guest
-		// is a fresh empty disk on whichever node it picks.
+		// fails on any node but the disk's.
 		if guest.Status.SharedBaseDisk != nil && guest.Status.SharedBaseDisk.Node != "" {
 			pod.Spec.NodeName = guest.Status.SharedBaseDisk.Node
 		}

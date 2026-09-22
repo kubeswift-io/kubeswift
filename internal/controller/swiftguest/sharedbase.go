@@ -91,6 +91,12 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 		return false, nil
 	}
 
+	// Before anything of this guest's can exist on a node: the finalizer is
+	// what makes deleting the guest release its disk.
+	if err := r.ensureSharedBaseFinalizer(ctx, guest); err != nil {
+		return false, err
+	}
+
 	if sb := status.SharedBaseDisk; sb != nil && sb.Created {
 		rg.SharedBaseDevicePath = sharedbase.DevicePath(guest.UID)
 		SetStorageReadyCondition(status, true, "",
@@ -119,7 +125,7 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 		return false, err
 	}
 
-	pod, err := r.materialisePod(ctx, guest.Namespace, jobName)
+	pod, err := r.jobPod(ctx, guest.Namespace, jobName)
 	if err != nil {
 		return false, err
 	}
@@ -196,8 +202,8 @@ func (r *SwiftGuestReconciler) sharedBaseKey(ctx context.Context, guest *swiftv1
 	return sharedbase.BaseKey(img.UID, pvc.UID), pvc.Name, nil
 }
 
-// materialisePod returns the materialise Job's pod, if one exists.
-func (r *SwiftGuestReconciler) materialisePod(ctx context.Context, namespace, jobName string) (*corev1.Pod, error) {
+// jobPod returns a pod of the named Job, if one exists.
+func (r *SwiftGuestReconciler) jobPod(ctx context.Context, namespace, jobName string) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(namespace),
 		client.MatchingLabels{"batch.kubernetes.io/job-name": jobName}); err != nil {

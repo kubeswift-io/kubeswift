@@ -2,7 +2,9 @@ package thinpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -65,7 +67,11 @@ type execRunner struct{}
 func ExecRunner() Runner { return execRunner{} }
 
 func (execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// The C locale, so an error reads the same on every node: DeleteThin
+	// recognises one by its text (see ErrNoSuchThin).
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -252,8 +258,16 @@ func (m *Manager) poolDevRef(ctx context.Context) (string, error) {
 // the four tests that all write-then-remove, and passed the other three.
 // dmsetup's own retry loop is the fix rather than a sleep, because the
 // condition is "udev has let go", not "some duration has passed".
+//
+// The device's /dev/mapper node goes with it. activate made that node itself
+// (mknodes), not udev, so udev does not remove it either: measured, it outlives
+// the device, left pointing at a device number the kernel will give to the next
+// device it maps. mknodes for a name that is no longer mapped removes the node.
 func (m *Manager) RemoveDevice(ctx context.Context, name string) error {
-	_, err := m.dmsetup(ctx, "remove", "--retry", name)
+	if _, err := m.dmsetup(ctx, "remove", "--retry", name); err != nil {
+		return err
+	}
+	_, err := m.dmsetup(ctx, "mknodes", name)
 	return err
 }
 
@@ -265,11 +279,24 @@ func (m *Manager) RemoveDevice(ctx context.Context, name string) error {
 // only the blocks no snapshot still points at. A base is a convenience for
 // creating the NEXT guest, not a dependency of the running ones — which is why
 // eviction needs no policy beyond "oldest unused first".
+//
+// An id the pool does not hold is ErrNoSuchThin, so a caller finishing an
+// interrupted delete can tell "already gone" from a real failure.
 func (m *Manager) DeleteThin(ctx context.Context, deviceID uint32) error {
-	_, err := m.dmsetup(ctx, "message", m.Pool, "0",
+	out, err := m.dmsetup(ctx, "message", m.Pool, "0",
 		fmt.Sprintf("delete %d", deviceID))
+	if err != nil && strings.Contains(out, "No data available") {
+		return fmt.Errorf("%w: id %d: %w", ErrNoSuchThin, deviceID, err)
+	}
 	return err
 }
+
+// ErrNoSuchThin is DeleteThin's error for an id the pool does not hold.
+//
+// dm-thin answers a delete of an unknown id with ENODATA, which dmsetup reports
+// only as text ("No data available"). ExecRunner pins the C locale so that
+// text is stable.
+var ErrNoSuchThin = errors.New("the pool holds no thin device with that id")
 
 // GrowData reloads the pool at a larger length after the data device has been
 // extended.

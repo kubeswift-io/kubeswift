@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kubeswift-io/kubeswift/internal/thinpool"
 )
 
 func TestValidate(t *testing.T) {
@@ -28,6 +30,17 @@ func TestValidate(t *testing.T) {
 	bad.mode = "materialise"
 	if err := bad.validate(); err == nil {
 		t.Error("an unknown mode was accepted")
+	}
+
+	// Release takes a disk away; sizes are for building one, and the release
+	// Job does not pass them.
+	rel := config{mode: modeRelease, guestKey: "ns/g/uid", device: "ks-g-uid"}
+	if err := rel.validate(); err != nil {
+		t.Errorf("a release config with only the guest and its device was rejected: %v", err)
+	}
+	if err := (config{mode: modeRelease}).validate(); err == nil ||
+		!strings.Contains(err.Error(), "--guest-key") || !strings.Contains(err.Error(), "--device") {
+		t.Errorf("release without --guest-key/--device should name both: %v", err)
 	}
 
 	missing := config{mode: modeReactivate}
@@ -71,6 +84,7 @@ func node(t *testing.T) config {
 		for _, line := range strings.Split(string(out), "\n") {
 			if f := strings.Fields(line); len(f) > 0 && strings.HasPrefix(f[0], "ksit-cmd-dev-") {
 				_ = exec.Command("dmsetup", "remove", "--retry", "-f", "--noudevsync", f[0]).Run()
+				_ = exec.Command("dmsetup", "mknodes", "--noudevsync", f[0]).Run()
 			}
 		}
 		_ = exec.Command("dmsetup", "remove", "--retry", "-f", "--noudevsync", pool).Run()
@@ -349,5 +363,208 @@ func TestIntegration_ChangingThePoolSizeDoesNotBreakRestarts(t *testing.T) {
 	re.poolDataBytes = cfg.poolDataBytes * 4 // the operator raised the setting
 	if err := run(context.Background(), re, &bytes.Buffer{}); err != nil {
 		t.Fatalf("a restart failed after the pool-size setting was raised: %v", err)
+	}
+}
+
+// --- release
+
+// createGuest builds a guest's disk on cfg's node, as the materialise Job does.
+func createGuest(t *testing.T, cfg config, key, device string) config {
+	t.Helper()
+	c := cfg
+	c.mode = modeCreate
+	c.baseKey = "uid-img/uid-pvc"
+	if c.image == "" {
+		c.image = gptImage(t, 16<<20)
+	}
+	c.guestKey, c.device = key, device
+	c.guestBytes = 32 << 20
+	if err := run(context.Background(), c, &bytes.Buffer{}); err != nil {
+		t.Fatalf("create %s: %v", key, err)
+	}
+	return c
+}
+
+// releaseOf is the release Job's view of a guest: its key and device, nothing
+// else.
+func releaseOf(c config) config {
+	return config{mode: modeRelease, root: c.root, pool: c.pool, guestKey: c.guestKey, device: c.device}
+}
+
+func mapped(t *testing.T, name string) bool {
+	t.Helper()
+	out, err := exec.Command("dmsetup", "ls").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// reboot leaves the node as a reboot does: guest unmapped, pool gone, loop
+// devices detached. Only the files remain.
+func reboot(t *testing.T, cfg config, devices ...string) {
+	t.Helper()
+	for _, d := range append(devices, cfg.pool) {
+		if out, err := exec.Command("dmsetup", "remove", "--retry", "--noudevsync", d).CombinedOutput(); err != nil {
+			t.Fatalf("removing %s: %v: %s", d, err, out)
+		}
+		_ = exec.Command("dmsetup", "mknodes", "--noudevsync", d).Run()
+	}
+	data, meta := poolFiles(cfg.root)
+	for _, f := range []string{data, meta} {
+		out, _ := exec.Command("losetup", "-j", f, "--noheadings", "-O", "NAME").Output()
+		for _, l := range strings.Fields(string(out)) {
+			if msg, err := exec.Command("losetup", "-d", l).CombinedOutput(); err != nil {
+				t.Fatalf("detaching %s: %v: %s", l, err, msg)
+			}
+		}
+	}
+}
+
+// Release frees the disk: unmapped, its /dev/mapper node gone, its blocks back
+// in the pool, and the node no longer knows the guest. Running it again is a
+// no-op, which is what makes a retried release Job safe.
+func TestIntegration_ReleaseFreesTheGuestsDisk(t *testing.T) {
+	itEnv(t)
+	ctx := context.Background()
+	c := createGuest(t, node(t), "ns/g/uid-rel", "ksit-cmd-dev-rel")
+	dev := "/dev/mapper/" + c.device
+	write(t, dev, 8<<20, bytes.Repeat([]byte("GUEST-WRITES-TO-FREE"), (1<<20)/20))
+	pool := &thinpool.Manager{Pool: c.pool}
+	before, err := pool.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := run(ctx, releaseOf(c), &out); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if !strings.Contains(out.String(), "released "+c.guestKey) {
+		t.Errorf("output should say it released the guest: %q", out.String())
+	}
+	if mapped(t, c.device) {
+		t.Error("the guest's disk is still mapped")
+	}
+	if _, err := os.Stat(dev); !os.IsNotExist(err) {
+		t.Errorf("%s outlived the release (stat err = %v)", dev, err)
+	}
+	after, err := pool.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.UsedData >= before.UsedData {
+		t.Errorf("the release freed nothing: %d -> %d pool blocks", before.UsedData, after.UsedData)
+	}
+
+	// Forgotten: a restart would now be refused, never handed a fresh disk.
+	re := c
+	re.mode = modeReactivate
+	re.baseKey, re.image = "", ""
+	if err := run(ctx, re, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "no record of it") {
+		t.Errorf("reactivating a released guest: err = %v, want the no-record refusal", err)
+	}
+
+	out.Reset()
+	if err := run(ctx, releaseOf(c), &out); err != nil {
+		t.Fatalf("a second release: %v", err)
+	}
+	if !strings.Contains(out.String(), "nothing to release") {
+		t.Errorf("a second release should find nothing: %q", out.String())
+	}
+}
+
+// The controller may run a release on a node the guest's materialise Job never
+// reached. That node must be left exactly as it was — above all, no 40 GiB
+// preallocated pool created only to delete nothing from it.
+func TestIntegration_ReleaseOnANodeWithoutAPoolCreatesNothing(t *testing.T) {
+	itEnv(t)
+	cfg := node(t)
+	c := releaseOf(cfg)
+	c.guestKey, c.device = "ns/g/uid-nopool", "ksit-cmd-dev-nopool"
+
+	var out bytes.Buffer
+	if err := run(context.Background(), c, &out); err != nil {
+		t.Fatalf("release on a node with no pool: %v", err)
+	}
+	if !strings.Contains(out.String(), "nothing to release") {
+		t.Errorf("output: %q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(cfg.root, "thinpool")); !os.IsNotExist(err) {
+		t.Errorf("release created pool state on a node that had none (stat err = %v)", err)
+	}
+	if mapped(t, cfg.pool) {
+		t.Error("release created a pool")
+	}
+}
+
+// After a reboot nothing is mapped. Release brings the pool back from its files
+// to free the disk, rather than concluding there is nothing to do.
+func TestIntegration_ReleaseAfterANodeReboot(t *testing.T) {
+	itEnv(t)
+	c := createGuest(t, node(t), "ns/g/uid-reboot", "ksit-cmd-dev-reboot")
+	reboot(t, c, c.device)
+
+	var out bytes.Buffer
+	if err := run(context.Background(), releaseOf(c), &out); err != nil {
+		t.Fatalf("release after a reboot: %v", err)
+	}
+	if !strings.Contains(out.String(), "released "+c.guestKey) {
+		t.Errorf("output should say it released the guest: %q", out.String())
+	}
+	x, err := openNode(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known, err := x.HasGuest(c.guestKey); err != nil || known {
+		t.Errorf("the node still knows the released guest (known=%v, err=%v)", known, err)
+	}
+}
+
+// Guests of one base share its blocks. Releasing one must leave the other's
+// disk exactly as it was — its own writes and the base it reads through.
+func TestIntegration_ReleaseLeavesOtherGuestsIntact(t *testing.T) {
+	itEnv(t)
+	cfg := node(t)
+	cfg.image = gptImage(t, 16<<20)
+	a := createGuest(t, cfg, "ns/a/uid-a", "ksit-cmd-dev-a")
+	b := createGuest(t, cfg, "ns/b/uid-b", "ksit-cmd-dev-b")
+	devB := "/dev/mapper/" + b.device
+	write(t, devB, 8<<20, []byte("GUEST-B-KEEPS-THIS"))
+
+	if err := run(context.Background(), releaseOf(a), &bytes.Buffer{}); err != nil {
+		t.Fatalf("releasing a: %v", err)
+	}
+	if got := read(t, devB, 8<<20, 18); string(got) != "GUEST-B-KEEPS-THIS" {
+		t.Errorf("b lost its own write when a was released: %q", got)
+	}
+	if got := read(t, devB, 2<<20, 20); string(got) != "IMAGE-PARTITION-DATA" {
+		t.Errorf("b can no longer read the base it shares with a: %q", got)
+	}
+}
+
+// Half a pool is refused, not completed. A fresh metadata file under an existing
+// data file is a pool that has forgotten every disk in it.
+func TestRelease_RefusesAHalfPresentPool(t *testing.T) {
+	root := t.TempDir()
+	data, meta := poolFiles(root)
+	if err := os.MkdirAll(filepath.Dir(data), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(data, make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := config{mode: modeRelease, root: root, pool: "ksit-cmd-never", guestKey: "ns/g/u", device: "ksit-cmd-dev-never"}
+	err := run(context.Background(), c, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("err = %v, want a refusal naming the incomplete pool", err)
+	}
+	if _, err := os.Stat(meta); !os.IsNotExist(err) {
+		t.Errorf("release created the missing metadata file (stat err = %v)", err)
 	}
 }
