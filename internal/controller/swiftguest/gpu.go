@@ -300,6 +300,11 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err != nil {
 		return nil, err
 	}
+	// A shared-base guest's launcher re-maps its disk before starting — the
+	// only way back after a node reboot. Applied here, once, rather than in
+	// each builder: disk boot, GPU and restore all need it, and a builder that
+	// forgot would leave a guest unable to start after its node rebooted.
+	withSharedBaseDisk(pod, guest, rg)
 	// Backstop for the host-path allowlist: Reconcile rejects a disallowed path
 	// before it gets here, but no caller may build a privileged launcher that
 	// mounts one. See hostpathguard.go.
@@ -415,14 +420,7 @@ func BuildGPUDiskBootPod(
 	// Base volumes: same as disk boot.
 	volumes := []corev1.Volume{
 		{Name: "run", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{
-			Name: "root-disk",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: rg.PreparedImage.PVCName,
-				},
-			},
-		},
+		rootDiskVolume(rg, rg.PreparedImage.PVCName),
 		{
 			Name: "runtime-intent",
 			VolumeSource: corev1.VolumeSource{

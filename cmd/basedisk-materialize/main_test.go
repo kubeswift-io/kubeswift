@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -278,5 +279,75 @@ func TestIntegration_CreateRefusesToShrinkBelowTheImage(t *testing.T) {
 	err := run(context.Background(), cfg, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "smaller than its image") {
 		t.Fatalf("a disk smaller than its image was accepted: %v", err)
+	}
+}
+
+// A first attempt that snapshotted the disk and then died before fixing the GPT
+// leaves the guest KNOWN to this node. The retry must still move the backup
+// header, or it stays mid-disk forever. Create mode only runs before the
+// guest's VM ever has, so the partition table is still the image's and this is
+// always safe here.
+func TestIntegration_RetryAfterPartialCreateStillFixesTheGPT(t *testing.T) {
+	itEnv(t)
+	cfg := node(t)
+	cfg.mode = modeCreate
+	cfg.baseKey = "uid-img/uid-pvc"
+	cfg.image = gptImage(t, 16<<20)
+	cfg.guestKey = "ns/g/uid-partial"
+	cfg.device = "ksit-cmd-dev-partial"
+	cfg.guestBytes = 64 << 20
+
+	// Reproduce the dead first attempt: base built and guest snapshotted at the
+	// grown size, but no sgdisk -e.
+	x, err := openNode(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imgBytes, _ := fileSize(cfg.image)
+	if _, err := x.EnsureBase(context.Background(), cfg.baseKey, imgBytes,
+		func() (io.ReadCloser, error) { return os.Open(cfg.image) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.EnsureGuest(context.Background(), cfg.baseKey, cfg.guestKey, cfg.device, cfg.guestBytes); err != nil {
+		t.Fatal(err)
+	}
+	dev := "/dev/mapper/" + cfg.device
+	if msg, _ := exec.Command("sgdisk", "-v", dev).CombinedOutput(); strings.Contains(string(msg), "No problems found") {
+		t.Fatal("setup did not reproduce a mid-disk backup header; the test would prove nothing")
+	}
+
+	if err := run(context.Background(), cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("the retried create: %v", err)
+	}
+	if msg, err := exec.Command("sgdisk", "-v", dev).CombinedOutput(); err != nil || !strings.Contains(string(msg), "No problems found") {
+		t.Errorf("the retry left the backup GPT header mid-disk:\n%s", msg)
+	}
+}
+
+// Raising the configured pool size must not stop existing guests restarting.
+// The pool is the size its backing file already is; the setting only sizes a
+// pool that does not exist yet.
+func TestIntegration_ChangingThePoolSizeDoesNotBreakRestarts(t *testing.T) {
+	itEnv(t)
+	cfg := node(t)
+	cfg.mode = modeCreate
+	cfg.baseKey = "uid-img/uid-pvc"
+	cfg.image = gptImage(t, 16<<20)
+	cfg.guestKey = "ns/g/uid-resize"
+	cfg.device = "ksit-cmd-dev-resize"
+	cfg.guestBytes = 32 << 20
+	if err := run(context.Background(), cfg, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("dmsetup", "remove", "--retry", "--noudevsync", cfg.device).CombinedOutput(); err != nil {
+		t.Fatalf("unmapping: %v: %s", err, out)
+	}
+
+	re := cfg
+	re.mode = modeReactivate
+	re.baseKey, re.image = "", ""
+	re.poolDataBytes = cfg.poolDataBytes * 4 // the operator raised the setting
+	if err := run(context.Background(), re, &bytes.Buffer{}); err != nil {
+		t.Fatalf("a restart failed after the pool-size setting was raised: %v", err)
 	}
 }

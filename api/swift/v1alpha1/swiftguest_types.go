@@ -964,4 +964,16 @@ type SharedBaseDiskStatus struct {
 	// pool reference-counts the blocks they share.
 	// +optional
 	BaseKey string `json:"baseKey,omitempty"`
+	// Created is true once the disk has been built on Node.
+	//
+	// It is a separate fact from Node, and the difference is the point. Node is
+	// recorded as soon as the materialise Job is placed, so that a retry goes
+	// back to the same node rather than building a second disk elsewhere. But a
+	// first attempt can fail before building anything, and a retry must then be
+	// able to build it. Once Created is true the guest's VM may have run and
+	// written, so from then on a missing disk is an ERROR — never a fresh start,
+	// which would silently discard everything it wrote. It also means the image
+	// is no longer needed to start the guest.
+	// +optional
+	Created bool `json:"created,omitempty"`
 }

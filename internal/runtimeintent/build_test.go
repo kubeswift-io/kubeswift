@@ -12,6 +12,7 @@ type mockResolvedGuest struct {
 	dataDisks           []DataDiskSpec
 	format              string
 	rootVolumeMode      string // W9: "Filesystem" (default) or "Block"
+	sharedBaseDevice    string
 	cpu                 int
 	memory              int
 	lifecycle           string
@@ -31,20 +32,21 @@ type mockResolvedGuest struct {
 	primaryUDNInterface string
 }
 
-func (m *mockResolvedGuest) HasSeed() bool                 { return m.hasSeed }
-func (m *mockResolvedGuest) HasKernel() bool               { return m.hasKernel }
-func (m *mockResolvedGuest) HasNetwork() bool              { return m.hasNetwork }
-func (m *mockResolvedGuest) GetDataDisks() []DataDiskSpec  { return m.dataDisks }
-func (m *mockResolvedGuest) GetRootDiskFormat() string     { return m.format }
-func (m *mockResolvedGuest) GetRootDiskVolumeMode() string { return m.rootVolumeMode }
-func (m *mockResolvedGuest) GetCPU() int                   { return m.cpu }
-func (m *mockResolvedGuest) GetMemoryMiB() int             { return m.memory }
-func (m *mockResolvedGuest) GetLifecycle() string          { return m.lifecycle }
-func (m *mockResolvedGuest) GetGuestID() string            { return m.guestID }
-func (m *mockResolvedGuest) GetKernelPath() string         { return m.kernelPath }
-func (m *mockResolvedGuest) GetInitramfsPath() string      { return m.initramfsPath }
-func (m *mockResolvedGuest) GetKernelCmdline() string      { return m.kernelCmdline }
-func (m *mockResolvedGuest) GetHypervisor() string         { return m.hypervisor }
+func (m *mockResolvedGuest) HasSeed() bool                   { return m.hasSeed }
+func (m *mockResolvedGuest) HasKernel() bool                 { return m.hasKernel }
+func (m *mockResolvedGuest) HasNetwork() bool                { return m.hasNetwork }
+func (m *mockResolvedGuest) GetDataDisks() []DataDiskSpec    { return m.dataDisks }
+func (m *mockResolvedGuest) GetRootDiskFormat() string       { return m.format }
+func (m *mockResolvedGuest) GetRootDiskVolumeMode() string   { return m.rootVolumeMode }
+func (m *mockResolvedGuest) GetSharedBaseDevicePath() string { return m.sharedBaseDevice }
+func (m *mockResolvedGuest) GetCPU() int                     { return m.cpu }
+func (m *mockResolvedGuest) GetMemoryMiB() int               { return m.memory }
+func (m *mockResolvedGuest) GetLifecycle() string            { return m.lifecycle }
+func (m *mockResolvedGuest) GetGuestID() string              { return m.guestID }
+func (m *mockResolvedGuest) GetKernelPath() string           { return m.kernelPath }
+func (m *mockResolvedGuest) GetInitramfsPath() string        { return m.initramfsPath }
+func (m *mockResolvedGuest) GetKernelCmdline() string        { return m.kernelCmdline }
+func (m *mockResolvedGuest) GetHypervisor() string           { return m.hypervisor }
 func (m *mockResolvedGuest) GetOSType() string {
 	if m.osType == "" {
 		return "linux"
@@ -550,5 +552,21 @@ func TestBuild_CPUPinningPolicyReachesTheIntent(t *testing.T) {
 				t.Errorf("SMTPolicy = %q, want %q", got.SMTPolicy, tc.wantSMT)
 			}
 		})
+	}
+}
+
+// A shared-base root disk is a device-mapper thin device, and it takes
+// precedence over the volume-mode path — including Block, which would otherwise
+// point CH at the PVC device path a shared-base guest does not have.
+func TestBuild_SharedBaseDeviceIsTheRootDisk(t *testing.T) {
+	for _, mode := range []string{"", "Filesystem", "Block"} {
+		rg := &mockResolvedGuest{rootVolumeMode: mode, sharedBaseDevice: "/dev/mapper/ks-g-uid"}
+		if got := Build(rg).RootDisk.Path; got != "/dev/mapper/ks-g-uid" {
+			t.Errorf("volumeMode=%q: root disk path = %q, want the shared-base device", mode, got)
+		}
+	}
+	// And nothing changes for a guest without one.
+	if got := Build(&mockResolvedGuest{}).RootDisk.Path; got != DisksRootPath+"/"+RootDiskImageFile {
+		t.Errorf("a guest without a shared-base disk got root disk path %q", got)
 	}
 }

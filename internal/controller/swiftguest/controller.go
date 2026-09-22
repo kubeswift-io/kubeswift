@@ -26,6 +26,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/seed"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // gpuHypervisorAnnotation overrides hypervisor selection for manual QEMU testing
@@ -289,6 +290,16 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		rg.Hypervisor = override
 	}
 
+	// A shared-base root disk is a device the intent names by path, and that
+	// path is fixed by the guest's UID. It has to be on rg BEFORE the intent is
+	// built here: set only later, by the disk step, the intent went out naming
+	// the image file, which does not exist in a shared-base launcher, and CH
+	// could never have started. The launcher itself is still gated on the disk
+	// actually existing, below.
+	if rg.SharedBaseDisk && !rg.HasKernel() {
+		rg.SharedBaseDevicePath = sharedbase.DevicePath(guest.UID)
+	}
+
 	// Create or update intent ConfigMap
 	intentConfigMapName := guest.Name + IntentConfigMapSuffix
 	intent := runtimeintent.Build(rg)
@@ -524,7 +535,23 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// image — its disk is materialized from the snapshot's oci disk artifact
 	// inside EnsureRootDiskClone (maybeRootDiskFromOCI), so it enters here too.
 	var rootDiskClone *RootDiskCloneResult
-	if (rg.PreparedImage.PVCName != "" || rg.RootDisk.FromOCI) && !rg.HasKernel() {
+	if rg.SharedBaseDisk && !rg.HasKernel() {
+		// A shared-base root disk is built on the node by a materialise Job,
+		// not cloned into a PVC, so it never enters EnsureRootDiskClone. Held in
+		// Scheduling until it exists, with the reason on StorageReady — which
+		// the clone path cannot do, since it drops its error on requeue.
+		ready, err := r.ensureSharedBaseDisk(ctx, &guest, rg, status)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !ready {
+			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	} else if (rg.PreparedImage.PVCName != "" || rg.RootDisk.FromOCI) && !rg.HasKernel() {
 		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
 			// Clone not ready — requeue

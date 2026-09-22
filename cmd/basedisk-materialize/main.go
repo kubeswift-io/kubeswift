@@ -152,10 +152,17 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 		// A disk presented larger than its image still has the image's backup
 		// GPT header in the middle of it. Move it to the end — exactly what the
 		// existing clone paths do for a grown disk — so the guest's own tooling
-		// can grow the partition into the space. Only for a disk created just now
-		// and only when it grew: on a disk that already existed the guest owns
-		// the partition table, and rewriting it is not this command's business.
-		if !known && cfg.guestBytes > imageBytes {
+		// can grow the partition into the space.
+		//
+		// Whenever it grew, including for a guest this node already knows.
+		// Create mode only ever runs before the guest's VM has: the controller
+		// starts the launcher once this Job has SUCCEEDED, and never runs it
+		// again after that. So the partition table is still the image's, and
+		// running this is always safe here. Skipping it for a known guest would
+		// strand one whose first attempt snapshotted the disk and then died
+		// before getting this far: the retry sees the guest, and the header
+		// would stay mid-disk forever.
+		if cfg.guestBytes > imageBytes {
 			if msg, err := exec.CommandContext(ctx, "sgdisk", "-e", path).CombinedOutput(); err != nil {
 				return fmt.Errorf("moving the backup GPT header to the end of %s: %w: %s", path, err, msg)
 			}
@@ -174,8 +181,18 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 // reopening its metadata after a reboot, or creating it on first use.
 func openNode(ctx context.Context, cfg config) (*thinpool.Materializer, error) {
 	dir := filepath.Join(cfg.root, "thinpool")
-	data := thinpool.Backing{File: filepath.Join(dir, "data.img"), FileBytes: cfg.poolDataBytes}
-	meta := thinpool.Backing{File: filepath.Join(dir, "meta.img"), FileBytes: thinpool.MetadataSectorsFor(cfg.poolDataBytes) * 512}
+	dataPath, metaPath := filepath.Join(dir, "data.img"), filepath.Join(dir, "meta.img")
+
+	// --pool-data-bytes sizes a pool when it is first CREATED. Once the backing
+	// file exists, its own size is the truth. Otherwise raising the configured
+	// size would make every later start on this node fail — the file would be
+	// "smaller than configured" — and a guest already running here could not
+	// restart. Growing a pool is a deliberate act, not a side effect of a
+	// setting.
+	dataBytes := existingSize(dataPath, cfg.poolDataBytes)
+	metaBytes := existingSize(metaPath, thinpool.MetadataSectorsFor(dataBytes)*512)
+	data := thinpool.Backing{File: dataPath, FileBytes: dataBytes}
+	meta := thinpool.Backing{File: metaPath, FileBytes: metaBytes}
 
 	run := thinpool.ExecRunner()
 	dataDev, err := data.Resolve(ctx, run)
@@ -187,7 +204,7 @@ func openNode(ctx context.Context, cfg config) (*thinpool.Materializer, error) {
 		return nil, fmt.Errorf("pool metadata device: %w", err)
 	}
 	m := &thinpool.Manager{Pool: cfg.pool, DataDev: dataDev, MetaDev: metaDev}
-	if err := m.EnsurePool(ctx, cfg.poolDataBytes/512); err != nil {
+	if err := m.EnsurePool(ctx, dataBytes/512); err != nil {
 		// device-mapper asks the kernel to load dm-thin-pool on first use, and
 		// that normally just works. When it does not — a node that forbids
 		// module loading — dmsetup reports only a bare ioctl failure, so say
@@ -211,4 +228,12 @@ func fileSize(path string) (uint64, error) {
 		return 0, errors.New("the image is empty")
 	}
 	return uint64(st.Size()), nil
+}
+
+// existingSize returns the size of path if it exists, else fallback.
+func existingSize(path string, fallback uint64) uint64 {
+	if st, err := os.Stat(path); err == nil && st.Size() > 0 {
+		return uint64(st.Size())
+	}
+	return fallback
 }

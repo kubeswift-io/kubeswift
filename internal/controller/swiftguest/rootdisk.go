@@ -95,22 +95,14 @@ func (r *SwiftGuestReconciler) EnsureRootDiskClone(
 	guest *swiftv1alpha1.SwiftGuest,
 	rg *resolved.ResolvedGuest,
 ) (*RootDiskCloneResult, error) {
-	// sharedBaseDisk is accepted by the API and its incompatibilities are
-	// already enforced (no Tier A snapshot, no live migration), but the disk
-	// itself is not built yet — base materialisation is the next piece of #614.
-	//
-	// Refuse rather than fall through. Falling through would hand the guest an
-	// ordinary private PVC while its class says otherwise, so the operator gets
-	// none of the density they asked for AND loses the two features the opt-in
-	// gives up: strictly worse than not setting it, and invisible. That is the
-	// same "accepted but ignored" trap #621 removed from spec.source.upload.
-	//
-	// Remove this when materialisation lands.
+	// A shared-base guest's disk is built on its node by ensureSharedBaseDisk,
+	// and Reconcile routes it there instead of here. Reaching this is a
+	// routing bug, and it must not fall through: cloning the image into a
+	// private PVC would give the guest none of what its class asked for, while
+	// it still pays the storage-layer restrictions the class brings.
 	if rg != nil && rg.SharedBaseDisk {
-		return nil, fmt.Errorf(
-			"SwiftGuestClass %q sets sharedBaseDisk: true, but shared base root disks are not implemented yet "+
-				"(tracked in #614) — set sharedBaseDisk: false to run this guest on a private root disk",
-			guest.Spec.GuestClassRef.Name)
+		return nil, fmt.Errorf("internal: shared-base guest %s/%s reached EnsureRootDiskClone; "+
+			"its disk is built by the materialise Job, never cloned", guest.Namespace, guest.Name)
 	}
 
 	// Full-state cloneFromSnapshot (P4): the root disk is materialized from the
