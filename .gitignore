@@ -17,6 +17,7 @@ vendor/
 /gpu-discovery
 /kubeswift-dra-driver
 /snapshot-stager
+/basedisk-materialize
 /snapshot-s3
 /snapshot-oras
 

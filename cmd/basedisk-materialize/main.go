@@ -1,0 +1,214 @@
+// Command basedisk-materialize prepares a shared-base guest's root disk on the
+// node it runs on. It has two modes, used by two different pods:
+//
+//   - create      — the per-guest materialise Job. Mounts the SwiftImage's
+//     prepared PVC, writes the base into the node's thin pool if this node does
+//     not already hold it, and snapshots it for the guest. Runs ONCE per guest.
+//   - reactivate  — the launcher's init container. Re-maps the guest's existing
+//     disk, which is only work after a node reboot. Never needs the image.
+//
+// They are separate pods, not one init container, because the image PVC is
+// ReadWriteOnce and a PVC stays attached for the life of the pod that mounts
+// it. An init container would pin the image to this node for as long as the
+// guest ran, and no other guest of that image could be created on any other
+// node meanwhile. A Job releases it when it exits — the same reason the
+// existing root-disk Copy Job is a Job.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"github.com/kubeswift-io/kubeswift/internal/thinpool"
+)
+
+const (
+	modeCreate     = "create"
+	modeReactivate = "reactivate"
+)
+
+type config struct {
+	mode string
+
+	root          string // node state: registry, locks, backing files
+	pool          string
+	poolDataBytes uint64
+
+	guestKey   string // namespace/name/uid — the UID is what keeps a recreated guest off its predecessor's disk
+	device     string
+	guestBytes uint64
+
+	// create mode only
+	baseKey string
+	image   string
+}
+
+func main() {
+	var cfg config
+	flag.StringVar(&cfg.mode, "mode", "", "create (materialise Job) or reactivate (launcher init container)")
+	flag.StringVar(&cfg.root, "root", "/var/lib/kubeswift", "node state directory")
+	flag.StringVar(&cfg.pool, "pool", "kubeswift-pool", "device-mapper name of the node's thin pool")
+	flag.Uint64Var(&cfg.poolDataBytes, "pool-data-bytes", 0, "size of the pool's preallocated data file")
+	flag.StringVar(&cfg.guestKey, "guest-key", "", "namespace/name/uid of the guest")
+	flag.StringVar(&cfg.device, "device", "", "device-mapper name to map the guest's disk at")
+	flag.Uint64Var(&cfg.guestBytes, "guest-bytes", 0, "size of the guest's root disk")
+	flag.StringVar(&cfg.baseKey, "base-key", "", "content identity of the image (create mode)")
+	flag.StringVar(&cfg.image, "image", "", "path to the raw image to build the base from (create mode)")
+	flag.Parse()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, cfg, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "basedisk-materialize:", err)
+		os.Exit(1)
+	}
+}
+
+func (c config) validate() error {
+	var missing []string
+	req := func(name string, set bool) {
+		if !set {
+			missing = append(missing, name)
+		}
+	}
+	req("--mode", c.mode != "")
+	req("--guest-key", c.guestKey != "")
+	req("--device", c.device != "")
+	req("--guest-bytes", c.guestBytes != 0)
+	req("--pool-data-bytes", c.poolDataBytes != 0)
+	switch c.mode {
+	case modeCreate:
+		req("--base-key", c.baseKey != "")
+		req("--image", c.image != "")
+	case modeReactivate, "":
+	default:
+		return fmt.Errorf("unknown --mode %q: want %s or %s", c.mode, modeCreate, modeReactivate)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required flags: %v", missing)
+	}
+	return nil
+}
+
+func run(ctx context.Context, cfg config, out io.Writer) error {
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	x, err := openNode(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	known, err := x.HasGuest(cfg.guestKey)
+	if err != nil {
+		return err
+	}
+
+	switch cfg.mode {
+	case modeReactivate:
+		// The controller only starts a launcher once the materialise Job has
+		// succeeded, so this node MUST already hold the guest's disk. If it does
+		// not, the disk is gone — the registry was lost, or the pool with it —
+		// and the guest's VM may have run and written. Creating a fresh one here
+		// would boot it as if new and discard all of that without a trace, so
+		// this is an error and stays one.
+		if !known {
+			return fmt.Errorf("guest %s should have a disk on this node but the node has no record of it; "+
+				"refusing to create a fresh one, which would silently discard everything the guest wrote. "+
+				"If the node's pool or %s was lost, the guest's disk was lost with it: delete and recreate the guest",
+				cfg.guestKey, thinpool.DefaultRegistryPath(cfg.root))
+		}
+		path, err := x.EnsureGuest(ctx, "", cfg.guestKey, cfg.device, cfg.guestBytes)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "reactivated %s at %s\n", cfg.guestKey, path)
+		return nil
+
+	case modeCreate:
+		imageBytes, err := fileSize(cfg.image)
+		if err != nil {
+			return err
+		}
+		if cfg.guestBytes < imageBytes {
+			return fmt.Errorf("the guest's root disk (%d bytes) is smaller than its image (%d bytes); a disk cannot be shrunk below the image it starts from",
+				cfg.guestBytes, imageBytes)
+		}
+		if _, err := x.EnsureBase(ctx, cfg.baseKey, imageBytes, func() (io.ReadCloser, error) { return os.Open(cfg.image) }); err != nil {
+			return err
+		}
+		path, err := x.EnsureGuest(ctx, cfg.baseKey, cfg.guestKey, cfg.device, cfg.guestBytes)
+		if err != nil {
+			return err
+		}
+		// A disk presented larger than its image still has the image's backup
+		// GPT header in the middle of it. Move it to the end — exactly what the
+		// existing clone paths do for a grown disk — so the guest's own tooling
+		// can grow the partition into the space. Only for a disk created just now
+		// and only when it grew: on a disk that already existed the guest owns
+		// the partition table, and rewriting it is not this command's business.
+		if !known && cfg.guestBytes > imageBytes {
+			if msg, err := exec.CommandContext(ctx, "sgdisk", "-e", path).CombinedOutput(); err != nil {
+				return fmt.Errorf("moving the backup GPT header to the end of %s: %w: %s", path, err, msg)
+			}
+		}
+		verb := "created"
+		if known {
+			verb = "reactivated"
+		}
+		fmt.Fprintf(out, "%s %s at %s\n", verb, cfg.guestKey, path)
+		return nil
+	}
+	return fmt.Errorf("unreachable: mode %q", cfg.mode)
+}
+
+// openNode brings up this node's pool — attaching its backing files and
+// reopening its metadata after a reboot, or creating it on first use.
+func openNode(ctx context.Context, cfg config) (*thinpool.Materializer, error) {
+	dir := filepath.Join(cfg.root, "thinpool")
+	data := thinpool.Backing{File: filepath.Join(dir, "data.img"), FileBytes: cfg.poolDataBytes}
+	meta := thinpool.Backing{File: filepath.Join(dir, "meta.img"), FileBytes: thinpool.MetadataSectorsFor(cfg.poolDataBytes) * 512}
+
+	run := thinpool.ExecRunner()
+	dataDev, err := data.Resolve(ctx, run)
+	if err != nil {
+		return nil, fmt.Errorf("pool data device: %w", err)
+	}
+	metaDev, err := meta.Resolve(ctx, run)
+	if err != nil {
+		return nil, fmt.Errorf("pool metadata device: %w", err)
+	}
+	m := &thinpool.Manager{Pool: cfg.pool, DataDev: dataDev, MetaDev: metaDev}
+	if err := m.EnsurePool(ctx, cfg.poolDataBytes/512); err != nil {
+		// device-mapper asks the kernel to load dm-thin-pool on first use, and
+		// that normally just works. When it does not — a node that forbids
+		// module loading — dmsetup reports only a bare ioctl failure, so say
+		// what to check rather than leave the operator with that.
+		return nil, fmt.Errorf("creating or opening thin pool %s: %w (if the kernel could not load the "+
+			"dm-thin-pool target, load it on the node with: modprobe dm-thin-pool)", cfg.pool, err)
+	}
+	return &thinpool.Materializer{
+		M:       m,
+		Reg:     thinpool.NewRegistry(thinpool.DefaultRegistryPath(cfg.root)),
+		LockDir: filepath.Join(dir, "locks"),
+	}, nil
+}
+
+func fileSize(path string) (uint64, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("the image: %w", err)
+	}
+	if st.Size() == 0 {
+		return 0, errors.New("the image is empty")
+	}
+	return uint64(st.Size()), nil
+}

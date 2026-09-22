@@ -48,6 +48,10 @@ COPY cmd ./cmd
 COPY internal ./internal
 COPY api ./api
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/snapshot-stager ./cmd/snapshot-stager
+# basedisk-materialize: builds and reactivates shared-base root disks in the
+# node's dm-thin pool. Runs as the per-guest materialise Job (create mode) and
+# as the launcher's init container (reactivate mode), both privileged.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/basedisk-materialize ./cmd/basedisk-materialize
 # kubeswift-guest-agent: the in-guest identity agent. It is NOT run by the
 # launcher pod — it is a static binary embedded here so it can be installed
 # INSIDE a source guest (via the guest-agent SwiftSeedProfile's NoCloud seed
@@ -97,6 +101,7 @@ RUN apt-get update \
     qemu-system-x86 \
     qemu-utils \
     gdisk \
+    dmsetup \
     ovmf \
     python3 \
     libseccomp2 \
@@ -161,6 +166,11 @@ RUN mkdir -p /usr/share/kubeswift-firmware && \
 
 COPY --from=builder /build/target/release/swiftletd /usr/local/bin/swiftletd
 COPY --from=go-builder /out/snapshot-stager /usr/local/bin/snapshot-stager
+# dmsetup (above) is what it drives. It deliberately does NOT need kmod or
+# /lib/modules: device-mapper asks the kernel to load dm-thin-pool on first use,
+# and the kernel runs the HOST's modprobe to do it — so the node's own module
+# format (zstd-compressed on current Ubuntu) is never this image's problem.
+COPY --from=go-builder /out/basedisk-materialize /usr/local/bin/basedisk-materialize
 # kubeswift-guest-agent + its systemd unit live in a share dir, NOT on the
 # launcher PATH — the agent runs INSIDE the guest, not in the launcher pod. The
 # guest-agent SwiftSeedProfile (PR 2) bind-mounts this dir read-only into a
