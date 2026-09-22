@@ -199,9 +199,37 @@ func copySkippingZeros(ctx context.Context, dst io.WriterAt, src io.Reader, limi
 // EnsureGuest returns the device path of a guest's disk, snapshotting the base
 // the first time and only REACTIVATING it after that.
 //
-// The base must already be ready. Snapshotting an unfinished one is the failure
-// EnsureBase exists to prevent, so this refuses rather than trying.
+// Whether the guest already has a disk is asked FIRST, before anything about
+// the base. Reactivating needs nothing from the base — dm-thin reference-counts
+// the blocks they share — and a base may legitimately have been evicted since
+// (§7.5). Checking the base first made every guest of an evicted base unable to
+// restart, its disk intact and unused. Only a NEW guest needs a ready base.
 func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devName string, sizeBytes uint64) (string, error) {
+	// Already mapped: the launcher container restarted without the node
+	// rebooting. Nothing to do, and creating it again would fail anyway.
+	if active, err := x.M.Active(ctx, devName); err != nil {
+		return "", err
+	} else if active {
+		return x.M.DevicePath(devName), nil
+	}
+
+	sectors := bytesToSectors(sizeBytes)
+	if id, known, err := x.Reg.GuestID(guestKey); err != nil {
+		return "", err
+	} else if known {
+		// The guest has a disk. Reactivate it; never re-snapshot.
+		//
+		// If the pool no longer holds this id, this fails, and that is the
+		// right outcome: the guest's data is gone, and quietly handing it a
+		// new empty disk would make that look like a clean first boot.
+		if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
+			return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
+		}
+		return x.M.DevicePath(devName), nil
+	}
+
+	// A new guest: this is the only case that needs the base, and it must be
+	// completely written before anything is snapshotted from it.
 	ready, err := x.Reg.BaseReady(baseKey)
 	if err != nil {
 		return "", err
@@ -217,26 +245,14 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 		return "", fmt.Errorf("base %s is marked ready but has no device id", baseKey)
 	}
 
-	// Already mapped: the launcher container restarted without the node
-	// rebooting. Nothing to do, and creating it again would fail anyway.
-	if active, err := x.M.Active(ctx, devName); err != nil {
-		return "", err
-	} else if active {
-		return x.M.DevicePath(devName), nil
-	}
-
-	sectors := bytesToSectors(sizeBytes)
 	for attempt := 0; attempt < maxIDRetries; attempt++ {
 		id, fresh, err := x.Reg.AllocateGuest(guestKey)
 		if err != nil {
 			return "", err
 		}
 		if !fresh {
-			// The guest has a disk. Reactivate it; never re-snapshot.
-			//
-			// If the pool no longer holds this id, this fails, and that is the
-			// right outcome: the guest's data is gone, and quietly handing it a
-			// new empty disk would make that look like a clean first boot.
+			// Allocated between the lookup above and here — another caller
+			// raced us. Treat it exactly like a known guest.
 			if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
 				return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
 			}
@@ -257,6 +273,12 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 		}
 	}
 	return "", fmt.Errorf("guest %s: %d consecutive device ids already in the pool; the registry is badly out of step with it", guestKey, maxIDRetries)
+}
+
+// HasGuest reports whether this node already holds a disk for guestKey.
+func (x *Materializer) HasGuest(guestKey string) (bool, error) {
+	_, known, err := x.Reg.GuestID(guestKey)
+	return known, err
 }
 
 // ReleaseGuest destroys a guest's disk and frees what it alone was using.

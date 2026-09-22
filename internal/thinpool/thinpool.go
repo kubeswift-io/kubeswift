@@ -59,6 +59,11 @@ type Runner interface {
 
 type execRunner struct{}
 
+// ExecRunner runs commands for real. Backing.Resolve takes a Runner explicitly
+// (unlike Manager, which defaults to this), so callers outside the package need
+// a way to name it.
+func ExecRunner() Runner { return execRunner{} }
+
 func (execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {

@@ -384,3 +384,49 @@ func TestIntegration_ReleaseGuestFreesAndAllowsRecreate(t *testing.T) {
 		t.Fatal("a guest recreated under a released name got the previous guest's data")
 	}
 }
+
+// Reactivating a guest's disk needs nothing from the base. dm-thin
+// reference-counts the blocks they share, so an evicted base leaves its guests
+// intact (§7.5) — and a restart must still work. An earlier EnsureGuest checked
+// that the base was ready BEFORE asking whether the guest already had a disk,
+// so evicting a base would have made every guest built from it unable to
+// restart, with its disk sitting there untouched.
+func TestIntegration_RestartWorksAfterTheBaseIsEvicted(t *testing.T) {
+	itEnv(t)
+	x, r := materializer(t)
+	ctx := context.Background()
+	img := image(8 << 20)
+	const key = "sha256:evicted"
+
+	if _, err := x.EnsureBase(ctx, key, uint64(len(img)), opener(img)); err != nil {
+		t.Fatal(err)
+	}
+	path, err := x.EnsureGuest(ctx, key, "ns/g/uid-1", "ksit-evict", uint64(len(img)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.track("ksit-evict")
+	mine := bytes.Repeat([]byte("MINE-SURVIVES-EVICTION!!"), 4096/24+1)[:4096]
+	ddWriteAt(t, path, mine, 0)
+
+	// Evict the base: forget it and delete its thin device.
+	baseID, _, _ := x.Reg.BaseID(key)
+	if err := x.Reg.ForgetBase(key); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.M.DeleteThin(ctx, baseID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The guest restarts.
+	if err := x.M.RemoveDevice(ctx, "ksit-evict"); err != nil {
+		t.Fatal(err)
+	}
+	path, err = x.EnsureGuest(ctx, key, "ns/g/uid-1", "ksit-evict", uint64(len(img)))
+	if err != nil {
+		t.Fatalf("a guest could not restart after its base was evicted: %v", err)
+	}
+	if got := ddRead(t, path, 0, len(mine)); !bytes.Equal(got, mine) {
+		t.Error("the guest came back without its writes")
+	}
+}
