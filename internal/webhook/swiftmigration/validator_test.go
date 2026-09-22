@@ -1399,35 +1399,34 @@ func TestValidateClusterState_VirtiofsOfflineNotRejected(t *testing.T) {
 	}
 }
 
-// A shared-base guest's root disk is a thin snapshot in a node-local pool, not
-// shared storage, so live migration has nothing to migrate over. It is refused
-// with a message naming the class the setting lives on and pointing at offline,
-// which does work — a refusal without a way forward gets worked around.
-func TestGateLiveModeStorage_SharedBaseDiskIsRefused(t *testing.T) {
-	scheme := migrationScheme(t)
-	guest := newSwiftGuest("guest", "default")
-	guest.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "shared"}
-	// SwiftGuestClass is cluster-scoped: no namespace on the fixture.
-	class := &swiftv1alpha1.SwiftGuestClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
-		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
-	v := &Validator{Client: c}
+// Every mode is refused at admission, offline included: offline only repins the
+// guest and would leave its node-local disk behind.
+func TestValidate_SharedBaseDiskRefusesEveryMode(t *testing.T) {
+	for _, mode := range []migrationv1alpha1.SwiftMigrationMode{
+		migrationv1alpha1.SwiftMigrationModeLive,
+		migrationv1alpha1.SwiftMigrationModeOffline,
+		migrationv1alpha1.SwiftMigrationModeAuto,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			scheme := migrationScheme(t)
+			guest := newSwiftGuest("guest", "default")
+			guest.Spec.GuestClassRef = corev1.LocalObjectReference{Name: "shared"}
+			class := &swiftv1alpha1.SwiftGuestClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+				Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class, newReadyNode("worker-2")).Build()
+			v := &Validator{Client: c}
 
-	err := v.gateLiveModeStorage(context.Background(), guest)
-	if err == nil {
-		t.Fatal("live migration of a sharedBaseDisk guest was accepted; it has no shared storage")
-	}
-	for _, want := range []string{"sharedBaseDisk", "shared", "offline"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal should mention %q: %v", want, err)
-		}
-	}
-	// The shared-base reason must win over the generic accessMode/volumeMode
-	// message: that one would tell the operator to set RWX+Block, which cannot
-	// help a guest whose disk is not a PVC at all.
-	if strings.Contains(err.Error(), "ReadWriteMany") {
-		t.Errorf("reported the generic storage message instead of the shared-base one: %v", err)
+			mig := newSwiftMigration("m", "default")
+			mig.Spec.Mode = mode
+			_, err := v.validate(context.Background(), mig)
+			if err == nil {
+				t.Fatalf("mode=%s migration of a sharedBaseDisk guest was admitted", mode)
+			}
+			if !strings.Contains(err.Error(), "cannot be migrated in any mode") {
+				t.Errorf("wrong refusal: %v", err)
+			}
+		})
 	}
 }

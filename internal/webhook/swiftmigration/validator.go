@@ -368,6 +368,16 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 			guest.Name)
 	}
 
+	// A shared-base guest cannot be migrated in ANY mode — offline included,
+	// because offline only repins the guest and copies nothing, which leaves a
+	// node-local disk behind. Checked here, where every mode passes, rather than
+	// in the live-only storage gate where it first lived.
+	if shared, className, err := sharedbase.GuestUsesSharedBase(ctx, v.Client, mig.Namespace, guest.Name); err != nil {
+		return nil, err
+	} else if shared {
+		return nil, fmt.Errorf("%s", sharedbase.MigrationRefusal(guest.Name, className))
+	}
+
 	// Resolve source node from the guest. status.nodeName is set by the
 	// SwiftGuest controller when the launcher pod is scheduled. If empty,
 	// the guest hasn't started yet — accept the migration anyway because
@@ -581,15 +591,6 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 		return fmt.Errorf("look up SwiftGuestClass %q for live-mode storage check: %w",
 			guest.Spec.GuestClassRef.Name, err)
 	}
-	// A shared-base guest's root disk is a thin snapshot in a node-local pool,
-	// not a PVC at all, so the accessMode/volumeMode question below does not
-	// apply to it and would produce a misleading answer. Live migration relies
-	// on shared storage; moving a node-local overlay would mean implementing
-	// storage live migration, which this design exists to avoid.
-	if class.Spec.SharedBaseDisk {
-		return fmt.Errorf("%s", sharedbase.LiveMigrationRefusal(guest.Name, class.Name))
-	}
-
 	storage := resolved.MergeStorage(guest, &class)
 	if storage.IsLiveMigrationCapable() {
 		return nil

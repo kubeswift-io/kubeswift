@@ -134,13 +134,17 @@ spec:
                       where a CSI-backed root disk survives and reschedules;
                     - Tier A (CSI VolumeSnapshot) snapshots are refused, because there is no
                       PVC to snapshot;
-                    - live migration is refused, because it relies on shared storage and
-                      moving a node-local overlay would mean storage live migration.
+                    - full-state (includeDisk) snapshots are refused, because the disk
+                      export reads a root PVC these guests do not have;
+                    - migration is refused in EVERY mode. Live migration needs shared
+                      storage, and offline migration only repins the guest and copies
+                      nothing, which would leave its disk behind. The guest stays on the
+                      node that holds its disk; to move it, recreate it.
 
-                  Tier B and Tier C snapshots, cold migration and rootDisk.size all work
-                  unchanged. This suits fleets of similar, rebuildable guests — pool
-                  replicas, CI workers, short-lived guests — and does not suit a guest
-                  whose disk is the thing that matters.
+                  Memory snapshots (Tier B, and Tier C without includeDisk) and
+                  rootDisk.size work unchanged. This suits fleets of similar, rebuildable
+                  guests — pool replicas, CI workers, short-lived guests — and does not
+                  suit a guest whose disk is the thing that matters.
                 type: boolean
               smtPolicy:
                 default: spread

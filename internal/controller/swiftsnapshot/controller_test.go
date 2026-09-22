@@ -424,3 +424,53 @@ func TestHandlePending_CSIBackend_SharedBaseGuestFailsTerminally(t *testing.T) {
 		}
 	}
 }
+
+// An includeDisk snapshot of a shared-base guest can never succeed — the export
+// reads a root PVC it does not have — so it fails at once, even when the guest
+// is STOPPED and has no launcher pod. Waiting for a launcher first would leave
+// it Pending "for the launcher" when the real answer is permanent.
+func TestHandlePendingLocal_IncludeDisk_SharedBaseFailsWithoutWaitingForALauncher(t *testing.T) {
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef:      snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "g1"},
+			IncludeMemory: true,
+			IncludeDisk:   true,
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendOCI,
+				OCI:  &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/snaps"},
+			},
+		},
+	}
+	// Deliberately NO launcher pod: the guest is stopped.
+	r, _ := newReconciler(t, guest, class, snap)
+
+	var status snapshotv1alpha1.SwiftSnapshotStatus
+	_, requeue, err := r.handlePendingLocal(context.Background(), snap, &status)
+	if err != nil {
+		t.Fatalf("handlePendingLocal: %v", err)
+	}
+	if status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseFailed {
+		t.Fatalf("phase = %q, want Failed — it must not wait for a launcher before refusing", status.Phase)
+	}
+	if requeue != 0 {
+		t.Errorf("requeued after %v; a permanent refusal must not be retried", requeue)
+	}
+	var msg string
+	for _, c := range status.Conditions {
+		if c.Type == "Ready" {
+			msg = c.Message
+		}
+	}
+	if !strings.Contains(msg, "includeDisk") {
+		t.Errorf("Ready condition should name includeDisk: %q", msg)
+	}
+}
