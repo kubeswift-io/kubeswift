@@ -199,6 +199,22 @@ func (m *Manager) activate(ctx context.Context, name string, deviceID uint32, si
 	return err
 }
 
+// Activate maps an EXISTING thin device at name, without creating anything in
+// the pool.
+//
+// This is how a guest comes back after its launcher restarts or its node
+// reboots. It must never be SnapshotBase: the guest's thin device holds every
+// write it has made, and taking a fresh snapshot of the base would hand it a
+// pristine disk — its data silently gone, and the guest booting as if new.
+func (m *Manager) Activate(ctx context.Context, deviceID uint32, name string, sizeSectors uint64) error {
+	return m.activate(ctx, name, deviceID, sizeSectors)
+}
+
+// Active reports whether a device-mapper device is currently mapped.
+func (m *Manager) Active(ctx context.Context, name string) (bool, error) {
+	return m.exists(ctx, name)
+}
+
 // DevicePath is where an activated device appears. Valid only after the device
 // has been created, because the node is made by mknodes rather than by udev.
 func (m *Manager) DevicePath(name string) string { return "/dev/mapper/" + name }
