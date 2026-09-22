@@ -106,7 +106,12 @@ func (r *rig) teardown() {
 	for i := len(r.devs) - 1; i >= 0; i-- {
 		_ = exec.Command("dmsetup", "remove", "--retry", "--noudevsync", r.devs[i]).Run()
 	}
-	_ = exec.Command("dmsetup", "remove", "-f", "--noudevsync", r.pool).Run()
+	// --retry as well as -f. -f alone, on a pool still briefly busy from the
+	// thin devices removed just above, does not remove it: it swaps in an
+	// "error" table and leaves the device behind, open count 0, holding its
+	// name. That leaked two pools after the concurrent tests, which end on the
+	// heaviest I/O. --retry waits out the busy window first.
+	_ = exec.Command("dmsetup", "remove", "--retry", "-f", "--noudevsync", r.pool).Run()
 	for _, d := range []string{r.data, r.meta} {
 		if d != "" {
 			_ = exec.Command("losetup", "-d", d).Run()

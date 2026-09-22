@@ -39,6 +39,15 @@ type registryState struct {
 	Bases map[string]uint32 `json:"bases,omitempty"`
 	// Guests maps "namespace/name" to the thin snapshot serving that guest.
 	Guests map[string]uint32 `json:"guests,omitempty"`
+	// Ready records which bases are FULLY written.
+	//
+	// Allocated and populated are different states, and the gap between them
+	// is where a guest would boot from half an image: a base is allocated,
+	// its writer is part-way through a multi-gigabyte copy, and a second guest
+	// on the same digest sees the id and snapshots it. Snapshots are only ever
+	// taken from a base marked here, and a base is only marked after its
+	// writer has synced.
+	Ready map[string]bool `json:"ready,omitempty"`
 }
 
 // NewRegistry returns a registry stored at path. The file is created on first
@@ -155,6 +164,35 @@ func (r *Registry) ForgetBase(digest string) error {
 			return false, nil
 		}
 		delete(st.Bases, digest)
+		// Readiness goes with it. Leaving it behind would let a base allocated
+		// later for the same digest be snapshotted before it was written.
+		delete(st.Ready, digest)
+		return true, nil
+	})
+}
+
+// BaseReady reports whether digest's base has been completely written.
+func (r *Registry) BaseReady(digest string) (bool, error) {
+	var ready bool
+	err := r.withLock(func(st *registryState) (bool, error) {
+		ready = st.Ready[digest]
+		return false, nil
+	})
+	return ready, err
+}
+
+// MarkBaseReady records that digest's base is completely written and synced.
+// Call it only after the writer has synced, never before: a base marked ready
+// is one guests will be snapshotted from.
+func (r *Registry) MarkBaseReady(digest string) error {
+	return r.withLock(func(st *registryState) (bool, error) {
+		if _, ok := st.Bases[digest]; !ok {
+			return false, fmt.Errorf("marking %s ready: no base allocated for it", digest)
+		}
+		if st.Ready[digest] {
+			return false, nil
+		}
+		st.Ready[digest] = true
 		return true, nil
 	})
 }
@@ -205,7 +243,7 @@ func (r *Registry) withLock(mutate func(*registryState) (bool, error)) error {
 }
 
 func (r *Registry) load() (*registryState, error) {
-	st := &registryState{NextID: firstDeviceID, Bases: map[string]uint32{}, Guests: map[string]uint32{}}
+	st := &registryState{NextID: firstDeviceID, Bases: map[string]uint32{}, Guests: map[string]uint32{}, Ready: map[string]bool{}}
 	data, err := os.ReadFile(r.path)
 	if os.IsNotExist(err) {
 		return st, nil
@@ -229,6 +267,9 @@ func (r *Registry) load() (*registryState, error) {
 	}
 	if st.Guests == nil {
 		st.Guests = map[string]uint32{}
+	}
+	if st.Ready == nil {
+		st.Ready = map[string]bool{}
 	}
 	return st, nil
 }
