@@ -15,6 +15,47 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
+// pinnedNode returns the node a guest's launcher must run on, and what pinned
+// it there, for messages.
+//
+// For a guest without a shared-base disk this is exactly spec.nodeName, as it
+// always was — no behaviour changes for anyone else.
+//
+// A shared-base disk is node-local, so for a guest that has one the disk's node
+// WINS, and every other pin must agree with it. A disagreement is an error, not
+// a choice. Obeying spec.nodeName would start the guest where its disk is not,
+// and that node — having never seen the guest — would hand it a fresh snapshot
+// of the base: a pristine disk, every write gone, booting as if new. Obeying the
+// disk would silently ignore an explicit request. So the guest is held, with
+// the reason, until the pins agree.
+func pinnedNode(guest *swiftv1alpha1.SwiftGuest) (node, source string, err error) {
+	disk := ""
+	if guest.Status.SharedBaseDisk != nil {
+		disk = guest.Status.SharedBaseDisk.Node
+	}
+	if disk == "" {
+		if guest.Spec.NodeName != "" {
+			return guest.Spec.NodeName, "spec.nodeName", nil
+		}
+		return "", "", nil
+	}
+	if s := guest.Spec.NodeName; s != "" && s != disk {
+		return "", "", fmt.Errorf(
+			"spec.nodeName=%q, but this guest's shared-base root disk lives on node %q "+
+				"(status.sharedBaseDisk.node) and cannot move; starting it on %q would give it a "+
+				"fresh empty disk. Set spec.nodeName to %q or clear it",
+			s, disk, s, disk)
+	}
+	if g := guest.Status.GPU; g != nil && g.NodeName != "" && g.NodeName != disk {
+		return "", "", fmt.Errorf(
+			"the GPU allocated to this guest is on node %q, but its shared-base root disk lives on "+
+				"node %q (status.sharedBaseDisk.node) and cannot move; the guest can only run where "+
+				"both are",
+			g.NodeName, disk)
+	}
+	return disk, "status.sharedBaseDisk.node", nil
+}
+
 // checkNodePlacement enforces the taint/toleration check that the scheduler
 // would have run, for guests that pin a node.
 //
@@ -57,15 +98,28 @@ func checkNodePlacement(ctx context.Context, c client.Reader, guest *swiftv1alph
 // a launcher already running: a cordon or taint added later does not evict it,
 // and Reconcile does not consult this for one.
 func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1alpha1.SwiftGuest, tolerations []corev1.Toleration) error {
-	if guest.Spec.NodeName == "" {
+	name, source, err := pinnedNode(guest)
+	if err != nil {
+		return err
+	}
+	if name == "" {
 		return nil // not pinned; the scheduler runs normally and applies taints itself
 	}
 	var node corev1.Node
-	if err := c.Get(ctx, types.NamespacedName{Name: guest.Spec.NodeName}, &node); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: name}, &node); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("spec.nodeName=%q does not exist", guest.Spec.NodeName)
+			if source == "status.sharedBaseDisk.node" {
+				// Not a typo to correct: the disk is on that node and nowhere
+				// else. Waiting is the only safe answer — starting elsewhere
+				// would boot the guest on an empty disk.
+				return fmt.Errorf("this guest's shared-base root disk lives on node %q, which does not "+
+					"exist; the disk is node-local and cannot move, so the guest waits for the node "+
+					"to return. If the node is gone for good, so is the disk: delete and recreate "+
+					"the guest", name)
+			}
+			return fmt.Errorf("%s=%q does not exist", source, name)
 		}
-		return fmt.Errorf("resolve spec.nodeName=%q: %w", guest.Spec.NodeName, err)
+		return fmt.Errorf("resolve %s=%q: %w", source, name, err)
 	}
 	// A cordon is spec.unschedulable, which the node lifecycle controller then
 	// mirrors as a taint. Either one alone counts: the taint lags behind both the
@@ -88,13 +142,20 @@ func checkNodePlacementFor(ctx context.Context, c client.Reader, guest *swiftv1a
 		// NoSchedule/NoExecute node at all. The message says that, rather than
 		// pointing at a field that does not exist (which the first version of
 		// this check did).
+		if source == "status.sharedBaseDisk.node" {
+			// Re-pinning is not an option: the disk cannot follow the guest.
+			return fmt.Errorf(
+				"this guest's shared-base root disk lives on node %q, which has taint %s=%s:%s, and a "+
+					"guest cannot tolerate taints; the disk cannot move, so remove the taint",
+				name, t.Key, t.Value, t.Effect)
+		}
 		return fmt.Errorf(
-			"spec.nodeName=%q has taint %s=%s:%s and a guest cannot tolerate taints; "+
+			"%s=%q has taint %s=%s:%s and a guest cannot tolerate taints; "+
 				"pin the guest to an untainted node, or remove the taint",
-			guest.Spec.NodeName, t.Key, t.Value, t.Effect)
+			source, name, t.Key, t.Value, t.Effect)
 	}
 	if cordoned {
-		return fmt.Errorf("spec.nodeName=%q is cordoned; the guest starts once the node is uncordoned", guest.Spec.NodeName)
+		return fmt.Errorf("%s=%q is cordoned; the guest starts once the node is uncordoned", source, name)
 	}
 	return nil
 }
@@ -118,8 +179,9 @@ func (r *SwiftGuestReconciler) holdForNodePlacement(ctx context.Context, guest *
 	if err := r.patchStatus(ctx, guest, status); err != nil {
 		return ctrl.Result{}, err
 	}
+	node, _, _ := pinnedNode(guest)
 	log.FromContext(ctx).Info("waiting for the pinned node to take a launcher",
-		"node", guest.Spec.NodeName, "reason", cause.Error())
+		"node", node, "reason", cause.Error())
 	return ctrl.Result{RequeueAfter: nodePlacementRetry}, nil
 }
 
