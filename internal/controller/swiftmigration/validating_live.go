@@ -13,7 +13,6 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
-	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // handleValidatingLive is the live-mode Validating phase.
@@ -78,18 +77,6 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	if guest.Spec.Migration != nil && guest.Spec.Migration.Enabled != nil && !*guest.Spec.Migration.Enabled {
 		return phaseFailure(
 			fmt.Sprintf("SwiftGuest %q has spec.migration.enabled=false", guest.Name),
-			migrationv1alpha1.FailureReasonEligibilityMismatch)
-	}
-
-	// Defense in depth, and the path that actually runs: the webhook refuses
-	// live migration for a shared-base guest, but it is off by default
-	// (webhook.enabled=false). Without this the migration would proceed and
-	// fail later at the storage layer, with an error about the wrong thing.
-	if shared, className, err := sharedbase.GuestUsesSharedBase(ctx, r.Client, mig.Namespace, guest.Name); err != nil {
-		return phaseTransient(fmt.Errorf("checking sharedBaseDisk: %w", err))
-	} else if shared {
-		return phaseFailure(
-			sharedbase.LiveMigrationRefusal(guest.Name, className),
 			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 

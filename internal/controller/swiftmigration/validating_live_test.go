@@ -493,33 +493,49 @@ func TestValidatingLive_MigrationDisabled_FailsWithEligibilityMismatch(t *testin
 	}
 }
 
-// Explicit mode=live on a shared-base guest must fail terminally in the
-// CONTROLLER, not only in the webhook — the webhook is off by default
-// (webhook.enabled=false), so this is the path that runs. Without it the
-// migration proceeds and fails later at the storage layer, reporting something
-// other than the cause.
-func TestHandleValidatingLive_SharedBaseDiskFails(t *testing.T) {
-	scheme := testScheme(t)
-	guest := &swiftv1alpha1.SwiftGuest{
-		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
-		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
-	}
-	// Cluster-scoped: no namespace.
-	class := &swiftv1alpha1.SwiftGuestClass{
-		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
-		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
-	}
-	mig := newMigration("m", "default")
-	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+// A shared-base guest cannot be migrated in ANY mode, and the refusal happens
+// once, in handleValidating, before auto-resolution and the mode dispatch.
+//
+// Offline is the case that used to be wrong: auto resolved shared-base guests
+// to offline, and the refusal recommended it. But offline only sets
+// spec.nodeName to the target and restarts — it copies nothing — so the guest
+// would arrive on a node that does not hold its disk.
+func TestHandleValidating_SharedBaseDiskRefusesEveryMode(t *testing.T) {
+	for _, mode := range []migrationv1alpha1.SwiftMigrationMode{
+		migrationv1alpha1.SwiftMigrationModeLive,
+		migrationv1alpha1.SwiftMigrationModeOffline,
+		migrationv1alpha1.SwiftMigrationModeAuto,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			scheme := testScheme(t)
+			guest := &swiftv1alpha1.SwiftGuest{
+				ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+				Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+			}
+			// Cluster-scoped: no namespace.
+			class := &swiftv1alpha1.SwiftGuestClass{
+				ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+				Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+			}
+			mig := newMigration("m", "default")
+			mig.Spec.Mode = mode
+			mig.Spec.AllowIPChange = true // so networking cannot be what refuses it
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
-	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+			r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
 
-	res := r.handleValidatingLive(context.Background(), mig, &mig.Status)
-	if res == nil {
-		t.Fatal("live migration of a sharedBaseDisk guest was accepted")
-	}
-	if !strings.Contains(res.FailureMsg, "sharedBaseDisk") || !strings.Contains(res.FailureMsg, "offline") {
-		t.Errorf("failure should name sharedBaseDisk and point at offline: %q", res.FailureMsg)
+			res := r.handleValidating(context.Background(), mig, &mig.Status)
+			if res == nil || res.FailureMsg == "" {
+				t.Fatalf("mode=%s migration of a sharedBaseDisk guest was not refused (result %+v)", mode, res)
+			}
+			if !strings.Contains(res.FailureMsg, "cannot be migrated in any mode") {
+				t.Errorf("wrong refusal: %q", res.FailureMsg)
+			}
+			// Auto must fail outright, not resolve to a mode and carry on.
+			if mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeOffline ||
+				mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+				t.Errorf("mode=%s was resolved to %q before being refused", mode, mig.Status.Mode)
+			}
+		})
 	}
 }

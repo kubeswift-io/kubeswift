@@ -10,7 +10,6 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
-	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // resolveAutoMode resolves spec.Mode=auto into a concrete status.Mode
@@ -87,18 +86,6 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 		// launcher pod on the target where the backends are
 		// re-established — mirror the VFIO rule. The webhook rejects
 		// explicit mode=live for these guests.
-		return nil
-	}
-
-	if shared, _, err := sharedbase.GuestUsesSharedBase(ctx, r.Client, mig.Namespace, guest.Name); err != nil {
-		return phaseTransient(fmt.Errorf("checking sharedBaseDisk for auto-resolution: %w", err))
-	} else if shared {
-		// The root disk is a thin snapshot in a node-local pool, not shared
-		// storage, so there is nothing for live migration to migrate over.
-		// Offline works unchanged: the launcher is recreated on the target,
-		// which materialises its own snapshot from its own copy of the base.
-		// Mirrors the VFIO and node-local-virtio rules above; the webhook
-		// rejects explicit mode=live for these guests.
 		return nil
 	}
 

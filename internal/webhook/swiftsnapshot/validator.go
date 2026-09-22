@@ -127,16 +127,23 @@ func (v *Validator) validateSwiftSnapshot(ctx context.Context, snap *snapshotv1a
 	// over: includeMemory defaults to true, so a csi disk-only snapshot of a GPU
 	// guest was wrongly rejected; and includeMemory:false on a local/s3 snapshot
 	// bypassed the check while the capture included memory anyway.
+	// Tier A and includeDisk both need a root PVC, and a shared-base guest's
+	// root disk is a thin snapshot in a node-local pool. Refusing here gives the
+	// operator the answer at apply time; the controller refuses too, because
+	// this webhook is off by default (webhook.enabled=false).
+	//
+	// This runs BEFORE the memory-compatibility check, not after it. An oci
+	// snapshot captures memory and that check returns, so anything placed after
+	// it is unreachable for oci — which is precisely the includeDisk case. An
+	// earlier version had it after, and admitted the snapshot it was written to
+	// refuse.
+	if (snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot || snap.Spec.IncludeDisk) && v.Client != nil {
+		if err := v.validateNotSharedBase(ctx, snap); err != nil {
+			return err
+		}
+	}
 	if backendCapturesMemory(snap) && v.Client != nil {
 		return v.validateMemoryCaptureCompat(ctx, snap)
-	}
-	// Tier A needs a PVC, and a shared-base guest's root disk is a thin
-	// snapshot in a node-local pool. Refusing here gives the operator the
-	// answer at apply time; the controller refuses too, because this webhook is
-	// off by default (webhook.enabled=false) and a guard only one of them
-	// enforces is a guard that mostly does not run.
-	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot && v.Client != nil {
-		return v.validateNotSharedBase(ctx, snap)
 	}
 	return nil
 }
@@ -146,10 +153,15 @@ func (v *Validator) validateNotSharedBase(ctx context.Context, snap *snapshotv1a
 	if err != nil {
 		return err
 	}
-	if shared {
+	if !shared {
+		return nil
+	}
+	// Both need a root PVC a shared-base guest does not have: Tier A snapshots
+	// one, and the includeDisk export reads one. Memory-only captures are fine.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot {
 		return fmt.Errorf("%s", sharedbase.CSISnapshotRefusal(snap.Spec.GuestRef.Name, className))
 	}
-	return nil
+	return fmt.Errorf("%s", sharedbase.IncludeDiskRefusal(snap.Spec.GuestRef.Name, className))
 }
 
 // validateMemoryCaptureCompat enforces the Phase 0 spike's hard

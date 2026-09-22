@@ -39,6 +39,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // Annotation keys — the controller writes (input to swiftletd).
@@ -114,6 +115,23 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 		setReadyCondition(status, metav1.ConditionFalse, ReasonGuestNotFound,
 			"SwiftGuest "+snap.Spec.GuestRef.Name+" not found in namespace "+snap.Namespace)
 		return false, 10 * time.Second, nil
+	}
+
+	// A shared-base guest has no root PVC for an includeDisk export to read,
+	// so that snapshot can NEVER succeed. Fail it now, before waiting for a
+	// running launcher: waiting on a stopped guest would leave the snapshot
+	// Pending "for the launcher" when the real answer is permanent (Principle
+	// #10). The webhook refuses this too, but it is off by default, so this is
+	// the check that runs.
+	if snap.Spec.IncludeDisk {
+		if shared, className, serr := sharedbase.GuestUsesSharedBase(ctx, r.Client, snap.Namespace, guest.Name); serr != nil {
+			return false, 0, serr
+		} else if shared {
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed,
+				sharedbase.IncludeDiskRefusal(guest.Name, className))
+			return false, 0, nil
+		}
 	}
 
 	// Find the launcher pod. It must be Running for memory snapshot to

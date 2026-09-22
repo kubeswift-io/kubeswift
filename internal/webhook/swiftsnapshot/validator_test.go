@@ -566,3 +566,75 @@ func TestValidate_LocalBackend_SharedBaseGuestIsAllowed(t *testing.T) {
 		t.Errorf("a local (Tier B) snapshot of a sharedBaseDisk guest must be allowed: %v", err)
 	}
 }
+
+// A full-state (includeDisk) snapshot exports the guest's root PVC, and a
+// shared-base guest has none. This must be refused at admission.
+//
+// It is also a regression guard for an ordering bug: an oci snapshot captures
+// memory, and the memory-compatibility check RETURNED early, so a shared-base
+// check placed after it was unreachable for exactly the oci + includeDisk case
+// it existed for. Caught by this test, not by reading the code.
+func TestValidate_IncludeDisk_SharedBaseGuestIsRefused(t *testing.T) {
+	scheme := newSchemeForMemoryTests(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef:      snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "g1"},
+			IncludeMemory: true,
+			IncludeDisk:   true,
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendOCI,
+				OCI:  &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/snaps"},
+			},
+		},
+	}
+	err := v.validateSwiftSnapshot(context.Background(), snap)
+	if err == nil {
+		t.Fatal("an includeDisk snapshot of a sharedBaseDisk guest was admitted; the disk export needs a root PVC it does not have")
+	}
+	if !strings.Contains(err.Error(), "includeDisk") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+}
+
+// A memory-only oci snapshot of the same guest is fine: it captures through the
+// running guest and never reads a PVC.
+func TestValidate_OCIMemoryOnly_SharedBaseGuestIsAllowed(t *testing.T) {
+	scheme := newSchemeForMemoryTests(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "shared"}},
+	}
+	class := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{SharedBaseDisk: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+	v := &Validator{Client: c}
+
+	snap := &snapshotv1alpha1.SwiftSnapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: "snap1", Namespace: "default"},
+		Spec: snapshotv1alpha1.SwiftSnapshotSpec{
+			GuestRef:      snapshotv1alpha1.SwiftSnapshotGuestRef{Name: "g1"},
+			IncludeMemory: true,
+			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendOCI,
+				OCI:  &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/snaps"},
+			},
+		},
+	}
+	if err := v.validateSwiftSnapshot(context.Background(), snap); err != nil {
+		t.Errorf("a memory-only oci snapshot of a sharedBaseDisk guest must be allowed: %v", err)
+	}
+}

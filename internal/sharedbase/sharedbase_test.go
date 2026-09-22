@@ -141,13 +141,38 @@ func TestRefusalsNameTheClassAndAWayOut(t *testing.T) {
 	}{
 		{"csi", CSISnapshotRefusal("web-1", "fast"),
 			[]string{"web-1", "fast", "sharedBaseDisk", "local", "sharedBaseDisk: false"}},
-		{"live", LiveMigrationRefusal("web-1", "fast"),
-			[]string{"web-1", "fast", "sharedBaseDisk", "offline", "sharedBaseDisk: false"}},
+		{"migration", MigrationRefusal("web-1", "fast"),
+			[]string{"web-1", "fast", "sharedBaseDisk", "Recreate the guest", "sharedBaseDisk: false"}},
+		{"includeDisk", IncludeDiskRefusal("web-1", "fast"),
+			[]string{"web-1", "fast", "sharedBaseDisk", "includeDisk: false", "sharedBaseDisk: false"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, w := range tc.wants {
 				if !strings.Contains(tc.msg, w) {
 					t.Errorf("refusal does not mention %q: %s", w, tc.msg)
+				}
+			}
+		})
+	}
+}
+
+// The refusals must not recommend a path that does not work. An earlier version
+// told the operator to use offline migration, which only repins the guest and
+// would leave its node-local disk behind; an operator following that advice
+// gets a guest that cannot start, or — without a pin — one that starts on a
+// pristine disk with its data gone.
+func TestRefusalsDoNotRecommendDeadEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name, msg string
+		never     []string
+	}{
+		{"migration", MigrationRefusal("g", "c"), []string{"Use mode offline", "use mode offline", "works unchanged"}},
+		{"csi", CSISnapshotRefusal("g", "c"), []string{"s3/oci (Tier C), which capture"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bad := range tc.never {
+				if strings.Contains(tc.msg, bad) {
+					t.Errorf("refusal recommends a dead end (%q): %s", bad, tc.msg)
 				}
 			}
 		})

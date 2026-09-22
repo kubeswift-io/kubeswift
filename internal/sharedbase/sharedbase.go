@@ -78,26 +78,54 @@ func ClassUsesSharedBase(ctx context.Context, c client.Client, className string)
 // CSISnapshotRefusal is the message for a Tier A snapshot of a shared-base
 // guest.
 //
-// Every refusal here names the guest, the class, and the way out, because the
-// operator's next question is always "then how do I snapshot this". Refusing
-// without an alternative is how a guard gets worked around.
+// Every refusal here names the guest, the class, and a way forward that
+// ACTUALLY WORKS. An earlier version of these messages pointed at offline
+// migration and at includeDisk snapshots, neither of which does anything useful
+// for a node-local disk; a refusal that recommends another dead end is worse
+// than a bare "no", because the operator follows it.
 func CSISnapshotRefusal(guestName, className string) string {
 	return fmt.Sprintf(
 		"guest %q uses SwiftGuestClass %q with sharedBaseDisk: true, so its root disk is a "+
 			"thin snapshot in a node-local pool and has no PersistentVolumeClaim for a CSI "+
-			"VolumeSnapshot to capture. Use backend.type local (Tier B) or s3/oci (Tier C), "+
-			"which capture through the running guest and are unaffected; or set "+
-			"sharedBaseDisk: false on the class if this guest needs CSI snapshots",
+			"VolumeSnapshot to capture. Memory snapshots still work: backend.type local, or s3/oci "+
+			"without includeDisk. Set sharedBaseDisk: false on the class if this guest needs CSI "+
+			"snapshots",
 		guestName, className)
 }
 
-// LiveMigrationRefusal is the message for a live migration of a shared-base
-// guest.
-func LiveMigrationRefusal(guestName, className string) string {
+// IncludeDiskRefusal is the message for a full-state (includeDisk) snapshot of
+// a shared-base guest.
+//
+// The chunk Job that exports the disk reads the guest's root PVC, and a
+// shared-base guest has none. The design allows for it — the guest's thin
+// device reads back as a complete merged disk, so exporting it needs only the
+// Job pinned to the guest's node and handed that device — but that is not built,
+// and until it is this must be refused rather than left to fail inside a Job
+// looking for a PVC that was never there.
+func IncludeDiskRefusal(guestName, className string) string {
+	return fmt.Sprintf(
+		"guest %q uses SwiftGuestClass %q with sharedBaseDisk: true; full-state snapshots "+
+			"(includeDisk) are not supported for shared-base guests yet, because the disk export "+
+			"reads a root PVC these guests do not have. A memory snapshot (includeDisk: false) "+
+			"works. Set sharedBaseDisk: false on the class if this guest needs full-state snapshots",
+		guestName, className)
+}
+
+// MigrationRefusal is the message for ANY SwiftMigration of a shared-base
+// guest, whatever its mode.
+//
+// Not only live. Offline migration stops the guest, sets spec.nodeName to the
+// target and starts it again: it copies nothing and relies on the disk being on
+// shared storage. A shared-base disk is node-local, so on the target the guest
+// would either be refused (it is pinned to the node holding its disk) or, were
+// the pin ever missing, be handed a fresh snapshot of the base — a pristine
+// disk, every write gone, booting as if new. There is no mode that moves it.
+func MigrationRefusal(guestName, className string) string {
 	return fmt.Sprintf(
 		"guest %q uses SwiftGuestClass %q with sharedBaseDisk: true, so its root disk is "+
-			"node-local and live migration has no shared storage to move over. Use mode "+
-			"offline, which works unchanged; or set sharedBaseDisk: false on the class if "+
-			"this guest needs live migration",
+			"node-local and cannot be migrated in any mode: live migration has no shared storage to "+
+			"move over, and offline migration only repins the guest, which would leave its disk "+
+			"behind. Recreate the guest on the target node instead, or set sharedBaseDisk: false on "+
+			"the class if this guest needs to move",
 		guestName, className)
 }

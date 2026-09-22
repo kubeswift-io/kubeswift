@@ -13,6 +13,7 @@ import (
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
 )
 
 // handleValidating implements the Validating phase.
@@ -40,6 +41,23 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	mig *migrationv1alpha1.SwiftMigration,
 	status *migrationv1alpha1.SwiftMigrationStatus,
 ) *phaseResult {
+	// A shared-base guest cannot be migrated in ANY mode, so this is checked
+	// once, before auto-resolution and before the mode dispatch, rather than
+	// in each mode's path.
+	//
+	// It used to be checked only for live, with auto resolving such guests to
+	// offline and the refusal recommending offline. That was wrong: offline
+	// migration stops the guest and sets spec.nodeName to the target, copying
+	// nothing, because it assumes shared storage. A shared-base disk is
+	// node-local, so the guest would arrive on a node that does not have its
+	// disk. See sharedbase.MigrationRefusal.
+	if shared, className, err := sharedbase.GuestUsesSharedBase(ctx, r.Client, mig.Namespace, mig.Spec.GuestRef.Name); err != nil {
+		return phaseTransient(fmt.Errorf("checking sharedBaseDisk: %w", err))
+	} else if shared {
+		return phaseFailure(sharedbase.MigrationRefusal(mig.Spec.GuestRef.Name, className),
+			migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+
 	// Phase 3a auto-mode pre-resolution. When spec.Mode=auto and
 	// status.Mode is empty (initial entry), resolve to a concrete
 	// mode and stamp status.Mode BEFORE the per-mode dispatch fires.
