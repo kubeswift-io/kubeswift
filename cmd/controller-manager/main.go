@@ -192,6 +192,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The shared-base pool size, checked here rather than where it is used: a
+	// value that does not parse would otherwise become the default silently,
+	// and the operator would find out from a pool of the wrong size.
+	if size, err := swiftguest.PoolSize(); err != nil {
+		klog.ErrorS(err, "invalid shared-base pool size")
+		os.Exit(1)
+	} else {
+		klog.InfoS("shared-base pool size", "bytes", size, "env", swiftguest.PoolSizeEnv)
+	}
+
 	if err = (&swiftguest.SwiftGuestReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),

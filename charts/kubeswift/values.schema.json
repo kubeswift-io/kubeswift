@@ -232,7 +232,13 @@
     "swiftGuest": {
       "additionalProperties": false,
       "properties": {
-        "allowedHostPathPrefixes": {}
+        "allowedHostPathPrefixes": {},
+        "sharedBaseDisk": {
+          "additionalProperties": false,
+          "properties": {
+            "poolSize": {}
+          }
+        }
       }
     }
   },

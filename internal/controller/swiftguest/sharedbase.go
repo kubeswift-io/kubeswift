@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,31 +36,56 @@ import (
 // guest of that image from being created anywhere else.
 
 const (
-	// defaultThinPoolDataBytes sizes a node's pool when it is first created.
-	// The file is preallocated, not sparse (§7.9), so this is real disk that a
-	// node gives up the first time it runs a shared-base guest.
-	defaultThinPoolDataBytes = 40 << 30
-	// thinPoolDataBytesEnv overrides it. Read on the controller, passed to the
-	// node command. Changing it later does not resize an existing pool: the
-	// node command uses the backing file's actual size once it exists.
-	thinPoolDataBytesEnv = "KUBESWIFT_THINPOOL_DATA_BYTES"
+	// defaultPoolSize sizes a node's pool when it is first created. The file is
+	// preallocated, not sparse (§7.9), so this is real disk that a node gives up
+	// the first time it runs a shared-base guest.
+	defaultPoolSize = 40 << 30
+	// PoolSizeEnv overrides it, as a quantity ("60Gi"). Read on the controller
+	// and passed to the node command. Changing it later does not resize an
+	// existing pool: the node command uses the backing file's actual size once
+	// it exists.
+	PoolSizeEnv = "KUBESWIFT_BASEDISK_POOL_SIZE"
 
 	materialiseJobSuffix = "-basedisk"
 	materialiseImageDir  = "/image"
 	basediskCommand      = "/usr/local/bin/basedisk-materialize"
 
-	reasonBaseDiskPending = "BaseDiskPending"
-	reasonBaseDiskFailed  = "BaseDiskFailed"
-	reasonBaseDiskRefused = "BaseDiskUnsupported"
+	reasonBaseDiskPending        = "BaseDiskPending"
+	reasonBaseDiskFailed         = "BaseDiskFailed"
+	reasonBaseDiskRefused        = "BaseDiskUnsupported"
+	reasonBaseDiskNodeIneligible = "BaseDiskNodeIneligible"
+	reasonBaseDiskNoNode         = "BaseDiskNoEligibleNode"
 )
 
-func thinPoolDataBytes() uint64 {
-	if v := os.Getenv(thinPoolDataBytesEnv); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
-			return n
-		}
+// PoolSize is the size a node's pool is created at.
+//
+// The error is for the operator's value, and is why this is checked once at
+// startup rather than swallowed here: a pool size that does not parse would
+// otherwise become the default silently, and nobody would learn that the 200Gi
+// they asked for is 40.
+func PoolSize() (uint64, error) {
+	v := os.Getenv(PoolSizeEnv)
+	if v == "" {
+		return defaultPoolSize, nil
 	}
-	return defaultThinPoolDataBytes
+	q, err := resource.ParseQuantity(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q is not a quantity (e.g. 40Gi): %w", PoolSizeEnv, v, err)
+	}
+	if q.Sign() <= 0 {
+		return 0, fmt.Errorf("%s=%q must be greater than zero", PoolSizeEnv, v)
+	}
+	return uint64(q.Value()), nil
+}
+
+// poolSize is PoolSize for callers that cannot report an error. Startup
+// validates the value, so a bad one never reaches here.
+func poolSize() uint64 {
+	n, err := PoolSize()
+	if err != nil {
+		return defaultPoolSize
+	}
+	return n
 }
 
 // MaterialiseJobName is the deterministic name of a guest's materialise Job.
@@ -107,6 +133,16 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 		SetStorageReadyCondition(status, true, "",
 			fmt.Sprintf("shared-base root disk %s on node %s", sharedbase.DeviceName(guest.UID), sb.Node))
 		return true, nil
+	}
+
+	// A pool is this node's own disk, preallocated, so a node holds one only
+	// when it is labelled for it. Checked before the Job exists, because the
+	// alternative is a Job sitting unschedulable with nothing saying why.
+	if reason, msg, err := r.baseDiskNodeCheck(ctx, guest); err != nil {
+		return false, err
+	} else if reason != "" {
+		SetStorageReadyCondition(status, false, reason, msg)
+		return false, nil
 	}
 
 	baseKey, imagePVC, err := r.sharedBaseKey(ctx, guest, rg)
@@ -188,6 +224,45 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 	return false, nil
 }
 
+// baseDiskNodeCheck reports why this guest's disk may not be built yet, as a
+// condition reason and message, or "" when it may.
+//
+// A guest pinned to a node needs that node labelled; an unpinned guest needs at
+// least one labelled node for the scheduler to choose from.
+func (r *SwiftGuestReconciler) baseDiskNodeCheck(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (reason, message string, err error) {
+	size := resource.NewQuantity(int64(poolSize()), resource.BinarySI)
+	if node, source, perr := pinnedNode(guest); perr == nil && node != "" {
+		var n corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: node}, &n); err != nil {
+			if apierrors.IsNotFound(err) {
+				return reasonBaseDiskNodeIneligible, fmt.Sprintf("node %q (%s) does not exist", node, source), nil
+			}
+			return "", "", err
+		}
+		if n.Labels[sharedbase.NodeLabel] != sharedbase.NodeLabelValue {
+			return reasonBaseDiskNodeIneligible, fmt.Sprintf(
+				"this guest is pinned to node %q (%s), which is not labelled %s=%s and so may not hold a "+
+					"shared-base pool — %s of that node's disk, preallocated. Label the node, or unpin the "+
+					"guest so it can be placed on a node that is",
+				node, source, sharedbase.NodeLabel, sharedbase.NodeLabelValue, size), nil
+		}
+		return "", "", nil
+	}
+
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes, client.MatchingLabels{sharedbase.NodeLabel: sharedbase.NodeLabelValue}); err != nil {
+		return "", "", err
+	}
+	if len(nodes.Items) == 0 {
+		return reasonBaseDiskNoNode, fmt.Sprintf(
+			"no node is labelled %s=%s, so there is nowhere to build this guest's disk. A pool is %s of a "+
+				"node's own disk, preallocated, so a node takes one only when it is labelled for it: "+
+				"kubectl label node <node> %s=%s",
+			sharedbase.NodeLabel, sharedbase.NodeLabelValue, size, sharedbase.NodeLabel, sharedbase.NodeLabelValue), nil
+	}
+	return "", "", nil
+}
+
 // sharedBaseKey derives the content identity of the guest's image and the
 // prepared PVC to build it from.
 func (r *SwiftGuestReconciler) sharedBaseKey(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) (string, string, error) {
@@ -242,7 +317,11 @@ func (r *SwiftGuestReconciler) materialiseJob(guest *swiftv1alpha1.SwiftGuest, r
 		"--image="+materialiseImageDir+"/"+runtimeintent.RootDiskImageFile,
 	)
 	spec := corev1.PodSpec{
-		RestartPolicy:                corev1.RestartPolicyNever,
+		RestartPolicy: corev1.RestartPolicyNever,
+		// Both when the scheduler places this and when it is bound directly: a
+		// pinned pod is still refused by the kubelet if the node does not match,
+		// so a node that loses the label takes no new disks either way.
+		NodeSelector:                 map[string]string{sharedbase.NodeLabel: sharedbase.NodeLabelValue},
 		AutomountServiceAccountToken: ptr.To(false),
 		ImagePullSecrets:             LauncherImagePullSecrets(),
 		Containers: []corev1.Container{{
@@ -349,7 +428,7 @@ func nodeCommandArgs(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest
 		"--mode=" + mode,
 		"--root=" + sharedbase.StateRoot,
 		"--pool=" + sharedbase.Pool,
-		"--pool-data-bytes=" + strconv.FormatUint(thinPoolDataBytes(), 10),
+		"--pool-data-bytes=" + strconv.FormatUint(poolSize(), 10),
 		"--guest-key=" + sharedbase.GuestKey(guest.Namespace, guest.Name, guest.UID),
 		"--device=" + sharedbase.DeviceName(guest.UID),
 		"--guest-bytes=" + strconv.FormatInt(sharedBaseDiskBytes(guest, rg), 10),

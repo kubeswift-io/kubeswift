@@ -114,6 +114,15 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 	if cfg.mode == modeRelease {
 		return release(ctx, cfg, out)
 	}
+	if cfg.mode == modeReactivate {
+		// Never create a pool here. The launcher only runs where the disk was
+		// built, so a node with no pool has lost it — and openNode would
+		// preallocate a whole pool of this node's disk before the refusal
+		// below could say the disk is gone.
+		if err := poolMustExist(cfg); err != nil {
+			return err
+		}
+	}
 	x, err := openNode(ctx, cfg)
 	if err != nil {
 		return err
@@ -231,6 +240,23 @@ func release(ctx context.Context, cfg config, out io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(out, "released %s\n", cfg.guestKey)
+	return nil
+}
+
+// poolMustExist refuses when this node has no pool to reactivate from.
+func poolMustExist(cfg config) error {
+	data, meta := poolFiles(cfg.root)
+	for _, p := range []string{data, meta} {
+		ok, err := fileExists(p)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("this node has no thin pool (%s is missing), so the disk of guest %s is gone "+
+				"with it; refusing to build a pool and a fresh disk here, which would boot the guest as if "+
+				"new and discard everything it wrote. Delete and recreate the guest", p, cfg.guestKey)
+		}
+	}
 	return nil
 }
 

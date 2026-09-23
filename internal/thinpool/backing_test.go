@@ -172,3 +172,38 @@ func TestBacking_ResolveRequiresOneOfDeviceOrFile(t *testing.T) {
 		t.Fatal("an empty Backing resolved to something")
 	}
 }
+
+// A pool is preallocated in one go, so "it fits" is not enough: a node that
+// ends up under the kubelet's eviction threshold starts evicting everything
+// else on it. Refusing costs one guest instead.
+func TestRoomFor_RefusesWhatWouldFillTheFilesystem(t *testing.T) {
+	dir := t.TempDir()
+	err := roomFor(dir, 1<<50) // 1 PiB
+	if err == nil {
+		t.Fatal("a pool larger than the filesystem was accepted")
+	}
+	for _, want := range []string{"1024.0 TiB", "free of", "evicting"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message %q should contain %q — the operator needs the numbers", err, want)
+		}
+	}
+}
+
+func TestRoomFor_AllowsASizeThatLeavesHeadroom(t *testing.T) {
+	if err := roomFor(t.TempDir(), 1<<20); err != nil {
+		t.Fatalf("a 1 MiB pool was refused: %v", err)
+	}
+}
+
+func TestHuman(t *testing.T) {
+	for in, want := range map[uint64]string{
+		2 << 40:   "2.0 TiB",
+		40 << 30:  "40.0 GiB",
+		512 << 20: "512.0 MiB",
+		42:        "42 bytes",
+	} {
+		if got := human(in); got != want {
+			t.Errorf("human(%d) = %q, want %q", in, got, want)
+		}
+	}
+}

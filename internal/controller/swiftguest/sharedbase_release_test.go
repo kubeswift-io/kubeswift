@@ -112,7 +112,7 @@ func completeJob(t *testing.T, c client.Client, job *batchv1.Job) {
 // or a guest deleted in between would leave its disk behind for good.
 func TestSharedBaseFinalizer_AddedBeforeTheMaterialiseJob(t *testing.T) {
 	sawJob := false
-	c := guestClientBuilder(append(sharedBaseFixtures(), node("worker-1"))...).
+	c := guestClientBuilder(append(sharedBaseFixtures(), basediskNode("worker-1"))...).
 		WithStatusSubresource(&batchv1.Job{}).
 		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			if job, ok := obj.(*batchv1.Job); ok && strings.HasSuffix(job.Name, materialiseJobSuffix) {

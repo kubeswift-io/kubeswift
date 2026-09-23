@@ -16,3 +16,13 @@ import (
 func fallocate(f *os.File, size int64) error {
 	return unix.Fallocate(int(f.Fd()), 0, 0, size)
 }
+
+// freeAndTotal reports the free and total bytes of the filesystem holding dir.
+func freeAndTotal(dir string) (free, total uint64, err error) {
+	var st unix.Statfs_t
+	if err := unix.Statfs(dir, &st); err != nil {
+		return 0, 0, err
+	}
+	// Bavail, not Bfree: the blocks an unprivileged writer could actually use.
+	return st.Bavail * uint64(st.Bsize), st.Blocks * uint64(st.Bsize), nil
+}

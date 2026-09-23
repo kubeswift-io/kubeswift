@@ -485,3 +485,17 @@ swiftGuest:
   #   allowedHostPathPrefixes:
   #     - /srv/kubeswift-shares
   allowedHostPathPrefixes: []
+  # Shared-base root disks (SwiftGuestClass.sharedBaseDisk: true), where guests
+  # of one image share a copy-on-write base on their node instead of each
+  # copying it.
+  sharedBaseDisk:
+    # The size of the thin pool a node creates the first time it builds one.
+    # PREALLOCATED, so it is that much of the node's disk given up at once, and
+    # a node refuses to create one that would leave its filesystem under the
+    # kubelet's 10% eviction threshold.
+    #
+    # It sizes a pool at creation only: raising it later does not grow a pool
+    # that exists.
+    #
+    # Only nodes labelled kubeswift.io/basedisk-node=true hold a pool at all.
+    poolSize: 40Gi
