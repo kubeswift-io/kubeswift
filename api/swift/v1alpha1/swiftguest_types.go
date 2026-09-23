@@ -976,4 +976,15 @@ type SharedBaseDiskStatus struct {
 	// is no longer needed to start the guest.
 	// +optional
 	Created bool `json:"created,omitempty"`
+	// SizeBytes is the size the disk was built at, and the size its thin device
+	// is mapped at on every start from then on.
+	//
+	// Recorded because a thin device has no size of its own — the size is chosen
+	// each time it is mapped, and it was taken from the class every time. A
+	// class is a template for building guests, so lowering its rootDisk.size
+	// would have brought every guest on it back on a device shorter than its own
+	// filesystem, at its next restart, one by one. A disk that exists is the
+	// size it was made.
+	// +optional
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }

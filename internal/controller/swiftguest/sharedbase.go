@@ -98,6 +98,11 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 	}
 
 	if sb := status.SharedBaseDisk; sb != nil && sb.Created {
+		// Built before the size was recorded: take it from the class now, which
+		// is the size it is being mapped at today, and stop reading the class.
+		if sb.SizeBytes == 0 {
+			sb.SizeBytes = sharedBaseGuestBytes(rg)
+		}
 		rg.SharedBaseDevicePath = sharedbase.DevicePath(guest.UID)
 		SetStorageReadyCondition(status, true, "",
 			fmt.Sprintf("shared-base root disk %s on node %s", sharedbase.DeviceName(guest.UID), sb.Node))
@@ -117,6 +122,9 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 		if err := r.Create(ctx, r.materialiseJob(guest, rg, jobName, baseKey, imagePVC)); err != nil && !apierrors.IsAlreadyExists(err) {
 			return false, err
 		}
+		// The size the Job is building the disk at, recorded before it can
+		// finish, so every later start maps the device at it.
+		recordSharedBaseDisk(status, "", baseKey, sharedBaseDiskBytes(guest, rg))
 		SetStorageReadyCondition(status, false, reasonBaseDiskPending,
 			"building the shared-base root disk (materialise Job "+jobName+" created)")
 		return false, nil
@@ -143,7 +151,7 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 				return false, nil
 			}
 		} else {
-			status.SharedBaseDisk = &swiftv1alpha1.SharedBaseDiskStatus{Node: pod.Spec.NodeName, BaseKey: baseKey}
+			recordSharedBaseDisk(status, pod.Spec.NodeName, baseKey, sharedBaseDiskBytes(guest, rg))
 		}
 		status.SharedBaseDisk.Created = true
 		// NOT ready in this pass, deliberately. The launcher is pinned from the
@@ -170,7 +178,7 @@ func (r *SwiftGuestReconciler) ensureSharedBaseDisk(
 	// this one and starting again elsewhere. Only while the disk is not yet
 	// created: once it is, the node never moves.
 	if pod != nil && pod.Spec.NodeName != "" && (status.SharedBaseDisk == nil || !status.SharedBaseDisk.Created) {
-		status.SharedBaseDisk = &swiftv1alpha1.SharedBaseDiskStatus{Node: pod.Spec.NodeName, BaseKey: baseKey}
+		recordSharedBaseDisk(status, pod.Spec.NodeName, baseKey, sharedBaseDiskBytes(guest, rg))
 	}
 	msg := "building the shared-base root disk (materialise Job " + jobName + " running"
 	if status.SharedBaseDisk != nil && status.SharedBaseDisk.Node != "" {
@@ -303,6 +311,39 @@ func sharedBaseReactivateContainer(guest *swiftv1alpha1.SwiftGuest, rg *resolved
 	}
 }
 
+// recordSharedBaseDisk updates what is known about the guest's disk without
+// dropping what is already recorded. The size is written once: it is the size
+// the device exists at, not a setting to be re-read.
+func recordSharedBaseDisk(status *swiftv1alpha1.SwiftGuestStatus, node, baseKey string, sizeBytes int64) {
+	if status.SharedBaseDisk == nil {
+		status.SharedBaseDisk = &swiftv1alpha1.SharedBaseDiskStatus{}
+	}
+	sb := status.SharedBaseDisk
+	if node != "" {
+		sb.Node = node
+	}
+	if baseKey != "" {
+		sb.BaseKey = baseKey
+	}
+	if sb.SizeBytes == 0 {
+		sb.SizeBytes = sizeBytes
+	}
+}
+
+// sharedBaseDiskBytes is the size to map the guest's disk at: the size it was
+// built at, once that is known, and the class's size only before it exists.
+//
+// A thin device has no size of its own — one is chosen every time it is mapped.
+// Reading the class each time made a class edit resize existing disks: lowering
+// rootDisk.size brought every guest on that class back on a device shorter than
+// its filesystem, at its next restart.
+func sharedBaseDiskBytes(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest) int64 {
+	if sb := guest.Status.SharedBaseDisk; sb != nil && sb.SizeBytes > 0 {
+		return sb.SizeBytes
+	}
+	return sharedBaseGuestBytes(rg)
+}
+
 func nodeCommandArgs(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, mode string) []string {
 	return []string{
 		"--mode=" + mode,
@@ -311,7 +352,7 @@ func nodeCommandArgs(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest
 		"--pool-data-bytes=" + strconv.FormatUint(thinPoolDataBytes(), 10),
 		"--guest-key=" + sharedbase.GuestKey(guest.Namespace, guest.Name, guest.UID),
 		"--device=" + sharedbase.DeviceName(guest.UID),
-		"--guest-bytes=" + strconv.FormatInt(sharedBaseGuestBytes(rg), 10),
+		"--guest-bytes=" + strconv.FormatInt(sharedBaseDiskBytes(guest, rg), 10),
 	}
 }
 

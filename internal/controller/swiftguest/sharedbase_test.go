@@ -3,11 +3,14 @@ package swiftguest
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -329,5 +332,96 @@ func TestRootDiskVolume_EveryBuilder(t *testing.T) {
 	// The mount follows.
 	if m, _ := rootDiskMount(rg); m == nil || m.MountPath != sharedbase.DeviceDir {
 		t.Errorf("root-disk mount = %+v, want %s", m, sharedbase.DeviceDir)
+	}
+}
+
+// initArgs are the arguments of the launcher's reactivate init container.
+func initArgs(t *testing.T, c client.Client) []string {
+	t.Helper()
+	var pod corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: testGuestName}, &pod); err != nil {
+		t.Fatalf("no launcher: %v", err)
+	}
+	for _, ic := range pod.Spec.InitContainers {
+		if ic.Name == "basedisk-reactivate" {
+			return ic.Args
+		}
+	}
+	t.Fatal("the launcher has no basedisk-reactivate init container")
+	return nil
+}
+
+// A disk that exists is the size it was made. The class is a template for
+// building guests: lowering its rootDisk.size once resized every existing
+// guest's device at its next restart, to less than its own filesystem.
+func TestReconcile_SharedBaseGuest_KeepsTheSizeItsDiskWasBuiltAt(t *testing.T) {
+	const built = 10 << 30
+	objs := sharedBaseFixtures()
+	g := objs[0].(*swiftv1alpha1.SwiftGuest)
+	g.Finalizers = []string{SharedBaseDiskFinalizer}
+	g.Status.SharedBaseDisk = &swiftv1alpha1.SharedBaseDiskStatus{
+		Node: "worker-1", BaseKey: sharedbase.BaseKey(sbImageUID, sbPVCUID), Created: true, SizeBytes: built,
+	}
+	// The operator shrinks the class afterwards.
+	objs[1].(*swiftv1alpha1.SwiftGuestClass).Spec.RootDisk.Size = resource.MustParse("5Gi")
+	c := guestClientBuilder(append(objs, node("worker-1"))...).WithStatusSubresource(&batchv1.Job{}).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
+
+	got, _, err := reconcileGuest(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb := got.Status.SharedBaseDisk; sb == nil || sb.SizeBytes != built {
+		t.Fatalf("recorded size = %+v, want it unchanged at %d", sb, built)
+	}
+	want := "--guest-bytes=" + strconv.FormatInt(built, 10)
+	if args := initArgs(t, c); !slices.Contains(args, want) {
+		t.Errorf("the launcher would map the disk at the class's new size: args %v, want %s", args, want)
+	}
+}
+
+// A disk built before the size was recorded: the class still says what it is
+// being mapped at today, so record that and stop reading the class.
+func TestReconcile_SharedBaseGuest_RecordsTheSizeOfAnOlderDisk(t *testing.T) {
+	objs := guestWithDisk("worker-1") // Created, no SizeBytes
+	c := guestClientBuilder(append(objs, node("worker-1"))...).WithStatusSubresource(&batchv1.Job{}).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
+
+	got, _, err := reconcileGuest(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb := got.Status.SharedBaseDisk; sb == nil || sb.SizeBytes != 10<<30 {
+		t.Fatalf("recorded size = %+v, want the class's 10Gi backfilled", sb)
+	}
+}
+
+// The size is recorded with the Job that builds the disk at it, and survives
+// the passes that record the node and completion.
+func TestReconcile_SharedBaseGuest_RecordsTheSizeWithTheJob(t *testing.T) {
+	c := guestClientBuilder(append(sharedBaseFixtures(), node("worker-1"))...).
+		WithStatusSubresource(&batchv1.Job{}).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
+
+	got, _, err := reconcileGuest(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb := got.Status.SharedBaseDisk; sb == nil || sb.SizeBytes != 10<<30 {
+		t.Fatalf("recorded size after the Job was created = %+v, want 10Gi", sb)
+	}
+	job := materialiseJobOf(t, c)
+	want := "--guest-bytes=" + strconv.FormatInt(10<<30, 10)
+	if args := job.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, want) {
+		t.Errorf("materialise Job args %v, want %s", args, want)
+	}
+
+	succeed(t, c, job, "worker-1")
+	got, _, err = reconcileGuest(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb := got.Status.SharedBaseDisk; sb == nil || sb.SizeBytes != 10<<30 || sb.Node != "worker-1" || !sb.Created {
+		t.Fatalf("status = %+v; recording the node and completion must not drop the size", sb)
 	}
 }
