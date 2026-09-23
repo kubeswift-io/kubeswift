@@ -158,6 +158,13 @@ spec:
 
 **Phase meanings:** `Pending` = resolution failed or unschedulable; `Scheduling` = pod pending; `Running` = VM up; `Stopped` = VM stopped; `Failed` = resolution, pod, or VM error.
 
+**What belongs to one run:** `GuestRunning`, `NetworkReady`, `EgressReady`,
+`PortsProgrammed`, `PodScheduled` and `network.primaryIP` describe a single
+launcher, and are cleared when the guest is stopped, when its launcher exits,
+and when a new launcher starts. So a stopped guest never reads as running, and a
+restarting one never reports the address the previous run held — a
+`kubectl wait` on those conditions waits for the run in front of it.
+
 ## Example
 
 ```bash

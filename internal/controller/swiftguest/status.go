@@ -77,10 +77,51 @@ func dhcpTimeoutMessage(guest *swiftv1alpha1.SwiftGuest, raw string) string {
 	return msg
 }
 
+// ClearRunState drops what described a launcher that is gone.
+//
+// Run-scoped means "true of one launcher pod, and only while it runs":
+// GuestRunning and PortsProgrammed are written by swiftletd from inside it,
+// NetworkReady and EgressReady are observations of it, PodScheduled describes
+// it, and primaryIP is the lease the VM held. None of them outlive it.
+//
+// Nothing used to clear them, so a stopped guest reported Running with an
+// address, and a restarting one reported the previous run's until its new
+// launcher overwrote them — the stale values the migration controller had to
+// work around, because they would otherwise drive a false "Completed"
+// (W-GPU-3, resuming.go). Only conditions the guest actually has are cleared:
+// a guest that never ran gains nothing by being told it is not running.
+func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message string) {
+	for _, t := range []string{
+		"GuestRunning",
+		ConditionPodScheduled,
+		swiftv1alpha1.ConditionNetworkReady,
+		swiftv1alpha1.ConditionEgressReady,
+		swiftv1alpha1.ConditionPortsProgrammed,
+	} {
+		if findCondition(status, t) == nil {
+			continue
+		}
+		setCondition(status, metav1.Condition{
+			Type: t, Status: metav1.ConditionFalse, Reason: reason, Message: message,
+		})
+	}
+	if status.Network != nil {
+		status.Network.PrimaryIP = ""
+	}
+}
+
 // MapPodToStatus updates status from pod phase and conditions.
 func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	if pod == nil {
 		return
+	}
+
+	// A different launcher than the one this status describes: nothing the last
+	// one reported is true of this one. Before PodRef is overwritten below, and
+	// before anything this pod reports is read, so a pod that has already said
+	// something wins.
+	if status.PodRef != nil && pod.UID != "" && status.PodRef.UID != pod.UID {
+		ClearRunState(status, "GuestStarting", "a new launcher is starting; nothing from the previous run applies")
 	}
 
 	// Set network from pod annotation (guest IP discovered by swiftletd)
@@ -184,9 +225,13 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	case corev1.PodFailed:
 		status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
 		reason, msg := podFailureReason(pod)
+		// The launcher is gone, so the VM is too: say so rather than leave the
+		// last "running with an address" standing on a failed guest.
+		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
 		SetPodScheduledCondition(status, pod, false, reason+": "+msg)
 	case corev1.PodSucceeded:
 		status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
+		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
 		SetPodScheduledCondition(status, pod, true, "")
 	case corev1.PodPending:
 		unschedulable := findUnschedulableCondition(pod)
