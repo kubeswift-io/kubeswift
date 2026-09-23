@@ -43,6 +43,10 @@ spec:
             - name: KUBESWIFT_LAUNCHER_IMAGE_PULL_SECRETS
               value: {{ join "," . | quote }}
             {{- end }}
+            # Sizes a node's shared-base thin pool when it first creates one.
+            # Nodes take a pool only when labelled kubeswift.io/basedisk-node=true.
+            - name: KUBESWIFT_BASEDISK_POOL_SIZE
+              value: {{ .Values.swiftGuest.sharedBaseDisk.poolSize | quote }}
             - name: KUBESWIFT_SNAPSHOT_S3_IMAGE
               value: {{ .Values.snapshotS3.image.registry }}/snapshot-s3:{{ include "kubeswift.imageTag" (dict "tag" .Values.snapshotS3.image.tag "appVersion" .Chart.AppVersion) }}
             - name: KUBESWIFT_SNAPSHOT_ORAS_IMAGE

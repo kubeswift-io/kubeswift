@@ -42,6 +42,14 @@ func sharedBaseFixtures() []client.Object {
 	return []client.Object{g, cls, img, pvc}
 }
 
+// basediskNode is a node an operator has allowed to hold a shared-base pool.
+// Building a disk anywhere else is refused, so most of these tests need one.
+func basediskNode(name string) *corev1.Node {
+	n := node(name)
+	n.Labels = map[string]string{sharedbase.NodeLabel: sharedbase.NodeLabelValue}
+	return n
+}
+
 func materialiseJobOf(t *testing.T, c client.Client) *batchv1.Job {
 	t.Helper()
 	var job batchv1.Job
@@ -87,7 +95,7 @@ func launchers(t *testing.T, c client.Client) []corev1.Pod {
 
 // THE lifecycle, end to end through Reconcile.
 func TestReconcile_SharedBaseGuest_Lifecycle(t *testing.T) {
-	c := guestClientBuilder(append(sharedBaseFixtures(), node("worker-1"), node("worker-2"))...).
+	c := guestClientBuilder(append(sharedBaseFixtures(), basediskNode("worker-1"), basediskNode("worker-2"))...).
 		WithStatusSubresource(&batchv1.Job{}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
 
@@ -196,7 +204,8 @@ func initNames(pod *corev1.Pod) []string {
 
 // The Job's shape: everything it needs, and nothing that would outlast it.
 func TestMaterialiseJob_Shape(t *testing.T) {
-	c := guestClientBuilder(sharedBaseFixtures()...).WithStatusSubresource(&batchv1.Job{}).Build()
+	c := guestClientBuilder(append(sharedBaseFixtures(), basediskNode("worker-1"))...).
+		WithStatusSubresource(&batchv1.Job{}).Build()
 	if _, _, err := reconcileGuest(t, &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +251,7 @@ func TestMaterialiseJob_Shape(t *testing.T) {
 
 // A failed materialisation says why, on StorageReady, and does not loop.
 func TestReconcile_SharedBaseGuest_JobFailureIsSurfaced(t *testing.T) {
-	c := guestClientBuilder(append(sharedBaseFixtures(), node("worker-1"))...).WithStatusSubresource(&batchv1.Job{}).Build()
+	c := guestClientBuilder(append(sharedBaseFixtures(), basediskNode("worker-1"))...).WithStatusSubresource(&batchv1.Job{}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
 	if _, _, err := reconcileGuest(t, r); err != nil {
 		t.Fatal(err)
@@ -399,7 +408,7 @@ func TestReconcile_SharedBaseGuest_RecordsTheSizeOfAnOlderDisk(t *testing.T) {
 // The size is recorded with the Job that builds the disk at it, and survives
 // the passes that record the node and completion.
 func TestReconcile_SharedBaseGuest_RecordsTheSizeWithTheJob(t *testing.T) {
-	c := guestClientBuilder(append(sharedBaseFixtures(), node("worker-1"))...).
+	c := guestClientBuilder(append(sharedBaseFixtures(), basediskNode("worker-1"))...).
 		WithStatusSubresource(&batchv1.Job{}).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
 

@@ -232,8 +232,11 @@ func TestIntegration_CreateTwiceReactivates(t *testing.T) {
 // discard everything, looking like success.
 func TestIntegration_ReactivateNeverCreatesAFreshDisk(t *testing.T) {
 	itEnv(t)
-	cfg := node(t)
+	// A node with a pool and another guest on it: the disk of THIS guest is
+	// what is missing, which is the case that must not be papered over.
+	cfg := createGuest(t, node(t), "ns/other/uid-other", "ksit-cmd-dev-other")
 	cfg.mode = modeReactivate
+	cfg.baseKey, cfg.image = "", ""
 	cfg.guestKey = "ns/g/never-built"
 	cfg.device = "ksit-cmd-dev-3"
 	cfg.guestBytes = 32 << 20
@@ -566,5 +569,24 @@ func TestRelease_RefusesAHalfPresentPool(t *testing.T) {
 	}
 	if _, err := os.Stat(meta); !os.IsNotExist(err) {
 		t.Errorf("release created the missing metadata file (stat err = %v)", err)
+	}
+}
+
+// A launcher started on a node with no pool must not build one: openNode would
+// preallocate a whole pool of that node's disk before the "no record of it"
+// refusal could be reached.
+func TestReactivate_OnANodeWithoutAPoolCreatesNothing(t *testing.T) {
+	root := t.TempDir()
+	c := config{
+		mode: modeReactivate, root: root, pool: "ksit-cmd-never",
+		guestKey: "ns/g/uid", device: "ksit-cmd-dev-never",
+		guestBytes: 1 << 30, poolDataBytes: 1 << 30,
+	}
+	err := run(context.Background(), c, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "no thin pool") {
+		t.Fatalf("err = %v, want a refusal naming the missing pool", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "thinpool")); !os.IsNotExist(statErr) {
+		t.Errorf("a pool was created on a node that had none (stat err = %v)", statErr)
 	}
 }

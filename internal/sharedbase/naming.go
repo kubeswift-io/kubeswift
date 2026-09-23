@@ -8,6 +8,21 @@ import "k8s.io/apimachinery/pkg/types"
 // a disk the materialise Job never made.
 
 const (
+	// NodeLabel marks a node that may hold a shared-base pool, and a node holds
+	// one only when it carries it.
+	//
+	// Opt-in, like kubeswift.io/kernel-node, because a pool is a large,
+	// preallocated file of that node's own disk — not something to place on a
+	// node because the scheduler happened to pick it. Without this, an unpinned
+	// guest could build one on a control-plane node and take it into
+	// DiskPressure.
+	//
+	// It governs where a disk may be BUILT. Removing it from a node does not
+	// stop the guests whose disks are already there: their disks cannot move.
+	NodeLabel = "kubeswift.io/basedisk-node"
+	// NodeLabelValue is the only value that means yes.
+	NodeLabelValue = "true"
+
 	// Pool is the device-mapper name of a node's thin pool.
 	Pool = "kubeswift-pool"
 	// StateRoot is where a node keeps its pool's backing files, registry and

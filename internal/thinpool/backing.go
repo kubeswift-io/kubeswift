@@ -125,6 +125,44 @@ func existingLoop(ctx context.Context, r Runner, path string) (string, error) {
 	return "", nil
 }
 
+// evictionHeadroom is the fraction of a filesystem a node must keep free.
+//
+// The kubelet evicts pods below 10% free on the filesystem it runs from
+// (nodefs.available<10%, its default), and a pool file is preallocated in one
+// go — so a pool sized to "what is free" does not fill the disk slowly, it puts
+// the node over the line at once, and everything else on it starts being
+// evicted. Refusing is the kinder failure: it costs this guest, not the node.
+const evictionHeadroom = 10
+
+// roomFor refuses to preallocate size bytes in dir when doing so would leave
+// the filesystem under the eviction headroom.
+func roomFor(dir string, size uint64) error {
+	free, total, err := freeAndTotal(dir)
+	if err != nil {
+		return fmt.Errorf("checking the space in %s: %w", dir, err)
+	}
+	keep := total / evictionHeadroom
+	if free < size+keep {
+		return fmt.Errorf("a pool of %s does not fit in %s: %s free of %s, and a node must keep %s "+
+			"(%d%%) free or the kubelet starts evicting pods. Use a node with more room, or a smaller pool size",
+			human(size), dir, human(free), human(total), human(keep), evictionHeadroom)
+	}
+	return nil
+}
+
+// human renders bytes as TiB/GiB/MiB, for messages an operator reads.
+func human(b uint64) string {
+	switch {
+	case b >= 1<<40:
+		return fmt.Sprintf("%.1f TiB", float64(b)/(1<<40))
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20))
+	}
+	return fmt.Sprintf("%d bytes", b)
+}
+
 // ensurePreallocated creates path at size bytes if absent, fully allocated.
 //
 // PREALLOCATED, never sparse. A sparse backing file makes it impossible to
@@ -150,6 +188,9 @@ func ensurePreallocated(path string, size uint64) error {
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	}
+	if err := roomFor(filepath.Dir(path), size); err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
