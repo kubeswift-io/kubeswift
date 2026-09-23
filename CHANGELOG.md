@@ -4,6 +4,160 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.14.0] — 2026-09-23
+
+Guests of one image can now share a copy-on-write base disk on their node
+instead of each copying it. A second guest's first boot costs **25 MiB** of pool
+space against **1.75 GiB** for a copy, and its disk is ready in 15 s instead of
+55 s. Opt-in per SwiftGuestClass, on nodes that opt in too, because the disk is
+node-local and cannot move.
+
+The rest is operational correctness: a deleted GPU guest no longer frees its
+device while its VM still holds it, a stopped guest no longer reports itself
+running with an address, a pool that cannot resolve its image stops hammering
+the registry, and creating a guest no longer runs `apt-get` on the node.
+
+**CRDs changed this release** — `swiftguests`, `swiftguestclasses` and
+`swiftimages`. Apply them before upgrading:
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+```
+
+### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.14.0 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+Nothing changes for existing guests: shared-base disks are opt-in and no class
+has them until you say so.
+
+**Shared-base disks need nodes that accept them.** A pool is a large,
+preallocated file of a node's own disk, so no node takes one unless it is
+labelled:
+
+```bash
+kubectl label node <node> kubeswift.io/basedisk-node=true
+```
+
+A guest of a `sharedBaseDisk: true` class waits, saying so on `StorageReady`,
+until a node is labelled. Size the pool with the new
+`swiftGuest.sharedBaseDisk.poolSize` (default `40Gi`); it sizes a pool when it is
+created, and a node refuses to create one that would leave its filesystem under
+the kubelet's 10% eviction threshold.
+
+**`SwiftImage.spec.source.upload` is gone.** It was an empty placeholder the
+webhook accepted and the import path could never honour, so an image using it
+sat in `Pending` forever with the explanation only in its conditions. Applying
+the new CRD prunes the field. Nothing that worked stops working — nothing using
+it ever worked.
+
+**A stopped guest now reports that it is stopped.** `GuestRunning`,
+`NetworkReady`, `EgressReady`, `PortsProgrammed`, `PodScheduled` and
+`status.network.primaryIP` describe one launcher, and are cleared when the guest
+stops, when its launcher exits, and when a new launcher starts. Two consequences
+worth knowing: a `kubectl wait` on those conditions now waits for the run in
+front of it rather than returning on the last one, and a rolling
+`SwiftGuestPool` update counts a restarting replica unavailable until its VM is
+actually up.
+
+`ui.image.tag` stays at `v0.12.4` — kubeswift-ui cut no release this cycle.
+
+### Added
+
+- **Shared-base root disks** (#614, #600). `SwiftGuestClass.spec.sharedBaseDisk:
+  true` gives guests of that class a root disk that is a copy-on-write snapshot
+  of one node-local base per image, built by a per-guest Job on the node and
+  mapped from a device-mapper thin pool. Guests pay for what they write. The
+  disk is node-local, so the guest is pinned to the node holding it, and
+  migration in every mode, CSI snapshots and full-state (`includeDisk`)
+  snapshots are refused with the reason on the object — memory snapshots still
+  work. Deleting a guest frees its disk through a release Job on its node,
+  including when its whole namespace is deleted. Bases are a cache: kept while
+  there is room, evicted least recently used first when a new one needs the
+  space, which is also what reclaims a base whose image has been deleted. See
+  [docs/shared-base-disks.md](docs/shared-base-disks.md).
+- **`swiftGuest.sharedBaseDisk.poolSize`** (default `40Gi`) sizes a node's thin
+  pool at creation. Validated at controller startup, so a value that does not
+  parse fails the rollout instead of silently becoming the default.
+- **The `faas` kernel is published** (#598). `kernels/faas:6.6.3` exists in the
+  registry now; the docs previously pointed at a tag that was never published,
+  in three files that disagreed about which one it was.
+
+### Fixed
+
+- **A deleted GPU guest freed its device while its VM still held it** (#602,
+  #604). The allocation was released the moment the object had a
+  `DeletionTimestamp`, but a terminating launcher's Cloud Hypervisor still holds
+  the VFIO group, so `SwiftGPUNode` advertised a device that was busy and the
+  next consumer failed to boot with `failed to open /dev/vfio/<group> group:
+  Resource busy`. A GPU `SwiftSandboxPool` with `minWarm: 1` creates that next
+  consumer by itself, so this needed no unusual timing. The allocation is now
+  held until no pod carries the guest's launcher label.
+- **A stopped guest reported itself running, with an address** (#634). See
+  Upgrade above. The same stale values are what the migration controller already
+  had to work around, gating completion on the destination pod's own state
+  because the condition and IP survived the cutover pod swap.
+- **A sandbox pool that could not resolve its image hammered the registry**
+  (#603, #605). Every reconcile issued a manifest GET — which a registry counts
+  as a pull — at the 10 s poll interval: ~360 an hour against Docker Hub's
+  anonymous allowance of 100, forever, recoverable only by removing the demand
+  by hand. Resolve failures now back off per pool, 10 s doubling to 10 m,
+  cleared on the first success.
+- **Creating a guest ran `apt-get` on the node** (#607, #616). The root-disk
+  clone Job, the data-disk fill Job and `clone-grow-init` all ran `ubuntu:22.04`
+  and installed `qemu-utils` and `gdisk` before doing any work — a network
+  round-trip and a reachable apt mirror in the path of creating a guest, and an
+  outright failure on nodes with neither. They now run the launcher image, which
+  is on every node that runs guests by definition and ships both tools.
+- **Golden-image import wrote zeros as allocated blocks** (#608). Only all-zero
+  windows are skipped when a golden image is pushed, so a stored window holding
+  a few MiB of data was mostly zeros and the import materialised them: 10.75 GiB
+  written for 5.69 GiB of real data on a 30 GiB image, and every per-guest clone
+  then copied all of it. Zero blocks inside a stored window are now left as
+  holes; block devices are still written densely.
+
+### Changed
+
+- **`SwiftImage.spec.source.upload` removed** (#623). See Upgrade.
+
+### Security
+
+- **rustls advisory in the launcher's TLS stack** (#601). RUSTSEC-2026-0285
+  (TLS 1.3 handshake messages accepted across encryption level boundaries)
+  reached swiftletd through `kube-client`. `cargo update` alone lands on
+  0.23.43, one short of the fix; pinned to 0.23.45.
+- **grpc 1.84.0 is not proposed any more** (#615). `govulncheck` finds
+  GO-2026-6443 reachable from `cmd/kubeswift-dra-driver`, and the fix exists
+  only in a v1.85.0 pre-release, so Dependabot re-proposed a version that failed
+  the gate every week — the kind of weekly red that teaches people to click past
+  it.
+- **A flaky `gosec` install stopped marking the tool broken** (#599). When
+  `go install` could not reach `sum.golang.org`, the SARIF upload ran anyway on
+  a file that was never written, registering a configuration error against gosec
+  in the Security tab that outlived the run.
+
+### Docs
+
+- **Shared-base root disks** — what they cost a node, which nodes may hold a
+  pool, what they refuse and why, what happens when a guest is deleted, and how
+  to read the state on a node.
+- **`role: edge` no longer says edge onboarding has not shipped** (#622).
+  `values.yaml` said it lands in a follow-up PR while the block twelve lines
+  below documented the feature the chart already implements.
+
+### CI
+
+- **The chart README's values table is verified against `values.yaml`** (#624).
+  v0.13.14 shipped a stale `ui.image.tag` default in that table, caught by
+  reading ~60 rows by hand during a release sweep — exactly the step that gets
+  skipped on the release where it matters.
+
+---
+
 ## [v0.13.15] — 2026-09-14
 
 A bug-fix and hardening release. Three of these turned an ordinary operational
