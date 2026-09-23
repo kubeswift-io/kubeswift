@@ -401,6 +401,8 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		podDone := !podGone && (existingPod.Status.Phase == corev1.PodSucceeded || existingPod.Status.Phase == corev1.PodFailed)
 		if podGone || podDone {
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
+			// Nothing of the last run is true of a stopped guest.
+			ClearRunState(status, "Stopped", "the guest is stopped; it has no launcher")
 			var podForStopped *corev1.Pod
 			if !podGone {
 				podForStopped = &existingPod
