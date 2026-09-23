@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -48,6 +49,14 @@ type registryState struct {
 	// taken from a base marked here, and a base is only marked after its
 	// writer has synced.
 	Ready map[string]bool `json:"ready,omitempty"`
+	// Used records when each base was last built from, RFC3339 with nanoseconds.
+	//
+	// A base is a cache: keeping one costs pool space, dropping one costs the
+	// time to write it again. When the pool has no room for a new base, the one
+	// least recently built from is the cheapest to lose — so this is what
+	// decides the order. A base with no entry here has never been used since
+	// the node learned to record it, and goes first.
+	Used map[string]string `json:"used,omitempty"`
 }
 
 // NewRegistry returns a registry stored at path. The file is created on first
@@ -164,6 +173,7 @@ func (r *Registry) ForgetBase(digest string) error {
 			return false, nil
 		}
 		delete(st.Bases, digest)
+		delete(st.Used, digest)
 		// Readiness goes with it. Leaving it behind would let a base allocated
 		// later for the same digest be snapshotted before it was written.
 		delete(st.Ready, digest)
@@ -198,6 +208,44 @@ func (r *Registry) MarkBaseReady(digest string) error {
 }
 
 // Bases returns the digests this node holds, sorted, for eviction decisions.
+// TouchBase records that a base has just been used.
+func (r *Registry) TouchBase(digest string) error {
+	return r.withLock(func(st *registryState) (bool, error) {
+		if _, ok := st.Bases[digest]; !ok {
+			return false, nil
+		}
+		if st.Used == nil {
+			st.Used = map[string]string{}
+		}
+		st.Used[digest] = time.Now().UTC().Format(time.RFC3339Nano)
+		return true, nil
+	})
+}
+
+// BasesByLeastRecentUse returns every base, least recently used first. A base
+// with no recorded use sorts first: nothing is known to have wanted it.
+func (r *Registry) BasesByLeastRecentUse() ([]string, error) {
+	var out []string
+	when := map[string]time.Time{}
+	err := r.withLock(func(st *registryState) (bool, error) {
+		for d := range st.Bases {
+			out = append(out, d)
+			if t, err := time.Parse(time.RFC3339, st.Used[d]); err == nil {
+				when[d] = t
+			}
+		}
+		return false, nil
+	})
+	sort.Slice(out, func(i, j int) bool {
+		a, b := when[out[i]], when[out[j]]
+		if a.Equal(b) {
+			return out[i] < out[j] // stable, and deterministic in tests
+		}
+		return a.Before(b)
+	})
+	return out, err
+}
+
 func (r *Registry) Bases() ([]string, error) {
 	var out []string
 	err := r.withLock(func(st *registryState) (bool, error) {

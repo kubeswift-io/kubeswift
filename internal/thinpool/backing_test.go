@@ -207,3 +207,16 @@ func TestHuman(t *testing.T) {
 		}
 	}
 }
+
+// A node that is refused keeps nothing: the check runs before the directory is
+// made, so an unusable node is left as it was found.
+func TestEnsurePreallocated_RefusedLeavesNothingBehind(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "thinpool")
+	err := ensurePreallocated(filepath.Join(dir, "data.img"), 1<<50)
+	if err == nil {
+		t.Fatal("a pool larger than the filesystem was accepted")
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("%s was created for a pool that was refused (stat err = %v)", dir, statErr)
+	}
+}

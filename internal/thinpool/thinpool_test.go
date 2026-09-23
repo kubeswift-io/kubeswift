@@ -11,9 +11,15 @@ type fakeRunner struct {
 	calls [][]string
 	out   map[string]string // joined args -> stdout
 	fail  map[string]error
+	// onCall runs before each command answers, so a test can make the world
+	// change as a result of it (a delete freeing pool space, say).
+	onCall func(name string, args ...string)
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	if f.onCall != nil {
+		f.onCall(name, args...)
+	}
 	call := append([]string{name}, args...)
 	f.calls = append(f.calls, call)
 	key := strings.Join(call, " ")

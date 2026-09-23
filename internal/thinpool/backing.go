@@ -150,6 +150,21 @@ func roomFor(dir string, size uint64) error {
 	return nil
 }
 
+// nearestExisting walks up from dir to the closest path that exists, so a
+// filesystem can be measured before anything is created on it.
+func nearestExisting(dir string) string {
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir
+		}
+		dir = parent
+	}
+}
+
 // human renders bytes as TiB/GiB/MiB, for messages an operator reads.
 func human(b uint64) string {
 	switch {
@@ -186,11 +201,13 @@ func ensurePreallocated(path string, size uint64) error {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
 
+	// Checked BEFORE the directory is made, against the nearest parent that
+	// exists: a node that is refused is left exactly as it was found.
+	if err := roomFor(nearestExisting(filepath.Dir(path)), size); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
-	}
-	if err := roomFor(filepath.Dir(path), size); err != nil {
-		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {

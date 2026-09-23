@@ -504,3 +504,81 @@ func TestIntegration_ReleaseLeavesNoDeviceNode(t *testing.T) {
 		t.Fatalf("%s outlived its device (stat err = %v)", path, err)
 	}
 }
+
+// THE eviction property, against a real pool that is really full: a new base
+// gets built by dropping the one least recently used, and the guest of the base
+// that stayed is untouched — dm-thin reference-counts what they share, so
+// eviction costs only the time to write that base again (§7.5).
+func TestIntegration_EvictsAnOldBaseToBuildANewOne(t *testing.T) {
+	itEnv(t)
+	x, r := materializer(t)
+	ctx := context.Background()
+	const size = 24 << 20
+	// Dense, because zero blocks are skipped: a sparse image would allocate
+	// almost nothing and the pool would never come under pressure.
+	dense := func(tag string) []byte { return bytes.Repeat([]byte(tag), size/len(tag)) }
+
+	// Two bases, "old" used first, and a guest on "keep" that must survive.
+	if _, err := x.EnsureBase(ctx, "sha256:old", size, opener(dense("OLD-BASE-DATA!!!"))); err != nil {
+		t.Fatal(err)
+	}
+	keep := dense("KEPT-BASE-DATA!!")
+	if _, err := x.EnsureBase(ctx, "sha256:keep", size, opener(keep)); err != nil {
+		t.Fatal(err)
+	}
+	path, err := x.EnsureGuest(ctx, "sha256:keep", "ns/g", "ksit-evict-guest", size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.track("ksit-evict-guest")
+	ddWriteAt(t, path, bytes.Repeat([]byte("GUEST-OF-THE-KEPT-BASE!!"), 64*1024/24), 0)
+
+	// Fill the rest so that a new base does not fit, but does once the least
+	// recently used one is evicted.
+	st, err := x.M.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := (st.TotalData - st.UsedData) * BlockSectors * 512
+	if free <= size {
+		t.Fatalf("the rig's pool is too small for this test: %d bytes free", free)
+	}
+	fill := free - size/2 // leaves less than one base free
+	if _, err := x.EnsureBase(ctx, "sha256:filler", fill, opener(bytes.Repeat([]byte("FILLER!!"), int(fill)/8))); err != nil {
+		t.Fatal(err)
+	}
+	// Most recently used order is now: old (first), keep, filler.
+	if st, err = x.M.Status(ctx); err != nil {
+		t.Fatal(err)
+	} else if got := (st.TotalData - st.UsedData) * BlockSectors * 512; got >= size {
+		t.Fatalf("the pool still has room for a base (%d bytes free); nothing would be evicted", got)
+	}
+
+	if _, err := x.EnsureBase(ctx, "sha256:new", size, opener(dense("NEW-BASE-DATA!!!"))); err != nil {
+		t.Fatalf("a new base could not be built by evicting an old one: %v", err)
+	}
+
+	names, err := x.Reg.Bases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "sha256:new") {
+		t.Fatalf("bases = %s, want the new one present", joined)
+	}
+	if strings.Contains(joined, "sha256:old") {
+		t.Errorf("bases = %s; the least recently used base should have gone first", joined)
+	}
+	if !strings.Contains(joined, "sha256:keep") {
+		t.Errorf("bases = %s; a more recently used base was evicted before it was needed", joined)
+	}
+
+	// The guest of the base that stayed reads exactly what it wrote, and what
+	// its base holds underneath.
+	if got := ddRead(t, path, 0, 24); string(got) != "GUEST-OF-THE-KEPT-BASE!!" {
+		t.Errorf("the guest lost its own write to an eviction: %q", got)
+	}
+	if got := ddRead(t, path, 4*blk, 16); !bytes.Equal(got, keep[4*blk:4*blk+16]) {
+		t.Errorf("the guest can no longer read its base: %q", got)
+	}
+}
