@@ -317,6 +317,7 @@ func openNode(ctx context.Context, cfg config) (*thinpool.Materializer, error) {
 		M:       m,
 		Reg:     thinpool.NewRegistry(thinpool.DefaultRegistryPath(cfg.root)),
 		LockDir: filepath.Join(dir, "locks"),
+		Log:     func(s string) { fmt.Fprintln(os.Stderr, "basedisk-materialize:", s) },
 	}, nil
 }
 

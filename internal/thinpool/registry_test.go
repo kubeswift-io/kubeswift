@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func tmpRegistry(t *testing.T) *Registry {
@@ -220,5 +221,64 @@ func TestStore_LeavesNoPartialFile(t *testing.T) {
 func TestDefaultRegistryPath(t *testing.T) {
 	if got := DefaultRegistryPath("/var/lib/kubeswift"); got != "/var/lib/kubeswift/thinpool/registry.json" {
 		t.Errorf("DefaultRegistryPath = %q", got)
+	}
+}
+
+func TestRegistry_LeastRecentUseOrdersEviction(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	for _, k := range []string{"first", "second", "never-used"} {
+		if _, _, err := r.AllocateBase(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Used in this order; "never-used" is never touched.
+	for _, k := range []string{"first", "second"} {
+		if err := r.TouchBase(k); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond) // distinct stamps, without waiting on a clock tick
+	}
+	got, err := r.BasesByLeastRecentUse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"never-used", "first", "second"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v — a base nothing has used goes first", got, want)
+	}
+}
+
+func TestRegistry_ForgettingABaseForgetsItsUse(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if _, _, err := r.AllocateBase("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.TouchBase("b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ForgetBase("b"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(r.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"b"`) {
+		t.Errorf("the registry still mentions the forgotten base: %s", raw)
+	}
+}
+
+// Touching a base nothing allocated must not invent one.
+func TestRegistry_TouchingAnUnknownBaseDoesNothing(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if err := r.TouchBase("ghost"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Bases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("bases = %v, want none", got)
 	}
 }

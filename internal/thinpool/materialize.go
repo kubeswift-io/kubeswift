@@ -32,6 +32,11 @@ type Materializer struct {
 	Reg *Registry
 	// LockDir holds one lock file per base key.
 	LockDir string
+
+	// Log, when set, reports what the node did that an operator would not
+	// otherwise see — evicting a base, above all: the next guest of that image
+	// pays to write it again, and the only other trace is a pool number moving.
+	Log func(string)
 }
 
 // maxIDRetries bounds recovery from a registry that has fallen behind the pool
@@ -64,7 +69,17 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 		return 0, err
 	} else if ready {
 		id, _, err := x.Reg.BaseID(key)
+		if err == nil {
+			// Used now, so it is not the first one evicted later.
+			err = x.Reg.TouchBase(key)
+		}
 		return id, err
+	}
+
+	// A base is a cache, and dm-thin refcounts what it shares, so an unused one
+	// can go to make room for this one (§7.5).
+	if err := x.makeRoomFor(ctx, sizeBytes, key); err != nil {
+		return 0, err
 	}
 
 	sectors := bytesToSectors(sizeBytes)
@@ -87,7 +102,111 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 	if err := x.Reg.MarkBaseReady(key); err != nil {
 		return 0, err
 	}
+	if err := x.Reg.TouchBase(key); err != nil {
+		return 0, err
+	}
 	return id, nil
+}
+
+// makeRoomFor frees pool space for a base of sizeBytes by evicting others,
+// least recently used first, and returns an error only when it cannot.
+//
+// Evicting a base is safe at any time: it is a convenience for creating the
+// NEXT guest, not a dependency of the ones already running — dm-thin
+// reference-counts the blocks they share, so deleting one leaves every guest
+// derived from it byte-identical and writable, and returns only the blocks
+// nothing else points at (measured, §7.5). The cost of being wrong is the time
+// to write that base again.
+func (x *Materializer) makeRoomFor(ctx context.Context, sizeBytes uint64, keep string) error {
+	free, err := x.freeBytes(ctx)
+	if err != nil || free >= sizeBytes {
+		return err
+	}
+	keys, err := x.Reg.BasesByLeastRecentUse()
+	if err != nil {
+		return err
+	}
+	evicted := 0
+	for _, key := range keys {
+		if key == keep {
+			continue
+		}
+		gone, err := x.evictBase(ctx, key)
+		if err != nil {
+			return err
+		}
+		if !gone {
+			continue
+		}
+		evicted++
+		if free, err = x.freeBytes(ctx); err != nil {
+			return err
+		}
+		if free >= sizeBytes {
+			return nil
+		}
+	}
+	return fmt.Errorf("the pool has %d bytes free and this base needs %d; evicted %d of %d other bases and "+
+		"it still does not fit. Give the pool a larger data device, or use a smaller image",
+		free, sizeBytes, evicted, len(keys))
+}
+
+// evictBase deletes a base and forgets it, reporting whether it went.
+//
+// The base's own lock is taken WITHOUT waiting, so a base another process is
+// building or snapshotting from is skipped rather than fought over — and two
+// nodes' builds evicting each other's bases cannot deadlock holding one lock
+// and waiting for the other.
+func (x *Materializer) evictBase(ctx context.Context, key string) (bool, error) {
+	unlock, ok, err := x.tryLockKey(key)
+	if err != nil || !ok {
+		return false, err
+	}
+	defer unlock()
+
+	id, known, err := x.Reg.BaseID(key)
+	if err != nil {
+		return false, err
+	}
+	if !known {
+		return false, nil
+	}
+	name := baseDeviceName(key)
+	if active, err := x.M.Active(ctx, name); err != nil {
+		return false, err
+	} else if active {
+		if err := x.M.RemoveDevice(ctx, name); err != nil {
+			return false, fmt.Errorf("unmapping base %s: %w", key, err)
+		}
+	}
+	// Deleted before forgotten, for the reason ReleaseGuest is: forgetting
+	// first would leak the blocks with nothing left naming the id.
+	if err := x.M.DeleteThin(ctx, id); err != nil && !errors.Is(err, ErrNoSuchThin) {
+		return false, fmt.Errorf("deleting base %s: %w", key, err)
+	}
+	if err := x.Reg.ForgetBase(key); err != nil {
+		return false, err
+	}
+	x.logf("evicted base %s to make room; the next guest of that image pays to write it again", key)
+	return true, nil
+}
+
+func (x *Materializer) logf(format string, args ...any) {
+	if x.Log != nil {
+		x.Log(fmt.Sprintf(format, args...))
+	}
+}
+
+// freeBytes is what the pool has left for new data.
+func (x *Materializer) freeBytes(ctx context.Context) (uint64, error) {
+	st, err := x.M.Status(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reading pool %s: %w", x.M.Pool, err)
+	}
+	if st.TotalData < st.UsedData {
+		return 0, nil
+	}
+	return (st.TotalData - st.UsedData) * BlockSectors * 512, nil
 }
 
 // createBase allocates a device for key and creates an empty thin volume.
@@ -320,6 +439,28 @@ func (x *Materializer) ReleaseGuest(ctx context.Context, guestKey, devName strin
 		return fmt.Errorf("deleting the thin device of guest %s: %w", guestKey, err)
 	}
 	return x.Reg.Forget(guestKey)
+}
+
+// tryLockKey is lockKey without waiting: ok is false when someone else holds it.
+func (x *Materializer) tryLockKey(key string) (release func(), ok bool, err error) {
+	if err := os.MkdirAll(x.LockDir, 0o700); err != nil {
+		return nil, false, fmt.Errorf("creating %s: %w", x.LockDir, err)
+	}
+	f, err := os.OpenFile(filepath.Join(x.LockDir, keyHash(key)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("locking base %s: %w", key, err)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}, true, nil
 }
 
 // lockKey takes an exclusive per-key lock, returning its release.
