@@ -163,7 +163,13 @@ type SwiftGuestClassSpec struct {
 	// guests — pool replicas, CI workers, short-lived guests — and does not
 	// suit a guest whose disk is the thing that matters.
 	//
+	// IMMUTABLE. Changing it on a class that guests already use would move
+	// their root disks — from a per-guest PVC to a shared-base thin device, or
+	// back — at the next restart of each, discarding everything written to the
+	// disk they had, with nothing saying so. Use a new class instead.
+	//
 	// +kubebuilder:default=false
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sharedBaseDisk is immutable: changing it would move the root disk of every guest on this class between a shared-base thin device and a per-guest PVC at its next restart, discarding what it had. Create a new SwiftGuestClass instead"
 	// +optional
 	SharedBaseDisk bool `json:"sharedBaseDisk,omitempty"`
 
