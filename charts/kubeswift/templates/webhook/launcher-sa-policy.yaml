@@ -84,5 +84,63 @@ spec:
   # Cluster-wide by design. Guests and sandboxes run in arbitrary user
   # namespaces, so scoping this to a namespace list would leave exactly the
   # namespaces an attacker would pick.
+---
+# The pod gate above stops a pod from receiving a launcher token. A legacy
+# service-account token Secret is another way to mint one: create a Secret of
+# type kubernetes.io/service-account-token annotated with a launcher SA's name,
+# and the token controller fills it with a long-lived token for that SA -- no
+# pod involved. Anyone who can create Secrets in the namespace (the built-in
+# edit/admin roles can) could do this. Nothing legitimate creates such a
+# Secret for a launcher SA, so only the controller may.
+#
+# Not covered here (see docs/security-audit.md): TokenRequest
+# (serviceaccounts/token), impersonation of the launcher SA, and pods/exec into
+# a launcher pod, which the built-in edit/admin roles also grant.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-launcher-sa-token-secret-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets"]
+  variables:
+    - name: launcherSAs
+      expression: "['{{ .Values.launcherSAGate.guestServiceAccountName }}', '{{ .Values.launcherSAGate.sandboxServiceAccountName }}']"
+    - name: controllerUser
+      expression: "'system:serviceaccount:{{ .Values.namespace }}:controller-manager'"
+    - name: tokenFor
+      expression: >-
+        object.type == 'kubernetes.io/service-account-token' &&
+        has(object.metadata.annotations) &&
+        'kubernetes.io/service-account.name' in object.metadata.annotations
+        ? object.metadata.annotations['kubernetes.io/service-account.name'] : ''
+  validations:
+    - expression: >-
+        !(variables.tokenFor in variables.launcherSAs) ||
+        request.userInfo.username == variables.controllerUser
+      message: >-
+        service-account token Secrets for the KubeSwift launcher ServiceAccounts
+        are reserved: their pods run privileged, so only the KubeSwift controller
+        may mint such a token
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-launcher-sa-token-secret-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: kubeswift-launcher-sa-token-secret-gate
+  validationActions: [Deny]
 {{- end }}
 {{- end }}

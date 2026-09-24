@@ -8,6 +8,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A legacy token Secret could mint a launcher ServiceAccount token.** The
+  launcher-SA admission gate stops a pod from naming a launcher ServiceAccount,
+  but creating a `kubernetes.io/service-account-token` Secret annotated with
+  that ServiceAccount still had the token controller mint a long-lived token
+  for it, with no pod involved. That token can patch the privileged launcher,
+  which is node root. Anyone who can create Secrets in the namespace (the
+  built-in `edit` role) could do it. A second ValidatingAdmissionPolicy under
+  the same `launcherSAGate` switch now rejects such Secrets unless the
+  controller creates them. `docs/security-audit.md` no longer claims the
+  escalation is closed. It lists the routes still open (TokenRequest,
+  impersonation, and `pods/exec` into the launcher, all in `edit`/`admin`) and
+  says to treat those roles as node-admin in launcher namespaces.
+
 - **GPU passthrough could take a host NIC or disk away from the node.**
   `gpu-init` bound every non-bridge device in the GPU's IOMMU group to
   vfio-pci. On a board without ACS that group can also hold another card, such
