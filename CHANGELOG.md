@@ -148,6 +148,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A crash while creating a thin-pool backing file blocked the node's pool
+  until someone deleted the file by hand.** The file was created at its final
+  path and then preallocated, so a crash in between left a short file there,
+  which every later attempt refused as smaller than the configured size. It
+  is now built beside the final path and renamed into place only once fully
+  allocated and synced. Creation and loop-device attachment also run under a
+  per-file lock, so two creators on a node cannot each attach their own file.
+
 - **A memory snapshot could fail right after pausing the guest.** The capture
   deadline (600s by default) ran from the snapshot's creation, so time spent
   Pending (waiting for the guest to come up) counted against it. A snapshot

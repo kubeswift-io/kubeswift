@@ -220,3 +220,55 @@ func TestEnsurePreallocated_RefusedLeavesNothingBehind(t *testing.T) {
 		t.Errorf("%s was created for a pool that was refused (stat err = %v)", dir, statErr)
 	}
 }
+
+// The process dying mid-preallocation (simulated by a panic out of it) must
+// leave nothing at the final path: a short file there blocked the pool for
+// good.
+func TestEnsurePreallocated_DeathMidAllocationLeavesNoShortFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.img")
+	orig := preallocate
+	t.Cleanup(func() { preallocate = orig })
+	preallocate = func(f *os.File, size int64) error {
+		if _, err := f.Write([]byte("partial")); err != nil {
+			return err
+		}
+		panic("killed mid-fallocate")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_ = ensurePreallocated(path, 8<<20)
+	}()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a short file was left at the final path (err=%v); every later attempt would refuse it", err)
+	}
+	preallocate = orig
+	if err := ensurePreallocated(path, 8<<20); err != nil {
+		t.Fatalf("the next attempt must succeed: %v", err)
+	}
+}
+
+// A crash mid-preallocation used to leave a short file at the final path,
+// which every later attempt refused as "smaller than the configured size"
+// until someone deleted it by hand. The file is now built beside the final
+// path and renamed into place complete, so a crash leaves only a partial that
+// the next attempt replaces.
+func TestEnsurePreallocated_RecoversFromACrashedCreation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.img")
+	const size = 8 << 20
+	if err := os.WriteFile(path+".partial", []byte("half-written"), 0o600); err != nil { // the crash
+		t.Fatal(err)
+	}
+	if err := ensurePreallocated(path, size); err != nil {
+		t.Fatalf("a crashed earlier attempt must not block creation: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Size() != size {
+		t.Errorf("size = %d, want %d", st.Size(), size)
+	}
+	if _, err := os.Stat(path + ".partial"); !os.IsNotExist(err) {
+		t.Errorf("the partial should be gone once the file is in place, err=%v", err)
+	}
+}
