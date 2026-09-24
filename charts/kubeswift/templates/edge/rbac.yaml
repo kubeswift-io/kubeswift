@@ -3,8 +3,13 @@
 # hub impersonates THROUGH, plus its RBAC. The hub connects to THIS cluster as
 # this ServiceAccount (the token in the Secret below) and impersonates end users;
 # the member RBAC then authorizes those users. See the helm NOTES for the
-# ready-to-apply hub-side Cluster + Secret. Least privilege: this SA can
-# impersonate + read VMs/services, NOT cluster-admin.
+# ready-to-apply hub-side Cluster + Secret.
+#
+# Treat this credential as cluster-admin on this cluster. It holds no admin
+# grant itself, but it may impersonate ANY user and group, and impersonating the
+# system:masters group is cluster-admin. The hub's gateway refuses to
+# impersonate system:-prefixed subjects on a caller's behalf, but whoever holds
+# the token directly is not bound by that. Store the hub-side copy accordingly.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -28,7 +33,9 @@ metadata:
     app.kubernetes.io/component: edge
 type: kubernetes.io/service-account-token
 ---
-# Let the member credential impersonate end users + groups.
+# Let the member credential impersonate end users + groups. Unrestricted: RBAC
+# cannot exclude subjects, and an allowlist (resourceNames) would refuse every
+# user carrying an IdP group not on it. See the note at the top of this file.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
