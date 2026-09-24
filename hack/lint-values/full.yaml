@@ -19,6 +19,11 @@
 # Keep in sync with hack/verify-render-coverage.sh, which asserts that the
 # expected workloads really did render.
 
+# A hub federates itself, which renders the gateway's console grant and the
+# kubeswift-gateway-exec-gate policy that bounds it.
+federation:
+  role: hub
+
 gateway:
   enabled: true
   oidc:

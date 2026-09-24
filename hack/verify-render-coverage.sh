@@ -59,14 +59,16 @@ fi
 # Capability-guarded objects render to NOTHING unless the shared render script
 # passes --api-versions for them, and a security control CI cannot see is worse
 # than one that does not exist — it reads as covered. Assert the launcher-SA
-# admission gates (#443: pods, legacy token Secrets, TokenRequests) are
-# actually in the scanned output.
+# admission gates (#443: pods, legacy token Secrets, TokenRequests) and the
+# gateway's exec gate are actually in the scanned output.
 GUARDED="ValidatingAdmissionPolicy/kubeswift-launcher-sa-gate
 ValidatingAdmissionPolicyBinding/kubeswift-launcher-sa-gate
 ValidatingAdmissionPolicy/kubeswift-launcher-sa-token-secret-gate
 ValidatingAdmissionPolicyBinding/kubeswift-launcher-sa-token-secret-gate
 ValidatingAdmissionPolicy/kubeswift-launcher-sa-tokenrequest-gate
-ValidatingAdmissionPolicyBinding/kubeswift-launcher-sa-tokenrequest-gate"
+ValidatingAdmissionPolicyBinding/kubeswift-launcher-sa-tokenrequest-gate
+ValidatingAdmissionPolicy/kubeswift-gateway-exec-gate
+ValidatingAdmissionPolicyBinding/kubeswift-gateway-exec-gate"
 
 for want in $GUARDED; do
   kind="${want%%/*}"; name="${want##*/}"

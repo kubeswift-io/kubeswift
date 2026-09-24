@@ -69,6 +69,19 @@ cluster: role=edge with federation.edge.applyMemberRBAC (default true). Emits
 {{- end -}}
 
 {{/*
+kubeswift.gatewayConsole — "true" when this cluster grants the gateway's member
+credential the console bridges (templates/gateway/exec-gate.yaml): an edge
+member, or a hub that federates itself. Only where the API server serves
+ValidatingAdmissionPolicy: the kubeswift-gateway-exec-gate policy is what holds
+that credential's pods/exec to the bridge commands, and without it the grant
+would be any command in a privileged pod, so it is not made and the console
+refuses instead. Emits "true" or "".
+*/}}
+{{- define "kubeswift.gatewayConsole" -}}
+{{- if and (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") (or (eq (include "kubeswift.edgeRBAC" .) "true") (eq (include "kubeswift.selfRegisterEnabled" .) "true")) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 kubeswift.ingress.annotations — the merged annotation map for an Ingress: the
 raw .annotations, plus (when .tlsAuto.enabled) the cert-manager issuer
 annotation. Input: an ingress config dict (e.g. .Values.ui.ingress). Returns

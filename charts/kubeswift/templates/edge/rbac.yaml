@@ -123,9 +123,18 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
+  # The console, the sandbox shell and the sandbox log view. Not pods/exec: the
+  # launcher is privileged, so exec in it is root on its node. The gateway
+  # checks these and runs the bridge itself (gateway/exec-gate.yaml).
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests/console"]
     verbs: ["create"]
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes/exec"]
+    verbs: ["create"]
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes/log"]
+    verbs: ["get"]
   - apiGroups: ["migration.kubeswift.io"]
     resources: ["swiftmigrations"]
     verbs: ["get", "list", "watch", "create"]

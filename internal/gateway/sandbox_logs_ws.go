@@ -1,20 +1,14 @@
 package gateway
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/klog/v2"
-
-	"github.com/kubeswift-io/kubeswift/internal/cli"
 )
 
 // sandboxGVR is the SwiftSandbox resource. Kept local to the gateway so the
@@ -28,20 +22,22 @@ var sandboxGVR = schema.GroupVersionResource{
 // logs`: resolve the sandbox's target pod (its own launcher, or the claimed slot
 // pod for a warm-pool checkout via status.podRef), then exec `tail -F` on the
 // host log file inside the launcher and pump stdout to the socket. Like the
-// console, it is a raw WebSocket (browsers can't do bidi Connect) with the
-// bearer token on the query string; the impersonating client authorizes the
-// read.
+// console, it is a raw WebSocket (browsers can't do bidi Connect). The user
+// needs get on swiftsandboxes/log, and the exec runs as the gateway's member
+// credential (see exec_bridge.go).
 type SandboxLogsHandler struct {
-	pool consoleProvider
-	auth Authenticator
-	up   websocket.Upgrader
+	pool   consoleProvider
+	auth   Authenticator
+	review accessReviewer
+	up     websocket.Upgrader
 }
 
 func NewSandboxLogsHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *SandboxLogsHandler {
 	return &SandboxLogsHandler{
-		pool: pool,
-		auth: auth,
-		up:   wsUpgrader(origin.Allow),
+		pool:   pool,
+		auth:   auth,
+		review: ssarReviewer{pool: pool},
+		up:     wsUpgrader(origin.Allow),
 	}
 }
 
@@ -68,46 +64,19 @@ func (h *SandboxLogsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dyn, err := h.pool.DynamicFor(cluster, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	// The user is authorized to read the sandbox's logs, not for pods/exec, and
+	// the exec runs as the gateway's member credential (see exec_bridge.go).
+	// The logs live in the target pod's runtime directory, as for swiftctl.
+	cfg, clientset, target, ok := sandboxLauncher(r.Context(), w, h.pool, h.review, cluster, id, namespace, name, "get", "log")
+	if !ok {
 		return
 	}
-
-	// Resolve the target pod: a warm-pool checkout's run dir lives in the claimed
-	// slot pod (status.podRef), not a pod named after the sandbox. Mirrors
-	// swiftctl's sandboxTargetPod. Getting the CR also authorizes the read.
-	sb, err := dyn.Resource(sandboxGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	target := name
-	if podRef, _, _ := unstructured.NestedString(sb.Object, "status", "podRef"); podRef != "" {
-		target = podRef
-	}
-
-	cfg, err := h.pool.RestConfigFor(cluster, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// The console is captured to <run>/serial.sock.log; the run dir is keyed by
-	// the launcher pod identity (ns-<targetPod>), same as swiftctl.
-	runDir := fmt.Sprintf("/var/lib/kubeswift/run/%s-%s", namespace, target)
-	shellCmd := cli.SandboxLogsCommand(runDir, follow)
 
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(target).Namespace(namespace).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: launcherContainer,
-			Command:   []string{"sh", "-c", shellCmd},
+			Command:   []string{"sh", "-c", sandboxLogsBridge(namespace, target, follow)},
 			Stdin:     false,
 			Stdout:    true,
 			Stderr:    true,
