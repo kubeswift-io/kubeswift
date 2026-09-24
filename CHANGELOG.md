@@ -8,6 +8,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **Release signature checks accepted a signature from any branch.** The
+  documented and CI `cosign verify` commands matched the signing workflow's
+  identity with `…release-(stable|rc).yaml@.*`, so a signature produced by that
+  workflow file on any ref, a branch included, verified as a release. Releases
+  are only built from tag pushes, so the identity is now pinned to
+  `@refs/tags/v.*` (anchored, with dots escaped) in the release and verify
+  workflows and in `docs/releases.md`. CI's generated-code check now also
+  covers `charts/kubeswift/crds`, the CRD copy operators actually install.
+
 - **With `auth-mode=insecure`, any web page could drive the gateway.** There is
   no token in that mode, yet the Connect API answered every origin with
   `Access-Control-Allow-Origin: *`, mutating RPCs included. The WebSocket

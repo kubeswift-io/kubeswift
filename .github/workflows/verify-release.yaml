@@ -69,7 +69,7 @@ jobs:
             # "anything Sigstore ever signed". release-(stable|rc) because both
             # publish images under this prefix.
             if cosign verify "$ref" \
-                 --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*$' \
+                 --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
                  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
                  > /dev/null 2>&1; then
               sig=ok
