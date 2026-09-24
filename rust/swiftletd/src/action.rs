@@ -637,8 +637,11 @@ pub struct ActionState {
 /// 3. **Idempotent** — `action_id_key` matches `last_completed_id` or
 ///    matches the in-flight action's id.
 /// 4. **RejectInFlight** — different action-id arrives while one is in
-///    flight (cancel verbs are exempt — they bypass this gate so they
-///    can interrupt a running migration).
+///    flight (cancel verbs are exempt from this gate). Note what that does
+///    NOT buy: the action loop awaits each dispatch, so a cancel is only
+///    seen once the in-flight action returns. A cancel cannot interrupt a
+///    running receive; the controller's backstop is deleting the destination
+///    pod once its ack budget runs out (swiftmigration cancel_live.go).
 /// 5. **RejectAckMissing** — namespace has `ack_key=Some(_)` but the
 ///    annotation is absent or has a value other than `ack`. Phase 2
 ///    plaintext-transport gate (§8.2.1).
@@ -666,9 +669,10 @@ pub fn decide(
         return ActionDecision::Idempotent { id };
     }
     let kind = (keys.parse_verb)(verb);
-    // Cancel verbs bypass the in-flight gate so they can interrupt an
-    // in-flight migration (Q1d-F2). All other verbs follow the normal
-    // RejectInFlight rule.
+    // Cancel verbs bypass the in-flight gate (Q1d-F2). All other verbs
+    // follow the normal RejectInFlight rule. The gate only decides whether an
+    // action is accepted when it is seen; the loop sees it only between
+    // dispatches (see the decide() doc).
     let is_cancel = matches!(kind, ActionKind::MigrationCancel);
     if let Some(current) = in_flight_id {
         if current == id {
@@ -877,7 +881,9 @@ const SANDBOX_EXEC_TIMEOUT_SECS: u64 = 3600;
 /// Run a checked-out warm-slot's workload in the guest over vsock (single-shot exec
 /// into /newroot) and report the exit code. Mirrors `dispatch_identity_regenerate`:
 /// the vsock socket lives next to the CH API socket; the sync client runs on a
-/// blocking task so the action loop keeps ticking.
+/// blocking task so it does not stall the async runtime's other tasks. The
+/// action loop itself awaits it, so no other action on this pod is picked up
+/// until the workload exits (bounded by timeoutSeconds).
 ///
 /// A NON-ZERO workload exit is a SUCCESSFUL exec (Ok) carrying the code in the detail
 /// (status "complete") — the controller maps exit!=0 to a Failed sandbox, exit==0 to
