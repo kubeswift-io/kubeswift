@@ -148,6 +148,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A snapshot schedule burst out stale snapshots after an outage.** The
+  catch-up walked forward from the last fire and stopped after 100 ticks,
+  firing that tick rather than the latest one. The snapshot it created
+  re-triggered the reconcile, which fired the next stale tick, and so on: a
+  frequent schedule produced a snapshot per reconcile, each named for a
+  long-past time, until it caught up. It now fires only the most recent missed
+  tick, found by searching back from the current time.
+
 - **A crash while creating a thin-pool backing file blocked the node's pool
   until someone deleted the file by hand.** The file was created at its final
   path and then preallocated, so a crash in between left a short file there,
