@@ -112,7 +112,120 @@ Run with `KUBECONFIG` pointing at dev, from the checkout at `<sha>`.
 
 ## Go-ahead
 
-Phase 0: **GO** — run it now.
-Phase 1: **WAIT**.
-Phase 2: **WAIT**.
-Phase 3: **WAIT**.
+Phase 0: **DONE** (`phase0.md`). Thanks — the heads-ups are all taken below.
+
+**Candidate: main @ `2d146eb`** (#649, #652, #653, #655, #656, #657). William has
+confirmed the v0.14.1 validation session is finished.
+
+Phase 1: **GO**.
+Phase 2: **GO** once Phase 1 has succeeded on dev.
+Phase 3: **GO** per cluster, once Phase 1 has succeeded on that cluster.
+Push `phase1.md`, `phase2.md` and `phase3.md` as each finishes; do not wait for
+another go-ahead between them.
+
+**Stop conditions:**
+- If the upgrade or rollout fails on a cluster, collect the evidence, run
+  nothing more on that cluster, and continue with the others.
+- If a scenario leaves a guest without a running VM (lost, killed, or stuck with
+  no launcher), stop Phase 2 there and report at once.
+
+### Amendments from Phase 0 (these override the tables above)
+
+**Phase 1:**
+- **Image published?** Before step 1, check the build exists:
+  - `helm show chart oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.0.0-dev.2d146eb`
+  - the image `ghcr.io/kubeswift-io/kubeswift/controller-manager:sha-2d146eb`
+
+  The Release Dev run for `2d146eb` was still publishing at 22:58 UTC. If either
+  is missing, re-check every 5 minutes for up to 45 minutes, then report and stop.
+- **Also set `snapshotS3.image.tag=sha-2d146eb`** (heads-up 2): all nine
+  pinned tags, `ui` excepted.
+- **CRDs first** on every cluster, from a checkout at `2d146eb` (heads-up 3).
+  Then confirm `swiftsnapshots` has `status.guestSpec.primaryIP`.
+- **After each cluster's upgrade, record:**
+  - the Helm revision;
+  - every kubeswift image;
+  - the controller's `--metrics-secure` value;
+  - the VAPs present. Expected: `kubeswift-launcher-sa-tokenrequest-gate`
+    everywhere; `kubeswift-gateway-exec-gate` on dev and sov, not ntx;
+  - on dev and sov: that ClusterRole `kubeswift-gateway-console` exists, and that
+    `kubeswift-vm-reader` (sov) no longer grants `pods/exec`.
+- **Running guests are not disturbed.** Record the launcher pod UID and
+  restart count of every running guest before and after:
+  - dev: `gpu-cells/innercp` (`10bd28b8-…`);
+  - ntx: `capi-udn/ks-udn-cp-54klw` (`a5420720-…`).
+
+  The controller upgrade must not recreate them.
+
+**Phase 2 (dev):**
+- **D5.** Run the scripts directly with `--vsclass longhorn-snapshot-vsc`
+  (`test/snapshot/snapshot-test.sh --vsclass …`, and the same for
+  `test/clonestrategy/clonestrategy-test.sh` if it accepts the flag; if it does
+  not, SKIPPED with the reason).
+- **D7 is replaced.** Do not run `test/migration/migration-test.sh`: it is an
+  offline test with the defects you listed, and they will be fixed separately.
+  - Instead, create a live SwiftMigration by hand for a guest of class
+    `small-migratable` (`longhorn-migratable`, RWX Block), from worker-1 to
+    worker-2 (`spec.mode: live`; see `docs/migration/phase-3a.md` for the spec).
+  - **Before:** plant a tmpfs sentinel in the guest (as the round-trip test does)
+    and record `/proc/uptime`.
+  - **Pass:** phase **`Completed`** (not `Succeeded`); the sentinel is still
+    there; uptime kept counting (no reboot); the guest is reachable; the source
+    pod is gone; `status.podRef` names the destination pod.
+- **D8, cancel mid-transfer.**
+  - Setup: a cluster-scoped SwiftGuestClass `val-migratable-16g`, a copy of
+    `small-migratable` with 16Gi memory (delete it afterwards). Make memory busy
+    in the guest, e.g. fill a tmpfs with random data and keep rewriting it, so
+    the transfer lasts long enough to cancel.
+  - Start a live migration, and while it is transferring set
+    `spec.cancelRequested: true` (phase-3a, "Cancelling a migration").
+  - **Pass:** the SwiftMigration ends Cancelled; on the source, the sentinel is
+    present, uptime is continuous, and the guest is reachable; the destination
+    pod is gone.
+  - Also report the phase and phaseDetail sequence you observed, and the
+    destination launcher's swiftletd log lines around the cancel.
+- **D9, cancel racing completion.** Same setup; set `cancelRequested` as close
+  as you can to the source reporting complete.
+  - **Pass:** exactly one VM survives: either Cancelled with the source running,
+    or Completed with the destination running. The sentinel is present and
+    uptime continuous in whichever runs.
+  - Try it three times, and report the timing of each attempt.
+- **D11.** Take the bridge command verbatim from `consoleBridge()` in
+  `internal/gateway/exec_bridge.go` @ `2d146eb`, with the guest's namespace and
+  name substituted. The gateway credential on dev is
+  `system:serviceaccount:kubeswift-system:kubeswift-gateway`.
+- **D12 is split.**
+  - The browser half is William's: an OIDC login with and without the Console
+    capability. List the exact steps for him in the report.
+  - Your half:
+    - run the CHANGELOG `jq` role migration as a **dry run** first, printing each
+      role that would change and its before/after rules;
+    - then apply it on dev;
+    - report which roles changed, and that a new role saved in the Access editor
+      carries `swiftguests/console` rather than `pods/exec` (check an existing
+      editor-created role's rules via kubectl if you can't use the UI).
+- **D13 on dev.**
+  - Find the ServiceAccount the kube-prometheus-stack Prometheus runs as, in the
+    `monitoring` release.
+  - Then `helm upgrade … --reuse-values --set controllerManager.metrics.secure=true`
+    with `controllerManager.metrics.readers` set to that SA.
+  - Check:
+    - plain HTTP fails;
+    - an unbound SA token gets 403;
+    - a bound one gets 200 with `kubeswift_` series;
+    - the Prometheus target `kubeswift-controller-manager` is `up` (via its
+      `/api/v1/targets`).
+  - Leave dev in this state (it is the new default); report the final values.
+
+**Phase 3:**
+- **ntx:**
+  - The default class is `longhorn-r1`, and worker-1's Longhorn has an attach
+    problem that predates everything here (heads-up 4).
+  - If N1 or N2 fails on a Longhorn attach (`FailedMount`, volume `attaching`),
+    mark it **BLOCKED-ENV** with the evidence. Retry once with the guest pinned
+    to worker-2 (`spec.nodeName`).
+  - N3 uses the baseline above: same launcher UID, 0 restarts.
+- **sov** (no KVM, no webhook):
+  - S1 is controller Ready; the VAPs as expected; the sov-side console grant and
+    exec gate present; `kubeswift-vm-reader` without `pods/exec`.
+  - Its webhook is off, so skip the `--dry-run=server` check and say so.
