@@ -184,9 +184,23 @@ func (r *SwiftSandboxPoolReconciler) deleteWarmSlots(ctx context.Context, pool *
 		if pods.Items[i].DeletionTimestamp != nil {
 			continue
 		}
-		if err := r.Delete(ctx, &pods.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+		if err := deleteWarmSlot(ctx, r.Client, &pods.Items[i]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// deleteWarmSlot deletes a slot pod read as warm, but only if it is still the
+// pod that was read. The pool acts on a listed (possibly cached) warm set, and
+// a checkout claims a slot by updating its labels in between: deleting without
+// the precondition removed a slot a sandbox had just claimed, and that
+// checkout then failed with SlotLost. A claimed slot's resourceVersion has
+// moved, so the delete conflicts and the slot is left to its sandbox.
+func deleteWarmSlot(ctx context.Context, c client.Client, p *corev1.Pod) error {
+	err := c.Delete(ctx, p, client.Preconditions{UID: &p.UID, ResourceVersion: &p.ResourceVersion})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
 }

@@ -230,6 +230,12 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A sandbox pool could delete a slot a checkout had just claimed.**
+  Scale-down, stale-slot recycling and pool deletion delete warm slots from a
+  list read earlier. A checkout that claimed one of those slots in between
+  lost it, and the sandbox failed with `SlotLost`. The pool now deletes a warm
+  slot only if it is unchanged since it was read.
+
 - **Deleting a SwiftGuestPool deleted every replica's data disk.** PVCs from
   `volumeClaimTemplates` had the pool as their controller owner, so garbage
   collection removed them with the pool. The pool guide says they survive

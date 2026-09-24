@@ -173,7 +173,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// verification key changed since) -- or before slots recorded
 			// one. It would never be handed to a sandbox asking for the
 			// current settings, so replace it rather than keep it warm.
-			if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
+			if err := deleteWarmSlot(ctx, r.Client, p); err != nil {
 				return ctrl.Result{}, err
 			}
 			continue
@@ -255,7 +255,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Drain excess warm slots when the desired count dropped below the live count
 	// (a `kubectl scale`/HPA scale-down). want>0 and this are mutually exclusive.
 	for _, p := range pickWarmToDrain(warmPods, slotsToDelete(int(pool.Spec.MinWarm), warmLive)) {
-		if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
+		if err := deleteWarmSlot(ctx, r.Client, p); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
