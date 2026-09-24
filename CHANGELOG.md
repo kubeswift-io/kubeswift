@@ -148,6 +148,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **With scoped launcher RBAC, a live-migrated guest lost its API access when
+  its migration was deleted.** After a live migration the guest runs in the
+  renamed destination pod, whose per-pod grant was owned by the
+  SwiftMigration. Deleting the migration (a drain migration's 1h TTL does)
+  garbage-collected the grant, and the running launcher could no longer report
+  status, its IP or action results. The SwiftGuest controller now takes that
+  grant over onto the guest.
+
 - **A snapshot schedule burst out stale snapshots after an outage.** The
   catch-up walked forward from the last fire and stopped after 100 ticks,
   firing that tick rather than the latest one. The snapshot it created

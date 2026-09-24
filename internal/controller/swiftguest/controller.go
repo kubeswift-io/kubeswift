@@ -151,6 +151,17 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Error(err, "failed to ensure scoped launcher RBAC", "guest", guest.Name)
 		return ctrl.Result{}, err
 	}
+	// After a live migration the guest runs in the renamed destination pod
+	// (<guest>-mig-<uid>). Its grant was created owned by the SwiftMigration,
+	// so deleting the migration (a drain's sets a 1h TTL) garbage-collected
+	// it and the running launcher lost API access for good -- no more status,
+	// IP or action reporting. Take the grant over onto the guest.
+	if pod := canonicalPodName(&guest); pod != guest.Name {
+		if err := EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &guest, pod, GuestLauncher); err != nil {
+			logger.Error(err, "failed to ensure scoped launcher RBAC for the migrated launcher", "guest", guest.Name, "pod", pod)
+			return ctrl.Result{}, err
+		}
+	}
 
 	// The narrowing. Strictly AFTER the scoped grant above, so the launcher never
 	// has a window with neither. Off by default, and never fatal — see
