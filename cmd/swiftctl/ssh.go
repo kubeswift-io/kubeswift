@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -21,6 +23,47 @@ import (
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
+
+// execStream runs one command in a pod container and wires the given streams to
+// it. A nil stream is not requested. Shared by the key-staging exec and the ssh
+// exec so both go through the same SPDY setup.
+func execStream(
+	ctx context.Context,
+	config *rest.Config,
+	clientset kubernetes.Interface,
+	namespace, podName, container string,
+	command []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+	tty bool,
+	sizeQueue remotecommand.TerminalSizeQueue,
+) error {
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Namespace(namespace).
+		Name(podName).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: container,
+			Command:   command,
+			Stdin:     stdin != nil,
+			Stdout:    stdout != nil,
+			Stderr:    stderr != nil,
+			TTY:       tty,
+		}, clientgoscheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	if err != nil {
+		return fmt.Errorf("create executor: %w", err)
+	}
+	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdin:             stdin,
+		Stdout:            stdout,
+		Stderr:            stderr,
+		Tty:               tty,
+		TerminalSizeQueue: sizeQueue,
+	})
+}
 
 var (
 	sshUser     string
@@ -48,6 +91,24 @@ command after "--" to run it non-interactively and return its output, like
 func init() {
 	sshCmd.Flags().StringVarP(&sshUser, "user", "u", "kubeswift", "SSH username")
 	sshCmd.Flags().StringVarP(&sshIdentity, "identity", "i", "~/.ssh/id_rsa", "Path to SSH private key")
+}
+
+// sshExecCommand builds the launcher exec command that runs ssh to the guest.
+// Every value is a quoted positional arg, so the untrusted primaryIP (a pod
+// annotation) and the user cannot inject shell: $1 keyPath, $2 user, $3 host,
+// $4 optional joined remote command. The EXIT trap removes the staged key even
+// if ssh is interrupted (no `exec`, so the trap still fires), and ssh's exit
+// code is propagated. The private key is never referenced here — only its path.
+func sshExecCommand(keyPath, user, host string, remoteArgs []string) []string {
+	const script = `trap 'rm -f "$1"' EXIT; ` +
+		`ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$1" "$2"@"$3" ${4:+"$4"}; exit $?`
+	command := []string{"sh", "-c", script, "swiftctl-ssh", keyPath, user, host}
+	if len(remoteArgs) > 0 {
+		// ssh concatenates its trailing args with spaces, so joining matches
+		// `ssh host a b c`.
+		command = append(command, strings.Join(remoteArgs, " "))
+	}
+	return command
 }
 
 func expandPath(p string) (string, error) {
@@ -125,42 +186,26 @@ func runSSH(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create clientset: %w", err)
 	}
 
-	// The remote command (if any) is passed as a positional arg ($1) to `sh -c`,
-	// NOT interpolated into the script string — this avoids quoting issues across
-	// the Go -> pod sh -> ssh -> guest shell layers. ${1:+"$1"} appends it to ssh
-	// only when present; with no command, ssh opens an interactive shell. The
-	// exit code is propagated so scripts can branch on it.
-	sshCmdStr := fmt.Sprintf(`KEY=$(mktemp) && chmod 600 "$KEY" && cat > "$KEY" << 'KUBESWIFT_EOF'
-%s
-KUBESWIFT_EOF
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY" %s@%s ${1:+"$1"}; rc=$?; rm -f "$KEY"; exit $rc`,
-		string(keyData), sshUser, primaryIP)
-
-	command := []string{"sh", "-c", sshCmdStr}
-	if !interactive {
-		// $0 is a label; $1 is the joined remote command (ssh concatenates its
-		// trailing args with spaces, so joining matches `ssh host a b c`).
-		command = append(command, "swiftctl-ssh", strings.Join(remoteArgs, " "))
+	// Stage the private key into the launcher over the exec STDIN, never on a
+	// command line. The key used to ride a heredoc inside the exec command,
+	// which the apiserver records in its audit log's request URI and which shows
+	// in /proc/<pid>/cmdline of the sh process for the whole session — readable
+	// by anyone with exec ("console") into this privileged pod. Exec stdin
+	// content is not logged that way. This first exec reads the key from stdin
+	// into a mode-0600 temp file and prints its path; the ssh exec below runs
+	// `ssh -i <path>` and removes it on exit.
+	var keyPathBuf strings.Builder
+	stageCmd := []string{"sh", "-c", `K=$(mktemp) && chmod 600 "$K" && cat > "$K" && printf %s "$K"`}
+	if err := execStream(ctx, config, clientset, pod.Namespace, pod.Name, cli.LauncherContainer,
+		stageCmd, strings.NewReader(string(keyData)), &keyPathBuf, os.Stderr, false, nil); err != nil {
+		return fmt.Errorf("stage ssh key in launcher: %w", err)
+	}
+	keyPath := strings.TrimSpace(keyPathBuf.String())
+	if keyPath == "" || strings.ContainsAny(keyPath, " \t\r\n") {
+		return fmt.Errorf("staging ssh key: unexpected key path %q from launcher", keyPath)
 	}
 
-	req := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(pod.Namespace).
-		Name(pod.Name).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: cli.LauncherContainer,
-			Command:   command,
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       interactive,
-		}, clientgoscheme.ParameterCodec)
-
-	executor, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
-	if err != nil {
-		return fmt.Errorf("failed to create executor: %w", err)
-	}
+	command := sshExecCommand(keyPath, sshUser, primaryIP, remoteArgs)
 
 	var restore func()
 	if interactive {
@@ -193,13 +238,8 @@ ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY" %s@%s 
 		}
 	}
 
-	streamErr := executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdin:             os.Stdin,
-		Stdout:            os.Stdout,
-		Stderr:            os.Stderr,
-		Tty:               interactive,
-		TerminalSizeQueue: sizeQueue,
-	})
+	streamErr := execStream(ctx, config, clientset, pod.Namespace, pod.Name, cli.LauncherContainer,
+		command, os.Stdin, os.Stdout, os.Stderr, interactive, sizeQueue)
 	if streamErr != nil {
 		if ctx.Err() != nil {
 			return nil

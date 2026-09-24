@@ -8,6 +8,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **`swiftctl ssh` leaked the user's private key into logs.** The key was
+  embedded in the pod-exec command, which the Kubernetes apiserver records in
+  its audit log's request URI and which appears in `/proc/<pid>/cmdline` of the
+  `sh` process for the whole session — readable by anyone with exec ("console")
+  into the privileged launcher. The key is now streamed over the exec's stdin
+  into a mode-0600 temp file (stdin content is not logged that way) and ssh runs
+  `ssh -i <path>`, removing the file on exit via a trap. The guest's `primaryIP`
+  (an unvalidated pod annotation) and the SSH user are now passed as quoted
+  positional args instead of being spliced into the script, closing a shell
+  injection through a hostile annotation.
+
 - **A member kubeconfig could exfiltrate the gateway's own token or run code as
   the gateway.** A member `Cluster`'s credential Secret is supplied by whoever
   registers it, and the gateway loaded its kubeconfig with every field honoured,
