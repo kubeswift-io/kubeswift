@@ -43,6 +43,20 @@ unaffected: they keep the directory they were captured into.
   disallowed host path. One segment, not `<namespace>/<name>`: guests still
   running a v0.14.1 launcher accept only a single segment below the root.
 
+- **A TokenRequest could mint a launcher ServiceAccount token.** The
+  launcher-SA gate stopped pods and legacy token Secrets from obtaining the
+  launcher credential, but `create serviceaccounts/token`, which the built-in
+  `edit` and `admin` roles grant, minted one directly: a token that can patch
+  the privileged launcher, which is node root. A third ValidatingAdmissionPolicy
+  under the same `launcherSAGate` switch now refuses a TokenRequest for a
+  launcher ServiceAccount unless the requester is the kubelet (group
+  `system:nodes`, which mints the projected token every launcher pod mounts)
+  or the controller. Verified against a real kube-apiserver (envtest 1.35): the
+  kubelet and the controller get tokens, a tenant is refused for both launcher
+  ServiceAccounts and still gets its own, and the existing pod and Secret gates
+  hold. Impersonation and `pods/exec` into a launcher remain open;
+  `docs/security-audit.md` says so.
+
 - **Base images were pinned by tag only.** Every published image was built
   `FROM` a mutable tag (`debian:bookworm-slim`, `golang:1.27-bookworm`,
   `rust:1.98.0-bookworm`, `alpine:3.24`, distroless), so each build used
