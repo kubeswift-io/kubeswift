@@ -73,3 +73,18 @@ func TestCapturedGuestSpec_FullState_Surface(t *testing.T) {
 		t.Errorf("hasDataDisks must be true (source had dataDiskRefs)")
 	}
 }
+
+// The memory image holds the guest's network configuration, so the capture
+// records the address that goes with it: an in-place restore resumes with it
+// and never asks DHCP again.
+func TestCapturedGuestSpec_RecordsPrimaryIP(t *testing.T) {
+	g := &swiftv1alpha1.SwiftGuest{Status: swiftv1alpha1.SwiftGuestStatus{
+		Network: &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.168.99.14"},
+	}}
+	if got := capturedGuestSpec(g, nil).PrimaryIP; got != "192.168.99.14" {
+		t.Errorf("primaryIP = %q, want 192.168.99.14", got)
+	}
+	if got := capturedGuestSpec(&swiftv1alpha1.SwiftGuest{}, nil).PrimaryIP; got != "" {
+		t.Errorf("a guest with no address recorded %q", got)
+	}
+}
