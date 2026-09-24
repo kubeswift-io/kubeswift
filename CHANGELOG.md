@@ -8,6 +8,13 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **Gateway console and sandbox-exec sessions left no audit record.** The
+  raw WebSocket routes bypass the Connect audit interceptor, so opening a
+  console into a (privileged) launcher, or running a command in a sandbox,
+  logged nothing naming who did it. Each session now logs `ws session opened`
+  and `ws session closed` lines with the user, cluster, namespace, target,
+  pod, duration and, for sandbox exec, the command (truncated at 512 bytes).
+
 - **The controller's metrics can now be served to authorized scrapers
   only.** `/metrics` is plain HTTP to anyone who can reach the pod, and it
   names every tenant's guests, images and namespaces.

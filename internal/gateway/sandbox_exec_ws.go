@@ -171,6 +171,8 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	conn.SetReadLimit(maxWSMessageBytes)
+	defer auditSession("sandbox-exec", id, cluster, namespace, name,
+		"pod", target, "command", auditedCommand(command))()
 
 	fw := guestagent.NewFrameWriter(inW)
 
