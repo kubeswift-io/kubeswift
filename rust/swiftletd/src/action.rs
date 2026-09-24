@@ -608,6 +608,20 @@ pub struct NamespaceState {
     /// namespace at a time; namespaces can have at most one in-flight
     /// each.
     pub in_flight: Option<PendingAction>,
+    /// A migration cancel accepted while `in_flight` was running. From then
+    /// on the annotations carry its id, so it is also the idempotency key
+    /// until the interrupted action finishes.
+    pub cancel_id: Option<String>,
+    /// Whether that cancel's dispatch is still running.
+    pub cancel_running: bool,
+    /// Whether that cancel killed the destination (its result was
+    /// `CANCELLED`). If so the interrupted action's own terminal status is
+    /// not written: the cancel's is the acknowledgement the controller waits
+    /// for, and a later write would replace it.
+    pub cancel_killed: bool,
+    /// The interrupted action's completion, held while its cancel is still
+    /// running so the cancel's outcome decides whether it is written.
+    pub(crate) deferred: Option<Completion>,
 }
 
 /// Local state the action loop carries across iterations. Holds
@@ -637,11 +651,10 @@ pub struct ActionState {
 /// 3. **Idempotent** — `action_id_key` matches `last_completed_id` or
 ///    matches the in-flight action's id.
 /// 4. **RejectInFlight** — different action-id arrives while one is in
-///    flight (cancel verbs are exempt from this gate). Note what that does
-///    NOT buy: the action loop awaits each dispatch, so a cancel is only
-///    seen once the in-flight action returns. A cancel cannot interrupt a
-///    running receive; the controller's backstop is deleting the destination
-///    pod once its ack budget runs out (swiftmigration cancel_live.go).
+///    flight (cancel verbs are exempt from this gate). `handle_namespace`
+///    does not write this as a rejection: the incoming action waits and is
+///    decided again once the running one finishes. Dispatches run off the
+///    loop, so a cancel is seen while the receive it cancels is running.
 /// 5. **RejectAckMissing** — namespace has `ack_key=Some(_)` but the
 ///    annotation is absent or has a value other than `ack`. Phase 2
 ///    plaintext-transport gate (§8.2.1).
@@ -670,9 +683,9 @@ pub fn decide(
     }
     let kind = (keys.parse_verb)(verb);
     // Cancel verbs bypass the in-flight gate (Q1d-F2). All other verbs
-    // follow the normal RejectInFlight rule. The gate only decides whether an
-    // action is accepted when it is seen; the loop sees it only between
-    // dispatches (see the decide() doc).
+    // follow the normal RejectInFlight rule. Whether an accepted cancel then
+    // interrupts the running action is `handle_namespace`'s call: only a
+    // receive is.
     let is_cancel = matches!(kind, ActionKind::MigrationCancel);
     if let Some(current) = in_flight_id {
         if current == id {
@@ -726,6 +739,11 @@ pub struct ActionOutcome {
     /// manual demo) reads the matching value to detect terminal
     /// success.
     pub success_status: Option<&'static str>,
+    /// Write no terminal status for this action. Set by a migration cancel
+    /// that refused to act (see [`dispatch_migration_cancel`]): the
+    /// migration completed, and any status it wrote would either read as a
+    /// cancel acknowledgement or overwrite the destination's `running`.
+    pub suppress_status: bool,
 }
 
 impl ActionOutcome {
@@ -734,6 +752,7 @@ impl ActionOutcome {
             detail: Some(s.into()),
             pause_window_ms: None,
             success_status: None,
+            suppress_status: false,
         }
     }
 }
@@ -951,6 +970,7 @@ async fn dispatch_sandbox_exec(
         detail: Some(code.to_string()),
         pause_window_ms: None,
         success_status: Some("complete"),
+        suppress_status: false,
     })
 }
 
@@ -1066,11 +1086,12 @@ impl Drop for ProgressEmitterGuard {
 ///
 /// Implementation notes:
 ///
-/// - **Dedicated std::thread, not tokio::spawn.** The action loop's
-///   tokio runtime is `current_thread`; `client.send_migration` is a
-///   sync HTTP call that blocks the thread for tens of seconds. A
-///   `tokio::spawn`'d task would not get scheduled until send_migration
-///   returns, defeating the point of progress emission. Mirrors the
+/// - **Dedicated std::thread, not tokio::spawn.** The send's dispatch runs
+///   on a `current_thread` runtime of its own (`Dispatch::start`), and
+///   `client.send_migration` is a sync HTTP call that blocks that thread
+///   for tens of seconds. A `tokio::spawn`'d task would not get scheduled
+///   until send_migration returns, defeating the point of progress
+///   emission. Mirrors the
 ///   lease poller's std::thread + own-runtime pattern at
 ///   [`crate::lease`].
 /// - **Best-effort.** If `guest_ram_mib` is absent, env vars
@@ -1319,6 +1340,7 @@ async fn dispatch_migration_send(
                 // Source-side migration success verb per design §3.1:
                 // "complete" (CH gone, guest now running on destination).
                 success_status: Some("complete"),
+                suppress_status: false,
             })
         }
         swift_ch_client::SendMigrationOutcome::Failed(detail) => {
@@ -1428,6 +1450,7 @@ async fn dispatch_migration_receive(
                 // Destination-side migration success verb per design §3.1:
                 // "running" (CH state=Running with the migrated guest).
                 success_status: Some("running"),
+                suppress_status: false,
             })
         }
         Ok(info) => {
@@ -1496,6 +1519,34 @@ async fn dispatch_migration_cancel(
 ) -> Result<ActionOutcome, String> {
     log::info!("dispatch_migration_cancel id={}", action.id);
 
+    // Never kill a destination that has finished receiving. Once the receive
+    // completes, this VM is the only running copy of the guest: the source's
+    // Cloud Hypervisor exits after a successful send. The controller writes a
+    // cancel only before the commit point, but the receive can complete
+    // between that write and this dispatch, and the controller then ignores
+    // the cancel and completes the migration. Killing here would destroy the
+    // guest it is about to cut over to. A Running VM means the receive is
+    // done; anything else (no VM yet, mid-receive, or an API that does not
+    // answer because it is busy receiving) is still cancellable.
+    let probe = swift_ch_client::ApiClient::new(api_socket).with_timeout(CANCEL_PROBE_TIMEOUT);
+    if let Ok(info) = probe.vm_info() {
+        if info.state == "Running" {
+            log::warn!(
+                "dispatch_migration_cancel_refused id={} reason=destination_running",
+                action.id
+            );
+            return Ok(ActionOutcome {
+                detail: Some(
+                    "cancel refused: the destination guest is already running (the migration completed)"
+                        .to_string(),
+                ),
+                pause_window_ms: None,
+                success_status: None,
+                suppress_status: true,
+            });
+        }
+    }
+
     // ch.pid lives next to ch.sock in <runtime_dir>.
     let pid_path = api_socket
         .parent()
@@ -1519,8 +1570,18 @@ async fn dispatch_migration_cancel(
     );
     // Err triggers write_migration_status(Failed, detail="cancelled")
     // via handle_namespace's existing Err path.
-    Err("cancelled".to_string())
+    Err(CANCELLED.to_string())
 }
+
+/// The error a migration cancel returns once it has killed the destination:
+/// written as the `failed` status detail the controller matches for its
+/// cancel acknowledgement.
+pub const CANCELLED: &str = "cancelled";
+
+/// How long a cancel waits for the destination's VM state before acting. A
+/// Cloud Hypervisor busy receiving may not answer; that is treated as
+/// cancellable, so this bounds how long a cancel is delayed by the probe.
+const CANCEL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Read CH's PID from `<runtime_dir>/ch.pid`. Used by the cancel
 /// handler. Returned errors are user-facing strings (no source-error
@@ -1985,6 +2046,7 @@ async fn dispatch_capture(
         detail: Some(detail),
         pause_window_ms: Some(pause_window_ms),
         success_status: None, // Snapshot uses the default StatusKind::Ready ("ready").
+        suppress_status: false,
     })
 }
 
@@ -2249,6 +2311,22 @@ pub fn decide_watchdog(
         return WatchdogDecision::Skip("terminal failed status already present for action-id");
     }
 
+    // The pending action is a cancel: this exit is (in all likelihood) its
+    // SIGKILL, and the action loop's own acknowledgement may never be
+    // written -- swiftletd exits once the watchdog is done. Write the
+    // acknowledgement the controller waits for (`failed` with `cancelled` in
+    // the detail), not a generic abnormal exit, which it would not accept
+    // and would answer, 30 seconds later, by force-deleting the pod.
+    if annotations.get(MIGRATION_ACTION_KEY).map(String::as_str) == Some("cancel") {
+        return WatchdogDecision::WriteFailed {
+            action_id,
+            detail: format!(
+                "{}: destination listener exited ({})",
+                CANCELLED, exit_detail
+            ),
+        };
+    }
+
     WatchdogDecision::WriteFailed {
         action_id,
         detail: format!("destination listener exited abnormally: {}", exit_detail),
@@ -2348,8 +2426,21 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
     };
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), &namespace);
     let mut state = ActionState::default();
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+    let dispatcher = Dispatch {
+        done: done_tx,
+        run: dispatch_on_own_runtime,
+    };
     log::info!("action_loop_started pod={}/{}", namespace, pod_name);
     loop {
+        // Dispatches run on their own threads (Dispatch::start), so the loop
+        // keeps polling while one runs: a cancel reaches the receive it
+        // cancels, and a long action in one namespace does not hold up the
+        // others. Their terminal statuses are written here, in completion
+        // order.
+        while let Ok(done) = done_rx.try_recv() {
+            finish(&client, &namespace, &pod_name, &mut state, done, writer_for).await;
+        }
         match api.get(&pod_name).await {
             Ok(pod) => {
                 let annotations = pod.metadata.annotations.clone().unwrap_or_default();
@@ -2361,6 +2452,8 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
                     &api_socket,
                     &mut state,
                     &annotations,
+                    &dispatcher,
+                    writer_for,
                 )
                 .await;
             }
@@ -2368,7 +2461,269 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
                 log::warn!("action_loop_get_pod_err: {}", e);
             }
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        // Wake early for a finished dispatch, so a terminal status (the
+        // migration send's in particular: main.rs waits for it before
+        // exiting) is not held back by the poll interval.
+        tokio::select! {
+            _ = tokio::time::sleep(POLL_INTERVAL) => {}
+            Some(done) = done_rx.recv() => {
+                finish(&client, &namespace, &pod_name, &mut state, done, writer_for).await;
+            }
+        }
+    }
+}
+
+/// The action namespaces, to route a finished dispatch back to its state and
+/// status writer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ns {
+    Snapshot,
+    Migration,
+    Identity,
+    Sandbox,
+}
+
+/// Which of a namespace's two slots a dispatch ran in: its action, or a
+/// migration cancel interrupting that action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Slot {
+    Main,
+    Cancel,
+}
+
+/// A dispatch that finished on its worker thread, handed back to the loop.
+#[derive(Debug)]
+pub(crate) struct Completion {
+    ns: Ns,
+    slot: Slot,
+    pending: PendingAction,
+    result: Result<ActionOutcome, String>,
+}
+
+/// Runs one action to completion on the calling thread.
+pub(crate) type Dispatcher = fn(&PendingAction, &Path) -> Result<ActionOutcome, String>;
+
+/// Starts dispatches on their own threads and reports them on `done`.
+pub(crate) struct Dispatch {
+    done: tokio::sync::mpsc::UnboundedSender<Completion>,
+    run: Dispatcher,
+}
+
+impl Dispatch {
+    /// Run `pending` on a thread of its own. Every dispatch blocks its thread
+    /// for as long as the action takes -- Cloud Hypervisor's API is
+    /// synchronous, and a receive lasts the whole migration -- which is why
+    /// it does not run on the loop's.
+    fn start(&self, ns: Ns, slot: Slot, pending: PendingAction, api_socket: &Path) {
+        let done = self.done.clone();
+        let run = self.run;
+        let socket = api_socket.to_path_buf();
+        let for_thread = pending.clone();
+        // A fixed name: the action id is annotation text, and a thread name
+        // with a NUL byte in it panics.
+        let spawned = std::thread::Builder::new()
+            .name("swiftletd-action".to_string())
+            .spawn(move || {
+                let result = run(&for_thread, &socket);
+                let _ = done.send(Completion {
+                    ns,
+                    slot,
+                    pending: for_thread,
+                    result,
+                });
+            });
+        if let Err(e) = spawned {
+            let _ = self.done.send(Completion {
+                ns,
+                slot,
+                pending,
+                result: Err(format!("could not start the action: {}", e)),
+            });
+        }
+    }
+}
+
+/// The production [`Dispatcher`]: [`dispatch`] on a runtime of its own.
+fn dispatch_on_own_runtime(
+    pending: &PendingAction,
+    api_socket: &Path,
+) -> Result<ActionOutcome, String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("action runtime: {}", e))?;
+    rt.block_on(dispatch(pending, api_socket))
+}
+
+/// The status writer of each namespace.
+fn writer_for(ns: Ns) -> StatusWriter {
+    match ns {
+        Ns::Snapshot => write_status_fn,
+        Ns::Migration => write_migration_status_fn,
+        Ns::Identity => write_identity_status_fn,
+        Ns::Sandbox => write_sandbox_status_fn,
+    }
+}
+
+impl ActionState {
+    fn ns_mut(&mut self, ns: Ns) -> &mut NamespaceState {
+        match ns {
+            Ns::Snapshot => &mut self.snapshot,
+            Ns::Migration => &mut self.migration,
+            Ns::Identity => &mut self.identity,
+            Ns::Sandbox => &mut self.sandbox,
+        }
+    }
+
+    /// The id of an action running in a namespace other than `ns` that
+    /// `ns` must not run alongside. Snapshot, migration and identity all act
+    /// on the same VM (a capture pauses it, a migration moves it, identity
+    /// regeneration talks to its agent), so one waits while another runs:
+    /// the order the loop has always run them in, when every dispatch held
+    /// it. A sandbox exec is independent.
+    fn blocking(&self, ns: Ns) -> Option<String> {
+        let exclusive = [
+            (Ns::Snapshot, &self.snapshot),
+            (Ns::Migration, &self.migration),
+            (Ns::Identity, &self.identity),
+        ];
+        if !exclusive.iter().any(|(n, _)| *n == ns) {
+            return None;
+        }
+        exclusive
+            .iter()
+            .filter(|(n, _)| *n != ns)
+            .find_map(|(_, st)| st.in_flight.as_ref().map(|p| p.id.clone()))
+    }
+}
+
+/// Write a finished dispatch's terminal status and settle its namespace.
+///
+/// A cancel's completion is written as it arrives. The interrupted action's
+/// completion waits for its cancel to finish, and is not written if the
+/// cancel killed the destination: the cancel's `failed`/`cancelled` is the
+/// acknowledgement the controller waits for, and the interrupted receive's
+/// own failure, arriving after, would replace it.
+pub(crate) async fn finish(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    state: &mut ActionState,
+    done: Completion,
+    writers: fn(Ns) -> StatusWriter,
+) {
+    let write = writers(done.ns);
+    let st = state.ns_mut(done.ns);
+    match done.slot {
+        Slot::Cancel => {
+            write_terminal(client, namespace, pod_name, &done, write).await;
+            st.cancel_running = false;
+            st.cancel_killed = matches!(&done.result, Err(e) if e == CANCELLED);
+            if let Some(main) = st.deferred.take() {
+                finish_main(client, namespace, pod_name, st, main, write).await;
+            }
+        }
+        Slot::Main if st.cancel_running => {
+            log::info!(
+                "action_complete_deferred namespace={:?} id={} until its cancel finishes",
+                done.ns,
+                done.pending.id
+            );
+            st.deferred = Some(done);
+        }
+        Slot::Main => finish_main(client, namespace, pod_name, st, done, write).await,
+    }
+}
+
+async fn finish_main(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    st: &mut NamespaceState,
+    done: Completion,
+    write: StatusWriter,
+) {
+    if st.cancel_killed {
+        log::info!(
+            "action_status_skipped id={}: cancelled by {:?}, whose status stands",
+            done.pending.id,
+            st.cancel_id
+        );
+    } else {
+        write_terminal(client, namespace, pod_name, &done, write).await;
+    }
+    // W23: signal main.rs that the terminal write for a
+    // MigrationSend action has completed (success or failure).
+    // main.rs's W22 success branch awaits this before exiting,
+    // ensuring the apiserver actually received the
+    // `migration-status: complete` annotation patch before the
+    // process exits and kills this thread mid-flight.
+    //
+    // Fired AFTER the write call returns — the whole point is
+    // ensuring the write lands. Send-failure on the channel is
+    // benign (notify_one stores at most one permit; idempotent
+    // if no awaiter is parked yet).
+    //
+    // Scoped to MigrationSend only because that's the action
+    // whose completion triggers main's exit. Other actions
+    // (snapshot, restore, MigrationReceive, MigrationCancel)
+    // don't have main.rs exiting on their completion so they
+    // don't need the signal. Defensive completeness: fire on
+    // both success ("complete") and failure paths since a
+    // future code change might add an exit-on-send-failure
+    // path; cheap to fire either way.
+    if done.pending.kind == ActionKind::MigrationSend {
+        migration_send_terminal_signal().notify_one();
+        log::info!("w23_terminal_write_signal_fired id={}", done.pending.id);
+    }
+    st.in_flight = None;
+    // The id the annotations now carry: the cancel's, if one came.
+    st.last_completed_id = st.cancel_id.take().or(Some(done.pending.id));
+    st.cancel_killed = false;
+}
+
+/// Write the status a finished dispatch reports, unless it asks for none.
+async fn write_terminal(
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    done: &Completion,
+    write: StatusWriter,
+) {
+    let (status, detail, pause_window_ms) = match &done.result {
+        Ok(outcome) if outcome.suppress_status => {
+            log::info!(
+                "action_status_suppressed id={}: {}",
+                done.pending.id,
+                outcome.detail.as_deref().unwrap_or("")
+            );
+            return;
+        }
+        // `success_status` is None for snapshot (defaults to
+        // StatusKind::Ready → "ready"); migration source
+        // sets Some("complete"); migration destination sets
+        // Some("running"). See ActionOutcome.success_status.
+        Ok(outcome) => (
+            outcome
+                .success_status
+                .map_or(StatusKind::Ready, StatusKind::Custom),
+            outcome.detail.clone(),
+            outcome.pause_window_ms,
+        ),
+        Err(d) => (StatusKind::Failed, Some(d.clone()), None),
+    };
+    if let Err(e) = write(
+        client,
+        namespace,
+        pod_name,
+        &done.pending.id,
+        status,
+        detail.as_deref(),
+        pause_window_ms,
+    )
+    .await
+    {
+        log::error!("action_status_write_failed: {}", e);
     }
 }
 
@@ -2394,6 +2749,7 @@ fn namespace_action_id<'a>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_pod_state(
     client: &Client,
     namespace: &str,
@@ -2401,6 +2757,8 @@ async fn handle_pod_state(
     api_socket: &Path,
     state: &mut ActionState,
     annotations: &BTreeMap<String, String>,
+    dispatcher: &Dispatch,
+    writers: fn(Ns) -> StatusWriter,
 ) {
     let snap_active = is_namespace_active(annotations, &SNAPSHOT_KEYS);
     let mig_active = is_namespace_active(annotations, &MIGRATION_KEYS);
@@ -2421,7 +2779,7 @@ async fn handle_pod_state(
     {
         if let Some(id) = namespace_action_id(annotations, &SNAPSHOT_KEYS) {
             log::warn!("action_reject_concurrent namespace=snapshot id={}", id);
-            if let Err(e) = write_status(
+            if let Err(e) = (writers(Ns::Snapshot))(
                 client,
                 namespace,
                 pod_name,
@@ -2437,7 +2795,7 @@ async fn handle_pod_state(
         }
         if let Some(id) = namespace_action_id(annotations, &MIGRATION_KEYS) {
             log::warn!("action_reject_concurrent namespace=migration id={}", id);
-            if let Err(e) = write_migration_status(
+            if let Err(e) = (writers(Ns::Migration))(
                 client,
                 namespace,
                 pod_name,
@@ -2454,68 +2812,46 @@ async fn handle_pod_state(
         return;
     }
 
-    // Per-namespace processing. Each namespace's writer/state is
-    // independent; calling them sequentially is safe because the
-    // action loop is single-threaded per pod.
-    handle_namespace(
-        client,
-        namespace,
-        pod_name,
-        api_socket,
-        &mut state.snapshot,
-        &SNAPSHOT_KEYS,
-        annotations,
-        write_status_fn,
-    )
-    .await;
-
+    // Per-namespace processing. Each namespace's state is its own, and
+    // decisions are made here, on the loop's thread; only dispatches run
+    // elsewhere (Dispatch::start), so this sequence stays race-free.
+    //
     // Secured mode drops the ack-gate from the migration KeySet (PR 4 §6.2):
     // under mTLS the plaintext-ack escape-hatch is moot, so decide() must
     // not reject the secured flow for a missing ack.
+    //
+    // Identity (in-guest agent over vsock) is NOT part of the
+    // snapshot<->migration mutual rejection above: identity-regen fires once
+    // on a fresh cloneFromSnapshot clone (post GuestRunning) and does not
+    // overlap a snapshot/migration of the same guest in the controller-driven
+    // flow (PR 4); see clone-identity-vsock-agent.md. It does wait for one
+    // that is running (ActionState::blocking).
+    //
+    // Sandbox-exec (checked-out warm-slot workload over vsock,
+    // SwiftSandboxPool checkout) is independent of the other three.
     let mig_keys = migration_keys();
-    handle_namespace(
-        client,
-        namespace,
-        pod_name,
-        api_socket,
-        &mut state.migration,
-        &mig_keys,
-        annotations,
-        write_migration_status_fn,
-    )
-    .await;
-
-    // Identity namespace (in-guest agent over vsock). A separate namespace with
-    // its own state — it is NOT part of the snapshot<->migration mutual-rejection
-    // above: identity-regen fires once on a fresh cloneFromSnapshot clone (post
-    // GuestRunning) and does not overlap a snapshot/migration of the same guest
-    // in the controller-driven flow (PR 4). See clone-identity-vsock-agent.md.
-    handle_namespace(
-        client,
-        namespace,
-        pod_name,
-        api_socket,
-        &mut state.identity,
-        &IDENTITY_KEYS,
-        annotations,
-        write_identity_status_fn,
-    )
-    .await;
-
-    // Sandbox-exec namespace (checked-out warm-slot workload over vsock, SwiftSandboxPool
-    // checkout). Independent state; NOT part of the snapshot<->migration mutual rejection
-    // (a warm slot runs its idle keeper, not a snapshot/migration of the same guest).
-    handle_namespace(
-        client,
-        namespace,
-        pod_name,
-        api_socket,
-        &mut state.sandbox,
-        &SANDBOX_KEYS,
-        annotations,
-        write_sandbox_status_fn,
-    )
-    .await;
+    for (ns, keys) in [
+        (Ns::Snapshot, &SNAPSHOT_KEYS),
+        (Ns::Migration, &mig_keys),
+        (Ns::Identity, &IDENTITY_KEYS),
+        (Ns::Sandbox, &SANDBOX_KEYS),
+    ] {
+        let blocking = state.blocking(ns);
+        handle_namespace(
+            client,
+            namespace,
+            pod_name,
+            api_socket,
+            ns,
+            state.ns_mut(ns),
+            keys,
+            annotations,
+            writers(ns),
+            blocking.as_deref(),
+            dispatcher,
+        )
+        .await;
+    }
 }
 
 /// Type alias for the namespace-specific status writer used by
@@ -2651,12 +2987,20 @@ async fn handle_namespace(
     namespace: &str,
     pod_name: &str,
     api_socket: &Path,
+    ns: Ns,
     state: &mut NamespaceState,
     keys: &KeySet,
     annotations: &BTreeMap<String, String>,
     write: StatusWriter,
+    blocking: Option<&str>,
+    dispatcher: &Dispatch,
 ) {
-    let last = state.last_completed_id.as_deref();
+    // Once a cancel is accepted for the running action the annotations carry
+    // its id: count it as done, or it would be dispatched again every tick.
+    let last = state
+        .cancel_id
+        .as_deref()
+        .or(state.last_completed_id.as_deref());
     let in_flight = state.in_flight.as_ref().map(|p| p.id.as_str());
     match decide(annotations, keys, last, in_flight) {
         ActionDecision::Idle | ActionDecision::Idempotent { .. } => {}
@@ -2674,28 +3018,18 @@ async fn handle_namespace(
             incoming_id,
             current_id,
         } => {
-            log::warn!(
-                "action_reject_inflight namespace={} incoming={} current={}",
+            // Waits, and is decided again every tick: it starts once the
+            // running action finishes. That is what has always happened --
+            // while a dispatch held the loop, the next action was simply not
+            // seen until it returned -- and a controller treats `rejected`
+            // as a failure, so writing one would newly fail, say, a second
+            // snapshot of a guest taken mid-capture.
+            log::debug!(
+                "action_wait namespace={} incoming={} running={}",
                 keys.namespace,
                 incoming_id,
                 current_id
             );
-            if let Err(e) = write(
-                client,
-                namespace,
-                pod_name,
-                &incoming_id,
-                StatusKind::Rejected,
-                Some(&format!(
-                    "rejected: action {} already in flight",
-                    current_id
-                )),
-                None,
-            )
-            .await
-            {
-                log::error!("action_status_write_failed: {}", e);
-            }
         }
         ActionDecision::RejectAckMissing {
             incoming_id,
@@ -2727,13 +3061,48 @@ async fn handle_namespace(
             }
         }
         ActionDecision::Accept(pending) => {
+            let mut slot = Slot::Main;
+            if pending.kind == ActionKind::MigrationCancel {
+                if let Some(running) = &state.in_flight {
+                    // A cancel interrupts only the destination's receive, the
+                    // one action it is defined against: it SIGKILLs the
+                    // receiving Cloud Hypervisor. Anything else it waits for,
+                    // as before; interrupting a send would kill the source
+                    // VM mid-transfer.
+                    if running.kind != ActionKind::MigrationReceive || state.cancel_id.is_some() {
+                        log::debug!(
+                            "action_wait namespace={} cancel={} running={}",
+                            keys.namespace,
+                            pending.id,
+                            running.id
+                        );
+                        return;
+                    }
+                    slot = Slot::Cancel;
+                }
+            } else if let Some(other) = blocking {
+                log::debug!(
+                    "action_wait namespace={} incoming={} running_elsewhere={}",
+                    keys.namespace,
+                    pending.id,
+                    other
+                );
+                return;
+            }
             log::info!(
-                "action_accept namespace={} kind={:?} id={}",
+                "action_accept namespace={} kind={:?} id={} slot={:?}",
                 keys.namespace,
                 pending.kind,
-                pending.id
+                pending.id,
+                slot
             );
-            state.in_flight = Some(pending.clone());
+            match slot {
+                Slot::Main => state.in_flight = Some(pending.clone()),
+                Slot::Cancel => {
+                    state.cancel_id = Some(pending.id.clone());
+                    state.cancel_running = true;
+                }
+            }
             if let Err(e) = write(
                 client,
                 namespace,
@@ -2747,59 +3116,7 @@ async fn handle_namespace(
             {
                 log::error!("action_status_write_failed: {}", e);
             }
-            let result = dispatch(&pending, api_socket).await;
-            let (status, detail, pause_window_ms) = match result {
-                Ok(outcome) => {
-                    // `success_status` is None for snapshot (defaults to
-                    // StatusKind::Ready → "ready"); migration source
-                    // sets Some("complete"); migration destination sets
-                    // Some("running"). See ActionOutcome.success_status.
-                    let status = outcome
-                        .success_status
-                        .map_or(StatusKind::Ready, StatusKind::Custom);
-                    (status, outcome.detail, outcome.pause_window_ms)
-                }
-                Err(d) => (StatusKind::Failed, Some(d), None),
-            };
-            if let Err(e) = write(
-                client,
-                namespace,
-                pod_name,
-                &pending.id,
-                status,
-                detail.as_deref(),
-                pause_window_ms,
-            )
-            .await
-            {
-                log::error!("action_status_write_failed: {}", e);
-            }
-            // W23: signal main.rs that the terminal write for a
-            // MigrationSend action has completed (success or failure).
-            // main.rs's W22 success branch awaits this before exiting,
-            // ensuring the apiserver actually received the
-            // `migration-status: complete` annotation patch before the
-            // process exits and kills this thread mid-flight.
-            //
-            // Fired AFTER the write call returns — the whole point is
-            // ensuring the write lands. Send-failure on the channel is
-            // benign (notify_one stores at most one permit; idempotent
-            // if no awaiter is parked yet).
-            //
-            // Scoped to MigrationSend only because that's the action
-            // whose completion triggers main's exit. Other actions
-            // (snapshot, restore, MigrationReceive, MigrationCancel)
-            // don't have main.rs exiting on their completion so they
-            // don't need the signal. Defensive completeness: fire on
-            // both success ("complete") and failure paths since a
-            // future code change might add an exit-on-send-failure
-            // path; cheap to fire either way.
-            if pending.kind == ActionKind::MigrationSend {
-                migration_send_terminal_signal().notify_one();
-                log::info!("w23_terminal_write_signal_fired id={}", pending.id);
-            }
-            state.in_flight = None;
-            state.last_completed_id = Some(pending.id);
+            dispatcher.start(ns, slot, pending, api_socket);
         }
     }
 }
@@ -3980,6 +4297,53 @@ mod tests {
     // real process requires a fork+exec harness disproportionate to
     // the bug-surface of three lines of code.
 
+    fn vm_info_response(state: &str) -> Vec<u8> {
+        let body = format!(r#"{{"config":{{}},"state":"{}"}}"#, state);
+        let mut full =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+        full.extend_from_slice(body.as_bytes());
+        full
+    }
+
+    fn cancel_action() -> PendingAction {
+        PendingAction {
+            kind: ActionKind::MigrationCancel,
+            id: "cancel-1".to_string(),
+            args: serde_json::Value::Null,
+        }
+    }
+
+    // A destination whose receive has completed holds the only running copy
+    // of the guest. The cancel must leave it alone, and write no status: a
+    // `failed` for the cancel id would read as its acknowledgement.
+    #[tokio::test]
+    async fn migration_cancel_refuses_a_running_destination() {
+        let server = MultiMockServer::spawn(vec![vm_info_response("Running")]);
+        let outcome = dispatch(&cancel_action(), &server.path).await.unwrap();
+        assert!(outcome.suppress_status, "refusal must write no status");
+        assert!(
+            outcome
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("cancel refused"),
+            "got {:?}",
+            outcome.detail
+        );
+        // Only the state probe reached Cloud Hypervisor.
+        assert_eq!(server.collect().len(), 1);
+    }
+
+    // Not running yet (still receiving, or no VM): the cancel goes ahead to
+    // the kill, which here fails for want of a pid file -- the pre-existing
+    // path.
+    #[tokio::test]
+    async fn migration_cancel_proceeds_when_the_destination_is_not_running() {
+        let server = MultiMockServer::spawn(vec![vm_info_response("Paused")]);
+        let err = dispatch(&cancel_action(), &server.path).await.unwrap_err();
+        assert!(err.contains("cancel kill failed"), "got {}", err);
+    }
+
     #[tokio::test]
     async fn migration_cancel_no_pid_file_is_error() {
         // No `<runtime_dir>/ch.pid` (CH never started, or the
@@ -4127,6 +4491,26 @@ mod tests {
                 assert!(reason.contains("terminal failed"), "got {}", reason);
             }
             other => panic!("expected Skip, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn watchdog_acknowledges_a_pending_cancel() {
+        // The receiver died under a cancel: the watchdog's write must be the
+        // acknowledgement the controller matches (failed + the cancel's id +
+        // "cancelled" in the detail), since swiftletd may exit before the
+        // action loop writes its own.
+        let mut a = BTreeMap::new();
+        a.insert(MIGRATION_ACTION_KEY.to_string(), "cancel".to_string());
+        a.insert(MIGRATION_ACTION_ID_KEY.to_string(), "cxl-9".to_string());
+        a.insert(MIGRATION_STATUS_KEY.to_string(), "running".to_string());
+        a.insert(MIGRATION_STATUS_ID_KEY.to_string(), "cxl-9".to_string());
+        match decide_watchdog(&a, "signal:9") {
+            WatchdogDecision::WriteFailed { action_id, detail } => {
+                assert_eq!(action_id, "cxl-9");
+                assert!(detail.contains(CANCELLED), "detail: {}", detail);
+            }
+            other => panic!("expected WriteFailed, got {:?}", other),
         }
     }
 
@@ -4454,5 +4838,321 @@ mod tests {
             source.contains("// SECURITY-S1: guest_ip is read"),
             "D3 SECURITY-S1 marker text missing or renamed; Phase 3b grep-and-delete sweep depends on it"
         );
+    }
+}
+
+/// The action loop's scheduling: dispatches run off the loop, a cancel
+/// interrupts a receive, and everything else waits its turn. Driven through
+/// `handle_namespace` and `finish` with a fake dispatcher (gated per action
+/// id) and a status writer that records instead of patching the pod.
+#[cfg(test)]
+mod loop_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    type Gate = std::sync::mpsc::Sender<Result<ActionOutcome, String>>;
+
+    fn gates(
+    ) -> &'static Mutex<HashMap<String, std::sync::mpsc::Receiver<Result<ActionOutcome, String>>>>
+    {
+        static GATES: OnceLock<
+            Mutex<HashMap<String, std::sync::mpsc::Receiver<Result<ActionOutcome, String>>>>,
+        > = OnceLock::new();
+        GATES.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// The dispatch of action `id` blocks until the returned sender says
+    /// how it ends. Ids are unique per test, so tests do not share gates.
+    fn gate(id: &str) -> Gate {
+        let (tx, rx) = std::sync::mpsc::channel();
+        gates().lock().unwrap().insert(id.to_string(), rx);
+        tx
+    }
+
+    fn fake_dispatch(p: &PendingAction, _: &Path) -> Result<ActionOutcome, String> {
+        let rx = gates().lock().unwrap().remove(&p.id);
+        match rx {
+            Some(rx) => rx
+                .recv()
+                .unwrap_or_else(|_| Err("gate dropped".to_string())),
+            None => Ok(ActionOutcome::detail("done")),
+        }
+    }
+
+    thread_local! {
+        static WRITES: RefCell<Vec<(String, &'static str, Option<String>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn record<'a>(
+        _: &'a Client,
+        _: &'a str,
+        _: &'a str,
+        id: &'a str,
+        status: StatusKind,
+        detail: Option<&'a str>,
+        _: Option<u64>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>>
+    {
+        WRITES.with(|w| {
+            w.borrow_mut()
+                .push((id.to_string(), status.as_str(), detail.map(String::from)))
+        });
+        Box::pin(async { Ok(()) })
+    }
+
+    fn recorder(_: Ns) -> StatusWriter {
+        record
+    }
+
+    fn writes() -> Vec<(String, &'static str, Option<String>)> {
+        WRITES.with(|w| w.borrow().clone())
+    }
+
+    struct Rig {
+        client: Client,
+        dispatcher: Dispatch,
+        done: tokio::sync::mpsc::UnboundedReceiver<Completion>,
+        state: ActionState,
+        socket: PathBuf,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            WRITES.with(|w| w.borrow_mut().clear());
+            let config = kube::Config::new("http://127.0.0.1:1".parse().unwrap());
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            Rig {
+                client: Client::try_from(config).unwrap(),
+                dispatcher: Dispatch {
+                    done: tx,
+                    run: fake_dispatch,
+                },
+                done: rx,
+                state: ActionState::default(),
+                socket: PathBuf::from("/nonexistent/ch.sock"),
+            }
+        }
+
+        /// One tick for namespace `ns` against annotations naming `verb`/`id`.
+        async fn tick(&mut self, ns: Ns, verb: &str, id: &str) {
+            let keys = match ns {
+                Ns::Snapshot => SNAPSHOT_KEYS,
+                Ns::Migration => migration_keys_for(true),
+                Ns::Identity => IDENTITY_KEYS,
+                Ns::Sandbox => SANDBOX_KEYS,
+            };
+            let mut annotations = BTreeMap::new();
+            annotations.insert(keys.action_key.to_string(), verb.to_string());
+            annotations.insert(keys.action_id_key.to_string(), id.to_string());
+            let blocking = self.state.blocking(ns);
+            handle_namespace(
+                &self.client,
+                "ns",
+                "pod",
+                &self.socket,
+                ns,
+                self.state.ns_mut(ns),
+                &keys,
+                &annotations,
+                record,
+                blocking.as_deref(),
+                &self.dispatcher,
+            )
+            .await;
+        }
+
+        /// Wait for the next dispatch to finish and settle it.
+        async fn settle(&mut self) -> Completion {
+            let done = tokio::time::timeout(Duration::from_secs(5), self.done.recv())
+                .await
+                .expect("a dispatch finished")
+                .expect("channel open");
+            let seen = Completion {
+                ns: done.ns,
+                slot: done.slot,
+                pending: done.pending.clone(),
+                result: done.result.clone(),
+            };
+            finish(&self.client, "ns", "pod", &mut self.state, done, recorder).await;
+            seen
+        }
+
+        fn nothing_pending(&mut self) -> bool {
+            self.done.try_recv().is_err()
+        }
+    }
+
+    // The loop no longer waits on a dispatch: a receive that lasts the whole
+    // migration returns control at once, still recorded as in flight.
+    #[tokio::test]
+    async fn a_running_receive_does_not_hold_the_loop() {
+        let mut rig = Rig::new();
+        let _receive = gate("rcv-hold");
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            rig.tick(Ns::Migration, "receive", "rcv-hold"),
+        )
+        .await
+        .expect("tick returned while the receive runs");
+        assert_eq!(
+            rig.state
+                .migration
+                .in_flight
+                .as_ref()
+                .map(|p| p.id.as_str()),
+            Some("rcv-hold")
+        );
+        assert_eq!(
+            writes(),
+            vec![("rcv-hold".to_string(), "receive-ready", None)]
+        );
+    }
+
+    // A cancel reaches the receive it cancels. Its failed/cancelled status is
+    // the acknowledgement the controller waits for, and the interrupted
+    // receive's own failure, arriving after, does not replace it.
+    #[tokio::test]
+    async fn a_cancel_interrupts_a_receive_and_its_acknowledgement_stands() {
+        let mut rig = Rig::new();
+        let receive = gate("rcv-1");
+        let cancel = gate("cxl-1");
+        rig.tick(Ns::Migration, "receive", "rcv-1").await;
+        rig.tick(Ns::Migration, "cancel", "cxl-1").await;
+        assert!(
+            rig.state.migration.cancel_running,
+            "the cancel was dispatched mid-receive"
+        );
+
+        cancel.send(Err(CANCELLED.to_string())).unwrap();
+        assert_eq!(rig.settle().await.slot, Slot::Cancel);
+        receive
+            .send(Err("receive_migration: connection_reset".to_string()))
+            .unwrap();
+        assert_eq!(rig.settle().await.slot, Slot::Main);
+
+        assert_eq!(
+            writes(),
+            vec![
+                ("rcv-1".to_string(), "receive-ready", None),
+                ("cxl-1".to_string(), "running", None),
+                ("cxl-1".to_string(), "failed", Some(CANCELLED.to_string())),
+            ],
+            "the receive's failure must not overwrite the cancel's acknowledgement"
+        );
+        let st = &rig.state.migration;
+        assert!(st.in_flight.is_none() && st.cancel_id.is_none() && !st.cancel_running);
+        assert_eq!(st.last_completed_id.as_deref(), Some("cxl-1"));
+
+        // The cancel is not dispatched again.
+        rig.tick(Ns::Migration, "cancel", "cxl-1").await;
+        assert!(rig.nothing_pending());
+        assert_eq!(writes().len(), 3);
+    }
+
+    // The receive finished while its cancel was still deciding, and the
+    // cancel then refused (the guest is running). The receive's `running`
+    // is written, after the cancel's (suppressed) outcome, so it stands.
+    #[tokio::test]
+    async fn a_receive_that_completes_under_a_refused_cancel_reports_running() {
+        let mut rig = Rig::new();
+        let receive = gate("rcv-2");
+        let cancel = gate("cxl-2");
+        rig.tick(Ns::Migration, "receive", "rcv-2").await;
+        rig.tick(Ns::Migration, "cancel", "cxl-2").await;
+
+        receive
+            .send(Ok(ActionOutcome {
+                detail: Some("received".to_string()),
+                success_status: Some("running"),
+                ..Default::default()
+            }))
+            .unwrap();
+        rig.settle().await; // held until the cancel finishes
+        assert!(rig.state.migration.deferred.is_some());
+        cancel
+            .send(Ok(ActionOutcome {
+                detail: Some("cancel refused".to_string()),
+                suppress_status: true,
+                ..Default::default()
+            }))
+            .unwrap();
+        rig.settle().await;
+
+        let w = writes();
+        assert_eq!(
+            w.last(),
+            Some(&("rcv-2".to_string(), "running", Some("received".to_string()))),
+            "writes: {:?}",
+            w
+        );
+        assert!(!w.iter().any(|(id, s, _)| id == "cxl-2" && *s == "failed"));
+        assert!(rig.state.migration.in_flight.is_none());
+    }
+
+    // A cancel interrupts only a receive. During a send it waits, as it
+    // always has: interrupting would kill the source VM mid-transfer.
+    #[tokio::test]
+    async fn a_cancel_waits_for_a_send() {
+        let mut rig = Rig::new();
+        let send = gate("snd-1");
+        rig.tick(Ns::Migration, "send", "snd-1").await;
+        rig.tick(Ns::Migration, "cancel", "cxl-3").await;
+        assert!(rig.state.migration.cancel_id.is_none());
+        assert_eq!(writes().len(), 1, "only the send's pre-dispatch status");
+        send.send(Ok(ActionOutcome::default())).unwrap();
+        rig.settle().await;
+    }
+
+    // An action written while another runs in its namespace waits and runs
+    // next. It is not rejected: a controller fails an action on `rejected`,
+    // and before dispatches ran off the loop such an action simply ran next.
+    #[tokio::test]
+    async fn a_second_capture_waits_for_the_first_instead_of_failing() {
+        let mut rig = Rig::new();
+        let first = gate("cap-1");
+        rig.tick(Ns::Snapshot, "capture", "cap-1").await;
+        rig.tick(Ns::Snapshot, "capture", "cap-2").await;
+        assert_eq!(writes().len(), 1, "nothing written for the waiting capture");
+
+        first.send(Ok(ActionOutcome::default())).unwrap();
+        rig.settle().await;
+        rig.tick(Ns::Snapshot, "capture", "cap-2").await;
+        assert_eq!(
+            rig.state.snapshot.in_flight.as_ref().map(|p| p.id.as_str()),
+            Some("cap-2")
+        );
+        rig.settle().await;
+        assert!(!writes().iter().any(|(_, s, _)| *s == "rejected"));
+    }
+
+    // Snapshot, migration and identity act on the same VM, so one waits
+    // while another runs; a sandbox exec does not.
+    #[tokio::test]
+    async fn namespaces_on_the_same_vm_wait_for_each_other() {
+        let mut rig = Rig::new();
+        let receive = gate("rcv-4");
+        rig.tick(Ns::Migration, "receive", "rcv-4").await;
+        rig.tick(Ns::Snapshot, "capture", "cap-4").await;
+        rig.tick(Ns::Identity, "regenerate", "idn-4").await;
+        assert!(rig.state.snapshot.in_flight.is_none());
+        assert!(rig.state.identity.in_flight.is_none());
+
+        rig.tick(Ns::Sandbox, "run", "run-4").await;
+        assert!(
+            rig.state.sandbox.in_flight.is_some(),
+            "a sandbox exec is independent"
+        );
+
+        receive.send(Ok(ActionOutcome::default())).unwrap();
+        rig.settle().await;
+        rig.settle().await;
+        rig.tick(Ns::Snapshot, "capture", "cap-4").await;
+        assert!(
+            rig.state.snapshot.in_flight.is_some(),
+            "the capture runs once the receive is done"
+        );
+        rig.settle().await;
     }
 }

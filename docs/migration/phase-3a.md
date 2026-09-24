@@ -169,11 +169,20 @@ ack timed out (30s budget)"`.
   already-migrated guest).
 
 The W12 (action-loop blocking) and W20 (fallback fires
-because D1 doesn't dispatch in time) limitations both resolve
-in Phase 3b when `swift-ch-client` is refactored to async I/O
-(cancellable network calls). At that point, D1 will fire
-within sub-seconds and `spec.cancelRequested` cancellation
-will land in "few seconds" range.
+because D1 doesn't dispatch in time) limitations were expected
+to resolve with an async `swift-ch-client`. They were resolved
+instead by running each dispatch on a thread of its own: the
+action loop keeps polling while a receive runs, D1 is dispatched
+within a poll interval (2s) of the cancel annotation, and
+`spec.cancelRequested` lands in the few-seconds range. The 30s
+force-delete remains the backstop for an unreachable swiftletd.
+
+D1 refuses to kill a destination whose VM is already `Running`:
+the receive has completed and that VM is the only copy of the
+guest (the source CH exits after a successful send). Until the
+dispatch change the refusal did not exist, and a cancel written
+mid-transfer was processed only after the receive returned, so a
+migration that completed anyway had its destination killed.
 
 To cancel:
 
