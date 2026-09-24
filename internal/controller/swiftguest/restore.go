@@ -137,6 +137,13 @@ const (
 	RestoreModeClone   = "clone"
 )
 
+// PodRoleLabel names what a pod of a guest is for; BuildRestorePod sets it to
+// PodRoleRestoreReceive on the launcher that loads a snapshot.
+const (
+	PodRoleLabel          = "swift.kubeswift.io/role"
+	PodRoleRestoreReceive = "restore-receive"
+)
+
 // In-pod paths for restore mounts. Kept here (not in constants.go)
 // because they're specific to the Tier B path and have no other
 // callers.
@@ -389,7 +396,7 @@ func BuildRestorePod(
 			Annotations: podAnnotations(guest),
 			Labels: map[string]string{
 				"swift.kubeswift.io/guest": guest.Name,
-				"swift.kubeswift.io/role":  "restore-receive",
+				PodRoleLabel:               PodRoleRestoreReceive,
 			},
 		},
 		Spec: corev1.PodSpec{

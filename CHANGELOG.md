@@ -70,6 +70,22 @@ unaffected: they keep the directory they were captured into.
 
 ### Fixed
 
+- **An in-place restore of a running guest reported Ready and booted the guest
+  cold.** The restore force-deletes the guest's launcher and waits for
+  GuestRunning, but the guest still carried the replaced launcher's status,
+  which said GuestRunning=True: the VM the snapshot left paused. The restore
+  went straight to resume, and the replaced launcher's swiftletd, still alive
+  for a moment and polling its pod by name, found the resume action on the new
+  pod, resumed its own paused VM and reported it done. The restore was Ready
+  in seconds and removed its annotations, so the new launcher read an intent
+  with no restore in it and booted the guest from its disk, memory lost. The
+  restore now waits for its own launcher: a restore-receive pod created after
+  the restore started, which the guest's `status.podRef` names; it sends the
+  resume action to that pod's UID only. swiftletd exits when its pod has been
+  replaced by another of the same name, rather than act on it. Found by the
+  kind e2e (local-roundtrip), which failed on it once the restore's address
+  was fixed.
+
 - **A guest restored in place reported no address** (a regression from #641
   in v0.14.0). A restore resumes the guest's memory, network configuration
   included, so the guest never asks DHCP for an address and the launcher's
