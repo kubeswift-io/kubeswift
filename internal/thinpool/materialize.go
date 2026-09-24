@@ -406,6 +406,19 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 
 	// A new guest: this is the only case that needs the base, and it must be
 	// completely written before anything is snapshotted from it.
+	//
+	// Hold the base's lock until the snapshot exists. Eviction takes that lock
+	// without waiting and skips a base someone holds; without it, a build of
+	// another image could evict this base between the readiness check and
+	// create_snap, and the guest's first attempt failed on a base that had
+	// just been deleted.
+	if baseKey != "" {
+		unlock, err := x.lockKey(baseKey)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+	}
 	ready, err := x.Reg.BaseReady(baseKey)
 	if err != nil {
 		return "", err

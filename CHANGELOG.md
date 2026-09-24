@@ -273,6 +273,13 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A shared base could be evicted while a guest was being created from
+  it.** Creating a shared-base guest's disk checked that the base was ready
+  and then snapshotted it, without holding the base's lock. A build of
+  another image could evict the base in between, failing the guest's first
+  attempt. The base's lock is now held until the snapshot exists, and
+  eviction skips a locked base.
+
 - **QEMU vCPU pinning was skipped for the large GPU guests it exists for.**
   QEMU answers QMP only after hugepage preallocation and VFIO DMA mapping,
   which for a guest with hundreds of GiB of RAM takes minutes. swiftletd
