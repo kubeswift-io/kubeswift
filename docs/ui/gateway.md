@@ -194,9 +194,21 @@ In `insecure` mode these work with no token; in `token` mode add
   gets a clean permission denial. In `token` mode the member's RBAC gates who
   can act.
 - **Console** — a raw WebSocket at `/console?cluster=&namespace=&name=`
-  exec-bridges the guest's serial socket. It execs `socat` in the launcher
-  pod, so the acting subject needs `create` on `pods/exec` — **powerful**
-  (arbitrary in-pod commands); grant it only to console users.
+  exec-bridges the guest's serial socket: `socat` in the launcher pod. The
+  user needs `create` on `swiftguests/console` for that guest (the Console
+  capability; `kubeswift-vm-reader` on an edge), **not** `pods/exec`: the
+  launcher is privileged, so exec in it is root on its node, and a user who
+  held it could run anything there. The gateway asks the member with a
+  SelfSubjectAccessReview as the user, then resolves the launcher
+  (`status.podRef`, labelled as that guest's) and execs the bridge as its own
+  member credential. That credential holds `pods/exec`
+  (`kubeswift-gateway-console`), and the `kubeswift-gateway-exec-gate`
+  ValidatingAdmissionPolicy admits its exec only in a launcher container and
+  only for the bridge commands (`internal/gateway/exec_bridge.go`). Both are
+  rendered on an edge member and on a hub that federates itself, only where
+  the API server serves ValidatingAdmissionPolicy; elsewhere the grant is not
+  made and the console refuses. A member set up by hand needs section 4 of
+  `config/samples/gateway/member-rbac.yaml`.
 
   A browser cannot set a WebSocket `Authorization` header, so the bearer travels
   as a **subprotocol** — `Sec-WebSocket-Protocol:
@@ -219,7 +231,10 @@ In `insecure` mode these work with no token; in `token` mode add
   `/sandbox-exec?…&cmd=/bin/sh` (an interactive shell — pod-exec → the in-guest
   vsock agent → the `internal/guestagent` frame protocol; the browser sends
   binary stdin frames and a text `{"resize":{cols,rows}}` control). Same
-  subprotocol-bearer + `pods/exec` RBAC posture as the console.
+  subprotocol bearer, and the same split as the console: the user needs `get`
+  on `swiftsandboxes/log` or `create` on `swiftsandboxes/exec`, and the
+  gateway's credential runs the bridge in the sandbox's launcher (its own, or
+  the warm-pool slot it claimed).
 
 **Cross-origin upgrades.** The three planes above police `Origin` against
 `--cors-allow-origin`. Same-origin is always allowed, and a request with no
@@ -233,7 +248,8 @@ operator happens to visit and a root console on one of their VMs.
   D5's "serial-on-a-port"). The gateway is a multi-cluster hub: it reaches a
   member's launcher pod *through that member's API server* (the impersonating
   client), never by dialing the pod's IP directly across cluster networks. The
-  exec-pipe already rides that path (the `pods/exec` subresource). A
+  exec-pipe already rides that path (the `pods/exec` subresource, as the
+  gateway's credential, held to the bridge by admission policy). A
   swiftletd-serial-on-a-TCP-port transport would still have to tunnel through
   the API server (the `pods/portforward` subresource) for a cross-cluster hub —
   a lateral move (swap `exec`+`socat` for `portforward`, a different RBAC verb,

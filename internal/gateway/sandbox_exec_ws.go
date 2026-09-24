@@ -10,9 +10,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 
@@ -33,16 +30,18 @@ const agentVsockPort = 1024
 // and agent FrameStdout/Stderr → browser, FrameExit → close. Same raw-WS +
 // impersonating-client posture as the console.
 type SandboxExecHandler struct {
-	pool consoleProvider
-	auth Authenticator
-	up   websocket.Upgrader
+	pool   consoleProvider
+	auth   Authenticator
+	review accessReviewer
+	up     websocket.Upgrader
 }
 
 func NewSandboxExecHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *SandboxExecHandler {
 	return &SandboxExecHandler{
-		pool: pool,
-		auth: auth,
-		up:   wsUpgrader(origin.Allow),
+		pool:   pool,
+		auth:   auth,
+		review: ssarReviewer{pool: pool},
+		up:     wsUpgrader(origin.Allow),
 	}
 }
 
@@ -79,42 +78,18 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dyn, err := h.pool.DynamicFor(cluster, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	// The user is authorized for the sandbox shell, not for pods/exec, and the
+	// exec runs as the gateway's member credential (see exec_bridge.go).
+	cfg, clientset, target, ok := sandboxLauncher(r.Context(), w, h.pool, h.review, cluster, id, namespace, name, "create", "exec")
+	if !ok {
 		return
 	}
-	sb, err := dyn.Resource(sandboxGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	target := name
-	if podRef, _, _ := unstructured.NestedString(sb.Object, "status", "podRef"); podRef != "" {
-		target = podRef
-	}
-
-	cfg, err := h.pool.RestConfigFor(cluster, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	vsockSock := fmt.Sprintf("/var/lib/kubeswift/run/%s-%s/vsock.sock", namespace, target)
-	waitAndSocat := fmt.Sprintf(
-		"for i in $(seq 1 10); do test -S %q && break; sleep 1; done; exec socat -t10 - UNIX-CONNECT:%s",
-		vsockSock, vsockSock)
 
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(target).Namespace(namespace).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: launcherContainer,
-			Command:   []string{"sh", "-c", waitAndSocat},
+			Command:   []string{"sh", "-c", sandboxShellBridge(namespace, target)},
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,

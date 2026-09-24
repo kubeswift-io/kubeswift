@@ -1,12 +1,12 @@
 package gateway
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,29 +18,34 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// consoleProvider is the subset of ClientPool the console plane needs: the
-// impersonating dynamic client (to resolve + authorize the guest's pod) and the
-// raw REST config (client-go's remotecommand exec needs it).
+// consoleProvider is the subset of ClientPool the console planes need: the
+// user's REST config (to ask the member whether the user may open the
+// console), and the member credential's dynamic client and REST config (to
+// resolve the launcher and exec the bridge in it; client-go's remotecommand
+// needs the raw config).
 type consoleProvider interface {
 	DynamicFor(cluster string, id Identity) (dynamic.Interface, error)
 	RestConfigFor(cluster string, id Identity) (*rest.Config, error)
 }
 
-// ConsoleHandler bridges a guest's serial console to a browser WebSocket. It is
-// the D5 bootstrap path: exec `socat ... UNIX-CONNECT:<serial.sock>` inside the
-// launcher pod (as the impersonated user) and pump bytes both ways. The
-// swiftletd serial-on-a-port transport is the later upgrade.
+// ConsoleHandler bridges a guest's serial console to a browser WebSocket: it
+// execs `socat ... UNIX-CONNECT:<serial.sock>` in the launcher pod and pumps
+// bytes both ways. The user needs create on swiftguests/console; the exec runs
+// as the gateway's member credential, which the kubeswift-gateway-exec-gate
+// policy holds to the bridge command (see exec_bridge.go).
 type ConsoleHandler struct {
-	pool consoleProvider
-	auth Authenticator
-	up   websocket.Upgrader
+	pool   consoleProvider
+	auth   Authenticator
+	review accessReviewer
+	up     websocket.Upgrader
 }
 
 func NewConsoleHandler(pool consoleProvider, auth Authenticator, origin *OriginPolicy) *ConsoleHandler {
 	return &ConsoleHandler{
-		pool: pool,
-		auth: auth,
-		up:   wsUpgrader(origin.Allow),
+		pool:   pool,
+		auth:   auth,
+		review: ssarReviewer{pool: pool},
+		up:     wsUpgrader(origin.Allow),
 	}
 }
 
@@ -69,37 +74,35 @@ func (h *ConsoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the guest's current launcher pod (authz via the impersonating client).
-	dyn, err := h.pool.DynamicFor(cluster, id)
+	// The user is authorized for the console, not for pods/exec, and the exec
+	// runs as the gateway's member credential (see exec_bridge.go).
+	cfg, err := h.pool.RestConfigFor(cluster, Identity{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	pods, err := dyn.Resource(podGVR).Namespace(namespace).
-		List(r.Context(), metav1.ListOptions{LabelSelector: guestPodLabel + "=" + name})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	podName := ""
-	for i := range pods.Items {
-		phase, _, _ := unstructured.NestedString(pods.Items[i].Object, "status", "phase")
-		if phase == "Running" { // prefer a Running pod; fall back to the first
-			podName = pods.Items[i].GetName()
-			break
-		}
-		if podName == "" {
-			podName = pods.Items[i].GetName()
-		}
-	}
-	if podName == "" {
-		http.Error(w, "no launcher pod for guest (is it running?)", http.StatusConflict)
+	if !authorizeUser(r.Context(), w, h.review, cluster, id, authorizationv1.ResourceAttributes{
+		Namespace: namespace, Name: name, Verb: "create",
+		Group: swiftGuestGVR.Group, Resource: swiftGuestGVR.Resource, Subresource: "console",
+	}) {
 		return
 	}
 
-	cfg, err := h.pool.RestConfigFor(cluster, id)
+	// The guest's launcher is the pod its status names: the controller writes
+	// it, and follows a live migration's <guest>-mig-<uid> rename.
+	dyn, err := h.pool.DynamicFor(cluster, Identity{})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	guest, err := dyn.Resource(swiftGuestGVR).Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	podName, _, _ := unstructured.NestedString(guest.Object, "status", "podRef", "name")
+	if podName == "" {
+		http.Error(w, "no launcher pod for guest (is it running?)", http.StatusConflict)
 		return
 	}
 	clientset, err := kubernetes.NewForConfig(cfg)
@@ -107,19 +110,16 @@ func (h *ConsoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// The serial socket is keyed by the GUEST id (ns-name), stable across the
-	// <guest>-mig-<uid> pod rename. Mirrors swiftctl console exactly.
-	serialSocket := fmt.Sprintf("/var/lib/kubeswift/run/%s-%s/serial.sock", namespace, name)
-	bridge := fmt.Sprintf("for i in $(seq 1 15); do test -S %q && break; sleep 1; done; "+
-		"test -S %q || { echo 'serial socket not found at %s'; exit 1; }; "+
-		"exec socat -,raw,echo=0 UNIX-CONNECT:%s", serialSocket, serialSocket, serialSocket, serialSocket)
+	if _, err := launcherPodOf(r.Context(), clientset, namespace, podName, guestPodLabel, name); err != nil {
+		http.Error(w, "no launcher pod for guest: "+err.Error(), http.StatusConflict)
+		return
+	}
 
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(podName).Namespace(namespace).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: launcherContainer, // the launcher pod is multi-container; name the swiftletd one
-			Command:   []string{"sh", "-c", bridge},
+			Command:   []string{"sh", "-c", consoleBridge(namespace, name)},
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    false,

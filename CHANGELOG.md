@@ -19,6 +19,33 @@ an existing schedule whose template sets one must drop it before its next
 edit; the controller already ignores it. Snapshots already captured are
 unaffected: they keep the directory they were captured into.
 
+**The UI's console, sandbox shell and sandbox logs no longer use the user's
+`pods/exec`.** The user needs `create swiftguests/console`, `create
+swiftsandboxes/exec` or `get swiftsandboxes/log` instead; the gateway runs the
+exec as its own member credential. On an edge member and a self-federating hub
+the chart updates `kubeswift-vm-reader` and adds the credential's grant and its
+`kubeswift-gateway-exec-gate` policy (Kubernetes 1.30+; without
+ValidatingAdmissionPolicy the grant is not made and the console refuses). A
+member set up by hand from `config/samples/gateway/member-rbac.yaml` needs the
+changed section 2 and the new section 4. Roles created in the UI's Access
+editor keep `pods/exec` until updated, and their console refuses until then;
+as a cluster admin on each member (it grants the new rules):
+
+```sh
+for r in $(kubectl get clusterroles -l kubeswift.io/role=true -o name); do
+  kubectl get "$r" -o json | jq '
+    if any(.rules[]; .resources == ["pods/exec"]) then
+      .rules = [.rules[] | select(.resources != ["pods/exec"])] + [
+        {apiGroups: ["swift.kubeswift.io"], resources: ["swiftguests/console"], verbs: ["create"]},
+        {apiGroups: ["sandbox.kubeswift.io"], resources: ["swiftsandboxes/exec"], verbs: ["create"]},
+        {apiGroups: ["sandbox.kubeswift.io"], resources: ["swiftsandboxes/log"], verbs: ["get"]}]
+    else . end' | kubectl replace -f -
+done
+```
+
+`swiftctl console` and `swiftctl sandbox exec` are unchanged: they exec with
+the caller's own credentials.
+
 **The controller's `/metrics` is HTTPS and authorized by default.**
 `controllerManager.metrics.secure` (and the binary's `--metrics-secure`) now
 defaults to `true`. A scraper needs `https`, a ServiceAccount token, and a
@@ -32,6 +59,24 @@ kubeswift-metrics-reader --clusterrole=kubeswift-metrics-reader
 setting it had.
 
 ### Security
+
+- **The Console capability was root on every node running a VM (G9).** The
+  UI's console, sandbox shell and sandbox log view exec'd in the launcher as
+  the user, so the capability, and the edge `kubeswift-vm-reader` role, granted
+  `create pods/exec`. The launcher is privileged: a user could exec anything in
+  it, not only the console bridge, and a role bound cluster-wide reached every
+  pod in the cluster, kube-system included. The gateway now asks the member
+  whether the user may open the console (`create swiftguests/console`) or the
+  sandbox (`create swiftsandboxes/exec`, `get swiftsandboxes/log`), then
+  resolves the launcher from the object's `status.podRef`, labelled as its
+  own, and execs the bridge as its member credential. That credential holds
+  `pods/exec`, and the `kubeswift-gateway-exec-gate` ValidatingAdmissionPolicy
+  admits its exec only in a launcher container and only for the four bridge
+  commands, whose only variable part is a runtime directory named after DNS
+  names. Verified against a 1.35 API server: the gateway's commands pass, and
+  an appended command, a path out of the runtime directory, a command
+  substitution, another shell, another container and the default container are
+  refused.
 
 - **The controller served its metrics to anyone who could reach it (G15).**
   `/metrics` on port 8080 was plain HTTP with no authentication, and the

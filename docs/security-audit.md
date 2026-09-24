@@ -599,11 +599,24 @@ Practically:
 - **Still open: other routes to the same power.** The built-in `edit` and
   `admin` roles also grant `impersonate serviceaccounts` (act as the launcher
   ServiceAccount) and `create pods/exec`, which reaches the privileged launcher
-  *directly*; the VM console and `swiftctl ssh` use exactly that. Neither is
-  gated: admission policy cannot see impersonation, and gating exec would take
-  the console with it. **Treat `edit`/`admin` in a namespace that runs
-  launchers as node-admin**, or grant a narrower role there that omits these
-  verbs.
+  *directly*; `swiftctl console` and `swiftctl ssh` use exactly that. Neither
+  is gated: admission policy cannot see impersonation, and a policy on exec
+  cannot tell a launcher pod from any other. **Treat `edit`/`admin` in a
+  namespace that runs launchers as node-admin**, or grant a narrower role there
+  that omits these verbs.
+- **The UI's console no longer needs `pods/exec` (G9).** The gateway's console,
+  sandbox shell and sandbox log view used to exec in the launcher as the user,
+  so the Console capability and the edge `kubeswift-vm-reader` role granted
+  `create pods/exec`: root on every node running a launcher, and, bound
+  cluster-wide, exec in every pod of the cluster. The user now needs `create
+  swiftguests/console`, `create swiftsandboxes/exec` or `get
+  swiftsandboxes/log`, which the gateway checks with a SelfSubjectAccessReview
+  as the user. The gateway then execs the bridge as its own member credential,
+  and `kubeswift-gateway-exec-gate` admits that credential's exec only in a
+  launcher container and only for the four bridge commands. Verified against a
+  1.35 API server: the gateway's commands pass; an appended command, a path
+  out of the runtime directory, a command substitution, another shell, another
+  container or the default container are refused; other users are unaffected.
 - **Removing the grant** — move swiftletd's status reporting off pod annotations
   onto a channel that needs no write access to its own pod. Would close it at the
   source rather than by admission; a rework of the status path in both the
