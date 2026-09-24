@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 )
 
@@ -263,7 +264,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			Namespace: snap.Namespace,
 			Labels: map[string]string{
 				"snapshot.kubeswift.io/role":           "hostpath-cleanup",
-				"snapshot.kubeswift.io/swift-snapshot": snap.Name,
+				"snapshot.kubeswift.io/swift-snapshot": names.LabelValue(snap.Name),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(snap, swiftSnapshotGVK),
@@ -479,7 +480,7 @@ func splitOCIReference(ref string) (ociArtifact, bool) {
 }
 
 func ociDeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-oci-delete"
+	return names.JobName(snap.Name, "-oci-delete")
 }
 
 // buildOCIDeleteJob runs snapshot-oras --mode=delete once per artifact (one
@@ -530,7 +531,7 @@ func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs 
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-oci-delete",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{

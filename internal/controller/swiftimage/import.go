@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 const (
@@ -173,7 +174,7 @@ func (r *SwiftImageReconciler) StartImport(ctx context.Context, img *imagev1alph
 // importHTTP creates a PVC and Job to fetch the URL.
 func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
 	pvcName := importPVCNamePrefix + img.Name
-	jobName := importJobNamePrefix + img.Name
+	jobName := names.JobName(importJobNamePrefix+img.Name, "")
 
 	// PVC size: from spec.rootDisk.size if set, else default 10Gi
 	storageReq := resource.MustParse("10Gi")
@@ -274,7 +275,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 		return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: "snapshot-oras image not configured for oci source"}, nil
 	}
 	pvcName := importPVCNamePrefix + img.Name
-	jobName := importJobNamePrefix + img.Name
+	jobName := names.JobName(importJobNamePrefix+img.Name, "")
 
 	storageReq := resource.MustParse("10Gi")
 	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
@@ -425,7 +426,7 @@ func (r *SwiftImageReconciler) importPVCClone(ctx context.Context, img *imagev1a
 
 // CheckImportStatus checks if an in-progress import (Job) has completed.
 func (r *SwiftImageReconciler) CheckImportStatus(ctx context.Context, img *imagev1alpha1.SwiftImage) (imagev1alpha1.SwiftImagePhase, *imagev1alpha1.PVCObjectReference, string, error) {
-	jobName := importJobNamePrefix + img.Name
+	jobName := names.JobName(importJobNamePrefix+img.Name, "")
 	var job batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: img.Namespace, Name: jobName}, &job); err != nil {
 		if errors.IsNotFound(err) {

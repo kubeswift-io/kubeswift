@@ -26,6 +26,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -94,7 +95,7 @@ func ociSigningRequested(snap *snapshotv1alpha1.SwiftSnapshot) bool {
 
 // ociPushJobName is the deterministic name of the push Job.
 func ociPushJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-oci-push"
+	return names.JobName(snap.Name, "-oci-push")
 }
 
 // ensureOCIPushJob creates the node-pinned push Job (idempotent) owned by the
@@ -306,7 +307,7 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-oci-push",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{

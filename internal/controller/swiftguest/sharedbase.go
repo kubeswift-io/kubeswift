@@ -17,6 +17,7 @@ import (
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
@@ -90,7 +91,7 @@ func poolSize() uint64 {
 
 // MaterialiseJobName is the deterministic name of a guest's materialise Job.
 func MaterialiseJobName(guest *swiftv1alpha1.SwiftGuest) string {
-	return guest.Name + materialiseJobSuffix
+	return names.JobName(guest.Name, materialiseJobSuffix)
 }
 
 // ensureSharedBaseDisk drives a shared-base guest's root disk to existence and

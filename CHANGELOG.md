@@ -230,6 +230,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Long SwiftSnapshot, SwiftRestore, SwiftGuest or SwiftImage names broke
+  their Jobs.** Derived Job names (`<snapshot>-s3-upload`, `-oci-push`,
+  `-oci-disk-<disk>`, `<restore>-oci-download`, `swiftguest-rootclone-<guest>`,
+  `<guest>-datafill-<disk>` and others) and name-bearing labels could exceed
+  the 63-character limit Kubernetes puts on Job names and label values, so
+  every Job create failed. A snapshot then failed later with a misleading
+  "capture deadline exceeded", and a restore sat Pending. Names over the
+  limit are now shortened with a hash of the full name, which keeps them
+  deterministic and distinct. Names that already fit are unchanged.
+
 - **An OCI snapshot could go Ready without the digest every restore needs.**
   The manifest digest of a pushed memory or disk artifact was read,
   best-effort, from the push pod's termination message. When that wasn't

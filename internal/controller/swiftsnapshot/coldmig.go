@@ -22,6 +22,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
@@ -48,7 +49,12 @@ func ociDiskReference(snap *snapshotv1alpha1.SwiftSnapshot) string {
 }
 
 func diskChunkJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-oci-disk"
+	return names.JobName(snap.Name, "-oci-disk")
+}
+
+// dataDiskChunkJobName is the chunk Job of a captured data disk.
+func dataDiskChunkJobName(snap *snapshotv1alpha1.SwiftSnapshot, disk string) string {
+	return names.JobName(snap.Name, "-oci-disk-"+disk)
 }
 
 // rootDiskIsBlock reports whether the guest's root PVC is Block-mode (raw device)
@@ -128,7 +134,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 		for _, dd := range status.GuestSpec.DataDisks {
 			targets = append(targets, chunkTarget{
 				dataName: dd.Name,
-				jobName:  diskChunkJobName(snap) + "-" + dd.Name,
+				jobName:  dataDiskChunkJobName(snap, dd.Name),
 				tag:      ociDiskTag(snap) + "-" + dd.Name,
 				pvcName:  dd.PVCName,
 				block:    dd.Block,
@@ -378,7 +384,7 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-oci-disk",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{

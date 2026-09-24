@@ -22,6 +22,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
@@ -99,7 +100,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 	}
 
 	// 2. Ensure the node-pinned download Job that materializes the disk from oci.
-	jobName := cloneName + "-oci-disk-dl"
+	jobName := names.JobName(cloneName, "-oci-disk-dl")
 	var job batchv1.Job
 	jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 	if apierrors.IsNotFound(jerr) {
@@ -300,7 +301,7 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 			return perr
 		}
 
-		jobName := pvcName + "-oci-dl"
+		jobName := names.JobName(pvcName, "-oci-dl")
 		var job batchv1.Job
 		jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 		if apierrors.IsNotFound(jerr) {
@@ -333,7 +334,7 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 			return err
 		}
 		var job batchv1.Job
-		if err := r.Get(ctx, client.ObjectKey{Name: pvcName + "-oci-dl", Namespace: guest.Namespace}, &job); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: names.JobName(pvcName, "-oci-dl"), Namespace: guest.Namespace}, &job); err != nil {
 			return err
 		}
 		done := false

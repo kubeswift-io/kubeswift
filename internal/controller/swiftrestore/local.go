@@ -46,6 +46,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -397,7 +398,7 @@ func (r *SwiftRestoreReconciler) materializeRestoreTarget(
 		// controller would mark its own work as a TargetConflict.
 		var existing swiftv1alpha1.SwiftGuest
 		err := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existing)
-		if err == nil && existing.Labels[swiftRestoreOwnerLabel] != restore.Name {
+		if err == nil && existing.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
 			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 			if !restore.Spec.TargetGuest.OverwriteExisting {
 				setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
@@ -749,7 +750,7 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 			Namespace:   restore.Namespace,
 			Annotations: annos,
 			Labels: map[string]string{
-				swiftRestoreOwnerLabel: restore.Name,
+				swiftRestoreOwnerLabel: names.LabelValue(restore.Name),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(restore, swiftRestoreGVK),

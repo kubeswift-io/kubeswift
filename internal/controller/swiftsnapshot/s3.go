@@ -23,6 +23,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -145,7 +146,7 @@ func s3KeyPrefix(snap *snapshotv1alpha1.SwiftSnapshot) string {
 
 // s3UploadJobName is the deterministic name of the upload Job.
 func s3UploadJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-s3-upload"
+	return names.JobName(snap.Name, "-s3-upload")
 }
 
 // s3Location is the s3:// URI of this snapshot's prefix, recorded in status.
@@ -155,7 +156,7 @@ func s3Location(snap *snapshotv1alpha1.SwiftSnapshot) string {
 
 // s3DeleteJobName is the deterministic name of the object-cleanup Job.
 func s3DeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-s3-delete"
+	return names.JobName(snap.Name, "-s3-delete")
 }
 
 // s3JobArgs builds the common snapshot-s3 flags for a given mode (the S3
@@ -225,7 +226,7 @@ func buildDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string) *batchv1
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-s3-delete",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -315,7 +316,7 @@ func buildUploadJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode str
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-s3-upload",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{

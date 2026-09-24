@@ -17,6 +17,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
@@ -448,7 +449,7 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 // snapshot's backend. Returns (job, failReason): a non-empty failReason is
 // terminal (the required transfer image is not configured).
 func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.SwiftSnapshot, node, name string) (*batchv1.Job, string) {
-	labels := map[string]string{"kubeswift.io/snapshot": snap.Name}
+	labels := map[string]string{"kubeswift.io/snapshot": names.LabelValue(snap.Name)}
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
 		if r.SnapshotORASImage == "" {
 			return nil, "snapshot-oras image not configured (set KUBESWIFT_SNAPSHOT_ORAS_IMAGE)"

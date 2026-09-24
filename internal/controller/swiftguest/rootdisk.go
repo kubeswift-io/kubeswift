@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
@@ -44,7 +45,7 @@ func RootDiskCloneName(guestName string) string {
 
 // CloneJobName returns the deterministic clone Job name for a guest.
 func CloneJobName(guestName string) string {
-	return CloneJobPrefix + guestName
+	return names.JobName(CloneJobPrefix+guestName, "")
 }
 
 // RootDiskCloneResult is the outcome of a successful EnsureRootDiskClone

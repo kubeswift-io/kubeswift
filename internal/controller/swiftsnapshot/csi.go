@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 // VolumeSnapshotNamePrefix is prepended to the SwiftSnapshot name to derive
@@ -81,7 +82,7 @@ func (r *SwiftSnapshotReconciler) createVolumeSnapshot(
 			Name:      vsName,
 			Namespace: snap.Namespace,
 			Labels: map[string]string{
-				"snapshot.kubeswift.io/swift-snapshot": snap.Name,
+				"snapshot.kubeswift.io/swift-snapshot": names.LabelValue(snap.Name),
 				"snapshot.kubeswift.io/role":           "swift-snapshot",
 			},
 			OwnerReferences: []metav1.OwnerReference{

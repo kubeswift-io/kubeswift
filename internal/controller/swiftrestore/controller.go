@@ -30,6 +30,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 // SwiftRestoreReconciler reconciles SwiftRestore resources.
@@ -272,7 +273,7 @@ func (r *SwiftRestoreReconciler) handlePending(
 	getErr := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existingTarget)
 	// A target this restore created itself (a re-run whose status write lagged)
 	// is not a conflict.
-	if getErr == nil && existingTarget.Labels[swiftRestoreOwnerLabel] != restore.Name {
+	if getErr == nil && existingTarget.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 		if !restore.Spec.TargetGuest.OverwriteExisting {
 			setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,

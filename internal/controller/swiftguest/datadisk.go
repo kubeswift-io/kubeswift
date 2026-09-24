@@ -12,12 +12,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
 // blankFillJobName is the fill Job for a Filesystem-mode blank data disk.
 func blankFillJobName(guestName, diskName string) string {
-	return guestName + "-datafill-" + diskName
+	return names.JobName(guestName, "-datafill-"+diskName)
 }
 
 // EnsureBlankDataDisks provisions and gates the guest-owned PVCs backing the
