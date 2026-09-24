@@ -336,15 +336,32 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 	if id, known, err := x.Reg.GuestID(guestKey); err != nil {
 		return "", err
 	} else if known {
-		// The guest has a disk. Reactivate it; never re-snapshot.
-		//
-		// If the pool no longer holds this id, this fails, and that is the
-		// right outcome: the guest's data is gone, and quietly handing it a
-		// new empty disk would make that look like a clean first boot.
-		if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
-			return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
+		created, err := x.Reg.GuestCreated(guestKey)
+		if err != nil {
+			return "", err
 		}
-		return x.M.DevicePath(devName), nil
+		if created {
+			// The guest has a disk. Reactivate it; never re-snapshot.
+			//
+			// If the pool no longer holds this id, this fails, and that is the
+			// right outcome: the guest's data is gone, and quietly handing it a
+			// new empty disk would make that look like a clean first boot.
+			if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
+				return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
+			}
+			return x.M.DevicePath(devName), nil
+		}
+		// Allocated but never created: its create_snap failed, or the process
+		// died before recording success. The guest never received a disk, so
+		// it holds no data — create one now instead of stranding it on a
+		// reactivation that can never succeed. Drop the allocation and take a
+		// FRESH id below; never activate whatever may sit at the old one: if
+		// the registry is behind the pool, that id could be another guest's
+		// disk. (Should create_snap in fact have completed just before a crash,
+		// its pristine snapshot of the base is left unnamed in the pool.)
+		if err := x.Reg.Forget(guestKey); err != nil {
+			return "", err
+		}
 	}
 
 	// A new guest: this is the only case that needs the base, and it must be
@@ -379,9 +396,17 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 		}
 		err = x.M.SnapshotBase(ctx, baseID, id, devName, sectors)
 		if err == nil {
+			if err := x.Reg.MarkGuestCreated(guestKey); err != nil {
+				return "", err
+			}
 			return x.M.DevicePath(devName), nil
 		}
 		if !isFileExists(err) {
+			// The snapshot was not created: release the allocation so the
+			// guest is not recorded against a device that does not exist.
+			if ferr := x.Reg.Forget(guestKey); ferr != nil {
+				return "", fmt.Errorf("%w (and forgetting the failed allocation: %v)", err, ferr)
+			}
 			return "", err
 		}
 		if err := x.Reg.Forget(guestKey); err != nil {

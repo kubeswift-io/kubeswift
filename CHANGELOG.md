@@ -148,6 +148,20 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A shared-base guest could be left permanently unable to boot.** The node
+  recorded a guest's thin device id before creating its snapshot, so a snapshot
+  that failed (for example, its base evicted by another build at the same
+  moment) or a materialise Job killed between the two left the guest recorded
+  against a device that did not exist. Every later attempt took the reactivate
+  path and failed with "thin device N does not exist in pool" until the guest was
+  deleted. Guests now have the same two-phase record bases already had: a guest is
+  marked created only after its snapshot exists. An allocated-but-never-created
+  guest never received a disk, so it is created afresh (with a new id — never by
+  activating the old one, which could belong to another guest if the registry is
+  behind the pool); a created guest whose device is gone still fails loudly, as
+  before. Registries written by earlier versions are read with every guest
+  treated as created.
+
 - **Deleting an S3 snapshot could delete other snapshots' data.** The delete
   Job listed objects by the snapshot's key prefix with no trailing `/`, and an S3
   prefix list is a plain string match, so deleting snapshot `db` also removed
