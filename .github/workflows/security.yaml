@@ -73,6 +73,8 @@ jobs:
           # Pinned; bumped by Dependabot is not possible for a raw download, so
           # this is reviewed by hand when the scanner is updated.
           GITLEAKS_VERSION: '8.30.0'
+          # Update with the version (the release's checksums.txt).
+          GITLEAKS_SHA256: '79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e'
         run: |
           set -euo pipefail
           # The gitleaks ACTION is commercially licensed for organization-owned
@@ -82,5 +84,6 @@ jobs:
           # from a workflow that would otherwise hold a token.
           curl -sSfL -o /tmp/gitleaks.tar.gz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks git . --redact --verbose --config .gitleaks.toml

@@ -12,6 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 func ociImageResource(oci imagev1alpha1.OCIImageSource) *imagev1alpha1.SwiftImage {
@@ -67,8 +68,8 @@ func TestStartImport_OCISourceCreatesJobWithPuller(t *testing.T) {
 		}
 	}
 	// The main container reuses the ubuntu importer for the resize/patch tail.
-	if len(spec.Containers) != 1 || spec.Containers[0].Image != "ubuntu:22.04" {
-		t.Errorf("want a single ubuntu:22.04 main container; got %+v", spec.Containers)
+	if len(spec.Containers) != 1 || spec.Containers[0].Image != swiftguest.CloneJobImage() {
+		t.Errorf("want a single launcher-image main container; got %+v", spec.Containers)
 	}
 	// Both containers share the import PVC at /data.
 	if len(spec.Volumes) < 1 || spec.Volumes[0].PersistentVolumeClaim == nil ||

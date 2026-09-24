@@ -8,6 +8,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **The privileged image-import Job ran whatever a mutable tag served.** The
+  import, OCI-import and measure Jobs used `ubuntu:22.04` and `apt-get
+  install`ed curl, qemu-utils and util-linux on every run, as root and (for
+  Linux images) privileged, pulling from whatever the tag and the package
+  mirror served that day. They now run the launcher image, which already
+  carries those tools and is on every node that runs guests, the same way
+  the root-disk clone Job does. CI's raw tool downloads (kind, trivy,
+  kubeconform, kube-linter, gitleaks) are now checked against pinned sha256
+  sums.
+
 - **Gateway console and sandbox-exec sessions left no audit record.** The
   raw WebSocket routes bypass the Connect audit interceptor, so opening a
   console into a (privileged) launcher, or running a command in a sandbox,

@@ -122,6 +122,9 @@ jobs:
       - name: Install kind
         run: |
           curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          # Pinned: a tool that builds the test cluster runs with the runner's
+          # privileges. Bumping the version means updating this checksum.
+          echo "b89aada5a39d620da3fcd16435b7f28d858927dd53f92cbac77686b0588b600d  kind" | sha256sum -c -
           chmod +x kind
           sudo mv kind /usr/local/bin/
 

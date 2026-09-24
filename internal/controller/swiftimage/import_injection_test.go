@@ -85,3 +85,23 @@ func TestImportScript_GRUBMountRefusesSymlinkEscape(t *testing.T) {
 		t.Errorf("windows import must not loop-mount: %s", win)
 	}
 }
+
+// The privileged import Job runs the launcher image, which already carries
+// its tools. It used to apt-get them into a mutable ubuntu tag on every
+// import: whatever the tag and the mirror served that day, run as root.
+func TestImportScripts_InstallNothingAtRuntime(t *testing.T) {
+	for _, format := range []string{"qcow2", "raw"} {
+		for _, osType := range []string{"linux", "windows"} {
+			for name, script := range map[string]string{
+				"http": importScript(format, osType),
+				"oci":  importScriptOCI(format, osType),
+			} {
+				for _, banned := range []string{"apt-get", "apk add", "yum ", "dnf "} {
+					if strings.Contains(script, banned) {
+						t.Errorf("%s %s/%s script installs packages (%q)", name, format, osType, banned)
+					}
+				}
+			}
+		}
+	}
+}

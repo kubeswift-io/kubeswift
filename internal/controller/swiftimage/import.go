@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
@@ -62,9 +63,9 @@ func importScript(sourceFormat, osType string) string {
 	output := base + "/" + importOutputFile
 	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o \"$SRC\" \"$%s\"\n%sqemu-img convert -f qcow2 -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, importSourceURLEnv, qcow2SafetyCheck(`"$SRC"`), grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=%q\ncurl -fsSL -o \"$SRC\" \"$%s\"\n%sqemu-img convert -f qcow2 -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, importSourceURLEnv, qcow2SafetyCheck(`"$SRC"`), grubPatch)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" \"$%s\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, importSourceURLEnv, grubPatch)
+	return fmt.Sprintf("set -e\nOUTPUT=%q\ncurl -fsSL -o \"$OUTPUT\" \"$%s\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, importSourceURLEnv, grubPatch)
 }
 
 // grubPatchBlock is the shell that loop-mounts a Linux disk image and injects
@@ -143,9 +144,9 @@ func importScriptOCI(sourceFormat, osType string) string {
 	output := importVolumeMountPath + "/" + importOutputFile
 	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq qemu-utils util-linux >/dev/null\n%sqemu-img convert -f qcow2 -O raw \"$OUTPUT\" \"$OUTPUT.tmp\"\nmv \"$OUTPUT.tmp\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, qcow2SafetyCheck(`"$OUTPUT"`), grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\n%sqemu-img convert -f qcow2 -O raw \"$OUTPUT\" \"$OUTPUT.tmp\"\nmv \"$OUTPUT.tmp\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, qcow2SafetyCheck(`"$OUTPUT"`), grubPatch)
 	}
-	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq util-linux >/dev/null%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
+	return fmt.Sprintf("set -e\nOUTPUT=%q%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
 }
 
 // ImportResult holds the outcome of an import attempt.
@@ -213,7 +214,7 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 	// The import Job needs privileged ONLY for the loop-mount the Linux GRUB
 	// serial-console patch performs. Windows skips that patch (no GRUB), so its
 	// import runs unprivileged (Design Principle: no privileged unless required).
-	// RunAsUser 0 is still needed either way for apt-get in the ubuntu image.
+	// RunAsUser 0 is still needed either way to write the root-owned PVC.
 	privileged := img.Spec.OSType != imagev1alpha1.OSTypeWindows
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: img.Namespace},
@@ -223,12 +224,18 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					AutomountServiceAccountToken: ptr.To(false),
 					SecurityContext: &corev1.PodSecurityContext{
-						// Root is needed for apt-get (and, on Linux, the loop-mount).
+						// Root writes the root-owned PVC (and, on Linux, loop-mounts).
 						RunAsUser: ptr.To(int64(0)),
 					},
+					ImagePullSecrets: swiftguest.LauncherImagePullSecrets(),
 					Containers: []corev1.Container{{
-						Name:    "import",
-						Image:   "ubuntu:22.04",
+						Name: "import",
+						// The launcher image, which carries curl, qemu-img and
+						// util-linux. This used to be a mutable ubuntu:22.04 tag
+						// that apt-get installed tools into on every import: a
+						// privileged container running whatever the tag and the
+						// mirror served that day.
+						Image:   swiftguest.CloneJobImage(),
 						Command: []string{"sh", "-c", script},
 						// The user-supplied URL rides as an env var, never spliced
 						// into the script text.
@@ -375,10 +382,11 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					AutomountServiceAccountToken: ptr.To(false),
 					SecurityContext: &corev1.PodSecurityContext{
-						// Root: the init container writes into the (root-owned) PVC
-						// mount; the main container runs apt-get (+ Linux loop-mount).
+						// Root: both containers write into the (root-owned) PVC
+						// mount, and on Linux the main container loop-mounts.
 						RunAsUser: ptr.To(int64(0)),
 					},
+					ImagePullSecrets: swiftguest.LauncherImagePullSecrets(),
 					InitContainers: []corev1.Container{{
 						Name:         "pull",
 						Image:        r.SnapshotORASImage,
@@ -394,8 +402,10 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 						},
 					}},
 					Containers: []corev1.Container{{
-						Name:    "import",
-						Image:   "ubuntu:22.04",
+						Name: "import",
+						// The launcher image (qemu-img, util-linux); see the http
+						// import Job.
+						Image:   swiftguest.CloneJobImage(),
 						Command: []string{"sh", "-c", script},
 						SecurityContext: &corev1.SecurityContext{
 							Privileged: ptr.To(privileged),

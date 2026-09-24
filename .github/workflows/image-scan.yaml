@@ -173,10 +173,13 @@ jobs:
       - name: Install trivy
         env:
           TRIVY_VERSION: '0.73.0'
+          # Update with the version: this workflow holds security-events: write.
+          TRIVY_SHA256: '2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b'
         run: |
           set -euo pipefail
           curl -sSfL -o /tmp/trivy.tar.gz \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
           /tmp/trivy --version
 
