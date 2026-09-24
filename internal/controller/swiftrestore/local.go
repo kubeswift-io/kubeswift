@@ -441,7 +441,17 @@ func (r *SwiftRestoreReconciler) handleRestoringLocal(
 		}
 		return false, 0, "", err
 	}
-	if !isGuestRunning(&target) {
+	// GuestRunning must come from the launcher this restore started. Restored
+	// in place, the guest still carries its old launcher's status until the
+	// new one reports, and that said GuestRunning=True: the VM the snapshot
+	// left paused. Taking it for the restore's resumed that old VM (its
+	// swiftletd, dying, still polls the pod by name) and finished the restore
+	// before the new launcher had read its intent.
+	_, ours, err := r.restoreLauncher(ctx, restore, status, &target)
+	if err != nil {
+		return false, 0, "", err
+	}
+	if !ours || !isGuestRunning(&target) {
 		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoring,
 			"waiting for target SwiftGuest "+target.Name+" launcher pod to bind CH socket")
 		return false, 5 * time.Second, "", nil
@@ -479,13 +489,23 @@ func (r *SwiftRestoreReconciler) handleResumingLocal(
 	restore *snapshotv1alpha1.SwiftRestore,
 	status *snapshotv1alpha1.SwiftRestoreStatus,
 ) (bool, time.Duration, error) {
-	pod, err := r.findLauncherPod(ctx, restore.Namespace, restore.Spec.TargetGuest.Name)
+	var target swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &target); err != nil {
+		if apierrors.IsNotFound(err) {
+			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
+				"target SwiftGuest "+restore.Spec.TargetGuest.Name+" disappeared during Resuming")
+			return true, 0, nil
+		}
+		return false, 0, err
+	}
+	pod, ours, err := r.restoreLauncher(ctx, restore, status, &target)
 	if err != nil {
 		return false, 0, err
 	}
-	if pod == nil {
+	if pod == nil || !ours {
 		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming,
-			"launcher pod for "+restore.Spec.TargetGuest.Name+" not yet present")
+			"restore launcher pod for "+restore.Spec.TargetGuest.Name+" not yet present")
 		return false, 5 * time.Second, nil
 	}
 	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
@@ -813,6 +833,37 @@ func (r *SwiftRestoreReconciler) unstampGuestRestoreAnnotations(
 // findLauncherPod returns the launcher pod for a SwiftGuest, or nil
 // if not yet present. Convention: launcher pod name == SwiftGuest
 // name (one launcher per guest).
+// restoreLauncher returns the target guest's launcher pod if it is the one this
+// restore started, and whether the guest's status now describes it.
+//
+// A restore replaces the target's launcher with a restore-receive pod of the
+// same name. Until that pod is scheduled and mapped, the name can still
+// resolve to the pod it replaced (deleted with no grace period, but in the
+// cache a moment longer), and the guest's status is still the old pod's. So
+// the pod counts only if it is a restore-receive launcher, is not being
+// deleted, and was created after the restore started, which rules out a
+// restore-receive pod an earlier restore left. The status describes it once
+// status.podRef names its UID: the guest controller clears the last pod's run
+// state in the same write, so a GuestRunning read alongside is this pod's.
+func (r *SwiftRestoreReconciler) restoreLauncher(
+	ctx context.Context,
+	restore *snapshotv1alpha1.SwiftRestore,
+	status *snapshotv1alpha1.SwiftRestoreStatus,
+	target *swiftv1alpha1.SwiftGuest,
+) (*corev1.Pod, bool, error) {
+	pod, err := r.findLauncherPod(ctx, restore.Namespace, target.Name)
+	if err != nil || pod == nil {
+		return nil, false, err
+	}
+	if pod.DeletionTimestamp != nil ||
+		pod.Labels[swiftguestctrl.PodRoleLabel] != swiftguestctrl.PodRoleRestoreReceive ||
+		(status.StartedAt != nil && pod.CreationTimestamp.Before(status.StartedAt)) {
+		return nil, false, nil
+	}
+	ref := target.Status.PodRef
+	return pod, ref != nil && ref.UID != "" && ref.UID == pod.UID, nil
+}
+
 func (r *SwiftRestoreReconciler) findLauncherPod(ctx context.Context, namespace, guestName string) (*corev1.Pod, error) {
 	var pod corev1.Pod
 	err := r.Get(ctx, client.ObjectKey{Name: guestName, Namespace: namespace}, &pod)
@@ -833,15 +884,19 @@ func (r *SwiftRestoreReconciler) patchPodActionAnnotations(
 	pod *corev1.Pod,
 	verb, actionID, argsJSON string,
 ) error {
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"annotations": map[string]any{
-				annoAction:     verb,
-				annoActionID:   actionID,
-				annoActionArgs: argsJSON,
-			},
+	meta := map[string]any{
+		"annotations": map[string]any{
+			annoAction:     verb,
+			annoActionID:   actionID,
+			annoActionArgs: argsJSON,
 		},
 	}
+	// The UID pins the patch to this pod: another pod created under the same
+	// name refuses it (a UID cannot change) instead of receiving the action.
+	if pod.UID != "" {
+		meta["uid"] = string(pod.UID)
+	}
+	patch := map[string]any{"metadata": meta}
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err

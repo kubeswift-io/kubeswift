@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
@@ -146,6 +147,21 @@ func inPlaceRestoring(t *testing.T, resume bool, pod *corev1.Pod) (*SwiftRestore
 	}
 	objs := []client.Object{snap, restore, guest}
 	if pod != nil {
+		// The restore's own launcher, as the guest controller builds it and
+		// the guest's status then names it.
+		if pod.Labels == nil {
+			pod.Labels = map[string]string{}
+		}
+		pod.Labels[swiftguestctrl.PodRoleLabel] = swiftguestctrl.PodRoleRestoreReceive
+		if pod.UID == "" {
+			pod.UID = "restore-launcher"
+		}
+		// Created after the restore started (the fake client stamps no
+		// creation time; the restore's start is its first reconcile).
+		if pod.CreationTimestamp.IsZero() {
+			pod.CreationTimestamp = metav1.NewTime(time.Now().Add(time.Hour))
+		}
+		guest.Status.PodRef = &corev1.ObjectReference{Name: pod.Name, UID: pod.UID}
 		objs = append(objs, pod)
 	}
 	return newReconciler(t, objs...)
@@ -276,4 +292,106 @@ func TestLocal_InPlaceRestoreRefusesAGuestRelaunchedSinceTheCapture(t *testing.T
 			}
 		})
 	}
+}
+
+// Restored in place, the guest keeps its old launcher's status until the new
+// launcher reports, and that says GuestRunning=True: the VM the snapshot left
+// paused. The restore must not take it for its own launcher's: it used to
+// resume the old VM (its dying swiftletd still polls the pod by name) and
+// report Ready in seconds, while the new launcher, its intent rewritten
+// without the restore, booted the guest cold. The e2e found the sentinel
+// gone.
+func TestLocal_InPlaceRestoreWaitsForItsOwnLauncher(t *testing.T) {
+	ctx := context.Background()
+	started := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
+	for _, tc := range []struct {
+		name string
+		pod  corev1.Pod
+		ref  types.UID // the pod the guest's status describes
+	}{
+		{
+			name: "status still describes the replaced launcher",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "new",
+				Labels:            map[string]string{swiftguestctrl.PodRoleLabel: swiftguestctrl.PodRoleRestoreReceive},
+				CreationTimestamp: metav1.NewTime(started.Add(time.Second))}},
+			ref: "old",
+		},
+		{
+			name: "the name still resolves to the replaced launcher",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "old",
+				CreationTimestamp: metav1.NewTime(started.Add(-time.Hour))}},
+			ref: "old",
+		},
+		{
+			name: "an earlier restore's launcher",
+			pod: corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "earlier",
+				Labels:            map[string]string{swiftguestctrl.PodRoleLabel: swiftguestctrl.PodRoleRestoreReceive},
+				CreationTimestamp: metav1.NewTime(started.Add(-time.Hour))}},
+			ref: "earlier",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := tc.pod
+			r, c := inPlaceRestoring(t, true, nil)
+			if err := c.Create(ctx, &pod); err != nil {
+				t.Fatal(err)
+			}
+			var g swiftv1alpha1.SwiftGuest
+			if err := c.Get(ctx, client.ObjectKey{Name: "g1", Namespace: "default"}, &g); err != nil {
+				t.Fatal(err)
+			}
+			g.Status.PodRef = &corev1.ObjectReference{Name: "g1", UID: tc.ref}
+			if err := c.Update(ctx, &g); err != nil {
+				t.Fatal(err)
+			}
+			var restore snapshotv1alpha1.SwiftRestore
+			if err := c.Get(ctx, client.ObjectKey{Name: "r1", Namespace: "default"}, &restore); err != nil {
+				t.Fatal(err)
+			}
+			restore.Status.StartedAt = &started
+			if err := c.Status().Update(ctx, &restore); err != nil {
+				t.Fatal(err)
+			}
+
+			for i := 0; i < 3; i++ {
+				reconcile(t, r, "r1", "default")
+			}
+			if got := get(t, c, "r1", "default"); got.Status.Phase != snapshotv1alpha1.SwiftRestorePhaseRestoring {
+				t.Fatalf("phase = %s, want Restoring until its own launcher reports", got.Status.Phase)
+			}
+			var p corev1.Pod
+			if err := c.Get(ctx, client.ObjectKey{Name: "g1", Namespace: "default"}, &p); err != nil {
+				t.Fatal(err)
+			}
+			if v := p.Annotations[annoActionID]; v != "" {
+				t.Errorf("a resume action (%s) was sent to a launcher this restore did not start", v)
+			}
+		})
+	}
+
+	// Once the guest's status names the restore's launcher, the restore
+	// resumes that launcher.
+	t.Run("its own launcher reported", func(t *testing.T) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "g1", Namespace: "default", UID: "new",
+			CreationTimestamp: metav1.NewTime(started.Add(time.Second))}}
+		r, c := inPlaceRestoring(t, true, pod)
+		var restore snapshotv1alpha1.SwiftRestore
+		if err := c.Get(ctx, client.ObjectKey{Name: "r1", Namespace: "default"}, &restore); err != nil {
+			t.Fatal(err)
+		}
+		restore.Status.StartedAt = &started
+		if err := c.Status().Update(ctx, &restore); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			reconcile(t, r, "r1", "default")
+		}
+		var p corev1.Pod
+		if err := c.Get(ctx, client.ObjectKey{Name: "g1", Namespace: "default"}, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Annotations[annoAction] != verbResume {
+			t.Errorf("the restore's own launcher got no resume action: %v", p.Annotations)
+		}
+	})
 }

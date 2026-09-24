@@ -2432,6 +2432,7 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
         run: dispatch_on_own_runtime,
     };
     log::info!("action_loop_started pod={}/{}", namespace, pod_name);
+    let mut own_uid: Option<String> = None;
     loop {
         // Dispatches run on their own threads (Dispatch::start), so the loop
         // keeps polling while one runs: a cancel reaches the receive it
@@ -2443,6 +2444,23 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
         }
         match api.get(&pod_name).await {
             Ok(pod) => {
+                if is_successor(&mut own_uid, pod.metadata.uid.as_deref()) {
+                    // This launcher's pod was deleted and another created under
+                    // its name: an in-place restore force-deletes the launcher
+                    // and starts a restore-receive pod, and this process lives
+                    // on until the kubelet kills it. The successor's actions
+                    // are not ours. Acting on them resumed this, the replaced,
+                    // VM and reported it done on the successor, which then
+                    // booted cold.
+                    log::error!(
+                        "pod_replaced pod={}/{} uid={} successor_uid={}: exiting",
+                        namespace,
+                        pod_name,
+                        own_uid.as_deref().unwrap_or(""),
+                        pod.metadata.uid.as_deref().unwrap_or("")
+                    );
+                    std::process::exit(0);
+                }
                 let annotations = pod.metadata.annotations.clone().unwrap_or_default();
                 let annotations: BTreeMap<String, String> = annotations.into_iter().collect();
                 handle_pod_state(
@@ -2470,6 +2488,21 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
                 finish(&client, &namespace, &pod_name, &mut state, done, writer_for).await;
             }
         }
+    }
+}
+
+/// Whether the pod just read is another pod under this launcher's name. The
+/// first UID read is this launcher's own: the loop starts with the process,
+/// long before anything could replace its pod. A pod's UID never changes, so
+/// a different one is a different pod.
+fn is_successor(own: &mut Option<String>, seen: Option<&str>) -> bool {
+    match (own.as_deref(), seen) {
+        (_, None) => false,
+        (None, Some(uid)) => {
+            *own = Some(uid.to_string());
+            false
+        }
+        (Some(o), Some(uid)) => o != uid,
     }
 }
 
@@ -4847,6 +4880,23 @@ mod tests {
 /// id) and a status writer that records instead of patching the pod.
 #[cfg(test)]
 mod loop_tests {
+    use super::is_successor;
+
+    // A launcher replaced by another pod of the same name must not act on it.
+    #[test]
+    fn successor_is_another_uid_under_the_same_name() {
+        let mut own = None;
+        assert!(
+            !is_successor(&mut own, Some("a")),
+            "the first pod read is our own"
+        );
+        assert_eq!(own.as_deref(), Some("a"));
+        assert!(!is_successor(&mut own, Some("a")));
+        assert!(!is_successor(&mut own, None), "no UID is no evidence");
+        assert!(is_successor(&mut own, Some("b")));
+        assert_eq!(own.as_deref(), Some("a"), "our own UID is kept");
+    }
+
     use super::*;
     use std::cell::RefCell;
     use std::collections::HashMap;
