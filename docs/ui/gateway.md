@@ -87,7 +87,7 @@ spec:
   server: https://edge-1.example.com:6443       # optional if the kubeconfig has it
   credentialSecretRef:
     name: edge-1-kubeconfig
-  prometheusEndpoint: http://prometheus.monitoring.svc:9090   # optional (see below)
+  prometheusEndpoint: https://prometheus.edge-1.example.com  # needed for telemetry (see below)
   displayName: Edge 1 (lab)
 ```
 
@@ -102,14 +102,19 @@ so joining is install-then-copy-one-manifest, with no hand-crafted admin
 kubeconfig. The token is never printed by Helm (NOTES prints the `kubectl`
 extraction). Bind your IdP groups with `--set 'federation.edge.operatorGroups={grp}'`.
 
-`prometheusEndpoint` is **optional**: leave it empty and the gateway discovers an
-in-cluster Prometheus on the member (the kube-prometheus-stack `prometheus-operated`
-Service or any Service labeled `app.kubernetes.io/name=prometheus`, scanned in
+`prometheusEndpoint` is **required for telemetry on a remote member**: set it to
+a URL the gateway can reach from the hub (an ingress, or a query frontend such as
+Thanos). For the **local** cluster (`spec.local: true`) it is optional: leave it
+empty and the gateway discovers an in-cluster Prometheus (the
+kube-prometheus-stack `prometheus-operated` Service or any Service labeled
+`app.kubernetes.io/name=prometheus`, scanned in
 `gateway.prometheusDiscovery.namespaces`) and publishes the result to
-`status.prometheusEndpoint` + the `PrometheusEndpointResolved` condition. An
-explicit `spec.prometheusEndpoint` always wins. Discovery needs the member
-credential to read Services (`config/samples/gateway/member-rbac.yaml` grants it);
-set `gateway.prometheusDiscovery.namespaces: []` to disable it.
+`status.prometheusEndpoint` + the `PrometheusEndpointResolved` condition.
+Discovery is local-only because it yields an in-cluster Service address, which
+the hub cannot reach on another cluster. From the hub it either failed or
+reached the hub's own Prometheus, so a remote member's charts showed the hub's
+metrics. An explicit `spec.prometheusEndpoint` always wins. Set
+`gateway.prometheusDiscovery.namespaces: []` to disable discovery.
 
 The gateway picks the member up immediately, probes it, and writes status:
 

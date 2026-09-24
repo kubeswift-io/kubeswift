@@ -196,7 +196,7 @@ func (p *ClientPool) upsert(ctx context.Context, obj any) {
 		if verr != nil {
 			reachMsg = verr.Error()
 		}
-		endpoint, promReason, promMsg := p.resolvePrometheus(ctx, cfg, cl.Spec.PrometheusEndpoint, reachable)
+		endpoint, promReason, promMsg := p.resolvePrometheus(ctx, cfg, cl.Spec.PrometheusEndpoint, reachable, cl.Spec.Local)
 		p.mu.Lock()
 		if m := p.members[cl.Name]; m != nil {
 			m.prometheus = endpoint
@@ -212,9 +212,20 @@ func (p *ClientPool) upsert(ctx context.Context, obj any) {
 // an in-cluster Prometheus (reason Discovered); else empty (reason NotFound or
 // DiscoveryError). It never guesses silently — the reason + message are surfaced
 // on the Cluster's PrometheusEndpointResolved condition (Principle #6).
-func (p *ClientPool) resolvePrometheus(ctx context.Context, cfg *rest.Config, specEndpoint string, reachable bool) (endpoint, reason, msg string) {
+//
+// Discovery runs only for the local cluster (spec.local). It yields an
+// in-cluster Service address (<name>.<ns>.svc), which only the cluster the
+// gateway itself runs in can reach. For a remote member that address either
+// failed from the hub or -- worse -- resolved to the HUB's own Prometheus, and
+// the member's charts silently showed the hub's metrics.
+func (p *ClientPool) resolvePrometheus(ctx context.Context, cfg *rest.Config, specEndpoint string, reachable, local bool) (endpoint, reason, msg string) {
 	if specEndpoint != "" {
 		return specEndpoint, prometheusReasonExplicit, "operator-set spec.prometheusEndpoint"
+	}
+	if !local {
+		return "", prometheusReasonNotFound, "spec.prometheusEndpoint is empty, and discovery only serves the local cluster: " +
+			"it finds an in-cluster Service address the hub cannot reach on a remote member. " +
+			"Set spec.prometheusEndpoint to a URL the gateway can reach (an ingress, or a query frontend such as Thanos)"
 	}
 	if !reachable {
 		return "", prometheusReasonNotFound, "member unreachable; Prometheus discovery skipped"

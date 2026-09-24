@@ -273,6 +273,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A remote member's VM charts could show the hub's metrics.** Prometheus
+  auto-discovery produced an in-cluster Service address
+  (`prometheus-operated.monitoring.svc`) for every member. The hub cannot
+  reach that address on a remote cluster. The query either failed, or the
+  name resolved to the hub's own Prometheus, whose data was then charted as
+  the member's. Discovery now serves only the local cluster (`spec.local`).
+  A remote member needs `spec.prometheusEndpoint` set to a URL the hub can
+  reach, and its `PrometheusEndpointResolved` condition says so. The docs'
+  and sample's `*.svc` example for a remote member is replaced.
+
 - **A shared base could be evicted while a guest was being created from
   it.** Creating a shared-base guest's disk checked that the base was ready
   and then snapshotted it, without holding the base's lock. A build of

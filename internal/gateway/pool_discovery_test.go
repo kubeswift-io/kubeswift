@@ -111,14 +111,25 @@ func TestPrometheusServicePort(t *testing.T) {
 // to NotFound. These paths never touch cfg, so a nil cfg is safe.
 func TestResolvePrometheus_Precedence(t *testing.T) {
 	pEnabled := &ClientPool{discoveryNamespaces: []string{"monitoring"}}
-	if ep, reason, _ := pEnabled.resolvePrometheus(context.Background(), nil, "http://explicit:9090", true); ep != "http://explicit:9090" || reason != prometheusReasonExplicit {
+	if ep, reason, _ := pEnabled.resolvePrometheus(context.Background(), nil, "http://explicit:9090", true, false); ep != "http://explicit:9090" || reason != prometheusReasonExplicit {
 		t.Fatalf("explicit must win: ep=%q reason=%q", ep, reason)
 	}
-	if ep, reason, _ := pEnabled.resolvePrometheus(context.Background(), nil, "", false); ep != "" || reason != prometheusReasonNotFound {
+	if ep, reason, _ := pEnabled.resolvePrometheus(context.Background(), nil, "", false, true); ep != "" || reason != prometheusReasonNotFound {
 		t.Fatalf("unreachable must be NotFound (no discovery): ep=%q reason=%q", ep, reason)
 	}
 	pDisabled := &ClientPool{discoveryNamespaces: nil}
-	if ep, reason, _ := pDisabled.resolvePrometheus(context.Background(), nil, "", true); ep != "" || reason != prometheusReasonNotFound {
+	if ep, reason, _ := pDisabled.resolvePrometheus(context.Background(), nil, "", true, true); ep != "" || reason != prometheusReasonNotFound {
 		t.Fatalf("discovery-disabled must be NotFound: ep=%q reason=%q", ep, reason)
+	}
+}
+
+// A remote member is never given a discovered address: it is an in-cluster
+// Service name that, queried from the hub, fails or reaches the hub's own
+// Prometheus. The member must name an endpoint the hub can reach.
+func TestResolvePrometheus_DiscoveryIsLocalOnly(t *testing.T) {
+	p := &ClientPool{discoveryNamespaces: []string{"monitoring"}}
+	ep, reason, msg := p.resolvePrometheus(context.Background(), nil, "", true, false)
+	if ep != "" || reason != prometheusReasonNotFound || !strings.Contains(msg, "spec.prometheusEndpoint") {
+		t.Fatalf("remote member: ep=%q reason=%q msg=%q; want no endpoint and a pointer to spec.prometheusEndpoint", ep, reason, msg)
 	}
 }
