@@ -582,8 +582,21 @@ Practically:
 
 - **Admission control — SHIPPED in v0.13.8.** `kubeswift-launcher-sa-gate`
   rejects any Pod naming a launcher ServiceAccount unless the KubeSwift
-  controller created it (see above). This is what closes the escalation. The
-  paragraphs above describe the posture where it is disabled.
+  controller created it (see above). This closes the *pod* route to the
+  launcher credential. The paragraphs above describe the posture where it is
+  disabled.
+- **Legacy token Secrets — closed.** `kubeswift-launcher-sa-token-secret-gate`
+  rejects a `kubernetes.io/service-account-token` Secret for a launcher
+  ServiceAccount unless the controller creates it. Without it, anyone who can
+  create Secrets in the namespace could have the token controller mint a
+  long-lived launcher token with no pod involved.
+- **Still open: other routes to the same power.** The built-in `edit` and
+  `admin` roles also grant `create serviceaccounts/token` (TokenRequest for the
+  launcher ServiceAccount), `impersonate serviceaccounts` (act as it), and
+  `create pods/exec`, which reaches the privileged launcher *directly*; the VM
+  console and `swiftctl ssh` use exactly that. None of these is gated. **Treat
+  `edit`/`admin` in a namespace that runs launchers as node-admin**, or grant
+  a narrower role there that omits these verbs.
 - **Removing the grant** — move swiftletd's status reporting off pod annotations
   onto a channel that needs no write access to its own pod. Would close it at the
   source rather than by admission; a rework of the status path in both the

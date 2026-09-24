@@ -125,10 +125,30 @@ func TestOriginPolicy_NoOriginIsANonBrowserClient(t *testing.T) {
 	}
 }
 
-func TestOriginPolicy_SameOriginAlwaysAllowed(t *testing.T) {
-	p := NewOriginPolicy("https://ui.example.com", "insecure")
+func TestOriginPolicy_SameOriginAllowedWithAuth(t *testing.T) {
+	p := NewOriginPolicy("https://ui.example.com", "oidc")
 	if !p.Allow(originReq("https://gw.example.com", "gw.example.com")) {
 		t.Error("same-origin upgrade rejected")
+	}
+}
+
+// With no authentication, a DNS-rebinding page is "same-origin" by the
+// Origin-host == Host test: its own name, re-pointed at the gateway, is both.
+// A DNS-name origin must be listed; an IP literal or localhost cannot be
+// produced by rebinding and still passes.
+func TestOriginPolicy_InsecureModeSameOriginResistsDNSRebinding(t *testing.T) {
+	p := NewOriginPolicy("https://ui.example.com", "insecure")
+	if p.Allow(originReq("http://attacker.example:8080", "attacker.example:8080")) {
+		t.Error("a DNS-rebinding page passed the same-origin test under auth-mode=insecure")
+	}
+	for _, host := range []string{"localhost:8080", "127.0.0.1:8080", "10.0.0.5:8080", "[::1]:8080"} {
+		if !p.Allow(originReq("http://"+host, host)) {
+			t.Errorf("same-origin %s rejected", host)
+		}
+	}
+	listed := NewOriginPolicy("https://gw.example.com", "insecure")
+	if !listed.Allow(originReq("https://gw.example.com", "gw.example.com")) {
+		t.Error("an explicitly listed name was rejected")
 	}
 }
 

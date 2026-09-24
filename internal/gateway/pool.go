@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -114,14 +116,56 @@ func (p *ClientPool) Start(ctx context.Context) error {
 		return err
 	}
 	if _, err := inf.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { p.upsert(ctx, obj) },
-		UpdateFunc: func(_, obj any) { p.upsert(ctx, obj) },
+		AddFunc: func(obj any) { p.upsert(ctx, obj) },
+		UpdateFunc: func(oldObj, obj any) {
+			if statusOnlyUpdate(oldObj, obj) {
+				return
+			}
+			p.upsert(ctx, obj)
+		},
 		DeleteFunc: func(obj any) { p.remove(obj) },
 	}); err != nil {
 		return err
 	}
-	<-ctx.Done()
-	return nil
+	// Re-probe every member on a timer: status-only updates no longer do it
+	// (see statusOnlyUpdate), and the informer's resync is hours apart.
+	ticker := time.NewTicker(memberProbeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			var clusters fleetv1alpha1.ClusterList
+			if err := p.cache.List(ctx, &clusters, client.InNamespace(p.namespace)); err != nil {
+				continue
+			}
+			for i := range clusters.Items {
+				p.upsert(ctx, &clusters.Items[i])
+			}
+		}
+	}
+}
+
+// memberProbeInterval is how often every member's reachability, version and
+// telemetry endpoint are re-checked.
+const memberProbeInterval = 2 * time.Minute
+
+// statusOnlyUpdate reports whether an update changed nothing but the
+// Cluster's status. Every probe writes status (lastConnected at least), so
+// re-probing on those updates looped: a member more than about a second away
+// never saw two probes land in the same second, and was probed, and its
+// status rewritten, about once a second forever. A spec or metadata change
+// still re-probes, and so does an informer resync (resourceVersion unchanged),
+// which is what re-checks a member's health.
+func statusOnlyUpdate(oldObj, obj any) bool {
+	o, n := extractCluster(oldObj), extractCluster(obj)
+	if o == nil || n == nil || o.ResourceVersion == n.ResourceVersion {
+		return false
+	}
+	return o.Generation == n.Generation &&
+		equality.Semantic.DeepEqual(o.Labels, n.Labels) &&
+		equality.Semantic.DeepEqual(o.Annotations, n.Annotations)
 }
 
 func (p *ClientPool) upsert(ctx context.Context, obj any) {
@@ -152,7 +196,7 @@ func (p *ClientPool) upsert(ctx context.Context, obj any) {
 		if verr != nil {
 			reachMsg = verr.Error()
 		}
-		endpoint, promReason, promMsg := p.resolvePrometheus(ctx, cfg, cl.Spec.PrometheusEndpoint, reachable)
+		endpoint, promReason, promMsg := p.resolvePrometheus(ctx, cfg, cl.Spec.PrometheusEndpoint, reachable, cl.Spec.Local)
 		p.mu.Lock()
 		if m := p.members[cl.Name]; m != nil {
 			m.prometheus = endpoint
@@ -168,9 +212,20 @@ func (p *ClientPool) upsert(ctx context.Context, obj any) {
 // an in-cluster Prometheus (reason Discovered); else empty (reason NotFound or
 // DiscoveryError). It never guesses silently — the reason + message are surfaced
 // on the Cluster's PrometheusEndpointResolved condition (Principle #6).
-func (p *ClientPool) resolvePrometheus(ctx context.Context, cfg *rest.Config, specEndpoint string, reachable bool) (endpoint, reason, msg string) {
+//
+// Discovery runs only for the local cluster (spec.local). It yields an
+// in-cluster Service address (<name>.<ns>.svc), which only the cluster the
+// gateway itself runs in can reach. For a remote member that address either
+// failed from the hub or -- worse -- resolved to the HUB's own Prometheus, and
+// the member's charts silently showed the hub's metrics.
+func (p *ClientPool) resolvePrometheus(ctx context.Context, cfg *rest.Config, specEndpoint string, reachable, local bool) (endpoint, reason, msg string) {
 	if specEndpoint != "" {
 		return specEndpoint, prometheusReasonExplicit, "operator-set spec.prometheusEndpoint"
+	}
+	if !local {
+		return "", prometheusReasonNotFound, "spec.prometheusEndpoint is empty, and discovery only serves the local cluster: " +
+			"it finds an in-cluster Service address the hub cannot reach on a remote member. " +
+			"Set spec.prometheusEndpoint to a URL the gateway can reach (an ingress, or a query frontend such as Thanos)"
 	}
 	if !reachable {
 		return "", prometheusReasonNotFound, "member unreachable; Prometheus discovery skipped"
@@ -306,6 +361,9 @@ func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) 
 		if err != nil {
 			return nil, fmt.Errorf("parse kubeconfig: %w", err)
 		}
+		if err := sanitizeMemberRESTConfig(cfg); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	tok := sec.Data["token"]
@@ -321,6 +379,35 @@ func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) 
 		cfg.TLSClientConfig.CAData = ca
 	}
 	return cfg, nil
+}
+
+// sanitizeMemberRESTConfig rejects a member kubeconfig that resolves its
+// credentials against the GATEWAY's own filesystem or an external command,
+// rather than carrying them inline. A member credential Secret is supplied by
+// whoever registers the Cluster (an edge admin, or anyone who can write Secrets
+// in the hub namespace), so an unsanitized kubeconfig can point tokenFile at
+// the gateway's own ServiceAccount token and a server the attacker controls —
+// the gateway then sends that token to the attacker — or run an exec/auth
+// plugin as the gateway process. Inline data (token, client-certificate-data,
+// client-key-data, certificate-authority-data) is unaffected.
+func sanitizeMemberRESTConfig(cfg *rest.Config) error {
+	var bad []string
+	if cfg.BearerTokenFile != "" {
+		bad = append(bad, "tokenFile")
+	}
+	if cfg.ExecProvider != nil {
+		bad = append(bad, "exec credential plugin")
+	}
+	if cfg.AuthProvider != nil {
+		bad = append(bad, "auth-provider plugin")
+	}
+	if cfg.TLSClientConfig.CertFile != "" || cfg.TLSClientConfig.KeyFile != "" || cfg.TLSClientConfig.CAFile != "" {
+		bad = append(bad, "client certificate/key/CA file path")
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("member kubeconfig references gateway-local files or plugins (%s); supply inline credentials only", strings.Join(bad, ", "))
+	}
+	return nil
 }
 
 // DynamicFor returns a dynamic client for the named member, impersonating the

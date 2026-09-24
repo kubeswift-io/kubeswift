@@ -199,8 +199,21 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// handleCancellation runs the rollback (pre-cutover) or just
 	// clears the annotation (post-cutover), then drops the
 	// finalizer to allow deletion to proceed.
+	//
+	// A live migration deleted past its commit point but before its
+	// cutover finished is driven forward first. The destination holds the
+	// only running copy, but the guest's podRef still names the source pod
+	// until cutover swaps it: dropping the finalizer there left the VM
+	// running in a pod nothing tracks, and the guest pointing at a launcher
+	// that had exited.
 	if mig.DeletionTimestamp != nil {
-		return r.handleCancellation(ctx, &mig)
+		forward, err := r.finishCutoverBeforeDeletion(ctx, &mig)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !forward {
+			return r.handleCancellation(ctx, &mig)
+		}
 	}
 
 	// Terminal phases: nothing more to do. Idempotency: re-reconcile
@@ -219,6 +232,13 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// an unnecessary API roundtrip on every spurious enqueue.
 	if isTerminalPhase(mig.Status.Phase) {
 		if hasFinalizer(&mig) {
+			// Reclaim the per-node identity copies before dropping the
+			// finalizer, so a node-wide private key does not linger in the
+			// tenant namespace after the migration ends (TTL deletion is
+			// opt-in, so it cannot be relied on for this).
+			if err := r.cleanupCopiedNodeIdentities(ctx, &mig); err != nil {
+				return ctrl.Result{}, fmt.Errorf("cleanup copied node identities: %w", err)
+			}
 			if err := r.removeFinalizer(ctx, &mig); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -230,7 +250,8 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Add finalizer on first reconcile so cancellation mid-flight
-	// gets a chance to clean up the SwiftGuest annotation.
+	// gets a chance to clean up the SwiftGuest annotation. (A deleting
+	// migration only gets here holding it: finishCutoverBeforeDeletion.)
 	if err := r.ensureFinalizer(ctx, &mig); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -261,6 +282,18 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if status.StartedAt == nil {
 		now := metav1.Now()
 		status.StartedAt = &now
+	}
+
+	// spec.timeout for offline migrations. Live mode enforces it in its own
+	// handlers, where it must respect the commit point; offline had no check
+	// at all, so one stuck in Preparing or Resuming kept the guest's
+	// migration-in-progress marker for good and blocked every later
+	// migration and drain of it. Failing is safe on either side of the
+	// offline cutover (onTerminalPhase): before it the source is restarted
+	// where it was; after it the guest stays on the target, already
+	// runPolicy=Running, and only the marker is cleared.
+	if phase != migrationv1alpha1.SwiftMigrationPhasePending && !isLiveMode(&mig, status) && timeoutExceeded(&mig, status) {
+		return r.dispatchResult(ctx, &mig, status, timeoutFailure(&mig))
 	}
 
 	switch phase {

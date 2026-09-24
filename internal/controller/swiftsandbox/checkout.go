@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,6 +78,13 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
+	// A slot runs the pool's image under the pool's network mode, verified
+	// (or not) with the pool's key: only a sandbox asking for exactly that may
+	// take one. Anything else boots cold with its own settings.
+	if pool.Name != "" && poolSlotProfile(&pool) != sandboxSlotProfile(sb) {
+		return r.coldFallback(ctx, sb, kernelName,
+			"the pool's image, network mode or verification key differs from this sandbox's")
+	}
 
 	// Adopt an already-claimed slot from a partial prior reconcile (the pod claim
 	// succeeded but the status update didn't) before claiming a new one — no double-claim.
@@ -100,6 +108,13 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if metrics.MarkSandboxCheckoutObserved(string(sb.UID)) {
 			metrics.SandboxCheckoutsTotal.WithLabelValues("hit").Inc()
 		}
+	}
+
+	// The slot's intent ConfigMap and deny-ingress NetworkPolicy go with its
+	// pod to the claiming sandbox. Left pool-owned they outlived the checkout
+	// -- one orphaned pair per claim, until the pool itself was deleted.
+	if err := r.adoptSlotObjects(ctx, sb, slot); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	now := metav1.Now()
@@ -180,6 +195,11 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		if p.DeletionTimestamp != nil || !launcherReady(p) {
+			continue
+		}
+		// Only a slot booted with exactly this sandbox's image, network mode
+		// and verification key (a slot from before a pool edit is not).
+		if p.Annotations[SlotProfileAnnotation] != sandboxSlotProfile(sb) {
 			continue
 		}
 		claimed := p.DeepCopy()
@@ -287,4 +307,33 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	default:
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
 	}
+}
+
+// adoptSlotObjects makes the claiming sandbox the controller of the slot's
+// intent ConfigMap and NetworkPolicy (when they exist), as checkout does for
+// the slot pod. Idempotent.
+func (r *SwiftSandboxReconciler) adoptSlotObjects(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod) error {
+	slotSB := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: slot.Name, Namespace: slot.Namespace}}
+	for _, obj := range []client.Object{
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: intentConfigMapName(slotSB), Namespace: slot.Namespace}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: buildNetworkPolicy(slotSB).Name, Namespace: slot.Namespace}},
+	} {
+		if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		if metav1.IsControlledBy(obj, sb) {
+			continue
+		}
+		obj.SetOwnerReferences(nonControllerRefs(obj.GetOwnerReferences()))
+		if err := controllerutil.SetControllerReference(sb, obj, r.Scheme); err != nil {
+			return err
+		}
+		if err := r.Update(ctx, obj); err != nil {
+			return err
+		}
+	}
+	return nil
 }

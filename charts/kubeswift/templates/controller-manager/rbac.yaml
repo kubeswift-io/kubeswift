@@ -231,6 +231,15 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  # TokenReview + SubjectAccessReview — used only with
+  # controllerManager.metrics.secure, to check a scraper's bearer token and
+  # its permission to GET /metrics before serving it.
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -283,3 +292,16 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "patch"]
+---
+# Bind to a metrics scraper's ServiceAccount (e.g. Prometheus) when
+# controllerManager.metrics.secure is on: only callers allowed to GET /metrics
+# are served.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-metrics-reader
+  labels:
+    app.kubernetes.io/name: kubeswift
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]

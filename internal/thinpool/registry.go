@@ -57,7 +57,42 @@ type registryState struct {
 	// decides the order. A base with no entry here has never been used since
 	// the node learned to record it, and goes first.
 	Used map[string]string `json:"used,omitempty"`
+	// Created records which guests' snapshots were successfully created —
+	// the guest-side twin of Ready.
+	//
+	// AllocateGuest persists a guest's id BEFORE create_snap runs (the id must
+	// be durable before the device exists, or a crash could orphan it). Without
+	// this second phase, a create_snap that failed, or a process that died
+	// between the two, left the guest "known" with no device behind the id:
+	// every later attempt took the reactivate path and failed with "thin device
+	// N does not exist in pool", forever, until the guest was deleted. An
+	// allocated-but-not-created guest never received its disk, so it holds no
+	// data and is safe to create again; a created guest whose device is gone
+	// lost real data and must still fail loudly.
+	//
+	// No omitempty: a registry written before this field existed has no
+	// "created" key at all, and load() treats that — and only that — as legacy,
+	// marking every guest it names as created (they were, or stranded as before).
+	Created map[string]bool `json:"created"`
+	// Reserved holds the pool space promised to base builds still writing
+	// (see Reserve). Checking free space is not enough on its own: two builds
+	// of different images could each see room for itself, both write, and
+	// together fill the pool -- which stalls, then fails, every guest on the
+	// node.
+	Reserved map[string]reservation `json:"reserved,omitempty"`
 }
+
+// reservation is pool space a base build has claimed and not yet released.
+type reservation struct {
+	Bytes uint64 `json:"bytes"`
+	// Since is RFC3339 with nanoseconds. A build that died without releasing
+	// its claim leaves it behind; it lapses after reservationTTL.
+	Since string `json:"since"`
+}
+
+// reservationTTL is how long an unreleased reservation holds space. Well past
+// the longest base write, so it only ever reclaims a crashed build's claim.
+const reservationTTL = 6 * time.Hour
 
 // NewRegistry returns a registry stored at path. The file is created on first
 // mutation.
@@ -162,6 +197,34 @@ func (r *Registry) Forget(key string) error {
 			return false, nil
 		}
 		delete(st.Guests, key)
+		delete(st.Created, key)
+		return true, nil
+	})
+}
+
+// GuestCreated reports whether key's snapshot was successfully created (see
+// registryState.Created). A guest that is allocated but not created never
+// received its disk.
+func (r *Registry) GuestCreated(key string) (bool, error) {
+	var created bool
+	err := r.withLock(func(st *registryState) (bool, error) {
+		created = st.Created[key]
+		return false, nil
+	})
+	return created, err
+}
+
+// MarkGuestCreated records that key's snapshot exists. Call it only after
+// create_snap has succeeded.
+func (r *Registry) MarkGuestCreated(key string) error {
+	return r.withLock(func(st *registryState) (bool, error) {
+		if _, ok := st.Guests[key]; !ok {
+			return false, fmt.Errorf("marking guest %s created: no id allocated for it", key)
+		}
+		if st.Created[key] {
+			return false, nil
+		}
+		st.Created[key] = true
 		return true, nil
 	})
 }
@@ -203,6 +266,57 @@ func (r *Registry) MarkBaseReady(digest string) error {
 			return false, nil
 		}
 		st.Ready[digest] = true
+		return true, nil
+	})
+}
+
+// Reserve claims bytes of pool space for key's build if the pool has them
+// free beyond what other builds hold, and reports the space available to key
+// either way. free is read under the registry lock, so two builds cannot both
+// pass on the same free space. A claim key already held is replaced.
+func (r *Registry) Reserve(key string, bytes uint64, free func() (uint64, error)) (ok bool, available uint64, err error) {
+	err = r.withLock(func(st *registryState) (bool, error) {
+		f, err := free()
+		if err != nil {
+			return false, err
+		}
+		now := time.Now().UTC()
+		changed := false
+		var held uint64
+		for k, res := range st.Reserved {
+			if k == key {
+				continue
+			}
+			if since, err := time.Parse(time.RFC3339Nano, res.Since); err != nil || now.Sub(since) > reservationTTL {
+				delete(st.Reserved, k)
+				changed = true
+				continue
+			}
+			held += res.Bytes
+		}
+		if f > held {
+			available = f - held
+		}
+		if available < bytes {
+			return changed, nil
+		}
+		if st.Reserved == nil {
+			st.Reserved = map[string]reservation{}
+		}
+		st.Reserved[key] = reservation{Bytes: bytes, Since: now.Format(time.RFC3339Nano)}
+		ok = true
+		return true, nil
+	})
+	return ok, available, err
+}
+
+// Unreserve releases key's claim, once its build has written what it will.
+func (r *Registry) Unreserve(key string) error {
+	return r.withLock(func(st *registryState) (bool, error) {
+		if _, ok := st.Reserved[key]; !ok {
+			return false, nil
+		}
+		delete(st.Reserved, key)
 		return true, nil
 	})
 }
@@ -291,9 +405,13 @@ func (r *Registry) withLock(mutate func(*registryState) (bool, error)) error {
 }
 
 func (r *Registry) load() (*registryState, error) {
+	// Created is deliberately left nil here: json.Unmarshal leaves a field
+	// untouched when its key is absent, and an absent "created" key is how a
+	// legacy registry is recognised below. A brand-new registry gets it here.
 	st := &registryState{NextID: firstDeviceID, Bases: map[string]uint32{}, Guests: map[string]uint32{}, Ready: map[string]bool{}}
 	data, err := os.ReadFile(r.path)
 	if os.IsNotExist(err) {
+		st.Created = map[string]bool{}
 		return st, nil
 	}
 	if err != nil {
@@ -318,6 +436,15 @@ func (r *Registry) load() (*registryState, error) {
 	}
 	if st.Ready == nil {
 		st.Ready = map[string]bool{}
+	}
+	if st.Created == nil {
+		// Absent key: a registry from before guests had a created phase. Every
+		// guest it names went through the old single-phase path, so treat them
+		// as created — reactivation keeps its previous behaviour for them.
+		st.Created = make(map[string]bool, len(st.Guests))
+		for k := range st.Guests {
+			st.Created[k] = true
+		}
 	}
 	return st, nil
 }

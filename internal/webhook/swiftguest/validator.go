@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -45,6 +46,17 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftGuest, got %T", newObj)
 	}
+	// Validation is about the spec. An update that leaves it as it is (a
+	// finalizer removal, an annotation or label change) or that happens while
+	// the guest is being deleted cannot make anything newly possible, and it
+	// must not be refused: after the rules tightened (an allowlist narrowed, an
+	// upgrade), re-validating the old spec on every update rejected the
+	// controllers' finalizer removals, and the guest -- and its namespace --
+	// stayed Terminating for good.
+	if old, ok := oldObj.(*swiftv1alpha1.SwiftGuest); ok &&
+		(g.DeletionTimestamp != nil || equality.Semantic.DeepEqual(old.Spec, g.Spec)) {
+		return nil, nil
+	}
 	return nil, validateSwiftGuest(g, v.AllowedHostPathPrefixes)
 }
 
@@ -54,6 +66,9 @@ func (v *Validator) ValidateDelete(ctx context.Context, obj runtime.Object) (adm
 
 func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest, allowedHostPaths []string) error {
 	spec := &g.Spec
+	if err := hostpath.ValidateCHOptionValues(spec); err != nil {
+		return err
+	}
 	hasImage := spec.ImageRef != nil && spec.ImageRef.Name != ""
 	hasKernel := spec.KernelRef != nil && spec.KernelRef.Name != ""
 	hasClone := spec.CloneFromSnapshot != nil

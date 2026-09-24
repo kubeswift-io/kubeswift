@@ -43,7 +43,7 @@ pub struct QemuNUMANode {
 /// One vCPU→host-CPU pin. QEMU has no CLI for thread affinity, so pinning is
 /// applied post-spawn: QMP query-cpus-fast maps vcpu index → host thread id,
 /// then sched_setaffinity pins each thread (see `pinning`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QemuVCPUPin {
     pub vcpu: u32,
     pub host_cpu: u32,

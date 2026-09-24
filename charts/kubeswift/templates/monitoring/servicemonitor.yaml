@@ -34,4 +34,14 @@ spec:
     - port: metrics
       interval: {{ $sm.interval | default "30s" }}
       path: /metrics
+      {{- $cm := .Values.controllerManager | default dict }}
+      {{- if and $cm.metrics $cm.metrics.secure }}
+      # controllerManager.metrics.secure: https with a self-signed certificate,
+      # authenticated by Prometheus's own ServiceAccount token. Bind the
+      # kubeswift-metrics-reader ClusterRole to that ServiceAccount.
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      {{- end }}
 {{- end }}

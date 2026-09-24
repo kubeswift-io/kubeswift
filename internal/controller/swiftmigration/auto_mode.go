@@ -25,27 +25,18 @@ import (
 // only when ALL of the following hold:
 //
 //   - guest has no VFIO devices (no gpuProfileRef, no SR-IOV interface)
+//
 //   - networking is multi-node OR allowIPChange=true
 //
-// Storage live-capability is NOT checked here. The webhook's
-// gateLiveModeStorage runs at admission time; if the operator submits
-// mode=auto + non-live-capable storage, the auto-resolution may pick
-// "live" but Validating-live's body will then fail with a clear storage
-// gate message. This factoring keeps resolveAutoMode independent of
-// the storage-class read-and-resolve code path (which lives in the
-// webhook today).
+//   - storage is live-migration-capable (resolved.LiveMigrationStorageError:
+//     kernel-boot, or RWX+Block root storage)
 //
-// **Rule expansion is a Phase 3a/3b follow-up** (TODO). The full rule
-// per architect-discipline review:
-//
-//   - live-capable storage AND default-networking-with-allowIPChange
-//   - OR multi-node networking AND no GPU/SR-IOV
-//
-// The B2 conservative rule covers the second clause; the first clause
-// requires the storage-class resolution code path which is webhook
-// territory today. A follow-up commit can promote the storage-class
-// resolution out of the webhook into a shared helper, then auto-mode
-// can use it.
+// Storage IS checked here. It used not to be — on the assumption that
+// Validating-live would reject incapable storage, which it never did — so
+// every drain migration (always mode=auto) of a default disk-boot guest
+// (RWO/Filesystem) resolved to live, its destination pod hit Multi-Attach
+// and failed DstNeverReady, and the drain stayed blocked instead of taking
+// the offline path the docs promise.
 //
 // Default-to-offline is the safe fall-through: operators submitting
 // mode=auto on workloads that are not safe-to-live get the Phase 1
@@ -110,9 +101,43 @@ func (r *SwiftMigrationReconciler) resolveAutoMode(
 		return nil
 	}
 
+	// Storage must be live-capable. A missing SwiftGuestClass also resolves
+	// offline (the safe default); resolution surfaces the missing class.
+	gate, classFound, err := r.liveStorageGate(ctx, &guest)
+	if err != nil {
+		return phaseTransient(fmt.Errorf("checking storage live-capability for auto-resolution: %w", err))
+	}
+	if gate != nil || !classFound {
+		return nil
+	}
+
 	// All checks passed: resolve to live.
 	status.Mode = migrationv1alpha1.SwiftMigrationModeLive
 	return nil
+}
+
+// liveStorageGate applies the shared live-migration storage rule
+// (resolved.LiveMigrationStorageError) to the guest. gate is non-nil when the
+// storage cannot be live-migrated, carrying the reason; err is a transient
+// read failure. classFound is false when the SwiftGuestClass does not exist —
+// a resolution problem reported elsewhere, which callers treat on their own
+// terms (auto resolves offline; the Validating-live gate defers to resolution,
+// mirroring the webhook).
+func (r *SwiftMigrationReconciler) liveStorageGate(
+	ctx context.Context,
+	guest *swiftv1alpha1.SwiftGuest,
+) (gate error, classFound bool, err error) {
+	if guest.Spec.KernelRef != nil {
+		return nil, true, nil
+	}
+	var class swiftv1alpha1.SwiftGuestClass
+	if err := r.Get(ctx, client.ObjectKey{Name: guest.Spec.GuestClassRef.Name}, &class); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return resolved.LiveMigrationStorageError(guest, &class), true, nil
 }
 
 // hasVFIODevices returns true when the guest references VFIO devices

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,6 +43,11 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	oldR, ok := oldObj.(*snapshotv1alpha1.SwiftRestore)
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftRestore, got %T", oldObj)
+	}
+	// Deletion and metadata-only updates are not re-validated: the spec was
+	// checked at creation, and the checks look up the snapshot as it is now.
+	if r.DeletionTimestamp != nil || equality.Semantic.DeepEqual(oldR.Spec, r.Spec) {
+		return nil, nil
 	}
 	if err := v.validateSwiftRestore(ctx, r); err != nil {
 		return nil, err

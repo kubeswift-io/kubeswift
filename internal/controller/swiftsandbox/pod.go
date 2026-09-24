@@ -244,6 +244,17 @@ func buildIntentConfigMap(sb *sandboxv1alpha1.SwiftSandbox, intentJSON []byte) *
 	}
 }
 
+// launcherNodeSelector is the nodeSelector a sandbox launcher runs under: a
+// kernel node, narrowed by the sandbox's (or pool's) own selector. A native GPU
+// is allocated only on a node that satisfies it.
+func launcherNodeSelector(sel map[string]string) map[string]string {
+	out := map[string]string{kernelNodeLabel: "true"}
+	for k, v := range sel {
+		out[k] = v
+	}
+	return out
+}
+
 // buildPod builds the sandbox launcher pod: a sandbox-materialize init container
 // (pulls the image + produces the RO ext4 in the node cache) followed by the
 // swiftletd launcher (mode-3 direct-kernel boot of that rootfs). RestartPolicy
@@ -251,10 +262,7 @@ func buildIntentConfigMap(sb *sandboxv1alpha1.SwiftSandbox, intentJSON []byte) *
 func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 
-	nodeSelector := map[string]string{kernelNodeLabel: "true"}
-	for k, v := range sb.Spec.NodeSelector {
-		nodeSelector[k] = v
-	}
+	nodeSelector := launcherNodeSelector(sb.Spec.NodeSelector)
 	// Native SwiftGPU: pin to the node the controller allocated the device(s) on
 	// (the DRA backend instead lets the scheduler place the claim). The GPU node
 	// must also be a kernel node — the kernel-node label above still applies.
@@ -478,7 +486,17 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: "kernel-artifacts", MountPath: kernelDir},
-					{Name: "rootfs-cache", MountPath: rootfsCacheDir},
+					// Read-only: this container runs the untrusted guest, and the
+					// node rootfs cache is shared, keyed only by image digest and
+					// reused as-is on a cache hit. For a virtiofs sandbox
+					// virtiofsd shares whatever it can reach, so a RW mount here
+					// would let guest code (remounting the share, or escaping its
+					// chroot to the lower) write into the cache and poison every
+					// later sandbox of that image on the node — defeating cosign
+					// verify-before-boot. Block-mode rootfs is already opened
+					// readonly=on by CH; the init container above keeps this same
+					// volume RW to populate the cache before the guest runs.
+					{Name: "rootfs-cache", MountPath: rootfsCacheDir, ReadOnly: true},
 					{Name: "runtime-intent", MountPath: swiftguest.IntentPath},
 					{Name: "run", MountPath: swiftguest.RunDirPath},
 					{Name: "dev-kvm", MountPath: "/dev/kvm"},

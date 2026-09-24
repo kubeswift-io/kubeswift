@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // Backing describes where a node's pool keeps its bytes.
@@ -37,10 +39,39 @@ func (b Backing) Resolve(ctx context.Context, r Runner) (string, error) {
 	if b.File == "" {
 		return "", fmt.Errorf("thinpool backing: neither Device nor File is set")
 	}
+	// One creator per node at a time: two racing here could each create and
+	// attach their own file, and two loop devices -- two pools -- would claim
+	// the same path.
+	unlock, err := lockFile(b.File + ".lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if err := ensurePreallocated(b.File, b.FileBytes); err != nil {
 		return "", err
 	}
 	return EnsureLoop(ctx, r, b.File)
+}
+
+// lockFile takes an exclusive flock on path, creating it (and its directory)
+// if needed. The kernel drops the lock if the holder dies, so a crash never
+// leaves it held.
+func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening lock %s: %w", path, err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("locking %s: %w", path, err)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		f.Close()
+	}, nil
 }
 
 // EnsureLoop attaches path to a loop device with direct I/O enabled, reusing an
@@ -178,6 +209,9 @@ func human(b uint64) string {
 	return fmt.Sprintf("%d bytes", b)
 }
 
+// preallocate is fallocate; a variable so a test can interrupt it.
+var preallocate = fallocate
+
 // ensurePreallocated creates path at size bytes if absent, fully allocated.
 //
 // PREALLOCATED, never sparse. A sparse backing file makes it impossible to
@@ -206,21 +240,48 @@ func ensurePreallocated(path string, size uint64) error {
 	if err := roomFor(nearestExisting(filepath.Dir(path)), size); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	// Build it beside the final path and rename it into place only once it is
+	// fully allocated and synced. Creating it at the final path meant a crash
+	// mid-fallocate left a short file there, which every later attempt then
+	// refused as "smaller than the configured size" until someone deleted it
+	// by hand. A leftover partial from such a crash is simply replaced.
+	partial := path + ".partial"
+	_ = os.Remove(partial)
+	f, err := os.OpenFile(partial, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
-		return fmt.Errorf("creating %s: %w", path, err)
+		return fmt.Errorf("creating %s: %w", partial, err)
 	}
-	defer f.Close()
 	// Fallocate, not Truncate: Truncate produces a sparse file, which is the
 	// shape this must never be.
-	if err := fallocate(f, int64(size)); err != nil {
-		_ = os.Remove(path)
+	if err := preallocate(f, int64(size)); err != nil {
+		f.Close()
+		_ = os.Remove(partial)
 		return fmt.Errorf("preallocating %s to %d bytes: %w", path, size, err)
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(partial)
+		return fmt.Errorf("syncing %s: %w", partial, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(partial)
+		return fmt.Errorf("closing %s: %w", partial, err)
+	}
+	if err := os.Rename(partial, path); err != nil {
+		_ = os.Remove(partial)
+		return fmt.Errorf("moving %s into place: %w", path, err)
+	}
+	// Make the rename itself durable.
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", dir, err)
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // requireBlockDevice rejects anything that is not one, rather than letting

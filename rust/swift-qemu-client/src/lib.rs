@@ -19,6 +19,55 @@ use std::time::Duration;
 
 use qmp::QmpClient;
 
+/// Ask the guest behind a QMP socket to power itself off (ACPI
+/// `system_powerdown`) without holding a [`QemuProcess`]. Used by swiftletd's
+/// SIGTERM handler, which runs on its own thread while the main thread waits
+/// on the child. Returns once QEMU acknowledges the command, not when the guest
+/// has finished shutting down.
+pub fn request_powerdown(qmp_socket: &Path) -> Result<(), String> {
+    QmpClient::new(qmp_socket.to_path_buf()).powerdown()
+}
+
+/// Pin a running QEMU's vCPU threads once its QMP monitor answers, waiting up
+/// to `wait` for it.
+///
+/// QEMU creates its QMP socket early but does not answer until machine init is
+/// done, and that includes preallocating hugepages and mapping VFIO DMA: for a
+/// large GPU guest, minutes. A single short-timeout query gave up long before,
+/// and the guest ran unpinned with nothing retrying. Run this off the launch
+/// path (it blocks for as long as QEMU takes).
+///
+/// `allowed` is the host CPUs this process may use (the pod's cpuset); pins
+/// outside it are moved (see [`pinning::fit_to_cpuset`]). Returns how many
+/// vCPUs were pinned and a note for every pin that had to move or be dropped.
+pub fn pin_vcpus_when_ready(
+    qmp_socket: &Path,
+    pins: &[QemuVCPUPin],
+    allowed: Option<&[u32]>,
+    wait: Duration,
+) -> Result<(usize, Vec<String>), String> {
+    if pins.is_empty() {
+        return Ok((0, Vec::new()));
+    }
+    let qmp = QmpClient::new(qmp_socket.to_path_buf());
+    let deadline = std::time::Instant::now() + wait;
+    let threads = loop {
+        match qmp.query_cpus_fast() {
+            Ok(t) => break t,
+            Err(e) if std::time::Instant::now() >= deadline => {
+                return Err(format!("QMP did not answer within {:?}: {}", wait, e));
+            }
+            Err(_) => std::thread::sleep(Duration::from_secs(2)),
+        }
+    };
+    let (pins, notes) = match allowed {
+        Some(cpus) => pinning::fit_to_cpuset(pins, cpus, &pinning::cpu_numa_node),
+        None => (pins.to_vec(), Vec::new()),
+    };
+    let n = pinning::apply_pins(&pins, &threads)?;
+    Ok((n, notes))
+}
+
 /// Managed QEMU process with lifecycle control via QMP.
 pub struct QemuProcess {
     child: Child,

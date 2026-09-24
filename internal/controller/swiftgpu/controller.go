@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,15 @@ type SwiftGPUReconciler struct {
 
 // Reconcile implements the reconcile loop.
 func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	res, err := r.reconcile(ctx, req)
+	if apierrors.IsConflict(err) {
+		// The guest changed under this pass; retry from the newer object.
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return res, err
+}
+
+func (r *SwiftGPUReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var guest swiftv1alpha1.SwiftGuest
@@ -54,12 +64,14 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Select the GPU allocation backend (native: gpuProfileRef; dra:
-	// gpuResourceClaim). No GPU request -> nothing to do.
+	// gpuResourceClaim). gpuProfileRef and gpuResourceClaim are mutable, so
+	// what the spec asks for NOW is not necessarily what was allocated: release
+	// below follows the allocation (the SwiftGPUNodes' AllocatedTo), not the
+	// spec. It used to return here when the spec asked for nothing, so a guest
+	// whose ref was removed after allocation never had its finalizer removed
+	// (stuck Terminating) and its GPUs were never freed; switching native to
+	// DRA ran DRA's no-op Release and leaked the native GPUs the same way.
 	backendName := guest.GPUBackend()
-	if backendName == "" {
-		return ctrl.Result{}, nil
-	}
-	backend := r.backend(backendName)
 
 	// Handle deletion: release the allocation and remove the finalizer -- but
 	// not before the launcher pod is gone.
@@ -82,7 +94,7 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 					"guest", req.NamespacedName, "pod", podName)
 				return ctrl.Result{RequeueAfter: gpuReleaseWaitInterval}, nil
 			}
-			if err := backend.Release(ctx, &guest); err != nil {
+			if err := r.releaseAll(ctx, &guest, backendName); err != nil {
 				logger.Error(err, "GPU release failed", "backend", backendName)
 				return ctrl.Result{}, err
 			}
@@ -94,6 +106,27 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, nil
 	}
+
+	// A guest that carries the finalizer was set up for GPUs at some point. If
+	// it no longer asks for NATIVE GPUs but still holds some (ref removed, or
+	// switched to DRA), return them once the launcher lets go of the VFIO group.
+	if backendName != swiftv1alpha1.GPUBackendNative && controllerutil.ContainsFinalizer(&guest, GPUFinalizerName) {
+		if res, waiting, err := r.releaseStaleNative(ctx, &guest, logger); err != nil || waiting {
+			return res, err
+		}
+		if backendName == "" {
+			// Nothing requested and nothing held: the finalizer has no job left.
+			controllerutil.RemoveFinalizer(&guest, GPUFinalizerName)
+			if err := r.Update(ctx, &guest); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+	}
+	if backendName == "" {
+		return ctrl.Result{}, nil
+	}
+	backend := r.backend(backendName)
 
 	// Ensure the finalizer is present before any allocation work.
 	if !controllerutil.ContainsFinalizer(&guest, GPUFinalizerName) {
@@ -122,6 +155,58 @@ func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// GPUClaimPending so the SwiftGuest controller builds it, then Resolve once
 	// the scheduler/DRA driver has allocated a device.
 	return r.reconcileDeferred(ctx, &guest, backend, logger)
+}
+
+// staleNativeReleaseRecheck paces the re-check while a guest that no longer
+// asks for native GPUs still runs a launcher holding them. The guest's own
+// status change when its launcher goes away re-triggers the reconcile; this is
+// only the fallback.
+const staleNativeReleaseRecheck = time.Minute
+
+// releaseAll frees everything the guest may hold: native allocations by
+// identity on every SwiftGPUNode (idempotent — a no-op when none), plus the
+// current DRA backend's release when the spec uses DRA.
+func (r *SwiftGPUReconciler) releaseAll(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, backendName string) error {
+	if err := DeallocateForWorkload(ctx, r.Client, guest.Namespace+"/"+guest.Name); err != nil {
+		return err
+	}
+	if backendName == swiftv1alpha1.GPUBackendDRA {
+		return r.backend(backendName).Release(ctx, guest)
+	}
+	return nil
+}
+
+// releaseStaleNative returns native GPUs a guest still holds but no longer
+// requests. waiting is true while its launcher is still present — it may still
+// hold the VFIO group, and publishing the GPU as free then would let the next
+// consumer allocate a busy device. After release, the stale native allocation
+// is cleared from status so nothing is built from it.
+func (r *SwiftGPUReconciler) releaseStaleNative(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, logger logr.Logger) (ctrl.Result, bool, error) {
+	key := guest.Namespace + "/" + guest.Name
+	held, err := nativeAllocationHeld(ctx, r.Client, key)
+	if err != nil || !held {
+		return ctrl.Result{}, false, err
+	}
+	present, podName, err := r.launcherStillPresent(ctx, guest)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if present {
+		logger.Info("native GPU release deferred: no longer requested, but the launcher may still hold the VFIO group",
+			"guest", key, "pod", podName)
+		return ctrl.Result{RequeueAfter: staleNativeReleaseRecheck}, true, nil
+	}
+	if err := DeallocateForWorkload(ctx, r.Client, key); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	status := guest.Status.DeepCopy()
+	status.GPU = nil
+	apimeta.RemoveStatusCondition(&status.Conditions, swiftv1alpha1.ConditionGPUAllocated)
+	if err := r.patchStatus(ctx, guest, status); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	logger.Info("released native GPUs no longer requested", "guest", key)
+	return ctrl.Result{}, false, nil
 }
 
 // backend returns the gpualloc.Backend for the given backend name.
@@ -239,7 +324,11 @@ func (r *SwiftGPUReconciler) patchStatus(ctx context.Context, guest *swiftv1alph
 	if equality.Semantic.DeepEqual(guest.Status, *status) {
 		return nil
 	}
-	patch := client.MergeFrom(guest.DeepCopy())
+	// Optimistic lock: status.conditions is an atomic list, and setting
+	// GPUAllocated resends all of it. From a stale read that would put back
+	// an old GuestRunning written by swiftletd. A conflict retries with a
+	// fresh read (see Reconcile).
+	patch := client.MergeFromWithOptions(guest.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	guest.Status = *status
 	return r.Status().Patch(ctx, guest, patch)
 }

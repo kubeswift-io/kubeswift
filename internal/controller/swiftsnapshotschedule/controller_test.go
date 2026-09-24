@@ -492,3 +492,56 @@ func TestMostRecentDue_NoOccurrenceIsNotDue(t *testing.T) {
 		t.Errorf("due = true (tick %v); no occurrence exists, so nothing is due", tick)
 	}
 }
+
+// After an outage longer than a hundred ticks, the catch-up used to fire the
+// 101st missed tick rather than the latest; that snapshot re-triggered the
+// reconcile, which fired the next stale tick, and so on -- a burst of
+// snapshots named for long-past times. It must be the latest tick, once.
+func TestMostRecentDue_LongOutageFiresTheLatestTick(t *testing.T) {
+	sched, err := parseScheduleUTC("* * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := baseTime.Add(30 * time.Second)
+	for _, outage := range []time.Duration{time.Hour, 1000 * time.Minute, 30 * 24 * time.Hour} {
+		due, ok := mostRecentDue(sched, baseTime.Add(-outage), now)
+		if !ok || !due.Equal(baseTime) {
+			t.Errorf("outage %s: due = %v (ok=%v), want the latest tick %v", outage, due, ok, baseTime)
+		}
+	}
+	// An irregular schedule: the latest weekday-09:00 tick before a Saturday.
+	weekdays, err := parseScheduleUTC("0 9 * * 1-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sat := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC) // a Saturday
+	due, ok := mostRecentDue(weekdays, sat.Add(-90*24*time.Hour), sat)
+	if want := time.Date(2026, 6, 5, 9, 0, 0, 0, time.UTC); !ok || !due.Equal(want) {
+		t.Errorf("weekday schedule: due = %v, want %v", due, want)
+	}
+}
+
+func TestReconcile_LongOutageCreatesOneSnapshotNotABurst(t *testing.T) {
+	last := metav1.NewTime(baseTime.Add(-1000 * time.Minute))
+	s := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		s.Spec.ConcurrencyPolicy = snapshotv1alpha1.ConcurrencyAllow
+		s.Status.LastScheduleTime = &last
+	})
+	r, c := newSched(t, baseTime.Add(30*time.Second), s)
+	for i := 0; i < 5; i++ {
+		if _, err := r.Reconcile(context.Background(), req()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snaps := listSnaps(t, c)
+	if len(snaps) != 1 {
+		t.Fatalf("%d snapshots after the outage, want exactly 1 (the latest tick)", len(snaps))
+	}
+	var got snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.LastScheduleTime == nil || !got.Status.LastScheduleTime.Time.Equal(baseTime) {
+		t.Errorf("lastScheduleTime = %v, want the latest tick %v", got.Status.LastScheduleTime, baseTime)
+	}
+}

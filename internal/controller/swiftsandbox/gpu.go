@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,7 +79,8 @@ func (r *SwiftSandboxReconciler) reconcileNativeGPU(ctx context.Context, sb *san
 				sb.Spec.GPUProfileRef.Name, profile.Spec.Tier))
 	}
 
-	node, gpus, numa, partID, allocErr := swiftgpu.FindAndAllocateFor(ctx, r.Client, sandboxGPUAllocatedTo(sb), "", &profile)
+	node, gpus, numa, partID, allocErr := swiftgpu.FindAndAllocateFor(ctx, r.Client, sandboxGPUAllocatedTo(sb), "", &profile,
+		swiftgpu.NodeConstraint{NodeSelector: launcherNodeSelector(sb.Spec.NodeSelector)})
 	if allocErr != nil {
 		// No capacity (or an FM-version / vfio-ready gate). Surface the reason and
 		// requeue — a freed GPU or a fixed node makes the next attempt succeed.
@@ -129,11 +131,85 @@ func (r *SwiftSandboxReconciler) releaseNativeGPU(ctx context.Context, sb *sandb
 	return swiftgpu.DeallocateForWorkload(ctx, r.Client, sandboxGPUAllocatedTo(sb))
 }
 
+// sandboxGPUReleaseWait paces the wait for a launcher to let go of its GPU.
+const sandboxGPUReleaseWait = 5 * time.Second
+
+// launcherPodName is the sandbox's launcher pod: the claimed slot's pod for a
+// pooled checkout, else the cold pod named after the sandbox.
+func launcherPodName(sb *sandboxv1alpha1.SwiftSandbox) string {
+	if sb.Status.PodRef != "" {
+		return sb.Status.PodRef
+	}
+	return sb.Name
+}
+
+// launcherMayHoldGPU reports whether the sandbox's launcher pod may still hold
+// its VFIO group: it exists and its containers have not all exited. A
+// Terminating pod still counts -- its Cloud Hypervisor holds the group until
+// it exits -- and releasing the GPU then let the next consumer's VFIO bind
+// fail "Resource busy". The pod is returned for the caller to act on.
+func (r *SwiftSandboxReconciler) launcherMayHoldGPU(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (bool, *corev1.Pod, error) {
+	var pod corev1.Pod
+	if err := r.Get(ctx, client.ObjectKey{Namespace: sb.Namespace, Name: launcherPodName(sb)}, &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return false, &pod, nil
+	}
+	return true, &pod, nil
+}
+
+// releaseGPUWhenDone returns a finished sandbox's native GPU once its launcher
+// has exited. A Completed/Failed sandbox is kept until its TTL (or forever
+// without one) for its status and logs, and it used to keep the GPU reserved
+// that whole time.
+func (r *SwiftSandboxReconciler) releaseGPUWhenDone(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
+	if sb.Status.GPU == nil || !controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
+		return ctrl.Result{}, nil
+	}
+	held, _, err := r.launcherMayHoldGPU(ctx, sb)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if held {
+		return ctrl.Result{RequeueAfter: sandboxGPUReleaseWait}, nil
+	}
+	if err := r.releaseNativeGPU(ctx, sb); err != nil {
+		return ctrl.Result{}, err
+	}
+	sb.Status.GPU = nil
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionGPUAllocated, Status: metav1.ConditionFalse,
+		Reason: "Released", Message: "sandbox finished; GPU returned to the pool", ObservedGeneration: sb.Generation,
+	})
+	return ctrl.Result{}, r.Status().Update(ctx, sb)
+}
+
 // handleDeletion releases a native GPU allocation (if the finalizer is present)
 // and removes the finalizer so GC can proceed. A no-op for sandboxes that never
 // held a native GPU.
+//
+// The launcher is deleted first and the release waits until it has exited.
+// It is owned by the sandbox, but background GC removes it only after the
+// sandbox is gone -- i.e. after this finalizer -- so releasing straight away
+// freed a GPU whose VFIO group the still-running launcher held.
 func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
+		held, pod, err := r.launcherMayHoldGPU(ctx, sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if held {
+			if pod.DeletionTimestamp == nil && metav1.IsControlledBy(pod, sb) {
+				if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, err
+				}
+			}
+			return ctrl.Result{RequeueAfter: sandboxGPUReleaseWait}, nil
+		}
 		if err := r.releaseNativeGPU(ctx, sb); err != nil {
 			return ctrl.Result{}, err
 		}

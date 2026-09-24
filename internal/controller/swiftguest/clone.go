@@ -17,6 +17,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
@@ -242,8 +243,11 @@ func (r *SwiftGuestReconciler) stampCloneAnnotations(ctx context.Context, guest 
 	if err := r.Patch(ctx, patched, client.MergeFrom(guest)); err != nil {
 		return err
 	}
-	// Reflect the stamp in-memory so the rest of this reconcile sees it.
+	// Reflect the stamp in-memory so the rest of this reconcile sees it, and
+	// the new resourceVersion so this pass's (optimistically locked) status
+	// patch does not conflict with its own write.
 	guest.Annotations = patched.Annotations
+	guest.ResourceVersion = patched.ResourceVersion
 	return nil
 }
 
@@ -445,7 +449,7 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 // snapshot's backend. Returns (job, failReason): a non-empty failReason is
 // terminal (the required transfer image is not configured).
 func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.SwiftSnapshot, node, name string) (*batchv1.Job, string) {
-	labels := map[string]string{"kubeswift.io/snapshot": snap.Name}
+	labels := map[string]string{"kubeswift.io/snapshot": names.LabelValue(snap.Name)}
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
 		if r.SnapshotORASImage == "" {
 			return nil, "snapshot-oras image not configured (set KUBESWIFT_SNAPSHOT_ORAS_IMAGE)"
@@ -544,7 +548,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromSourceClone(
 	var srcPVC corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, client.ObjectKey{Name: sourceRootPVC, Namespace: guest.Namespace}, &srcPVC); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil, fmt.Errorf("cloneFromSnapshot: source root PVC %s not found — a memory-only clone needs the source guest's disk (use a full-state includeDisk snapshot for source-independent clones)", sourceRootPVC)
+			return true, nil, rootDiskFailed("cloneFromSnapshot: source root PVC %s not found — a memory-only clone needs the source guest's disk (use a full-state includeDisk snapshot for source-independent clones)", sourceRootPVC)
 		}
 		return true, nil, err
 	}

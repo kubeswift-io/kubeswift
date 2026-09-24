@@ -46,6 +46,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -208,6 +209,54 @@ func IsInPlaceRestore(snap *snapshotv1alpha1.SwiftSnapshot, restore *snapshotv1a
 	return true
 }
 
+// diskDivergence explains why an in-place memory restore would resume the
+// snapshot's RAM against a disk that no longer matches it, or returns "" when
+// nothing says it would (or the operator accepted it).
+//
+// A local/s3/oci memory snapshot captures RAM and device state, not the disk:
+// the restored VM reopens the guest's live disk. If anything ran on that disk
+// after the capture, the restored kernel's page cache, filesystem metadata and
+// journal state are older than the blocks underneath them, and it writes that
+// stale state back -- silent filesystem corruption. Two things say something
+// ran: the captured VM itself was resumed (resumeAfterSnapshot, the default),
+// or the guest's current launcher was started after the capture (a normal boot
+// from disk, e.g. the guest controller replacing a killed launcher). A
+// full-state OCI capture (includeDisk) terminates the guest at the snapshot
+// instant and carries the disk, so it does not diverge.
+func (r *SwiftRestoreReconciler) diskDivergence(
+	ctx context.Context,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+	restore *snapshotv1alpha1.SwiftRestore,
+	guest *swiftv1alpha1.SwiftGuest,
+) (string, error) {
+	if snap.Spec.IncludeDisk || restore.Annotations[snapshotv1alpha1.AnnotationAcceptDiskDivergence] == "true" {
+		return "", nil
+	}
+	why := ""
+	if snap.Spec.ResumeAfterSnapshot {
+		why = "the guest was resumed after the capture (resumeAfterSnapshot=true)"
+	} else if snap.Status.CapturedAt != nil {
+		pod, err := r.findLauncherPod(ctx, guest.Namespace, guest.Name)
+		if err != nil {
+			return "", err
+		}
+		// A restore-receive launcher is this restore's own (a re-run of
+		// Pending), not a boot from disk.
+		if pod != nil && pod.Labels["swift.kubeswift.io/role"] != "restore-receive" &&
+			pod.CreationTimestamp.After(snap.Status.CapturedAt.Time) {
+			why = "the guest has been relaunched from its disk since the capture (launcher " + pod.Name + ")"
+		}
+	}
+	if why == "" {
+		return "", nil
+	}
+	return "refusing in-place restore of " + guest.Name + ": SwiftSnapshot " + snap.Name +
+		" holds memory only, and " + why + ", so the disk has moved on since; resuming the old memory over " +
+		"the newer disk can corrupt the guest's filesystems. Use a csi-volume-snapshot for a disk-consistent " +
+		"restore, or set annotation " + snapshotv1alpha1.AnnotationAcceptDiskDivergence +
+		"=\"true\" on the SwiftRestore to accept the risk", nil
+}
+
 // CurrentClusterHypervisorVersion is the CH version the cluster is
 // expected to have, sourced from the controller-manager environment.
 // Read at controller startup (not per-reconcile) by main.go and
@@ -320,6 +369,15 @@ func (r *SwiftRestoreReconciler) materializeRestoreTarget(
 					" requires targetGuest.overwriteExisting=true")
 			return true, 0, nil
 		}
+		msg, err := r.diskDivergence(ctx, snap, restore, &source)
+		if err != nil {
+			return false, 0, err
+		}
+		if msg != "" {
+			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonDiskDiverged, msg)
+			return true, 0, nil
+		}
 		if err := r.stampGuestForRestore(ctx, &source, annos); err != nil {
 			return false, 0, fmt.Errorf("stamp source SwiftGuest for restore: %w", err)
 		}
@@ -340,15 +398,21 @@ func (r *SwiftRestoreReconciler) materializeRestoreTarget(
 		// controller would mark its own work as a TargetConflict.
 		var existing swiftv1alpha1.SwiftGuest
 		err := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existing)
-		if err == nil {
-			ownedByThisRestore := existing.Labels[swiftRestoreOwnerLabel] == restore.Name
-			if !ownedByThisRestore && !restore.Spec.TargetGuest.OverwriteExisting {
-				setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+		if err == nil && existing.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
+			setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+			if !restore.Spec.TargetGuest.OverwriteExisting {
 				setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
 					"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; "+
 						"set targetGuest.overwriteExisting=true to replace")
 				return true, 0, nil
 			}
+			// ensureCloneTargetGuest returns an existing guest as it is, so an
+			// overwrite used to stamp nothing, "resume" the guest that was
+			// already running, and report Ready with nothing restored.
+			setReadyCondition(status, metav1.ConditionFalse, ReasonOverwriteUnsupported,
+				"a clone restore cannot overwrite existing SwiftGuest "+restore.Spec.TargetGuest.Name+
+					" (only an in-place restore onto the snapshot's own source guest can); delete it first, or restore to a new name")
+			return true, 0, nil
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			return false, 0, err
@@ -390,8 +454,21 @@ func (r *SwiftRestoreReconciler) handleRestoringLocal(
 		return false, 5 * time.Second, "", nil
 	}
 
-	// CH is up + paused. Transition to Resuming so the next reconcile
-	// drives the resume action.
+	// CH is up + paused. resumeAfterRestore=false stops here: the VM is left
+	// paused for inspection. (The in-place path used to resume it anyway.)
+	if !restore.Spec.ResumeAfterRestore {
+		msg := "restore complete; SwiftGuest " + target.Name + " is paused per resumeAfterRestore=false"
+		if err := r.unstampGuestRestoreAnnotations(ctx, restore.Namespace, target.Name); err != nil {
+			msg += " (note: annotation cleanup deferred: " + err.Error() + ")"
+		}
+		now := metav1.Now()
+		status.CompletedAt = &now
+		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseReady)
+		setReadyCondition(status, metav1.ConditionTrue, ReasonRestoreReady, msg)
+		return true, 0, "", nil
+	}
+
+	// Transition to Resuming so the next reconcile drives the resume action.
 	setPhase(status, snapshotv1alpha1.SwiftRestorePhaseResuming)
 	setReadyCondition(status, metav1.ConditionFalse, ReasonResuming,
 		"target SwiftGuest "+target.Name+" launcher up; resume action queued")
@@ -673,7 +750,7 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 			Namespace:   restore.Namespace,
 			Annotations: annos,
 			Labels: map[string]string{
-				swiftRestoreOwnerLabel: restore.Name,
+				swiftRestoreOwnerLabel: names.LabelValue(restore.Name),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(restore, swiftRestoreGVK),
@@ -688,15 +765,12 @@ func (r *SwiftRestoreReconciler) ensureCloneTargetGuest(
 	// socket") forever. Mirrors the cloneFromSnapshot rule in
 	// swiftguest/clone.go ("runPolicy is clone-owned"). Surfaced by the F2
 	// investigation (2026-07-02).
+	//
+	// That holds for resumeAfterRestore=false too: "left paused" means a
+	// launcher whose CH has loaded the snapshot and was never sent the resume
+	// action (handleRestoringLocal stops there). A Stopped target has no
+	// launcher at all, so the restore waited for one forever.
 	target.Spec.RunPolicy = swiftv1alpha1.RunPolicyRunning
-	if !restore.Spec.ResumeAfterRestore {
-		// Caller asked the restored VM be left Paused. With Tier B
-		// the launcher pod is what gets paused (CH stays paused
-		// without a resume action), so we just don't drive the
-		// resume in handleResumingLocal — implementation note: this
-		// flag is consulted there.
-		target.Spec.RunPolicy = swiftv1alpha1.RunPolicyStopped
-	}
 	if err := r.Create(ctx, target); err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, err
 	}

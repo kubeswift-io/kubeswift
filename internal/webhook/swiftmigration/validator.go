@@ -165,6 +165,11 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftMigration, got %T", oldObj)
 	}
+	// A migration being deleted is shedding its cleanup finalizer; a shape
+	// rule added since it was created must not block that.
+	if mig.DeletionTimestamp != nil {
+		return nil, nil
+	}
 	if !specsEqual(&oldMig.Spec, &mig.Spec) {
 		return nil, fmt.Errorf("SwiftMigration spec is immutable after creation; create a new SwiftMigration to retry with different inputs")
 	}
@@ -520,6 +525,11 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	// Phase 1 offline migrations are exempt — they don't conflict with
 	// live mode (different state surfaces) and the per-source-guest
 	// annotation conflict check in Preparing is the floor for offline.
+	//
+	// A mode=auto migration is not checked here: whether it goes live is
+	// decided later, by the controller. Once it has, it counts against
+	// its source node for later explicit-live admissions (peers are
+	// compared by their resolved mode).
 	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive && sourceNode != "" {
 		if err := v.checkPerSourceNodeConcurrency(ctx, mig, sourceNode); err != nil {
 			return nil, err
@@ -591,15 +601,9 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 		return fmt.Errorf("look up SwiftGuestClass %q for live-mode storage check: %w",
 			guest.Spec.GuestClassRef.Name, err)
 	}
-	storage := resolved.MergeStorage(guest, &class)
-	if storage.IsLiveMigrationCapable() {
-		return nil
-	}
-	return fmt.Errorf(
-		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (Filesystem RWX is not live-migration-capable). "+
-			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline.",
-		guest.Name, storage.AccessMode, storage.VolumeMode,
-	)
+	// The rule itself is shared with the controller (auto-mode resolution and
+	// the Validating-live gate), so admission and reconcile cannot drift.
+	return resolved.LiveMigrationStorageError(guest, &class)
 }
 
 // checkPerSourceNodeConcurrency rejects a live-mode SwiftMigration
@@ -627,8 +631,15 @@ func (v *Validator) checkPerSourceNodeConcurrency(
 			continue
 		}
 		// Only live mode conflicts with live mode. Phase 1 offline
-		// migrations don't share state with live mode.
-		if other.Spec.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		// migrations don't share state with live mode. A peer's mode is
+		// the one it resolved to (status.mode) once it has one: mode=auto,
+		// the default for swiftctl and drain, is live from then on, and
+		// an auto peer that resolved offline does not count.
+		otherMode := other.Status.Mode
+		if otherMode == "" {
+			otherMode = other.Spec.Mode
+		}
+		if otherMode != migrationv1alpha1.SwiftMigrationModeLive {
 			continue
 		}
 		// Skip terminal-phase peers.

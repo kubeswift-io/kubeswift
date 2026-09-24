@@ -29,7 +29,7 @@ func TestIdentityFromClaims_Keycloak(t *testing.T) {
 }
 
 func TestIdentityFromClaims_EmailAndPrefixes(t *testing.T) {
-	claims := map[string]interface{}{"email": "bob@example.com", "groups": []interface{}{"admins"}}
+	claims := map[string]interface{}{"email": "bob@example.com", "email_verified": true, "groups": []interface{}{"admins"}}
 	id, err := identityFromClaims(claims, OIDCClaimConfig{
 		UsernameClaim: "email", GroupsClaim: "groups",
 		UsernamePrefix: "oidc:", GroupsPrefix: "oidc:",
@@ -42,6 +42,44 @@ func TestIdentityFromClaims_EmailAndPrefixes(t *testing.T) {
 	}
 	if len(id.Groups) != 1 || id.Groups[0] != "oidc:admins" {
 		t.Errorf("groups = %v", id.Groups)
+	}
+}
+
+// With the email username claim (the default), an unverified or missing
+// email_verified must be rejected — an IdP that lets a user set their own email
+// could otherwise assert a privileged operator's address. Mirrors kube-apiserver.
+func TestIdentityFromClaims_EmailRequiresVerified(t *testing.T) {
+	cfg := OIDCClaimConfig{UsernameClaim: "email"}
+	for _, tc := range []struct {
+		name  string
+		claim interface{}
+		ok    bool
+	}{
+		{"verified bool", true, true},
+		{"verified string", "true", true},
+		{"unverified bool", false, false},
+		{"unverified string", "false", false},
+		{"absent", nil, false},
+	} {
+		claims := map[string]interface{}{"email": "admin@corp.com"}
+		if tc.claim != nil {
+			claims["email_verified"] = tc.claim
+		}
+		_, err := identityFromClaims(claims, cfg)
+		if tc.ok && err != nil {
+			t.Errorf("%s: want accept, got %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s: want rejection, got nil", tc.name)
+		}
+	}
+
+	// A non-email username claim is not subject to the check.
+	if _, err := identityFromClaims(
+		map[string]interface{}{"preferred_username": "bob"},
+		OIDCClaimConfig{UsernameClaim: "preferred_username"},
+	); err != nil {
+		t.Errorf("non-email claim should not require email_verified: %v", err)
 	}
 }
 

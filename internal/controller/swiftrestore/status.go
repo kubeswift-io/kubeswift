@@ -18,6 +18,12 @@ const (
 	ReasonSourceGuestGone  = "SourceGuestGone"
 	ReasonTargetConflict   = "TargetConflict"
 	ReasonRestoreFailed    = "RestoreFailed"
+	// ReasonOverwriteUnsupported: overwriteExisting asked to restore over an
+	// existing guest in a mode that cannot replace its state.
+	ReasonOverwriteUnsupported = "OverwriteUnsupported"
+	// ReasonDiskDiverged: an in-place memory restore whose guest kept running
+	// on its disk after the capture (see AnnotationAcceptDiskDivergence).
+	ReasonDiskDiverged = "DiskDiverged"
 )
 
 func setPhase(status *snapshotv1alpha1.SwiftRestoreStatus, phase snapshotv1alpha1.SwiftRestorePhase) {

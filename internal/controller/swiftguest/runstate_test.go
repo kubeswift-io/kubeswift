@@ -3,8 +3,10 @@ package swiftguest
 import (
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -46,6 +48,33 @@ func assertNotRunning(t *testing.T, st *swiftv1alpha1.SwiftGuestStatus, wantReas
 	}
 	if ip := st.Network.PrimaryIP; ip != "" {
 		t.Errorf("primaryIP = %q; the address went with the launcher", ip)
+	}
+}
+
+// The last run's process, console socket and interface leases are gone with
+// its launcher; the hypervisor kind describes the guest and stays.
+func TestClearRunState_DropsTheRunsProcessConsoleAndLeases(t *testing.T) {
+	st := ranStatus("pod-1")
+	st.Runtime = &swiftv1alpha1.GuestRuntimeStatus{PID: 4242, Hypervisor: "qemu"}
+	st.Console = &swiftv1alpha1.GuestConsoleStatus{SerialSocket: "/run/kubeswift/serial.sock"}
+	st.Network.Interfaces = []swiftv1alpha1.GuestNetworkInterface{{Name: "eth0"}}
+	st.Network.Ready = true
+	st.Network.Egress = "ClusterServices"
+
+	ClearRunState(st, "Stopped", "stopped")
+
+	if st.Network.Ready || st.Network.Egress != "" {
+		t.Errorf("network ready=%v egress=%q; both were observations of the last run", st.Network.Ready, st.Network.Egress)
+	}
+
+	if st.Runtime == nil || st.Runtime.PID != 0 || st.Runtime.Hypervisor != "qemu" {
+		t.Errorf("runtime = %+v, want pid cleared and hypervisor kept", st.Runtime)
+	}
+	if st.Console != nil {
+		t.Errorf("console = %+v; the serial socket went with the launcher", st.Console)
+	}
+	if len(st.Network.Interfaces) != 0 {
+		t.Errorf("interfaces = %+v; their addresses were the last run's leases", st.Network.Interfaces)
 	}
 }
 
@@ -165,6 +194,37 @@ func TestMapPodToStatus_APendingLauncherIsNotRunning(t *testing.T) {
 	}
 }
 
+// A pod stays Pending while ANY container is still waiting, so a running
+// launcher next to a sidecar that has not started yet (the migration stunnel
+// server pulling its image) reads Pending. swiftletd reports GuestRunning=True
+// only once, so clearing it here left the guest not-running for good.
+func TestMapPodToStatus_PendingWithRunningLauncherKeepsRunState(t *testing.T) {
+	st := ranStatus("pod-1")
+	pending := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1"},
+		Spec:       corev1.PodSpec{NodeName: "worker-1"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: LauncherContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+				{Name: "stunnel", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}},
+			},
+		},
+	}
+	MapPodToStatus(pending, st)
+	if c := findCondition(st, "GuestRunning"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("GuestRunning = %+v; the launcher is running, only a sidecar is waiting", c)
+	}
+	if st.Network.PrimaryIP != "192.0.2.10" {
+		t.Errorf("primaryIP = %q; the VM still holds its address", st.Network.PrimaryIP)
+	}
+
+	// The launcher itself waiting is still "not running".
+	pending.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
+	MapPodToStatus(pending, st)
+	assertNotRunning(t, st, "GuestStarting")
+}
+
 // Clearing must be idempotent: setCondition stamps lastTransitionTime every
 // time, so a guest sitting Pending would otherwise have its status rewritten —
 // and claim a transition — on every reconcile.
@@ -190,5 +250,30 @@ func TestClearRunState_ANewReasonIsRecorded(t *testing.T) {
 	ClearRunState(st, "Stopped", "stopped")
 	if c := findCondition(st, "GuestRunning"); c == nil || c.Reason != "Stopped" {
 		t.Errorf("GuestRunning = %+v, want the newer reason", c)
+	}
+}
+
+// Re-setting a condition to the status it already has must not change it:
+// the controller writes status only when it changed, and a restamped
+// lastTransitionTime made every reconcile of every guest a write.
+func TestSetCondition_KeepsTransitionTimeUnlessStatusChanges(t *testing.T) {
+	st := &swiftv1alpha1.SwiftGuestStatus{}
+	past := metav1.NewTime(metav1.Now().Add(-time.Hour))
+	st.Conditions = []metav1.Condition{{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "VmRunning", LastTransitionTime: past}}
+	before := st.DeepCopy()
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "VmRunning"})
+	if !equality.Semantic.DeepEqual(before, st) {
+		t.Errorf("re-setting an unchanged condition changed the status:\n before %+v\n after  %+v", before.Conditions, st.Conditions)
+	}
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "Other", Message: "m"})
+	if c := findCondition(st, "GuestRunning"); !c.LastTransitionTime.Equal(&past) || c.Reason != "Other" {
+		t.Errorf("a reason-only change must update the reason and keep the transition time, got %+v", c)
+	}
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionFalse, Reason: "Stopped"})
+	if c := findCondition(st, "GuestRunning"); c.LastTransitionTime.Equal(&past) {
+		t.Error("a status change must move the transition time")
 	}
 }

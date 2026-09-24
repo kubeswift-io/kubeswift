@@ -8,12 +8,15 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	cacheopts "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -86,6 +89,10 @@ func main() {
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	metricsAddr := flag.String("metrics-bind-address", ":8080", "Address for metrics endpoint")
+	metricsSecure := flag.Bool("metrics-secure", false,
+		"Serve metrics over HTTPS to callers the apiserver authenticates and authorizes for GET /metrics "+
+			"(grant scrapers the kubeswift-metrics-reader ClusterRole). Off by default: turning it on changes how Prometheus must scrape.")
+	probeAddr := flag.String("health-probe-bind-address", ":8081", "Address for the /healthz and /readyz endpoints")
 	var allowedHostPaths stringSliceFlag
 	flag.Var(&allowedHostPaths, "allowed-hostpath-prefix",
 		"Host-path prefix a SwiftGuest may mount into the (privileged) launcher pod "+
@@ -121,7 +128,8 @@ func main() {
 
 	mgrOpts := ctrl.Options{
 		Scheme:                  scheme.Scheme,
-		Metrics:                 metricsserver.Options{BindAddress: *metricsAddr},
+		Metrics:                 metricsOptions(*metricsAddr, *metricsSecure),
+		HealthProbeBindAddress:  *probeAddr,
 		LeaderElection:          *leaderElect,
 		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: leaderElectionNS,
@@ -141,6 +149,21 @@ func main() {
 		// (their Reconcile is idempotent and their primary trigger is
 		// also informer-driven).
 		Cache: cacheopts.Options{SyncPeriod: ptr.To(30 * time.Second)},
+		// Do NOT cache Secrets. The default cached client backs every typed
+		// read with an informer, so a single r.Get on a Secret makes
+		// controller-runtime watch and hold EVERY Secret in the cluster in
+		// memory — seed data, migration mTLS keys, registry creds, and every
+		// unrelated tenant Secret — under the manager's 512Mi limit, an OOM
+		// risk on large clusters and a fat target if the controller is
+		// compromised. No controller watches or owns Secrets (they are only
+		// read imperatively), so reading them straight from the apiserver is
+		// correct and also fresher (no read-after-write cache staleness for the
+		// seed/cert Secrets the controllers create then re-read). The sandbox
+		// controller already reads pull secrets uncached via APIReader for the
+		// same reason; this extends it to the shared cached client.
+		Client: client.Options{
+			Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}},
+		},
 	}
 	if *webhookEnabled {
 		mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{
@@ -153,6 +176,21 @@ func main() {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		klog.ErrorS(err, "unable to create manager")
+		os.Exit(1)
+	}
+	// Liveness is the process answering. Readiness also waits for the
+	// webhook server when webhooks are on: they are failurePolicy: Fail, so a
+	// pod that is Ready before it serves them fails every guarded write.
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		klog.ErrorS(err, "unable to add health check")
+		os.Exit(1)
+	}
+	readyCheck := healthz.Ping
+	if *webhookEnabled {
+		readyCheck = mgr.GetWebhookServer().StartedChecker()
+	}
+	if err := mgr.AddReadyzCheck("readyz", readyCheck); err != nil {
+		klog.ErrorS(err, "unable to add ready check")
 		os.Exit(1)
 	}
 
@@ -507,4 +545,16 @@ func volumeSnapshotCRDsInstalled(cs kubernetes.Interface) bool {
 		}
 	}
 	return false
+}
+
+// metricsOptions serves metrics over plain HTTP, or -- with secure -- over
+// HTTPS (a self-signed certificate unless one is provided) to authenticated,
+// authorized callers only.
+func metricsOptions(addr string, secure bool) metricsserver.Options {
+	opts := metricsserver.Options{BindAddress: addr}
+	if secure {
+		opts.SecureServing = true
+		opts.FilterProvider = kubeswiftmetrics.AuthFilterProvider
+	}
+	return opts
 }

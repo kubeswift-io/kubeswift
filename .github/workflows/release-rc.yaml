@@ -210,7 +210,7 @@ jobs:
       # certificate are stored alongside the image in GHCR and logged in the
       # Rekor transparency log. Verify with:
       #   cosign verify <image>@<digest> \
-      #     --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@.*' \
+      #     --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       # Every image this workflow builds, digest-pinned, shared by the sign and
       # verify steps below so the two cannot drift.
@@ -266,7 +266,7 @@ jobs:
             [ -n "$ref" ] || continue
             echo "verifying $ref"
             cosign verify "$ref" \
-              --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-rc\.yaml@.*$' \
+              --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-rc\.yaml@refs/tags/v.*$' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               > /dev/null
           done
@@ -340,6 +340,6 @@ jobs:
 
             ```bash
             cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:${{ steps.version.outputs.tag }} \
-              --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+              --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com
             ```

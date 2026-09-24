@@ -22,6 +22,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
@@ -99,7 +100,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 	}
 
 	// 2. Ensure the node-pinned download Job that materializes the disk from oci.
-	jobName := cloneName + "-oci-disk-dl"
+	jobName := names.JobName(cloneName, "-oci-disk-dl")
 	var job batchv1.Job
 	jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 	if apierrors.IsNotFound(jerr) {
@@ -134,7 +135,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 			return true, &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return true, nil, fmt.Errorf("full-state clone disk download failed: %s", c.Message)
+			return true, nil, rootDiskFailed("full-state clone disk download failed: %s", c.Message)
 		}
 	}
 	return true, nil, fmt.Errorf("full-state clone disk download in progress")
@@ -300,7 +301,7 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 			return perr
 		}
 
-		jobName := pvcName + "-oci-dl"
+		jobName := names.JobName(pvcName, "-oci-dl")
 		var job batchv1.Job
 		jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 		if apierrors.IsNotFound(jerr) {
@@ -333,13 +334,13 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 			return err
 		}
 		var job batchv1.Job
-		if err := r.Get(ctx, client.ObjectKey{Name: pvcName + "-oci-dl", Namespace: guest.Namespace}, &job); err != nil {
+		if err := r.Get(ctx, client.ObjectKey{Name: names.JobName(pvcName, "-oci-dl"), Namespace: guest.Namespace}, &job); err != nil {
 			return err
 		}
 		done := false
 		for _, c := range job.Status.Conditions {
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-				return fmt.Errorf("clone data-disk %s download failed: %s", art.Name, c.Message)
+				return rootDiskFailed("clone data-disk %s download failed: %s", art.Name, c.Message)
 			}
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 				done = true

@@ -142,13 +142,15 @@ spec:
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 2    # delete up to 2 old replicas at once
-      maxSurge: 1          # create up to 1 extra replica during rollout
+      maxUnavailable: 2    # up to 2 replicas may be down at once
+      maxSurge: 1          # up to 1 extra replica during rollout
 ```
 
-- `maxUnavailable: 1, maxSurge: 0` (default) -- safest; one replica down at a time, no extra capacity needed
+- `maxUnavailable: 1, maxSurge: 0` (default) -- one replica down at a time, no extra capacity needed
 - `maxUnavailable: 0, maxSurge: 1` -- zero-downtime; always at full capacity, needs headroom for one extra VM
-- `maxUnavailable: "25%", maxSurge: "25%"` -- fast rollout for large fleets
+- Both are integers, and they cannot both be `0` (no replica could ever be replaced)
+
+A replica counts as available only while it is `Running` with `GuestRunning=True`. A replacement that is still booting does not count. Outdated replicas that are not serving are replaced first and do not use up `maxUnavailable`, so rolling back a rollout that never became ready is not blocked. Surge replicas take the next indices above `replicas` (e.g. `demo-pool-3` for a 3-replica pool) and are removed when the rollout finishes.
 
 ### Recreate strategy
 
@@ -320,7 +322,7 @@ spec:
         name: default
 ```
 
-This creates PVCs named `stateful-pool-home-0`, `stateful-pool-home-1`, etc.
+This creates PVCs named `home-stateful-pool-0`, `home-stateful-pool-1`, etc. (`<template-name>-<pool-name>-<index>`), each labelled `swift.kubeswift.io/pool=stateful-pool`.
 
 ### PVC lifecycle
 

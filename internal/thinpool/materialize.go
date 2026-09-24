@@ -55,6 +55,15 @@ const maxIDRetries = 8
 // one writes and the rest wait and then use what it wrote. Callers for
 // different keys do not block each other.
 func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uint64, open func() (io.ReadCloser, error)) (uint32, error) {
+	return x.EnsureBaseNeeding(ctx, key, sizeBytes, sizeBytes, open)
+}
+
+// EnsureBaseNeeding is EnsureBase for an image whose write needs less pool
+// space than its size: needBytes bounds what populating it will allocate
+// (PoolBytesForFile computes it for a sparse image file). Asking the pool for
+// the full size of a mostly-empty image refused bases that fit, and evicted
+// others trying to make room it did not need.
+func (x *Materializer) EnsureBaseNeeding(ctx context.Context, key string, sizeBytes, needBytes uint64, open func() (io.ReadCloser, error)) (uint32, error) {
 	if key == "" {
 		return 0, errors.New("thinpool: empty base key")
 	}
@@ -77,10 +86,16 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 	}
 
 	// A base is a cache, and dm-thin refcounts what it shares, so an unused one
-	// can go to make room for this one (§7.5).
-	if err := x.makeRoomFor(ctx, sizeBytes, key); err != nil {
+	// can go to make room for this one (§7.5). The room is reserved until the
+	// write is done, so a concurrent build of another image cannot count on it.
+	if err := x.makeRoomFor(ctx, needBytes, key); err != nil {
 		return 0, err
 	}
+	defer func() {
+		if err := x.Reg.Unreserve(key); err != nil {
+			x.logf("releasing the pool space reserved for base %s: %v (it lapses on its own)", key, err)
+		}
+	}()
 
 	sectors := bytesToSectors(sizeBytes)
 	name := baseDeviceName(key)
@@ -108,8 +123,9 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 	return id, nil
 }
 
-// makeRoomFor frees pool space for a base of sizeBytes by evicting others,
-// least recently used first, and returns an error only when it cannot.
+// makeRoomFor reserves pool space for a base of sizeBytes, evicting others,
+// least recently used first, until it can, and returns an error only when it
+// cannot.
 //
 // Evicting a base is safe at any time: it is a convenience for creating the
 // NEXT guest, not a dependency of the ones already running — dm-thin
@@ -117,38 +133,49 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 // derived from it byte-identical and writable, and returns only the blocks
 // nothing else points at (measured, §7.5). The cost of being wrong is the time
 // to write that base again.
+//
+// The space is reserved (Registry.Reserve) rather than merely checked, and
+// what other builds have reserved does not count as free; the caller releases
+// it when its write is done.
 func (x *Materializer) makeRoomFor(ctx context.Context, sizeBytes uint64, keep string) error {
-	free, err := x.freeBytes(ctx)
-	if err != nil || free >= sizeBytes {
-		return err
-	}
-	keys, err := x.Reg.BasesByLeastRecentUse()
-	if err != nil {
-		return err
-	}
-	evicted := 0
-	for _, key := range keys {
-		if key == keep {
-			continue
+	free := func() (uint64, error) { return x.freeBytes(ctx) }
+	var keys []string
+	listed := false
+	others, evicted, next := 0, 0, 0
+	for {
+		ok, available, err := x.Reg.Reserve(keep, sizeBytes, free)
+		if err != nil || ok {
+			return err
 		}
-		gone, err := x.evictBase(ctx, key)
+		if !listed {
+			if keys, err = x.Reg.BasesByLeastRecentUse(); err != nil {
+				return err
+			}
+			for _, k := range keys {
+				if k != keep {
+					others++
+				}
+			}
+			listed = true
+		}
+		for next < len(keys) && keys[next] == keep {
+			next++
+		}
+		if next >= len(keys) {
+			return fmt.Errorf("the pool has %d bytes available (free, less what other base builds on this node have reserved) "+
+				"and this base needs %d; evicted %d of %d other bases and it still does not fit. "+
+				"Give the pool a larger data device, or use a smaller image",
+				available, sizeBytes, evicted, others)
+		}
+		gone, err := x.evictBase(ctx, keys[next])
+		next++
 		if err != nil {
 			return err
 		}
-		if !gone {
-			continue
-		}
-		evicted++
-		if free, err = x.freeBytes(ctx); err != nil {
-			return err
-		}
-		if free >= sizeBytes {
-			return nil
+		if gone {
+			evicted++
 		}
 	}
-	return fmt.Errorf("the pool has %d bytes free and this base needs %d; evicted %d of %d other bases and "+
-		"it still does not fit. Give the pool a larger data device, or use a smaller image",
-		free, sizeBytes, evicted, len(keys))
 }
 
 // evictBase deletes a base and forgets it, reporting whether it went.
@@ -224,8 +251,21 @@ func (x *Materializer) createBase(ctx context.Context, key, name string, sectors
 			return 0, err
 		}
 		if !fresh {
-			_ = x.M.RemoveDevice(ctx, name) // a crashed writer may have left it mapped
-			_ = x.M.DeleteThin(ctx, id)     // absent if the crash came before create_thin
+			// Throw the partial base away. Only "already gone" is ignorable:
+			// had a busy mapping or a refused delete been ignored, create_thin
+			// below would find the id still in the pool and take the
+			// "registry fell behind" path, forgetting the id -- and leaking the
+			// old device, up to the image's full size, with nothing naming it.
+			if active, err := x.M.Active(ctx, name); err != nil {
+				return 0, err
+			} else if active {
+				if err := x.M.RemoveDevice(ctx, name); err != nil {
+					return 0, fmt.Errorf("unmapping the unfinished base %s: %w", key, err)
+				}
+			}
+			if err := x.M.DeleteThin(ctx, id); err != nil && !errors.Is(err, ErrNoSuchThin) {
+				return 0, fmt.Errorf("deleting the unfinished base %s: %w", key, err)
+			}
 		}
 		err = x.M.CreateBase(ctx, id, name, sectors)
 		if err == nil {
@@ -336,19 +376,49 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 	if id, known, err := x.Reg.GuestID(guestKey); err != nil {
 		return "", err
 	} else if known {
-		// The guest has a disk. Reactivate it; never re-snapshot.
-		//
-		// If the pool no longer holds this id, this fails, and that is the
-		// right outcome: the guest's data is gone, and quietly handing it a
-		// new empty disk would make that look like a clean first boot.
-		if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
-			return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
+		created, err := x.Reg.GuestCreated(guestKey)
+		if err != nil {
+			return "", err
 		}
-		return x.M.DevicePath(devName), nil
+		if created {
+			// The guest has a disk. Reactivate it; never re-snapshot.
+			//
+			// If the pool no longer holds this id, this fails, and that is the
+			// right outcome: the guest's data is gone, and quietly handing it a
+			// new empty disk would make that look like a clean first boot.
+			if err := x.M.Activate(ctx, id, devName, sectors); err != nil {
+				return "", fmt.Errorf("reactivating the disk of guest %s (device %d): %w", guestKey, id, err)
+			}
+			return x.M.DevicePath(devName), nil
+		}
+		// Allocated but never created: its create_snap failed, or the process
+		// died before recording success. The guest never received a disk, so
+		// it holds no data — create one now instead of stranding it on a
+		// reactivation that can never succeed. Drop the allocation and take a
+		// FRESH id below; never activate whatever may sit at the old one: if
+		// the registry is behind the pool, that id could be another guest's
+		// disk. (Should create_snap in fact have completed just before a crash,
+		// its pristine snapshot of the base is left unnamed in the pool.)
+		if err := x.Reg.Forget(guestKey); err != nil {
+			return "", err
+		}
 	}
 
 	// A new guest: this is the only case that needs the base, and it must be
 	// completely written before anything is snapshotted from it.
+	//
+	// Hold the base's lock until the snapshot exists. Eviction takes that lock
+	// without waiting and skips a base someone holds; without it, a build of
+	// another image could evict this base between the readiness check and
+	// create_snap, and the guest's first attempt failed on a base that had
+	// just been deleted.
+	if baseKey != "" {
+		unlock, err := x.lockKey(baseKey)
+		if err != nil {
+			return "", err
+		}
+		defer unlock()
+	}
 	ready, err := x.Reg.BaseReady(baseKey)
 	if err != nil {
 		return "", err
@@ -379,9 +449,17 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 		}
 		err = x.M.SnapshotBase(ctx, baseID, id, devName, sectors)
 		if err == nil {
+			if err := x.Reg.MarkGuestCreated(guestKey); err != nil {
+				return "", err
+			}
 			return x.M.DevicePath(devName), nil
 		}
 		if !isFileExists(err) {
+			// The snapshot was not created: release the allocation so the
+			// guest is not recorded against a device that does not exist.
+			if ferr := x.Reg.Forget(guestKey); ferr != nil {
+				return "", fmt.Errorf("%w (and forgetting the failed allocation: %v)", err, ferr)
+			}
 			return "", err
 		}
 		if err := x.Reg.Forget(guestKey); err != nil {

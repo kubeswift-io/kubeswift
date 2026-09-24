@@ -637,8 +637,11 @@ pub struct ActionState {
 /// 3. **Idempotent** — `action_id_key` matches `last_completed_id` or
 ///    matches the in-flight action's id.
 /// 4. **RejectInFlight** — different action-id arrives while one is in
-///    flight (cancel verbs are exempt — they bypass this gate so they
-///    can interrupt a running migration).
+///    flight (cancel verbs are exempt from this gate). Note what that does
+///    NOT buy: the action loop awaits each dispatch, so a cancel is only
+///    seen once the in-flight action returns. A cancel cannot interrupt a
+///    running receive; the controller's backstop is deleting the destination
+///    pod once its ack budget runs out (swiftmigration cancel_live.go).
 /// 5. **RejectAckMissing** — namespace has `ack_key=Some(_)` but the
 ///    annotation is absent or has a value other than `ack`. Phase 2
 ///    plaintext-transport gate (§8.2.1).
@@ -666,9 +669,10 @@ pub fn decide(
         return ActionDecision::Idempotent { id };
     }
     let kind = (keys.parse_verb)(verb);
-    // Cancel verbs bypass the in-flight gate so they can interrupt an
-    // in-flight migration (Q1d-F2). All other verbs follow the normal
-    // RejectInFlight rule.
+    // Cancel verbs bypass the in-flight gate (Q1d-F2). All other verbs
+    // follow the normal RejectInFlight rule. The gate only decides whether an
+    // action is accepted when it is seen; the loop sees it only between
+    // dispatches (see the decide() doc).
     let is_cancel = matches!(kind, ActionKind::MigrationCancel);
     if let Some(current) = in_flight_id {
         if current == id {
@@ -877,7 +881,9 @@ const SANDBOX_EXEC_TIMEOUT_SECS: u64 = 3600;
 /// Run a checked-out warm-slot's workload in the guest over vsock (single-shot exec
 /// into /newroot) and report the exit code. Mirrors `dispatch_identity_regenerate`:
 /// the vsock socket lives next to the CH API socket; the sync client runs on a
-/// blocking task so the action loop keeps ticking.
+/// blocking task so it does not stall the async runtime's other tasks. The
+/// action loop itself awaits it, so no other action on this pod is picked up
+/// until the workload exits (bounded by timeoutSeconds).
 ///
 /// A NON-ZERO workload exit is a SUCCESSFUL exec (Ok) carrying the code in the detail
 /// (status "complete") — the controller maps exit!=0 to a Failed sandbox, exit==0 to
@@ -921,15 +927,18 @@ async fn dispatch_sandbox_exec(
             resp.error.unwrap_or_else(|| "unknown".to_string())
         ));
     }
-    // Tee the workload output to the sandbox serial log (best-effort) so
-    // `swiftctl sandbox logs` shows it — a checked-out workload runs over vsock, not
-    // on the guest console the cold path captures.
+    // Save the workload output (best-effort) so `swiftctl sandbox logs` shows
+    // it — a checked-out workload runs over vsock, not on the guest console the
+    // cold path captures. Its own file, next to the console log: Cloud
+    // Hypervisor writes serial.sock.log at its own offset (it does not open it
+    // for append), so output appended there was overwritten by the next
+    // console line.
     if !resp.stdout.is_empty() || !resp.stderr.is_empty() {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(run_dir.join("serial.sock.log"))
+            .open(run_dir.join(WORKLOAD_LOG))
         {
             let _ = f.write_all(resp.stdout.as_bytes());
             let _ = f.write_all(resp.stderr.as_bytes());
@@ -944,6 +953,10 @@ async fn dispatch_sandbox_exec(
         success_status: Some("complete"),
     })
 }
+
+/// File in the run dir holding a warm-slot workload's output (read by
+/// `swiftctl sandbox logs` and the gateway after the console log).
+const WORKLOAD_LOG: &str = "workload.log";
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
 /// `send` verb. The destination URL is the load-bearing field and
@@ -1202,15 +1215,22 @@ async fn dispatch_migration_send(
     // `send-migration` NON-BLOCKING (#8021): the call returns 204 the
     // instant CH accepts the migration while pre-copy/stop-and-copy run on
     // a background thread. CH <= v52 blocks the call until the source has
-    // exited. This decides how completion is detected below. On a query
-    // failure we fall back to the historic (blocking) assumption — no
-    // worse than the pre-v53 behaviour.
-    let non_blocking = client
-        .version()
-        .ok()
-        .and_then(|v| v.major_minor())
-        .map(|(major, _)| major >= 53)
-        .unwrap_or(false);
+    // exited. This decides how completion is detected below. The probe is
+    // retried briefly: a wrong guess on v53 reports a migration still running
+    // in the background as failed. If it still cannot tell, fall back to the
+    // historic (blocking) assumption — no worse than the pre-v53 behaviour,
+    // and the non-blocking path must not be taken on a v52 CH, whose exit
+    // ordering it would break.
+    let non_blocking = match probe_ch_major(&client) {
+        Some(major) => major >= 53,
+        None => {
+            log::warn!(
+                "dispatch_migration_send id={} could not determine the Cloud Hypervisor version; assuming a blocking (<= v52) send",
+                action.id
+            );
+            false
+        }
+    };
 
     // Phase 3b PR 1 Commit D — spawn the progress-estimate emitter BEFORE
     // the send_migration call. Drop guard ensures the emitter is signaled
@@ -1743,6 +1763,19 @@ fn sanitize_ch_error(raw: &str) -> &'static str {
     }
 }
 
+/// The local Cloud Hypervisor's major version, asked up to three times.
+fn probe_ch_major(client: &swift_ch_client::ApiClient) -> Option<u32> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if let Some((major, _)) = client.version().ok().and_then(|v| v.major_minor()) {
+            return Some(major);
+        }
+    }
+    None
+}
+
 /// Args parsed from `kubeswift.io/snapshot-action-args` for the
 /// capture verb. Defaults match the controller's documented behavior
 /// so that empty/missing fields don't surprise the operator.
@@ -1769,6 +1802,61 @@ struct CaptureArgs {
 
 fn default_true() -> bool {
     true
+}
+
+/// Node directory every snapshot capture lands under (the launcher's
+/// `kubeswift-snapshots` hostPath mount).
+const SNAPSHOT_ROOT: &str = "/var/lib/kubeswift/snapshots/";
+
+#[cfg(not(test))]
+fn snapshot_root() -> String {
+    SNAPSHOT_ROOT.to_string()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests capture into a tempdir; this stands in for [`SNAPSHOT_ROOT`].
+    static TEST_SNAPSHOT_ROOT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn snapshot_root() -> String {
+    TEST_SNAPSHOT_ROOT
+        .with(|r| r.borrow().clone())
+        .unwrap_or_else(|| SNAPSHOT_ROOT.to_string())
+}
+
+/// The directory a capture may wipe and write: `file://` + the snapshot root
+/// ([`SNAPSHOT_ROOT`]) + one segment of `[A-Za-z0-9._-]` starting
+/// alphanumeric, the same rule the controller applies to
+/// `spec.backend.local.hostPath` (and that the s3/oci `<namespace>-<name>`
+/// directories satisfy). Anything else -- the root itself, a nested path,
+/// `..`, another scheme -- is refused.
+fn capture_dest_dir(url: &str) -> Result<&str, String> {
+    let root = snapshot_root();
+    let refuse = || {
+        format!(
+            "destination_url must be file://{}<name>/ with <name> a single [A-Za-z0-9._-] segment starting alphanumeric (got {:?})",
+            root, url
+        )
+    };
+    let path = url.strip_prefix("file://").ok_or_else(refuse)?;
+    let seg = path
+        .strip_prefix(root.as_str())
+        .ok_or_else(refuse)?
+        .trim_end_matches('/');
+    let first_alnum = seg
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric());
+    let safe = seg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !first_alnum || !safe {
+        return Err(refuse());
+    }
+    Ok(path.trim_end_matches('/'))
 }
 
 /// Capture handler: pause → snapshot → (optional) resume.
@@ -1823,14 +1911,18 @@ async fn dispatch_capture(
     // launcher pod (one capture-action in flight at a time, gated by
     // action-id) and across launchers each SwiftSnapshot owns a
     // unique destination subdirectory.
-    if let Some(local_path) = args.destination_url.strip_prefix("file://") {
-        let local_path = local_path.trim_end_matches('/');
-        // remove_dir_all on a missing path returns an error we ignore;
-        // the create_dir_all below is the only authoritative step.
-        let _ = std::fs::remove_dir_all(local_path);
-        if let Err(e) = std::fs::create_dir_all(local_path) {
-            return Err(format!("create destination dir {}: {}", local_path, e));
-        }
+    //
+    // The path comes from a pod annotation, which anyone who can patch the
+    // pod can write, and every launcher mounts the node-wide snapshot root
+    // read-write. So it is checked here, not only in the controller: a
+    // destination of the root itself (or one reaching outside it) would wipe
+    // every namespace's snapshots on the node.
+    let local_path = capture_dest_dir(&args.destination_url)?;
+    // remove_dir_all on a missing path returns an error we ignore;
+    // the create_dir_all below is the only authoritative step.
+    let _ = std::fs::remove_dir_all(local_path);
+    if let Err(e) = std::fs::create_dir_all(local_path) {
+        return Err(format!("create destination dir {}: {}", local_path, e));
     }
 
     let timeout =
@@ -2714,6 +2806,38 @@ async fn handle_namespace(
 
 #[cfg(test)]
 mod tests {
+
+    // A capture may only wipe one snapshot's own directory under the node's
+    // snapshot root: the path is annotation-supplied and the root is shared by
+    // every namespace on the node.
+    #[test]
+    fn capture_dest_dir_accepts_one_segment_under_the_root_only() {
+        TEST_SNAPSHOT_ROOT.with(|r| *r.borrow_mut() = None);
+        assert_eq!(
+            capture_dest_dir("file:///var/lib/kubeswift/snapshots/ns-snap/"),
+            Ok("/var/lib/kubeswift/snapshots/ns-snap")
+        );
+        assert_eq!(
+            capture_dest_dir("file:///var/lib/kubeswift/snapshots/db.v1_2"),
+            Ok("/var/lib/kubeswift/snapshots/db.v1_2")
+        );
+        for bad in [
+            "file:///var/lib/kubeswift/snapshots/",
+            "file:///var/lib/kubeswift/snapshots",
+            "file:///var/lib/kubeswift/snapshots/../kernels/",
+            "file:///var/lib/kubeswift/snapshots/..",
+            "file:///var/lib/kubeswift/snapshots/a/b/",
+            "file:///var/lib/kubeswift/snapshots/.hidden/",
+            "file:///var/lib/kubeswift/snapshots/-x/",
+            "file:///var/lib/kubeswift/snapshots/a b/",
+            "file:///etc/",
+            "file:///var/lib/kubeswift/snapshotsX/a/",
+            "/var/lib/kubeswift/snapshots/a/",
+            "http://example.com/var/lib/kubeswift/snapshots/a/",
+        ] {
+            assert!(capture_dest_dir(bad).is_err(), "{bad} must be refused");
+        }
+    }
     use super::*;
 
     fn ann(kvs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -3130,7 +3254,14 @@ mod tests {
     /// non-existent destination dirs at runtime) succeeds in tests
     /// without root permissions.
     fn tmp_dest_url(tmp: &tempfile::TempDir, sub: &str) -> String {
+        use_snapshot_root(tmp);
         format!("file://{}/{}/", tmp.path().display(), sub)
+    }
+
+    /// Point capture's snapshot root at tmp for this test thread.
+    fn use_snapshot_root(tmp: &tempfile::TempDir) {
+        let root = format!("{}/", tmp.path().display());
+        TEST_SNAPSHOT_ROOT.with(|r| *r.borrow_mut() = Some(root));
     }
 
     #[tokio::test]
@@ -3237,6 +3368,7 @@ mod tests {
         // already exists, no error, snapshot proceeds.
         let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
         let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
         let pre_existing = dest_tmp.path().join("preexisting");
         std::fs::create_dir_all(&pre_existing).unwrap();
         let dest_url = format!("file://{}/", pre_existing.display());
@@ -3253,6 +3385,7 @@ mod tests {
         // doesn't block the new capture.
         let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
         let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
         let snap_dir = dest_tmp.path().join("stale-snap");
         std::fs::create_dir_all(&snap_dir).unwrap();
         // Pre-populate with the three known CH outputs.
@@ -3270,6 +3403,28 @@ mod tests {
         assert!(!snap_dir.join("config.json").exists());
         assert!(!snap_dir.join("state.json").exists());
         assert!(!snap_dir.join("memory-ranges").exists());
+    }
+
+    // The snapshot root itself is refused before anything is wiped or the VM
+    // is paused: every namespace's snapshots on the node live under it.
+    #[tokio::test]
+    async fn capture_refuses_the_snapshot_root_and_wipes_nothing() {
+        let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
+        let other = dest_tmp.path().join("other-tenant-snap");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("state.json"), b"{}").unwrap();
+        let action = capture_action(serde_json::json!({
+            "destination_url": format!("file://{}/", dest_tmp.path().display()),
+        }));
+        let err = dispatch(&action, Path::new("/does/not/matter"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("destination_url must be"), "{err}");
+        assert!(
+            other.join("state.json").exists(),
+            "another snapshot was wiped"
+        );
     }
 
     #[tokio::test]

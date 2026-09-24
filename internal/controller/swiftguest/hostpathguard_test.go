@@ -40,6 +40,45 @@ func TestCheckHostPaths_EnforcedWithoutTheWebhook(t *testing.T) {
 	}
 }
 
+// The restore snapshot path arrives via annotations, not spec, and is mounted
+// into the privileged restore launcher. A tenant who can patch their own
+// SwiftGuest must not be able to point it at an arbitrary node path. It is
+// constrained to the snapshot base + one safe segment, independent of the
+// operator host-path allowlist.
+func TestCheckHostPaths_RestoreSnapshotPath(t *testing.T) {
+	withRestore := func(path string) *swiftv1alpha1.SwiftGuest {
+		return &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationActiveRestore:       "restore-1",
+				AnnotationRestoreSnapshotPath: path,
+			},
+		}}
+	}
+	// Even with a permissive allowlist, an out-of-snapshot restore path is refused.
+	for _, bad := range []string{
+		"/",
+		"/etc/kubernetes/pki",
+		"/var/lib/kubeswift/snapshots/",          // the shared root itself
+		"/var/lib/kubeswift/snapshots/../../etc", // traversal
+		"/var/lib/kubeswift/snapshots/a/b",       // nested
+		"/var/lib/kubeswift/snapshots/a;rm",      // shell metacharacter
+		"",                                       // missing
+	} {
+		if err := checkHostPaths(withRestore(bad), []string{"/"}); err == nil {
+			t.Errorf("accepted restore snapshot path %q", bad)
+		}
+	}
+	// The real controller-written values (local hostPath, S3LocalDir "<ns>-<name>").
+	for _, ok := range []string{
+		"/var/lib/kubeswift/snapshots/default-snap-1",
+		"/var/lib/kubeswift/snapshots/ns-name",
+	} {
+		if err := checkHostPaths(withRestore(ok), nil); err != nil {
+			t.Errorf("rejected a legitimate restore snapshot path %q: %v", ok, err)
+		}
+	}
+}
+
 // vhost-user sockets are host paths too: the pod builder mounts the socket's
 // directory into the privileged launcher.
 func TestCheckHostPaths_VhostUserSockets(t *testing.T) {
@@ -199,5 +238,14 @@ func TestReconcile_DisallowedHostPathLeavesARunningLauncherAlone(t *testing.T) {
 	cond := resolvedCondition(t, got)
 	if cond.Status != metav1.ConditionFalse || !strings.Contains(cond.Message, "spec.filesystems[0].source.hostPath") {
 		t.Errorf("Resolved = %s %q; want False naming the field", cond.Status, cond.Message)
+	}
+}
+
+// The controller enforces it even with the webhook off (the default).
+func TestCheckHostPaths_RejectsCHOptionInjection(t *testing.T) {
+	g := kernelGuest()
+	g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{{Name: "d", Type: "blk", Socket: "/srv/vm/x,path=/dev/sda"}}
+	if err := checkHostPaths(g, []string{"/srv/vm"}); err == nil {
+		t.Fatal("a socket that injects a CH --disk path= option passed the controller's check")
 	}
 }

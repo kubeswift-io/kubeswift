@@ -200,8 +200,10 @@ spec:
                 description: |-
                   DeletionPolicy controls whether deleting this SwiftSnapshot also purges
                   its backend artifacts. Delete (default) purges the local hostPath / s3
-                  objects; Retain leaves them in place (the cleanup finalizer is dropped
-                  without a purge) for out-of-band archival. Ignored for
+                  objects / oci artifacts; Retain leaves them in place (the cleanup
+                  finalizer is dropped without a purge) for out-of-band archival. The
+                  capture node's local copy of an s3/oci capture is removed either way. A
+                  registry that refuses deletes leaves the oci artifact in place. Ignored for
                   csi-volume-snapshot — the VolumeSnapshotClass deletionPolicy governs the
                   underlying VolumeSnapshot.
                 enum:
@@ -264,6 +266,14 @@ spec:
           status:
             description: SwiftSnapshotStatus is the observed state of a SwiftSnapshot.
             properties:
+              captureStartedAt:
+                description: |-
+                  CaptureStartedAt is when the capture action was sent to the launcher.
+                  The capture deadline runs from here, not from the snapshot's creation:
+                  time spent Pending (waiting for the guest to be Running) is not
+                  capture time.
+                format: date-time
+                type: string
               capturedAt:
                 format: date-time
                 type: string

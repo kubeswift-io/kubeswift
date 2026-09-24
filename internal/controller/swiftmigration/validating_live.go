@@ -80,6 +80,19 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
+	// Storage gate — the controller-side twin of the webhook's
+	// gateLiveModeStorage, and the check EligibilityMismatch was defined for.
+	// webhook.enabled defaults to false, so admission may never have run it: an
+	// explicit mode=live on RWO or Filesystem storage would otherwise go on to
+	// a destination pod that cannot attach the disk (Multi-Attach), or live-
+	// migrate on storage the project declares unsafe. A missing class defers to
+	// resolution, as the webhook does.
+	if gate, _, err := r.liveStorageGate(ctx, &guest); err != nil {
+		return phaseTransient(fmt.Errorf("check live-migration storage: %w", err))
+	} else if gate != nil {
+		return phaseFailure(gate.Error(), migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+
 	// Stamp status.Mode + SourceNode + DestinationNode + SourcePodUID.
 	// Mode may already be "live" (B1 dispatch path) or "" + spec=live;
 	// either way we set it explicitly here for clarity.
@@ -202,17 +215,23 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 				fmt.Sprintf("source pod %q is not mTLS-source-ready (no client-role migration-stunnel sidecar); it predates mTLS enablement or is a post-cutover destination pod — recycle the guest's pod before live-migrating with mTLS", srcPod.Name),
 				migrationv1alpha1.FailureReasonSourceSidecarNotReady)
 		}
-		for _, n := range []string{status.SourceNode, status.DestinationNode} {
-			if n == "" {
-				return phaseFailure(
-					"migration mTLS enabled but a participating node name is empty; cannot resolve per-node identity",
-					migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
-			}
-			if err := migrationcert.EnsureMigrationIdentitySecret(ctx, r.Client, r.SystemNamespace, guest.Namespace, n); err != nil {
-				return phaseFailure(
-					fmt.Sprintf("migration identity Secret for node %q not ready: %v", n, err),
-					migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
-			}
+		if status.SourceNode == "" || status.DestinationNode == "" {
+			return phaseFailure(
+				"migration mTLS enabled but a participating node name is empty; cannot resolve per-node identity",
+				migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
+		}
+		// Copy ONLY the destination node's identity into the guest namespace:
+		// the destination pod's stunnel-server sidecar mounts it
+		// (MigrationNodeSecretName(dstNode)). The source pod mounts the
+		// per-guest Secret instead (populateSourceIdentity below), so the
+		// source node's full cert+KEY does not need to sit in the tenant
+		// namespace at all — copying it there only widened the exposure of a
+		// node-wide private key. The source node's identity is still required
+		// to exist: populateSourceIdentity errors if it is not provisioned.
+		if err := migrationcert.EnsureMigrationIdentitySecret(ctx, r.Client, r.SystemNamespace, guest.Namespace, status.DestinationNode); err != nil {
+			return phaseFailure(
+				fmt.Sprintf("migration identity Secret for node %q not ready: %v", status.DestinationNode, err),
+				migrationv1alpha1.FailureReasonMigrationIdentityNotReady)
 		}
 		// PR 3d: populate the per-guest identity Secret the SOURCE sidecar
 		// mounts with the source node's issued identity, so the idle client

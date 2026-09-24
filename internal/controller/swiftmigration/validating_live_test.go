@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -77,6 +78,41 @@ func newSourcePod(guestName, ns, uid string) *corev1.Pod {
 	}
 }
 
+// An explicit mode=live on storage that cannot be live-migrated must fail in
+// Validating with EligibilityMismatch. webhook.enabled defaults to false, so
+// the controller is the only place this is guaranteed to be checked.
+func TestValidatingLive_NonLiveCapableStorage_FailsEligibility(t *testing.T) {
+	scheme := validatingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	class.Spec.Storage = nil // defaults: ReadWriteOnce + Filesystem
+	node := newSpaciousNode("worker-2", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	result := r.handleValidatingLive(context.Background(), mig, mig.Status.DeepCopy())
+	if result.FailureMsg == "" {
+		t.Fatal("expected a storage-gate failure for RWO/Filesystem storage")
+	}
+	if result.FailureReason != migrationv1alpha1.FailureReasonEligibilityMismatch {
+		t.Errorf("FailureReason: want EligibilityMismatch, got %q", result.FailureReason)
+	}
+	if !strings.Contains(result.FailureMsg, "ReadWriteMany") {
+		t.Errorf("failure message should name the requirement; got %q", result.FailureMsg)
+	}
+}
+
 func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")
@@ -124,8 +160,11 @@ func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 // TestValidatingLive_MTLS_IdentitiesPresent_Advances verifies the
 // Phase 3c precondition: with mTLS enabled and both node identity
 // Secrets present in the system namespace, Validating-live advances AND
-// distributes both Secrets into the guest namespace so the launcher
-// pods can mount them.
+// distributes the DESTINATION node's identity into the guest namespace
+// (the destination pod mounts it). The source node's identity goes only
+// into the per-guest Secret the source sidecar mounts — its full cert+key
+// is not copied as migration-node-<src>, so a node-wide key is not left
+// sitting in the tenant namespace.
 func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
 	scheme := validatingScheme(t)
 	const sysNS = "kubeswift-system"
@@ -159,12 +198,21 @@ func TestValidatingLive_MTLS_IdentitiesPresent_Advances(t *testing.T) {
 	if !result.Advanced {
 		t.Fatal("expected Advanced=true with both identities present")
 	}
-	// Both node identity Secrets copied into the guest namespace.
-	for _, n := range []string{"worker-1", "worker-2"} {
-		var s corev1.Secret
-		if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: migrationcert.MigrationNodeSecretName(n)}, &s); err != nil {
-			t.Errorf("identity Secret for node %q not distributed into guest namespace: %v", n, err)
-		}
+	// The DESTINATION node's identity is copied into the guest namespace.
+	var dst corev1.Secret
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: migrationcert.MigrationNodeSecretName("worker-2")}, &dst); err != nil {
+		t.Errorf("destination identity Secret not distributed into guest namespace: %v", err)
+	}
+	// The SOURCE node's full identity must NOT be copied as migration-node-<src>;
+	// the source sidecar reads the per-guest Secret instead.
+	var srcCopy corev1.Secret
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: migrationcert.MigrationNodeSecretName("worker-1")}, &srcCopy); !apierrors.IsNotFound(err) {
+		t.Errorf("source node's full identity should not be copied into the tenant namespace; got err=%v", err)
+	}
+	// The per-guest identity Secret carries the source identity.
+	var perGuest corev1.Secret
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: swiftguest.PerGuestMigrationIdentitySecretName("guest")}, &perGuest); err != nil {
+		t.Errorf("per-guest source identity Secret not populated: %v", err)
 	}
 }
 

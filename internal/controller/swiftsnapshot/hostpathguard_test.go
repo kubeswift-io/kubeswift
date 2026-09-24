@@ -31,6 +31,10 @@ func TestCheckLocalHostPath_RejectsEscapes(t *testing.T) {
 		"/var/lib/kubeswift/snapshots/../../../etc",
 		"/var/lib/kubeswift/snapshots/..",
 		"/root",
+		"/var/lib/kubeswift/snapshots/",         // the shared root: rm here wipes every namespace's snapshots on the node
+		"/var/lib/kubeswift/snapshots/*",        // glob
+		"/var/lib/kubeswift/snapshots/a;rm -rf", // shell metacharacter
+		"/var/lib/kubeswift/snapshots/a/b",      // nested path
 	} {
 		if err := checkLocalHostPath(localSnap(hp)); err == nil {
 			t.Errorf("accepted hostPath %q", hp)

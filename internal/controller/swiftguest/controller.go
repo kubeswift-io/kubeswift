@@ -98,6 +98,10 @@ type SwiftGuestReconciler struct {
 
 // Reconcile implements the reconcile loop.
 func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return conflictRequeue(r.reconcile(ctx, req))
+}
+
+func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var guest swiftv1alpha1.SwiftGuest
@@ -146,6 +150,17 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &guest, guest.Name, GuestLauncher); err != nil {
 		logger.Error(err, "failed to ensure scoped launcher RBAC", "guest", guest.Name)
 		return ctrl.Result{}, err
+	}
+	// After a live migration the guest runs in the renamed destination pod
+	// (<guest>-mig-<uid>). Its grant was created owned by the SwiftMigration,
+	// so deleting the migration (a drain's sets a 1h TTL) garbage-collected
+	// it and the running launcher lost API access for good -- no more status,
+	// IP or action reporting. Take the grant over onto the guest.
+	if pod := canonicalPodName(&guest); pod != guest.Name {
+		if err := EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &guest, pod, GuestLauncher); err != nil {
+			logger.Error(err, "failed to ensure scoped launcher RBAC for the migrated launcher", "guest", guest.Name, "pod", pod)
+			return ctrl.Result{}, err
+		}
 	}
 
 	// The narrowing. Strictly AFTER the scoped grant above, so the launcher never
@@ -431,7 +446,10 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		podGone := apierrors.IsNotFound(podErr)
 
-		if !podGone {
+		// A launcher that handed its VM to a live migration did not stop the
+		// guest: the VM runs in the destination pod. Restarting it would boot
+		// a second copy from the same disk alongside the migrated one.
+		if !podGone && !launcherHandedOff(&existingPod) {
 			shouldRestart := false
 			if existingPod.Status.Phase == corev1.PodFailed {
 				shouldRestart = true
@@ -579,8 +597,11 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	} else if (rg.PreparedImage.PVCName != "" || rg.RootDisk.FromOCI) && !rg.HasKernel() {
 		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
-			// Clone not ready — requeue
+			// Clone not ready — requeue, saying why on StorageReady (it used to
+			// be dropped, so a failed clone Job left the guest in Scheduling
+			// with nothing naming the cause).
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+			setRootDiskCloneCondition(status, &guest.Status, err)
 			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
@@ -652,7 +673,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var existingPod corev1.Pod
 	var podForMetrics *corev1.Pod
-	var cloneIdentityRequeue time.Duration
+	var cloneIdentityRequeue, ipWaitRequeue time.Duration
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
@@ -662,6 +683,12 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			// Retry: the next pass finds no pod and fails the guest with the
 			// reason instead of recreating the launcher.
 			return ctrl.Result{}, hostPathErr
+		}
+		// A stopping guest's launcher can finish terminating between the stop
+		// check above and this lookup. Never start a new one for it: the next
+		// pass takes the stop path and records the guest Stopped.
+		if rg.GetLifecycle() == "stop" {
+			return ctrl.Result{Requeue: true}, nil
 		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
@@ -717,14 +744,19 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// restore intent's AutoResume is set, so the clone comes up RUNNING with
 		// no controller-driven resume round-trip needed (replaces the former
 		// resumeCloneIfNeeded; Bug #73 / CH v52 capabilities assessment).
-		// If guest is running but IP not yet discovered, requeue to catch annotation update
+		// kube-ovn primary: remember the address so the next launcher keeps it.
+		if err := r.recordKubeOVNIP(ctx, &guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		// A running guest whose IP is not discovered yet: look again soon. The
+		// pod watch delivers swiftletd's IP annotation anyway, so this is only a
+		// backstop -- and the guest still gets its Service and PDB below. It
+		// used to return here, so a guest that never reports an IP (static
+		// address, SR-IOV, DHCP timeout) had no drain-protecting PDB at all and
+		// was requeued every 5s forever.
 		if status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
 			(status.Network == nil || status.Network.PrimaryIP == "") {
-			recordGuestMetrics(&guest, &guest.Status, status, podForMetrics)
-			if err := r.patchStatus(ctx, &guest, status); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			ipWaitRequeue = 30 * time.Second
 		}
 		// TODO: consider updating pod spec if resolved changed (e.g., resources)
 	}
@@ -752,8 +784,13 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Requeue while an agent-enabled clone's identity regen is still in flight
-	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state).
-	return ctrl.Result{RequeueAfter: cloneIdentityRequeue}, nil
+	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state),
+	// or while a running guest's IP is still undiscovered.
+	requeue := cloneIdentityRequeue
+	if ipWaitRequeue > 0 && (requeue == 0 || ipWaitRequeue < requeue) {
+		requeue = ipWaitRequeue
+	}
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *swiftv1alpha1.SwiftGuestStatus, pod *corev1.Pod) {
@@ -832,12 +869,30 @@ func findCondition(status *swiftv1alpha1.SwiftGuestStatus, condType string) *met
 }
 
 func (r *SwiftGuestReconciler) patchStatus(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, status *swiftv1alpha1.SwiftGuestStatus) error {
-	if equality.Semantic.DeepEqual(guest.Status, status) {
+	// Compare values: guest.Status against the pointer never matched, so every
+	// reconcile sent a patch -- and, with the optimistic lock below, one that a
+	// stale cache turned into a conflict and a requeue.
+	if equality.Semantic.DeepEqual(guest.Status, *status) {
 		return nil
 	}
-	patch := client.MergeFrom(guest.DeepCopy())
+	// Optimistic lock: status.conditions is an atomic list, so this patch
+	// replaces all of it whenever any condition changed. From a stale read it
+	// would put back a GuestRunning that swiftletd has since changed (and
+	// swiftletd, which writes the list the same way, would drop ours). A
+	// conflict is retried with a fresh read (conflictRequeue).
+	patch := client.MergeFromWithOptions(guest.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	guest.Status = *status
 	return r.Status().Patch(ctx, guest, patch)
+}
+
+// conflictRequeue turns an optimistic-lock conflict into a prompt, quiet
+// retry: the guest changed under this reconcile (swiftletd reported, another
+// controller wrote), and the next pass starts from the newer object.
+func conflictRequeue(res ctrl.Result, err error) (ctrl.Result, error) {
+	if apierrors.IsConflict(err) {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return res, err
 }
 
 // swiftImageToSwiftGuests enqueues SwiftGuests that reference a SwiftImage when the SwiftImage changes.

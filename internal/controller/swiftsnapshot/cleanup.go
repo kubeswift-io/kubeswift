@@ -24,10 +24,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
+	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 )
 
 // HostPathFinalizer is added to local-backend SwiftSnapshots once they
@@ -40,6 +44,11 @@ const HostPathFinalizer = "kubeswift.io/snapshot-hostpath-cleanup"
 // purges the snapshot's object-storage prefix, then removes the finalizer.
 const S3ObjectFinalizer = "kubeswift.io/snapshot-s3-cleanup"
 
+// OCIArtifactFinalizer is added to oci-backend SwiftSnapshots once they reach
+// Ready. The deletion handler deletes the pushed artifact(s) from the registry
+// and the capture node's local copy, then removes the finalizer.
+const OCIArtifactFinalizer = "kubeswift.io/snapshot-oci-cleanup"
+
 // cleanupFinalizerFor returns the cleanup finalizer a SwiftSnapshot's
 // backend needs, or "" for backends with no controller-managed artifact
 // cleanup (csi-volume-snapshot — the VolumeSnapshot lifecycle handles it).
@@ -49,6 +58,8 @@ func cleanupFinalizerFor(snap *snapshotv1alpha1.SwiftSnapshot) string {
 		return HostPathFinalizer
 	case snapshotv1alpha1.SnapshotBackendS3:
 		return S3ObjectFinalizer
+	case snapshotv1alpha1.SnapshotBackendOCI:
+		return OCIArtifactFinalizer
 	default:
 		return ""
 	}
@@ -109,6 +120,8 @@ func (r *SwiftSnapshotReconciler) handleDeletion(
 	switch {
 	case hasFinalizer(snap, S3ObjectFinalizer):
 		return r.handleS3Deletion(ctx, snap)
+	case hasFinalizer(snap, OCIArtifactFinalizer):
+		return r.handleOCIDeletion(ctx, snap)
 	case hasFinalizer(snap, HostPathFinalizer):
 		return r.handleLocalDeletion(ctx, snap)
 	default:
@@ -166,6 +179,20 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 		return r.removeFinalizer(ctx, snap)
 	}
 
+	done, err := r.cleanupNodeDir(ctx, snap, subdir)
+	if err != nil || !done {
+		return false, err
+	}
+	return r.removeFinalizer(ctx, snap)
+}
+
+// cleanupNodeDir removes <HostPathBaseDir>/<subdir> on the snapshot's capture
+// node with a one-shot pod, reporting done once the pod has succeeded.
+func (r *SwiftSnapshotReconciler) cleanupNodeDir(
+	ctx context.Context,
+	snap *snapshotv1alpha1.SwiftSnapshot,
+	subdir string,
+) (bool, error) {
 	podName := cleanupPodName(snap)
 	var pod corev1.Pod
 	getErr := r.Get(ctx, client.ObjectKey{Name: podName, Namespace: snap.Namespace}, &pod)
@@ -186,7 +213,7 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 		// otherwise; the next reconcile would also see Succeeded and
 		// skip creating a new one).
 		_ = r.Delete(ctx, &pod)
-		return r.removeFinalizer(ctx, snap)
+		return true, nil
 	case corev1.PodFailed:
 		// Pod ran but failed (e.g. permission error, stale mount).
 		// Surface in status by leaving the finalizer; operator can
@@ -199,6 +226,22 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 		// Pending / Running — requeue.
 		return false, nil
 	}
+}
+
+// cleanupCaptureCopy removes the node-local copy an s3/oci capture leaves on
+// its capture node (the directory the upload/push Job read from). It holds
+// the guest's full RAM image and was never removed: every s3/oci snapshot
+// ever taken stayed on its node's disk -- secrets and all -- after the
+// snapshot was deleted. Done immediately when there is no node to clean.
+func (r *SwiftSnapshotReconciler) cleanupCaptureCopy(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
+	if snap.Status.NodeName == "" {
+		return true, nil
+	}
+	subdir := pathSubdir(captureDestDir(snap))
+	if subdir == "" || subdir == "." || subdir == "/" {
+		return true, nil
+	}
+	return r.cleanupNodeDir(ctx, snap, subdir)
 }
 
 // createCleanupPod schedules a one-shot Pod that removes the snapshot
@@ -221,7 +264,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			Namespace: snap.Namespace,
 			Labels: map[string]string{
 				"snapshot.kubeswift.io/role":           "hostpath-cleanup",
-				"snapshot.kubeswift.io/swift-snapshot": snap.Name,
+				"snapshot.kubeswift.io/swift-snapshot": names.LabelValue(snap.Name),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(snap, swiftSnapshotGVK),
@@ -233,14 +276,13 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			Containers: []corev1.Container{{
 				Name:  "rm",
 				Image: CleanupImage,
-				// The shell-quoted subdir is generated from the
-				// trailing path component of the operator-set
-				// hostPath, which the webhook constrained to
-				// /var/lib/kubeswift/snapshots/<...> with no `..`.
-				// We additionally guard against empty/./.. above,
-				// so this rm cannot escape the parent.
-				Command: []string{"sh", "-c"},
-				Args:    []string{fmt.Sprintf("rm -rf %s/%s", HostPathBaseMount, subdir)},
+				// No shell: the path is the argv operand to rm, so a subdir
+				// carrying a shell metacharacter cannot be interpreted (it was
+				// already constrained to a single [A-Za-z0-9._-] segment by
+				// ValidateLocalHostPath and pathSubdir). "--" stops rm from
+				// reading the path as an option even if it began with '-'.
+				Command: []string{"rm", "-rf", "--"},
+				Args:    []string{HostPathBaseMount + "/" + subdir},
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      "snapshots",
 					MountPath: HostPathBaseMount,
@@ -297,6 +339,11 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 	if !hasFinalizer(snap, S3ObjectFinalizer) {
 		return true, nil
 	}
+	// The capture node's local copy goes in every case -- it is a cache of
+	// the guest's RAM, not the retained artifact.
+	if done, err := r.cleanupCaptureCopy(ctx, snap); err != nil || !done {
+		return false, err
+	}
 	// deletionPolicy: Retain — leave the S3 objects, just drop the finalizer.
 	if retainArtifacts(snap) {
 		return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
@@ -339,6 +386,168 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 	return false, nil // still purging
 }
 
+// handleOCIDeletion deletes an oci snapshot's pushed artifact(s) from the
+// registry and the capture node's local copy, then removes
+// OCIArtifactFinalizer. deletionPolicy: Delete promised this, but the
+// controller never purged anything.
+//
+// A registry that refuses deletes (several do not implement manifest DELETE)
+// fails the Job; the finalizer is then dropped with the artifact left in
+// place, rather than holding the snapshot -- and its namespace -- in
+// Terminating for good.
+func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (bool, error) {
+	logger := log.FromContext(ctx)
+	if done, err := r.cleanupCaptureCopy(ctx, snap); err != nil || !done {
+		return false, err
+	}
+	refs := ociArtifactRefs(snap)
+	if retainArtifacts(snap) || len(refs) == 0 {
+		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
+	}
+	if r.SnapshotORASImage == "" {
+		logger.Info("snapshot-oras image not configured; dropping OCI cleanup finalizer without deleting the artifact", "snapshot", snap.Name)
+		return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
+	}
+
+	var job batchv1.Job
+	getErr := r.Get(ctx, client.ObjectKey{Name: ociDeleteJobName(snap), Namespace: snap.Namespace}, &job)
+	if apierrors.IsNotFound(getErr) {
+		j := buildOCIDeleteJob(snap, r.SnapshotORASImage, refs)
+		if err := ctrl.SetControllerReference(snap, j, r.Scheme); err != nil {
+			return false, err
+		}
+		if err := r.Create(ctx, j); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("create oci delete Job: %w", err)
+		}
+		return false, nil
+	}
+	if getErr != nil {
+		return false, getErr
+	}
+	for _, c := range job.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case batchv1.JobComplete:
+			_ = r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
+		case batchv1.JobFailed:
+			logger.Info("could not delete the OCI artifact (the registry may not support deletes); dropping the cleanup finalizer and leaving it in place",
+				"snapshot", snap.Name, "artifacts", refs, "reason", c.Message)
+			_ = r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
+		}
+	}
+	return false, nil // still deleting
+}
+
+// ociArtifact is one registry artifact to delete.
+type ociArtifact struct{ repository, tag string }
+
+// ociArtifactRefs lists everything the snapshot pushed: the memory artifact
+// and, for a full-state capture, its disk and data-disk artifacts.
+func ociArtifactRefs(snap *snapshotv1alpha1.SwiftSnapshot) []ociArtifact {
+	st := snap.Status.OCI
+	if st == nil {
+		return nil
+	}
+	var out []ociArtifact
+	add := func(ref string) {
+		if a, ok := splitOCIReference(ref); ok {
+			out = append(out, a)
+		}
+	}
+	add(st.Reference)
+	if st.Disk != nil {
+		add(st.Disk.Reference)
+	}
+	for _, d := range st.DataDisks {
+		add(d.Reference)
+	}
+	return out
+}
+
+// splitOCIReference splits "registry/repo:tag" at the tag's colon (the last
+// one after the last slash, so a registry port is not mistaken for it).
+func splitOCIReference(ref string) (ociArtifact, bool) {
+	slash := strings.LastIndex(ref, "/")
+	colon := strings.LastIndex(ref, ":")
+	if ref == "" || colon <= slash || colon == len(ref)-1 {
+		return ociArtifact{}, false
+	}
+	return ociArtifact{repository: ref[:colon], tag: ref[colon+1:]}, true
+}
+
+func ociDeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	return names.JobName(snap.Name, "-oci-delete")
+}
+
+// buildOCIDeleteJob runs snapshot-oras --mode=delete once per artifact (one
+// container each; the binary deletes a single tag). Registry credentials come
+// from the same dockerconfigjson Secret the push used. Node-agnostic,
+// non-root, no host access.
+func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs []ociArtifact) *batchv1.Job {
+	oci := snap.Spec.Backend.OCI
+	var env []corev1.EnvVar
+	var mounts []corev1.VolumeMount
+	var volumes []corev1.Volume
+	if oci != nil && oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociAuthMount})
+		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociAuthMount, ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{
+			Name: "oras-auth",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: oci.CredentialsSecretRef.Name,
+				Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
+			}},
+		})
+	}
+	containers := make([]corev1.Container, 0, len(refs))
+	for i, a := range refs {
+		args := []string{"--mode=delete", "--repository=" + a.repository, "--tag=" + a.tag}
+		if oci != nil && oci.Insecure {
+			args = append(args, "--insecure")
+		}
+		containers = append(containers, corev1.Container{
+			Name:         fmt.Sprintf("delete-%d", i),
+			Image:        image,
+			Args:         args,
+			Env:          env,
+			VolumeMounts: mounts,
+			SecurityContext: &corev1.SecurityContext{
+				AllowPrivilegeEscalation: ptr.To(false),
+				RunAsNonRoot:             ptr.To(true),
+				RunAsUser:                ptr.To(int64(65534)),
+				ReadOnlyRootFilesystem:   ptr.To(true),
+				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			},
+		})
+	}
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ociDeleteJobName(snap),
+			Namespace: snap.Namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":      "kubeswift",
+				"app.kubernetes.io/component": "snapshot-oci-delete",
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: ptr.To(s3UploadBackoffLimit),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					AutomountServiceAccountToken: ptr.To(false),
+					Containers:                   containers,
+					Volumes:                      volumes,
+				},
+			},
+		},
+	}
+}
+
 func hasFinalizer(snap *snapshotv1alpha1.SwiftSnapshot, target string) bool {
 	for _, f := range snap.Finalizers {
 		if f == target {
@@ -348,23 +557,15 @@ func hasFinalizer(snap *snapshotv1alpha1.SwiftSnapshot, target string) bool {
 	return false
 }
 
-// pathSubdir returns the trailing path component of an absolute
-// hostPath under HostPathBaseDir. Returns empty if the path doesn't
-// match the expected shape — caller treats empty as a refusal-to-act.
+// pathSubdir returns the trailing path component of an absolute hostPath under
+// HostPathBaseDir, or "" if the path is not a single safe segment under it —
+// the caller treats "" as a refusal-to-act. This is the last check before the
+// path reaches the cleanup Pod, and it applies the SAME rule as the admission
+// and reconcile guards (ValidateLocalHostPath), so the delete path is
+// self-protecting even for an object persisted before those guards existed.
 func pathSubdir(hostPath string) string {
-	hp := strings.TrimSuffix(hostPath, "/")
-	if !strings.HasPrefix(hp, HostPathBaseDir) {
+	if swiftsnapshotwebhook.ValidateLocalHostPath(hostPath) != nil {
 		return ""
 	}
-	tail := strings.TrimPrefix(hp, HostPathBaseDir)
-	// Reject paths that contain further slashes — we only support a
-	// single subdirectory under HostPathBaseDir, which is what the
-	// webhook + controller produce.
-	if strings.Contains(tail, "/") {
-		return ""
-	}
-	if tail == "" || tail == "." || tail == ".." {
-		return ""
-	}
-	return tail
+	return strings.TrimPrefix(strings.TrimSuffix(hostPath, "/"), HostPathBaseDir)
 }

@@ -1321,6 +1321,51 @@ func TestValidate_ModeLivePerSourceNodeConcurrency_OfflinePeerOk(t *testing.T) {
 	}
 }
 
+// A mode=auto peer (the swiftctl and drain default) that resolved to live
+// holds its source node like an explicit live one; one that resolved offline
+// does not.
+func TestValidate_ModeLivePerSourceNodeConcurrency_AutoPeerByResolvedMode(t *testing.T) {
+	for _, tc := range []struct {
+		resolved migrationv1alpha1.SwiftMigrationMode
+		wantErr  bool
+	}{
+		{migrationv1alpha1.SwiftMigrationModeLive, true},
+		{migrationv1alpha1.SwiftMigrationModeOffline, false},
+	} {
+		t.Run(string(tc.resolved), func(t *testing.T) {
+			scheme := migrationScheme(t)
+			guest1 := newSwiftGuest("guest1", "default")
+			guest1.Spec.ImageRef = nil
+			guest1.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+			guest2 := newSwiftGuest("guest2", "default")
+			guest2.Spec.ImageRef = nil
+			guest2.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+			class := &swiftv1alpha1.SwiftGuestClass{ObjectMeta: metav1.ObjectMeta{Name: "class"}}
+			peer := newSwiftMigration("drain-guest1", "default")
+			peer.Spec.GuestRef.Name = "guest1"
+			peer.Spec.Mode = migrationv1alpha1.SwiftMigrationModeAuto
+			peer.Status.Mode = tc.resolved
+			peer.Status.SourceNode = "worker-1"
+			peer.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseStopAndCopy
+
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				guest1, guest2, class, newReadyKernelNode("worker-2"), peer,
+			).Build()
+			v := &Validator{Client: c}
+
+			mig := newSwiftMigration("new", "default")
+			mig.Spec.GuestRef.Name = "guest2"
+			mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+			mig.Spec.AllowIPChange = true
+
+			_, err := v.validate(context.Background(), mig)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("auto peer resolved %s: err=%v, wantErr=%v", tc.resolved, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // Node-local virtio backend gate (virtiofs / vhost-user → offline-only, like
 // VFIO).
 

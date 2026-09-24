@@ -61,7 +61,11 @@ spec:
 > `allowPersistentIPs` / `ipam.lifecycle: Persistent`). KubeSwift's kube-ovn backend
 > pins the guest's IP via the `<provider>.kubernetes.io/ip_address` annotation and
 > lets the migration destination acquire it through the migration marker kube-ovn
-> recognises — so live-migration IP-keep works out of the box.
+> recognises — so live-migration IP-keep works out of the box. The IP to pin is
+> recorded on the SwiftGuest as `swift.kubeswift.io/kube-ovn-ip` the first time
+> kube-ovn assigns one, so it also survives a stop/start, a poweroff and an
+> offline migration. Remove that annotation to let kube-ovn allocate afresh (for
+> example after moving the guest to a different subnet).
 
 ### 2. Reference the NAD from a SwiftGuest
 

@@ -209,10 +209,10 @@ Guest state survived the full Tier C round-trip **across nodes via object
 storage**: capture on worker-1 → upload to MinIO → cross-node download on worker-2 →
 `CH --restore` → resume, with the in-guest sentinel preserved exactly.
 
-### Tracked follow-up
+### Deletion
 
-S3 object lifecycle on snapshot deletion is **not** part of Phase 3: deleting a
-SwiftSnapshot does not purge its bucket objects, so reusing a snapshot *name*
-relies on bug-3's checksum-aware re-upload to overwrite stale artifacts (it
-does). A future phase should add `deletionPolicy: Delete` S3 cleanup so a reused
-name starts from an empty prefix.
+Deleting a SwiftSnapshot with `deletionPolicy: Delete` (the default) purges its
+objects under `<prefix>/<namespace>/<name>/`. With either policy, the copy of
+the capture left on the capture node (which holds the guest's RAM) is removed
+from that node. Download caches written on other nodes by restores and clones
+are not tracked and are not removed.

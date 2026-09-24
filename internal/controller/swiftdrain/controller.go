@@ -95,6 +95,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get drain migration %q: %w", migName, getErr)
 	}
 
+	// No drain migration yet, and no VM running to evacuate (powered off, or
+	// its launcher failed): the eviction webhook lets an exited launcher go,
+	// so the drain needs nothing from us. Migrating it would only boot the
+	// stopped guest on the target (or wait out the migration timeout).
+	if guest.Status.Phase == swiftv1alpha1.SwiftGuestPhaseStopped ||
+		guest.Status.Phase == swiftv1alpha1.SwiftGuestPhaseFailed {
+		if err := r.clearMarker(ctx, &guest); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.event(&guest, corev1.EventTypeNormal, "DrainNotNeeded",
+			fmt.Sprintf("guest is %s (no VM running on %q); nothing to migrate, drain marker cleared", guest.Status.Phase, drainingNode))
+		return ctrl.Result{}, nil
+	}
+
 	// No drain migration yet. If some OTHER migration is already in flight for
 	// this guest (operator-initiated, or a prior drain of a different node),
 	// don't create a second — wait for it to settle.

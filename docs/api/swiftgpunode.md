@@ -26,7 +26,7 @@ The entire resource is status-only (no user-editable spec).
 | `freeGPUs` | Number of unallocated GPUs |
 | `gpuModel` | GPU model (assumes homogeneous node) |
 | `gpuVendor` | GPU vendor (assumes homogeneous node): `"NVIDIA"`, `"AMD"`, `"Intel"` |
-| `vfioReady` | `true` when the `vfio-pci` driver is loaded on this node (`/sys/bus/pci/drivers/vfio-pci` exists). GPU allocation and the migration GPU target pre-flight refuse a node that isn't `vfioReady`. Loading `vfio-pci` is a host responsibility (e.g. `/etc/modules-load.d`) — the minimal-capability discovery DaemonSet only detects and reports it, it cannot `modprobe`. Printcolumn `VfioReady`. |
+| `vfioReady` | `true` when the `vfio-pci` driver is loaded on this node (`/sys/bus/pci/drivers/vfio-pci` exists). GPU allocation and the migration GPU target pre-flight refuse a node that isn't `vfioReady`. A new allocation also skips a node whose `phase` isn't `Ready`, whose Kubernetes Node is cordoned or gone, and one the workload can't run on: a SwiftGuest's `spec.nodeName`, or a sandbox's (or pool's) `nodeSelector` plus the kernel-node label. Loading `vfio-pci` is a host responsibility (e.g. `/etc/modules-load.d`) — the minimal-capability discovery DaemonSet only detects and reports it, it cannot `modprobe`. Printcolumn `VfioReady`. |
 
 ### Host topology
 

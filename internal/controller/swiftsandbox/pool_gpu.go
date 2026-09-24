@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 
 	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -48,7 +51,8 @@ func (r *SwiftSandboxPoolReconciler) allocateSlotGPU(ctx context.Context, pool *
 		return fmt.Errorf("warm GPU pools support only tier: pcie (mode-3); profile %q is tier %q", profile.Name, profile.Spec.Tier)
 	}
 
-	node, gpus, numa, partID, err := swiftgpu.FindAndAllocateFor(ctx, r.Client, slotGPUAllocatedTo(pool.Namespace, slot.Name), "", &profile)
+	node, gpus, numa, partID, err := swiftgpu.FindAndAllocateFor(ctx, r.Client, slotGPUAllocatedTo(pool.Namespace, slot.Name), "", &profile,
+		swiftgpu.NodeConstraint{NodeSelector: launcherNodeSelector(pool.Spec.NodeSelector)})
 	if err != nil {
 		return err
 	}
@@ -67,40 +71,136 @@ func (r *SwiftSandboxPoolReconciler) allocateSlotGPU(ctx context.Context, pool *
 	return nil
 }
 
+// slotSuffixLen is the length of the random suffix in a slot name
+// (<pool>-slot-<suffix>). newSlotName generates it and isPoolSlotName matches
+// it, so the GPU GC recognises exactly this pool's slots.
+const slotSuffixLen = 5
+
+// poolGPUReleaseRecheck paces a terminating GPU pool's wait for its slot pods
+// to go away (a claimed slot's checkout may still be running).
+const poolGPUReleaseRecheck = 15 * time.Second
+
+// newSlotName returns a fresh name for one of pool's warm slots.
+func newSlotName(pool *sandboxv1alpha1.SwiftSandboxPool) string {
+	return pool.Name + "-slot-" + utilrand.String(slotSuffixLen)
+}
+
+// isPoolSlotName reports whether name has the exact shape of one of pool's slot
+// names. A bare "<pool>-slot-" prefix match also caught a standalone sandbox
+// named "<pool>-slot-x" and every slot of a pool named "<pool>-slot-y" — and
+// the GC then freed THEIR running GPUs, which were handed out again.
+func isPoolSlotName(pool *sandboxv1alpha1.SwiftSandboxPool, name string) bool {
+	suffix, ok := strings.CutPrefix(name, pool.Name+"-slot-")
+	if !ok || len(suffix) != slotSuffixLen {
+		return false
+	}
+	for _, c := range suffix {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// podReader is the uncached reader when wired (production), else the client.
+func (r *SwiftSandboxPoolReconciler) podReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 // reconcileSlotGPUGC releases the GPU of any of this pool's slots whose pod no
 // longer exists — draining (scale-down), checkout completion (the claiming
-// SwiftSandbox was deleted → its slot pod GC'd), or churn. liveSlotPods holds
-// the names of every pool pod that currently EXISTS (any phase, incl.
-// terminating — a terminating pod's CH may still hold the VFIO group, so its
-// allocation is kept until the pod is truly gone; mirrors the B1 reuse race).
-// Bounded: a handful of GPU nodes. A no-op for non-GPU pools.
-func (r *SwiftSandboxPoolReconciler) reconcileSlotGPUGC(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, liveSlotPods map[string]bool) error {
+// SwiftSandbox was deleted → its slot pod GC'd), or churn. A pod that still
+// EXISTS (any phase, incl. terminating, warm or claimed) keeps its allocation:
+// its CH may still hold the VFIO group. held reports whether any of this pool's
+// allocations is still backed by such a pod. A no-op for non-GPU pools.
+//
+// The live-pod set is read UNCACHED: a slot created moments ago may not be in
+// the informer cache yet, and freeing its GPU then hands the device out twice.
+func (r *SwiftSandboxPoolReconciler) reconcileSlotGPUGC(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool) (held bool, err error) {
 	if pool.Spec.GPUProfileRef == nil {
-		return nil
+		return false, nil
 	}
-	prefix := slotGPUPrefix(pool)
 	idPrefix := "sandbox:" + pool.Namespace + "/"
+
+	var pods corev1.PodList
+	if err := r.podReader().List(ctx, &pods, client.InNamespace(pool.Namespace), client.MatchingLabels{PoolLabelKey: pool.Name}); err != nil {
+		return false, err
+	}
+	live := make(map[string]bool, len(pods.Items))
+	for i := range pods.Items {
+		live[pods.Items[i].Name] = true
+	}
 
 	var nodes gpuv1alpha1.SwiftGPUNodeList
 	if err := r.List(ctx, &nodes); err != nil {
-		return err
+		return false, err
 	}
-	orphans := map[string]bool{}
+	orphans := map[string]string{} // allocatedTo -> slot name
 	for i := range nodes.Items {
 		for _, g := range nodes.Items[i].Status.GPUs {
-			if !strings.HasPrefix(g.AllocatedTo, prefix) {
+			name, ok := strings.CutPrefix(g.AllocatedTo, idPrefix)
+			if !ok || !isPoolSlotName(pool, name) {
 				continue
 			}
-			slotName := strings.TrimPrefix(g.AllocatedTo, idPrefix)
-			if !liveSlotPods[slotName] {
-				orphans[g.AllocatedTo] = true
+			if live[name] {
+				held = true
+				continue
 			}
+			orphans[g.AllocatedTo] = name
 		}
 	}
-	for allocatedTo := range orphans {
+	for allocatedTo, name := range orphans {
+		// A standalone SwiftSandbox whose name happens to have a slot's shape
+		// owns this allocation, and its own controller releases it (after its
+		// launcher is gone). Never free it from here.
+		var sb sandboxv1alpha1.SwiftSandbox
+		if err := r.podReader().Get(ctx, client.ObjectKey{Namespace: pool.Namespace, Name: name}, &sb); err == nil {
+			continue
+		} else if !apierrors.IsNotFound(err) {
+			return held, err
+		}
 		if err := swiftgpu.DeallocateForWorkload(ctx, r.Client, allocatedTo); err != nil {
+			return held, err
+		}
+	}
+	return held, nil
+}
+
+// deleteWarmSlots deletes the pool's idle warm slot pods. They are owned by the
+// pool, but while the GPU finalizer holds the pool, background garbage
+// collection does not remove them (it waits for the owner to be gone) — and the
+// finalizer in turn waits for them, so without this the two would wait on each
+// other forever.
+func (r *SwiftSandboxPoolReconciler) deleteWarmSlots(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(pool.Namespace),
+		client.MatchingLabels{PoolLabelKey: pool.Name, SlotStateLabelKey: slotStateWarm}); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		if pods.Items[i].DeletionTimestamp != nil {
+			continue
+		}
+		if err := deleteWarmSlot(ctx, r.Client, &pods.Items[i]); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// deleteWarmSlot deletes a slot pod read as warm, but only if it is still the
+// pod that was read. The pool acts on a listed (possibly cached) warm set, and
+// a checkout claims a slot by updating its labels in between: deleting without
+// the precondition removed a slot a sandbox had just claimed, and that
+// checkout then failed with SlotLost. A claimed slot's resourceVersion has
+// moved, so the delete conflicts and the slot is left to its sandbox.
+func deleteWarmSlot(ctx context.Context, c client.Client, p *corev1.Pod) error {
+	err := c.Delete(ctx, p, client.Preconditions{UID: &p.UID, ResourceVersion: &p.ResourceVersion})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
 }

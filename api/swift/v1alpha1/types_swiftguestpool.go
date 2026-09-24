@@ -129,6 +129,7 @@ type UpdateStrategy struct {
 }
 
 // RollingUpdateConfig controls the pace of rolling updates.
+// +kubebuilder:validation:XValidation:rule="self.maxUnavailable > 0 || self.maxSurge > 0",message="maxUnavailable and maxSurge cannot both be 0: no replica could ever be replaced"
 type RollingUpdateConfig struct {
 	// MaxUnavailable is the max number of VMs that can be unavailable during update.
 	// +kubebuilder:default=1

@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -190,5 +191,72 @@ func TestOVNMigrationDstAnnotations_NonKubeOVN_Empty(t *testing.T) {
 	}
 	if len(out) != 0 {
 		t.Errorf("non-OVN guest must yield no dst annotations; got %v", out)
+	}
+}
+
+// nadAndGuestClient serves both NADs and SwiftGuests (recordKubeOVNIP patches
+// the guest).
+func nadAndGuestClient(t *testing.T, guest *swiftv1alpha1.SwiftGuest, nads ...*unstructured.Unstructured) *SwiftGuestReconciler {
+	t.Helper()
+	s := runtime.NewScheme()
+	gv := schema.GroupVersion{Group: "swift.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gv, &swiftv1alpha1.SwiftGuest{}, &swiftv1alpha1.SwiftGuestList{})
+	metav1.AddToGroupVersion(s, gv)
+	s.AddKnownTypeWithName(networkAttachmentDefinitionGVK, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(
+		networkAttachmentDefinitionGVK.GroupVersion().WithKind("NetworkAttachmentDefinitionList"),
+		&unstructured.UnstructuredList{},
+	)
+	b := fake.NewClientBuilder().WithScheme(s).WithObjects(guest)
+	for _, n := range nads {
+		b = b.WithObjects(n)
+	}
+	return &SwiftGuestReconciler{Client: b.Build()}
+}
+
+// The kube-ovn IP pin must survive the launcher going away. Clearing the run
+// state (stop/start, poweroff, offline migration) blanks status.primaryIP, and
+// pinning from it gave every restarted guest a new address -- breaking the
+// documented stable static IP.
+func TestKubeOVN_IPPinSurvivesClearedRunState(t *testing.T) {
+	ctx := context.Background()
+	guest := guestWithPrimaryNAD("ovn-val", "ovn-vm", "ovn-l2", "52:54:00:c4:0d:90")
+	guest.Status.Network = &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "10.20.0.4"}
+	r := nadAndGuestClient(t, guest, nadObj("ovn-val", "ovn-l2", "kube-ovn", "ovn-l2.ovn-val.ovn"))
+
+	if err := r.recordKubeOVNIP(ctx, guest, &guest.Status); err != nil {
+		t.Fatal(err)
+	}
+	if got := guest.Annotations[AnnotationKubeOVNIP]; got != "10.20.0.4" {
+		t.Fatalf("recorded IP = %q, want 10.20.0.4", got)
+	}
+
+	ClearRunState(&guest.Status, "LauncherExited", "stopped")
+	pod := &corev1.Pod{}
+	if err := r.stampOVNIdentity(ctx, guest, pod); err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Annotations[KubeOVNIPAnnotationKey("ovn-l2.ovn-val.ovn")]; got != "10.20.0.4" {
+		t.Errorf("next launcher's ip_address = %q, want the recorded 10.20.0.4", got)
+	}
+	dst, err := OVNMigrationDstAnnotations(ctx, r.Client, guest, "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dst[KubeOVNIPAnnotationKey("ovn-l2.ovn-val.ovn")]; got != "10.20.0.4" {
+		t.Errorf("migration dst ip_address = %q, want the recorded 10.20.0.4", got)
+	}
+}
+
+// Only kube-ovn guests get the annotation.
+func TestKubeOVN_RecordIPIsANoOpForOtherNetworks(t *testing.T) {
+	guest := guestWithPrimaryNAD("ns", "g", "bridge-nad", "")
+	guest.Status.Network = &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.0.2.7"}
+	r := nadAndGuestClient(t, guest, nadObj("ns", "bridge-nad", "bridge", ""))
+	if err := r.recordKubeOVNIP(context.Background(), guest, &guest.Status); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := guest.Annotations[AnnotationKubeOVNIP]; ok {
+		t.Error("a non-kube-ovn guest must not get a kube-ovn IP record")
 	}
 }

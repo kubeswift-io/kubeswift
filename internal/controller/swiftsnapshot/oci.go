@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +26,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -93,7 +95,7 @@ func ociSigningRequested(snap *snapshotv1alpha1.SwiftSnapshot) bool {
 
 // ociPushJobName is the deterministic name of the push Job.
 func ociPushJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Name + "-oci-push"
+	return names.JobName(snap.Name, "-oci-push")
 }
 
 // ensureOCIPushJob creates the node-pinned push Job (idempotent) owned by the
@@ -131,6 +133,16 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 	}
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			rep, wait, failMsg, rerr := r.pushedArtifact(ctx, snap.Namespace, ociPushJobName(snap), c.LastTransitionTime.Time, "memory")
+			if rerr != nil {
+				return false, "", rerr
+			}
+			if failMsg != "" {
+				return false, failMsg, nil
+			}
+			if wait {
+				return false, "", nil
+			}
 			now := metav1.Now()
 			// Preserve the full-state disk refs (P4 includeDisk + v1.1 data disks):
 			// the disks are captured BEFORE this memory push, so status.OCI.Disk
@@ -153,14 +165,11 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 				Disk:      disk,
 				DataDisks: dataDisks,
 			}
-			// Read the push Job's byte report (best-effort; a missing report leaves
-			// bytes/digest empty and is not a failure). status carries the registry
-			// footprint + the pinned digest; the metric counts actual wire traffic.
-			if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, ociPushJobName(snap)); rerr == nil && ok {
-				status.OCI.PushedBytes = rep.TotalBytes
-				status.OCI.ManifestDigest = rep.ManifestDigest
-				metrics.SnapshotUploadBytesTotal.Add(float64(rep.TransferredBytes))
-			}
+			// status carries the registry footprint + the pinned digest; the
+			// metric counts actual wire traffic.
+			status.OCI.PushedBytes = rep.TotalBytes
+			status.OCI.ManifestDigest = rep.ManifestDigest
+			metrics.SnapshotUploadBytesTotal.Add(float64(rep.TransferredBytes))
 			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseReady)
 			setReadyCondition(status, metav1.ConditionTrue, ReasonSnapshotReady,
 				"snapshot pushed to "+ociReference(snap))
@@ -171,6 +180,32 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 		}
 	}
 	return false, "", nil // still pushing
+}
+
+// digestReadGrace bounds how long a completed OCI push may go without a
+// readable report. The report is the push pod's termination message, and the
+// pod's status can trail the Job's Complete condition in the cache; one still
+// missing after this is gone for good.
+const digestReadGrace = 2 * time.Minute
+
+// pushedArtifact reads the transfer report of a completed OCI push Job, which
+// must carry the manifest digest: restores and clones pin the artifact by it,
+// and a snapshot recorded without one used to go Ready and then refuse every
+// restore. wait means the report is not readable yet; a failMsg means it
+// never will be.
+func (r *SwiftSnapshotReconciler) pushedArtifact(ctx context.Context, namespace, jobName string, completedAt time.Time, what string) (clonecommon.TransferReport, bool, string, error) {
+	rep, ok, err := clonecommon.JobTransferReport(ctx, r.Client, namespace, jobName)
+	if err != nil {
+		return rep, false, "", err
+	}
+	if ok && rep.ManifestDigest != "" {
+		return rep, false, "", nil
+	}
+	if time.Since(completedAt) < digestReadGrace {
+		return rep, true, "", nil
+	}
+	return rep, false, fmt.Sprintf("the %s push Job %s completed, but its manifest digest could not be read from the Job's pod; "+
+		"restores pin the artifact by that digest, so this snapshot could not be restored. Delete and recreate it", what, jobName), nil
 }
 
 // buildOCIPushJob constructs the node-pinned push Job. It mounts the captured
@@ -272,7 +307,7 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			Labels: map[string]string{
 				"app.kubernetes.io/name":      "kubeswift",
 				"app.kubernetes.io/component": "snapshot-oci-push",
-				"kubeswift.io/swiftsnapshot":  snap.Name,
+				"kubeswift.io/swiftsnapshot":  names.LabelValue(snap.Name),
 			},
 		},
 		Spec: batchv1.JobSpec{

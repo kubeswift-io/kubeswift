@@ -192,8 +192,10 @@ spec:
               timeoutStrategy:
                 default: cancel
                 description: |-
-                  TimeoutStrategy controls behavior on timeout. Phase 1 supports cancel
-                  only (the default); ignore is reserved for live mode.
+                  TimeoutStrategy controls behavior on timeout: cancel (the default) fails
+                  the migration once Timeout has elapsed (a live migration only before its
+                  commit point, after which it always runs to completion); ignore never
+                  times the migration out.
                 enum:
                 - cancel
                 - ignore

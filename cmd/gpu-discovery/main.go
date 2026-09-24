@@ -10,6 +10,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -66,12 +67,28 @@ func runDiscovery(ctx context.Context, k8s client.Client, nodeName string) {
 		return
 	}
 
+	merged, ok := publishStatus(ctx, k8s, nodeName, discovered)
+	if !ok {
+		return
+	}
+
+	klog.InfoS("discovery cycle complete",
+		"node", nodeName,
+		"gpuCount", merged.GPUCount,
+		"freeGPUs", merged.FreeGPUs,
+		"phase", merged.Phase,
+	)
+}
+
+// publishStatus writes the discovered hardware into the node's SwiftGPUNode
+// (creating it if needed), preserving the controller-owned allocation fields.
+func publishStatus(ctx context.Context, k8s client.Client, nodeName string, discovered *SwiftGPUNodeStatus) (gpuv1alpha1.SwiftGPUNodeStatus, bool) {
 	// Read existing SwiftGPUNode to preserve controller-owned fields.
 	var existing gpuv1alpha1.SwiftGPUNode
-	err = k8s.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
+	err := k8s.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
 	if client.IgnoreNotFound(err) != nil {
 		klog.ErrorS(err, "failed to get SwiftGPUNode")
-		return
+		return gpuv1alpha1.SwiftGPUNodeStatus{}, false
 	}
 	exists := err == nil
 
@@ -90,29 +107,35 @@ func runDiscovery(ctx context.Context, k8s client.Client, nodeName string) {
 		}
 		if err := k8s.Create(ctx, node); err != nil {
 			klog.ErrorS(err, "failed to create SwiftGPUNode")
-			return
+			return gpuv1alpha1.SwiftGPUNodeStatus{}, false
 		}
 		// Re-read to get resourceVersion for status patch.
 		if err := k8s.Get(ctx, client.ObjectKey{Name: nodeName}, &existing); err != nil {
 			klog.ErrorS(err, "failed to re-read SwiftGPUNode after create")
-			return
+			return gpuv1alpha1.SwiftGPUNodeStatus{}, false
 		}
 	}
 
-	// Patch status subresource.
-	patch := client.MergeFrom(existing.DeepCopy())
-	existing.Status = merged
-	if err := k8s.Status().Patch(ctx, &existing, patch); err != nil {
+	// Patch status subresource, optimistically locked. status.gpus is an
+	// atomic list carrying the controller's allocations (allocated /
+	// allocatedTo), and this patch resends all of it from the read above. An
+	// allocation the controller wrote in between was erased by an unlocked
+	// patch -- the GPU read as free again and was handed out twice. On a
+	// conflict, re-read and re-merge so the fresh allocation is preserved.
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := k8s.Get(ctx, client.ObjectKey{Name: nodeName}, &existing); err != nil {
+			return err
+		}
+		merged = mergeStatus(discovered, &existing.Status)
+		patch := client.MergeFromWithOptions(existing.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		existing.Status = merged
+		return k8s.Status().Patch(ctx, &existing, patch)
+	})
+	if err != nil {
 		klog.ErrorS(err, "failed to patch SwiftGPUNode status")
-		return
+		return merged, false
 	}
-
-	klog.InfoS("discovery cycle complete",
-		"node", nodeName,
-		"gpuCount", merged.GPUCount,
-		"freeGPUs", merged.FreeGPUs,
-		"phase", merged.Phase,
-	)
+	return merged, true
 }
 
 func patchPhase(ctx context.Context, k8s client.Client, nodeName, phase string) {

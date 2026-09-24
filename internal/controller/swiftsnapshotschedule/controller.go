@@ -29,9 +29,6 @@ const (
 	maxRequeue = time.Hour
 	// suspendedRequeue is the cheap re-check cadence for a suspended schedule.
 	suspendedRequeue = time.Hour
-	// missedTickCap bounds catch-up after a long outage: the controller fires at
-	// most ONE snapshot (the most recent missed tick), never a backlog.
-	missedTickCap = 100
 )
 
 // SwiftSnapshotScheduleReconciler reconciles SwiftSnapshotSchedule resources.
@@ -149,19 +146,36 @@ func parseScheduleUTC(spec string) (cron.Schedule, error) {
 // whether one exists. It fires at most once per reconcile (the most recent
 // missed tick), coalescing a backlog after an outage rather than stampeding.
 //
+// The walk starts close to now: the window reaching back from now doubles
+// until it holds a tick (or reaches earliest), and only that window is walked.
+// Walking forward from earliest with a cap of missedTickCap ticks returned the
+// 101st missed tick, not the latest; the snapshot it created re-triggered the
+// reconcile, which fired the next stale tick, and so on -- a burst of
+// snapshots named for long-past times after any long outage of a frequent
+// schedule.
+//
 // A zero Next means no occurrence within the five years cron searches, so
 // nothing is due. Unguarded it precedes every "now" and reads as permanently
 // due — one snapshot named for year 1 per reconcile.
 func mostRecentDue(sched cron.Schedule, earliest, now time.Time) (time.Time, bool) {
-	var due time.Time
-	found := false
-	t := sched.Next(earliest)
-	for i := 0; !t.IsZero() && !t.After(now); i++ {
-		due, found = t, true
-		if i >= missedTickCap {
+	if !earliest.Before(now) {
+		return time.Time{}, false
+	}
+	start := earliest
+	for d := time.Minute; ; d *= 2 {
+		s := now.Add(-d)
+		if !s.After(earliest) {
+			break // the window reaches back to earliest: walk all of it
+		}
+		if t := sched.Next(s); !t.IsZero() && !t.After(now) {
+			start = s
 			break
 		}
-		t = sched.Next(t)
+	}
+	var due time.Time
+	found := false
+	for t := sched.Next(start); !t.IsZero() && !t.After(now); t = sched.Next(t) {
+		due, found = t, true
 	}
 	return due, found
 }

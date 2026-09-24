@@ -34,11 +34,12 @@ func testGPUNode(name string, gpus []gpuv1alpha1.GPUDevice, fm *gpuv1alpha1.Fabr
 			Name: name,
 		},
 		Status: gpuv1alpha1.SwiftGPUNodeStatus{
-			Phase:    "Ready",
-			GPUCount: len(gpus),
-			FreeGPUs: free,
-			GPUModel: model,
-			GPUs:     gpus,
+			Phase:     "Ready",
+			GPUCount:  len(gpus),
+			FreeGPUs:  free,
+			GPUModel:  model,
+			GPUs:      gpus,
+			VfioReady: true,
 			Host: gpuv1alpha1.HostTopology{
 				NUMANodes: []gpuv1alpha1.NUMANodeInfo{
 					{ID: 0, CPUs: "0-47", MemoryMi: 1048576},
@@ -93,13 +94,31 @@ func eightGPUs() []gpuv1alpha1.GPUDevice {
 	}
 }
 
+// kubeNode is the schedulable Node a SwiftGPUNode reports for; the allocator
+// refuses a SwiftGPUNode whose Node is missing or cordoned.
+func kubeNode(name string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+}
+
+// newReconciler builds a reconciler over objs, adding a Node for every
+// SwiftGPUNode that does not already have one.
 func newReconciler(objs ...client.Object) *SwiftGPUReconciler {
 	cb := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithStatusSubresource(
 		&swiftv1alpha1.SwiftGuest{},
 		&gpuv1alpha1.SwiftGPUNode{},
 	)
+	haveNode := map[string]bool{}
+	for _, o := range objs {
+		if _, ok := o.(*corev1.Node); ok {
+			haveNode[o.GetName()] = true
+		}
+	}
 	for _, o := range objs {
 		cb = cb.WithObjects(o)
+		if _, ok := o.(*gpuv1alpha1.SwiftGPUNode); ok && !haveNode[o.GetName()] {
+			cb = cb.WithObjects(kubeNode(o.GetName()))
+			haveNode[o.GetName()] = true
+		}
 	}
 	return &SwiftGPUReconciler{
 		Client: cb.Build(),

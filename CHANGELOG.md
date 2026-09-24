@@ -6,7 +6,805 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **The privileged image-import Job ran whatever a mutable tag served.** The
+  import, OCI-import and measure Jobs used `ubuntu:22.04` and `apt-get
+  install`ed curl, qemu-utils and util-linux on every run, as root and (for
+  Linux images) privileged, pulling from whatever the tag and the package
+  mirror served that day. They now run the launcher image, which already
+  carries those tools and is on every node that runs guests, the same way
+  the root-disk clone Job does. CI's raw tool downloads (kind, trivy,
+  kubeconform, kube-linter, gitleaks) are now checked against pinned sha256
+  sums.
+
+- **Gateway console and sandbox-exec sessions left no audit record.** The
+  raw WebSocket routes bypass the Connect audit interceptor, so opening a
+  console into a (privileged) launcher, or running a command in a sandbox,
+  logged nothing naming who did it. Each session now logs `ws session opened`
+  and `ws session closed` lines with the user, cluster, namespace, target,
+  pod, duration and, for sandbox exec, the command (truncated at 512 bytes).
+
+- **The controller's metrics can now be served to authorized scrapers
+  only.** `/metrics` is plain HTTP to anyone who can reach the pod, and it
+  names every tenant's guests, images and namespaces.
+  `controllerManager.metrics.secure=true` (flag `--metrics-secure`) serves it
+  over HTTPS and only to callers the API server authenticates (TokenReview)
+  and authorizes to `get /metrics` (SubjectAccessReview). Bind the new
+  `kubeswift-metrics-reader` ClusterRole to your scraper; the ServiceMonitor
+  follows the setting. It is off by default because it changes how every
+  scraper connects. The controller also gained `/healthz` and `/readyz`
+  probes. Readiness waits for the webhook server when webhooks are enabled,
+  since their `failurePolicy: Fail` made a Ready-but-not-serving pod fail
+  every guarded write.
+
+- **The kustomize install (`make deploy`, the local-cluster quickstart, e2e)
+  lagged the Helm chart's security hardening.** Its controller ClusterRole
+  still granted what the chart had removed (writes to `swiftgpuprofiles`,
+  create/delete on `swiftgpunodes`, write verbs on `pods/log`). Its launcher
+  reporter role carried extra `update` verbs. It never installed the sandbox
+  reporter role or the launcher-ServiceAccount admission gate, and the
+  controller Deployment had no securityContext. The controller RBAC and the
+  admission gate are now generated from the chart templates by `make
+  generate` (`hack/sync-kustomize.sh`), and CI fails if they drift. The
+  Deployment gets the chart's non-root, read-only, no-capabilities context.
+  `config/default` now includes a ValidatingAdmissionPolicy, which needs
+  Kubernetes 1.30+.
+
+- **swiftletd wiped whatever directory a snapshot capture named.** Before a
+  capture, swiftletd empties the destination directory, and it took that
+  path from the launcher pod's `snapshot-action-args` annotation without
+  checking it. Every launcher mounts the node-wide
+  `/var/lib/kubeswift/snapshots` read-write, so anyone who could patch a
+  launcher pod could point a capture at that root and delete every
+  namespace's snapshots on the node. swiftletd now accepts only
+  `file:///var/lib/kubeswift/snapshots/<name>/`, with `<name>` a single safe
+  segment, which is the rule the controller already applies.
+
+- **A checked-out warm-pool sandbox ran with no ingress isolation.** A warm
+  slot's deny-ingress NetworkPolicy selected the pod by its sandbox label, and
+  checkout rewrites that label to the claiming sandbox's name. From the moment
+  of checkout the policy matched nothing, and the workload accepted inbound
+  traffic from the whole cluster. Slot pods now carry a stable slot-name label
+  that the policy selects on. At checkout the slot's NetworkPolicy and intent
+  ConfigMap move to the claiming sandbox, as its pod does, so they are removed
+  with it instead of piling up until the pool is deleted.
+
+- **A legacy token Secret could mint a launcher ServiceAccount token.** The
+  launcher-SA admission gate stops a pod from naming a launcher ServiceAccount,
+  but creating a `kubernetes.io/service-account-token` Secret annotated with
+  that ServiceAccount still had the token controller mint a long-lived token
+  for it, with no pod involved. That token can patch the privileged launcher,
+  which is node root. Anyone who can create Secrets in the namespace (the
+  built-in `edit` role) could do it. A second ValidatingAdmissionPolicy under
+  the same `launcherSAGate` switch now rejects such Secrets unless the
+  controller creates them. `docs/security-audit.md` no longer claims the
+  escalation is closed. It lists the routes still open (TokenRequest,
+  impersonation, and `pods/exec` into the launcher, all in `edit`/`admin`) and
+  says to treat those roles as node-admin in launcher namespaces.
+
+- **GPU passthrough could take a host NIC or disk away from the node.**
+  `gpu-init` bound every non-bridge device in the GPU's IOMMU group to
+  vfio-pci. On a board without ACS that group can also hold another card, such
+  as the node's NIC or NVMe controller, which was then unbound from its host
+  driver. The node lost its network or disk, and the device was handed to the
+  guest. A peer is now bound only if it is another function of the same card,
+  another GPU allocated to the guest, or already on vfio-pci. Any other device
+  in the group makes `gpu-init` refuse before touching anything, naming the
+  device.
+
+- **Release signature checks accepted a signature from any branch.** The
+  documented and CI `cosign verify` commands matched the signing workflow's
+  identity with `…release-(stable|rc).yaml@.*`, so a signature produced by that
+  workflow file on any ref, a branch included, verified as a release. Releases
+  are only built from tag pushes, so the identity is now pinned to
+  `@refs/tags/v.*` (anchored, with dots escaped) in the release and verify
+  workflows and in `docs/releases.md`. CI's generated-code check now also
+  covers `charts/kubeswift/crds`, the CRD copy operators actually install.
+
+- **With `auth-mode=insecure`, any web page could drive the gateway.** There is
+  no token in that mode, yet the Connect API answered every origin with
+  `Access-Control-Allow-Origin: *`, mutating RPCs included. The WebSocket
+  origin check also accepted any request whose Origin host matched its Host
+  header, which a DNS-rebinding page satisfies. A page the operator visited
+  could therefore delete VMs or open a console or sandbox shell. In insecure
+  mode, browser requests to both the RPC and WebSocket surfaces are now
+  accepted only from explicitly listed origins, or same-origin via localhost or
+  an IP address (a port-forward). A same-origin DNS name must be listed in
+  `gateway.corsAllowOrigin`. Authenticated modes are unchanged.
+
+- **A vhost-user socket path could attach a host disk to the guest.** Cloud
+  Hypervisor takes each device as one comma-separated `key=value` string, and
+  swiftletd wrote the guest's vhost-user socket paths, virtiofs tags and
+  generic-device `virtioId` into those strings unescaped. A socket such as
+  `/srv/vm/x,path=/dev/sda` passes the host-path allowlist, yet made CH attach
+  the node's `/dev/sda` to the guest. These values are now restricted to a safe
+  character set by the SwiftGuest controller (the webhook is optional), the
+  webhook and, as a last check before launch, swiftletd.
+
+- **A pooled sandbox could run with the pool's network access and without
+  its image verification.** Checking a SwiftSandbox out of a warm pool ignored
+  the sandbox's own `network.mode`, `verifyKeySecretRef` and `image`. A
+  `restricted` sandbox claiming a slot of an `open` pool got open egress, a
+  sandbox that required a verified image ran the pool's image unverified, and
+  slots warmed before a pool edit kept the old settings until claimed. Each
+  warm slot now records the image, network mode and verification key it booted
+  with. A sandbox claims only a slot that matches its own, and otherwise boots
+  cold. The pool replaces warm slots booted under different settings, so
+  existing warm slots are recycled once after upgrading.
+
+- **The source node's migration private key was copied into the tenant
+  namespace unnecessarily.** With live-migration mTLS enabled, Validating copied
+  both participating nodes' identity Secrets — cert **and** private key — into
+  the guest's namespace, but only the destination node's copy is ever mounted
+  (by the destination pod's stunnel server). The source pod reads the per-guest
+  Secret instead, so the source node's full identity in the tenant namespace was
+  dead weight that widened exposure of a node-wide private key to anyone who can
+  read Secrets there. Only the destination node's identity is copied now; the
+  source node's identity is still required to exist (the per-guest copy fails if
+  it is not provisioned). The destination node's identity copy is now reclaimed
+  when the migration ends (at the terminal transition, and on mid-flight
+  deletion), guarded so a copy another active migration in the namespace still
+  needs is kept — previously these copies carried no owner and were never
+  cleaned up, so a node private key sat in the tenant namespace indefinitely.
+
+- **`swiftctl ssh` leaked the user's private key into logs.** The key was
+  embedded in the pod-exec command, which the Kubernetes apiserver records in
+  its audit log's request URI and which appears in `/proc/<pid>/cmdline` of the
+  `sh` process for the whole session — readable by anyone with exec ("console")
+  into the privileged launcher. The key is now streamed over the exec's stdin
+  into a mode-0600 temp file (stdin content is not logged that way) and ssh runs
+  `ssh -i <path>`, removing the file on exit via a trap. The guest's `primaryIP`
+  (an unvalidated pod annotation) and the SSH user are now passed as quoted
+  positional args instead of being spliced into the script, closing a shell
+  injection through a hostile annotation.
+
+- **A member kubeconfig could exfiltrate the gateway's own token or run code as
+  the gateway.** A member `Cluster`'s credential Secret is supplied by whoever
+  registers it, and the gateway loaded its kubeconfig with every field honoured,
+  so one with `tokenFile: /var/run/secrets/.../token` and an attacker-controlled
+  `server` made the gateway send its own ServiceAccount token to the attacker,
+  and an `exec`/auth-provider plugin ran as the gateway process. The gateway now
+  rejects a member kubeconfig that references gateway-local files or plugins
+  (`tokenFile`, `exec`, auth-provider, client cert/key/CA file paths); inline
+  credential data is unaffected.
+
+- **OIDC mode did not require `email_verified`.** The default username claim is
+  `email`, but the gateway never checked `email_verified`, so on an IdP that lets
+  a user set or change their own email an attacker could claim a privileged
+  operator's address and be impersonated as them on every federated member. The
+  gateway now requires `email_verified=true` when the username claim is `email`,
+  matching kube-apiserver's OIDC authenticator.
+
+- **An unauthenticated request could OOM the gateway.** The Connect service
+  handlers had no read-size cap, and Connect reads and decompresses a request
+  message in full before the handler — and therefore before authentication —
+  runs, so a single small gzip body could inflate to gigabytes and exhaust the
+  gateway (chart memory limit 256Mi). Every Connect handler now caps the
+  decompressed request at 4 MiB (`connect.WithReadMaxBytes`), and the raw
+  WebSocket planes (`/console`, `/sandbox-exec`) cap a single inbound message at
+  1 MiB (`SetReadLimit`), which gorilla otherwise leaves unbounded.
+
+- **The controller no longer caches every Secret in the cluster.** The default
+  cached client backs each typed read with an informer, so a single Secret read
+  made controller-runtime watch and hold every Secret in the cluster in the
+  controller's memory — seed data, migration mTLS keys, registry credentials and
+  every unrelated tenant Secret — under the manager's 512Mi limit, an OOM risk
+  on large clusters and a large exposure if the controller is compromised.
+  Secrets are now read directly from the apiserver (no controller watches or
+  owns them, so nothing relies on a cached Secret watch), which also removes
+  read-after-write staleness for the seed and cert Secrets the controllers
+  create and re-read.
+
+- **Kernel artifacts collided across namespaces on a node.** The per-node
+  kernel directory was `/var/lib/kubeswift/kernels/<namespace>-<name>`, and
+  since both a namespace and a name can contain `-`, the join was ambiguous:
+  namespace `team` + kernel `a-prod` and namespace `team-a` + kernel `prod`
+  mapped to the same directory. One tenant's pull Job would then overwrite the
+  other tenant's kernel and initramfs, which the victim's guests and sandboxes
+  boot. The namespace and name are now separate path segments
+  (`/var/lib/kubeswift/kernels/<namespace>/<name>`); neither can contain `/`, so
+  the mapping is unambiguous. The path is derived, never stored, so existing
+  kernels re-pull to the new layout on the next reconcile (a no-op if already
+  present).
+
+- **A virtio-fs sandbox could poison the node's shared rootfs cache.** The
+  launcher container — which runs the untrusted guest — mounted the node rootfs
+  cache (`/var/lib/kubeswift/sandbox-rootfs`) read-write. That cache is shared,
+  keyed only by image digest, and reused as-is on a cache hit, and for a
+  virtiofs sandbox virtiofsd shares whatever it can reach, so guest code that
+  remounted the share or escaped its chroot to the lower layer could write into
+  the cache and every later sandbox of that image on the node — in any namespace
+  — would then boot the tampered rootfs, defeating cosign verify-before-boot.
+  The launcher now mounts the cache read-only (the materialize init container
+  keeps it read-write to populate it); block-mode rootfs was already opened
+  `readonly=on` by Cloud Hypervisor. The read-only bind mount is authoritative —
+  virtiofsd gets `EROFS` on any write regardless of its own flags.
+
+- **A SwiftGuest annotation could mount an arbitrary node path into the
+  privileged launcher.** Restore mode is selected by the
+  `snapshot.kubeswift.io/active-restore` annotation, and
+  `snapshot.kubeswift.io/restore-snapshot-path` was mounted into the privileged
+  restore launcher as a hostPath verbatim. The controller host-path allowlist
+  (`checkHostPaths`) validates `spec.filesystems[].source.hostPath` but never
+  saw this annotation-sourced path, so a tenant who can patch their own
+  SwiftGuest could set `active-restore` plus `restore-snapshot-path: /` and get
+  the host root — or any node path — mounted into a privileged pod, i.e. node
+  root. The restore snapshot path is now constrained to the snapshot base
+  (`/var/lib/kubeswift/snapshots/`) plus one safe segment at the same controller
+  chokepoint, matching the only values the SwiftRestore and cloneFromSnapshot
+  controllers ever write (the snapshot's node-local dir). A guest carrying an
+  out-of-bounds restore path now fails loudly instead of building the launcher.
+
+- **A local-backend SwiftSnapshot could delete every namespace's snapshots on
+  a node.** `spec.backend.local.hostPath` is mounted into a privileged Job and
+  handed to `rm -rf` (cleanup) and swiftletd's `remove_dir_all` (capture), but
+  the guard only checked the prefix and rejected `..`. The prefix itself
+  (`/var/lib/kubeswift/snapshots/`) passed, so pointing a snapshot at the shared
+  root and deleting it wiped every namespace's snapshots and s3/oci caches on
+  the node; a segment like `*` or one carrying `;`/`$`/spaces passed too, and
+  the cleanup Pod ran it through `sh -c` unquoted. The hostPath is now
+  constrained to the prefix plus exactly one `[A-Za-z0-9._-]` segment (rejecting
+  the shared root, globs, shell metacharacters and nested paths), enforced by
+  the same validator in the webhook and — because `webhook.enabled` defaults to
+  false — in the controller before any capture, and again before cleanup. The
+  cleanup Pod no longer uses a shell: the path is passed as an argv operand to
+  `rm`. The controller only ever generates `<ns>-<name>` names, so no legitimate
+  snapshot is affected.
+
+- **A SwiftImage import could reach data outside the image it named.** The
+  import Job runs privileged (Linux images need a loop-mount to patch GRUB for
+  the serial console), and it processed the tenant-supplied disk two ways that
+  did not stay inside that disk. The GRUB patch mounted the image's partitions
+  and rewrote `grub.cfg` with `sed`/`mv`; a symlink planted in the image (say
+  `boot/grub/grub.cfg.tmp` → a host device, or `grub.cfg` itself → a host path)
+  redirected that write out of the image, because the mount followed symlinks.
+  And for a qcow2 source, `qemu-img convert` transparently follows a backing
+  file or external data file named in the header, so an image referencing a
+  host path or another tenant's file copied those bytes into the imported raw,
+  where the booted guest could read them. Anyone able to create a SwiftImage in
+  their own namespace could use either. The GRUB loop-mount now uses
+  `nosymfollow,nodev,nosuid,noexec`, so the kernel refuses to follow any symlink
+  on it (the patch of a real `grub.cfg` is unchanged; a redirected write fails
+  closed and is skipped), and the qcow2 path now refuses any image whose header
+  declares a backing or external data file before it converts. The launcher pod
+  remains a node-level trust boundary by design; this closes two paths that let
+  the *import* Job, not the launcher, act on data the operator never allow-listed.
+
 ### Fixed
+
+- **A remote member's VM charts could show the hub's metrics.** Prometheus
+  auto-discovery produced an in-cluster Service address
+  (`prometheus-operated.monitoring.svc`) for every member. The hub cannot
+  reach that address on a remote cluster. The query either failed, or the
+  name resolved to the hub's own Prometheus, whose data was then charted as
+  the member's. Discovery now serves only the local cluster (`spec.local`).
+  A remote member needs `spec.prometheusEndpoint` set to a URL the hub can
+  reach, and its `PrometheusEndpointResolved` condition says so. The docs'
+  and sample's `*.svc` example for a remote member is replaced.
+
+- **A shared base could be evicted while a guest was being created from
+  it.** Creating a shared-base guest's disk checked that the base was ready
+  and then snapshotted it, without holding the base's lock. A build of
+  another image could evict the base in between, failing the guest's first
+  attempt. The base's lock is now held until the snapshot exists, and
+  eviction skips a locked base.
+
+- **QEMU vCPU pinning was skipped for the large GPU guests it exists for.**
+  QEMU answers QMP only after hugepage preallocation and VFIO DMA mapping,
+  which for a guest with hundreds of GiB of RAM takes minutes. swiftletd
+  queried it once with a 5 s timeout, logged a warning and never retried, so
+  the guest ran unpinned. Pins were also applied to the controller's chosen
+  CPUs as given. Under the kubelet's static CPU Manager those are often
+  outside the pod's cpuset, which the kernel rejects, and pinning stopped at
+  the first rejection. Pinning now runs on its own thread, waiting up to 15
+  minutes for QMP. Pins outside the pod's cpuset move to free allowed CPUs,
+  on the same NUMA node when possible, and every pin is attempted.
+
+- **Building a shared base could evict other bases for nothing, or overfill
+  the pool.** Making room for a new base asked the pool for the image's full
+  raw size, although only its non-zero blocks are written. A 10 GiB image
+  holding 1.5 GiB of data demanded 10 GiB free and evicted cached bases to
+  get it. The requirement is now the pool blocks the image file's data
+  extents touch, an upper bound on what the write allocates. The free-space
+  check was also not reserved. Two builds of different images could each see
+  room, both write, and together fill the pool, which stalls and then fails
+  every guest on the node. A build now reserves its space in the node
+  registry, other builds don't count it as free, and it is released when the
+  write finishes (or lapses after six hours if the build died).
+
+- **The gateway probed slow member clusters about once a second, forever.**
+  Every Cluster update re-probed the member, and every probe wrote
+  `status.lastConnected`, which is itself an update. The loop stopped only
+  when two probes finished within the same second, which never happened for
+  a member more than about a second away. Each iteration cost roughly ten
+  member API calls, a hub status write, and a WatchClusters event to every
+  UI. Status-only updates no longer trigger a probe. Instead every member is
+  re-probed every two minutes, which also keeps Ready/Reachable current for
+  members whose loop used to end at once.
+
+- **Rebuilding an unfinished shared base could leak its thin device.** A base
+  whose population never finished is thrown away and rebuilt under the same
+  id. Failures to unmap or delete the old device were ignored. If it was
+  still busy, `create_thin` then found the id in the pool, and the
+  "registry fell behind" recovery forgot the id. That left the old device,
+  up to the image's full size, in the pool with nothing naming it. The
+  rebuild now stops on such a failure and retries on the next attempt.
+
+- **A checked-out sandbox's workload output could vanish from its logs.**
+  swiftletd appended the output of a workload run in a claimed warm slot to
+  the console log. Cloud Hypervisor writes that file at its own offset (it
+  does not open it for append), so the next console line overwrote the
+  appended output. The output now goes to `workload.log` in the run
+  directory. `swiftctl sandbox logs` and the gateway print it after the
+  console, and follow both files.
+
+- **A successful live migration could be reported as failed on some Cloud
+  Hypervisor builds.** swiftletd picks between CH v52's blocking
+  send-migration and v53's non-blocking one from the CH version. It read
+  git-describe or dirty builds (`v53.0-3-gabc1234`, `v53.0-dirty`) as
+  unparseable and assumed v52. On v53 it then saw the guest still running
+  right after the send was accepted and wrote `migration-status: failed`,
+  while the migration completed in the background. The version's minor
+  component is now read up to its first non-digit, and a failed probe is
+  retried before the v52 assumption is used.
+
+- **A guest could grow swiftletd's memory, or stall it, through the vsock
+  agent reply.** swiftletd read the in-guest agent's reply (identity
+  regeneration, warm-slot exec) until a newline, with no size limit and a
+  timeout that restarted on every read. A guest that never ended its reply
+  grew swiftletd's memory without bound, and one that sent a byte at a time
+  held the action loop indefinitely. Replies are now capped at 16 MiB, and
+  the timeout covers the whole reply.
+
+- **A vhost-user queue size below 1 kept the launcher from starting.**
+  `vhostUserDevices[].queueSizes` is signed in the API but read as unsigned by
+  swiftletd, so a negative entry made the whole runtime intent unreadable and
+  the launcher exited before it could report why. The CRD now requires each
+  size to be at least 1, and the controller refuses such a guest (covering
+  objects written before the schema change).
+
+- **Long SwiftSnapshot, SwiftRestore, SwiftGuest or SwiftImage names broke
+  their Jobs.** Derived Job names (`<snapshot>-s3-upload`, `-oci-push`,
+  `-oci-disk-<disk>`, `<restore>-oci-download`, `swiftguest-rootclone-<guest>`,
+  `<guest>-datafill-<disk>` and others) and name-bearing labels could exceed
+  the 63-character limit Kubernetes puts on Job names and label values, so
+  every Job create failed. A snapshot then failed later with a misleading
+  "capture deadline exceeded", and a restore sat Pending. Names over the
+  limit are now shortened with a hash of the full name, which keeps them
+  deterministic and distinct. Names that already fit are unchanged.
+
+- **An OCI snapshot could go Ready without the digest every restore needs.**
+  The manifest digest of a pushed memory or disk artifact was read,
+  best-effort, from the push pod's termination message. When that wasn't
+  readable (the pod's status trailing the Job's in the cache, or the pod
+  gone), the snapshot still went Ready with an empty digest, and every restore
+  and clone of it was then refused. The controller now waits for the report
+  and fails the snapshot, naming why, if it is still missing two minutes
+  after the push completed. The report is also taken only from a Succeeded
+  pod the Job controls. Any pod labelled `job-name: <job>` used to be able to
+  supply it, and with it the digest a restore would pull.
+
+- **A failed root-disk clone was never reported.** Every error from
+  preparing a disk-boot guest's root disk, including a clone or download Job
+  that had failed for good, was dropped on requeue. The guest sat in
+  Scheduling with nothing naming the cause. `StorageReady` is now False with
+  reason `RootDiskCloning` while the disk is being prepared, or
+  `RootDiskCloneFailed` with the Job's failure message when retrying won't
+  help. A storage pre-flight failure already on the condition takes
+  precedence.
+
+- **The SwiftGuest controller sent a status patch on every reconcile.** Its
+  "nothing changed" check compared the stored status with a pointer, which
+  never matched. With the optimistic lock added in this release, a stale
+  cached read turned that no-op patch into a conflict and an extra reconcile.
+  An unchanged status is no longer patched.
+
+- **A stopped guest kept its last run's pid, console socket and interface
+  addresses.** Clearing the run state when a launcher goes away dropped the
+  conditions and the primary IP but left `status.runtime.pid`,
+  `status.console`, `status.network.interfaces`, `status.network.ready` and
+  `status.network.egress`, so `swiftctl describe` showed a process, a serial
+  socket and network state that no longer existed. They are now cleared as
+  well. `status.runtime.hypervisor` is kept,
+  since it describes the guest rather than the run.
+
+- **A stopping guest could briefly get a new launcher.** If its launcher
+  finished terminating between the controller's stop check and its launcher
+  lookup in the same pass, the controller created a fresh launcher, which
+  exited at once. It now waits for the next pass, which records the guest
+  Stopped.
+
+- **A sandbox pool could delete a slot a checkout had just claimed.**
+  Scale-down, stale-slot recycling and pool deletion delete warm slots from a
+  list read earlier. A checkout that claimed one of those slots in between
+  lost it, and the sandbox failed with `SlotLost`. The pool now deletes a warm
+  slot only if it is unchanged since it was read.
+
+- **Deleting a SwiftGuestPool deleted every replica's data disk.** PVCs from
+  `volumeClaimTemplates` had the pool as their controller owner, so garbage
+  collection removed them with the pool. The pool guide says they survive
+  pool deletion and are cleaned up by hand. They now carry no owner
+  reference, and existing PVCs have the pool's reference removed on the next
+  reconcile. A replica also adopted any existing PVC with its name, and names
+  can collide across pools (template `data-web` in pool `x`, template `data`
+  in pool `web-x`), so two pools' replicas could share one disk. A PVC is now
+  reused only if its `swift.kubeswift.io/pool` label names the pool. The docs
+  also had the PVC name order backwards: it is
+  `<template-name>-<pool-name>-<index>`.
+
+- **A live migration could boot a second copy of the VM, or hang in
+  Resuming.** After a successful send, the source Cloud Hypervisor exits and,
+  with plaintext transport, the source launcher pod exits 0. Until cutover
+  moved the guest to the destination pod, the SwiftGuest controller read that
+  exit as a guest shutdown. With `runPolicy: Always` it deleted the launcher
+  and started a new one, a second VM on the same disk as the migrated one.
+  With any run policy it marked the guest Stopped and cleared the
+  `GuestRunning=True` that the destination had written once, so the
+  migration waited in Resuming until `spec.timeout`. A launcher that has
+  reported `migration-status: complete` is now left alone. Separately,
+  deleting a live SwiftMigration after the source reported complete kept the
+  destination pod but never cut over to it. The VM ran in a pod nothing
+  tracked while the guest pointed at the exited source. Such a deletion now
+  finishes the cutover before the object goes.
+
+- **The one-live-migration-per-source-node admission check ignored `mode:
+  auto` peers.** It compared `spec.mode` only, so a migration created as `auto`
+  (the default for `swiftctl` and node drain) that had gone live was never
+  counted, and an explicit live migration from the same node was admitted
+  alongside it. Peers are now compared by the mode they resolved to. An `auto`
+  migration is still not checked when it is admitted, since its mode is not
+  known yet.
+
+- **A native GPU could be allocated on a node its workload could never run
+  on.** The allocator took the first SwiftGPUNode with enough free GPUs. It did
+  not check `vfioReady` (which the API docs said it did) or the discovery
+  phase, whether the Kubernetes Node was cordoned or gone, a SwiftGuest's
+  `spec.nodeName`, or a sandbox's `nodeSelector` and kernel-node requirement.
+  The launcher is pinned to the GPU's node, so it sat Pending (or failed
+  gpu-init) holding GPUs another node could have supplied. New allocations now
+  skip such nodes. An allocation a workload already holds is left where it is.
+
+- **GPU discovery could erase an allocation and let a GPU be handed out
+  twice.** Each discovery cycle read the SwiftGPUNode, merged in the hardware
+  it found, and patched status without a `resourceVersion`. `status.gpus` is an
+  atomic list, so when the list changed (a driver rebind, for instance), the
+  patch resent all of it from the earlier read. An allocation the controller
+  made in between was reverted to free. Discovery's status write is now
+  optimistically locked and, on a conflict, re-reads and re-merges.
+
+- **The legacy seed-ConfigMap cleanup could delete a ConfigMap KubeSwift did
+  not create.** Retiring the pre-v0.12 plaintext seed ConfigMap deleted any
+  ConfigMap named `<guest>-seed` that no pod was mounting, including one the
+  user or another tool owned. Only the ConfigMap the guest controls is removed
+  now.
+
+- **A refused sandbox exec hung forever in the gateway and in `swiftctl`.** When
+  the exec into the launcher was refused (no `pods/exec` permission, pod not
+  running), the stream ended without reading stdin, and the vsock handshake
+  write into the stdin pipe blocked forever. Every refused console/exec
+  attempt leaked a gateway handler, its goroutines and the client connection,
+  and `swiftctl sandbox exec` hung instead of reporting the refusal. The pipes
+  are now closed with the stream's error when it ends, and the refusal is
+  returned to the caller.
+
+- **Deleting an s3 or oci snapshot left the guest's RAM on the capture node,
+  and oci artifacts were never deleted.** An s3/oci capture writes the full
+  memory image to a node-local directory before uploading it, and nothing
+  removed that directory: every such snapshot's RAM, secrets included, stayed
+  on the node's disk after the snapshot was deleted. oci snapshots also had no
+  cleanup at all, so `deletionPolicy: Delete` left every pushed artifact in the
+  registry. Deleting an s3/oci snapshot now removes the capture-node copy
+  (under either policy), and deleting an oci snapshot with `Delete` removes
+  its memory, disk and data-disk artifacts from the registry. A registry that
+  refuses deletes leaves the artifact in place rather than blocking the
+  deletion. Download caches written on other nodes by restores and clones are
+  still not tracked.
+
+- **With scoped launcher RBAC, a live-migrated guest lost its API access when
+  its migration was deleted.** After a live migration the guest runs in the
+  renamed destination pod, whose per-pod grant was owned by the
+  SwiftMigration. Deleting the migration (a drain migration's 1h TTL does)
+  garbage-collected the grant, and the running launcher could no longer report
+  status, its IP or action results. The SwiftGuest controller now takes that
+  grant over onto the guest.
+
+- **A snapshot schedule burst out stale snapshots after an outage.** The
+  catch-up walked forward from the last fire and stopped after 100 ticks,
+  firing that tick rather than the latest one. The snapshot it created
+  re-triggered the reconcile, which fired the next stale tick, and so on: a
+  frequent schedule produced a snapshot per reconcile, each named for a
+  long-past time, until it caught up. It now fires only the most recent missed
+  tick, found by searching back from the current time.
+
+- **A crash while creating a thin-pool backing file blocked the node's pool
+  until someone deleted the file by hand.** The file was created at its final
+  path and then preallocated, so a crash in between left a short file there,
+  which every later attempt refused as smaller than the configured size. It
+  is now built beside the final path and renamed into place only once fully
+  allocated and synced. Creation and loop-device attachment also run under a
+  per-file lock, so two creators on a node cannot each attach their own file.
+
+- **A memory snapshot could fail right after pausing the guest.** The capture
+  deadline (600s by default) ran from the snapshot's creation, so time spent
+  Pending (waiting for the guest to come up) counted against it. A snapshot
+  that had waited that long failed on its first Capturing poll, after the
+  capture had been sent and the guest paused. For a full-state (`includeDisk`)
+  capture, which leaves the guest paused for the disk export, the guest was
+  then left paused with nothing to export or terminate it. The deadline now
+  runs from the new `status.captureStartedAt`, and a full-state capture that
+  does exceed it queues a resume so the guest is not left paused.
+
+- **A guest with SR-IOV NICs on two different resources lost the second NIC.**
+  swiftletd took each VF's PCI address from its resource's `PCIDEVICE_*` list
+  using one counter shared across all resources, so the first NIC on a second
+  resource asked for index 1 of a one-entry list, found nothing, and was
+  dropped with only a log line. Addresses are now counted per resource.
+
+- **A GPU sandbox released its GPU while still using it, and never released it
+  when it finished.** Deleting a native-GPU SwiftSandbox freed its GPU at once,
+  but its launcher pod is garbage-collected only after the sandbox is gone, so
+  the running Cloud Hypervisor still held the VFIO group and the next
+  consumer's bind failed with "Resource busy" (the race already fixed for
+  SwiftGuests). A Completed or Failed sandbox, meanwhile, kept its GPU reserved
+  until it was deleted, which is never without a TTL. Deletion now deletes the
+  launcher and releases the GPU once it is gone, and a finished sandbox
+  returns its GPU as soon as its launcher has exited.
+
+- **An offline migration could hang forever and block every later migration
+  and drain of its guest.** `spec.timeout` was enforced only for live
+  migrations. An offline migration stuck in Preparing (a volume that never
+  detached) or Resuming (a target that never boots) kept the guest's
+  migration-in-progress marker indefinitely. Offline migrations now fail at
+  `spec.timeout`: before the cutover the guest is restarted where it was, and
+  after it the guest stays on the target; the marker is released either way.
+  `timeoutStrategy: ignore`, which was accepted but never read, now disables
+  the timeout (live and offline).
+
+- **A powered-off guest blocked node drains.** The eviction webhook denied the
+  eviction of every SwiftGuest launcher and marked the guest for migration,
+  including a launcher that had already exited (a stopped or failed guest).
+  The drain then waited on a migration that either timed out or powered the
+  stopped guest on at the target. An exited launcher is now evicted normally
+  (it runs no VM), and the drain controller clears a drain marker on a
+  `Stopped`/`Failed` guest instead of migrating it.
+
+- **Deleting a guest or snapshot could hang in `Terminating` when the webhook
+  was enabled.** The validating webhooks re-checked the whole spec on every
+  update, including the controllers' finalizer removals. After the rules
+  tightened (a narrower hostPath allowlist, an upgrade), or the source guest
+  changed (a GPU added after a memory snapshot was taken), a SwiftGuest's or
+  SwiftSnapshot's finalizer could no longer be removed, and it stayed
+  `Terminating` along with its namespace. Updates to an object being deleted,
+  and updates that leave its spec unchanged, are no longer re-validated
+  (SwiftGuest, SwiftSnapshot, SwiftRestore, SwiftMigration). Spec changes are
+  still validated, and immutable specs remain immutable.
+
+- **swiftletd's `GuestRunning` report wiped the guest's other conditions.**
+  `status.conditions` is an atomic list, so swiftletd's merge patch of just
+  `[GuestRunning]` replaced the whole list, dropping `GPUAllocated`,
+  `StorageReady` and the rest, and a running GPU guest then read as Pending.
+  In the other direction, the SwiftGuest and GPU controllers' status patches
+  resent the full list from a possibly stale read and could put back a
+  `GuestRunning` that swiftletd had just changed. swiftletd now reads the
+  conditions, updates only `GuestRunning` (keeping its transition time unless
+  the status changes), and writes them back with the `resourceVersion` it read,
+  retrying on conflict. Both controllers' status patches are optimistically
+  locked, and a conflict is retried promptly from a fresh read.
+
+- **A kube-ovn guest got a new IP after a stop/start.** The kube-ovn IP pin was
+  taken from `status.network.primaryIP`, which is now correctly cleared when
+  the launcher goes away (stop, poweroff, offline migration). Every restarted
+  guest was therefore unpinned and handed a fresh address, breaking the
+  documented stable static IP. The IP kube-ovn assigns is now recorded on the
+  guest as `swift.kubeswift.io/kube-ovn-ip` and pinned from there. Remove the
+  annotation to release the pin.
+
+- **A running guest that never reported an IP had no drain protection.** While
+  waiting for the guest's IP, the controller returned early every 5 seconds,
+  skipping the per-guest Service and the PodDisruptionBudget that keeps a drain
+  from evicting the VM. A guest that never reports one (static address, SR-IOV,
+  DHCP timeout) therefore never got either, and was polled every 5 seconds
+  forever. It now gets both, and the IP is looked for again every 30 seconds
+  (the pod watch delivers it sooner).
+
+- **Every guest's status was rewritten on every reconcile.** The SwiftGuest
+  controller writes status only when it changed, but its condition helper
+  restamped `lastTransitionTime` on every call, so the status always differed:
+  each 30s resync of each guest was an apiserver write (and a watch event to
+  every client), and the timestamps no longer said when anything happened.
+  `lastTransitionTime` now moves only when the condition's status changes.
+
+- **An in-place memory restore could resume old RAM over a newer disk.** A
+  local/s3/oci memory snapshot captures memory and device state, not the disk,
+  and the in-place restore reopens the guest's live disk. When the guest kept
+  running after the capture (`resumeAfterSnapshot: true`, the default) or was
+  relaunched from its disk since, the restored kernel's page cache and
+  filesystem state were older than the disk underneath, and writing them back
+  silently corrupts the filesystem. The documented disaster-recovery walkthrough
+  did exactly this. The in-place restore now refuses such a guest with reason
+  `DiskDiverged` unless the SwiftRestore carries the annotation
+  `snapshot.kubeswift.io/accept-disk-divergence: "true"`. A full-state OCI
+  capture (`includeDisk`) is unaffected. The samples, the round-trip e2e test
+  and the walkthrough now capture with `resumeAfterSnapshot: false` and let the
+  restore replace the paused launcher, rather than killing it (which boots the
+  guest from its disk) first.
+
+- **`overwriteExisting: true` restored nothing and reported Ready.** Over an
+  existing guest, the csi-volume-snapshot restore found the root-disk PVC and
+  the guest already present and skipped both. A memory clone restore returned
+  the existing guest unchanged and "resumed" it. Either way the restore went
+  `Ready` ("restore complete") with nothing restored. Only the in-place memory
+  restore can replace an existing guest's state; any other restore onto an
+  existing guest now fails with reason `OverwriteUnsupported`.
+
+- **A failed in-place restore left the guest unable to boot normally.** The
+  restore annotations route every launcher the guest gets to the snapshot, and
+  they were only removed on success. After a failure, every relaunch retried the
+  failed restore, and the guest never booted from its disk again until someone
+  removed the annotations by hand. They are now removed when the restore fails.
+
+- **`resumeAfterRestore: false` hung memory clone restores and was ignored by
+  in-place ones.** A clone target was created `Stopped`, so it had no launcher
+  and the restore waited for one forever. The in-place path resumed the VM
+  anyway. Both now bring the launcher up with the snapshot loaded, go `Ready`,
+  and leave the VM paused.
+
+- **SwiftGuestPool rolling updates could take the whole pool down, or never
+  finish.** Availability was counted from the replicas that existed rather than
+  the ones serving, so a replacement created in the same pass (still booting)
+  counted as available: with 2 replicas and `maxUnavailable: 1` the second
+  replica was deleted while the first one's replacement was still starting, and
+  both were down at once. `maxSurge` only filled missing indices below the
+  desired count, of which a rollout has none, so the documented zero-downtime
+  setting `maxUnavailable: 0, maxSurge: 1` never replaced anything. And rolling
+  back a rollout whose new replicas never became ready deadlocked: the broken
+  replicas were the unavailable ones, so the budget was spent and none could be
+  replaced. A replica now counts as available only while it is `Running` with
+  `GuestRunning=True` and not terminating. Outdated replicas that are not
+  serving are replaced first, outside the budget. `maxSurge` brings up
+  current-template replicas above the desired count (the next indices), which
+  are removed once the rollout is done and every replica is serving. The CRD now
+  rejects `maxUnavailable` and `maxSurge` both 0, which could never make
+  progress. An existing pool set that way reports a `RolloutBlocked` event
+  instead of stalling silently. The docs no longer claim percentage values,
+  which the integer fields never accepted.
+
+- **A running guest could be stuck reporting `GuestRunning=False`.** The
+  controller cleared a guest's run state whenever its launcher pod was
+  `Pending`, on the premise that a Pending pod has started nothing. But a pod
+  stays Pending while *any* container is still waiting, so a launcher already
+  running next to a sidecar that is still starting (the migration mTLS stunnel
+  server) read the same. swiftletd reports `GuestRunning=True` only once, so the
+  clear stuck: the guest read not-running with no address, and migration
+  Resuming, restores and pool rollouts waited on it until they timed out. The
+  run state is now cleared only when the launcher container itself is not
+  running.
+
+- **A warm GPU pool could free GPUs that were still in use.** The pool's slot
+  GPU cleanup matched allocations by the bare `<pool>-slot-` name prefix, so it
+  also freed the GPU of a standalone SwiftSandbox named like a slot and of every
+  slot of a pool whose own name began with `<pool>-slot-`. Deleting the pool
+  released every slot's GPU outright, including those of claimed slots whose
+  checkouts were still running. The set of live slot pods also came from the
+  informer cache, where a slot created moments earlier might not appear yet. In
+  each case the device was handed to the next consumer while a VM still had it.
+  The cleanup now matches only this pool's exact slot-name shape, never frees a
+  GPU a SwiftSandbox by that name still owns, and reads the live pods uncached.
+  Pool deletion removes idle warm slots and then waits, holding its finalizer,
+  until the pods of claimed slots are gone before releasing their GPUs.
+
+- **Editing a guest's GPU request could leak the GPU and wedge the guest in
+  `Terminating`.** `gpuProfileRef` and `gpuResourceClaim` are mutable, but the
+  GPU controller chose what to do from the current spec. Removing the ref after
+  allocation made it return early: on delete the finalizer was never removed, so
+  the guest stayed `Terminating` forever and its GPU stayed allocated to it.
+  Switching from the native backend to DRA ran DRA's no-op release and leaked the
+  native GPUs the same way. Release now follows the allocation recorded on the
+  SwiftGPUNodes rather than the spec: deletion frees everything the guest holds,
+  and a guest that no longer requests native GPUs gets them returned once its
+  launcher has let go of the VFIO group, with its stale GPU status cleared. The
+  native release also no longer skips a guest whose `status.gpu` is missing,
+  which leaked the reservation when the status write after allocation failed.
+
+- **A failed sandbox workload could be reported `Completed` with exit code 0.**
+  swiftletd recovers the workload's exit code from the console log, but two bugs
+  lost it and let the SwiftSandbox controller fall back to the launcher's own
+  exit code (0). The recovery was gated on the block-rootfs path, which a
+  `rootfsMode: virtiofs` sandbox does not have, so it never ran for them; and the
+  log was read as strict UTF-8, so any non-UTF-8 byte the workload printed failed
+  the read. The recovery now runs for every sandbox and reads the log's last
+  64 KiB lossily (bounded, so a workload that logged gigabytes no longer makes
+  swiftletd load all of it); the last exit-code marker still wins, so a workload
+  cannot spoof the real one.
+
+- **A shared-base guest could be left permanently unable to boot.** The node
+  recorded a guest's thin device id before creating its snapshot, so a snapshot
+  that failed (for example, its base evicted by another build at the same
+  moment) or a materialise Job killed between the two left the guest recorded
+  against a device that did not exist. Every later attempt took the reactivate
+  path and failed with "thin device N does not exist in pool" until the guest was
+  deleted. Guests now have the same two-phase record bases already had: a guest is
+  marked created only after its snapshot exists. An allocated-but-never-created
+  guest never received a disk, so it is created afresh (with a new id — never by
+  activating the old one, which could belong to another guest if the registry is
+  behind the pool); a created guest whose device is gone still fails loudly, as
+  before. Registries written by earlier versions are read with every guest
+  treated as created.
+
+- **Deleting an S3 snapshot could delete other snapshots' data.** The delete
+  Job listed objects by the snapshot's key prefix with no trailing `/`, and an S3
+  prefix list is a plain string match, so deleting snapshot `db` also removed
+  every object of `db-1700000000`, `db2` and any other snapshot whose name starts
+  with `db` in the same bucket path. A scheduled snapshot's keep-N pruning of its
+  oldest snapshot therefore wiped its newer siblings, which stayed `Ready` but
+  could no longer be restored. The delete is now scoped to `<prefix>/<ns>/<name>/`.
+
+- **Stopping, deleting or draining a guest killed its VM instead of shutting it
+  down.** swiftletd runs as PID 1 in the launcher container and installed no
+  SIGTERM handler, and the kernel drops a signal sent to a PID-namespace init
+  with no handler. So every launcher-pod deletion — `runPolicy: Stopped`, guest
+  delete, node drain, and the source teardown of an offline migration — sent a
+  SIGTERM that was silently ignored, and the kubelet SIGKILLed Cloud
+  Hypervisor/QEMU at the end of the grace period. The guest never received an
+  ACPI power-off and lost its dirty page cache, leaving filesystems needing
+  journal replay or damaged (worst for Windows/NTFS), including the disk an
+  offline migration then booted on the target. swiftletd now handles SIGTERM by
+  pressing the guest's ACPI power button (Cloud Hypervisor `vm.power-button`,
+  QEMU `system_powerdown`); the guest shuts down cleanly within the pod's grace
+  period and swiftletd reports `VmStopped`. A guest that ignores ACPI is killed
+  at the end of the grace period as before.
+
+- **Draining a node could hang on a guest with ordinary storage.** Every drain
+  migration uses `mode: auto`, and auto resolution never checked storage, so a
+  default disk-boot guest (ReadWriteOnce/Filesystem) resolved to live; its
+  destination pod hit Multi-Attach, the migration failed `DstNeverReady`, and
+  the drain stayed blocked instead of falling back to offline as documented. Its
+  comment assumed Validating-live would reject incapable storage, but no such
+  check existed in the controller — only in the webhook, which is off by
+  default and only applied to explicit `mode: live`. The storage rule
+  (kernel-boot, or ReadWriteMany+Block root storage) now lives in one shared
+  helper used by the webhook, by auto resolution (incapable storage resolves
+  offline), and by Validating-live (explicit `mode: live` on incapable storage
+  fails with `EligibilityMismatch`, the reason defined for exactly this).
+
+- **The gateway UI froze on a member cluster after about an hour, with no
+  error.** A multi-cluster guest or migration stream ran one watch per member,
+  and when the apiserver ended a member's watch — its routine watch timeout, a
+  dropped connection, or a 410 once the resume point was compacted — that
+  member's watch just returned while the stream stayed open on the others. The
+  UI kept showing the member's last state indefinitely. Member watches now
+  re-establish themselves: a routine close resumes from the last resourceVersion
+  seen (with bookmarks), so nothing in the gap is lost; an expired
+  resourceVersion restarts from current state and reports a per-cluster error
+  (deletions inside the gap cannot be replayed); a transient start failure is
+  reported and retried with capped backoff.
+
+- **A live-migration cancel or timeout could destroy the only running copy of
+  the VM.** The controller treated cutover step 1 (the `PodRefSwapped`
+  condition) as the point of no return, but the real commit point is earlier:
+  when the source launcher reports `migration-status=complete`, its Cloud
+  Hypervisor has already exited and the destination holds the only running copy.
+  In the window between those two events a `spec.cancelRequested`, a
+  `spec.timeout` expiry, or a timeout landing between cutover step 1 and step 2
+  would fail the migration and delete the destination pod — losing the guest.
+  The commit point is now defined as "source reported complete" (in one helper)
+  and honoured by both the cancel handler (a cancel past it is ignored and the
+  migration completes) and the StopAndCopy timeout (not enforced once the source
+  has completed or cutover has begun; the migration only moves forward). A cancel
+  or timeout *before* the commit point still aborts as before.
+
+- **Deleting a live SwiftMigration mid-transfer could orphan the destination or
+  split-brain the guest.** The deletion (finalizer) handler decided pre- vs
+  post-cutover by phase, treating all of StopAndCopy as post-cutover: it left
+  the destination pod — which the SwiftGuest owns, so it is not garbage-collected
+  with the migration — receiving into an orphan that nothing would cut over to,
+  and with `runPolicy: Always` the SwiftGuest controller then booted a second
+  copy from the same disk. Deletion now uses the same commit point: before it
+  (source still running) the deletion is an abort that restores the source and
+  deletes the destination pod; after it the destination is preserved as the
+  running guest. Offline deletion is unchanged (its commit point is the
+  `spec.nodeName` patch).
 
 - **Live migrations hung in `Resuming` until their timeout** (#646,
   regression from #641 in v0.14.0). The cutover pointed the guest's

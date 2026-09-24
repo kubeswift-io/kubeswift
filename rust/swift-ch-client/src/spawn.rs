@@ -32,6 +32,9 @@ fn rm_stale_api_socket(api_socket: &Path) {
 /// Spawns the Cloud Hypervisor process with the given config.
 /// Returns the child process. The API socket will be created by CH when ready.
 pub fn spawn_ch(config: &VmConfig) -> Result<Child, std::io::Error> {
+    config
+        .validate_option_values()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let binary =
         std::env::var("KUBESWIFT_CH_BINARY").unwrap_or_else(|_| DEFAULT_CH_BINARY.to_string());
 

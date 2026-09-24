@@ -713,10 +713,21 @@ preserves in-RAM state across a launcher pod kill.
 
 ## Scenario 5 — Memory snapshot + in-place restore (Tier B disaster recovery)
 
-**Goal.** Capture a running VM's full state — RAM included —
-to a node hostPath, kill the launcher pod (simulating node failure
-or pod eviction), and bring the VM back **with its in-memory state
-intact**. The contract Tier B exists to support.
+**Goal.** Capture a running VM's memory and device state to a node
+hostPath, then bring the VM back from it **with its in-memory state
+intact**.
+
+A Tier B snapshot holds memory, not the disk: the restored VM reopens
+the guest's live disk. The restore is only consistent if nothing ran
+on that disk after the capture, so this scenario captures with
+`resumeAfterSnapshot: false` (the VM stays paused) and lets the
+in-place restore replace the paused launcher. A guest that was resumed
+after the capture, or relaunched from its disk since, has a disk the
+captured memory does not match. The restore refuses it with reason
+`DiskDiverged` rather than risk corrupting its filesystems (override:
+annotation `snapshot.kubeswift.io/accept-disk-divergence: "true"` on
+the SwiftRestore). For disaster recovery of a guest's disk, use the
+csi-volume-snapshot backend.
 
 ### Manifests
 
@@ -725,7 +736,7 @@ intact**. The contract Tier B exists to support.
 - `01-source.yaml` — SwiftImage + SwiftSeedProfile + SwiftGuest
   (same shape as Scenario 1).
 - `02-snapshot.yaml` — SwiftSnapshot with `backend.type: local`,
-  `includeMemory: true`, hostPath under
+  `includeMemory: true`, `resumeAfterSnapshot: false`, hostPath under
   `/var/lib/kubeswift/snapshots/`.
 - `03-inplace-restore.yaml` — SwiftRestore with `targetGuest.name:
   s5-source` (same as source) and `overwriteExisting: true`.
@@ -756,7 +767,8 @@ kubectl apply -n snapshots-wt-s5 -f \
   config/samples/snapshots-walkthrough/scenario-5-memory-snapshot-inplace/02-snapshot.yaml
 ```
 
-The snapshot pauses the VM, serialises RAM to disk, and resumes:
+The snapshot pauses the VM and serialises RAM to disk. With
+`resumeAfterSnapshot: false` the VM then stays paused:
 
 ```
 [0s]  phase=Capturing
@@ -768,17 +780,13 @@ is unresponsive on the network during the pause. See
 [`pause-window.md`](pause-window.md) for the per-storage-class
 slope you'll see; Longhorn HDD measured here is ~2.5 s/GiB.
 
-### Step 3 — Kill the launcher pod (simulating a node failure)
+### Step 3 — Don't kill the launcher
 
-```bash
-kubectl delete pod -l swift.kubeswift.io/guest=s5-source \
-  -n snapshots-wt-s5 --grace-period=0 --force
-```
-
-The SwiftGuest controller will normally requeue and recreate the
-launcher pod from the source SwiftImage on its own. To force the
-restore-from-snapshot path instead, apply the SwiftRestore
-immediately:
+The paused launcher is left alone: the in-place restore force-deletes
+it and brings the VM back in a restore-mode launcher. Killing it
+yourself would let the SwiftGuest controller boot the guest fresh from
+its disk, and that boot writes to the disk. The restore would then
+refuse with `DiskDiverged`.
 
 ### Step 4 — Apply the in-place SwiftRestore
 
@@ -820,11 +828,11 @@ rebooted.
 
 ### What you just did
 
-You captured a running VM's full state (disk + memory), simulated
-a launcher pod crash, and brought the VM back with in-RAM state
-intact. This is the disaster-recovery contract Tier B exists for —
-fast restore of a known-good moment, no application restart, no
-re-init of in-memory caches.
+You captured a running VM's memory and device state and brought the
+VM back from it with in-RAM state intact: fast resume of a known-good
+moment, with no application restart and no re-init of in-memory caches.
+The disk was not captured. The restore relied on it being unchanged
+since the capture, which is why the VM was left paused.
 
 ### Cleanup
 

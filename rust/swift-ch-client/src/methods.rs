@@ -61,7 +61,10 @@ pub struct VmmVersion {
 
 impl VmmVersion {
     /// Parse `build_version` as `(major, minor)`. Returns `None` if the
-    /// string doesn't start with `v<digits>.<digits>`. Patch is dropped.
+    /// string doesn't start with `v<digits>.<digits>`. Patch is dropped, and
+    /// so is anything after the minor's digits: a git-describe build reports
+    /// `v53.0-3-gabc1234` and a local one `v53.0-dirty`, and reading those as
+    /// unparseable made swiftletd assume CH v52's blocking send on a v53 CH.
     ///
     /// The Phase 2 hypervisor-version check (per architect risk #3)
     /// compares major.minor exactly, allowing patch-level drift across
@@ -74,10 +77,17 @@ impl VmmVersion {
             .strip_prefix('v')
             .unwrap_or(&self.build_version);
         let mut parts = s.split('.');
-        let major: u32 = parts.next()?.parse().ok()?;
-        let minor: u32 = parts.next()?.parse().ok()?;
+        let major = leading_number(parts.next()?)?;
+        let minor = leading_number(parts.next()?)?;
         Some((major, minor))
     }
+}
+
+/// The number at the start of `s` (`"0-3-gabc"` -> 0), or `None` when `s`
+/// does not start with a digit.
+fn leading_number(s: &str) -> Option<u32> {
+    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    s[..end].parse().ok()
 }
 
 /// Terminal outcome of a non-blocking (CH >= v53) `send-migration`,
@@ -168,6 +178,16 @@ impl ApiClient {
     /// TODO that was originally meant for this purpose.
     pub fn shutdown(&self) -> Result<(), ApiError> {
         self.request_ok("PUT", "/api/v1/vm.shutdown", None)
+            .map(drop)
+    }
+
+    /// Press the virtual ACPI power button. Unlike [`shutdown`] (which stops
+    /// the VM's vCPUs outright, like pulling the plug), this asks the GUEST OS
+    /// to shut itself down: it flushes its page cache, unmounts filesystems and
+    /// powers off, after which Cloud Hypervisor exits. Returns once CH has
+    /// accepted the request, not when the guest has finished shutting down.
+    pub fn power_button(&self) -> Result<(), ApiError> {
+        self.request_ok("PUT", "/api/v1/vm.power-button", None)
             .map(drop)
     }
 
@@ -454,6 +474,20 @@ mod tests {
 
     fn no_content() -> Vec<u8> {
         b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()
+    }
+
+    // power_button must hit vm.power-button (ACPI, guest shuts itself down),
+    // NOT vm.shutdown (stops the vCPUs outright, like pulling the plug).
+    #[test]
+    fn power_button_sends_put_vm_power_button() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client.power_button().unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        assert!(
+            req.starts_with("PUT /api/v1/vm.power-button "),
+            "unexpected request line: {req}"
+        );
     }
 
     #[test]
@@ -807,6 +841,29 @@ mod tests {
     fn major_minor_rejects_garbage() {
         let v = VmmVersion {
             build_version: "totally-not-a-version".into(),
+            pid: None,
+        };
+        assert_eq!(v.major_minor(), None);
+    }
+
+    // Git-describe and dirty builds carry a suffix after the minor. Reading
+    // them as unparseable made swiftletd treat a v53 CH as v52 and report a
+    // migration still running in the background as failed.
+    #[test]
+    fn major_minor_ignores_build_suffixes() {
+        for (s, want) in [
+            ("v53.0-3-gabc1234", (53, 0)),
+            ("v53.0-dirty", (53, 0)),
+            ("v53.1.2-rc1", (53, 1)),
+        ] {
+            let v = VmmVersion {
+                build_version: s.into(),
+                pid: None,
+            };
+            assert_eq!(v.major_minor(), Some(want), "{s}");
+        }
+        let v = VmmVersion {
+            build_version: "v53.x".into(),
             pid: None,
         };
         assert_eq!(v.major_minor(), None);

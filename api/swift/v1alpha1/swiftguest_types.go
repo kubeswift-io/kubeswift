@@ -628,8 +628,10 @@ type VhostUserDevice struct {
 	// +optional
 	VirtioID string `json:"virtioId,omitempty"`
 	// QueueSizes optionally sets per-queue sizes for a generic device. Ignored
-	// for blk. When empty, Cloud Hypervisor's defaults apply.
+	// for blk. When empty, Cloud Hypervisor's defaults apply. Each size is at
+	// least 1.
 	// +optional
+	// +kubebuilder:validation:items:Minimum=1
 	QueueSizes []int32 `json:"queueSizes,omitempty"`
 }
 

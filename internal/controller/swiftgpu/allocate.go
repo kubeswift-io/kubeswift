@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	gpuv1alpha1 "github.com/kubeswift-io/kubeswift/api/gpu/v1alpha1"
@@ -14,6 +17,42 @@ import (
 )
 
 var ErrNoCapacity = errors.New("no GPU node has sufficient capacity")
+
+// NodeConstraint narrows which nodes a new allocation may land on. The
+// workload's launcher is pinned to whichever node the GPUs come from, so a
+// node it cannot run on -- cordoned, gone, missing a label its nodeSelector
+// needs, or not the node spec.nodeName names -- leaves it Pending (or refused)
+// for good while holding GPUs another node could have supplied.
+type NodeConstraint struct {
+	// RequiredNode, when set, is the only node the allocation may use (a
+	// SwiftGuest's spec.nodeName).
+	RequiredNode string
+	// NodeSelector must match the node's labels.
+	NodeSelector map[string]string
+}
+
+// nodeUsable reports whether a new allocation may be placed on n: its GPUs are
+// VFIO-ready, discovery reports it Ready, the Node exists and is not cordoned,
+// and it satisfies the constraint.
+func nodeUsable(ctx context.Context, c client.Client, n *gpuv1alpha1.SwiftGPUNode, nc NodeConstraint) (bool, error) {
+	if !n.Status.VfioReady || (n.Status.Phase != "" && n.Status.Phase != "Ready") {
+		return false, nil
+	}
+	if nc.RequiredNode != "" && n.Name != nc.RequiredNode {
+		return false, nil
+	}
+	var node corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: n.Name}, &node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil // a SwiftGPUNode left behind by a removed node
+		}
+		return false, err
+	}
+	if node.Spec.Unschedulable {
+		return false, nil
+	}
+	return labels.SelectorFromSet(nc.NodeSelector).Matches(labels.Set(node.Labels)), nil
+}
 
 // findAndAllocate is the SwiftGuest wrapper over FindAndAllocateFor: it derives
 // the allocation identity ("<ns>/<name>") and the preferred node (from
@@ -27,7 +66,8 @@ func (r *SwiftGPUReconciler) findAndAllocate(
 	if guest.Status.GPU != nil {
 		preferredNode = guest.Status.GPU.NodeName
 	}
-	return FindAndAllocateFor(ctx, r.Client, guest.Namespace+"/"+guest.Name, preferredNode, profile)
+	return FindAndAllocateFor(ctx, r.Client, guest.Namespace+"/"+guest.Name, preferredNode, profile,
+		NodeConstraint{RequiredNode: guest.Spec.NodeName})
 }
 
 // FindAndAllocateFor is the object-agnostic native allocation core: it finds a
@@ -49,6 +89,7 @@ func FindAndAllocateFor(
 	allocatedTo string,
 	preferredNode string,
 	profile *gpuv1alpha1.SwiftGPUProfile,
+	constraint NodeConstraint,
 ) (node *gpuv1alpha1.SwiftGPUNode, selectedGPUs []gpuv1alpha1.GPUDevice, numaNodes []int, partitionID int, err error) {
 
 	var nodeList gpuv1alpha1.SwiftGPUNodeList
@@ -113,6 +154,11 @@ func FindAndAllocateFor(
 
 		// Require at least profile.Count free GPUs.
 		if n.Status.FreeGPUs < profile.Spec.Count {
+			continue
+		}
+		if ok, err := nodeUsable(ctx, c, n, constraint); err != nil {
+			return nil, nil, nil, -1, err
+		} else if !ok {
 			continue
 		}
 
@@ -228,9 +274,11 @@ func fmVersionString(node *gpuv1alpha1.SwiftGPUNode) string {
 // deallocateGPUs releases the GPU allocation recorded in guest.status.gpu from
 // the SwiftGPUNode. No-op if no allocation is recorded or the node is gone.
 func (r *SwiftGPUReconciler) deallocateGPUs(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
-	if guest.Status.GPU == nil {
-		return nil
-	}
+	// No early return on a nil status.GPU: the SwiftGPUNodes are the record of
+	// what is allocated, and status.GPU can be missing while an allocation is
+	// held (the status patch after marking the GPUs failed). Returning early
+	// there leaked the reservation. DeallocateForWorkload is idempotent.
+	//
 	// Free the guest's GPUs (and FM partitions) on EVERY SwiftGPUNode, not just
 	// status.GPU.NodeName. During a VFIO offline migration's reserve-before-stop
 	// window the guest is briefly allocated on BOTH the source
@@ -262,6 +310,34 @@ func DeallocateForWorkload(ctx context.Context, c client.Client, allocatedTo str
 		}
 	}
 	return nil
+}
+
+// nativeAllocationHeld reports whether any SwiftGPUNode records a GPU or Fabric
+// Manager partition AllocatedTo the given identity — whether a native
+// allocation is outstanding, whatever the workload's spec says now. Native
+// allocations live on the SwiftGPUNodes (DRA ones do not), so this is the
+// source of truth for "what must be released".
+func nativeAllocationHeld(ctx context.Context, c client.Client, allocatedTo string) (bool, error) {
+	var nodes gpuv1alpha1.SwiftGPUNodeList
+	if err := c.List(ctx, &nodes); err != nil {
+		return false, fmt.Errorf("list SwiftGPUNodes: %w", err)
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		for _, g := range n.Status.GPUs {
+			if g.AllocatedTo == allocatedTo {
+				return true, nil
+			}
+		}
+		if n.Status.FabricManager != nil {
+			for _, p := range n.Status.FabricManager.Partitions {
+				if p.AllocatedTo == allocatedTo {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // selectGPUs picks count free GPUs from gpus, preferring GPUs on the same NUMA

@@ -72,10 +72,13 @@ jobs:
       - name: Install kubeconform
         env:
           KUBECONFORM_VERSION: '0.8.0'
+          # Update with the version (the release's CHECKSUMS file).
+          KUBECONFORM_SHA256: '9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883'
         run: |
           set -euo pipefail
           curl -sSfL -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
           /tmp/kubeconform -v
 
@@ -164,10 +167,14 @@ jobs:
       - name: Install kube-linter
         env:
           KUBE_LINTER_VERSION: '0.8.3'
+          # Update with the version. kube-linter publishes no checksum file, so
+          # this is the hash of the release asset as downloaded when pinned.
+          KUBE_LINTER_SHA256: '1a6d8419b11971372971fdbc22682b684ebfb7cf1c39591662d1b6ca736c41df'
         run: |
           set -euo pipefail
           curl -sSfL -o /tmp/kube-linter.tar.gz \
             "https://github.com/stackrox/kube-linter/releases/download/v${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz"
+          echo "${KUBE_LINTER_SHA256}  /tmp/kube-linter.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kube-linter.tar.gz -C /tmp kube-linter
           /tmp/kube-linter version
 

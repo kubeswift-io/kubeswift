@@ -137,6 +137,14 @@ func identityFromClaims(claims map[string]interface{}, cfg OIDCClaimConfig) (Ide
 	if user == "" {
 		return Identity{}, fmt.Errorf("token has no %q claim for the username", cfg.UsernameClaim)
 	}
+	// When the username is the email (the default), require email_verified=true,
+	// exactly as kube-apiserver's OIDC authenticator does. Otherwise, on an IdP
+	// that lets a user set or change their own email without verification, an
+	// attacker sets it to a privileged operator's address and is impersonated as
+	// that operator on every federated member.
+	if cfg.UsernameClaim == "email" && !claimIsTrue(claims["email_verified"]) {
+		return Identity{}, fmt.Errorf("email username claim requires email_verified=true (got %v)", claims["email_verified"])
+	}
 	id := Identity{User: cfg.UsernamePrefix + user}
 	if isReservedSubject(id.User) {
 		return Identity{}, fmt.Errorf("username %q uses the reserved %q prefix", id.User, reservedSubjectPrefix)
@@ -149,6 +157,20 @@ func identityFromClaims(claims map[string]interface{}, cfg OIDCClaimConfig) (Ide
 		id.Groups = append(id.Groups, g)
 	}
 	return id, nil
+}
+
+// claimIsTrue reports whether an OIDC claim value represents boolean true. Most
+// IdPs send email_verified as a JSON bool; some send the string "true", so both
+// are accepted. Anything else (false, "false", a number, nil/absent) is not.
+func claimIsTrue(v interface{}) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(t, "true")
+	default:
+		return false
+	}
 }
 
 // reservedSubjectPrefix is Kubernetes' reserved namespace for built-in subjects.

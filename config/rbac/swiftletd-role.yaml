@@ -1,3 +1,6 @@
+# These reporter roles are also installed by config/default (generated from the
+# Helm chart into config/manager/controller-manager-rbac.yaml). This copy is
+# kept for instructions that apply config/rbac on its own; keep the two equal.
 # ClusterRole for swiftletd (the launcher container) to read/patch its own
 # pod's annotations and patch the SwiftGuest's /status subresource.
 #

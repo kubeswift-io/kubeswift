@@ -130,7 +130,7 @@ Verify an image signature and inspect its provenance/SBOM:
 
 ```bash
 cosign verify ghcr.io/kubeswift-io/kubeswift/controller-manager:<tag> \
-  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+  --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 docker buildx imagetools inspect ghcr.io/kubeswift-io/kubeswift/controller-manager:<tag> \
@@ -142,7 +142,7 @@ Verify the chart (signed by digest):
 ```bash
 DIGEST=$(crane digest ghcr.io/kubeswift-io/charts/kubeswift:<version>)   # or skopeo inspect
 cosign verify ghcr.io/kubeswift-io/charts/kubeswift@$DIGEST \
-  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-(stable|rc).yaml@.*' \
+  --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -150,7 +150,7 @@ Verify stable binaries:
 
 ```bash
 cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
-  --certificate-identity-regexp 'https://github.com/kubeswift-io/kubeswift/.github/workflows/release-stable.yaml@.*' \
+  --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-stable\.yaml@refs/tags/v.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c SHA256SUMS
 ```

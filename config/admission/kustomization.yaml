@@ -1,0 +1,8 @@
+# Launcher-ServiceAccount admission gate (#443): only the controller may create
+# a pod that names a launcher ServiceAccount, or a token Secret for one.
+# ValidatingAdmissionPolicy is GA in Kubernetes 1.30; on an older cluster drop
+# ../admission from config/default (and see docs/security-audit.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - launcher-sa-policy.yaml

@@ -53,7 +53,7 @@ No `--disk`, no `--kernel CLOUDHV.fd`, no `--net` in kernel boot mode.
 
 | Volume           | Mount path                                     | Purpose                          |
 |------------------|------------------------------------------------|----------------------------------|
-| kernel-artifacts | `/var/lib/kubeswift/kernels/<ns>-<name>/`     | Kernel + initramfs hostPath      |
+| kernel-artifacts | `/var/lib/kubeswift/kernels/<ns>/<name>/`     | Kernel + initramfs hostPath      |
 | runtime-intent   | `/var/lib/kubeswift/intent`                    | Runtime intent ConfigMap         |
 | run              | `/var/lib/kubeswift/run`                       | Per-guest runtime directory (emptyDir) |
 | dev-kvm          | `/dev/kvm`                                     | KVM device passthrough           |

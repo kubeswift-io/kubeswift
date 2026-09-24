@@ -119,7 +119,8 @@ The controller deletes the underlying VolumeSnapshot via owner reference. The CS
 | `Phase=Pending` with `Ready=False reason=RootPVCNotFound` | SwiftGuest still provisioning | Wait — the per-guest PVC takes 1–2 min to create on cold start |
 | `Phase=Failed reason=SnapshotFailed` | CSI driver returned a snapshot error | `kubectl describe volumesnapshot swift-snap-<name>` for the driver message |
 | `Phase=Failed reason=UnsupportedBackend` | `backend.type` is `local` or `s3` | Phase 1 only — use `csi-volume-snapshot` |
-| Restore `Phase=Failed reason=TargetConflict` | Target name already in use | Set `targetGuest.overwriteExisting=true` or pick a different name |
+| Restore `Phase=Failed reason=TargetConflict` | Target name already in use | Pick a different name, or delete the existing SwiftGuest first |
+| Restore `Phase=Failed reason=OverwriteUnsupported` | `overwriteExisting: true` over an existing guest | A disk restore cannot replace an existing guest's disk in place; delete the guest first, or restore to a new name |
 | Restore `Phase=Pending reason=SnapshotNotReady` | Source SwiftSnapshot not yet `Ready` | Wait for the snapshot to complete first |
 | Restore stuck in `Restoring` for 30–90 s | Per-guest PVC clone from snapshot still binding (Longhorn full-copy) | Wait — this is normal on full-copy CSI drivers. `kubectl describe pvc swiftguest-root-<target>` shows the bind progress. |
 | Restore `Ready` but restored guest looks like a fresh boot | Per-guest PVC has no `dataSource` and no `swift.kubeswift.io/restore-seeded` label | The SwiftGuest controller fell back to the SwiftImage Copy Job. `kubectl get pvc swiftguest-root-<target> -o yaml` will show the missing fields; this should not happen on KubeSwift versions that include PR #21. |

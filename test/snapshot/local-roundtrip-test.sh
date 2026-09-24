@@ -3,9 +3,10 @@
 #
 # Purpose: prove that a memory snapshot actually captures + restores
 # in-memory state. The test plants a sentinel file on the source VM's
-# tmpfs (RAM-backed, NOT persisted to disk), takes a memory snapshot,
-# kills the launcher pod, restores in-place, and verifies the sentinel
-# survived.
+# tmpfs (RAM-backed, NOT persisted to disk), takes a memory snapshot
+# (resumeAfterSnapshot: false, so the VM stays paused), restores
+# in-place -- which replaces the paused launcher with one that loads the
+# snapshot -- and verifies the sentinel survived.
 #
 # This is the canonical "memory snapshot works" test: a tmpfs file is
 # in RAM, so if it survives a snapshot/kill/restore cycle, the memory
@@ -211,14 +212,13 @@ if [[ -z "$NODE_NAME" ]]; then
   exit 1
 fi
 
-# 4. Kill the source launcher pod. The SwiftGuest controller would
-#    normally just recreate the pod from disk (fresh boot, no memory).
-#    We immediately follow with a SwiftRestore to bring it back from
-#    the snapshot.
-echo ""
-echo "--- Step 4: Kill source launcher pod ---"
-kubectl delete pod snapshot-local-source -n "$NAMESPACE" --grace-period=0 --force --ignore-not-found >/dev/null
-sleep 5
+# 4. No launcher kill. The snapshot left the VM paused; the in-place
+#    restore force-deletes that launcher itself. Killing it here would
+#    let the SwiftGuest controller boot the guest fresh from its disk,
+#    and the restore would then (rightly) refuse with DiskDiverged: a
+#    memory snapshot holds no disk, so the old memory must not resume
+#    over a disk that has run since the capture. The sentinel still
+#    proves the round trip: it exists only in the snapshot's memory.
 
 # 5. In-place restore.
 echo ""
@@ -266,6 +266,6 @@ echo "  OK: sentinel survived: $GOT_VALUE"
 
 echo ""
 echo "=== Tier B round-trip e2e PASS ==="
-echo "Memory state was captured, the VM was killed, restored in-place,"
-echo "and the tmpfs sentinel matches — proving CH --restore actually"
+echo "Memory state was captured, the paused VM's launcher was replaced by"
+echo "an in-place restore, and the tmpfs sentinel matches — proving CH --restore actually"
 echo "loaded the captured RAM image rather than booting fresh."

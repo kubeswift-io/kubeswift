@@ -654,12 +654,36 @@ where
 
     // vCPU pinning is applied post-spawn (QEMU has no CLI for thread
     // affinity). Best-effort: a missed pin degrades performance, never
-    // correctness — log loudly and keep the guest.
+    // correctness — log loudly and keep the guest. On its own thread: QEMU
+    // answers QMP only after hugepage prealloc and VFIO mapping, which for a
+    // large GPU guest takes minutes, and the launch must not wait on it.
     if !vcpu_pinning.is_empty() {
-        match process.apply_vcpu_pinning(&vcpu_pinning) {
-            Ok(n) => log::info!("vcpu_pinning_applied pins={}", n),
-            Err(e) => log::warn!("vcpu_pinning_failed err={}", e),
-        }
+        let pins = vcpu_pinning.clone();
+        let qmp = qmp_socket.clone();
+        std::thread::spawn(move || {
+            let allowed = crate::cpuset::effective_cpuset()
+                .map_err(|e| {
+                    log::warn!(
+                        "vcpu_pinning cpuset unreadable ({}); using the controller's cpus as given",
+                        e
+                    )
+                })
+                .ok();
+            match swift_qemu_client::pin_vcpus_when_ready(
+                &qmp,
+                &pins,
+                allowed.as_deref(),
+                QEMU_PIN_WAIT,
+            ) {
+                Ok((n, notes)) => {
+                    for note in &notes {
+                        log::warn!("vcpu_pinning_adjusted {}", note);
+                    }
+                    log::info!("vcpu_pinning_applied pins={} of {}", n, pins.len());
+                }
+                Err(e) => log::warn!("vcpu_pinning_failed err={}", e),
+            }
+        });
     }
 
     if let Some(cb) = on_socket_ready {
@@ -669,6 +693,10 @@ where
     let status = process.wait()?;
     Ok((status, pid, serial_socket_path))
 }
+
+/// How long vCPU pinning waits for QEMU's QMP monitor: well past the
+/// hugepage preallocation of the largest guests.
+const QEMU_PIN_WAIT: Duration = Duration::from_secs(15 * 60);
 
 // ─── NIC helpers ────────────────────────────────────────────────────────────
 
@@ -694,18 +722,15 @@ fn build_ch_nics(
     if let Some(nics) = intent.nics() {
         let mut ch_nics = vec![];
         let mut vfio_devs = vec![];
-        let mut sriov_idx = 0usize;
+        let mut sriov_vfs = crate::intent::SriovVfCursor::default();
         for n in nics {
             if n.is_sriov() {
                 if let Some(dev) = &n.sriov_device {
-                    if let Some(addr) =
-                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
-                    {
+                    if let Some(addr) = sriov_vfs.next_address(&dev.resource_name) {
                         vfio_devs.push(VFIODeviceConfig {
                             sysfs_path: format!("/sys/bus/pci/devices/{}/", addr),
                             gpu_direct_clique: -1, // Not applicable for SR-IOV NICs
                         });
-                        sriov_idx += 1;
                     } else {
                         log::error!(
                             "SR-IOV VF address not found for resource {}",
@@ -779,13 +804,11 @@ fn build_qemu_nics(
         let mut qemu_nics = vec![];
         let mut vfio_devs = vec![];
         let mut net_idx = 0usize;
-        let mut sriov_idx = 0usize;
+        let mut sriov_vfs = crate::intent::SriovVfCursor::default();
         for n in nics {
             if n.is_sriov() {
                 if let Some(dev) = &n.sriov_device {
-                    if let Some(addr) =
-                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
-                    {
+                    if let Some(addr) = sriov_vfs.next_address(&dev.resource_name) {
                         vfio_devs.push(QemuVFIODevice {
                             host_address: addr,
                             // SR-IOV VFs attach flat to pcie.0 (no SXM
@@ -793,7 +816,6 @@ fn build_qemu_nics(
                             pcie_root_port: false,
                             no_mmap: false,
                         });
-                        sriov_idx += 1;
                     } else {
                         log::error!(
                             "SR-IOV VF address not found for resource {}",

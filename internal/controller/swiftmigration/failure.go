@@ -11,7 +11,85 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
 )
+
+// cleanupCopiedNodeIdentities deletes the per-node migration-identity Secrets
+// this migration copied into the guest namespace
+// (migrationcert.EnsureMigrationIdentitySecret), once no other active migration
+// there still needs them. Those copies carry a node-wide private key and are
+// created without an ownerReference — deliberately, because they are shared
+// across migrations in the namespace — so nothing garbage-collects them and
+// they otherwise sit in the tenant namespace indefinitely. Bounding their life
+// to the migrations that use them keeps a node key from lingering for any tenant
+// with Secret read to pick up.
+//
+// Safe to delete at the terminal transition even though the destination pod
+// (now the guest's launcher) still references the Secret as a volume: launcher
+// pods use restartPolicy=Never, so kubelet never remounts, and any later
+// migration re-creates the copy (create-if-absent) before its pod is built.
+// Best-effort and idempotent: an already-absent Secret is success. Only Secrets
+// carrying the migration-mtls managed-by labels are touched.
+func (r *SwiftMigrationReconciler) cleanupCopiedNodeIdentities(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+) error {
+	if !r.MigrationMTLSEnabled {
+		return nil
+	}
+	candidates := map[string]struct{}{}
+	for _, n := range []string{mig.Status.SourceNode, mig.Status.DestinationNode} {
+		if n != "" {
+			candidates[n] = struct{}{}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Nodes still needed by another migration in this namespace that is not
+	// terminal (its pods may still mount the copy, or it may re-create it). A
+	// terminal migration's launcher never remounts, so it does not pin the copy.
+	var migs migrationv1alpha1.SwiftMigrationList
+	if err := r.List(ctx, &migs, client.InNamespace(mig.Namespace)); err != nil {
+		return err
+	}
+	inUse := map[string]struct{}{}
+	for i := range migs.Items {
+		m := &migs.Items[i]
+		if m.Name == mig.Name || isTerminalPhase(m.Status.Phase) {
+			continue
+		}
+		for _, n := range []string{m.Status.SourceNode, m.Status.DestinationNode} {
+			if n != "" {
+				inUse[n] = struct{}{}
+			}
+		}
+	}
+
+	for node := range candidates {
+		if _, keep := inUse[node]; keep {
+			continue
+		}
+		name := migrationcert.MigrationNodeSecretName(node)
+		var sec corev1.Secret
+		if err := r.Get(ctx, client.ObjectKey{Namespace: mig.Namespace, Name: name}, &sec); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		// Only a Secret this controller created as a migration-mtls copy.
+		if sec.Labels["app.kubernetes.io/component"] != "migration-mtls" ||
+			sec.Labels["app.kubernetes.io/managed-by"] != "kubeswift-controller-manager" {
+			continue
+		}
+		if err := r.Delete(ctx, &sec); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
 
 // FinalizerName is added to SwiftMigration resources at first reconcile
 // and removed after cleanup completes. Required so a `kubectl delete
@@ -86,26 +164,45 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 		return ctrl.Result{}, nil
 	}
 
-	// Decide pre-cutover vs post-cutover by examining the
-	// SwiftMigration's phase. Preparing and earlier are pre-cutover;
-	// StopAndCopy and later are post-cutover.
-	postCutover := false
-	switch mig.Status.Phase {
-	case migrationv1alpha1.SwiftMigrationPhaseStopAndCopy,
-		migrationv1alpha1.SwiftMigrationPhaseResuming,
-		migrationv1alpha1.SwiftMigrationPhaseCompleted:
-		postCutover = true
+	// Decide pre-commit vs committed by the commit point, mode-aware — NOT by
+	// phase. Deleting a live migration while it is in StopAndCopy but the
+	// source has not yet reported complete is a PRE-commit abort: the source is
+	// still the running copy, so the destination pod must be torn down. The old
+	// phase check treated all of StopAndCopy as committed, which left the
+	// destination receiving into an orphan pod nothing would cut over to — and
+	// with runPolicy=Always the SwiftGuest controller then boots a second copy
+	// from the same disk (split-brain). Past the commit point the destination
+	// holds the only running copy and is preserved.
+	committed, err := r.deletionCommitted(ctx, mig)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("cancellation: determine commit point: %w", err)
 	}
 
-	if err := r.cleanupSourceGuest(ctx, mig, !postCutover); err != nil {
+	if err := r.cleanupSourceGuest(ctx, mig, !committed); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleanup source guest on cancellation: %w", err)
+	}
+
+	// Pre-commit live abort: delete the destination pod the controller created
+	// in Preparing-live so it cannot complete the receive into an orphan.
+	// Mirrors onTerminalPhase's W17 handling. Committed deletions leave the
+	// destination in place — it is the canonical guest now.
+	if !committed && mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		if err := r.cleanupDstPod(ctx, mig, &mig.Status); err != nil {
+			return ctrl.Result{}, fmt.Errorf("cleanup destination pod on cancellation: %w", err)
+		}
+	}
+
+	// Reclaim the copied per-node identity Secrets (a mid-flight deletion never
+	// reaches the terminal-phase branch that normally does this).
+	if err := r.cleanupCopiedNodeIdentities(ctx, mig); err != nil {
+		return ctrl.Result{}, fmt.Errorf("cleanup copied node identities on cancellation: %w", err)
 	}
 
 	if r.Recorder != nil {
 		reason := ReasonCancelled
 		msg := "migration cancelled; source guest cleanup complete"
-		if postCutover {
-			msg = "migration cancelled post-cutover; destination guest continues running"
+		if committed {
+			msg = "migration cancelled after the commit point; destination guest continues running"
 		}
 		r.Recorder.Event(mig, corev1.EventTypeNormal, reason, msg)
 	}

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/base64"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,6 +36,14 @@ const (
 	// connection if it offers subprotocols and the server selects none, so a
 	// client offering the bearer above MUST also offer this one.
 	WSProtocol = "kubeswift.io"
+
+	// maxWSMessageBytes caps a single inbound WebSocket message on the raw
+	// planes (/console, /sandbox-exec). Their inbound traffic is terminal
+	// keystrokes and resize events — small — but gorilla's default read limit
+	// is unlimited, so without this one client could send a multi-hundred-MB
+	// frame and OOM the shared gateway for every tenant. Set with
+	// conn.SetReadLimit right after each upgrade.
+	maxWSMessageBytes = 1 << 20
 )
 
 // wsAuthHeader extracts the caller's bearer for a WebSocket upgrade and returns
@@ -142,10 +151,34 @@ func (p *OriginPolicy) Allow(r *http.Request) bool {
 	if p.allowed[strings.ToLower(origin)] {
 		return true
 	}
-	// Same-origin is always fine — this is the UI served from the gateway's own
-	// host, or through the UI's same-origin nginx proxy.
+	// Same-origin is fine — this is the UI served from the gateway's own
+	// host, or through the UI's same-origin nginx proxy. Except, with no
+	// authentication, when the host is a DNS name: a DNS-rebinding page is
+	// "same-origin" by this test (its name, re-pointed at the gateway, is both
+	// its Origin and the Host it sends), so there a name must be listed
+	// explicitly. A rebinding page can never have an IP-literal or localhost
+	// origin, so those still pass.
 	if u, err := url.Parse(origin); err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host) {
-		return true
+		if !p.strict || rebindingProofHost(u.Hostname()) {
+			return true
+		}
 	}
 	return p.wildcard && !p.strict
+}
+
+// AllowedOrigin returns the value for Access-Control-Allow-Origin on a
+// request allowed by the policy: the request's own origin when the policy
+// names origins or runs strict, "*" only for a wildcard policy with real
+// authentication behind it.
+func (p *OriginPolicy) AllowedOrigin(r *http.Request) string {
+	if p.wildcard && !p.strict {
+		return "*"
+	}
+	return r.Header.Get("Origin")
+}
+
+// rebindingProofHost reports whether an origin hostname cannot be produced by
+// DNS rebinding: an IP literal or localhost.
+func rebindingProofHost(h string) bool {
+	return strings.EqualFold(h, "localhost") || net.ParseIP(h) != nil
 }

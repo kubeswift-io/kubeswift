@@ -110,13 +110,18 @@ kind: SwiftSandbox
 metadata:
   name: pooled-echo
 spec:
-  image: docker.io/library/alpine:3.20   # should match the pool's image
+  image: docker.io/library/alpine:3.20   # must match the pool's image
   poolRef:
     name: alpine-pool
   command: ["sh", "-c"]
   args: ["echo hello from a warm slot"]
 ```
 
+- A slot is only handed to a sandbox whose `image`, `network.mode` and
+  `verifyKeySecretRef` match the pool's exactly: the slot has already booted
+  with the pool's, and a checkout only injects a command. A sandbox asking for
+  anything else boots cold with its own settings. Warm slots booted before a
+  pool edit to any of these are replaced.
 - The workload **must** have a `command` to check out — with no command the
   image entrypoint has to be resolved, which only the cold path knows, so a
   command-less pooled sandbox cold-falls-back.

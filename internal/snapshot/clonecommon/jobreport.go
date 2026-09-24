@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -32,15 +35,28 @@ type TransferReport struct {
 	Signed bool `json:"signed,omitempty"`
 }
 
-// JobTransferReport reads the byte report a completed snapshot-s3 Job left in
-// its pod's container termination message. Returns (report, true, nil) when a
-// terminated container carried a parseable report; (_, false, nil) when none is
-// available (pod GC'd, message absent/garbled). A missing report is NOT an error
-// the caller should fail on — it is a metrics/status surface only (Design
-// Principle #6: never fabricate, but never fail the operation on a missing
-// metric). Pods are matched by the standard `job-name` label, which the Job
-// controller applies alongside `batch.kubernetes.io/job-name` for compatibility.
+// JobTransferReport reads the report a completed snapshot-s3 / snapshot-oras
+// Job left in its pod's container termination message. Returns (report, true,
+// nil) when a terminated container carried a parseable report; (_, false, nil)
+// when none is available (pod GC'd, message absent/garbled). For byte counts a
+// missing report is not a failure (Design Principle #6: never fabricate, but
+// never fail the operation on a missing metric). An OCI push is different:
+// its report carries the manifest digest restores pin the artifact by, and the
+// SwiftSnapshot controller will not go Ready without it. Pods are matched by
+// the standard `job-name` label, which the Job controller applies alongside
+// `batch.kubernetes.io/job-name` for compatibility.
+//
+// Only a Succeeded pod the Job controls counts. Matching the label alone let
+// any pod in the namespace carrying `job-name: <job>` supply the report, and
+// with it the manifest digest a restore pins the artifact by.
 func JobTransferReport(ctx context.Context, c client.Reader, namespace, jobName string) (TransferReport, bool, error) {
+	var job batchv1.Job
+	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: jobName}, &job); err != nil {
+		if apierrors.IsNotFound(err) {
+			return TransferReport{}, false, nil
+		}
+		return TransferReport{}, false, err
+	}
 	var pods corev1.PodList
 	if err := c.List(ctx, &pods,
 		client.InNamespace(namespace),
@@ -49,7 +65,11 @@ func JobTransferReport(ctx context.Context, c client.Reader, namespace, jobName 
 		return TransferReport{}, false, err
 	}
 	for i := range pods.Items {
-		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+		pod := &pods.Items[i]
+		if pod.Status.Phase != corev1.PodSucceeded || !metav1.IsControlledBy(pod, &job) {
+			continue
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.State.Terminated == nil || cs.State.Terminated.Message == "" {
 				continue
 			}

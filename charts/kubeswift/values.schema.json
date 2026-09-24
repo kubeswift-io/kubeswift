@@ -12,7 +12,12 @@
       "properties": {
         "image": { "$ref": "#/definitions/image" },
         "replicas": {},
-        "resources": {}
+        "resources": {},
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "secure": { "type": "boolean" } }
+        }
       }
     },
     "swiftletd": {

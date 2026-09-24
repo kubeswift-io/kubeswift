@@ -68,7 +68,7 @@ Watches `SwiftKernel` objects and `Node` objects. For each labeled node (`kubesw
 - `bzImage` — media type `application/vnd.kubeswift.kernel.binary`
 - `rootfs.cpio.gz` — media type `application/vnd.kubeswift.initramfs.binary`
 
-Artifacts land at `/var/lib/kubeswift/kernels/<namespace>-<name>/` on the node. The path is deterministic and never stored in status. The controller tracks per-node pull progress in `status.nodeStatuses[]`. When all labeled nodes are Ready, `status.phase` becomes Ready.
+Artifacts land at `/var/lib/kubeswift/kernels/<namespace>/<name>/` on the node. The path is deterministic and never stored in status. The controller tracks per-node pull progress in `status.nodeStatuses[]`. When all labeled nodes are Ready, `status.phase` becomes Ready.
 
 ### SwiftGPU controller
 
@@ -192,7 +192,7 @@ SwiftGuest (kernelRef=faas-minimal)
   |
   v
 Controller resolves SwiftKernel → localPath
-  /var/lib/kubeswift/kernels/default-faas-minimal/
+  /var/lib/kubeswift/kernels/default/faas-minimal/
 Controller writes RuntimeIntent (kernelBoot.kernelPath, kernelBoot.initramfsPath, cmdline)
   |
   v
@@ -210,7 +210,7 @@ cloud-hypervisor \
   --serial socket=serial.sock
 ```
 
-No root disk PVC, no seed Secret, no cloud-init. The kernel artifact path is deterministic: `/var/lib/kubeswift/kernels/<namespace>-<name>/`.
+No root disk PVC, no seed Secret, no cloud-init. The kernel artifact path is deterministic: `/var/lib/kubeswift/kernels/<namespace>/<name>/`.
 
 ### Windows boot (osType: windows)
 

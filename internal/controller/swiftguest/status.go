@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -115,12 +116,41 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 	}
 	if status.Network != nil {
 		status.Network.PrimaryIP = ""
+		// Per-interface addresses are leases of the same run, and readiness
+		// and egress reachability were observations of it.
+		status.Network.Interfaces = nil
+		status.Network.Ready = false
+		status.Network.Egress = ""
 	}
+	// The hypervisor process and its serial socket went with the launcher.
+	// The hypervisor kind is not run-scoped: it says what the guest runs
+	// under, and snapshots record it from here.
+	if status.Runtime != nil {
+		status.Runtime.PID = 0
+	}
+	status.Console = nil
+}
+
+// launcherHandedOff reports whether pod's launcher sent its VM away in a live
+// migration. Its Cloud Hypervisor exited because the VM now runs in the
+// migration's destination pod, and the plaintext-transport launcher exits 0
+// right after -- a Succeeded pod that is not a guest shutdown. Until cutover
+// makes the destination the guest's pod, nothing about this pod describes the
+// guest.
+func launcherHandedOff(pod *corev1.Pod) bool {
+	return pod != nil && pod.Annotations[PodAnnotationMigrationStatus] == "complete"
 }
 
 // MapPodToStatus updates status from pod phase and conditions.
 func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	if pod == nil {
+		return
+	}
+	// Mapping a handed-off launcher's exit would report the guest stopped and
+	// clear the GuestRunning=True the destination already wrote (swiftletd
+	// writes it once), leaving the migration waiting in Resuming until
+	// spec.timeout.
+	if launcherHandedOff(pod) {
 		return
 	}
 
@@ -242,12 +272,20 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
 		SetPodScheduledCondition(status, pod, true, "")
 	case corev1.PodPending:
-		// A Pending pod has started no containers, so no VM is running behind
-		// it — whatever the last launcher reported. This catches the run state
-		// a launcher change alone does not: an upgrade can arrive with podRef
+		// A Pending pod whose launcher has not started has no VM behind it —
+		// whatever the last launcher reported. This catches the run state a
+		// launcher change alone does not: an upgrade can arrive with podRef
 		// already naming the current pod, leaving a guest stuck Pending on an
 		// unattachable volume reporting GuestRunning=True with an address.
-		ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
+		//
+		// Pending does NOT mean nothing started, though: the pod stays Pending
+		// while ANY container is still waiting, so a running launcher next to a
+		// sidecar that is still pulling or starting (the migration stunnel
+		// server) reads Pending too. swiftletd reports GuestRunning=True once,
+		// so clearing it then left the guest reading not-running for good.
+		if !launcherContainerRunning(pod) {
+			ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
+		}
 		unschedulable := findUnschedulableCondition(pod)
 		if unschedulable != nil {
 			status.Phase = swiftv1alpha1.SwiftGuestPhasePending
@@ -281,6 +319,17 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 			})
 		}
 	}
+}
+
+// launcherContainerRunning reports whether the pod's launcher (swiftletd)
+// container is currently running.
+func launcherContainerRunning(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == LauncherContainerName {
+			return cs.State.Running != nil
+		}
+	}
+	return false
 }
 
 // primaryUDNIPFromPod extracts the guest's UDN IP from the pod's OVN-Kubernetes
@@ -383,6 +432,37 @@ func SetStorageReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, r
 	setCondition(status, cond)
 }
 
+// Root-disk clone reasons on StorageReady.
+const (
+	reasonRootDiskCloning     = "RootDiskCloning"
+	reasonRootDiskCloneFailed = "RootDiskCloneFailed"
+)
+
+// setRootDiskCloneCondition reports on StorageReady why the root disk is not
+// ready yet: RootDiskCloneFailed for a failure retrying will not fix,
+// RootDiskCloning otherwise. A storage pre-flight failure already on the
+// condition is left in place: it is the more basic problem.
+//
+// The pre-flight sets StorageReady=True earlier in the same pass, so this
+// flips it back every time; keeping the stored transition time for an
+// unchanged reason stops that from rewriting the status on every requeue.
+func setRootDiskCloneCondition(status, stored *swiftv1alpha1.SwiftGuestStatus, err error) {
+	if c := findCondition(status, ConditionStorageReady); c != nil && c.Status == metav1.ConditionFalse &&
+		c.Reason != reasonRootDiskCloning && c.Reason != reasonRootDiskCloneFailed {
+		return
+	}
+	reason := reasonRootDiskCloning
+	var failure *rootDiskFailure
+	if errors.As(err, &failure) {
+		reason = reasonRootDiskCloneFailed
+	}
+	SetStorageReadyCondition(status, false, reason, err.Error())
+	if prev := findCondition(stored, ConditionStorageReady); prev != nil &&
+		prev.Status == metav1.ConditionFalse && prev.Reason == reason {
+		findCondition(status, ConditionStorageReady).LastTransitionTime = prev.LastTransitionTime
+	}
+}
+
 // ConditionDataDisksReady is True once every secondary VM data disk
 // (image-backed, blank, or attached) the guest declares is provisioned and
 // its backing PVC is Bound. Unlike StorageReady, this DOES gate pod creation:
@@ -471,20 +551,27 @@ func SetPodScheduledCondition(status *swiftv1alpha1.SwiftGuestStatus, pod *corev
 	setCondition(status, cond)
 }
 
+// setCondition sets or updates the condition of cond.Type.
+//
+// lastTransitionTime moves only when the condition's status does, as the
+// field means (apimeta.SetStatusCondition's rule). It used to be restamped on
+// every call, so every reconcile of every guest changed its status and wrote
+// it -- the unchanged-status check before the write could never hold -- and
+// the timestamps said nothing about when anything happened.
 func setCondition(status *swiftv1alpha1.SwiftGuestStatus, cond metav1.Condition) {
 	cond.ObservedGeneration = 0 // Status has no generation; controller sets when updating
-	now := metav1.Now()
-	cond.LastTransitionTime = now
-
-	found := false
 	for i := range status.Conditions {
-		if status.Conditions[i].Type == cond.Type {
-			status.Conditions[i] = cond
-			found = true
-			break
+		existing := &status.Conditions[i]
+		if existing.Type != cond.Type {
+			continue
 		}
+		cond.LastTransitionTime = existing.LastTransitionTime
+		if existing.Status != cond.Status || cond.LastTransitionTime.IsZero() {
+			cond.LastTransitionTime = metav1.Now()
+		}
+		*existing = cond
+		return
 	}
-	if !found {
-		status.Conditions = append(status.Conditions, cond)
-	}
+	cond.LastTransitionTime = metav1.Now()
+	status.Conditions = append(status.Conditions, cond)
 }

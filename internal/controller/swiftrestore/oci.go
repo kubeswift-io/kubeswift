@@ -22,12 +22,13 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // ociDownloadJobName is the deterministic name of the download Job.
 func ociDownloadJobName(restore *snapshotv1alpha1.SwiftRestore) string {
-	return restore.Name + "-oci-download"
+	return names.JobName(restore.Name, "-oci-download")
 }
 
 // ociRestoreTag resolves the artifact tag the same way the capture side does:
@@ -193,6 +194,6 @@ func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv
 		Namespace:             restore.Namespace,
 		Node:                  node,
 		Component:             "snapshot-oci-download",
-		ExtraLabels:           map[string]string{"kubeswift.io/swiftrestore": restore.Name},
+		ExtraLabels:           map[string]string{"kubeswift.io/swiftrestore": names.LabelValue(restore.Name)},
 	})
 }

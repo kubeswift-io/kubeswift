@@ -25,10 +25,14 @@ func seedScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// legacyCM is the seed ConfigMap an older controller created, owned by the
+// guest g1 (uid "g1-uid").
 func legacyCM(ns, name string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-		Data:       map[string]string{seed.KeyUserData: "#cloud-config\npassword: hunter2\n"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "swift.kubeswift.io/v1alpha1", Kind: "SwiftGuest", Name: "g1", UID: "g1-uid", Controller: ptrBool(true),
+		}}},
+		Data: map[string]string{seed.KeyUserData: "#cloud-config\npassword: hunter2\n"},
 	}
 }
 
@@ -56,7 +60,7 @@ func TestRetireLegacySeedConfigMap_KeepsItWhileAPodStillMountsIt(t *testing.T) {
 	// the pod breaks the guest on its next restart, when kubelet re-projects the
 	// volume and cannot find it.
 	s := seedScheme(t)
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1"}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1", UID: "g1-uid"}}
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(legacyCM("ns", "g1-seed"), podMounting("ns", "g1", "g1-seed", true)).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: s}
@@ -72,7 +76,7 @@ func TestRetireLegacySeedConfigMap_KeepsItWhileAPodStillMountsIt(t *testing.T) {
 
 func TestRetireLegacySeedConfigMap_DeletesOnceThePodMovedToTheSecret(t *testing.T) {
 	s := seedScheme(t)
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1"}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1", UID: "g1-uid"}}
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(legacyCM("ns", "g1-seed"), podMounting("ns", "g1", "g1-seed", false)).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: s}
@@ -89,7 +93,7 @@ func TestRetireLegacySeedConfigMap_DeletesOnceThePodMovedToTheSecret(t *testing.
 
 func TestRetireLegacySeedConfigMap_NoPodsAtAll(t *testing.T) {
 	s := seedScheme(t)
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1"}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1", UID: "g1-uid"}}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(legacyCM("ns", "g1-seed")).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: s}
 
@@ -105,7 +109,7 @@ func TestRetireLegacySeedConfigMap_NoPodsAtAll(t *testing.T) {
 
 func TestRetireLegacySeedConfigMap_AbsentIsNotAnError(t *testing.T) {
 	s := seedScheme(t)
-	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1"}}
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1", UID: "g1-uid"}}
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &SwiftGuestReconciler{Client: c, Scheme: s}
 	if err := r.retireLegacySeedConfigMap(context.Background(), guest, "g1-seed"); err != nil {
@@ -141,5 +145,25 @@ func TestBuildSecret_CarriesNoPlaintextConfigMap(t *testing.T) {
 	}
 	if s.TypeMeta.Kind != "" && s.TypeMeta.Kind != "Secret" {
 		t.Errorf("rendered seed is a %s, want Secret", s.TypeMeta.Kind)
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
+// A ConfigMap that merely has the name "<guest>-seed" -- the user's own, or
+// another tool's -- was deleted too. Only the one this guest owns is retired.
+func TestRetireLegacySeedConfigMap_LeavesAConfigMapTheGuestDoesNotOwn(t *testing.T) {
+	s := seedScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1", UID: "g1-uid"}}
+	users := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "g1-seed"}, Data: map[string]string{"k": "v"}}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(users).Build()
+	r := &SwiftGuestReconciler{Client: c, Scheme: s}
+
+	if err := r.retireLegacySeedConfigMap(context.Background(), guest, "g1-seed"); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "g1-seed"}, &cm); err != nil {
+		t.Fatalf("a ConfigMap the guest does not own was deleted: %v", err)
 	}
 }

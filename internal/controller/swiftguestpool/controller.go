@@ -103,8 +103,15 @@ func (r *SwiftGuestPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// --- Scale down: delete highest indices first ---
+	// Surge replicas (above desired, current template) stay while the rollout
+	// still needs them; everything else above desired goes.
+	keepSurge := surgeReplicasToKeep(&pool, indexMap, currentHash, desired)
 	excess := findExcessIndices(indexMap, desired)
 	for _, idx := range excess {
+		if keepSurge[idx] {
+			requeueNeeded = true // re-check once the replicas it covers are ready
+			continue
+		}
 		guest := indexMap[idx]
 		klog.InfoS("scaling down", "pool", pool.Name, "guest", guest.Name, "index", idx)
 		if err := r.Delete(ctx, &guest); err != nil {
@@ -221,6 +228,82 @@ func (r *SwiftGuestPoolReconciler) hasOutdatedGuests(indexMap map[int]swiftv1alp
 	return false
 }
 
+// rolloutParams returns the pool's update strategy and its rolling-update
+// bounds, with the API defaults (maxUnavailable 1, maxSurge 0) applied.
+func rolloutParams(pool *swiftv1alpha1.SwiftGuestPool) (strategy string, maxUnavailable, maxSurge int) {
+	strategy = swiftv1alpha1.UpdateStrategyRollingUpdate
+	maxUnavailable, maxSurge = 1, 0
+	if pool.Spec.UpdateStrategy != nil {
+		if pool.Spec.UpdateStrategy.Type != "" {
+			strategy = pool.Spec.UpdateStrategy.Type
+		}
+		if ru := pool.Spec.UpdateStrategy.RollingUpdate; ru != nil {
+			maxUnavailable = int(ru.MaxUnavailable)
+			maxSurge = int(ru.MaxSurge)
+		}
+	}
+	return strategy, maxUnavailable, maxSurge
+}
+
+// guestReady reports whether a replica is serving: running, with its VM up,
+// and not on its way out.
+func guestReady(g *swiftv1alpha1.SwiftGuest) bool {
+	if g.DeletionTimestamp != nil || g.Status.Phase != swiftv1alpha1.SwiftGuestPhaseRunning {
+		return false
+	}
+	for _, c := range g.Status.Conditions {
+		if c.Type == "GuestRunning" {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// surgeReplicasToKeep returns the indices at or above desired that are surge
+// replicas a rolling update still needs: current template, within maxSurge,
+// and either the rollout still has outdated replicas to replace or the surge
+// replica is serving in place of one that is not ready yet.
+func surgeReplicasToKeep(pool *swiftv1alpha1.SwiftGuestPool, indexMap map[int]swiftv1alpha1.SwiftGuest, currentHash string, desired int) map[int]bool {
+	strategy, _, maxSurge := rolloutParams(pool)
+	if strategy != swiftv1alpha1.UpdateStrategyRollingUpdate || maxSurge == 0 {
+		return nil
+	}
+	outdatedLeft, notReady := false, false
+	for idx := 0; idx < desired; idx++ {
+		g, ok := indexMap[idx]
+		if !ok {
+			notReady = true
+			continue
+		}
+		if g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
+			outdatedLeft = true
+		}
+		if !guestReady(&g) {
+			notReady = true
+		}
+	}
+	keep := map[int]bool{}
+	for idx := desired; idx < desired+maxSurge; idx++ {
+		g, ok := indexMap[idx]
+		if !ok || g.DeletionTimestamp != nil || g.Annotations[swiftv1alpha1.AnnotationTemplateHash] != currentHash {
+			continue
+		}
+		if outdatedLeft || (notReady && guestReady(&g)) {
+			keep[idx] = true
+		}
+	}
+	return keep
+}
+
+// reconcileRollingUpdate replaces outdated replicas without letting the number
+// of serving replicas drop below desired-maxUnavailable.
+//
+// Replicas keep stable identities (<pool>-<index>, with per-index PVCs), so an
+// outdated replica is replaced by deleting it; the scale-up pass recreates its
+// index from the current template once it is gone. Surge capacity therefore
+// comes from extra replicas at indices desired..desired+maxSurge-1, created
+// from the current template and removed by the scale-down pass once the
+// rollout no longer needs them.
 func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 	ctx context.Context,
 	pool *swiftv1alpha1.SwiftGuestPool,
@@ -228,16 +311,7 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 	currentHash string,
 	desired int,
 ) (requeue bool, err error) {
-	strategy := swiftv1alpha1.UpdateStrategyRollingUpdate
-	maxUnavailable := int32(1)
-	maxSurge := int32(0)
-	if pool.Spec.UpdateStrategy != nil {
-		strategy = pool.Spec.UpdateStrategy.Type
-		if pool.Spec.UpdateStrategy.RollingUpdate != nil {
-			maxUnavailable = pool.Spec.UpdateStrategy.RollingUpdate.MaxUnavailable
-			maxSurge = pool.Spec.UpdateStrategy.RollingUpdate.MaxSurge
-		}
-	}
+	strategy, maxUnavailable, maxSurge := rolloutParams(pool)
 
 	// Identify outdated guests (highest index first for deletion order).
 	var outdated []int
@@ -261,47 +335,73 @@ func (r *SwiftGuestPoolReconciler) reconcileRollingUpdate(
 		return true, nil
 	}
 
-	// RollingUpdate: one at a time, respecting maxUnavailable and maxSurge.
-	total := int32(len(indexMap))
-	readyCount := int32(0)
-	for _, g := range indexMap {
-		if g.Status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning {
-			for _, c := range g.Status.Conditions {
-				if c.Type == "GuestRunning" && c.Status == metav1.ConditionTrue {
-					readyCount++
-					break
-				}
-			}
-		}
+	if maxUnavailable == 0 && maxSurge == 0 {
+		// Nothing may go down and nothing may be added: no replica can ever be
+		// replaced. (The API rejects this combination on new writes.)
+		klog.InfoS("rolling update blocked: maxUnavailable and maxSurge are both 0", "pool", pool.Name)
+		r.event(pool, corev1.EventTypeWarning, "RolloutBlocked",
+			"maxUnavailable and maxSurge are both 0, so no replica can be replaced; raise one of them")
+		return true, nil
 	}
 
-	unavailable := total - readyCount
-	surge := total - int32(desired)
+	// Serving replicas, surge replicas included. A replica created this pass,
+	// one still booting and one terminating are all unavailable: counting the
+	// replicas that exist instead of the ones serving let a pass delete a
+	// second replica while the first one's replacement was still starting.
+	ready := 0
+	for _, g := range indexMap {
+		if guestReady(&g) {
+			ready++
+		}
+	}
+	budget := ready - (desired - maxUnavailable) // serving replicas we may take down now
 
-	// Delete one outdated guest if we can tolerate more unavailability.
-	if len(outdated) > 0 && unavailable < maxUnavailable {
-		idx := outdated[0]
+	var outdatedReady []int
+	for _, idx := range outdated {
 		guest := indexMap[idx]
-		klog.InfoS("rolling update: deleting outdated guest",
-			"pool", pool.Name, "guest", guest.Name, "index", idx,
-			"unavailable", unavailable, "maxUnavailable", maxUnavailable)
+		if idx >= desired || guest.DeletionTimestamp != nil {
+			continue
+		}
+		if guestReady(&guest) {
+			outdatedReady = append(outdatedReady, idx)
+			continue
+		}
+		// An outdated replica that is not serving costs nothing to replace,
+		// so it goes first and outside the budget. Holding it to the budget
+		// deadlocked rolling back a rollout that never became ready: the
+		// broken replicas were the unavailable ones, so none could be deleted.
+		klog.InfoS("rolling update: replacing outdated replica that is not serving",
+			"pool", pool.Name, "guest", guest.Name, "index", idx)
 		if err := r.Delete(ctx, &guest); err != nil {
 			return false, err
 		}
-		return true, nil
 	}
 
-	// Create a replacement if we can tolerate more surge.
-	missing := findMissingIndices(indexMap, desired)
-	if len(missing) > 0 && surge < maxSurge {
-		idx := missing[0]
-		klog.InfoS("rolling update: creating replacement",
-			"pool", pool.Name, "index", idx,
-			"surge", surge, "maxSurge", maxSurge)
+	// Surge: bring up current-template replicas above desired, so replacing
+	// serving replicas need not reduce capacity.
+	for idx, n := desired, 0; idx < desired+maxSurge && n < len(outdatedReady); idx, n = idx+1, n+1 {
+		if _, ok := indexMap[idx]; ok {
+			continue
+		}
+		klog.InfoS("rolling update: creating surge replica",
+			"pool", pool.Name, "index", idx, "maxSurge", maxSurge)
 		if err := r.createSwiftGuest(ctx, pool, idx, currentHash, 0); err != nil {
 			return false, err
 		}
-		return true, nil
+	}
+
+	for _, idx := range outdatedReady {
+		if budget <= 0 {
+			break
+		}
+		guest := indexMap[idx]
+		klog.InfoS("rolling update: deleting outdated guest",
+			"pool", pool.Name, "guest", guest.Name, "index", idx,
+			"ready", ready, "maxUnavailable", maxUnavailable)
+		if err := r.Delete(ctx, &guest); err != nil {
+			return false, err
+		}
+		budget--
 	}
 
 	// Still have outdated guests but can't act yet -- requeue.
@@ -619,7 +719,8 @@ func (r *SwiftGuestPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("swiftguestpool").
 		For(&swiftv1alpha1.SwiftGuestPool{}).
 		Owns(&swiftv1alpha1.SwiftGuest{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
+		// Per-replica PVCs are retained, not owned (see ensurePVC), and
+		// nothing here reacts to their changes.
 		Owns(&corev1.Service{}).
 		Complete(r)
 }

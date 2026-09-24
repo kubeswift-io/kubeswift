@@ -26,6 +26,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
@@ -86,7 +87,7 @@ func s3RestoreKeyPrefix(snap *snapshotv1alpha1.SwiftSnapshot) string {
 
 // s3DownloadJobName is the deterministic name of the download Job.
 func s3DownloadJobName(restore *snapshotv1alpha1.SwiftRestore) string {
-	return restore.Name + "-s3-download"
+	return names.JobName(restore.Name, "-s3-download")
 }
 
 // resolveS3RestoreNode picks the node the download Job + restore-receive
@@ -261,6 +262,6 @@ func buildDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1al
 		Namespace:   restore.Namespace,
 		Node:        node,
 		Component:   "snapshot-s3-download",
-		ExtraLabels: map[string]string{"kubeswift.io/swiftrestore": restore.Name},
+		ExtraLabels: map[string]string{"kubeswift.io/swiftrestore": names.LabelValue(restore.Name)},
 	})
 }

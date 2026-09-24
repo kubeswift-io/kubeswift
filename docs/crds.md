@@ -295,8 +295,8 @@ Manages a kernel + initramfs OCI artifact. The controller pulls artifacts to lab
 | `initramfsDigest` | string | Content digest of the rootfs.cpio.gz layer. |
 
 The artifact path on each node is deterministic:
-`/var/lib/kubeswift/kernels/<namespace>-<name>/bzImage`
-`/var/lib/kubeswift/kernels/<namespace>-<name>/rootfs.cpio.gz`
+`/var/lib/kubeswift/kernels/<namespace>/<name>/bzImage`
+`/var/lib/kubeswift/kernels/<namespace>/<name>/rootfs.cpio.gz`
 
 This path is computed at runtime and never stored in status.
 
@@ -475,7 +475,7 @@ Restores a VM from a SwiftSnapshot — in-place (same target guest) or as a clon
 | Key field | Type | Description |
 |-----------|------|-------------|
 | `snapshotRef` | SwiftRestoreSnapshotRef | The Ready SwiftSnapshot to restore from. |
-| `targetGuest` | SwiftRestoreTarget | Target SwiftGuest name; `overwriteExisting: true` is required for in-place restore. |
+| `targetGuest` | SwiftRestoreTarget | Target SwiftGuest name. `overwriteExisting: true` is required for an in-place memory restore (the only mode that can restore over an existing guest; others fail with `OverwriteUnsupported`). An in-place restore refuses a guest that ran on its disk after the capture (`DiskDiverged`) unless annotated `snapshot.kubeswift.io/accept-disk-divergence: "true"`. |
 | `targetNode` | string | Required for S3 (Tier C) restores; pins the download Job to a node. |
 | `identity` | IdentityRegeneration | Optional regeneration of `hostname`, `machineId`, `sshHostKeys`, `macAddresses`. |
 

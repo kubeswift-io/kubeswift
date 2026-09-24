@@ -1,3 +1,4 @@
+{{- $metricsSecure := and .Values.controllerManager.metrics .Values.controllerManager.metrics.secure }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -72,12 +73,34 @@ spec:
             {{- if .Values.migration.mtls.enabled }}
             - --migration-mtls-enabled=true
             {{- end }}
+            {{- if $metricsSecure }}
+            - --metrics-secure=true
+            {{- end }}
             {{- range .Values.swiftGuest.allowedHostPathPrefixes }}
             - --allowed-hostpath-prefix={{ . }}
             {{- end }}
           ports:
             - containerPort: 9443
               name: webhook
+            - containerPort: 8080
+              name: metrics
+            - containerPort: 8081
+              name: health
+          # Readiness waits for the webhook server when webhooks are on
+          # (failurePolicy: Fail): a Ready pod that does not serve them yet
+          # fails every guarded write.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -86,15 +109,29 @@ spec:
                 - ALL
           resources:
             {{- toYaml .Values.controllerManager.resources | nindent 12 }}
-          {{- if .Values.webhook.enabled }}
+          {{- if or .Values.webhook.enabled $metricsSecure }}
           volumeMounts:
+            {{- if .Values.webhook.enabled }}
             - name: webhook-cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
+            {{- end }}
+            {{- if $metricsSecure }}
+            # Secure metrics serve a self-signed certificate written here; the
+            # root filesystem is read-only.
+            - name: metrics-cert
+              mountPath: /tmp/k8s-metrics-server
+            {{- end }}
           {{- end }}
-      {{- if .Values.webhook.enabled }}
+      {{- if or .Values.webhook.enabled $metricsSecure }}
       volumes:
+        {{- if .Values.webhook.enabled }}
         - name: webhook-cert
           secret:
             secretName: kubeswift-webhook-cert
+        {{- end }}
+        {{- if $metricsSecure }}
+        - name: metrics-cert
+          emptyDir: {}
+        {{- end }}
       {{- end }}

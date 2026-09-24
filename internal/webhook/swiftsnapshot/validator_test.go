@@ -112,8 +112,38 @@ func TestValidate_LocalBackend_HostPathParentTraversal(t *testing.T) {
 	snap.Spec.Backend.Local.HostPath = "/var/lib/kubeswift/snapshots/../etc"
 	v := &Validator{}
 	_, err := v.ValidateCreate(context.Background(), snap)
-	if err == nil || !strings.Contains(err.Error(), "must not contain '..'") {
-		t.Errorf("expected parent-traversal rejection, got: %v", err)
+	if err == nil {
+		t.Errorf("expected parent-traversal rejection, got nil")
+	}
+}
+
+// The prefix itself, a glob, shell metacharacters and a nested path must all be
+// refused: the value is mounted into a privileged Job and handed to rm, so the
+// shared root would wipe every namespace's snapshots and a metacharacter would
+// reach a shell. A single safe segment is accepted.
+func TestValidate_LocalBackend_HostPathSegmentRules(t *testing.T) {
+	reject := []string{
+		"/var/lib/kubeswift/snapshots/",         // the shared root itself
+		"/var/lib/kubeswift/snapshots/*",        // glob
+		"/var/lib/kubeswift/snapshots/a b",      // space
+		"/var/lib/kubeswift/snapshots/a;rm -rf", // shell metacharacter
+		"/var/lib/kubeswift/snapshots/a/b",      // nested
+		"/var/lib/kubeswift/snapshots/-rf",      // leading dash (rm flag)
+		"/var/lib/kubeswift/snapshots/..",       // dot-dot
+	}
+	for _, hp := range reject {
+		if err := ValidateLocalHostPath(hp); err == nil {
+			t.Errorf("hostPath %q should be rejected", hp)
+		}
+	}
+	for _, hp := range []string{
+		"/var/lib/kubeswift/snapshots/default-snap1",
+		"/var/lib/kubeswift/snapshots/ns-name-1700000000",
+		"/var/lib/kubeswift/snapshots/a.b_c-1/",
+	} {
+		if err := ValidateLocalHostPath(hp); err != nil {
+			t.Errorf("hostPath %q should be accepted, got: %v", hp, err)
+		}
 	}
 }
 
@@ -636,5 +666,42 @@ func TestValidate_OCIMemoryOnly_SharedBaseGuestIsAllowed(t *testing.T) {
 	}
 	if err := v.validateSwiftSnapshot(context.Background(), snap); err != nil {
 		t.Errorf("a memory-only oci snapshot of a sharedBaseDisk guest must be allowed: %v", err)
+	}
+}
+
+// A snapshot was validated against its source guest when it was created. If
+// the guest changes afterwards (here: a GPU is added), updates that do not
+// touch the snapshot's spec -- above all the controller removing its cleanup
+// finalizer -- must still be admitted, or the snapshot and its namespace stay
+// Terminating.
+func TestValidateUpdate_SourceGuestChangedSinceCreation(t *testing.T) {
+	guest := makeSourceGuest("g1", "default")
+	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "h200-shared"} // added after the capture
+	v := validatorWithGuest(t, guest)
+	ctx := context.Background()
+
+	old := makeMemoryCaptureSnap("g1")
+	old.Finalizers = []string{"kubeswift.io/snapshot-hostpath-cleanup"}
+
+	labeled := old.DeepCopy()
+	labeled.Labels = map[string]string{"team": "a"}
+	if _, err := v.ValidateUpdate(ctx, old, labeled); err != nil {
+		t.Errorf("metadata-only update rejected because the source guest changed: %v", err)
+	}
+
+	now := metav1.Now()
+	deleting := old.DeepCopy()
+	deleting.DeletionTimestamp = &now
+	released := deleting.DeepCopy()
+	released.Finalizers = nil
+	if _, err := v.ValidateUpdate(ctx, deleting, released); err != nil {
+		t.Errorf("finalizer removal rejected: %v", err)
+	}
+
+	// The spec is still immutable.
+	changed := old.DeepCopy()
+	changed.Spec.GuestRef.Name = "other"
+	if _, err := v.ValidateUpdate(ctx, old, changed); err == nil {
+		t.Error("a spec change must still be rejected")
 	}
 }

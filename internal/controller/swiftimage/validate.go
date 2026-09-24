@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 const measureJobNamePrefix = "swiftimage-measure-"
@@ -44,7 +46,7 @@ func (r *SwiftImageReconciler) Validate(ctx context.Context, img *imagev1alpha1.
 		return nil, err
 	}
 
-	jobName := measureJobNamePrefix + img.Name
+	jobName := names.JobName(measureJobNamePrefix+img.Name, "")
 	var job batchv1.Job
 	if err := r.Get(ctx, types.NamespacedName{Namespace: img.Namespace, Name: jobName}, &job); err != nil {
 		if errors.IsNotFound(err) {
@@ -56,9 +58,10 @@ func (r *SwiftImageReconciler) Validate(ctx context.Context, img *imagev1alpha1.
 						Spec: corev1.PodSpec{
 							RestartPolicy:                corev1.RestartPolicyNever,
 							AutomountServiceAccountToken: ptr.To(false),
+							ImagePullSecrets:             swiftguest.LauncherImagePullSecrets(),
 							Containers: []corev1.Container{{
 								Name:    "measure",
-								Image:   "ubuntu:22.04",
+								Image:   swiftguest.CloneJobImage(),
 								Command: []string{"sh", "-c", "cat /data/image.raw.size"},
 								VolumeMounts: []corev1.VolumeMount{{
 									Name:      "data",

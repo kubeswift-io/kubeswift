@@ -15,6 +15,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 // rootPVCName returns the per-guest root-disk clone PVC name. Mirrors
@@ -79,7 +80,7 @@ func (r *SwiftRestoreReconciler) ensureRestorePVC(
 			Namespace: restore.Namespace,
 			Labels: map[string]string{
 				swiftguestctrl.RestoreSeededLabel:     "true",
-				"snapshot.kubeswift.io/swift-restore": restore.Name,
+				"snapshot.kubeswift.io/swift-restore": names.LabelValue(restore.Name),
 				"swift.kubeswift.io/role":             "root-disk",
 			},
 			OwnerReferences: []metav1.OwnerReference{
@@ -135,7 +136,7 @@ func (r *SwiftRestoreReconciler) ensureTargetGuest(
 			Name:      restore.Spec.TargetGuest.Name,
 			Namespace: restore.Namespace,
 			Labels: map[string]string{
-				"snapshot.kubeswift.io/swift-restore": restore.Name,
+				"snapshot.kubeswift.io/swift-restore": names.LabelValue(restore.Name),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(restore, swiftRestoreGVK),

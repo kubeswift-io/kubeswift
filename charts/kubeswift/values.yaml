@@ -21,6 +21,15 @@ controllerManager:
     limits:
       cpu: 500m
       memory: 512Mi
+  metrics:
+    # Serve /metrics over HTTPS, only to callers the apiserver authenticates
+    # and authorizes for GET /metrics. The metrics name every tenant's guests,
+    # images and namespaces, and plain HTTP hands them to anyone who can reach
+    # the pod. Bind the kubeswift-metrics-reader ClusterRole to your
+    # Prometheus ServiceAccount; the ServiceMonitor (monitoring.enabled)
+    # switches to https + its token. Off by default because it changes how
+    # every scraper must connect.
+    secure: false
 
 swiftletd:
   # DaemonSet: disabled by default. swiftletd is designed to run only inside SwiftGuest pods
@@ -223,6 +232,10 @@ gateway:
   # app's origin). "*" is acceptable for a token-auth API (no cookies); pin it
   # for a hardened install. With ui.gateway.mode=proxy the browser is same-origin,
   # so CORS does not apply.
+  # With authMode=insecure "*" is never honoured (there is no token to protect
+  # the API): browser requests are accepted only from origins listed here, or
+  # same-origin via localhost / an IP address (a port-forward). A same-origin
+  # DNS name must be listed too, since a DNS-rebinding page looks same-origin.
   corsAllowOrigin: "*"
   # Per-VM telemetry endpoint discovery. When a member's
   # Cluster.spec.prometheusEndpoint is empty, the gateway scans these namespaces

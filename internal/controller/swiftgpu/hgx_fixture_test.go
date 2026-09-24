@@ -139,7 +139,7 @@ func TestFindAndAllocate_HGXShared_PartitionMembershipCoupled(t *testing.T) {
 	profile := testGPUProfile("hgx4", "default", "hgx-shared", "", 4, "shared")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -178,7 +178,7 @@ func TestFindAndAllocate_HGXShared_TwoTenantsDisjoint(t *testing.T) {
 	profile := testGPUProfile("hgx4", "default", "hgx-shared", "", 4, "shared")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, g1, g2, g3, profile).
+		WithObjects(node, kubeNode(node.Name), g1, g2, g3, profile).
 		WithStatusSubresource(node, g1, g2, g3).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -248,7 +248,7 @@ func TestFindAndAllocate_HGXShared_SkipsPartitionWithHeldMembers(t *testing.T) {
 	guest := testSwiftGuest("g1", "default", &corev1.LocalObjectReference{Name: "hgx4"})
 	profile := testGPUProfile("hgx4", "default", "hgx-shared", "", 4, "shared")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -274,7 +274,7 @@ func TestFindAndAllocate_HGXShared_FullBaseboard(t *testing.T) {
 	guest := testSwiftGuest("g1", "default", &corev1.LocalObjectReference{Name: "hgx8"})
 	profile := testGPUProfile("hgx8", "default", "hgx-shared", "", 8, "shared")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -298,7 +298,7 @@ func TestReserveOnNode_HGXShared_PartitionMembershipCoupled(t *testing.T) {
 	guest := testSwiftGuest("g1", "default", &corev1.LocalObjectReference{Name: "hgx4"})
 	profile := testGPUProfile("hgx4", "default", "hgx-shared", "", 4, "shared")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 
@@ -330,7 +330,7 @@ func TestGPUNodeHasCapacity_HGXShared_HeldMembersFail(t *testing.T) {
 
 	profile := testGPUProfile("hgx4", "default", "hgx-shared", "", 4, "shared")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node).
+		WithObjects(node, kubeNode(node.Name)).
 		WithStatusSubresource(node).
 		Build()
 

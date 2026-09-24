@@ -28,7 +28,9 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	swiftguestctrl "github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 // SwiftRestoreReconciler reconciles SwiftRestore resources.
@@ -181,7 +183,38 @@ func (r *SwiftRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhasePending)
 	}
 
+	if status.Phase == snapshotv1alpha1.SwiftRestorePhaseFailed {
+		if err := r.releaseInPlaceTarget(ctx, &restore, status); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	return ctrl.Result{}, r.persist(ctx, &restore, status)
+}
+
+// releaseInPlaceTarget hands a guest that a failed in-place restore had
+// stamped back to its normal launcher. The restore annotations route every
+// launcher the guest gets to the snapshot, paused; left on after a failure,
+// each relaunch retried the failed restore, and the guest never booted from
+// its disk again until someone removed them by hand. Only annotations naming
+// this restore are removed, and only for an in-place target: a clone target
+// is this restore's own guest, and booting it fresh would not be a restore.
+func (r *SwiftRestoreReconciler) releaseInPlaceTarget(
+	ctx context.Context,
+	restore *snapshotv1alpha1.SwiftRestore,
+	status *snapshotv1alpha1.SwiftRestoreStatus,
+) error {
+	if status.GuestRef == nil {
+		return nil // never got as far as stamping a guest
+	}
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: status.GuestRef.Name, Namespace: restore.Namespace}, &guest); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if guest.Annotations[swiftguestctrl.AnnotationActiveRestore] != restore.Name ||
+		guest.Annotations[swiftguestctrl.AnnotationRestoreMode] != swiftguestctrl.RestoreModeInPlace {
+		return nil
+	}
+	return r.unstampGuestRestoreAnnotations(ctx, restore.Namespace, guest.Name)
 }
 
 // handlePending validates the snapshot and the target name, then advances.
@@ -238,10 +271,21 @@ func (r *SwiftRestoreReconciler) handlePending(
 	// Target SwiftGuest conflict check.
 	var existingTarget swiftv1alpha1.SwiftGuest
 	getErr := r.Get(ctx, client.ObjectKey{Name: restore.Spec.TargetGuest.Name, Namespace: restore.Namespace}, &existingTarget)
-	if getErr == nil && !restore.Spec.TargetGuest.OverwriteExisting {
+	// A target this restore created itself (a re-run whose status write lagged)
+	// is not a conflict.
+	if getErr == nil && existingTarget.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
-			"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; set targetGuest.overwriteExisting=true to replace")
+		if !restore.Spec.TargetGuest.OverwriteExisting {
+			setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
+				"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; set targetGuest.overwriteExisting=true to replace")
+			return true, 0, nil
+		}
+		// The disk restore seeds a NEW root-disk PVC and creates the guest
+		// around it. Over an existing guest both already exist, so every step
+		// was a no-op and the restore reported Ready with nothing restored.
+		setReadyCondition(status, metav1.ConditionFalse, ReasonOverwriteUnsupported,
+			"the csi-volume-snapshot backend cannot restore over existing SwiftGuest "+restore.Spec.TargetGuest.Name+
+				" (its current disk would be kept and nothing restored); delete it first, or restore to a new name")
 		return true, 0, nil
 	}
 	if getErr != nil && !isNotFound(getErr) {

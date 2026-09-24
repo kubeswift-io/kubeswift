@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
 
@@ -44,7 +45,7 @@ func RootDiskCloneName(guestName string) string {
 
 // CloneJobName returns the deterministic clone Job name for a guest.
 func CloneJobName(guestName string) string {
-	return CloneJobPrefix + guestName
+	return names.JobName(CloneJobPrefix+guestName, "")
 }
 
 // RootDiskCloneResult is the outcome of a successful EnsureRootDiskClone
@@ -271,7 +272,8 @@ func (r *SwiftGuestReconciler) ensureRootDiskCloneFromCopy(
 				return &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 			}
 			if isJobFailed(&existingJob) {
-				return nil, fmt.Errorf("clone Job %s failed", jobName)
+				return nil, rootDiskFailed("clone Job %s failed: %s (delete the Job to retry)",
+					jobName, jobFailureMessage(&existingJob))
 			}
 			return nil, fmt.Errorf("clone Job %s in progress", jobName)
 		}
@@ -639,6 +641,27 @@ echo "Clone complete: $(stat -c %%s /dst/image.raw) bytes"`,
 
 func isJobComplete(job *batchv1.Job) bool {
 	return job.Status.Succeeded > 0
+}
+
+// rootDiskFailure is a root-disk error that retrying will not fix: a Job that
+// has failed for good, or a source that is gone. Every other EnsureRootDiskClone
+// error is progress ("waiting for Bound", "Job in progress").
+type rootDiskFailure struct{ msg string }
+
+func (e *rootDiskFailure) Error() string { return e.msg }
+
+func rootDiskFailed(format string, args ...any) error {
+	return &rootDiskFailure{msg: fmt.Sprintf(format, args...)}
+}
+
+// jobFailureMessage is the message of job's Failed condition, if any.
+func jobFailureMessage(job *batchv1.Job) string {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return c.Message
+		}
+	}
+	return ""
 }
 
 func isJobFailed(job *batchv1.Job) bool {

@@ -63,6 +63,9 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, &sb)
 	}
 	if isTerminal(sb.Status.Phase) {
+		if res, err := r.releaseGPUWhenDone(ctx, &sb); err != nil || res.RequeueAfter > 0 {
+			return res, err
+		}
 		return r.handleRetention(ctx, &sb)
 	}
 

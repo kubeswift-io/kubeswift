@@ -41,6 +41,8 @@ spec:
   server: https://edge-1.example.com:6443
   credentialSecretRef:
     name: edge-1-kubeconfig
-  # Optional: per-member Prometheus for VM telemetry (P1).
-  # prometheusEndpoint: http://prometheus.monitoring.svc:9090
+  # Per-member Prometheus for VM telemetry (P1): a URL the gateway can reach
+  # from the hub. Not an in-cluster *.svc address -- the hub cannot reach the
+  # member's, and may resolve the name to its own Prometheus instead.
+  # prometheusEndpoint: https://prometheus.edge-1.example.com
   displayName: Edge 1 (lab)

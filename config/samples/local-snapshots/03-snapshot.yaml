@@ -4,9 +4,14 @@
 # /var/lib/kubeswift/snapshots/. The webhook enforces that prefix.
 # `includeMemory: true` is the default — explicit here for clarity.
 #
-# After Ready, swiftrestore-inplace.yaml or swiftrestore-clone.yaml
-# can restore this snapshot back into the same VM (in-place fast
-# path) or into a fresh clone.
+# After Ready, 04-restore-inplace.yaml restores this snapshot back into
+# the same VM (in-place fast path), and 05/06 restore it into clones.
+#
+# resumeAfterSnapshot: false leaves the captured VM paused. A memory
+# snapshot does not capture the disk, so an in-place restore is only
+# disk-consistent if nothing ran on that disk after the capture. A
+# resumed source keeps writing to it, and the in-place restore refuses
+# (reason DiskDiverged) rather than resume old memory over a newer disk.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftSnapshot
 metadata:
@@ -19,4 +24,4 @@ spec:
     local:
       hostPath: /var/lib/kubeswift/snapshots/default-snapshot-local-mem
   includeMemory: true
-  resumeAfterSnapshot: true
+  resumeAfterSnapshot: false
