@@ -1,70 +1,151 @@
 #!/usr/bin/env bash
-# KubeSwift SwiftMigration e2e test (Phase 1: offline migration).
+# KubeSwift SwiftMigration e2e test: offline (default) or live migration.
 #
-# Verifies the full SwiftMigration lifecycle end-to-end against a real
-# cluster: a guest is created on one node, a sentinel file is written,
-# a SwiftMigration moves the guest to a different node, and the
-# sentinel survives the move (proves direct PVC reuse worked).
+# Verifies the SwiftMigration lifecycle end-to-end against a real cluster: a
+# guest is created on one node, sentinels are written, a SwiftMigration moves
+# the guest to another node, and the sentinels survive the move.
 #
-# The test mirrors the Phase 1 spike's experimental design but as an
-# automated check that runs in CI (per the snapshot CI workflow).
+#   offline  a file on the root disk survives (proves the PVC moved with it).
+#   live     also a file on tmpfs survives and the guest's uptime keeps
+#            counting (proves the running VM moved, not a reboot).
 #
 # Requires:
 #   - kubectl, KubeSwift cluster with CRDs + controllers deployed.
-#   - At least two schedulable worker nodes labeled equivalently.
-#   - A storage class that supports cross-node attach (Longhorn, Rook
-#     Ceph RBD, EBS — NOT local-path-provisioner).
-#   - SSH key at ~/.ssh/id_ed25519 matching the seed profile's
-#     authorized_keys.
+#   - Two schedulable nodes that can run guests (/dev/kvm). By default the
+#     first two nodes, sorted by name, that are not cordoned and carry
+#     neither the control-plane label nor its taint; pass --source/--target
+#     to choose.
+#   - offline: a storage class that attaches across nodes (Longhorn, Ceph
+#     RBD, EBS — NOT local-path-provisioner). live: an RWX Block class
+#     (--storage-class, e.g. longhorn-migratable) or an existing guest class
+#     on one (--guest-class).
+#   - An SSH identity (--identity, default $KUBESWIFT_TEST_IDENTITY or
+#     ~/.ssh/id_ed25519). Its public key is put into the test's seed profile.
 #
 # Usage:
-#   ./migration-test.sh [--no-cleanup]
+#   ./migration-test.sh [--mode offline|live] [--source NODE] [--target NODE]
+#                       [--guest-class NAME] [--storage-class NAME]
+#                       [--identity PATH] [--no-cleanup]
 
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-migration-e2e}"
+MODE="${MIGRATION_MODE:-offline}"
+SOURCE_NODE="${SOURCE_NODE:-}"
+TARGET_NODE="${TARGET_NODE:-}"
+GUEST_CLASS="${GUEST_CLASS:-}"
+STORAGE_CLASS="${STORAGE_CLASS:-}"
+IDENTITY="${KUBESWIFT_TEST_IDENTITY:-${HOME}/.ssh/id_ed25519}"
 NO_CLEANUP=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-cleanup) NO_CLEANUP=true; shift ;;
+    --mode)          MODE="$2"; shift 2 ;;
+    --source)        SOURCE_NODE="$2"; shift 2 ;;
+    --target)        TARGET_NODE="$2"; shift 2 ;;
+    --guest-class)   GUEST_CLASS="$2"; shift 2 ;;
+    --storage-class) STORAGE_CLASS="$2"; shift 2 ;;
+    --identity)      IDENTITY="$2"; shift 2 ;;
+    --no-cleanup)    NO_CLEANUP=true; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
 
+case "$MODE" in
+  offline|live) ;;
+  *) echo "--mode must be offline or live, got $MODE" >&2; exit 2 ;;
+esac
+if [[ ! -r "$IDENTITY" ]]; then
+  echo "SSH identity $IDENTITY not readable; pass --identity or set KUBESWIFT_TEST_IDENTITY" >&2
+  exit 2
+fi
+PUBKEY="$(cat "${IDENTITY}.pub" 2>/dev/null || ssh-keygen -y -f "$IDENTITY")"
+if [[ "$MODE" == "live" && -z "$GUEST_CLASS" && -z "$STORAGE_CLASS" ]]; then
+  echo "--mode live needs an RWX Block class: pass --storage-class or --guest-class" >&2
+  exit 2
+fi
+
+# Only the nodes this script cordoned are uncordoned, and only the class it
+# created is deleted: a shared cluster may have its own cordons and classes.
+CORDONED=()
+CREATED_CLASS=""
+cordon_node() {
+  kubectl cordon "$1" >/dev/null
+  CORDONED+=("$1")
+}
+uncordon_node() {
+  kubectl uncordon "$1" >/dev/null 2>&1 || true
+  local keep=() n
+  for n in "${CORDONED[@]}"; do [[ "$n" == "$1" ]] || keep+=("$n"); done
+  CORDONED=("${keep[@]+"${keep[@]}"}")
+}
 cleanup() {
+  local n
+  for n in "${CORDONED[@]+"${CORDONED[@]}"}"; do
+    kubectl uncordon "$n" >/dev/null 2>&1 || true
+  done
   if [[ "$NO_CLEANUP" == "true" ]]; then
-    echo "--no-cleanup: leaving ${NAMESPACE} intact"
+    echo "--no-cleanup: leaving ${NAMESPACE}${CREATED_CLASS:+ and SwiftGuestClass ${CREATED_CLASS}} intact"
     return
   fi
   echo "Cleaning up..."
-  kubectl uncordon --all 2>/dev/null || true
   kubectl delete namespace "$NAMESPACE" --wait=false 2>/dev/null || true
+  if [[ -n "$CREATED_CLASS" ]]; then
+    kubectl delete swiftguestclass "$CREATED_CLASS" --wait=false 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
-# Pick two worker nodes (skip control-plane).
-mapfile -t WORKERS < <(kubectl get nodes -o jsonpath='{range .items[?(@.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")])].metadata.name}{""}{end}{range .items[?(!@.spec.taints[?(@.key=="node-role.kubernetes.io/control-plane")])].metadata.name}{.}{"\n"}{end}' | grep -v '^$')
-if [[ "${#WORKERS[@]}" -lt 2 ]]; then
-  echo "Need at least 2 schedulable worker nodes; found ${#WORKERS[@]}" >&2
+# Pick two nodes: schedulable, not a control plane by label or taint. A
+# label selector and custom columns, not a jsonpath filter: negated jsonpath
+# filters do not parse on every kubectl release.
+if [[ -z "$SOURCE_NODE" || -z "$TARGET_NODE" ]]; then
+  mapfile -t CANDIDATES < <(
+    kubectl get nodes -l '!node-role.kubernetes.io/control-plane' --no-headers \
+      -o custom-columns='NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,TAINTS:.spec.taints[*].key' |
+      awk '$2 != "true" && $3 !~ /node-role\.kubernetes\.io\/control-plane/ { print $1 }' | sort)
+  CANDIDATES=("${CANDIDATES[@]+"${CANDIDATES[@]}"}")
+  for n in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
+    if [[ -z "$SOURCE_NODE" && "$n" != "$TARGET_NODE" ]]; then SOURCE_NODE="$n"; continue; fi
+    if [[ -z "$TARGET_NODE" && "$n" != "$SOURCE_NODE" ]]; then TARGET_NODE="$n"; fi
+  done
+fi
+if [[ -z "$SOURCE_NODE" || -z "$TARGET_NODE" || "$SOURCE_NODE" == "$TARGET_NODE" ]]; then
+  echo "Need two distinct schedulable nodes; got source=${SOURCE_NODE:-none} target=${TARGET_NODE:-none}. Pass --source/--target." >&2
   exit 2
 fi
-SOURCE_NODE="${WORKERS[0]}"
-TARGET_NODE="${WORKERS[1]}"
-echo "Source node: $SOURCE_NODE  Target node: $TARGET_NODE"
+echo "Mode: $MODE  Source node: $SOURCE_NODE  Target node: $TARGET_NODE"
 
-# Set up namespace. As of 2026-04-29 the controller auto-creates
-# the per-namespace `swiftletd-reporter` RoleBinding on first
-# SwiftGuest reconcile (Phase 2 walkthrough finding W3 + snapshot
-# walkthrough F2). The cluster-scoped ClusterRole is shipped via
-# `make deploy` / Helm; this script no longer needs to apply it.
+# Guest class: the one given, or one this test owns.
+if [[ -z "$GUEST_CLASS" ]]; then
+  GUEST_CLASS="migration-e2e-${MODE}"
+  storage=""
+  if [[ "$MODE" == "live" ]]; then
+    storage=$'  storage:\n    accessMode: ReadWriteMany\n    volumeMode: Block\n    storageClassName: '"$STORAGE_CLASS"
+  elif [[ -n "$STORAGE_CLASS" ]]; then
+    storage=$'  storage:\n    storageClassName: '"$STORAGE_CLASS"
+  fi
+  cat <<EOF | kubectl apply -f -
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuestClass
+metadata:
+  name: ${GUEST_CLASS}
+spec:
+  cpu: "2"
+  memory: "2Gi"
+  rootDisk:
+    size: "10Gi"
+    format: raw
+${storage}
+EOF
+  CREATED_CLASS="$GUEST_CLASS"
+fi
+
 kubectl create namespace "$NAMESPACE" 2>/dev/null || true
 
-# Cordon target so the source guest lands on SOURCE_NODE.
-kubectl cordon "$TARGET_NODE"
-trap 'kubectl uncordon "$TARGET_NODE" 2>/dev/null || true; cleanup' EXIT
+# Cordon the target so the source guest lands on SOURCE_NODE.
+cordon_node "$TARGET_NODE"
 
-# Apply the source manifest.
 cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
@@ -91,7 +172,7 @@ spec:
       - name: kubeswift
         sudo: ALL=(ALL) NOPASSWD:ALL
         ssh_authorized_keys:
-          - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ53Xu8rRSofCQqb91XUgZqQam+5Q2e7tOwr0egG/W5x
+          - ${PUBKEY}
   metaData: |
     instance-id: migration-e2e-source
     local-hostname: e2e-source
@@ -104,14 +185,17 @@ spec:
   imageRef:
     name: ubuntu-noble
   guestClassRef:
-    name: default
+    name: ${GUEST_CLASS}
   seedProfileRef:
     name: e2e-seed
   runPolicy: Running
+  migration:
+    enabled: true
+    preferredMode: ${MODE}
 EOF
 
 echo "Waiting for SwiftImage Ready (max 5min)..."
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   phase=$(kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
   if [[ "$phase" == "Ready" ]]; then break; fi
   sleep 5
@@ -119,7 +203,7 @@ done
 [[ "$phase" == "Ready" ]] || { echo "SwiftImage failed to reach Ready: phase=$phase" >&2; exit 1; }
 
 echo "Waiting for SwiftGuest Running with primaryIP (max 3min)..."
-for i in $(seq 1 36); do
+for _ in $(seq 1 36); do
   phase=$(kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
   ip=$(kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}' 2>/dev/null || true)
   if [[ "$phase" == "Running" && -n "$ip" ]]; then break; fi
@@ -127,20 +211,41 @@ for i in $(seq 1 36); do
 done
 [[ "$phase" == "Running" && -n "$ip" ]] || { echo "SwiftGuest failed to reach Running with IP" >&2; exit 1; }
 
-source_node=$(kubectl get pod e2e-guest -n "$NAMESPACE" -o jsonpath='{.spec.nodeName}')
-echo "Guest running at IP=$ip on node=$source_node"
+launcher_pod() {
+  kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.podRef.name}'
+}
+pod=$(launcher_pod)
+source_node=$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.nodeName}')
+echo "Guest running at IP=$ip on node=$source_node (pod $pod)"
 [[ "$source_node" == "$SOURCE_NODE" ]] || { echo "guest landed on $source_node, expected $SOURCE_NODE" >&2; exit 1; }
 
-# Write a sentinel via the launcher pod (no public IP path required).
-kubectl cp ~/.ssh/id_ed25519 "$NAMESPACE"/e2e-guest:/tmp/key -c launcher
-SENTINEL="MIGRATION-E2E-SENTINEL-$(date +%s)"
-kubectl exec e2e-guest -n "$NAMESPACE" -c launcher -- sh -c \
-  "chmod 600 /tmp/key && ssh -i /tmp/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null kubeswift@$ip 'echo $SENTINEL | sudo tee /root/sentinel.txt'"
+# Run a command in the guest over SSH from its launcher pod (no route to the
+# guest from here is required).
+guest_ssh() {
+  local p gip
+  p=$(launcher_pod)
+  gip=$(kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}')
+  kubectl cp "$IDENTITY" "$NAMESPACE/$p:/tmp/key" -c launcher >/dev/null
+  kubectl exec "$p" -n "$NAMESPACE" -c launcher -- sh -c \
+    "chmod 600 /tmp/key && ssh -i /tmp/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 kubeswift@$gip '$1'"
+}
+echo "Waiting for SSH (max 3min)..."
+for _ in $(seq 1 36); do
+  if guest_ssh true >/dev/null 2>&1; then break; fi
+  sleep 5
+done
 
-# Now: uncordon target, cordon source (so the new pod must land on
-# TARGET_NODE). Submit the migration.
-kubectl uncordon "$TARGET_NODE"
-kubectl cordon "$SOURCE_NODE"
+SENTINEL="MIGRATION-E2E-SENTINEL-$(date +%s)"
+guest_ssh "echo $SENTINEL | sudo tee /root/sentinel.txt >/dev/null && sync"
+if [[ "$MODE" == "live" ]]; then
+  guest_ssh "sudo mkdir -p /run/e2e && echo $SENTINEL | sudo tee /run/e2e/sentinel >/dev/null"
+  uptime_before=$(guest_ssh "cut -d. -f1 /proc/uptime")
+  echo "Guest uptime before: ${uptime_before}s"
+fi
+
+# Free the target, pin the source, and migrate.
+uncordon_node "$TARGET_NODE"
+cordon_node "$SOURCE_NODE"
 
 T0=$(date +%s)
 swiftctl_bin="${SWIFTCTL:-./bin/swiftctl}"
@@ -149,48 +254,54 @@ if [[ ! -x "$swiftctl_bin" ]]; then
   go build -o "$swiftctl_bin" ./cmd/swiftctl
 fi
 "$swiftctl_bin" -n "$NAMESPACE" migrate e2e-guest --to "$TARGET_NODE" --allow-ip-change \
-  --name e2e-mig
+  --preferred-mode "$MODE" --name e2e-mig
 
-echo "Waiting for SwiftMigration Completed (max 5min)..."
-for i in $(seq 1 60); do
+echo "Waiting for SwiftMigration Completed (max 10min)..."
+for i in $(seq 1 120); do
   phase=$(kubectl get swiftmigration e2e-mig -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
   detail=$(kubectl get swiftmigration e2e-mig -n "$NAMESPACE" -o jsonpath='{.status.phaseDetail}' 2>/dev/null || true)
   echo "  [$((i*5))s] phase=$phase detail=$detail"
   if [[ "$phase" == "Completed" ]]; then break; fi
-  if [[ "$phase" == "Failed" ]]; then
+  if [[ "$phase" == "Failed" || "$phase" == "Cancelled" ]]; then
     fail=$(kubectl get swiftmigration e2e-mig -n "$NAMESPACE" -o jsonpath='{.status.failureMessage}')
-    echo "Migration Failed: $fail" >&2
+    echo "Migration $phase: $fail" >&2
     exit 1
   fi
   sleep 5
 done
 [[ "$phase" == "Completed" ]] || { echo "Migration did not complete: phase=$phase" >&2; exit 1; }
-
-T1=$(date +%s)
-echo "Migration completed in $((T1 - T0))s"
-
-# Verify the guest now runs on TARGET_NODE.
-new_node=$(kubectl get pod e2e-guest -n "$NAMESPACE" -o jsonpath='{.spec.nodeName}')
-[[ "$new_node" == "$TARGET_NODE" ]] || { echo "post-migration node = $new_node, expected $TARGET_NODE" >&2; exit 1; }
-
-# Verify the sentinel survived the cross-node attach.
-new_ip=$(kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.network.primaryIP}')
-echo "Post-migration IP: $new_ip"
-kubectl cp ~/.ssh/id_ed25519 "$NAMESPACE"/e2e-guest:/tmp/key -c launcher
-got_sentinel=$(kubectl exec e2e-guest -n "$NAMESPACE" -c launcher -- sh -c \
-  "chmod 600 /tmp/key && ssh -i /tmp/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null kubeswift@$new_ip 'sudo cat /root/sentinel.txt'" \
-  2>/dev/null || echo "MISSING")
-if [[ "$got_sentinel" != "$SENTINEL" ]]; then
-  echo "Sentinel survival check FAILED: expected $SENTINEL, got $got_sentinel" >&2
+resolved=$(kubectl get swiftmigration e2e-mig -n "$NAMESPACE" -o jsonpath='{.status.mode}' 2>/dev/null || true)
+echo "Migration completed in $(( $(date +%s) - T0 ))s (resolved mode: ${resolved:-unknown})"
+if [[ "$MODE" == "live" && -n "$resolved" && "$resolved" != "live" ]]; then
+  echo "Asked for a live migration, the controller resolved it to $resolved" >&2
   exit 1
 fi
-echo "PASS: sentinel \"$got_sentinel\" survived the cross-node migration"
+uncordon_node "$SOURCE_NODE"
 
-# Webhook rejection check: a SwiftMigration of a guest with
-# enabled=false on its migration policy must be rejected at admission.
-kubectl patch swiftguest e2e-guest -n "$NAMESPACE" --type merge \
-  -p '{"spec":{"migration":{"enabled":false}}}'
-if kubectl create -n "$NAMESPACE" -f - <<EOF >/dev/null 2>&1
+# The guest runs on the target now: status.podRef follows the cutover (a live
+# migration's pod is <guest>-mig-<uid>).
+pod=$(launcher_pod)
+new_node=$(kubectl get pod "$pod" -n "$NAMESPACE" -o jsonpath='{.spec.nodeName}')
+[[ "$new_node" == "$TARGET_NODE" ]] || { echo "post-migration node = $new_node (pod $pod), expected $TARGET_NODE" >&2; exit 1; }
+echo "Post-migration pod $pod on $new_node"
+
+got=$(guest_ssh "sudo cat /root/sentinel.txt" 2>/dev/null || echo MISSING)
+[[ "$got" == "$SENTINEL" ]] || { echo "disk sentinel: expected $SENTINEL, got $got" >&2; exit 1; }
+echo "PASS: disk sentinel survived the migration"
+if [[ "$MODE" == "live" ]]; then
+  got=$(guest_ssh "cat /run/e2e/sentinel" 2>/dev/null || echo MISSING)
+  [[ "$got" == "$SENTINEL" ]] || { echo "tmpfs sentinel: expected $SENTINEL, got $got (the VM was restarted, not moved)" >&2; exit 1; }
+  uptime_after=$(guest_ssh "cut -d. -f1 /proc/uptime")
+  (( uptime_after >= uptime_before )) || { echo "guest uptime went back from ${uptime_before}s to ${uptime_after}s: it rebooted" >&2; exit 1; }
+  echo "PASS: tmpfs sentinel survived and uptime kept counting (${uptime_before}s -> ${uptime_after}s): the running VM moved"
+fi
+
+# Webhook rejection check: a SwiftMigration of a guest whose migration policy
+# is disabled must be refused at admission. Only where the webhook runs.
+if kubectl get validatingwebhookconfiguration kubeswift-validating-webhook >/dev/null 2>&1; then
+  kubectl patch swiftguest e2e-guest -n "$NAMESPACE" --type merge \
+    -p '{"spec":{"migration":{"enabled":false}}}'
+  if kubectl create -n "$NAMESPACE" -f - <<EOF >/dev/null 2>&1
 apiVersion: migration.kubeswift.io/v1alpha1
 kind: SwiftMigration
 metadata:
@@ -201,11 +312,14 @@ spec:
   target:
     nodeName: $SOURCE_NODE
 EOF
-then
-  echo "Webhook should have rejected migration of disabled guest, but accepted it" >&2
-  exit 1
+  then
+    echo "Webhook should have rejected migration of disabled guest, but accepted it" >&2
+    exit 1
+  fi
+  echo "PASS: webhook rejected migration of guest with migration.enabled=false"
+else
+  echo "SKIP: webhook not installed; admission check not run"
 fi
-echo "PASS: webhook rejected migration of guest with migration.enabled=false"
 
 echo
 echo "All checks passed."
