@@ -122,8 +122,12 @@ spec:
                   overwriteExisting:
                     description: |-
                       OverwriteExisting must be true to restore over a SwiftGuest that
-                      already exists at the target Name. The existing guest is gracefully
-                      stopped before the restore proceeds.
+                      already exists at the target Name. Only an in-place memory restore
+                      (local/s3/oci backend, target name == the snapshot's source guest, no
+                      identity regeneration) can restore over an existing guest: its launcher
+                      is replaced by one that loads the snapshot. Any other restore onto an
+                      existing guest fails with reason OverwriteUnsupported rather than
+                      leaving that guest untouched and reporting success.
                     type: boolean
                 required:
                 - name

@@ -148,6 +148,41 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **An in-place memory restore could resume old RAM over a newer disk.** A
+  local/s3/oci memory snapshot captures memory and device state, not the disk,
+  and the in-place restore reopens the guest's live disk. When the guest kept
+  running after the capture (`resumeAfterSnapshot: true`, the default) or was
+  relaunched from its disk since, the restored kernel's page cache and
+  filesystem state were older than the disk underneath, and writing them back
+  silently corrupts the filesystem. The documented disaster-recovery walkthrough
+  did exactly this. The in-place restore now refuses such a guest with reason
+  `DiskDiverged` unless the SwiftRestore carries the annotation
+  `snapshot.kubeswift.io/accept-disk-divergence: "true"`. A full-state OCI
+  capture (`includeDisk`) is unaffected. The samples, the round-trip e2e test
+  and the walkthrough now capture with `resumeAfterSnapshot: false` and let the
+  restore replace the paused launcher, rather than killing it (which boots the
+  guest from its disk) first.
+
+- **`overwriteExisting: true` restored nothing and reported Ready.** Over an
+  existing guest, the csi-volume-snapshot restore found the root-disk PVC and
+  the guest already present and skipped both. A memory clone restore returned
+  the existing guest unchanged and "resumed" it. Either way the restore went
+  `Ready` ("restore complete") with nothing restored. Only the in-place memory
+  restore can replace an existing guest's state; any other restore onto an
+  existing guest now fails with reason `OverwriteUnsupported`.
+
+- **A failed in-place restore left the guest unable to boot normally.** The
+  restore annotations route every launcher the guest gets to the snapshot, and
+  they were only removed on success. After a failure, every relaunch retried the
+  failed restore, and the guest never booted from its disk again until someone
+  removed the annotations by hand. They are now removed when the restore fails.
+
+- **`resumeAfterRestore: false` hung memory clone restores and was ignored by
+  in-place ones.** A clone target was created `Stopped`, so it had no launcher
+  and the restore waited for one forever. The in-place path resumed the VM
+  anyway. Both now bring the launcher up with the snapshot loaded, go `Ready`,
+  and leave the VM paused.
+
 - **SwiftGuestPool rolling updates could take the whole pool down, or never
   finish.** Availability was counted from the replicas that existed rather than
   the ones serving, so a replacement created in the same pass (still booting)

@@ -462,8 +462,10 @@ func TestEnsureCloneTargetGuest_StoppedSource_TargetRuns(t *testing.T) {
 	}
 }
 
-// resumeAfterRestore=false still yields a Stopped target (the explicit ask).
-func TestEnsureCloneTargetGuest_NoResume_TargetStopped(t *testing.T) {
+// resumeAfterRestore=false still needs a launcher: "paused" is a launcher whose
+// CH loaded the snapshot and was never resumed. A Stopped target has none, and
+// the restore waited for it forever.
+func TestEnsureCloneTargetGuest_NoResume_TargetStillRuns(t *testing.T) {
 	source := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: "ns"},
 		Spec: swiftv1alpha1.SwiftGuestSpec{
@@ -484,7 +486,7 @@ func TestEnsureCloneTargetGuest_NoResume_TargetStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureCloneTargetGuest: %v", err)
 	}
-	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyStopped {
-		t.Errorf("target runPolicy = %q, want Stopped (resumeAfterRestore=false)", got.Spec.RunPolicy)
+	if got.Spec.RunPolicy != swiftv1alpha1.RunPolicyRunning {
+		t.Errorf("target runPolicy = %q, want Running (the paused VM lives in a launcher)", got.Spec.RunPolicy)
 	}
 }

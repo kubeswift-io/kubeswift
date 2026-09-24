@@ -1,7 +1,7 @@
 # Local Snapshots (Tier B)
 
-Tier B captures full VM state — memory + disk references — to a
-node-local hostPath directory. This is the right backend when:
+Tier B captures VM memory and device state (plus references to the
+disks, not their contents) to a node-local hostPath directory. This is the right backend when:
 
 - You want a memory snapshot (Tier B is the only Phase 2 backend that
   pauses the VM and serializes RAM).
@@ -71,11 +71,27 @@ spec:
     name: db-mem-2026-04-26
   targetGuest:
     name: db                # in-place restore (same name as source)
+    overwriteExisting: true # required: the source guest is the target
   resumeAfterRestore: true
 ```
 
 For an **in-place** restore (same name as source), no identity
-regeneration is needed — the restored VM is the same VM. For a
+regeneration is needed — the restored VM is the same VM. It also
+reopens the same disk, which the snapshot did not capture, so the
+restore is only consistent if nothing ran on that disk after the
+capture. Capture with `resumeAfterSnapshot: false` and restore without
+restarting the guest in between. The restore refuses a guest that was
+resumed after the capture or relaunched since (reason `DiskDiverged`):
+resuming the old memory over a newer disk can corrupt its filesystems.
+To proceed anyway, set the annotation
+`snapshot.kubeswift.io/accept-disk-divergence: "true"` on the
+SwiftRestore. `targetGuest.overwriteExisting: true` is required, and it
+is honored only by the in-place path: a clone restore onto an existing
+guest fails with reason `OverwriteUnsupported`.
+
+`resumeAfterRestore: false` leaves the restored VM paused: the restore
+goes `Ready` once the launcher has loaded the snapshot, and no resume is
+sent. For a
 **clone** (different name), set `spec.identity.regenerate` to include
 at least `macAddresses`:
 

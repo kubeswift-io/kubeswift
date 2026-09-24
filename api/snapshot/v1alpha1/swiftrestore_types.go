@@ -35,10 +35,23 @@ type SwiftRestoreTarget struct {
 	// only if OverwriteExisting is true.
 	Name string `json:"name"`
 	// OverwriteExisting must be true to restore over a SwiftGuest that
-	// already exists at the target Name. The existing guest is gracefully
-	// stopped before the restore proceeds.
+	// already exists at the target Name. Only an in-place memory restore
+	// (local/s3/oci backend, target name == the snapshot's source guest, no
+	// identity regeneration) can restore over an existing guest: its launcher
+	// is replaced by one that loads the snapshot. Any other restore onto an
+	// existing guest fails with reason OverwriteUnsupported rather than
+	// leaving that guest untouched and reporting success.
 	OverwriteExisting bool `json:"overwriteExisting,omitempty"`
 }
+
+// AnnotationAcceptDiskDivergence, set to "true" on a SwiftRestore, lets an
+// in-place memory restore proceed even though the guest kept running on its
+// disk after the snapshot was captured. A local/s3/oci memory snapshot holds
+// RAM and device state only, not the disk, so such a restore resumes
+// capture-time memory (page cache, filesystem metadata, journal state) against
+// a disk that has moved on since, which can corrupt the guest's filesystems.
+// Without this annotation that restore fails with reason DiskDiverged.
+const AnnotationAcceptDiskDivergence = "snapshot.kubeswift.io/accept-disk-divergence"
 
 // IdentityRegenerationItem names a guest-identity attribute to regenerate
 // when the snapshot is cloned into a new VM.

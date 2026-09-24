@@ -1,6 +1,11 @@
 # Scenario 5: Tier B local-backend memory snapshot. Pauses the VM
 # and serialises RAM to a node hostPath under
 # /var/lib/kubeswift/snapshots/. The webhook enforces that prefix.
+#
+# resumeAfterSnapshot: false keeps the VM paused after the capture, so
+# its disk stays exactly as the captured memory expects. The snapshot
+# holds memory only; the in-place restore refuses a guest that ran on
+# its disk afterwards.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftSnapshot
 metadata:
@@ -13,4 +18,4 @@ spec:
     local:
       hostPath: /var/lib/kubeswift/snapshots/snapshots-wt-s5-s5-mem-snap
   includeMemory: true
-  resumeAfterSnapshot: true
+  resumeAfterSnapshot: false

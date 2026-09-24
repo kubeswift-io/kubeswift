@@ -5,8 +5,15 @@
 #
 # OverwriteExisting=true is required because the source SwiftGuest
 # is the target. The controller stamps the source guest with restore
-# annotations and force-deletes its launcher pod so it gets rebuilt
-# in restore mode.
+# annotations and force-deletes its launcher pod (here: the one left
+# paused by 03-snapshot.yaml) so it gets rebuilt in restore mode.
+#
+# The restore refuses (reason DiskDiverged) if the guest ran on its disk
+# after the capture: the snapshot was taken with resumeAfterSnapshot:
+# true, or the guest was relaunched since. Resuming the old memory over
+# that newer disk can corrupt its filesystems. Set the annotation
+# snapshot.kubeswift.io/accept-disk-divergence: "true" only if you
+# accept that risk.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftRestore
 metadata:
