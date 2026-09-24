@@ -111,6 +111,7 @@ The `oci` snapshot backend (`SwiftSnapshot.spec.backend.type: oci`) pushes memor
 
 - [Gateway](ui/gateway.md) — read/action API for the web UI; multi-cluster fleet federation
 - [Gateway auth](ui/auth.md) — user authentication and RBAC impersonation
+- [Design: member-resident identity agent](design/edge-identity-agent.md) — proposal to replace the hub-held member credential (G8)
 
 ### Operator
 

@@ -182,6 +182,10 @@ In `insecure` mode these work with no token; in `token` mode add
 - **The hub holds credentials to every member** — it is the fleet's
   highest-value target. Restrict who can read Secrets in the gateway namespace,
   scope each member credential to the least privilege the UI needs, and rotate.
+  A member credential that may impersonate is cluster-admin-equivalent on its
+  member however it is scoped; the
+  [member-resident identity agent](../design/edge-identity-agent.md) proposal
+  removes it from the hub.
 - **`insecure` mode is a footgun** — it bypasses per-user authorization. The
   gateway logs a warning at startup when it is on. Note the **write actions**
   below make this sharper: in `insecure` mode every UI user can start/stop VMs.
