@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -275,19 +276,27 @@ func TestRunDelete(t *testing.T) {
 	if _, err := runUpload(ctx, store, src, "ns/snap", "ns/snap", false); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	// An unrelated object under a different prefix must survive.
-	store.objs["other/keep.bin"] = []byte("keep")
+	// An unrelated object under a different prefix must survive, and so must
+	// SIBLING snapshots whose names merely start with this one's ("snap-1700…",
+	// "snap2"): S3 prefix listing is a string match, so the delete must be
+	// scoped to "ns/snap/".
+	keep := []string{"other/keep.bin", "ns/snap-1700000000/manifest.json", "ns/snap2/memory-ranges"}
+	for _, k := range keep {
+		store.objs[k] = []byte("keep")
+	}
 
 	if err := runDelete(ctx, store, "ns/snap"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	for k := range store.objs {
-		if k != "other/keep.bin" {
+		if !slices.Contains(keep, k) {
 			t.Errorf("object %q under the deleted prefix survived", k)
 		}
 	}
-	if _, ok := store.objs["other/keep.bin"]; !ok {
-		t.Error("delete must not touch objects outside the snapshot prefix")
+	for _, k := range keep {
+		if _, ok := store.objs[k]; !ok {
+			t.Errorf("delete of ns/snap removed %q, which belongs to a different snapshot", k)
+		}
 	}
 
 	// Empty / whitespace prefix is refused (would target the whole bucket).

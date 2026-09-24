@@ -148,6 +148,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Deleting an S3 snapshot could delete other snapshots' data.** The delete
+  Job listed objects by the snapshot's key prefix with no trailing `/`, and an S3
+  prefix list is a plain string match, so deleting snapshot `db` also removed
+  every object of `db-1700000000`, `db2` and any other snapshot whose name starts
+  with `db` in the same bucket path. A scheduled snapshot's keep-N pruning of its
+  oldest snapshot therefore wiped its newer siblings, which stayed `Ready` but
+  could no longer be restored. The delete is now scoped to `<prefix>/<ns>/<name>/`.
+
 - **Stopping, deleting or draining a guest killed its VM instead of shutting it
   down.** swiftletd runs as PID 1 in the launcher container and installed no
   SIGTERM handler, and the kernel drops a signal sent to a PID-namespace init

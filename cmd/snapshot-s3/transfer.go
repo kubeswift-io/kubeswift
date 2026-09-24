@@ -143,11 +143,18 @@ func runDelete(ctx context.Context, store objectStore, keyPrefix string) error {
 	if strings.Trim(keyPrefix, "/ ") == "" {
 		return fmt.Errorf("refusing to delete: empty key prefix would target the whole bucket")
 	}
-	keys, err := store.list(ctx, keyPrefix)
+	// Scope the listing to the snapshot's own "directory". Every object is
+	// written as path.Join(keyPrefix, <file>), and an S3 prefix list is a plain
+	// string match — so listing "ns/db" also returned "ns/db-1700000000/…" and
+	// "ns/db2/…", and deleting snapshot db deleted its siblings' objects (a
+	// scheduled snapshot's keep-N prune wiped its newer siblings). The trailing
+	// "/" is the boundary.
+	scope := strings.TrimRight(keyPrefix, "/") + "/"
+	keys, err := store.list(ctx, scope)
 	if err != nil {
-		return fmt.Errorf("list %q: %w", keyPrefix, err)
+		return fmt.Errorf("list %q: %w", scope, err)
 	}
-	log.Printf("snapshot-s3 delete: %d object(s) under %s", len(keys), keyPrefix)
+	log.Printf("snapshot-s3 delete: %d object(s) under %s", len(keys), scope)
 	for _, k := range keys {
 		if err := store.remove(ctx, k); err != nil {
 			return fmt.Errorf("remove %q: %w", k, err)
