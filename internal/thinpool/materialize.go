@@ -224,8 +224,21 @@ func (x *Materializer) createBase(ctx context.Context, key, name string, sectors
 			return 0, err
 		}
 		if !fresh {
-			_ = x.M.RemoveDevice(ctx, name) // a crashed writer may have left it mapped
-			_ = x.M.DeleteThin(ctx, id)     // absent if the crash came before create_thin
+			// Throw the partial base away. Only "already gone" is ignorable:
+			// had a busy mapping or a refused delete been ignored, create_thin
+			// below would find the id still in the pool and take the
+			// "registry fell behind" path, forgetting the id -- and leaking the
+			// old device, up to the image's full size, with nothing naming it.
+			if active, err := x.M.Active(ctx, name); err != nil {
+				return 0, err
+			} else if active {
+				if err := x.M.RemoveDevice(ctx, name); err != nil {
+					return 0, fmt.Errorf("unmapping the unfinished base %s: %w", key, err)
+				}
+			}
+			if err := x.M.DeleteThin(ctx, id); err != nil && !errors.Is(err, ErrNoSuchThin) {
+				return 0, fmt.Errorf("deleting the unfinished base %s: %w", key, err)
+			}
 		}
 		err = x.M.CreateBase(ctx, id, name, sectors)
 		if err == nil {

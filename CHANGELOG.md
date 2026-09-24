@@ -230,6 +230,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Rebuilding an unfinished shared base could leak its thin device.** A base
+  whose population never finished is thrown away and rebuilt under the same
+  id. Failures to unmap or delete the old device were ignored. If it was
+  still busy, `create_thin` then found the id in the pool, and the
+  "registry fell behind" recovery forgot the id. That left the old device,
+  up to the image's full size, in the pool with nothing naming it. The
+  rebuild now stops on such a failure and retries on the next attempt.
+
 - **A checked-out sandbox's workload output could vanish from its logs.**
   swiftletd appended the output of a workload run in a claimed warm slot to
   the console log. Cloud Hypervisor writes that file at its own offset (it
