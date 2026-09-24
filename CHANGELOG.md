@@ -273,6 +273,18 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Building a shared base could evict other bases for nothing, or overfill
+  the pool.** Making room for a new base asked the pool for the image's full
+  raw size, although only its non-zero blocks are written. A 10 GiB image
+  holding 1.5 GiB of data demanded 10 GiB free and evicted cached bases to
+  get it. The requirement is now the pool blocks the image file's data
+  extents touch, an upper bound on what the write allocates. The free-space
+  check was also not reserved. Two builds of different images could each see
+  room, both write, and together fill the pool, which stalls and then fails
+  every guest on the node. A build now reserves its space in the node
+  registry, other builds don't count it as free, and it is released when the
+  write finishes (or lapses after six hours if the build died).
+
 - **The gateway probed slow member clusters about once a second, forever.**
   Every Cluster update re-probed the member, and every probe wrote
   `status.lastConnected`, which is itself an update. The loop stopped only

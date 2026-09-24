@@ -163,7 +163,13 @@ func run(ctx context.Context, cfg config, out io.Writer) error {
 			return fmt.Errorf("the guest's root disk (%d bytes) is smaller than its image (%d bytes); a disk cannot be shrunk below the image it starts from",
 				cfg.guestBytes, imageBytes)
 		}
-		if _, err := x.EnsureBase(ctx, cfg.baseKey, imageBytes, func() (io.ReadCloser, error) { return os.Open(cfg.image) }); err != nil {
+		// The pool space the write needs is bounded by the image's data, not
+		// its size: only non-zero blocks are written.
+		needBytes, err := thinpool.PoolBytesForFile(cfg.image, imageBytes)
+		if err != nil {
+			return err
+		}
+		if _, err := x.EnsureBaseNeeding(ctx, cfg.baseKey, imageBytes, needBytes, func() (io.ReadCloser, error) { return os.Open(cfg.image) }); err != nil {
 			return err
 		}
 		path, err := x.EnsureGuest(ctx, cfg.baseKey, cfg.guestKey, cfg.device, cfg.guestBytes)

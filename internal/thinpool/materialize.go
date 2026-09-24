@@ -55,6 +55,15 @@ const maxIDRetries = 8
 // one writes and the rest wait and then use what it wrote. Callers for
 // different keys do not block each other.
 func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uint64, open func() (io.ReadCloser, error)) (uint32, error) {
+	return x.EnsureBaseNeeding(ctx, key, sizeBytes, sizeBytes, open)
+}
+
+// EnsureBaseNeeding is EnsureBase for an image whose write needs less pool
+// space than its size: needBytes bounds what populating it will allocate
+// (PoolBytesForFile computes it for a sparse image file). Asking the pool for
+// the full size of a mostly-empty image refused bases that fit, and evicted
+// others trying to make room it did not need.
+func (x *Materializer) EnsureBaseNeeding(ctx context.Context, key string, sizeBytes, needBytes uint64, open func() (io.ReadCloser, error)) (uint32, error) {
 	if key == "" {
 		return 0, errors.New("thinpool: empty base key")
 	}
@@ -77,10 +86,16 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 	}
 
 	// A base is a cache, and dm-thin refcounts what it shares, so an unused one
-	// can go to make room for this one (§7.5).
-	if err := x.makeRoomFor(ctx, sizeBytes, key); err != nil {
+	// can go to make room for this one (§7.5). The room is reserved until the
+	// write is done, so a concurrent build of another image cannot count on it.
+	if err := x.makeRoomFor(ctx, needBytes, key); err != nil {
 		return 0, err
 	}
+	defer func() {
+		if err := x.Reg.Unreserve(key); err != nil {
+			x.logf("releasing the pool space reserved for base %s: %v (it lapses on its own)", key, err)
+		}
+	}()
 
 	sectors := bytesToSectors(sizeBytes)
 	name := baseDeviceName(key)
@@ -108,8 +123,9 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 	return id, nil
 }
 
-// makeRoomFor frees pool space for a base of sizeBytes by evicting others,
-// least recently used first, and returns an error only when it cannot.
+// makeRoomFor reserves pool space for a base of sizeBytes, evicting others,
+// least recently used first, until it can, and returns an error only when it
+// cannot.
 //
 // Evicting a base is safe at any time: it is a convenience for creating the
 // NEXT guest, not a dependency of the ones already running — dm-thin
@@ -117,38 +133,49 @@ func (x *Materializer) EnsureBase(ctx context.Context, key string, sizeBytes uin
 // derived from it byte-identical and writable, and returns only the blocks
 // nothing else points at (measured, §7.5). The cost of being wrong is the time
 // to write that base again.
+//
+// The space is reserved (Registry.Reserve) rather than merely checked, and
+// what other builds have reserved does not count as free; the caller releases
+// it when its write is done.
 func (x *Materializer) makeRoomFor(ctx context.Context, sizeBytes uint64, keep string) error {
-	free, err := x.freeBytes(ctx)
-	if err != nil || free >= sizeBytes {
-		return err
-	}
-	keys, err := x.Reg.BasesByLeastRecentUse()
-	if err != nil {
-		return err
-	}
-	evicted := 0
-	for _, key := range keys {
-		if key == keep {
-			continue
+	free := func() (uint64, error) { return x.freeBytes(ctx) }
+	var keys []string
+	listed := false
+	others, evicted, next := 0, 0, 0
+	for {
+		ok, available, err := x.Reg.Reserve(keep, sizeBytes, free)
+		if err != nil || ok {
+			return err
 		}
-		gone, err := x.evictBase(ctx, key)
+		if !listed {
+			if keys, err = x.Reg.BasesByLeastRecentUse(); err != nil {
+				return err
+			}
+			for _, k := range keys {
+				if k != keep {
+					others++
+				}
+			}
+			listed = true
+		}
+		for next < len(keys) && keys[next] == keep {
+			next++
+		}
+		if next >= len(keys) {
+			return fmt.Errorf("the pool has %d bytes available (free, less what other base builds on this node have reserved) "+
+				"and this base needs %d; evicted %d of %d other bases and it still does not fit. "+
+				"Give the pool a larger data device, or use a smaller image",
+				available, sizeBytes, evicted, others)
+		}
+		gone, err := x.evictBase(ctx, keys[next])
+		next++
 		if err != nil {
 			return err
 		}
-		if !gone {
-			continue
-		}
-		evicted++
-		if free, err = x.freeBytes(ctx); err != nil {
-			return err
-		}
-		if free >= sizeBytes {
-			return nil
+		if gone {
+			evicted++
 		}
 	}
-	return fmt.Errorf("the pool has %d bytes free and this base needs %d; evicted %d of %d other bases and "+
-		"it still does not fit. Give the pool a larger data device, or use a smaller image",
-		free, sizeBytes, evicted, len(keys))
 }
 
 // evictBase deletes a base and forgets it, reporting whether it went.

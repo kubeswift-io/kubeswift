@@ -74,7 +74,25 @@ type registryState struct {
 	// "created" key at all, and load() treats that — and only that — as legacy,
 	// marking every guest it names as created (they were, or stranded as before).
 	Created map[string]bool `json:"created"`
+	// Reserved holds the pool space promised to base builds still writing
+	// (see Reserve). Checking free space is not enough on its own: two builds
+	// of different images could each see room for itself, both write, and
+	// together fill the pool -- which stalls, then fails, every guest on the
+	// node.
+	Reserved map[string]reservation `json:"reserved,omitempty"`
 }
+
+// reservation is pool space a base build has claimed and not yet released.
+type reservation struct {
+	Bytes uint64 `json:"bytes"`
+	// Since is RFC3339 with nanoseconds. A build that died without releasing
+	// its claim leaves it behind; it lapses after reservationTTL.
+	Since string `json:"since"`
+}
+
+// reservationTTL is how long an unreleased reservation holds space. Well past
+// the longest base write, so it only ever reclaims a crashed build's claim.
+const reservationTTL = 6 * time.Hour
 
 // NewRegistry returns a registry stored at path. The file is created on first
 // mutation.
@@ -248,6 +266,57 @@ func (r *Registry) MarkBaseReady(digest string) error {
 			return false, nil
 		}
 		st.Ready[digest] = true
+		return true, nil
+	})
+}
+
+// Reserve claims bytes of pool space for key's build if the pool has them
+// free beyond what other builds hold, and reports the space available to key
+// either way. free is read under the registry lock, so two builds cannot both
+// pass on the same free space. A claim key already held is replaced.
+func (r *Registry) Reserve(key string, bytes uint64, free func() (uint64, error)) (ok bool, available uint64, err error) {
+	err = r.withLock(func(st *registryState) (bool, error) {
+		f, err := free()
+		if err != nil {
+			return false, err
+		}
+		now := time.Now().UTC()
+		changed := false
+		var held uint64
+		for k, res := range st.Reserved {
+			if k == key {
+				continue
+			}
+			if since, err := time.Parse(time.RFC3339Nano, res.Since); err != nil || now.Sub(since) > reservationTTL {
+				delete(st.Reserved, k)
+				changed = true
+				continue
+			}
+			held += res.Bytes
+		}
+		if f > held {
+			available = f - held
+		}
+		if available < bytes {
+			return changed, nil
+		}
+		if st.Reserved == nil {
+			st.Reserved = map[string]reservation{}
+		}
+		st.Reserved[key] = reservation{Bytes: bytes, Since: now.Format(time.RFC3339Nano)}
+		ok = true
+		return true, nil
+	})
+	return ok, available, err
+}
+
+// Unreserve releases key's claim, once its build has written what it will.
+func (r *Registry) Unreserve(key string) error {
+	return r.withLock(func(st *registryState) (bool, error) {
+		if _, ok := st.Reserved[key]; !ok {
+			return false, nil
+		}
+		delete(st.Reserved, key)
 		return true, nil
 	})
 }
