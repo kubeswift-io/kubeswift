@@ -230,6 +230,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **The gateway probed slow member clusters about once a second, forever.**
+  Every Cluster update re-probed the member, and every probe wrote
+  `status.lastConnected`, which is itself an update. The loop stopped only
+  when two probes finished within the same second, which never happened for
+  a member more than about a second away. Each iteration cost roughly ten
+  member API calls, a hub status write, and a WatchClusters event to every
+  UI. Status-only updates no longer trigger a probe. Instead every member is
+  re-probed every two minutes, which also keeps Ready/Reachable current for
+  members whose loop used to end at once.
+
 - **Rebuilding an unfinished shared base could leak its thin device.** A base
   whose population never finished is thrown away and rebuilt under the same
   id. Failures to unmap or delete the old device were ignored. If it was

@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -114,14 +116,56 @@ func (p *ClientPool) Start(ctx context.Context) error {
 		return err
 	}
 	if _, err := inf.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { p.upsert(ctx, obj) },
-		UpdateFunc: func(_, obj any) { p.upsert(ctx, obj) },
+		AddFunc: func(obj any) { p.upsert(ctx, obj) },
+		UpdateFunc: func(oldObj, obj any) {
+			if statusOnlyUpdate(oldObj, obj) {
+				return
+			}
+			p.upsert(ctx, obj)
+		},
 		DeleteFunc: func(obj any) { p.remove(obj) },
 	}); err != nil {
 		return err
 	}
-	<-ctx.Done()
-	return nil
+	// Re-probe every member on a timer: status-only updates no longer do it
+	// (see statusOnlyUpdate), and the informer's resync is hours apart.
+	ticker := time.NewTicker(memberProbeInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			var clusters fleetv1alpha1.ClusterList
+			if err := p.cache.List(ctx, &clusters, client.InNamespace(p.namespace)); err != nil {
+				continue
+			}
+			for i := range clusters.Items {
+				p.upsert(ctx, &clusters.Items[i])
+			}
+		}
+	}
+}
+
+// memberProbeInterval is how often every member's reachability, version and
+// telemetry endpoint are re-checked.
+const memberProbeInterval = 2 * time.Minute
+
+// statusOnlyUpdate reports whether an update changed nothing but the
+// Cluster's status. Every probe writes status (lastConnected at least), so
+// re-probing on those updates looped: a member more than about a second away
+// never saw two probes land in the same second, and was probed, and its
+// status rewritten, about once a second forever. A spec or metadata change
+// still re-probes, and so does an informer resync (resourceVersion unchanged),
+// which is what re-checks a member's health.
+func statusOnlyUpdate(oldObj, obj any) bool {
+	o, n := extractCluster(oldObj), extractCluster(obj)
+	if o == nil || n == nil || o.ResourceVersion == n.ResourceVersion {
+		return false
+	}
+	return o.Generation == n.Generation &&
+		equality.Semantic.DeepEqual(o.Labels, n.Labels) &&
+		equality.Semantic.DeepEqual(o.Annotations, n.Annotations)
 }
 
 func (p *ClientPool) upsert(ctx context.Context, obj any) {
