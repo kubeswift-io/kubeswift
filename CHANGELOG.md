@@ -148,6 +148,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A memory snapshot could fail right after pausing the guest.** The capture
+  deadline (600s by default) ran from the snapshot's creation, so time spent
+  Pending (waiting for the guest to come up) counted against it. A snapshot
+  that had waited that long failed on its first Capturing poll, after the
+  capture had been sent and the guest paused. For a full-state (`includeDisk`)
+  capture, which leaves the guest paused for the disk export, the guest was
+  then left paused with nothing to export or terminate it. The deadline now
+  runs from the new `status.captureStartedAt`, and a full-state capture that
+  does exceed it queues a resume so the guest is not left paused.
+
 - **A guest with SR-IOV NICs on two different resources lost the second NIC.**
   swiftletd took each VF's PCI address from its resource's `PCIDEVICE_*` list
   using one counter shared across all resources, so the first NIC on a second

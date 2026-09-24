@@ -336,9 +336,15 @@ type CapturedStorage struct {
 
 // SwiftSnapshotStatus is the observed state of a SwiftSnapshot.
 type SwiftSnapshotStatus struct {
-	Phase             SwiftSnapshotPhase `json:"phase,omitempty"`
-	Conditions        []metav1.Condition `json:"conditions,omitempty"`
-	CapturedAt        *metav1.Time       `json:"capturedAt,omitempty"`
+	Phase      SwiftSnapshotPhase `json:"phase,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	CapturedAt *metav1.Time       `json:"capturedAt,omitempty"`
+	// CaptureStartedAt is when the capture action was sent to the launcher.
+	// The capture deadline runs from here, not from the snapshot's creation:
+	// time spent Pending (waiting for the guest to be Running) is not
+	// capture time.
+	// +optional
+	CaptureStartedAt  *metav1.Time       `json:"captureStartedAt,omitempty"`
 	Hypervisor        string             `json:"hypervisor,omitempty"`
 	HypervisorVersion string             `json:"hypervisorVersion,omitempty"`
 	GuestSpec         *CapturedGuestSpec `json:"guestSpec,omitempty"`

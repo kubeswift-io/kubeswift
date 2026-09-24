@@ -779,6 +779,10 @@ func (in *SwiftSnapshotStatus) DeepCopyInto(out *SwiftSnapshotStatus) {
 		in, out := &in.CapturedAt, &out.CapturedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.CaptureStartedAt != nil {
+		in, out := &in.CaptureStartedAt, &out.CaptureStartedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.GuestSpec != nil {
 		in, out := &in.GuestSpec, &out.GuestSpec
 		*out = new(CapturedGuestSpec)

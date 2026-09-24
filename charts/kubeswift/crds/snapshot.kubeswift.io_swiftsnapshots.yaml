@@ -264,6 +264,14 @@ spec:
           status:
             description: SwiftSnapshotStatus is the observed state of a SwiftSnapshot.
             properties:
+              captureStartedAt:
+                description: |-
+                  CaptureStartedAt is when the capture action was sent to the launcher.
+                  The capture deadline runs from here, not from the snapshot's creation:
+                  time spent Pending (waiting for the guest to be Running) is not
+                  capture time.
+                format: date-time
+                type: string
               capturedAt:
                 format: date-time
                 type: string

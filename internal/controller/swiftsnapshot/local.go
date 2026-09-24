@@ -233,6 +233,10 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	if err := r.patchPodActionAnnotations(ctx, pod, verbCapture, actionID, string(argsJSON)); err != nil {
 		return false, 0, fmt.Errorf("patch action annotation: %w", err)
 	}
+	if status.CaptureStartedAt == nil {
+		now := metav1.Now()
+		status.CaptureStartedAt = &now
+	}
 
 	setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseCapturing)
 	setReadyCondition(status, metav1.ConditionFalse, ReasonCapturing,
@@ -258,6 +262,15 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 	// indefinitely. The Pod watcher (SetupWithManager) handles the
 	// fast path; this is the slow-path safety net.
 	if exceeded, deadlineSecs := captureDeadlineExceeded(snap); exceeded {
+		// A full-state capture runs with resume_after_snapshot=false, so if
+		// it is still going (or has just finished) the guest ends up paused
+		// -- and with this snapshot Failed, nothing would export and
+		// terminate it. Queue a resume behind the capture (swiftletd runs
+		// actions in order; resuming a running VM is a no-op) so the guest
+		// is not left paused with no owner. Best-effort.
+		if snap.Spec.IncludeDisk {
+			r.resumeAfterAbandonedCapture(ctx, snap)
+		}
 		return false, fmt.Sprintf("capture deadline (%ds) exceeded", deadlineSecs), nil
 	}
 
@@ -392,13 +405,11 @@ func (r *SwiftSnapshotReconciler) patchPodActionAnnotations(
 	return r.Patch(ctx, pod, client.RawPatch(types.MergePatchType, data))
 }
 
-// reservedReferences keeps verbResume and verbPrepare reachable so
-// the constants don't get optimized out by go vet's unused-export
-// check. They are consumed by commit 10 (SwiftRestore) to drive the
-// resume action and by commit 7's restore-receive intent. Defined
-// here because the action constants logically live with the
-// snapshot controller.
-var _ = []string{verbResume, verbPrepare}
+// reservedReferences keeps verbPrepare reachable so the constant doesn't
+// get flagged as unused. It is consumed by commit 7's restore-receive
+// intent. Defined here because the action constants logically live with
+// the snapshot controller.
+var _ = []string{verbPrepare}
 
 // capturingActionID returns a stable per-SwiftSnapshot action-id used
 // to drive (and later observe) the launcher pod's snapshot-action
@@ -439,9 +450,32 @@ func captureDeadlineExceeded(snap *snapshotv1alpha1.SwiftSnapshot) (bool, int64)
 			deadline = parsed
 		}
 	}
-	if snap.CreationTimestamp.IsZero() {
+	// From when the capture action was sent. Measuring from the snapshot's
+	// creation counted time spent Pending (e.g. waiting for the guest to come
+	// up), so a snapshot could fail on its first Capturing poll -- after the
+	// capture had been sent and the guest paused. Snapshots already in
+	// flight when this field was added fall back to their creation time.
+	start := snap.CreationTimestamp
+	if snap.Status.CaptureStartedAt != nil {
+		start = *snap.Status.CaptureStartedAt
+	}
+	if start.IsZero() {
 		return false, deadline
 	}
-	elapsed := time.Since(snap.CreationTimestamp.Time)
+	elapsed := time.Since(start.Time)
 	return elapsed.Seconds() > float64(deadline), deadline
+}
+
+// resumeAfterAbandonedCapture sends a resume action to the snapshot's
+// launcher (see the deadline branch of handleCapturingLocal). Errors are
+// logged, not returned: the snapshot is failing either way.
+func (r *SwiftSnapshotReconciler) resumeAfterAbandonedCapture(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) {
+	pod, err := r.findLauncherPod(ctx, snap.Namespace, snap.Spec.GuestRef.Name)
+	if err != nil || pod == nil || pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
+		return
+	}
+	if err := r.patchPodActionAnnotations(ctx, pod, verbResume, capturingActionID(snap)+"-resume", "{}"); err != nil {
+		log.FromContext(ctx).Error(err, "could not queue a resume after an abandoned full-state capture; the guest may be left paused",
+			"snapshot", snap.Name, "pod", pod.Name)
+	}
 }
