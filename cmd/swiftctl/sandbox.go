@@ -222,10 +222,19 @@ func dialAgent(config *rest.Config, clientset *kubernetes.Clientset, ns, pod, vs
 	outR, outW := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
-		done <- executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{
+		err := executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 			Stdin: inR, Stdout: outW, Stderr: os.Stderr,
 		})
-		outW.Close()
+		// A refused exec returns without reading stdin, and a pipe write
+		// blocks until read: without this the CONNECT write below hung
+		// forever instead of reporting why the exec was refused.
+		ended := err
+		if ended == nil {
+			ended = io.EOF
+		}
+		inR.CloseWithError(ended)
+		outW.CloseWithError(ended)
+		done <- err
 	}()
 
 	br := bufio.NewReader(outR)

@@ -127,25 +127,28 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	go func() {
-		_ = executor.StreamWithContext(r.Context(), remotecommand.StreamOptions{
+	go pumpExec(func() error {
+		return executor.StreamWithContext(r.Context(), remotecommand.StreamOptions{
 			Stdin: inR, Stdout: outW, Stderr: outW,
 		})
-		outW.Close()
-	}()
+	}, inR, outW)
 	br := bufio.NewReader(outR)
 
 	// vsock CONNECT handshake (before the WS upgrade, so a failure is a readable
 	// HTTP error rather than a closed socket).
 	if _, err := io.WriteString(inW, fmt.Sprintf("CONNECT %d\n", agentVsockPort)); err != nil {
 		inW.Close()
-		http.Error(w, "vsock connect: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "vsock connect: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	okLine, err := br.ReadString('\n')
 	if err != nil || !strings.HasPrefix(okLine, "OK ") {
 		inW.Close()
-		http.Error(w, "vsock handshake failed (is the sandbox running with an agent?)", http.StatusConflict)
+		msg := "vsock handshake failed (is the sandbox running with an agent?)"
+		if err != nil && err != io.EOF {
+			msg += ": " + err.Error()
+		}
+		http.Error(w, msg, http.StatusConflict)
 		return
 	}
 
@@ -211,4 +214,21 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// pumpExec runs a remote-command stream wired to the given pipe ends, then
+// fails anything still waiting on either pipe with the stream's outcome (its
+// error, or io.EOF when it ended cleanly).
+//
+// A refused exec (403, pod not running) returns without ever reading stdin,
+// and an io.Pipe write blocks until it is read: the handler's CONNECT write
+// used to hang forever, holding the handler, its goroutines and the client's
+// connection.
+func pumpExec(stream func() error, stdin *io.PipeReader, stdout *io.PipeWriter) {
+	err := stream()
+	if err == nil {
+		err = io.EOF
+	}
+	stdin.CloseWithError(err)
+	stdout.CloseWithError(err)
 }

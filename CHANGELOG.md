@@ -168,6 +168,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A refused sandbox exec hung forever in the gateway and in `swiftctl`.** When
+  the exec into the launcher was refused (no `pods/exec` permission, pod not
+  running), the stream ended without reading stdin, and the vsock handshake
+  write into the stdin pipe blocked forever. Every refused console/exec
+  attempt leaked a gateway handler, its goroutines and the client connection,
+  and `swiftctl sandbox exec` hung instead of reporting the refusal. The pipes
+  are now closed with the stream's error when it ends, and the refusal is
+  returned to the caller.
+
 - **Deleting an s3 or oci snapshot left the guest's RAM on the capture node,
   and oci artifacts were never deleted.** An s3/oci capture writes the full
   memory image to a node-local directory before uploading it, and nothing
