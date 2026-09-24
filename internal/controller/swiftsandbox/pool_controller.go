@@ -152,6 +152,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	var ready, warmLive, claimed int
 	var warmPods []*corev1.Pod
+	profile := poolSlotProfile(&pool)
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
@@ -166,6 +167,16 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// owner is the pod, so this adopts a still-pool-owned grant.
 		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher); err != nil {
 			return ctrl.Result{}, err
+		}
+		if p.Labels[SlotStateLabelKey] == slotStateWarm && p.Annotations[SlotProfileAnnotation] != profile {
+			// Booted under an earlier pool spec (image, network mode or
+			// verification key changed since) -- or before slots recorded
+			// one. It would never be handed to a sandbox asking for the
+			// current settings, so replace it rather than keep it warm.
+			if err := r.Delete(ctx, p); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+			continue
 		}
 		if p.Labels[SlotStateLabelKey] == slotStateWarm {
 			warmLive++
@@ -370,6 +381,10 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	pod := buildPod(slot, kernelName)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[SlotProfileAnnotation] = poolSlotProfile(pool)
 	// Spread the pool's slots across kernel-nodes so a checkout landing on any node is
 	// likely to find a warm slot there (warming is node-local). Soft (ScheduleAnyway):
 	// never block warming just because one node is full.

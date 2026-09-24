@@ -8,6 +8,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A pooled sandbox could run with the pool's network access and without
+  its image verification.** Checking a SwiftSandbox out of a warm pool ignored
+  the sandbox's own `network.mode`, `verifyKeySecretRef` and `image`. A
+  `restricted` sandbox claiming a slot of an `open` pool got open egress, a
+  sandbox that required a verified image ran the pool's image unverified, and
+  slots warmed before a pool edit kept the old settings until claimed. Each
+  warm slot now records the image, network mode and verification key it booted
+  with. A sandbox claims only a slot that matches its own, and otherwise boots
+  cold. The pool replaces warm slots booted under different settings, so
+  existing warm slots are recycled once after upgrading.
+
 - **The source node's migration private key was copied into the tenant
   namespace unnecessarily.** With live-migration mTLS enabled, Validating copied
   both participating nodes' identity Secrets — cert **and** private key — into

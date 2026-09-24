@@ -77,6 +77,13 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
+	// A slot runs the pool's image under the pool's network mode, verified
+	// (or not) with the pool's key: only a sandbox asking for exactly that may
+	// take one. Anything else boots cold with its own settings.
+	if pool.Name != "" && poolSlotProfile(&pool) != sandboxSlotProfile(sb) {
+		return r.coldFallback(ctx, sb, kernelName,
+			"the pool's image, network mode or verification key differs from this sandbox's")
+	}
 
 	// Adopt an already-claimed slot from a partial prior reconcile (the pod claim
 	// succeeded but the status update didn't) before claiming a new one — no double-claim.
@@ -180,6 +187,11 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		if p.DeletionTimestamp != nil || !launcherReady(p) {
+			continue
+		}
+		// Only a slot booted with exactly this sandbox's image, network mode
+		// and verification key (a slot from before a pool edit is not).
+		if p.Annotations[SlotProfileAnnotation] != sandboxSlotProfile(sb) {
 			continue
 		}
 		claimed := p.DeepCopy()
