@@ -115,7 +115,16 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 	}
 	if status.Network != nil {
 		status.Network.PrimaryIP = ""
+		// Per-interface addresses are leases of the same run.
+		status.Network.Interfaces = nil
 	}
+	// The hypervisor process and its serial socket went with the launcher.
+	// The hypervisor kind is not run-scoped: it says what the guest runs
+	// under, and snapshots record it from here.
+	if status.Runtime != nil {
+		status.Runtime.PID = 0
+	}
+	status.Console = nil
 }
 
 // launcherHandedOff reports whether pod's launcher sent its VM away in a live

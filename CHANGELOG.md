@@ -230,6 +230,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A stopped guest kept its last run's pid, console socket and interface
+  addresses.** Clearing the run state when a launcher goes away dropped the
+  conditions and the primary IP but left `status.runtime.pid`,
+  `status.console` and `status.network.interfaces`, so `swiftctl describe`
+  showed a process, a serial socket and per-interface leases that no longer
+  existed. They are now cleared as well. `status.runtime.hypervisor` is kept,
+  since it describes the guest rather than the run.
+
 - **A stopping guest could briefly get a new launcher.** If its launcher
   finished terminating between the controller's stop check and its launcher
   lookup in the same pass, the controller created a fresh launcher, which

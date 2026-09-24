@@ -51,6 +51,27 @@ func assertNotRunning(t *testing.T, st *swiftv1alpha1.SwiftGuestStatus, wantReas
 	}
 }
 
+// The last run's process, console socket and interface leases are gone with
+// its launcher; the hypervisor kind describes the guest and stays.
+func TestClearRunState_DropsTheRunsProcessConsoleAndLeases(t *testing.T) {
+	st := ranStatus("pod-1")
+	st.Runtime = &swiftv1alpha1.GuestRuntimeStatus{PID: 4242, Hypervisor: "qemu"}
+	st.Console = &swiftv1alpha1.GuestConsoleStatus{SerialSocket: "/run/kubeswift/serial.sock"}
+	st.Network.Interfaces = []swiftv1alpha1.GuestNetworkInterface{{Name: "eth0"}}
+
+	ClearRunState(st, "Stopped", "stopped")
+
+	if st.Runtime == nil || st.Runtime.PID != 0 || st.Runtime.Hypervisor != "qemu" {
+		t.Errorf("runtime = %+v, want pid cleared and hypervisor kept", st.Runtime)
+	}
+	if st.Console != nil {
+		t.Errorf("console = %+v; the serial socket went with the launcher", st.Console)
+	}
+	if len(st.Network.Interfaces) != 0 {
+		t.Errorf("interfaces = %+v; their addresses were the last run's leases", st.Network.Interfaces)
+	}
+}
+
 // Storage and resolution describe the guest, not the run, and must survive.
 func TestClearRunState_KeepsWhatIsNotAboutTheRun(t *testing.T) {
 	st := ranStatus("pod-1")
