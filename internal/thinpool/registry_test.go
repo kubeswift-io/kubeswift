@@ -282,3 +282,93 @@ func TestRegistry_TouchingAnUnknownBaseDoesNothing(t *testing.T) {
 		t.Errorf("bases = %v, want none", got)
 	}
 }
+
+// EvictionOrder: bases no live guest came from first, least recently used
+// first within each group.
+func TestRegistry_EvictionOrderPutsSharedBasesLast(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	for _, k := range []string{"old", "mid", "new"} {
+		if _, _, err := r.AllocateBase(k); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.TouchBase(k); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	oldID, _, _ := r.BaseID("old")
+	if _, _, err := r.AllocateGuest("ns/g/1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkGuestCreated("ns/g/1", oldID); err != nil {
+		t.Fatal(err)
+	}
+	order, shared, err := r.EvictionOrder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "mid,new,old" || shared != 1 {
+		t.Errorf("order = %s shared = %d; want mid,new,old with 1 shared", got, shared)
+	}
+
+	// The guest goes: its base is no longer shared.
+	if err := r.Forget("ns/g/1"); err != nil {
+		t.Fatal(err)
+	}
+	order, shared, err = r.EvictionOrder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "old,mid,new" || shared != 0 {
+		t.Errorf("after the guest is released: order = %s shared = %d; want plain LRU", got, shared)
+	}
+}
+
+// A guest shares blocks with the base DEVICE it came from. Once that base is
+// evicted and the digest rebuilt, the new device shares nothing with the
+// older guest, and must not be held back on its account.
+func TestRegistry_ARebuiltBaseIsNotSharedByOlderGuests(t *testing.T) {
+	r := NewRegistry(filepath.Join(t.TempDir(), "registry.json"))
+	if _, _, err := r.AllocateBase("img"); err != nil {
+		t.Fatal(err)
+	}
+	oldID, _, _ := r.BaseID("img")
+	if _, _, err := r.AllocateGuest("ns/g/1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkGuestCreated("ns/g/1", oldID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ForgetBase("img"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.AllocateBase("img"); err != nil {
+		t.Fatal(err)
+	}
+	if _, shared, err := r.EvictionOrder(); err != nil || shared != 0 {
+		t.Errorf("shared = %d err = %v; the rebuilt base shares nothing with the older guest", shared, err)
+	}
+}
+
+// Guests created before the record existed have no entry; they are not
+// counted, which is how eviction behaved before, and the file round-trips.
+func TestRegistry_DerivedIsOptionalAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	legacy := `{"nextID":3,"bases":{"img":1},"guests":{"ns/g/1":2},"created":{"ns/g/1":true},"ready":{"img":true}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry(path)
+	if _, shared, err := r.EvictionOrder(); err != nil || shared != 0 {
+		t.Fatalf("legacy registry: shared = %d err = %v", shared, err)
+	}
+	if _, _, err := r.AllocateGuest("ns/g/2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkGuestCreated("ns/g/2", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, shared, err := NewRegistry(path).EvictionOrder(); err != nil || shared != 1 {
+		t.Errorf("after reload: shared = %d err = %v; want the recorded guest to hold its base", shared, err)
+	}
+}

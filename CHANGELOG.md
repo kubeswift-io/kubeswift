@@ -56,6 +56,18 @@ unaffected: they keep the directory they were captured into.
 
 ### Fixed
 
+- **Making room for a shared base evicted the bases running guests used.**
+  Eviction went strictly least recently used first, and could not tell a base
+  that guests on the node were snapshotted from from one nothing used. dm-thin
+  frees only blocks nothing else references, so deleting a base its guests
+  share frees almost nothing, yet still costs the next guest of that image a
+  full rebuild. An old base every running guest shared went first. The node
+  now records which base device each guest's disk was snapshotted from, and
+  eviction takes unshared bases first, keeping shared ones as the last resort;
+  a build that still does not fit says how many of the bases it tried were
+  shared. Guests created by an earlier version have no record and are not
+  counted.
+
 - **Scheduled local snapshots overwrote each other.** Every snapshot of a
   schedule copied the template's `hostPath`, so each capture emptied the
   directory holding the previous snapshot, and pruning the oldest removed the

@@ -118,6 +118,12 @@ recently used first — including one whose image has been deleted, which nothin
 can use again. The cost of evicting one is the time to write it again for the
 next guest of that image.
 
+Bases that guests on the node were snapshotted from go last. Such a base shares
+nearly all its blocks with those guests, so deleting it frees almost nothing
+while still costing the rebuild. The node records which base each guest came
+from (`derived` in the registry, by base device id) when it creates the guest's
+disk; guests an earlier version created have no record and are not counted.
+
 ## Reading the state
 
 On a labelled node:

@@ -123,9 +123,10 @@ func (x *Materializer) EnsureBaseNeeding(ctx context.Context, key string, sizeBy
 	return id, nil
 }
 
-// makeRoomFor reserves pool space for a base of sizeBytes, evicting others,
-// least recently used first, until it can, and returns an error only when it
-// cannot.
+// makeRoomFor reserves pool space for a base of sizeBytes, evicting others
+// until it can, and returns an error only when it cannot. Bases no running
+// guest was snapshotted from go first, least recently used first; shared
+// bases go last (Registry.EvictionOrder).
 //
 // Evicting a base is safe at any time: it is a convenience for creating the
 // NEXT guest, not a dependency of the ones already running — dm-thin
@@ -141,14 +142,17 @@ func (x *Materializer) makeRoomFor(ctx context.Context, sizeBytes uint64, keep s
 	free := func() (uint64, error) { return x.freeBytes(ctx) }
 	var keys []string
 	listed := false
-	others, evicted, next := 0, 0, 0
+	others, shared, evicted, next := 0, 0, 0, 0
 	for {
 		ok, available, err := x.Reg.Reserve(keep, sizeBytes, free)
 		if err != nil || ok {
 			return err
 		}
 		if !listed {
-			if keys, err = x.Reg.BasesByLeastRecentUse(); err != nil {
+			// Bases live guests share come last: deleting one frees almost
+			// nothing, since the guests still reference its blocks, and
+			// costs the next guest of that image a rebuild.
+			if keys, shared, err = x.Reg.EvictionOrder(); err != nil {
 				return err
 			}
 			for _, k := range keys {
@@ -163,9 +167,10 @@ func (x *Materializer) makeRoomFor(ctx context.Context, sizeBytes uint64, keep s
 		}
 		if next >= len(keys) {
 			return fmt.Errorf("the pool has %d bytes available (free, less what other base builds on this node have reserved) "+
-				"and this base needs %d; evicted %d of %d other bases and it still does not fit. "+
+				"and this base needs %d; evicted %d of %d other bases (%d of them shared by running guests, whose "+
+				"blocks those guests still hold) and it still does not fit. "+
 				"Give the pool a larger data device, or use a smaller image",
-				available, sizeBytes, evicted, others)
+				available, sizeBytes, evicted, others, shared)
 		}
 		gone, err := x.evictBase(ctx, keys[next])
 		next++
@@ -449,7 +454,7 @@ func (x *Materializer) EnsureGuest(ctx context.Context, baseKey, guestKey, devNa
 		}
 		err = x.M.SnapshotBase(ctx, baseID, id, devName, sectors)
 		if err == nil {
-			if err := x.Reg.MarkGuestCreated(guestKey); err != nil {
+			if err := x.Reg.MarkGuestCreated(guestKey, baseID); err != nil {
 				return "", err
 			}
 			return x.M.DevicePath(devName), nil
