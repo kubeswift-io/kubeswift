@@ -165,6 +165,37 @@ func TestMapPodToStatus_APendingLauncherIsNotRunning(t *testing.T) {
 	}
 }
 
+// A pod stays Pending while ANY container is still waiting, so a running
+// launcher next to a sidecar that has not started yet (the migration stunnel
+// server pulling its image) reads Pending. swiftletd reports GuestRunning=True
+// only once, so clearing it here left the guest not-running for good.
+func TestMapPodToStatus_PendingWithRunningLauncherKeepsRunState(t *testing.T) {
+	st := ranStatus("pod-1")
+	pending := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1"},
+		Spec:       corev1.PodSpec{NodeName: "worker-1"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: LauncherContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+				{Name: "stunnel", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}},
+			},
+		},
+	}
+	MapPodToStatus(pending, st)
+	if c := findCondition(st, "GuestRunning"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("GuestRunning = %+v; the launcher is running, only a sidecar is waiting", c)
+	}
+	if st.Network.PrimaryIP != "192.0.2.10" {
+		t.Errorf("primaryIP = %q; the VM still holds its address", st.Network.PrimaryIP)
+	}
+
+	// The launcher itself waiting is still "not running".
+	pending.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
+	MapPodToStatus(pending, st)
+	assertNotRunning(t, st, "GuestStarting")
+}
+
 // Clearing must be idempotent: setCondition stamps lastTransitionTime every
 // time, so a guest sitting Pending would otherwise have its status rewritten —
 // and claim a transition — on every reconcile.

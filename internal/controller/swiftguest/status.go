@@ -242,12 +242,20 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
 		SetPodScheduledCondition(status, pod, true, "")
 	case corev1.PodPending:
-		// A Pending pod has started no containers, so no VM is running behind
-		// it — whatever the last launcher reported. This catches the run state
-		// a launcher change alone does not: an upgrade can arrive with podRef
+		// A Pending pod whose launcher has not started has no VM behind it —
+		// whatever the last launcher reported. This catches the run state a
+		// launcher change alone does not: an upgrade can arrive with podRef
 		// already naming the current pod, leaving a guest stuck Pending on an
 		// unattachable volume reporting GuestRunning=True with an address.
-		ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
+		//
+		// Pending does NOT mean nothing started, though: the pod stays Pending
+		// while ANY container is still waiting, so a running launcher next to a
+		// sidecar that is still pulling or starting (the migration stunnel
+		// server) reads Pending too. swiftletd reports GuestRunning=True once,
+		// so clearing it then left the guest reading not-running for good.
+		if !launcherContainerRunning(pod) {
+			ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
+		}
 		unschedulable := findUnschedulableCondition(pod)
 		if unschedulable != nil {
 			status.Phase = swiftv1alpha1.SwiftGuestPhasePending
@@ -281,6 +289,17 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 			})
 		}
 	}
+}
+
+// launcherContainerRunning reports whether the pod's launcher (swiftletd)
+// container is currently running.
+func launcherContainerRunning(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == LauncherContainerName {
+			return cs.State.Running != nil
+		}
+	}
+	return false
 }
 
 // primaryUDNIPFromPod extracts the guest's UDN IP from the pod's OVN-Kubernetes

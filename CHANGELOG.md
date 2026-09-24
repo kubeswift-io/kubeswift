@@ -148,6 +148,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A running guest could be stuck reporting `GuestRunning=False`.** The
+  controller cleared a guest's run state whenever its launcher pod was
+  `Pending`, on the premise that a Pending pod has started nothing. But a pod
+  stays Pending while *any* container is still waiting, so a launcher already
+  running next to a sidecar that is still starting (the migration mTLS stunnel
+  server) read the same. swiftletd reports `GuestRunning=True` only once, so the
+  clear stuck: the guest read not-running with no address, and migration
+  Resuming, restores and pool rollouts waited on it until they timed out. The
+  run state is now cleared only when the launcher container itself is not
+  running.
+
 - **A warm GPU pool could free GPUs that were still in use.** The pool's slot
   GPU cleanup matched allocations by the bare `<pool>-slot-` name prefix, so it
   also freed the GPU of a standalone SwiftSandbox named like a slot and of every
