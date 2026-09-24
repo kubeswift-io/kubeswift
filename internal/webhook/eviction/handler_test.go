@@ -28,6 +28,11 @@ func guestPod(name, ns, guest, node string) *corev1.Pod {
 	}
 }
 
+func exitedPod(p *corev1.Pod, phase corev1.PodPhase) *corev1.Pod {
+	p.Status.Phase = phase
+	return p
+}
+
 func plainPod(name, ns, node string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -113,6 +118,28 @@ func TestHandle(t *testing.T) {
 			req:         evictReq(ns, "g-pod", false),
 			wantAllowed: false,
 			wantMarked:  "worker-2",
+		},
+		{
+			// A powered-off guest's launcher has exited: nothing to migrate,
+			// and denying it blocked the drain.
+			name: "exited launcher (Succeeded) allows without marking",
+			objects: []client.Object{
+				exitedPod(guestPod("g-pod", ns, "g", "worker-2"), corev1.PodSucceeded),
+				swiftGuest("g", ns, nil),
+			},
+			req:         evictReq(ns, "g-pod", false),
+			wantAllowed: true,
+			wantMarked:  "",
+		},
+		{
+			name: "exited launcher (Failed) allows without marking",
+			objects: []client.Object{
+				exitedPod(guestPod("g-pod", ns, "g", "worker-2"), corev1.PodFailed),
+				swiftGuest("g", ns, nil),
+			},
+			req:         evictReq(ns, "g-pod", false),
+			wantAllowed: true,
+			wantMarked:  "",
 		},
 		{
 			name: "dry-run denies but does not mark",

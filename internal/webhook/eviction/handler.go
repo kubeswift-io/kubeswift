@@ -76,6 +76,15 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	if guestName == "" {
 		return admission.Allowed("not a SwiftGuest launcher pod")
 	}
+	// A launcher that has exited runs no VM: there is nothing to migrate and
+	// nothing to protect (the apiserver ignores PDBs for terminal pods for the
+	// same reason). Denying it and marking the guest for migration blocked the
+	// drain on every powered-off guest -- the migration either timed out or
+	// booted the stopped guest on the target. (Not Pending: a launcher that is
+	// running reads Pending while a sidecar is still starting.)
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return admission.Allowed(fmt.Sprintf("launcher pod has exited (%s); no VM is running", pod.Status.Phase))
+	}
 
 	var guest swiftv1alpha1.SwiftGuest
 	if err := h.Client.Get(ctx, types.NamespacedName{Namespace: pod.Namespace, Name: guestName}, &guest); err != nil {

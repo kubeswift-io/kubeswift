@@ -367,3 +367,22 @@ func TestObserveMigration_InProgress_NoOp(t *testing.T) {
 		t.Errorf("in-progress migration: rely on the Owns watch, no explicit requeue; got %+v", res)
 	}
 }
+
+// A powered-off (or failed) guest has no VM to evacuate. Migrating it only
+// booted the stopped guest on the target, or waited out the timeout while the
+// drain stayed blocked. The marker is cleared and no migration is created.
+func TestReconcile_StoppedGuest_NoMigrationMarkerCleared(t *testing.T) {
+	for _, phase := range []swiftv1alpha1.SwiftGuestPhase{swiftv1alpha1.SwiftGuestPhaseStopped, swiftv1alpha1.SwiftGuestPhaseFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			stopped := func(g *swiftv1alpha1.SwiftGuest) { g.Status.Phase = phase }
+			r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2"), stopped), node("worker-2"), node("worker-1"), smallClass())
+			reconcileGuest(t, r, "g")
+			if migs := listMigs(t, c); len(migs) != 0 {
+				t.Errorf("a %s guest must not be migrated; got %d migration(s)", phase, len(migs))
+			}
+			if _, ok := getGuest(t, c, "g").Annotations[swiftv1alpha1.AnnotationDrainRequested]; ok {
+				t.Error("marker should be cleared: there is nothing to evacuate")
+			}
+		})
+	}
+}

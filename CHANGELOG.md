@@ -148,6 +148,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A powered-off guest blocked node drains.** The eviction webhook denied the
+  eviction of every SwiftGuest launcher and marked the guest for migration,
+  including a launcher that had already exited (a stopped or failed guest).
+  The drain then waited on a migration that either timed out or powered the
+  stopped guest on at the target. An exited launcher is now evicted normally
+  (it runs no VM), and the drain controller clears a drain marker on a
+  `Stopped`/`Failed` guest instead of migrating it.
+
 - **Deleting a guest or snapshot could hang in `Terminating` when the webhook
   was enabled.** The validating webhooks re-checked the whole spec on every
   update, including the controllers' finalizer removals. After the rules
