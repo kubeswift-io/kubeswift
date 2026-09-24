@@ -8,6 +8,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **GPU passthrough could take a host NIC or disk away from the node.**
+  `gpu-init` bound every non-bridge device in the GPU's IOMMU group to
+  vfio-pci. On a board without ACS that group can also hold another card, such
+  as the node's NIC or NVMe controller, which was then unbound from its host
+  driver. The node lost its network or disk, and the device was handed to the
+  guest. A peer is now bound only if it is another function of the same card,
+  another GPU allocated to the guest, or already on vfio-pci. Any other device
+  in the group makes `gpu-init` refuse before touching anything, naming the
+  device.
+
 - **Release signature checks accepted a signature from any branch.** The
   documented and CI `cosign verify` commands matched the signing workflow's
   identity with `…release-(stable|rc).yaml@.*`, so a signature produced by that

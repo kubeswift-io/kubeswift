@@ -3,9 +3,10 @@ set -euo pipefail
 
 # gpu-init.sh -- runs as an init container before network-init and swiftletd.
 # Binds GPU PCI devices to the vfio-pci driver so the VM can access them via
-# VFIO passthrough. Also binds all IOMMU group peer devices (e.g., NVIDIA HD
-# Audio controllers on consumer GPUs) since VFIO requires all devices in an
-# IOMMU group to be isolated. Optionally activates a Fabric Manager partition
+# VFIO passthrough. Also binds the GPU's IOMMU group peers (e.g., the NVIDIA HD
+# Audio function on consumer GPUs) since VFIO requires all devices in an IOMMU
+# group to be isolated -- but only peers that are part of the GPU; a group that
+# also holds a host device is refused. Optionally activates a Fabric Manager partition
 # for shared NVSwitch mode (Tier 2 HGX workloads).
 #
 # Required environment variables:
@@ -105,7 +106,8 @@ unbind_from_host() {
   echo "${addr}" > "${SYSFS_PCI}/devices/${addr}/driver/unbind" 2>/dev/null || true
 }
 
-# Bind the GPU and every non-bridge device in its IOMMU group to vfio-pci.
+# Bind the GPU and its non-bridge IOMMU-group peers to vfio-pci -- refusing a
+# group with a peer that belongs to the host rather than to this GPU.
 #
 # Uses the correct two-pass order: UNBIND all group devices from their host
 # drivers FIRST, then bind them all to vfio-pci. vfio-pci's viability check
@@ -146,6 +148,28 @@ process_iommu_group() {
     echo "WARNING: IOMMU group for ${gpu_addr} not enumerable; binding the GPU alone"
     devices=" ${gpu_addr}"
   fi
+
+  # Refuse, before touching anything, a group holding a device that is not
+  # part of this GPU. On a board without ACS the GPU's group can include
+  # another card's NIC or NVMe controller; binding it to vfio-pci takes it from
+  # the host (the node loses its network or disk). A peer may be bound only if
+  # it is another function of the same card (same bus:device), another GPU
+  # allocated to this guest, or already on vfio-pci.
+  local allocated=" ${GPU_PCI_ADDRESSES//,/ } "
+  for d in $devices; do
+    [ "$d" = "$gpu_addr" ] && continue
+    [ "${d%.*}" = "${gpu_addr%.*}" ] && continue
+    case "$allocated" in *" $d "*) continue ;; esac
+    local peer_driver
+    peer_driver=$(basename "$(readlink ${SYSFS_PCI}/devices/${d}/driver 2>/dev/null)" 2>/dev/null || echo "none")
+    [ "$peer_driver" = "vfio-pci" ] && continue
+    local peer_class
+    peer_class=$(cat "${SYSFS_PCI}/devices/${d}/class" 2>/dev/null || echo "unknown")
+    echo "ERROR: IOMMU group ${group_id} of GPU ${gpu_addr} also contains ${d} (class ${peer_class}, driver ${peer_driver}),"
+    echo "       which is not part of this GPU. Binding it to vfio-pci would take it from the host."
+    echo "       Enable ACS / move the GPU to a slot with its own IOMMU group, or exclude this GPU."
+    exit 1
+  done
 
   # Pass 1: unbind every group device from its host driver so the whole group
   # is isolatable.
