@@ -148,6 +148,18 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **The gateway UI froze on a member cluster after about an hour, with no
+  error.** A multi-cluster guest or migration stream ran one watch per member,
+  and when the apiserver ended a member's watch — its routine watch timeout, a
+  dropped connection, or a 410 once the resume point was compacted — that
+  member's watch just returned while the stream stayed open on the others. The
+  UI kept showing the member's last state indefinitely. Member watches now
+  re-establish themselves: a routine close resumes from the last resourceVersion
+  seen (with bookmarks), so nothing in the gap is lost; an expired
+  resourceVersion restarts from current state and reports a per-cluster error
+  (deletions inside the gap cannot be replayed); a transient start failure is
+  reported and retried with capped backoff.
+
 - **A live-migration cancel or timeout could destroy the only running copy of
   the VM.** The controller treated cutover step 1 (the `PodRefSwapped`
   condition) as the point of no return, but the real commit point is earlier:

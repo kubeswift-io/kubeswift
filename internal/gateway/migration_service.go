@@ -134,34 +134,29 @@ func (s *MigrationService) watchOne(ctx context.Context, cluster string, id Iden
 		return
 	}
 	res := dyn.Resource(swiftMigrationGVR)
-	var w watch.Interface
-	if namespace != "" {
-		w, err = res.Namespace(namespace).Watch(ctx, metav1.ListOptions{})
-	} else {
-		w, err = res.Watch(ctx, metav1.ListOptions{})
-	}
-	if err != nil {
-		s.sendErr(ctx, out, cluster, err)
-		return
-	}
-	defer w.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case e, ok := <-w.ResultChan():
-			if !ok {
-				return
+	// resilientWatch re-establishes the member watch when the apiserver ends
+	// it, so a member does not silently freeze in the UI (see its doc).
+	resilientWatch(ctx,
+		func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
+			if namespace != "" {
+				return res.Namespace(namespace).Watch(ctx, opts)
 			}
-			if ev := migrationWatchEventToProto(cluster, e); ev != nil {
-				select {
-				case out <- ev:
-				case <-ctx.Done():
-					return
-				}
+			return res.Watch(ctx, opts)
+		},
+		func(e watch.Event) bool {
+			ev := migrationWatchEventToProto(cluster, e)
+			if ev == nil {
+				return true
 			}
-		}
-	}
+			select {
+			case out <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		},
+		func(err error) { s.sendErr(ctx, out, cluster, err) },
+	)
 }
 
 func migrationWatchEventToProto(cluster string, e watch.Event) *kubeswiftv1.MigrationEvent {

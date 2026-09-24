@@ -151,29 +151,26 @@ func (s *GuestService) watchOne(ctx context.Context, cluster string, id Identity
 		sendClusterErr(ctx, out, cluster, err)
 		return
 	}
-	w, err := guestResource(dyn, namespace).Watch(ctx, metav1.ListOptions{})
-	if err != nil {
-		sendClusterErr(ctx, out, cluster, err)
-		return
-	}
-	defer w.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case e, ok := <-w.ResultChan():
-			if !ok {
-				return
+	// resilientWatch re-establishes the member watch when the apiserver ends
+	// it, so a member does not silently freeze in the UI (see its doc).
+	resilientWatch(ctx,
+		func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error) {
+			return guestResource(dyn, namespace).Watch(ctx, opts)
+		},
+		func(e watch.Event) bool {
+			ev := watchEventToProto(cluster, e)
+			if ev == nil {
+				return true
 			}
-			if ev := watchEventToProto(cluster, e); ev != nil {
-				select {
-				case out <- ev:
-				case <-ctx.Done():
-					return
-				}
+			select {
+			case out <- ev:
+				return true
+			case <-ctx.Done():
+				return false
 			}
-		}
-	}
+		},
+		func(err error) { sendClusterErr(ctx, out, cluster, err) },
+	)
 }
 
 // GetGuestDetail returns the flat guest in P0; P1 enriches it with the launcher
