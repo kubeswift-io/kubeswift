@@ -6,6 +6,27 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **A SwiftImage import could reach data outside the image it named.** The
+  import Job runs privileged (Linux images need a loop-mount to patch GRUB for
+  the serial console), and it processed the tenant-supplied disk two ways that
+  did not stay inside that disk. The GRUB patch mounted the image's partitions
+  and rewrote `grub.cfg` with `sed`/`mv`; a symlink planted in the image (say
+  `boot/grub/grub.cfg.tmp` → a host device, or `grub.cfg` itself → a host path)
+  redirected that write out of the image, because the mount followed symlinks.
+  And for a qcow2 source, `qemu-img convert` transparently follows a backing
+  file or external data file named in the header, so an image referencing a
+  host path or another tenant's file copied those bytes into the imported raw,
+  where the booted guest could read them. Anyone able to create a SwiftImage in
+  their own namespace could use either. The GRUB loop-mount now uses
+  `nosymfollow,nodev,nosuid,noexec`, so the kernel refuses to follow any symlink
+  on it (the patch of a real `grub.cfg` is unchanged; a redirected write fails
+  closed and is skipped), and the qcow2 path now refuses any image whose header
+  declares a backing or external data file before it converts. The launcher pod
+  remains a node-level trust boundary by design; this closes two paths that let
+  the *import* Job, not the launcher, act on data the operator never allow-listed.
+
 ### Fixed
 
 - **Live migrations hung in `Resuming` until their timeout** (#646,

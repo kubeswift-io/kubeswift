@@ -33,3 +33,55 @@ func TestImportScript_DoesNotInterpolateSourceURL(t *testing.T) {
 		}
 	}
 }
+
+// A qcow2 whose header names a backing file or an external data file must be
+// refused before `qemu-img convert` runs. convert transparently follows those
+// references, so without the guard it copies bytes from OUTSIDE the tenant image
+// (a host device, another tenant's file) into the output raw the guest boots.
+// This covers the http path (checks $SRC) and the oci path (checks $OUTPUT).
+func TestImportScript_RefusesQcow2BackingAndDataFile(t *testing.T) {
+	scripts := map[string]string{
+		"http": importScript("qcow2", "linux"),
+		"oci":  importScriptOCI("qcow2", "linux"),
+	}
+	for name, script := range scripts {
+		// The guard must run before the convert.
+		guard := strings.Index(script, "qemu-img info")
+		convert := strings.Index(script, "qemu-img convert")
+		if guard < 0 {
+			t.Errorf("%s: no qemu-img info safety check before convert", name)
+			continue
+		}
+		if convert >= 0 && guard > convert {
+			t.Errorf("%s: safety check runs after convert (guard=%d convert=%d)", name, guard, convert)
+		}
+		for _, key := range []string{`"backing-filename"`, `"full-backing-filename"`, `"data-file"`} {
+			if !strings.Contains(script, key) {
+				t.Errorf("%s: safety check does not reject %s", name, key)
+			}
+		}
+		if !strings.Contains(script, "exit 1") {
+			t.Errorf("%s: safety check does not fail the job", name)
+		}
+	}
+}
+
+// The Linux GRUB loop-mount must use nosymfollow so a symlink planted in the
+// tenant image (e.g. boot/grub/grub.cfg.tmp -> /dev/sda) cannot redirect the
+// in-place sed/mv writes to a path outside the image. nodev/nosuid/noexec
+// harden the mount further.
+func TestImportScript_GRUBMountRefusesSymlinkEscape(t *testing.T) {
+	script := grubPatchBlock("linux")
+	for _, opt := range []string{"nosymfollow", "nodev", "nosuid", "noexec"} {
+		if !strings.Contains(script, opt) {
+			t.Errorf("GRUB loop-mount missing hardening option %q", opt)
+		}
+	}
+	if strings.Contains(script, "mount -o loop,offset=") {
+		t.Error("GRUB loop-mount still uses the unhardened `loop,offset=` options")
+	}
+	// Windows has no GRUB patch and so no mount at all.
+	if win := grubPatchBlock("windows"); strings.Contains(win, "mount") {
+		t.Errorf("windows import must not loop-mount: %s", win)
+	}
+}

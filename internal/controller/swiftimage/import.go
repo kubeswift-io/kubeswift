@@ -43,13 +43,25 @@ const (
 // inside a root, privileged container.
 const importSourceURLEnv = "SOURCE_URL"
 
+// qcow2SafetyCheck returns a shell snippet that refuses a qcow2 whose header
+// references a backing file or an external data file. Without it, `qemu-img
+// convert` transparently follows those references and copies bytes from OUTSIDE
+// the tenant-supplied image — a host block device, or another tenant's file —
+// into the output raw, which the resulting guest could then read back. Since
+// the container has no jq, this matches on the JSON key text; the trailing
+// quote in each pattern keeps `"data-file"` from matching `"data-file-raw"`.
+// srcExpr is the already-quoted shell expression naming the qcow2 (e.g. `"$SRC"`).
+func qcow2SafetyCheck(srcExpr string) string {
+	return fmt.Sprintf("QCOW2_INFO=$(qemu-img info -f qcow2 --output=json %s)\ncase \"$QCOW2_INFO\" in *'\"backing-filename\"'*|*'\"full-backing-filename\"'*|*'\"data-file\"'*) echo 'refusing image: qcow2 header declares a backing file or external data file' >&2; exit 1 ;; esac\n", srcExpr)
+}
+
 func importScript(sourceFormat, osType string) string {
 	base := importVolumeMountPath
 	source := base + "/" + importSourceFile
 	output := base + "/" + importOutputFile
 	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o \"$SRC\" \"$%s\"\nqemu-img convert -f qcow2 -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, importSourceURLEnv, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\nSRC=%q\napt-get update -qq && apt-get install -y -qq curl qemu-utils util-linux >/dev/null\ncurl -fsSL -o \"$SRC\" \"$%s\"\n%sqemu-img convert -f qcow2 -O raw \"$SRC\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, source, importSourceURLEnv, qcow2SafetyCheck(`"$SRC"`), grubPatch)
 	}
 	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq curl util-linux >/dev/null\ncurl -fsSL -o \"$OUTPUT\" \"$%s\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, importSourceURLEnv, grubPatch)
 }
@@ -105,7 +117,13 @@ FALLBACK_OFFSETS="1048576 116391936 5242880 104857600 140509184 536870912 115972
 
 for offset in $GPT_OFFSETS $FALLBACK_OFFSETS; do
   [ -z "$offset" ] || [ "$offset" = "0" ] && continue
-  if mount -o loop,offset=$offset "$OUTPUT" /mnt/disk 2>/dev/null; then
+  # nosymfollow: the kernel refuses to follow ANY symlink on this mount, so a
+  # symlink planted in the tenant image (e.g. boot/grub/grub.cfg.tmp -> /dev/sda,
+  # or grub.cfg itself -> a host path) cannot redirect the sed/mv writes below
+  # to a target outside the image. nodev,nosuid,noexec harden the mount further.
+  # Requires Linux >= 5.10; on older kernels mount rejects the option and the
+  # offset is skipped, which fails closed (no patch, no escape).
+  if mount -o loop,nosymfollow,nodev,nosuid,noexec,offset=$offset "$OUTPUT" /mnt/disk 2>/dev/null; then
     patch_grub /mnt/disk
     umount /mnt/disk
   fi
@@ -124,7 +142,7 @@ func importScriptOCI(sourceFormat, osType string) string {
 	output := importVolumeMountPath + "/" + importOutputFile
 	grubPatch := grubPatchBlock(osType)
 	if sourceFormat == "qcow2" {
-		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq qemu-utils util-linux >/dev/null\nqemu-img convert -f qcow2 -O raw \"$OUTPUT\" \"$OUTPUT.tmp\"\nmv \"$OUTPUT.tmp\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
+		return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq qemu-utils util-linux >/dev/null\n%sqemu-img convert -f qcow2 -O raw \"$OUTPUT\" \"$OUTPUT.tmp\"\nmv \"$OUTPUT.tmp\" \"$OUTPUT\"%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, qcow2SafetyCheck(`"$OUTPUT"`), grubPatch)
 	}
 	return fmt.Sprintf("set -e\nOUTPUT=%q\napt-get update -qq && apt-get install -y -qq util-linux >/dev/null%s\nstat -c %%s \"$OUTPUT\" > \"$OUTPUT.size\"\necho \"Image size: $(cat $OUTPUT.size) bytes\"", output, grubPatch)
 }
