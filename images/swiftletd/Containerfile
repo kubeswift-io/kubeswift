@@ -4,7 +4,7 @@
 # us build both the Rust launcher (under rust/) and the small Go
 # snapshot-stager init-container helper (under cmd/snapshot-stager,
 # which depends on internal/snapshot/configjson) from the same image.
-FROM rust:1.98.0-bookworm AS builder
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS builder
 WORKDIR /build
 
 ARG VERSION=dev
@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # repo-root context. snapshot-stager imports
 # internal/snapshot/configjson — the source-of-truth for the narrow
 # config.json edits applied to a Tier B clone (see commits 12/13).
-FROM golang:1.27-bookworm AS go-builder
+FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS go-builder
 ARG VERSION=dev
 WORKDIR /go-build
 COPY go.mod go.sum ./
@@ -63,7 +63,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -o /out/kubeswift-guest-agent ./cmd/kubeswift-guest-agent
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"

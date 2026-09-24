@@ -49,7 +49,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup e2e-tests \
-	verify-e2e-scripts verify-kustomize-sync \
+	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
@@ -427,6 +427,12 @@ verify-dashboards:
 # without a full kernel build. Run in CI.
 verify-sandbox-config:
 	@./build/kernels/sandbox/verify-config.sh
+
+# Every Containerfile base image pinned as <image>:<tag>@sha256:<digest>, so a
+# build uses the base that was reviewed; Dependabot proposes new digests. Run
+# in CI.
+verify-base-image-pins:
+	@./hack/verify-base-image-pins.sh
 
 # Boot-smoke the generated Tier-2/3 HGX QEMU topology (pcie-root-port per
 # device, NUMA memory backends, SMP) against the SHIPPING QEMU in the swiftletd

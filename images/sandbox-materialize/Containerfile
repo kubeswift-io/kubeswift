@@ -1,7 +1,7 @@
 # Multi-stage build for sandbox-materialize (the SwiftSandbox rootfs init
 # container: OCI image -> node-local read-only ext4 / unpacked tree, keyed by
 # digest). See docs/design/swiftsandbox-design.md and cmd/sandbox-materialize.
-FROM golang:1.27-bookworm AS builder
+FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS builder
 WORKDIR /build
 
 ARG VERSION=dev
@@ -55,7 +55,7 @@ RUN cd /tmp \
 #   - e2fsprogs   -> mkfs.ext4 -d (populate the RO ext4 from the flattened tree)
 #   - tar         -> faithful rootfs extraction (ownership/mode/setuid/nodes)
 #   - ca-certificates -> TLS to the registry
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 LABEL org.opencontainers.image.version="${VERSION}"

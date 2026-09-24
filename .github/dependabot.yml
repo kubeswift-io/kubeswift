@@ -144,3 +144,11 @@ updates:
       - /images/kubeswift-dra-driver
     schedule: {interval: weekly}
     open-pull-requests-limit: 5
+    # The bases are pinned by digest (hack/verify-base-image-pins.sh), and a
+    # digest moves whenever upstream rebuilds a tag: debian:bookworm-slim alone
+    # is the base of six of these images. Ungrouped, one rebuild is a PR per
+    # directory, more than the limit above lets through, so the rest of the
+    # week's base updates would never be proposed.
+    groups:
+      base-images:
+        patterns: ["*"]

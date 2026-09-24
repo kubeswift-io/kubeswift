@@ -14,6 +14,7 @@ on:
       - 'api/**'
       - 'config/crd/**'
       - 'images/**'
+      - 'hack/verify-base-image-pins.sh'
       - 'rust/**'
       - 'go.mod'
       - 'go.sum'
@@ -35,6 +36,7 @@ on:
       - 'api/**'
       - 'config/crd/**'
       - 'images/**'
+      - 'hack/verify-base-image-pins.sh'
       - 'rust/**'
       - 'go.mod'
       - 'go.sum'
@@ -215,6 +217,19 @@ jobs:
       # at all. That shipped once and only surfaced on a live cluster; catch it per-PR.
       - name: Verify sandbox kernel config deps
         run: make verify-sandbox-config
+
+  base-image-pins:
+    name: Base image pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Every Containerfile FROM is <image>:<tag>@sha256:<digest>. A tag is
+      # whatever the upstream registry serves on the day of the build, and the
+      # release signs and attests that; swiftletd's base runs privileged on
+      # every node. Dependabot's docker ecosystem proposes new digests.
+      - name: Verify base images are digest-pinned
+        run: make verify-base-image-pins
 
   swiftletd-image:
     name: swiftletd image

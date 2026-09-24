@@ -43,6 +43,17 @@ unaffected: they keep the directory they were captured into.
   disallowed host path. One segment, not `<namespace>/<name>`: guests still
   running a v0.14.1 launcher accept only a single segment below the root.
 
+- **Base images were pinned by tag only.** Every published image was built
+  `FROM` a mutable tag (`debian:bookworm-slim`, `golang:1.27-bookworm`,
+  `rust:1.98.0-bookworm`, `alpine:3.24`, distroless), so each build used
+  whatever the upstream registry served that day, and the release then
+  signed and attested it. swiftletd's base runs privileged on every node. All
+  18 `FROM` lines are now `<image>:<tag>@sha256:<digest>`, and
+  `hack/verify-base-image-pins.sh` fails CI on one that is not. New digests
+  arrive through Dependabot's docker ecosystem, which updates tag and digest
+  together, grouped into one PR so a rebuilt `debian:bookworm-slim` (the base
+  of six images) is not six.
+
 ### Fixed
 
 - **Scheduled local snapshots overwrote each other.** Every snapshot of a
