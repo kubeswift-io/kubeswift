@@ -8,7 +8,7 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
-- **Live migrations hung in `Resuming` until their timeout** (#PRNUM,
+- **Live migrations hung in `Resuming` until their timeout** (#646,
   regression from #641 in v0.14.0). The cutover pointed the guest's
   `status.podRef` at the destination launcher by name but kept the source
   launcher's UID. Since #641 the guest controller reads a launcher whose UID
