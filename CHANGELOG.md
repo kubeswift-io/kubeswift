@@ -220,6 +220,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **The one-live-migration-per-source-node admission check ignored `mode:
+  auto` peers.** It compared `spec.mode` only, so a migration created as `auto`
+  (the default for `swiftctl` and node drain) that had gone live was never
+  counted, and an explicit live migration from the same node was admitted
+  alongside it. Peers are now compared by the mode they resolved to. An `auto`
+  migration is still not checked when it is admitted, since its mode is not
+  known yet.
+
 - **A native GPU could be allocated on a node its workload could never run
   on.** The allocator took the first SwiftGPUNode with enough free GPUs. It did
   not check `vfioReady` (which the API docs said it did) or the discovery

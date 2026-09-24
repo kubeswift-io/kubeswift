@@ -525,6 +525,11 @@ func (v *Validator) validateClusterState(ctx context.Context, mig *migrationv1al
 	// Phase 1 offline migrations are exempt — they don't conflict with
 	// live mode (different state surfaces) and the per-source-guest
 	// annotation conflict check in Preparing is the floor for offline.
+	//
+	// A mode=auto migration is not checked here: whether it goes live is
+	// decided later, by the controller. Once it has, it counts against
+	// its source node for later explicit-live admissions (peers are
+	// compared by their resolved mode).
 	if mig.Spec.Mode == migrationv1alpha1.SwiftMigrationModeLive && sourceNode != "" {
 		if err := v.checkPerSourceNodeConcurrency(ctx, mig, sourceNode); err != nil {
 			return nil, err
@@ -626,8 +631,15 @@ func (v *Validator) checkPerSourceNodeConcurrency(
 			continue
 		}
 		// Only live mode conflicts with live mode. Phase 1 offline
-		// migrations don't share state with live mode.
-		if other.Spec.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		// migrations don't share state with live mode. A peer's mode is
+		// the one it resolved to (status.mode) once it has one: mode=auto,
+		// the default for swiftctl and drain, is live from then on, and
+		// an auto peer that resolved offline does not count.
+		otherMode := other.Status.Mode
+		if otherMode == "" {
+			otherMode = other.Spec.Mode
+		}
+		if otherMode != migrationv1alpha1.SwiftMigrationModeLive {
 			continue
 		}
 		// Skip terminal-phase peers.
