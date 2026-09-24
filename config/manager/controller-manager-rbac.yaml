@@ -1,3 +1,5 @@
+# GENERATED from charts/kubeswift/templates/controller-manager/rbac.yaml by hack/sync-kustomize.sh
+# (controller-manager and launcher reporter RBAC). Edit the chart template and run make generate.
 # ClusterRole for controller-manager: CRD reconciliation, Pods, ConfigMaps, PVCs, etc.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -10,18 +12,22 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests", "swiftguests/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguestclasses"]
+    verbs: ["get", "list", "watch"]
   # SwiftGuestPool
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguestpools", "swiftguestpools/status", "swiftguestpools/scale"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["swift.kubeswift.io"]
-    resources: ["swiftguestclasses"]
-    verbs: ["get", "list", "watch"]
   # SwiftImage
   - apiGroups: ["image.kubeswift.io"]
     resources: ["swiftimages", "swiftimages/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftSeedProfile
+  # SwiftKernel
+  - apiGroups: ["kernel.kubeswift.io"]
+    resources: ["swiftkernels", "swiftkernels/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["seed.kubeswift.io"]
     resources: ["swiftseedprofiles"]
     verbs: ["get", "list", "watch"]
@@ -37,96 +43,18 @@ rules:
     resources: ["ipamclaims"]
     verbs: ["get", "list", "watch", "create"]
   # Namespaces — read-only, to detect the OVN-Kubernetes primary-UDN label
-  # (k8s.ovn.org/primary-user-defined-network) and decide whether a guest rides
-  # its namespace primary UDN (Model A). list,watch alongside get because the
-  # controller-runtime cached client opens a Namespace informer on Get (W7/W8).
+  # (Model A: guest rides its namespace primary UDN). list,watch alongside get —
+  # the cached client opens a Namespace informer (W7/W8).
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch"]
-  # SwiftKernel
-  - apiGroups: ["kernel.kubeswift.io"]
-    resources: ["swiftkernels", "swiftkernels/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # SwiftGPUProfile
-  - apiGroups: ["gpu.kubeswift.io"]
-    resources: ["swiftgpuprofiles"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # SwiftGPUNode — discovery DaemonSet and controller both write status
-  - apiGroups: ["gpu.kubeswift.io"]
-    resources: ["swiftgpunodes"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["gpu.kubeswift.io"]
-    resources: ["swiftgpunodes/status"]
-    verbs: ["get", "update", "patch"]
-  # DRA (resource.k8s.io) — the DRA GPU allocation backend reads ResourceClaims
-  # back to discover the scheduler/driver-allocated device, and may own a
-  # per-guest ResourceClaim. Inert unless a guest uses spec.gpuResourceClaim.
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceclaims", "resourceclaimtemplates"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  - apiGroups: ["resource.k8s.io"]
-    resources: ["resourceclaims/status"]
-    verbs: ["get"]
-  # SwiftSnapshot / SwiftRestore (snapshot.kubeswift.io)
-  - apiGroups: ["snapshot.kubeswift.io"]
-    resources: ["swiftsnapshots", "swiftsnapshots/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["snapshot.kubeswift.io"]
-    resources: ["swiftrestores", "swiftrestores/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["snapshot.kubeswift.io"]
-    resources: ["swiftsnapshotschedules", "swiftsnapshotschedules/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # SwiftMigration (migration.kubeswift.io). Status patches go through
-  # the /status subresource. The controller patches SwiftGuest spec
-  # fields (runPolicy, nodeName) using the existing
-  # swift.kubeswift.io/swiftguests grant; no additional grant needed
-  # there. VolumeAttachment list (storage.k8s.io) is added below for
-  # the Preparing phase's dual-poll.
-  - apiGroups: ["migration.kubeswift.io"]
-    resources: ["swiftmigrations", "swiftmigrations/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # SwiftSandbox (sandbox.kubeswift.io). Owns launcher pods + intent ConfigMaps
-  # (granted via the core "" group above); status via the /status subresource.
-  - apiGroups: ["sandbox.kubeswift.io"]
-    resources: ["swiftsandboxes", "swiftsandboxes/status", "swiftsandboxpools", "swiftsandboxpools/status"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # snapshot.storage.k8s.io VolumeSnapshots — owned by SwiftSnapshot/SwiftImage,
-  # read by SwiftRestore. The CSI external-snapshotter owns VolumeSnapshotContent
-  # and VolumeSnapshotClass; the controller-manager only needs read for class.
-  - apiGroups: ["snapshot.storage.k8s.io"]
-    resources: ["volumesnapshots"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["snapshot.storage.k8s.io"]
-    resources: ["volumesnapshotclasses"]
-    verbs: ["get", "list", "watch"]
-  # snapshot.storage.k8s.io VolumeSnapshotContents — get,patch only.
-  # The CSI external-snapshotter owns VSC creation/deletion (the
-  # controller never creates or deletes VSCs). The SwiftImage
-  # controller patches the
-  # snapshot.storage.kubernetes.io/allow-volume-mode-change annotation
-  # on the cloneSeed VSC after the snapshotter binds it (W9.x / issue
-  # #37) so RWX+Block guests can clone from a Filesystem-mode source
-  # snapshot. Without these verbs the patch fails 403 and snapshot+
-  # Block guests never reach Running.
-  #
-  # list,watch are required by controller-runtime's cached client (the
-  # informer cache opens a watch on every GETable resource — same
-  # pattern as W7 rolebindings, W8 storageclasses).
-  - apiGroups: ["snapshot.storage.k8s.io"]
-    resources: ["volumesnapshotcontents"]
-    verbs: ["get", "list", "watch", "patch"]
   # Core resources
   - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["pods", "pods/status", "pods/log"]
+    resources: ["pods", "pods/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -139,16 +67,19 @@ rules:
   # poddisruptionbudgets — Phase 4 drain integration: the SwiftGuest
   # controller creates a per-guest maxUnavailable:0 PDB (the hard floor that
   # protects VMs from drain even when the eviction webhook is down). list,watch
-  # alongside get because the controller-runtime cached client opens an
-  # informer on every GET-ed resource (the W7/W8 lesson).
+  # alongside get because the cached client opens an informer on GET (W7/W8).
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # secrets — get,list,watch for general reads; create,update added for
-  # the Phase 3c live-migration mTLS path (--migration-mtls-enabled): the
-  # migrationcert controller copies a node's cert-manager-issued identity
-  # Secret into guest namespaces (distribution, not issuance). The verbs
-  # are dormant when mTLS is disabled (the reconciler is not registered).
+  # secrets — get,list,watch for general reads. create,update have two
+  # consumers:
+  #   1. the rendered cloud-init seed, which is a Secret rather than a
+  #      ConfigMap (user-data carries SSH keys, passwords and join tokens,
+  #      and a seed profile can source it from a Secret);
+  #   2. the live-migration mTLS path (migration.mtls.enabled): the
+  #      migrationcert controller copies a node's cert-manager-issued
+  #      identity Secret into guest namespaces (distribution, not issuance),
+  #      and is not registered at all when mTLS is disabled.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update"]
@@ -158,11 +89,84 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch"]
+  # Leader election (controller-runtime uses coordination.k8s.io/leases)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "get", "update", "patch", "list", "watch"]
+  # SwiftGPUProfile
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpuprofiles"]
+    verbs: ["get", "list", "watch"]
+  # SwiftGPUNode — controller writes allocation fields, discovery writes hardware info
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["gpu.kubeswift.io"]
+    resources: ["swiftgpunodes/status"]
+    verbs: ["get", "update", "patch"]
+  # DRA (resource.k8s.io) — the DRA GPU allocation backend reads ResourceClaims
+  # back to discover the allocated device. Inert unless a guest uses
+  # spec.gpuResourceClaim.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims", "resourceclaimtemplates"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/status"]
+    verbs: ["get"]
+  # Nodes — required for SwiftKernel per-node pull scheduling
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # SwiftSnapshot / SwiftRestore
+  - apiGroups: ["snapshot.kubeswift.io"]
+    resources: ["swiftsnapshots", "swiftsnapshots/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.kubeswift.io"]
+    resources: ["swiftrestores", "swiftrestores/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.kubeswift.io"]
+    resources: ["swiftsnapshotschedules", "swiftsnapshotschedules/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # snapshot.storage.k8s.io VolumeSnapshots — owned by SwiftSnapshot/SwiftImage,
+  # read by SwiftRestore. The CSI external-snapshotter owns
+  # VolumeSnapshotContent and VolumeSnapshotClass; the controller-manager
+  # only needs read access for class.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  # snapshot.storage.k8s.io VolumeSnapshotContents — get,patch only.
+  # The CSI external-snapshotter owns VSC creation/deletion. The
+  # SwiftImage controller patches the
+  # snapshot.storage.kubernetes.io/allow-volume-mode-change annotation
+  # on the cloneSeed VSC after binding (W9.x / issue #37). list,watch
+  # required by controller-runtime's cached client.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "patch"]
+  # SwiftMigration (migration.kubeswift.io). Phase 1 controller patches
+  # SwiftGuest spec fields (runPolicy + nodeName) using the existing
+  # swift.kubeswift.io/swiftguests grant; no additional grant needed
+  # there.
+  - apiGroups: ["migration.kubeswift.io"]
+    resources: ["swiftmigrations", "swiftmigrations/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftSandbox (sandbox.kubeswift.io). Owns launcher pods + intent ConfigMaps
+  # (granted via the core "" group); status via the /status subresource.
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes", "swiftsandboxes/status", "swiftsandboxpools", "swiftsandboxpools/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # storage.k8s.io VolumeAttachment — read-only. The SwiftMigration
-  # controller's Preparing phase polls VolumeAttachments to verify the
-  # source-node CSI ControllerUnpublishVolume has completed before
-  # advancing to StopAndCopy (cross-node attach gate; without this
-  # the destination pod hits Multi-Attach errors on RWO storage).
+  # controller's Preparing phase polls VolumeAttachments to verify
+  # the source-node CSI ControllerUnpublishVolume has completed
+  # before advancing to StopAndCopy (cross-node attach gate; without
+  # this the destination pod hits Multi-Attach errors on RWO storage).
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
     verbs: ["get", "list", "watch"]
@@ -172,34 +176,18 @@ rules:
   # list+watch are required because controller-runtime's cached client
   # opens an informer on every GETable resource — same pattern as W7
   # for rolebindings; without list+watch the informer cache fails to
-  # sync ("Failed to watch *v1.StorageClass" loop) and every reconcile
-  # that touches the cached client blocks indefinitely. PR #32 W8
-  # follow-up.
+  # sync and every reconcile that touches the cached client blocks
+  # indefinitely. PR #32 W8 follow-up.
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
-  # Leader election (controller-runtime uses coordination.k8s.io/leases)
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["create", "get", "update", "patch", "list", "watch"]
   # rbac.authorization.k8s.io RoleBindings — the SwiftGuest controller
   # creates a per-namespace RoleBinding that binds the
   # `kubeswift-swiftletd-reporter` ClusterRole to the workload
-  # namespace's `default` ServiceAccount. This replaces the prior
+  # namespace's `default` ServiceAccount. Replaces the prior
   # operator-applied RoleBinding pattern (snapshot walkthrough finding
-  # F2 + Phase 2 walkthrough finding W3). Per-call permissions:
-  #   - get      — to detect whether the binding already exists (idempotent)
-  #   - create   — to create it on first SwiftGuest reconcile in a namespace
-  #   - list,watch — controller-runtime's default cached client requires
-  #                  these to populate the informer cache for RoleBinding;
-  #                  without them, Get returns "Failed to watch" errors
-  #                  and the cache never syncs (Phase 2 walkthrough
-  #                  W3 follow-up — the original PR #30 grant of just
-  #                  get,create blocked Reconcile because the cache
-  #                  layer couldn't initialise).
-  # No update/delete — the RoleBinding is owned by the namespace
-  # lifecycle, not by individual SwiftGuests; deleting all SwiftGuests
-  # in a namespace doesn't remove the binding.
+  # F2 + Phase 2 walkthrough finding W3). list+watch are required by
+  # controller-runtime's cached client (Phase 2 W3 follow-up).
   # core ServiceAccounts — the controller creates the per-namespace launcher
   # SAs (kubeswift-launcher / kubeswift-sandbox-launcher) so a launcher pod no
   # longer runs as the namespace `default` SA (#443). list+watch are REQUIRED,
@@ -222,10 +210,10 @@ rules:
   # grants more than the creator holds, and the security review removed
   # `escalate` from this ClusterRole on purpose. That constraint is satisfied
   # WITHOUT it because the controller already holds everything the scoped Role
-  # grants — pods get/patch and swiftguests/status get/patch. If a future rule
-  # widens the scoped Role beyond what the controller holds, Role creation
-  # starts failing with a 403 rather than silently escalating, which is the
-  # correct outcome.
+  # grants — pods get/patch and swiftguests/status get/patch, both above. If a
+  # future rule widens the scoped Role beyond what the controller itself holds,
+  # Role creation will start failing with a 403 rather than silently escalating,
+  # and that is the correct outcome.
   #
   # list+watch are REQUIRED, not optional: controller-runtime's cached client
   # opens an informer per GETable type and blocks indefinitely without them —
@@ -234,14 +222,14 @@ rules:
     resources: ["roles"]
     verbs: ["get", "list", "watch", "create", "update"]
   # cert-manager.io Certificates — the Phase 3c migrationcert controller
-  # (--migration-mtls-enabled) creates one per-node leaf Certificate
+  # (migration.mtls.enabled) creates one per-node leaf Certificate
   # (SAN=nodeName, Option B) and deletes stale ones. list+watch are
   # required by controller-runtime's cached client (same informer pattern
   # as W7/W8 — without them the cache fails to sync). cert-manager must be
   # installed when mTLS is enabled; when disabled the reconciler is not
   # registered, so this grant is dormant. The CA Issuer + CA Certificate
-  # are Helm/overlay-managed (config/overlays/migration-mtls/issuer.yaml),
-  # not controller-created, so no issuers/clusterissuers grant is needed.
+  # are Helm-managed (templates/migration/issuer.yaml), not controller-
+  # created, so no issuers/clusterissuers grant is needed here.
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list", "watch", "create", "delete"]
@@ -265,8 +253,8 @@ subjects:
 # own pod's annotations and patch the SwiftGuest's /status subresource.
 # Bound per workload namespace via a RoleBinding the SwiftGuest
 # controller creates on Reconcile (see internal/controller/swiftguest/rbac.go).
-# See config/rbac/swiftletd-role.yaml for the operator-facing comment
-# and history.
+# Replaces the prior per-namespace Role + manually-applied RoleBinding
+# pattern (snapshot walkthrough finding F2 + Phase 2 walkthrough finding W3).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -276,7 +264,24 @@ metadata:
 rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests/status"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "patch", "update"]
+    verbs: ["get", "patch"]
+---
+# The SANDBOX launcher's role. Strictly smaller than the guest reporter: no
+# swiftguests/status. A sandbox sets KUBESWIFT_REPORT_GUEST_CR=false and never
+# patches a SwiftGuest, and it is the workload class that runs untrusted code —
+# granting it status:patch would let an escaped sandbox forge GuestRunning or
+# Failed on any SwiftGuest in the namespace, which the controller state machine
+# and the drain path both consume. (#443)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-sandbox-reporter
+  labels:
+    app.kubernetes.io/name: kubeswift
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "patch"]

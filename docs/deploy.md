@@ -118,7 +118,16 @@ make deploy
 This applies:
 
 1. CRDs (`config/crd`)
-2. Namespace, controller-manager, swiftletd DaemonSet (`config/default`)
+2. Namespace, controller-manager and its RBAC, the launcher reporter roles, and
+   the launcher-ServiceAccount admission gate (`config/default`)
+
+The controller RBAC (`config/manager/controller-manager-rbac.yaml`) and the
+admission gate (`config/admission/`) are generated from the Helm chart by
+`make generate` (`hack/sync-kustomize.sh`), so both install paths grant the same
+permissions. The admission gate is a ValidatingAdmissionPolicy, which needs
+Kubernetes 1.30 or later. On an older cluster, remove `../admission` from
+`config/default/kustomization.yaml` and read `docs/security-audit.md` for
+what that leaves open.
 
 ### Local clusters (kind, minikube)
 
@@ -143,11 +152,11 @@ This deletes deployment resources first, then CRDs.
 
 ## Post-deploy: SwiftGuest workloads
 
-After deploy, create SwiftGuests in a namespace. **Apply swiftletd RBAC in that namespace first:**
-
-```bash
-kubectl apply -k config/rbac -n <namespace>
-```
+After deploy, create SwiftGuests in a namespace. The launcher's RBAC needs no
+per-namespace step: `config/default` installs the reporter ClusterRoles, and the
+controller creates each namespace's launcher ServiceAccount and RoleBinding.
+(`kubectl apply -k config/rbac`, which older instructions used, applies the
+same roles again and is harmless.)
 
 Then create a SwiftGuest (see `config/samples/`). The smoke test (`make smoke-test`) expects RBAC to be applied in the target namespace.
 
@@ -203,4 +212,4 @@ kubectl apply -k config/default
 - **Minimal install**: No admission webhooks (ValidatingWebhookConfiguration, MutatingWebhookConfiguration). The controller-manager runs webhooks in-process but the API server does not call them; create/update succeeds without admission.
 - **controller-manager**: Runs SwiftImage and SwiftGuest controllers.
 - **swiftletd DaemonSet**: Runs swiftletd on each node. The SwiftGuest controller also creates pods with swiftletd as the launcher container.
-- **swiftletd RBAC**: Apply `config/rbac` in each namespace where SwiftGuests run so swiftletd can patch SwiftGuest status.
+- **swiftletd RBAC**: installed by `config/default`; the controller binds it in each namespace where SwiftGuests run.

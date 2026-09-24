@@ -19,9 +19,22 @@ spec:
         app.kubernetes.io/component: controller-manager
     spec:
       serviceAccountName: controller-manager
+      # Same hardened context as the Helm chart: the controller-manager is a
+      # plain Go binary on distroless/static-debian12:nonroot and needs no host
+      # access. (The launcher pods are privileged, deliberately and separately.)
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: controller-manager
           image: ghcr.io/kubeswift-io/kubeswift/controller-manager:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           args:
             - --leader-elect
             - --webhook-enabled=false

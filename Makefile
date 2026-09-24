@@ -49,7 +49,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
 	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup e2e-tests \
-	verify-e2e-scripts \
+	verify-e2e-scripts verify-kustomize-sync \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
 help:
@@ -195,9 +195,15 @@ generate:
 	@# new CRDs (the bug that produced the Phase 1 cluster gap).
 	cp config/crd/bases/*.yaml charts/kubeswift/crds/
 	./hack/verify-crd-sync.sh
+	@# The kustomize install's RBAC and launcher-SA gate are rendered from the
+	@# chart so the two installs cannot drift apart.
+	./hack/sync-kustomize.sh
 
 verify-crd-sync:
 	./hack/verify-crd-sync.sh
+
+verify-kustomize-sync:
+	./hack/verify-kustomize-sync.sh
 
 verify-render-coverage:
 	./hack/verify-render-coverage.sh

@@ -11,7 +11,7 @@ Use this path for **kind** or **minikube**: build images locally, load them into
 
 ## Prerequisites
 
-- kind or minikube (Kubernetes 1.28+)
+- kind or minikube (Kubernetes 1.30+: the install includes a ValidatingAdmissionPolicy. On 1.28 or 1.29, remove `../admission` from `config/default/kustomization.yaml`)
 - `kubectl` configured
 - Docker (or compatible)
 - Worker nodes with KVM; run [preflight](../operator/worker-node-preflight.md) before smoke test

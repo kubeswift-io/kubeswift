@@ -8,6 +8,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **The kustomize install (`make deploy`, the local-cluster quickstart, e2e)
+  lagged the Helm chart's security hardening.** Its controller ClusterRole
+  still granted what the chart had removed (writes to `swiftgpuprofiles`,
+  create/delete on `swiftgpunodes`, write verbs on `pods/log`). Its launcher
+  reporter role carried extra `update` verbs. It never installed the sandbox
+  reporter role or the launcher-ServiceAccount admission gate, and the
+  controller Deployment had no securityContext. The controller RBAC and the
+  admission gate are now generated from the chart templates by `make
+  generate` (`hack/sync-kustomize.sh`), and CI fails if they drift. The
+  Deployment gets the chart's non-root, read-only, no-capabilities context.
+  `config/default` now includes a ValidatingAdmissionPolicy, which needs
+  Kubernetes 1.30+.
+
 - **swiftletd wiped whatever directory a snapshot capture named.** Before a
   capture, swiftletd empties the destination directory, and it took that
   path from the launcher pod's `snapshot-action-args` annotation without

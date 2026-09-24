@@ -117,7 +117,10 @@ jobs:
         run: |
           # charts/kubeswift/crds is what an operator installs (make generate
           # copies it from config/crd/bases); an unchecked stale copy ships.
-          if ! git diff --exit-code config/crd/bases/ charts/kubeswift/crds/ api/; then
+          # The kustomize RBAC and admission gate are rendered from the chart
+          # (hack/sync-kustomize.sh) for the same reason.
+          if ! git diff --exit-code config/crd/bases/ charts/kubeswift/crds/ api/ \
+              config/manager/controller-manager-rbac.yaml config/admission/; then
             echo "Generated code is out of date. Run: make generate"
             exit 1
           fi
