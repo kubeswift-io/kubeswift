@@ -187,7 +187,50 @@ pub struct FsMount {
     pub socket: String,
 }
 
+/// Whether `v` can sit in a Cloud Hypervisor `key=value,key=value` option
+/// string as a single value. A comma (or `=`, brackets, whitespace) in a value
+/// would start options of its author's choosing -- a vhost-user socket of
+/// "/x,path=/dev/sda" attaches the node's disk to the guest.
+fn ch_option_value_ok(v: &str) -> bool {
+    !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+}
+
 impl VmConfig {
+    /// Rejects spec-derived values that would split or extend the Cloud
+    /// Hypervisor option strings `to_args` builds. The controller validates
+    /// these too; this is the last check before they reach CH.
+    pub fn validate_option_values(&self) -> Result<(), String> {
+        let check = |what: &str, v: &str| {
+            if ch_option_value_ok(v) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{} {:?} would be read by cloud-hypervisor as extra device options",
+                    what, v
+                ))
+            }
+        };
+        for nic in &self.nics {
+            if let Some(ref s) = nic.vhost_user_socket {
+                check("vhost-user net socket", s)?;
+            }
+        }
+        for fs in &self.fs_mounts {
+            check("virtiofs tag", &fs.tag)?;
+            check("virtiofs socket", &fs.socket)?;
+        }
+        for s in &self.vhost_user_blk_sockets {
+            check("vhost-user-blk socket", s)?;
+        }
+        for d in &self.generic_vhost_user {
+            check("vhost-user device type", &d.device_type)?;
+            check("vhost-user device socket", &d.socket)?;
+        }
+        Ok(())
+    }
+
     /// Returns the API socket path. Used by spawn paths to clean up
     /// stale sockets before invoking CH (W2 walkthrough finding).
     pub fn api_socket(&self) -> &str {
@@ -482,6 +525,31 @@ impl VmConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A comma in a spec-derived value used to reach CH verbatim: a vhost-user
+    // socket of "/srv/vm/x,path=/dev/sda" became `--disk
+    // vhost_user=on,socket=/srv/vm/x,path=/dev/sda` and attached the host disk.
+    #[test]
+    fn option_values_that_would_inject_options_are_refused() {
+        let mut c = make_disk_boot_config();
+        c.vhost_user_blk_sockets = vec!["/srv/vm/x,path=/dev/sda".to_string()];
+        assert!(c.validate_option_values().is_err());
+
+        let mut c = make_disk_boot_config();
+        c.fs_mounts = vec![FsMount {
+            tag: "t,socket=/run/other".to_string(),
+            socket: "/run/ks/fs.sock".to_string(),
+        }];
+        assert!(c.validate_option_values().is_err());
+
+        let mut c = make_disk_boot_config();
+        c.vhost_user_blk_sockets = vec!["/var/run/spdk/vhost.0".to_string()];
+        c.fs_mounts = vec![FsMount {
+            tag: "data_1".to_string(),
+            socket: "/run/ks/virtiofsd-data_1.sock".to_string(),
+        }];
+        assert!(c.validate_option_values().is_ok());
+    }
 
     fn make_disk_boot_config() -> VmConfig {
         VmConfig {

@@ -240,3 +240,12 @@ func TestReconcile_DisallowedHostPathLeavesARunningLauncherAlone(t *testing.T) {
 		t.Errorf("Resolved = %s %q; want False naming the field", cond.Status, cond.Message)
 	}
 }
+
+// The controller enforces it even with the webhook off (the default).
+func TestCheckHostPaths_RejectsCHOptionInjection(t *testing.T) {
+	g := kernelGuest()
+	g.Spec.VhostUserDevices = []swiftv1alpha1.VhostUserDevice{{Name: "d", Type: "blk", Socket: "/srv/vm/x,path=/dev/sda"}}
+	if err := checkHostPaths(g, []string{"/srv/vm"}); err == nil {
+		t.Fatal("a socket that injects a CH --disk path= option passed the controller's check")
+	}
+}

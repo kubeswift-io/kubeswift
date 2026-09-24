@@ -8,6 +8,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A vhost-user socket path could attach a host disk to the guest.** Cloud
+  Hypervisor takes each device as one comma-separated `key=value` string, and
+  swiftletd wrote the guest's vhost-user socket paths, virtiofs tags and
+  generic-device `virtioId` into those strings unescaped. A socket such as
+  `/srv/vm/x,path=/dev/sda` passes the host-path allowlist, yet made CH attach
+  the node's `/dev/sda` to the guest. These values are now restricted to a safe
+  character set by the SwiftGuest controller (the webhook is optional), the
+  webhook and, as a last check before launch, swiftletd.
+
 - **A pooled sandbox could run with the pool's network access and without
   its image verification.** Checking a SwiftSandbox out of a warm pool ignored
   the sandbox's own `network.mode`, `verifyKeySecretRef` and `image`. A

@@ -56,6 +56,11 @@ func validateRestoreSnapshotPath(path string) error {
 // again as a backstop.
 func checkHostPaths(guest *swiftv1alpha1.SwiftGuest, allowed []string) error {
 	spec := &guest.Spec
+	// Values written into Cloud Hypervisor's comma-separated device options:
+	// a comma in one adds options of its author's choosing (a host disk).
+	if err := hostpath.ValidateCHOptionValues(spec); err != nil {
+		return err
+	}
 	for i := range spec.Filesystems {
 		fs := &spec.Filesystems[i]
 		if fs.Source.HostPath == nil {

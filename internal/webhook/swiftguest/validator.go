@@ -66,6 +66,9 @@ func (v *Validator) ValidateDelete(ctx context.Context, obj runtime.Object) (adm
 
 func validateSwiftGuest(g *swiftv1alpha1.SwiftGuest, allowedHostPaths []string) error {
 	spec := &g.Spec
+	if err := hostpath.ValidateCHOptionValues(spec); err != nil {
+		return err
+	}
 	hasImage := spec.ImageRef != nil && spec.ImageRef.Name != ""
 	hasKernel := spec.KernelRef != nil && spec.KernelRef.Name != ""
 	hasClone := spec.CloneFromSnapshot != nil
