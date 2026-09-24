@@ -102,6 +102,22 @@ func (r *SwiftMigrationReconciler) deletionCommitted(
 	return guest.Spec.NodeName == mig.Status.DestinationNode, nil
 }
 
+// finishCutoverBeforeDeletion reports whether a deleted migration must keep
+// running its phases rather than be cancelled: a live migration past the
+// commit point whose cutover has not finished (a non-terminal phase). Its
+// finalizer holds the deletion until it reaches a terminal phase, and
+// handleCancellation then only finalizes.
+func (r *SwiftMigrationReconciler) finishCutoverBeforeDeletion(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+) (bool, error) {
+	if !hasFinalizer(mig) || isTerminalPhase(mig.Status.Phase) ||
+		mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		return false, nil
+	}
+	return r.liveCommitted(ctx, mig)
+}
+
 // timeoutExceeded reports whether spec.timeout has run out since StartedAt and
 // the timeout strategy says to act on it. timeoutStrategy: ignore turns the
 // backstop off (it used to be accepted and never read).

@@ -199,8 +199,21 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// handleCancellation runs the rollback (pre-cutover) or just
 	// clears the annotation (post-cutover), then drops the
 	// finalizer to allow deletion to proceed.
+	//
+	// A live migration deleted past its commit point but before its
+	// cutover finished is driven forward first. The destination holds the
+	// only running copy, but the guest's podRef still names the source pod
+	// until cutover swaps it: dropping the finalizer there left the VM
+	// running in a pod nothing tracks, and the guest pointing at a launcher
+	// that had exited.
 	if mig.DeletionTimestamp != nil {
-		return r.handleCancellation(ctx, &mig)
+		forward, err := r.finishCutoverBeforeDeletion(ctx, &mig)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !forward {
+			return r.handleCancellation(ctx, &mig)
+		}
 	}
 
 	// Terminal phases: nothing more to do. Idempotency: re-reconcile
@@ -237,7 +250,8 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Add finalizer on first reconcile so cancellation mid-flight
-	// gets a chance to clean up the SwiftGuest annotation.
+	// gets a chance to clean up the SwiftGuest annotation. (A deleting
+	// migration only gets here holding it: finishCutoverBeforeDeletion.)
 	if err := r.ensureFinalizer(ctx, &mig); err != nil {
 		return ctrl.Result{}, err
 	}

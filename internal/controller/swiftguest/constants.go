@@ -30,6 +30,11 @@ const PodAnnotationNetworkUnready = "kubeswift.io/guest-network-unready"
 // PodAnnotationGuestRuntimePID is the annotation key for the CH process PID (set by swiftletd on socket ready).
 const PodAnnotationGuestRuntimePID = "kubeswift.io/guest-runtime-pid"
 
+// PodAnnotationMigrationStatus is the migration action status swiftletd writes
+// on a launcher pod. "complete" is written only by a successful live-migration
+// send: the VM has left this pod for the migration's destination.
+const PodAnnotationMigrationStatus = "kubeswift.io/migration-status"
+
 // PodAnnotationGuestSerialSocket is the annotation key for the serial socket path (set by swiftletd on socket ready).
 const PodAnnotationGuestSerialSocket = "kubeswift.io/guest-serial-socket"
 

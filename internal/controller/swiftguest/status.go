@@ -118,9 +118,26 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 	}
 }
 
+// launcherHandedOff reports whether pod's launcher sent its VM away in a live
+// migration. Its Cloud Hypervisor exited because the VM now runs in the
+// migration's destination pod, and the plaintext-transport launcher exits 0
+// right after -- a Succeeded pod that is not a guest shutdown. Until cutover
+// makes the destination the guest's pod, nothing about this pod describes the
+// guest.
+func launcherHandedOff(pod *corev1.Pod) bool {
+	return pod != nil && pod.Annotations[PodAnnotationMigrationStatus] == "complete"
+}
+
 // MapPodToStatus updates status from pod phase and conditions.
 func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	if pod == nil {
+		return
+	}
+	// Mapping a handed-off launcher's exit would report the guest stopped and
+	// clear the GuestRunning=True the destination already wrote (swiftletd
+	// writes it once), leaving the migration waiting in Resuming until
+	// spec.timeout.
+	if launcherHandedOff(pod) {
 		return
 	}
 

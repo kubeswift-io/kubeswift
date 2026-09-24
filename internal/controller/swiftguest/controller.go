@@ -446,7 +446,10 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		podGone := apierrors.IsNotFound(podErr)
 
-		if !podGone {
+		// A launcher that handed its VM to a live migration did not stop the
+		// guest: the VM runs in the destination pod. Restarting it would boot
+		// a second copy from the same disk alongside the migrated one.
+		if !podGone && !launcherHandedOff(&existingPod) {
 			shouldRestart := false
 			if existingPod.Status.Phase == corev1.PodFailed {
 				shouldRestart = true

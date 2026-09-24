@@ -220,6 +220,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A live migration could boot a second copy of the VM, or hang in
+  Resuming.** After a successful send, the source Cloud Hypervisor exits and,
+  with plaintext transport, the source launcher pod exits 0. Until cutover
+  moved the guest to the destination pod, the SwiftGuest controller read that
+  exit as a guest shutdown. With `runPolicy: Always` it deleted the launcher
+  and started a new one, a second VM on the same disk as the migrated one.
+  With any run policy it marked the guest Stopped and cleared the
+  `GuestRunning=True` that the destination had written once, so the
+  migration waited in Resuming until `spec.timeout`. A launcher that has
+  reported `migration-status: complete` is now left alone. Separately,
+  deleting a live SwiftMigration after the source reported complete kept the
+  destination pod but never cut over to it. The VM ran in a pod nothing
+  tracked while the guest pointed at the exited source. Such a deletion now
+  finishes the cutover before the object goes.
+
 - **The one-live-migration-per-source-node admission check ignored `mode:
   auto` peers.** It compared `spec.mode` only, so a migration created as `auto`
   (the default for `swiftctl` and node drain) that had gone live was never

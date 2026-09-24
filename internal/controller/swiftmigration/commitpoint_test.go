@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // Once the source has reported migration-status=complete, its Cloud Hypervisor
@@ -184,5 +186,53 @@ func TestCommitPoint_DeletePostCommitPreservesDestination(t *testing.T) {
 	var p corev1.Pod
 	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); apierrors.IsNotFound(err) {
 		t.Error("post-commit deletion deleted the destination pod — the only running copy of the guest")
+	}
+}
+
+// Deleting a live migration past its commit point must still finish the
+// cutover before the object goes: until step 1 the guest's podRef names the
+// source pod, whose launcher has exited. Dropping the finalizer there left the
+// migrated VM running in a pod nothing tracked.
+func TestCommitPoint_DeletePostCommitFinishesCutover(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Finalizers = []string{FinalizerName}
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+	guest.Status.PodRef = &corev1.ObjectReference{Name: src.Name, Namespace: "default", UID: src.UID}
+	stamp(src, migrationActionVerbSend, sendActionID(mig), migrationStatusComplete, sendActionID(mig), "sent")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	ctx := context.Background()
+	if err := r.Delete(ctx, mig); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 6; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+	var g swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKeyFromObject(guest), &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.Status.PodRef == nil || g.Status.PodRef.Name != dst.Name {
+		t.Fatalf("guest podRef = %+v, want the destination pod %q", g.Status.PodRef, dst.Name)
+	}
+	var p corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(src), &p); !apierrors.IsNotFound(err) {
+		t.Errorf("source pod not removed by cutover (err=%v)", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); err != nil {
+		t.Errorf("destination pod lost: %v", err)
+	}
+}
+
+// The SwiftGuest controller recognises a launcher that handed its VM off by
+// this annotation; the two packages must name the same key.
+func TestCommitPoint_GuestControllerReadsTheSameStatusKey(t *testing.T) {
+	if swiftguest.PodAnnotationMigrationStatus != AnnotationMigrationStatus {
+		t.Fatalf("swiftguest reads %q, swiftletd writes %q", swiftguest.PodAnnotationMigrationStatus, AnnotationMigrationStatus)
 	}
 }
