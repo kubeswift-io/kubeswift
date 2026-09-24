@@ -10,6 +10,7 @@ package swiftsnapshot
 
 import (
 	"context"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -136,6 +137,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 	}
 
 	allComplete := true
+	completedAt := map[string]time.Time{}
 	for _, t := range targets {
 		var job batchv1.Job
 		jerr := r.Get(ctx, client.ObjectKey{Name: t.jobName, Namespace: snap.Namespace}, &job)
@@ -157,6 +159,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 		for _, c := range job.Status.Conditions {
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 				complete = true
+				completedAt[t.jobName] = c.LastTransitionTime.Time
 			}
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
 				disk := "root disk"
@@ -177,28 +180,47 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 	// 3. All chunk Jobs Complete → stamp the artifacts atomically (the
 	//    controller's Uploading guard keys on status.oci.disk, so nothing is
 	//    stamped until every disk is in the registry).
+	//    Every artifact's digest is required (restore and import pin by it),
+	//    so nothing is stamped until all of them are readable.
+	reports := map[string]clonecommon.TransferReport{}
+	for _, t := range targets {
+		what := "root disk"
+		if t.dataName != "" {
+			what = "data disk " + t.dataName
+		}
+		rep, wait, failMsg, rerr := r.pushedArtifact(ctx, snap.Namespace, t.jobName, completedAt[t.jobName], what)
+		if rerr != nil {
+			return false, "", rerr
+		}
+		if failMsg != "" {
+			return false, failMsg, nil
+		}
+		if wait {
+			return false, "", nil
+		}
+		reports[t.jobName] = rep
+	}
 	if status.OCI == nil {
 		status.OCI = &snapshotv1alpha1.OCISnapshotStatus{}
 	}
-	status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{Reference: ociDiskReference(snap)}
-	if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, diskChunkJobName(snap)); rerr == nil && ok {
-		status.OCI.Disk.ManifestDigest = rep.ManifestDigest
-		status.OCI.Disk.PushedBytes = rep.TotalBytes
+	root := reports[diskChunkJobName(snap)]
+	status.OCI.Disk = &snapshotv1alpha1.OCIDiskArtifact{
+		Reference:      ociDiskReference(snap),
+		ManifestDigest: root.ManifestDigest,
+		PushedBytes:    root.TotalBytes,
 	}
 	status.OCI.DataDisks = nil
 	for _, t := range targets {
 		if t.dataName == "" {
 			continue
 		}
-		art := snapshotv1alpha1.OCIDataDiskArtifact{
-			Name:      t.dataName,
-			Reference: snap.Spec.Backend.OCI.Repository + ":" + t.tag,
-		}
-		if rep, ok, rerr := clonecommon.JobTransferReport(ctx, r.Client, snap.Namespace, t.jobName); rerr == nil && ok {
-			art.ManifestDigest = rep.ManifestDigest
-			art.PushedBytes = rep.TotalBytes
-		}
-		status.OCI.DataDisks = append(status.OCI.DataDisks, art)
+		rep := reports[t.jobName]
+		status.OCI.DataDisks = append(status.OCI.DataDisks, snapshotv1alpha1.OCIDataDiskArtifact{
+			Name:           t.dataName,
+			Reference:      snap.Spec.Backend.OCI.Repository + ":" + t.tag,
+			ManifestDigest: rep.ManifestDigest,
+			PushedBytes:    rep.TotalBytes,
+		})
 	}
 	return true, "", nil
 }

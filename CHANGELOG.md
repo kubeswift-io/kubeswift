@@ -230,6 +230,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **An OCI snapshot could go Ready without the digest every restore needs.**
+  The manifest digest of a pushed memory or disk artifact was read,
+  best-effort, from the push pod's termination message. When that wasn't
+  readable (the pod's status trailing the Job's in the cache, or the pod
+  gone), the snapshot still went Ready with an empty digest, and every restore
+  and clone of it was then refused. The controller now waits for the report
+  and fails the snapshot, naming why, if it is still missing two minutes
+  after the push completed. The report is also taken only from a Succeeded
+  pod the Job controls. Any pod labelled `job-name: <job>` used to be able to
+  supply it, and with it the digest a restore would pull.
+
 - **A failed root-disk clone was never reported.** Every error from
   preparing a disk-boot guest's root disk, including a clone or download Job
   that had failed for good, was dropped on requeue. The guest sat in

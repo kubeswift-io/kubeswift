@@ -4,10 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 )
@@ -214,16 +217,8 @@ func TestHandleUploadingOCI_PreservesDiskAndDataDisks(t *testing.T) {
 	snap := ociSnap(nil)
 	r, c := newReconciler(t, snap)
 
-	// A completed push Job (what handleUploadingOCI watches).
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: ociPushJobName(snap), Namespace: snap.Namespace},
-		Status: batchv1.JobStatus{
-			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}},
-		},
-	}
-	if err := c.Create(context.Background(), job); err != nil {
-		t.Fatal(err)
-	}
+	// A completed push Job (what handleUploadingOCI watches), with its report.
+	completedPushJob(t, c, snap, time.Now(), `{"manifestDigest":"sha256:mem","totalBytes":10}`)
 
 	// Disk + data-disk artifacts already stamped by the capture step.
 	status := &snapshotv1alpha1.SwiftSnapshotStatus{
@@ -247,5 +242,131 @@ func TestHandleUploadingOCI_PreservesDiskAndDataDisks(t *testing.T) {
 	}
 	if status.OCI.Reference != ociReference(snap) {
 		t.Errorf("memory ref not stamped: %q", status.OCI.Reference)
+	}
+}
+
+// completedPushJob creates the snapshot's push Job, Complete at completedAt,
+// and -- when report is non-empty -- its Succeeded pod carrying that
+// termination-message report.
+func completedPushJob(t *testing.T, c client.Client, snap *snapshotv1alpha1.SwiftSnapshot, completedAt time.Time, report string) {
+	t.Helper()
+	completedReportJob(t, c, snap.Namespace, ociPushJobName(snap), completedAt, report)
+}
+
+// completedReportJob is completedPushJob for any Job name.
+func completedReportJob(t *testing.T, c client.Client, namespace, name string, completedAt time.Time, report string) {
+	t.Helper()
+	ctx := context.Background()
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(name + "-uid")},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+			Type: batchv1.JobComplete, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(completedAt),
+		}}},
+	}
+	if err := c.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if report == "" {
+		return
+	}
+	addReportPod(t, c, job, report)
+}
+
+// addReportPod adds job's Succeeded pod carrying report as its termination
+// message.
+func addReportPod(t *testing.T, c client.Client, job *batchv1.Job, report string) {
+	t.Helper()
+	isController := true
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: job.Name + "-abcde", Namespace: job.Namespace,
+			Labels: map[string]string{"job-name": job.Name},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &isController,
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "push", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: report}},
+		}}},
+	}
+	if err := c.Create(context.Background(), pod); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The memory push's digest is what restores pin the artifact by. A push whose
+// report is not readable yet waits for it; the snapshot used to go Ready with
+// an empty digest, and every restore of it was then refused.
+func TestHandleUploadingOCI_WaitsForTheManifestDigest(t *testing.T) {
+	snap := ociSnap(nil)
+	r, c := newReconciler(t, snap)
+	completedPushJob(t, c, snap, time.Now(), "")
+
+	status := &snapshotv1alpha1.SwiftSnapshotStatus{}
+	ready, msg, err := r.handleUploadingOCI(context.Background(), snap, status)
+	if err != nil || msg != "" || ready {
+		t.Fatalf("ready=%v msg=%q err=%v; want to wait for the push report", ready, msg, err)
+	}
+}
+
+// A report still missing well after the push completed is gone for good: the
+// snapshot fails, naming why, rather than going Ready unrestorable.
+func TestHandleUploadingOCI_FailsWithoutADigest(t *testing.T) {
+	snap := ociSnap(nil)
+	r, c := newReconciler(t, snap)
+	completedPushJob(t, c, snap, time.Now().Add(-10*time.Minute), "")
+
+	status := &snapshotv1alpha1.SwiftSnapshotStatus{}
+	ready, msg, err := r.handleUploadingOCI(context.Background(), snap, status)
+	if err != nil || ready || !strings.Contains(msg, "manifest digest could not be read") {
+		t.Fatalf("ready=%v msg=%q err=%v; want a failure naming the missing digest", ready, msg, err)
+	}
+}
+
+func TestHandleUploadingOCI_StampsTheReportedDigest(t *testing.T) {
+	snap := ociSnap(nil)
+	r, c := newReconciler(t, snap)
+	completedPushJob(t, c, snap, time.Now(), `{"manifestDigest":"sha256:mem","totalBytes":10}`)
+
+	status := &snapshotv1alpha1.SwiftSnapshotStatus{}
+	ready, msg, err := r.handleUploadingOCI(context.Background(), snap, status)
+	if err != nil || msg != "" || !ready {
+		t.Fatalf("ready=%v msg=%q err=%v", ready, msg, err)
+	}
+	if status.OCI.ManifestDigest != "sha256:mem" || status.OCI.PushedBytes != 10 {
+		t.Errorf("status.oci = %+v, want the reported digest and size", status.OCI)
+	}
+}
+
+// The disk artifacts' digests are required just like the memory one: a
+// full-state clone imports the disk by it. Nothing is stamped until the chunk
+// Job's report is readable.
+func TestHandleFullStateDiskCapture_WaitsForTheDiskDigest(t *testing.T) {
+	snap := ociSnap(nil)
+	snap.Spec.IncludeDisk = true
+	r, c := newReconciler(t, snap)
+	r.SnapshotORASImage = "snapshot-oras:test"
+	completedReportJob(t, c, snap.Namespace, diskChunkJobName(snap), time.Now(), "")
+
+	status := &snapshotv1alpha1.SwiftSnapshotStatus{NodeName: "worker-1"}
+	done, msg, err := r.handleFullStateDiskCapture(context.Background(), snap, status)
+	if err != nil || msg != "" || done {
+		t.Fatalf("done=%v msg=%q err=%v; want to wait for the chunk report", done, msg, err)
+	}
+	if status.OCI != nil && status.OCI.Disk != nil {
+		t.Fatalf("disk artifact stamped without a digest: %+v", status.OCI.Disk)
+	}
+
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: snap.Namespace, Name: diskChunkJobName(snap)}, &job); err != nil {
+		t.Fatal(err)
+	}
+	addReportPod(t, c, &job, `{"manifestDigest":"sha256:disk","totalBytes":7}`)
+	done, msg, err = r.handleFullStateDiskCapture(context.Background(), snap, status)
+	if err != nil || msg != "" || !done {
+		t.Fatalf("done=%v msg=%q err=%v", done, msg, err)
+	}
+	if status.OCI.Disk.ManifestDigest != "sha256:disk" {
+		t.Errorf("disk artifact = %+v, want the reported digest", status.OCI.Disk)
 	}
 }
