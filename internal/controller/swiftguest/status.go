@@ -98,7 +98,15 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 		swiftv1alpha1.ConditionEgressReady,
 		swiftv1alpha1.ConditionPortsProgrammed,
 	} {
-		if findCondition(status, t) == nil {
+		c := findCondition(status, t)
+		if c == nil {
+			continue
+		}
+		// Already said, with the same reason: leave it alone. setCondition
+		// stamps lastTransitionTime unconditionally, so re-clearing on every
+		// pass would rewrite the status — and claim a transition — for a guest
+		// that has not moved. A pod can sit Pending for a long time.
+		if c.Status == metav1.ConditionFalse && c.Reason == reason {
 			continue
 		}
 		setCondition(status, metav1.Condition{
@@ -234,6 +242,12 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
 		SetPodScheduledCondition(status, pod, true, "")
 	case corev1.PodPending:
+		// A Pending pod has started no containers, so no VM is running behind
+		// it — whatever the last launcher reported. This catches the run state
+		// a launcher change alone does not: an upgrade can arrive with podRef
+		// already naming the current pod, leaving a guest stuck Pending on an
+		// unattachable volume reporting GuestRunning=True with an address.
+		ClearRunState(status, "GuestStarting", "the launcher has not started; the VM is not running")
 		unschedulable := findUnschedulableCondition(pod)
 		if unschedulable != nil {
 			status.Phase = swiftv1alpha1.SwiftGuestPhasePending

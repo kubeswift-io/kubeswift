@@ -146,3 +146,49 @@ func TestMapPodToStatus_AnExitedLauncherIsNotRunning(t *testing.T) {
 		}
 	}
 }
+
+// The case the launcher-change rule alone misses: an upgrade can arrive with
+// podRef already naming the current pod, so nothing re-evaluates a guest that
+// is stuck Pending while its status still says it is running — seen on a
+// cluster, on a guest whose volume would not attach.
+func TestMapPodToStatus_APendingLauncherIsNotRunning(t *testing.T) {
+	st := ranStatus("pod-1")
+	pending := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1"}, // SAME pod
+		Spec:       corev1.PodSpec{NodeName: "worker-1"},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	MapPodToStatus(pending, st)
+	assertNotRunning(t, st, "GuestStarting")
+	if st.Phase != swiftv1alpha1.SwiftGuestPhaseScheduling {
+		t.Errorf("phase = %q, want Scheduling", st.Phase)
+	}
+}
+
+// Clearing must be idempotent: setCondition stamps lastTransitionTime every
+// time, so a guest sitting Pending would otherwise have its status rewritten —
+// and claim a transition — on every reconcile.
+func TestClearRunState_IsIdempotent(t *testing.T) {
+	st := ranStatus("pod-1")
+	ClearRunState(st, "Stopped", "stopped")
+	before := map[string]metav1.Time{}
+	for _, c := range st.Conditions {
+		before[c.Type] = c.LastTransitionTime
+	}
+	ClearRunState(st, "Stopped", "stopped")
+	for _, c := range st.Conditions {
+		if !c.LastTransitionTime.Equal(&[]metav1.Time{before[c.Type]}[0]) {
+			t.Errorf("%s moved its lastTransitionTime without transitioning", c.Type)
+		}
+	}
+}
+
+// A different reason still lands: stopped is not the same as starting.
+func TestClearRunState_ANewReasonIsRecorded(t *testing.T) {
+	st := ranStatus("pod-1")
+	ClearRunState(st, "GuestStarting", "starting")
+	ClearRunState(st, "Stopped", "stopped")
+	if c := findCondition(st, "GuestRunning"); c == nil || c.Reason != "Stopped" {
+		t.Errorf("GuestRunning = %+v, want the newer reason", c)
+	}
+}
