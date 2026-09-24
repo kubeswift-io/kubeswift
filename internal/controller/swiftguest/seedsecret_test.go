@@ -32,7 +32,7 @@ func legacyCM(ns, name string) *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, OwnerReferences: []metav1.OwnerReference{{
 			APIVersion: "swift.kubeswift.io/v1alpha1", Kind: "SwiftGuest", Name: "g1", UID: "g1-uid", Controller: ptrBool(true),
 		}}},
-		Data:       map[string]string{seed.KeyUserData: "#cloud-config\npassword: hunter2\n"},
+		Data: map[string]string{seed.KeyUserData: "#cloud-config\npassword: hunter2\n"},
 	}
 }
 
