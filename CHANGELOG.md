@@ -148,6 +148,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A failed sandbox workload could be reported `Completed` with exit code 0.**
+  swiftletd recovers the workload's exit code from the console log, but two bugs
+  lost it and let the SwiftSandbox controller fall back to the launcher's own
+  exit code (0). The recovery was gated on the block-rootfs path, which a
+  `rootfsMode: virtiofs` sandbox does not have, so it never ran for them; and the
+  log was read as strict UTF-8, so any non-UTF-8 byte the workload printed failed
+  the read. The recovery now runs for every sandbox and reads the log's last
+  64 KiB lossily (bounded, so a workload that logged gigabytes no longer makes
+  swiftletd load all of it); the last exit-code marker still wins, so a workload
+  cannot spoof the real one.
+
 - **A shared-base guest could be left permanently unable to boot.** The node
   recorded a guest's thin device id before creating its snapshot, so a snapshot
   that failed (for example, its base evicted by another build at the same

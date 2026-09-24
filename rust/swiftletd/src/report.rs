@@ -114,6 +114,28 @@ pub async fn report_sandbox_exit(
 /// bridge-init emits it once, after the workload exits, so it is the workload's exit
 /// code. Taking the LAST match is robust against a workload that printed a look-alike
 /// line before exiting (all of its output precedes the bridge's line).
+/// How much of the end of a sandbox console log to read for the exit-code
+/// marker. The bridge-init prints the marker just before powering off, so it is
+/// in the last few lines; bounding the read keeps a workload that logged
+/// gigabytes from making swiftletd load all of it into memory.
+pub const SANDBOX_CONSOLE_TAIL_BYTES: u64 = 64 * 1024;
+
+/// Read at most the last `max` bytes of a console log as text. Lossy on
+/// purpose: a workload can print arbitrary bytes, and a strict UTF-8 read
+/// (read_to_string) failed on the first non-UTF-8 one — which dropped the exit
+/// code and let a failed workload be reported as exit 0.
+pub fn read_console_tail(path: &str, max: u64) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    if len > max {
+        f.seek(SeekFrom::Start(len - max))?;
+    }
+    let mut buf = Vec::with_capacity(len.min(max) as usize);
+    f.read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 pub fn parse_sandbox_exit_code(console: &str) -> Option<i32> {
     console
         .lines()
@@ -141,7 +163,10 @@ pub fn report_guest_cr_enabled(v: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sandbox_exit_code, report_guest_cr_enabled};
+    use super::{
+        parse_sandbox_exit_code, read_console_tail, report_guest_cr_enabled,
+        SANDBOX_CONSOLE_TAIL_BYTES,
+    };
 
     #[test]
     fn sandbox_exit_code_parsing() {
@@ -179,5 +204,35 @@ mod tests {
         for v in ["false", "off", "0", "no", "False", "OFF", " false "] {
             assert!(!report_guest_cr_enabled(Some(v)), "{v} should disable");
         }
+    }
+
+    // A workload that printed non-UTF-8 bytes must still have its exit code
+    // recovered (read_to_string used to fail and the sandbox read as exit 0).
+    #[test]
+    fn console_tail_recovers_exit_code_despite_binary_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serial.sock.log");
+        let mut data = b"starting\n".to_vec();
+        data.extend_from_slice(&[0xff, 0xfe, 0x00, 0xc3, 0x28, b'\n']); // invalid UTF-8
+        data.extend_from_slice(b"KUBESWIFT-EXIT-CODE=3\nreboot: Power down\n");
+        std::fs::write(&path, &data).unwrap();
+        let text = read_console_tail(path.to_str().unwrap(), SANDBOX_CONSOLE_TAIL_BYTES).unwrap();
+        assert_eq!(parse_sandbox_exit_code(&text), Some(3));
+    }
+
+    // Only the tail is read, so a huge log stays bounded, and the real marker
+    // (printed last, after the workload exits) wins over one the workload
+    // printed itself.
+    #[test]
+    fn console_tail_is_bounded_and_takes_the_last_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("serial.sock.log");
+        let mut data = b"KUBESWIFT-EXIT-CODE=0\n".to_vec(); // spoof from the workload
+        data.extend(std::iter::repeat_n(b'x', 256 * 1024));
+        data.extend_from_slice(b"\nKUBESWIFT-EXIT-CODE=1\n");
+        std::fs::write(&path, &data).unwrap();
+        let text = read_console_tail(path.to_str().unwrap(), SANDBOX_CONSOLE_TAIL_BYTES).unwrap();
+        assert!(text.len() as u64 <= SANDBOX_CONSOLE_TAIL_BYTES);
+        assert_eq!(parse_sandbox_exit_code(&text), Some(1));
     }
 }

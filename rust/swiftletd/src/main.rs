@@ -417,10 +417,17 @@ fn main() {
                     // off — CH has exited now, so the file is complete) and write it to
                     // a pod annotation for the SwiftSandbox controller. Best-effort: a
                     // missing marker leaves status.exitCode unset, not wrong.
-                    if intent.sandbox_rootfs_path().is_some() {
+                    // is_sandbox, not sandbox_rootfs_path: a virtio-fs rootfs has no
+                    // block path, so gating on the path skipped virtio-fs sandboxes
+                    // entirely and a failed workload fell back to the launcher's
+                    // exit code (0) — reported Completed.
+                    if intent.is_sandbox() {
                         if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                             let console = format!("{}.log", serial_socket_path);
-                            match std::fs::read_to_string(&console) {
+                            match report::read_console_tail(
+                                &console,
+                                report::SANDBOX_CONSOLE_TAIL_BYTES,
+                            ) {
                                 Ok(text) => match report::parse_sandbox_exit_code(&text) {
                                     Some(code) => rt.block_on(async {
                                         match kube_client::create_client().await {
