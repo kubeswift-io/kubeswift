@@ -8,12 +8,14 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"k8s.io/klog/v2/klogr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	cacheopts "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -141,6 +143,21 @@ func main() {
 		// (their Reconcile is idempotent and their primary trigger is
 		// also informer-driven).
 		Cache: cacheopts.Options{SyncPeriod: ptr.To(30 * time.Second)},
+		// Do NOT cache Secrets. The default cached client backs every typed
+		// read with an informer, so a single r.Get on a Secret makes
+		// controller-runtime watch and hold EVERY Secret in the cluster in
+		// memory — seed data, migration mTLS keys, registry creds, and every
+		// unrelated tenant Secret — under the manager's 512Mi limit, an OOM
+		// risk on large clusters and a fat target if the controller is
+		// compromised. No controller watches or owns Secrets (they are only
+		// read imperatively), so reading them straight from the apiserver is
+		// correct and also fresher (no read-after-write cache staleness for the
+		// seed/cert Secrets the controllers create then re-read). The sandbox
+		// controller already reads pull secrets uncached via APIReader for the
+		// same reason; this extends it to the shared cached client.
+		Client: client.Options{
+			Cache: &client.CacheOptions{DisableFor: []client.Object{&corev1.Secret{}}},
+		},
 	}
 	if *webhookEnabled {
 		mgrOpts.WebhookServer = webhook.NewServer(webhook.Options{

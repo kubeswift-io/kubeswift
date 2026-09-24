@@ -8,6 +8,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **The controller no longer caches every Secret in the cluster.** The default
+  cached client backs each typed read with an informer, so a single Secret read
+  made controller-runtime watch and hold every Secret in the cluster in the
+  controller's memory — seed data, migration mTLS keys, registry credentials and
+  every unrelated tenant Secret — under the manager's 512Mi limit, an OOM risk
+  on large clusters and a large exposure if the controller is compromised.
+  Secrets are now read directly from the apiserver (no controller watches or
+  owns them, so nothing relies on a cached Secret watch), which also removes
+  read-after-write staleness for the seed and cert Secrets the controllers
+  create and re-read.
+
 - **Kernel artifacts collided across namespaces on a node.** The per-node
   kernel directory was `/var/lib/kubeswift/kernels/<namespace>-<name>`, and
   since both a namespace and a name can contain `-`, the join was ambiguous:
