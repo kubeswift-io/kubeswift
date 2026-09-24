@@ -311,6 +311,11 @@ func (r *SwiftGuestReconciler) buildPod(
 	if err := checkHostPaths(guest, r.AllowedHostPathPrefixes); err != nil {
 		return nil, err
 	}
+	if violation, err := r.restoreSnapshotOwnerViolation(ctx, guest); err != nil {
+		return nil, err
+	} else if violation != nil {
+		return nil, violation
+	}
 	// No node-placement check here. buildPod also runs for a launcher that is
 	// already up, and a cordon or taint added since must not fail that guest.
 	// Reconcile checks placement where it matters, just before creating a

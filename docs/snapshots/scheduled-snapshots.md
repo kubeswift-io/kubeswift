@@ -84,8 +84,12 @@ keep-N safety:
   no shared state, crash-consistent, no VM pause.
 - **s3**: per-tick object-store export; great for periodic offsite backups. Pair
   with `keepLast` and/or `ttl` + `deletionPolicy: Delete` to bound bucket growth.
-- **local**: ⚠️ writes a **fixed `hostPath`**, so scheduled local snapshots
-  overwrite each other — **don't schedule the local backend**; use csi or s3.
+- **local**: each scheduled snapshot is captured into its own directory,
+  derived from its name, on the node running the source VM. Leave
+  `backend.local.hostPath` out of the template: the webhook rejects one, and
+  the controller ignores one an earlier version accepted, which named a single
+  directory every snapshot of the schedule overwrote. The snapshots are node-local and
+  go with the node; use s3 or oci for copies that outlive it.
 
 ## Status
 

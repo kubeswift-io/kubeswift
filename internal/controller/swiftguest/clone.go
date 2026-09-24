@@ -71,10 +71,10 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 	var snapshotPath, node string
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendLocal:
-		if snap.Status.NodeName == "" || snap.Spec.Backend.Local == nil || snap.Spec.Backend.Local.HostPath == "" {
-			return nil, nil, "SwiftSnapshot " + snap.Name + " is missing status.nodeName or backend.local.hostPath", false, nil
+		if snap.Status.NodeName == "" {
+			return nil, nil, "SwiftSnapshot " + snap.Name + " is missing status.nodeName", false, nil
 		}
-		snapshotPath, node = snap.Spec.Backend.Local.HostPath, snap.Status.NodeName
+		snapshotPath, node = clonecommon.NodeDir(&snap), snap.Status.NodeName
 	case snapshotv1alpha1.SnapshotBackendS3:
 		node = src.TargetNode
 		if node == "" {
@@ -94,7 +94,7 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 			// Still downloading the snapshot artifacts onto the target node.
 			return nil, nil, "", true, nil
 		}
-		snapshotPath = clonecommon.S3LocalDir(&snap)
+		snapshotPath = clonecommon.NodeDir(&snap)
 	case snapshotv1alpha1.SnapshotBackendOCI:
 		node = src.TargetNode
 		if node == "" {
@@ -114,7 +114,7 @@ func (r *SwiftGuestReconciler) prepareCloneFromSnapshot(
 			// Still pulling the snapshot artifacts onto the target node.
 			return nil, nil, "", true, nil
 		}
-		snapshotPath = clonecommon.S3LocalDir(&snap)
+		snapshotPath = clonecommon.NodeDir(&snap)
 	default:
 		return nil, nil, "cloneFromSnapshot requires a memory snapshot (backend.type: local, s3, or oci); got " + string(snap.Spec.Backend.Type), false, nil
 	}
@@ -359,7 +359,7 @@ func cloneAnnotationsMatch(have, want map[string]string) bool {
 // Job, keyed by (node, snapshot) — NOT by the guest. Every clone that lands on
 // the same node from the same snapshot resolves to the SAME Job name, so they
 // share one downloader instead of racing concurrent writers on the shared
-// node-local cache hostPath (S3LocalDir is snapshot-keyed and identical on a
+// node-local cache hostPath (NodeDir is snapshot-keyed and identical on a
 // given node). The (namespace, name, node) tuple is hashed to a short, always
 // DNS-1123-valid suffix (node names can be long or contain characters invalid
 // in a resource name). The snapshot lives in the guest's namespace, so the
@@ -378,7 +378,7 @@ func cloneDownloadJobName(snap *snapshotv1alpha1.SwiftSnapshot, node string) str
 //   - otherwise        → still downloading (caller requeues).
 //
 // Dedup per (node, snapshot): the Job name (cloneDownloadJobName) and the cache
-// dir (clonecommon.S3LocalDir) are both functions of the snapshot, not the
+// dir (clonecommon.NodeDir) are both functions of the snapshot, not the
 // guest, so every clone on a given node from the same snapshot converges on ONE
 // download Job. Concurrent reconciles all Get-then-Create the same name; the
 // first wins and the rest get AlreadyExists (swallowed below). That guarantees a

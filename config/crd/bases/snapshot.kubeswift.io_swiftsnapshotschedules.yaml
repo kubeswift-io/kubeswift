@@ -147,11 +147,20 @@ spec:
                                 type: string
                             type: object
                           local:
-                            description: Local is reserved for Phase 2.
+                            description: |-
+                              Local configures the local backend. Optional: its only field, the
+                              directory, is derived.
                             properties:
                               hostPath:
-                                description: HostPath is the directory on the node
-                                  where the snapshot is written.
+                                description: |-
+                                  HostPath is the directory on the node where the snapshot is written. It
+                                  is derived from the snapshot's namespace and name,
+                                  /var/lib/kubeswift/snapshots/<namespace>_<name>, so no two snapshots
+                                  share one and none can name another's. Omit it, or set it to exactly
+                                  that directory; any other value is rejected. The directory a capture
+                                  used is recorded in status.memorySnapshot.handle, which is what a
+                                  restore and the cleanup read: a snapshot an earlier version captured into
+                                  a directory its author chose keeps that directory.
                                 type: string
                             type: object
                           oci:

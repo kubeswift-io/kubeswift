@@ -12,8 +12,10 @@ package clonecommon
 import (
 	"path"
 	"path/filepath"
+	"strings"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/names"
 )
 
 // HostPathBase is the kubeswift-managed subtree the node-local snapshot cache
@@ -22,12 +24,67 @@ import (
 // a controller package.
 const HostPathBase = "/var/lib/kubeswift/snapshots/"
 
-// S3LocalDir is the node-local cache directory for a snapshot's s3 artifacts —
-// where the upload Job reads from on the capture node and the download Job
-// writes to on the restore/clone node. Derived deterministically from the
-// snapshot's identity so it is stable across reconciles and consistent across
-// nodes: <HostPathBase>/<namespace>-<name>.
-func S3LocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
+// maxDirName is the longest file name Linux accepts (NAME_MAX).
+const maxDirName = 255
+
+// SnapshotDir is the node directory a snapshot captured from now on uses, on
+// every backend: the capture, the s3/oci upload source, and the download cache
+// on a restore or clone node. <HostPathBase><namespace>_<name>.
+//
+// It is derived from the snapshot's identity, never chosen by its author, and
+// bound to its namespace. The old names were not: the local backend used a
+// hostPath the author picked, so a tenant could name another tenant's
+// directory and have it emptied by a capture or removed by a delete, and the
+// s3/oci cache used "<namespace>-<name>", which is ambiguous because both parts
+// may contain '-' (namespace "team" + "a-db" and "team-a" + "db" collide).
+// '_' occurs in neither a namespace (an RFC 1123 label) nor an object name (an
+// RFC 1123 subdomain), so here the namespace is everything before the first
+// '_', and two snapshots never share a directory.
+//
+// One segment, not <namespace>/<name>: swiftletd since v0.14.1 accepts a
+// capture destination only one segment below the root, and a running
+// launcher keeps the swiftletd it started with, so a nested path would fail
+// every capture of a guest started before the upgrade. The name is bounded to
+// NAME_MAX; a shortened one keeps its "<namespace>_" prefix.
+func SnapshotDir(namespace, name string) string {
+	return HostPathBase + names.Bounded(namespace+"_"+name, "", maxDirName)
+}
+
+// SnapshotDirNamespaced reports whether dir is a SnapshotDir of namespace:
+// directly under HostPathBase, named "<namespace>_...".
+func SnapshotDirNamespaced(dir, namespace string) bool {
+	seg, ok := strings.CutPrefix(strings.TrimSuffix(dir, "/"), HostPathBase)
+	return ok && namespace != "" && strings.HasPrefix(seg, namespace+"_") && !strings.Contains(seg, "/")
+}
+
+// NodeDir is where a snapshot's artifacts live on a node: the capture node's
+// copy, and the download cache on a restore or clone node.
+//
+// It is the directory recorded when the capture began
+// (status.memorySnapshot.handle), so a snapshot keeps the directory it was
+// captured into whatever a later version derives. Before a capture begins
+// (no status.nodeName) it is SnapshotDir. A capture begun by a version that
+// recorded the directory only on completion has a node and no handle; its
+// directory is the one that version used (legacyNodeDir).
+func NodeDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if ms := snap.Status.MemorySnapshot; ms != nil && ms.Handle != "" {
+		return strings.TrimSuffix(ms.Handle, "/")
+	}
+	if snap.Status.NodeName == "" {
+		return SnapshotDir(snap.Namespace, snap.Name)
+	}
+	return legacyNodeDir(snap)
+}
+
+// legacyNodeDir is the directory versions up to v0.14.1 captured into: the
+// local backend's spec.backend.local.hostPath, or "<namespace>-<name>" for
+// s3 and oci.
+func legacyNodeDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+		if l := snap.Spec.Backend.Local; l != nil && l.HostPath != "" {
+			return strings.TrimSuffix(l.HostPath, "/")
+		}
+	}
 	return filepath.Join(HostPathBase, snap.Namespace+"-"+snap.Name)
 }
 

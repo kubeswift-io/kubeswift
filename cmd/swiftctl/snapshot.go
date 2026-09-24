@@ -12,6 +12,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 var (
@@ -42,14 +43,14 @@ var snapshotCreateCmd = &cobra.Command{
     root-disk PVC crash-consistently — the VM is not paused. Disk
     state only; --include-memory has no effect on this backend.
 
-  local: full VM state (memory + disks) captured into a hostPath
-    directory on the node where the source VM is running. The VM is
-    paused for the duration of the capture (~2.8s/GiB on Longhorn).
-    Requires --hostpath under /var/lib/kubeswift/snapshots/.`,
+  local: full VM state (memory + disks) captured into
+    /var/lib/kubeswift/snapshots/<namespace>_<name> on the node where the
+    source VM is running. The VM is paused for the duration of the capture
+    (~2.8s/GiB on Longhorn). --hostpath may state that directory; any
+    other is rejected.`,
 	Example: `  swiftctl snapshot create db-2026-04-25 --guest db
   swiftctl snapshot create snap1 --guest myvm --vsclass csi-hostpath-snapclass
-  swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local \
-    --hostpath /var/lib/kubeswift/snapshots/default-db-mem-2026-04-26`,
+  swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSnapshotCreate,
 }
@@ -82,7 +83,7 @@ func init() {
 	snapshotCreateCmd.Flags().StringVar(&snapshotGuestRef, "guest", "", "SwiftGuest to snapshot (required)")
 	snapshotCreateCmd.Flags().StringVar(&snapshotBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot or local")
 	snapshotCreateCmd.Flags().StringVar(&snapshotVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only; default: cluster default)")
-	snapshotCreateCmd.Flags().StringVar(&snapshotHostPath, "hostpath", "", "On-node directory for local backend (required when --backend=local; must be under /var/lib/kubeswift/snapshots/)")
+	snapshotCreateCmd.Flags().StringVar(&snapshotHostPath, "hostpath", "", "On-node directory for local backend (optional; if set, must be /var/lib/kubeswift/snapshots/<namespace>_<name>)")
 	snapshotCreateCmd.Flags().BoolVar(&snapshotIncludeMem, "include-memory", true, "Backend-determined: local/s3 always capture memory, csi is always disk-only; --include-memory=false is a no-op (use --backend=csi-volume-snapshot for disk-only)")
 	snapshotCreateCmd.Flags().BoolVar(&snapshotResumeAfter, "resume", true, "Resume the source VM after snapshot (no-op on csi-volume-snapshot)")
 	_ = snapshotCreateCmd.MarkFlagRequired("guest")
@@ -129,9 +130,6 @@ func runSnapshotCreate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--hostpath is only valid for --backend=local")
 		}
 	case snapshotv1alpha1.SnapshotBackendLocal:
-		if snapshotHostPath == "" {
-			return fmt.Errorf("--hostpath is required for --backend=local")
-		}
 		if snapshotVSClass != "" {
 			return fmt.Errorf("--vsclass is only valid for --backend=csi-volume-snapshot")
 		}
@@ -210,8 +208,8 @@ func runSnapshotDescribe(cmd *cobra.Command, args []string) error {
 	if s.Spec.Backend.CSIVolumeSnapshot != nil && s.Spec.Backend.CSIVolumeSnapshot.VolumeSnapshotClassName != "" {
 		fmt.Fprintf(out, "VSClass:     %s\n", s.Spec.Backend.CSIVolumeSnapshot.VolumeSnapshotClassName)
 	}
-	if s.Spec.Backend.Local != nil {
-		fmt.Fprintf(out, "HostPath:    %s\n", s.Spec.Backend.Local.HostPath)
+	if s.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
+		fmt.Fprintf(out, "Directory:   %s\n", clonecommon.NodeDir(&s))
 	}
 	fmt.Fprintf(out, "Phase:       %s\n", s.Status.Phase)
 	if s.Status.CapturedAt != nil {

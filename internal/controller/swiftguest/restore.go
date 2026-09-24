@@ -70,7 +70,7 @@ const (
 	// the SwiftRestore's phase).
 	AnnotationActiveRestore = "snapshot.kubeswift.io/active-restore"
 	// AnnotationRestoreSnapshotPath is the on-node hostPath of the
-	// snapshot directory. Mirrors snap.Spec.Backend.Local.HostPath.
+	// snapshot directory: the snapshot's clonecommon.NodeDir.
 	AnnotationRestoreSnapshotPath = "snapshot.kubeswift.io/restore-snapshot-path"
 	// AnnotationRestoreNodeName is the node where the snapshot lives
 	// (snap.Status.NodeName). Used as the launcher pod's nodeSelector.

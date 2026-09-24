@@ -140,6 +140,38 @@ func TestReconcile_FiresDueTick(t *testing.T) {
 	}
 }
 
+// A template hostPath named one directory for every scheduled snapshot, so each
+// capture wiped the one before. Each snapshot is captured into the directory
+// derived from its own name now, and the scheduled snapshot carries none.
+func TestReconcile_LocalTemplateHostPathDropped(t *testing.T) {
+	s := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		lt := metav1.NewTime(baseTime.Add(-2 * time.Minute))
+		s.Status.LastScheduleTime = &lt
+		s.Spec.Template.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{
+			Type:  snapshotv1alpha1.SnapshotBackendLocal,
+			Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/nightly"},
+		}
+	})
+	r, c := newSched(t, baseTime, s)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	snaps := listSnaps(t, c)
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 scheduled snapshot, got %d", len(snaps))
+	}
+	if l := snaps[0].Spec.Backend.Local; l == nil || l.HostPath != "" {
+		t.Errorf("backend.local = %+v, want it kept with no hostPath", l)
+	}
+	var after snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Spec.Template.Spec.Backend.Local.HostPath == "" {
+		t.Error("the schedule's own template must not be modified")
+	}
+}
+
 func TestReconcile_Idempotent_SameTickNoDuplicate(t *testing.T) {
 	s := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
 		lt := metav1.NewTime(baseTime.Add(-2 * time.Minute))

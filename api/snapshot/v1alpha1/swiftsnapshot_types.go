@@ -75,9 +75,17 @@ type CSIVolumeSnapshotBackend struct {
 	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 }
 
-// LocalBackend is reserved for Phase 2 (memory + disk capture to hostPath).
+// LocalBackend configures the local (Tier B, node-local directory) backend.
 type LocalBackend struct {
-	// HostPath is the directory on the node where the snapshot is written.
+	// HostPath is the directory on the node where the snapshot is written. It
+	// is derived from the snapshot's namespace and name,
+	// /var/lib/kubeswift/snapshots/<namespace>_<name>, so no two snapshots
+	// share one and none can name another's. Omit it, or set it to exactly
+	// that directory; any other value is rejected. The directory a capture
+	// used is recorded in status.memorySnapshot.handle, which is what a
+	// restore and the cleanup read: a snapshot an earlier version captured into
+	// a directory its author chose keeps that directory.
+	// +optional
 	HostPath string `json:"hostPath,omitempty"`
 }
 
@@ -164,7 +172,8 @@ type SecretObjectReference struct {
 type SwiftSnapshotBackend struct {
 	Type              SnapshotBackendType       `json:"type"`
 	CSIVolumeSnapshot *CSIVolumeSnapshotBackend `json:"csiVolumeSnapshot,omitempty"`
-	// Local is reserved for Phase 2.
+	// Local configures the local backend. Optional: its only field, the
+	// directory, is derived.
 	// +optional
 	Local *LocalBackend `json:"local,omitempty"`
 	// S3 is reserved for Phase 3.
@@ -249,8 +258,10 @@ type SnapshotDiskRef struct {
 // MemorySnapshotRef records the memory portion of a snapshot. Nil when
 // IncludeMemory is false or the backend is csi-volume-snapshot.
 type MemorySnapshotRef struct {
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
-	Handle    string `json:"handle,omitempty"`
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+	// Handle is the node directory the capture was written to, recorded when
+	// the capture began. Restores, clones, uploads and cleanup read it.
+	Handle string `json:"handle,omitempty"`
 }
 
 // CapturedGuestSpec preserves the SwiftGuest's relevant spec fields at

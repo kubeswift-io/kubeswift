@@ -736,8 +736,9 @@ csi-volume-snapshot backend.
 - `01-source.yaml` — SwiftImage + SwiftSeedProfile + SwiftGuest
   (same shape as Scenario 1).
 - `02-snapshot.yaml` — SwiftSnapshot with `backend.type: local`,
-  `includeMemory: true`, `resumeAfterSnapshot: false`, hostPath under
-  `/var/lib/kubeswift/snapshots/`.
+  `includeMemory: true`, `resumeAfterSnapshot: false`. It is captured into
+  `/var/lib/kubeswift/snapshots/snapshots-wt-s5_s5-mem-snap`, the directory
+  derived from its namespace and name.
 - `03-inplace-restore.yaml` — SwiftRestore with `targetGuest.name:
   s5-source` (same as source) and `overwriteExisting: true`.
 
@@ -1096,10 +1097,11 @@ Each test below applies a deliberately broken manifest with
 `--dry-run=server` so the apply is rejected by the admission
 webhook without persisting state.
 
-### Test A — Tier B hostPath outside the allowed prefix
+### Test A — Tier B hostPath other than the snapshot's own directory
 
-The hostPath whitelist exists so a malicious or mistaken manifest
-can't write into arbitrary node directories.
+A local snapshot is captured into a directory derived from its
+namespace and name, so a malicious or mistaken manifest can't write
+into an arbitrary node directory, or into another snapshot's.
 
 ```bash
 kubectl apply --dry-run=server -n snapshots-wt-s8 -f - <<EOF
@@ -1118,8 +1120,9 @@ EOF
 ```
 Error from server (Forbidden): admission webhook
 "vswiftsnapshot.snapshot.kubeswift.io" denied the request:
-spec.backend.local.hostPath must be under
-/var/lib/kubeswift/snapshots/ (got "/tmp/badprefix/foo")
+spec.backend.local.hostPath must be omitted or be
+/var/lib/kubeswift/snapshots/snapshots-wt-s8_bad-hostpath, the directory
+derived from the snapshot's namespace and name (got "/tmp/badprefix/foo")
 ```
 
 Operator-respecting: names the constraint, names the offending

@@ -4,6 +4,56 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Upgrade
+
+**A local snapshot's directory is now derived, not chosen.**
+`spec.backend.local.hostPath` must be omitted or be
+`/var/lib/kubeswift/snapshots/<namespace>_<name>`; any other value fails the
+snapshot before it captures (and is rejected at admission when the webhook is
+on). Drop `hostPath` from local SwiftSnapshot manifests and from `swiftctl
+snapshot create --hostpath`. A SwiftSnapshotSchedule template may no longer set
+it, and `swiftctl schedule create --hostpath` is refused. With the webhook on,
+an existing schedule whose template sets one must drop it before its next
+edit; the controller already ignores it. Snapshots already captured are
+unaffected: they keep the directory they were captured into.
+
+### Security
+
+- **One namespace could delete, or read, another namespace's snapshots on a
+  node.** A local snapshot was captured into whatever single directory under
+  `/var/lib/kubeswift/snapshots/` its author named. swiftletd empties that
+  directory before a capture and the cleanup Job removes it when the snapshot
+  is deleted, so naming another tenant's directory destroyed that snapshot. The
+  s3 and oci caches used `<namespace>-<name>`, which is ambiguous (namespace
+  `team` + `a-db` and `team-a` + `db` share one), so two tenants' snapshots
+  could overwrite each other. And a restore mounts the directory named by an
+  annotation on the target SwiftGuest, which a tenant can set, so any snapshot
+  directory on the node could be booted, memory and secrets included, in the
+  tenant's own VM. Every snapshot is now captured into
+  `<namespace>_<name>`: `_` occurs in neither a namespace nor an object name, so
+  the directory is unique and names its namespace. The directory is recorded in
+  `status.memorySnapshot.handle` when the capture begins, and restores, clones,
+  uploads and cleanup read that record rather than the spec. A snapshot that
+  never began capturing has nothing removed. A restore path must be a
+  `<namespace>_` directory of the guest's own namespace, or, for a snapshot an
+  earlier version captured, the recorded directory of a SwiftSnapshot in that
+  namespace; otherwise the guest fails with the reason on `Resolved`, like a
+  disallowed host path. One segment, not `<namespace>/<name>`: guests still
+  running a v0.14.1 launcher accept only a single segment below the root.
+
+### Fixed
+
+- **Scheduled local snapshots overwrote each other.** Every snapshot of a
+  schedule copied the template's `hostPath`, so each capture emptied the
+  directory holding the previous snapshot, and pruning the oldest removed the
+  directory all of them shared. The docs said not to schedule the local
+  backend. Each scheduled snapshot now gets its own directory, and the
+  controller drops a template `hostPath` that an existing schedule carries.
+
+---
+
 ## [v0.14.1] — 2026-09-24
 
 A security and correctness release: the fixes from a full review of the

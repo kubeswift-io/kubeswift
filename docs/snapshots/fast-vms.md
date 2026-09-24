@@ -67,7 +67,7 @@ spec:
   guestRef: { name: golden-src }       # a Running, already-configured source
   backend:
     type: local                         # Tier B — node-local; see Tier note below
-    local: { hostPath: /var/lib/kubeswift/snapshots/golden-snap }
+                                        # (captured into /var/lib/kubeswift/snapshots/default_golden-snap)
   includeMemory: true                   # captures RAM — this is what enables resume
   resumeAfterSnapshot: true             # source keeps running after the capture
 ```

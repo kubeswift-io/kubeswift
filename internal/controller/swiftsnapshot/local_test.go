@@ -32,7 +32,7 @@ func makeLocalSnap(name, ns, guestName string) *snapshotv1alpha1.SwiftSnapshot {
 			Backend: snapshotv1alpha1.SwiftSnapshotBackend{
 				Type: snapshotv1alpha1.SnapshotBackendLocal,
 				Local: &snapshotv1alpha1.LocalBackend{
-					HostPath: HostPathBaseDir + ns + "-" + name,
+					HostPath: HostPathBaseDir + ns + "_" + name,
 				},
 			},
 			IncludeMemory:       true,
@@ -70,6 +70,11 @@ func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing
 	if got.Status.SnapshotDirVersion != SnapshotDirVersionV1 {
 		t.Errorf("status.snapshotDirVersion = %q, want %q", got.Status.SnapshotDirVersion, SnapshotDirVersionV1)
 	}
+	// The directory is recorded with the node, before the capture completes,
+	// so every later step reads where the capture went.
+	if ms := got.Status.MemorySnapshot; ms == nil || ms.Handle != HostPathBaseDir+"default_snap1" {
+		t.Errorf("status.memorySnapshot = %+v, want the handle recorded at capture start", ms)
+	}
 
 	// The action annotations must be set on the launcher pod.
 	var p corev1.Pod
@@ -88,7 +93,7 @@ func TestLocal_Pending_AdvancesToCapturing_AndWritesActionAnnotations(t *testing
 	if err := json.Unmarshal([]byte(p.Annotations[annoActionArgs]), &args); err != nil {
 		t.Fatalf("parse action args: %v (raw=%s)", err, p.Annotations[annoActionArgs])
 	}
-	wantURL := "file://" + HostPathBaseDir + "default-snap1/"
+	wantURL := "file://" + HostPathBaseDir + "default_snap1/"
 	if args.DestinationURL != wantURL {
 		t.Errorf("destination_url = %q, want %q", args.DestinationURL, wantURL)
 	}

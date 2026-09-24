@@ -18,6 +18,7 @@ import (
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/sharedbase"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // HypervisorOverrideAnnotation matches the constant in the SwiftGuest
@@ -329,46 +330,64 @@ func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 // LocalBackendHostPathPrefix: one path segment of a conservative charset. It
 // starts with an alphanumeric (so the name can never be read as an `rm` flag)
 // and admits only [A-Za-z0-9._-] thereafter — no '/', no '..', and no shell
-// metacharacter. The controller only ever generates "<ns>-<name>" and
-// "<ns>-<name>-<unix>" names, which are RFC 1123 labels joined with '-' and so
-// always match.
+// metacharacter. Every directory the controller derives matches:
+// "<ns>_<name>" (clonecommon.SnapshotDir) and, from earlier versions,
+// "<ns>-<name>".
 var localBackendHostPathSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// ValidateLocalHostPath is the security boundary for the local snapshot
-// backend. spec.backend.local.hostPath is mounted into a privileged Job and
-// handed to `rm -rf` (cleanup) and swiftletd's remove_dir_all (capture), so it
-// must be LocalBackendHostPathPrefix followed by exactly one safe segment.
+// ValidateSnapshotDir is the shape every snapshot node directory must have
+// before it is mounted into a privileged Job or handed to `rm -rf` (cleanup)
+// and swiftletd's remove_dir_all (capture): LocalBackendHostPathPrefix
+// followed by exactly one safe segment.
 //
 // A prefix test alone is not enough: the prefix itself
 // ("/var/lib/kubeswift/snapshots/") satisfies HasPrefix, and deleting the
 // shared root wipes every namespace's snapshots on the node; a segment like
 // "*" or one carrying ';', '$', spaces or backticks would reach a shell; and a
 // nested path escapes the single-subdir model the cleanup pod assumes.
-func ValidateLocalHostPath(hp string) error {
-	if hp == "" {
-		return fmt.Errorf("spec.backend.local.hostPath is required when spec.backend.type=local")
+func ValidateSnapshotDir(dir string) error {
+	if !strings.HasPrefix(dir, LocalBackendHostPathPrefix) {
+		return fmt.Errorf("snapshot directory must be under %s (got %q)", LocalBackendHostPathPrefix, dir)
 	}
-	if !strings.HasPrefix(hp, LocalBackendHostPathPrefix) {
-		return fmt.Errorf("spec.backend.local.hostPath must be under %s (got %q)", LocalBackendHostPathPrefix, hp)
-	}
-	seg := strings.TrimSuffix(strings.TrimPrefix(hp, LocalBackendHostPathPrefix), "/")
+	seg := strings.TrimSuffix(strings.TrimPrefix(dir, LocalBackendHostPathPrefix), "/")
 	if seg == "" {
-		return fmt.Errorf("spec.backend.local.hostPath must name a subdirectory under %s, not the directory itself (got %q)", LocalBackendHostPathPrefix, hp)
+		return fmt.Errorf("snapshot directory must name a subdirectory under %s, not the directory itself (got %q)", LocalBackendHostPathPrefix, dir)
 	}
 	if !localBackendHostPathSegment.MatchString(seg) {
-		return fmt.Errorf("spec.backend.local.hostPath must be %s<name>, where <name> is a single path segment of [A-Za-z0-9._-] starting alphanumeric (got %q)", LocalBackendHostPathPrefix, hp)
+		return fmt.Errorf("snapshot directory must be %s<name>, where <name> is a single path segment of [A-Za-z0-9._-] starting alphanumeric (got %q)", LocalBackendHostPathPrefix, dir)
 	}
 	return nil
 }
 
-// validateLocalBackend enforces the local-backend completeness rules:
-//   - backend.local must be set (operator must declare where the snapshot lives)
-//   - backend.local.hostPath must be a single safe segment under the prefix
+// ValidateLocalHostPath is the rule for spec.backend.local.hostPath on a
+// snapshot that has not been captured yet: empty, or the directory the
+// controller derives for it (clonecommon.SnapshotDir), which is where it is
+// captured either way.
+//
+// It used to be any single segment the author chose. That let a tenant name
+// another tenant's directory and have it emptied by the capture (swiftletd
+// clears the destination first) or removed by deleting the snapshot. Every
+// snapshot of a SwiftSnapshotSchedule also shared its template's directory,
+// so each capture wiped the previous one. The field remains so a manifest can
+// state where the snapshot lands.
+func ValidateLocalHostPath(namespace, name, hp string) error {
+	if hp == "" {
+		return nil
+	}
+	want := clonecommon.SnapshotDir(namespace, name)
+	if strings.TrimSuffix(hp, "/") != want {
+		return fmt.Errorf("spec.backend.local.hostPath must be omitted or be %s, the directory derived from the snapshot's namespace and name (got %q)", want, hp)
+	}
+	return nil
+}
+
+// validateLocalBackend enforces the local-backend hostPath rule. backend.local
+// is optional: the directory is derived.
 func validateLocalBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	if snap.Spec.Backend.Local == nil {
-		return fmt.Errorf("spec.backend.local is required when spec.backend.type=local")
+		return nil
 	}
-	return ValidateLocalHostPath(snap.Spec.Backend.Local.HostPath)
+	return ValidateLocalHostPath(snap.Namespace, snap.Name, snap.Spec.Backend.Local.HostPath)
 }
 
 func specsEqual(a, b *snapshotv1alpha1.SwiftSnapshotSpec) bool {
