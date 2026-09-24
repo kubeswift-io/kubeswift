@@ -62,8 +62,10 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftSnapshot, got %T", oldObj)
 	}
-	if err := v.validateSwiftSnapshot(ctx, snap); err != nil {
-		return nil, err
+	// A snapshot being deleted is shedding its cleanup finalizer; nothing may
+	// block that.
+	if snap.DeletionTimestamp != nil {
+		return nil, nil
 	}
 	// Spec is immutable after creation: snapshots are point-in-time
 	// captures, mutating them would break the contract callers rely on.
@@ -72,6 +74,12 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !specsEqual(&oldSnap.Spec, &snap.Spec) {
 		return nil, fmt.Errorf("SwiftSnapshot spec is immutable")
 	}
+	// The immutable spec was validated at creation. Re-validating it on every
+	// update re-ran the source-guest checks against the guest as it is NOW
+	// (a GPU added since, a class switched to a shared base) and the current
+	// rules, and rejected updates that change nothing about the capture --
+	// the controller's finalizer removal among them, leaving the snapshot and
+	// its namespace Terminating.
 	return advisoryWarnings(snap), nil
 }
 

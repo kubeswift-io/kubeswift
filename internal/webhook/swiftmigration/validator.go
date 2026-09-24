@@ -165,6 +165,11 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftMigration, got %T", oldObj)
 	}
+	// A migration being deleted is shedding its cleanup finalizer; a shape
+	// rule added since it was created must not block that.
+	if mig.DeletionTimestamp != nil {
+		return nil, nil
+	}
 	if !specsEqual(&oldMig.Spec, &mig.Spec) {
 		return nil, fmt.Errorf("SwiftMigration spec is immutable after creation; create a new SwiftMigration to retry with different inputs")
 	}

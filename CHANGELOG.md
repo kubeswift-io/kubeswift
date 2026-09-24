@@ -148,6 +148,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Deleting a guest or snapshot could hang in `Terminating` when the webhook
+  was enabled.** The validating webhooks re-checked the whole spec on every
+  update, including the controllers' finalizer removals. After the rules
+  tightened (a narrower hostPath allowlist, an upgrade), or the source guest
+  changed (a GPU added after a memory snapshot was taken), a SwiftGuest's or
+  SwiftSnapshot's finalizer could no longer be removed, and it stayed
+  `Terminating` along with its namespace. Updates to an object being deleted,
+  and updates that leave its spec unchanged, are no longer re-validated
+  (SwiftGuest, SwiftSnapshot, SwiftRestore, SwiftMigration). Spec changes are
+  still validated, and immutable specs remain immutable.
+
 - **swiftletd's `GuestRunning` report wiped the guest's other conditions.**
   `status.conditions` is an atomic list, so swiftletd's merge patch of just
   `[GuestRunning]` replaced the whole list, dropping `GPUAllocated`,

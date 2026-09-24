@@ -668,3 +668,40 @@ func TestValidate_OCIMemoryOnly_SharedBaseGuestIsAllowed(t *testing.T) {
 		t.Errorf("a memory-only oci snapshot of a sharedBaseDisk guest must be allowed: %v", err)
 	}
 }
+
+// A snapshot was validated against its source guest when it was created. If
+// the guest changes afterwards (here: a GPU is added), updates that do not
+// touch the snapshot's spec -- above all the controller removing its cleanup
+// finalizer -- must still be admitted, or the snapshot and its namespace stay
+// Terminating.
+func TestValidateUpdate_SourceGuestChangedSinceCreation(t *testing.T) {
+	guest := makeSourceGuest("g1", "default")
+	guest.Spec.GPUProfileRef = &corev1.LocalObjectReference{Name: "h200-shared"} // added after the capture
+	v := validatorWithGuest(t, guest)
+	ctx := context.Background()
+
+	old := makeMemoryCaptureSnap("g1")
+	old.Finalizers = []string{"kubeswift.io/snapshot-hostpath-cleanup"}
+
+	labeled := old.DeepCopy()
+	labeled.Labels = map[string]string{"team": "a"}
+	if _, err := v.ValidateUpdate(ctx, old, labeled); err != nil {
+		t.Errorf("metadata-only update rejected because the source guest changed: %v", err)
+	}
+
+	now := metav1.Now()
+	deleting := old.DeepCopy()
+	deleting.DeletionTimestamp = &now
+	released := deleting.DeepCopy()
+	released.Finalizers = nil
+	if _, err := v.ValidateUpdate(ctx, deleting, released); err != nil {
+		t.Errorf("finalizer removal rejected: %v", err)
+	}
+
+	// The spec is still immutable.
+	changed := old.DeepCopy()
+	changed.Spec.GuestRef.Name = "other"
+	if _, err := v.ValidateUpdate(ctx, old, changed); err == nil {
+		t.Error("a spec change must still be rejected")
+	}
+}
