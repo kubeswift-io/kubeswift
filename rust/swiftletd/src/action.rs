@@ -921,15 +921,18 @@ async fn dispatch_sandbox_exec(
             resp.error.unwrap_or_else(|| "unknown".to_string())
         ));
     }
-    // Tee the workload output to the sandbox serial log (best-effort) so
-    // `swiftctl sandbox logs` shows it — a checked-out workload runs over vsock, not
-    // on the guest console the cold path captures.
+    // Save the workload output (best-effort) so `swiftctl sandbox logs` shows
+    // it — a checked-out workload runs over vsock, not on the guest console the
+    // cold path captures. Its own file, next to the console log: Cloud
+    // Hypervisor writes serial.sock.log at its own offset (it does not open it
+    // for append), so output appended there was overwritten by the next
+    // console line.
     if !resp.stdout.is_empty() || !resp.stderr.is_empty() {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(run_dir.join("serial.sock.log"))
+            .open(run_dir.join(WORKLOAD_LOG))
         {
             let _ = f.write_all(resp.stdout.as_bytes());
             let _ = f.write_all(resp.stderr.as_bytes());
@@ -944,6 +947,10 @@ async fn dispatch_sandbox_exec(
         success_status: Some("complete"),
     })
 }
+
+/// File in the run dir holding a warm-slot workload's output (read by
+/// `swiftctl sandbox logs` and the gateway after the console log).
+const WORKLOAD_LOG: &str = "workload.log";
 
 /// Args parsed from `kubeswift.io/migration-action-args` for the
 /// `send` verb. The destination URL is the load-bearing field and

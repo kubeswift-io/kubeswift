@@ -386,12 +386,8 @@ func runSandboxLogs(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	serialLog := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target) + "/serial.sock.log"
-	shellCmd := "cat " + serialLog
-	if sandboxLogsFollow {
-		// tail from the start, then follow; keep waiting even if the file appears late.
-		shellCmd = "tail -n +1 -F " + serialLog
-	}
+	runDir := "/var/lib/kubeswift/run/" + cli.GuestID(ns, target)
+	shellCmd := cli.SandboxLogsCommand(runDir, sandboxLogsFollow)
 
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").

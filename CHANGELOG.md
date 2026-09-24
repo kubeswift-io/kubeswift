@@ -230,6 +230,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A checked-out sandbox's workload output could vanish from its logs.**
+  swiftletd appended the output of a workload run in a claimed warm slot to
+  the console log. Cloud Hypervisor writes that file at its own offset (it
+  does not open it for append), so the next console line overwrote the
+  appended output. The output now goes to `workload.log` in the run
+  directory. `swiftctl sandbox logs` and the gateway print it after the
+  console, and follow both files.
+
 - **A successful live migration could be reported as failed on some Cloud
   Hypervisor builds.** swiftletd picks between CH v52's blocking
   send-migration and v53's non-blocking one from the CH version. It read

@@ -13,6 +13,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/klog/v2"
+
+	"github.com/kubeswift-io/kubeswift/internal/cli"
 )
 
 // sandboxGVR is the SwiftSandbox resource. Kept local to the gateway so the
@@ -98,12 +100,8 @@ func (h *SandboxLogsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// The console is captured to <run>/serial.sock.log; the run dir is keyed by
 	// the launcher pod identity (ns-<targetPod>), same as swiftctl.
-	logFile := fmt.Sprintf("/var/lib/kubeswift/run/%s-%s/serial.sock.log", namespace, target)
-	shellCmd := "cat " + logFile
-	if follow {
-		// tail from the start then follow; -F keeps waiting if the file appears late.
-		shellCmd = "tail -n +1 -F " + logFile
-	}
+	runDir := fmt.Sprintf("/var/lib/kubeswift/run/%s-%s", namespace, target)
+	shellCmd := cli.SandboxLogsCommand(runDir, follow)
 
 	execReq := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").Name(target).Namespace(namespace).SubResource("exec").
