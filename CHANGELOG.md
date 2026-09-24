@@ -4,6 +4,26 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A guest whose launcher had not started still reported itself running**
+  (#643, follow-up to #634). v0.14.0 clears a guest's run state when its
+  launcher changes, which covers a restart but not the state a PREVIOUS
+  controller left behind: after an upgrade `status.podRef` can already name the
+  current pod, so nothing re-evaluates it. Found while upgrading the fleet to
+  v0.14.0, on a guest stuck Pending against a volume that would not attach: it
+  reported `GuestRunning=True` with an address, because the launcher that
+  reported them was two pods ago. A Pending pod has started no containers, so no
+  VM is running behind it whatever the last launcher said. Clearing there
+  catches the case and heals a guest upgraded into it. `ClearRunState` is now
+  idempotent as well: a condition already False for the same reason is left
+  alone, so a guest sitting Pending is not rewritten, and does not claim a
+  transition, on every reconcile.
+
+---
+
 ## [v0.14.0] — 2026-09-23
 
 Guests of one image can now share a copy-on-write base disk on their node
