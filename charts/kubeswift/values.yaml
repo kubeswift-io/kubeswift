@@ -21,6 +21,15 @@ controllerManager:
     limits:
       cpu: 500m
       memory: 512Mi
+  metrics:
+    # Serve /metrics over HTTPS, only to callers the apiserver authenticates
+    # and authorizes for GET /metrics. The metrics name every tenant's guests,
+    # images and namespaces, and plain HTTP hands them to anyone who can reach
+    # the pod. Bind the kubeswift-metrics-reader ClusterRole to your
+    # Prometheus ServiceAccount; the ServiceMonitor (monitoring.enabled)
+    # switches to https + its token. Off by default because it changes how
+    # every scraper must connect.
+    secure: false
 
 swiftletd:
   # DaemonSet: disabled by default. swiftletd is designed to run only inside SwiftGuest pods

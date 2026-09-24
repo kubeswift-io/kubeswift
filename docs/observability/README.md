@@ -46,6 +46,29 @@ Non-Helm installs can apply `config/grafana/servicemonitor.yaml` and load the
 dashboards under `config/grafana/*.json` as ConfigMaps labeled
 `grafana_dashboard: "1"`.
 
+### Securing the metrics endpoint
+
+By default the controller serves `/metrics` over plain HTTP on port 8080, to
+anyone who can reach the pod. The metrics name every tenant's guests, images
+and namespaces. With `controllerManager.metrics.secure=true` the controller
+serves them over HTTPS (a self-signed certificate) and only to callers that
+the API server authenticates and that are allowed to `get` the `/metrics`
+non-resource URL. Bind the `kubeswift-metrics-reader` ClusterRole to your
+Prometheus ServiceAccount:
+
+```bash
+kubectl create clusterrolebinding kubeswift-metrics-reader \
+  --clusterrole=kubeswift-metrics-reader \
+  --serviceaccount=<prometheus-namespace>:<prometheus-serviceaccount>
+```
+
+The chart's ServiceMonitor switches to `https` with Prometheus's own
+ServiceAccount token when the setting is on. A scraper configured by hand
+needs the same.
+
+The controller also serves `/healthz` and `/readyz` on port 8081. Readiness
+waits for the webhook server when webhooks are enabled.
+
 ## Dashboards
 
 | Dashboard | uid | Answers |

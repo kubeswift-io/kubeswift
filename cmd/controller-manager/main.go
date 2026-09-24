@@ -16,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	cacheopts "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -88,6 +89,10 @@ func main() {
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	metricsAddr := flag.String("metrics-bind-address", ":8080", "Address for metrics endpoint")
+	metricsSecure := flag.Bool("metrics-secure", false,
+		"Serve metrics over HTTPS to callers the apiserver authenticates and authorizes for GET /metrics "+
+			"(grant scrapers the kubeswift-metrics-reader ClusterRole). Off by default: turning it on changes how Prometheus must scrape.")
+	probeAddr := flag.String("health-probe-bind-address", ":8081", "Address for the /healthz and /readyz endpoints")
 	var allowedHostPaths stringSliceFlag
 	flag.Var(&allowedHostPaths, "allowed-hostpath-prefix",
 		"Host-path prefix a SwiftGuest may mount into the (privileged) launcher pod "+
@@ -123,7 +128,8 @@ func main() {
 
 	mgrOpts := ctrl.Options{
 		Scheme:                  scheme.Scheme,
-		Metrics:                 metricsserver.Options{BindAddress: *metricsAddr},
+		Metrics:                 metricsOptions(*metricsAddr, *metricsSecure),
+		HealthProbeBindAddress:  *probeAddr,
 		LeaderElection:          *leaderElect,
 		LeaderElectionID:        leaderElectionID,
 		LeaderElectionNamespace: leaderElectionNS,
@@ -170,6 +176,21 @@ func main() {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), mgrOpts)
 	if err != nil {
 		klog.ErrorS(err, "unable to create manager")
+		os.Exit(1)
+	}
+	// Liveness is the process answering. Readiness also waits for the
+	// webhook server when webhooks are on: they are failurePolicy: Fail, so a
+	// pod that is Ready before it serves them fails every guarded write.
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		klog.ErrorS(err, "unable to add health check")
+		os.Exit(1)
+	}
+	readyCheck := healthz.Ping
+	if *webhookEnabled {
+		readyCheck = mgr.GetWebhookServer().StartedChecker()
+	}
+	if err := mgr.AddReadyzCheck("readyz", readyCheck); err != nil {
+		klog.ErrorS(err, "unable to add ready check")
 		os.Exit(1)
 	}
 
@@ -524,4 +545,16 @@ func volumeSnapshotCRDsInstalled(cs kubernetes.Interface) bool {
 		}
 	}
 	return false
+}
+
+// metricsOptions serves metrics over plain HTTP, or -- with secure -- over
+// HTTPS (a self-signed certificate unless one is provided) to authenticated,
+// authorized callers only.
+func metricsOptions(addr string, secure bool) metricsserver.Options {
+	opts := metricsserver.Options{BindAddress: addr}
+	if secure {
+		opts.SecureServing = true
+		opts.FilterProvider = kubeswiftmetrics.AuthFilterProvider
+	}
+	return opts
 }

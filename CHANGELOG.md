@@ -8,6 +8,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **The controller's metrics can now be served to authorized scrapers
+  only.** `/metrics` is plain HTTP to anyone who can reach the pod, and it
+  names every tenant's guests, images and namespaces.
+  `controllerManager.metrics.secure=true` (flag `--metrics-secure`) serves it
+  over HTTPS and only to callers the API server authenticates (TokenReview)
+  and authorizes to `get /metrics` (SubjectAccessReview). Bind the new
+  `kubeswift-metrics-reader` ClusterRole to your scraper; the ServiceMonitor
+  follows the setting. It is off by default because it changes how every
+  scraper connects. The controller also gained `/healthz` and `/readyz`
+  probes. Readiness waits for the webhook server when webhooks are enabled,
+  since their `failurePolicy: Fail` made a Ready-but-not-serving pod fail
+  every guarded write.
+
 - **The kustomize install (`make deploy`, the local-cluster quickstart, e2e)
   lagged the Helm chart's security hardening.** Its controller ClusterRole
   still granted what the chart had removed (writes to `swiftgpuprofiles`,
