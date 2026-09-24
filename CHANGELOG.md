@@ -8,6 +8,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A virtio-fs sandbox could poison the node's shared rootfs cache.** The
+  launcher container — which runs the untrusted guest — mounted the node rootfs
+  cache (`/var/lib/kubeswift/sandbox-rootfs`) read-write. That cache is shared,
+  keyed only by image digest, and reused as-is on a cache hit, and for a
+  virtiofs sandbox virtiofsd shares whatever it can reach, so guest code that
+  remounted the share or escaped its chroot to the lower layer could write into
+  the cache and every later sandbox of that image on the node — in any namespace
+  — would then boot the tampered rootfs, defeating cosign verify-before-boot.
+  The launcher now mounts the cache read-only (the materialize init container
+  keeps it read-write to populate it); block-mode rootfs was already opened
+  `readonly=on` by Cloud Hypervisor. The read-only bind mount is authoritative —
+  virtiofsd gets `EROFS` on any write regardless of its own flags.
+
 - **A SwiftGuest annotation could mount an arbitrary node path into the
   privileged launcher.** Restore mode is selected by the
   `snapshot.kubeswift.io/active-restore` annotation, and

@@ -478,7 +478,17 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: "kernel-artifacts", MountPath: kernelDir},
-					{Name: "rootfs-cache", MountPath: rootfsCacheDir},
+					// Read-only: this container runs the untrusted guest, and the
+					// node rootfs cache is shared, keyed only by image digest and
+					// reused as-is on a cache hit. For a virtiofs sandbox
+					// virtiofsd shares whatever it can reach, so a RW mount here
+					// would let guest code (remounting the share, or escaping its
+					// chroot to the lower) write into the cache and poison every
+					// later sandbox of that image on the node — defeating cosign
+					// verify-before-boot. Block-mode rootfs is already opened
+					// readonly=on by CH; the init container above keeps this same
+					// volume RW to populate the cache before the guest runs.
+					{Name: "rootfs-cache", MountPath: rootfsCacheDir, ReadOnly: true},
 					{Name: "runtime-intent", MountPath: swiftguest.IntentPath},
 					{Name: "run", MountPath: swiftguest.RunDirPath},
 					{Name: "dev-kvm", MountPath: "/dev/kvm"},
