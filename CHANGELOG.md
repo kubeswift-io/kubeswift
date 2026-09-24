@@ -273,6 +273,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **QEMU vCPU pinning was skipped for the large GPU guests it exists for.**
+  QEMU answers QMP only after hugepage preallocation and VFIO DMA mapping,
+  which for a guest with hundreds of GiB of RAM takes minutes. swiftletd
+  queried it once with a 5 s timeout, logged a warning and never retried, so
+  the guest ran unpinned. Pins were also applied to the controller's chosen
+  CPUs as given. Under the kubelet's static CPU Manager those are often
+  outside the pod's cpuset, which the kernel rejects, and pinning stopped at
+  the first rejection. Pinning now runs on its own thread, waiting up to 15
+  minutes for QMP. Pins outside the pod's cpuset move to free allowed CPUs,
+  on the same NUMA node when possible, and every pin is attempted.
+
 - **Building a shared base could evict other bases for nothing, or overfill
   the pool.** Making room for a new base asked the pool for the image's full
   raw size, although only its non-zero blocks are written. A 10 GiB image

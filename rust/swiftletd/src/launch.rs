@@ -654,12 +654,36 @@ where
 
     // vCPU pinning is applied post-spawn (QEMU has no CLI for thread
     // affinity). Best-effort: a missed pin degrades performance, never
-    // correctness — log loudly and keep the guest.
+    // correctness — log loudly and keep the guest. On its own thread: QEMU
+    // answers QMP only after hugepage prealloc and VFIO mapping, which for a
+    // large GPU guest takes minutes, and the launch must not wait on it.
     if !vcpu_pinning.is_empty() {
-        match process.apply_vcpu_pinning(&vcpu_pinning) {
-            Ok(n) => log::info!("vcpu_pinning_applied pins={}", n),
-            Err(e) => log::warn!("vcpu_pinning_failed err={}", e),
-        }
+        let pins = vcpu_pinning.clone();
+        let qmp = qmp_socket.clone();
+        std::thread::spawn(move || {
+            let allowed = crate::cpuset::effective_cpuset()
+                .map_err(|e| {
+                    log::warn!(
+                        "vcpu_pinning cpuset unreadable ({}); using the controller's cpus as given",
+                        e
+                    )
+                })
+                .ok();
+            match swift_qemu_client::pin_vcpus_when_ready(
+                &qmp,
+                &pins,
+                allowed.as_deref(),
+                QEMU_PIN_WAIT,
+            ) {
+                Ok((n, notes)) => {
+                    for note in &notes {
+                        log::warn!("vcpu_pinning_adjusted {}", note);
+                    }
+                    log::info!("vcpu_pinning_applied pins={} of {}", n, pins.len());
+                }
+                Err(e) => log::warn!("vcpu_pinning_failed err={}", e),
+            }
+        });
     }
 
     if let Some(cb) = on_socket_ready {
@@ -669,6 +693,10 @@ where
     let status = process.wait()?;
     Ok((status, pid, serial_socket_path))
 }
+
+/// How long vCPU pinning waits for QEMU's QMP monitor: well past the
+/// hugepage preallocation of the largest guests.
+const QEMU_PIN_WAIT: Duration = Duration::from_secs(15 * 60);
 
 // ─── NIC helpers ────────────────────────────────────────────────────────────
 
