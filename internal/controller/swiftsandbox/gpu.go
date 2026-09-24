@@ -79,7 +79,8 @@ func (r *SwiftSandboxReconciler) reconcileNativeGPU(ctx context.Context, sb *san
 				sb.Spec.GPUProfileRef.Name, profile.Spec.Tier))
 	}
 
-	node, gpus, numa, partID, allocErr := swiftgpu.FindAndAllocateFor(ctx, r.Client, sandboxGPUAllocatedTo(sb), "", &profile)
+	node, gpus, numa, partID, allocErr := swiftgpu.FindAndAllocateFor(ctx, r.Client, sandboxGPUAllocatedTo(sb), "", &profile,
+		swiftgpu.NodeConstraint{NodeSelector: launcherNodeSelector(sb.Spec.NodeSelector)})
 	if allocErr != nil {
 		// No capacity (or an FM-version / vfio-ready gate). Surface the reason and
 		// requeue — a freed GPU or a fixed node makes the next attempt succeed.

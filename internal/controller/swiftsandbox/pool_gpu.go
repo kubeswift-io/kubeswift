@@ -51,7 +51,8 @@ func (r *SwiftSandboxPoolReconciler) allocateSlotGPU(ctx context.Context, pool *
 		return fmt.Errorf("warm GPU pools support only tier: pcie (mode-3); profile %q is tier %q", profile.Name, profile.Spec.Tier)
 	}
 
-	node, gpus, numa, partID, err := swiftgpu.FindAndAllocateFor(ctx, r.Client, slotGPUAllocatedTo(pool.Namespace, slot.Name), "", &profile)
+	node, gpus, numa, partID, err := swiftgpu.FindAndAllocateFor(ctx, r.Client, slotGPUAllocatedTo(pool.Namespace, slot.Name), "", &profile,
+		swiftgpu.NodeConstraint{NodeSelector: launcherNodeSelector(pool.Spec.NodeSelector)})
 	if err != nil {
 		return err
 	}

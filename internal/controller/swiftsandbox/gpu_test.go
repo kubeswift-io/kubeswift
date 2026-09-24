@@ -31,6 +31,15 @@ func oneGPUNode(name string) *gpuv1alpha1.SwiftGPUNode {
 	}
 }
 
+// workerNode is the schedulable kernel Node behind a SwiftGPUNode; the
+// allocator refuses a SwiftGPUNode whose Node is missing, cordoned, or not one
+// the sandbox launcher can run on.
+func workerNode(name string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Labels: map[string]string{kernelNodeLabel: "true"},
+	}}
+}
+
 func pcieProfile(name, ns string) *gpuv1alpha1.SwiftGPUProfile {
 	return &gpuv1alpha1.SwiftGPUProfile{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -54,7 +63,7 @@ func TestReconcileNativeGPU_AllocatesAndReleases(t *testing.T) {
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(sb, node, profile).
+		WithObjects(sb, node, workerNode(node.Name), profile).
 		WithStatusSubresource(sb, node).
 		Build()
 	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
@@ -107,7 +116,7 @@ func TestReconcileNativeGPU_HGXTierRejected(t *testing.T) {
 	sb := nativeGPUSandbox("gpu-sb", "default", "hgx")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(sb, node, profile).WithStatusSubresource(sb, node).Build()
+		WithObjects(sb, node, workerNode(node.Name), profile).WithStatusSubresource(sb, node).Build()
 	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
 
 	ready, _, err := r.reconcileNativeGPU(context.Background(), sb)
@@ -205,4 +214,36 @@ func envVal(env []corev1.EnvVar, name string) string {
 		}
 	}
 	return ""
+}
+
+// The GPU comes from a node the launcher can actually run on: a kernel node
+// matching the sandbox's nodeSelector. A GPU on any other node would leave the
+// launcher Pending for good, pinned to a node it may not schedule onto.
+func TestReconcileNativeGPU_AllocatesOnlyWhereTheLauncherCanRun(t *testing.T) {
+	profile := pcieProfile("gtx", "default")
+	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
+	sb.Spec.NodeSelector = map[string]string{"zone": "b"}
+
+	notKernel := workerNode("a-notkernel")
+	notKernel.Labels = map[string]string{"zone": "b"}
+	wrongZone := workerNode("b-wrongzone")
+	wrongZone.Labels["zone"] = "a"
+	good := workerNode("c-good")
+	good.Labels["zone"] = "b"
+
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithObjects(sb, profile,
+			oneGPUNode("a-notkernel"), notKernel,
+			oneGPUNode("b-wrongzone"), wrongZone,
+			oneGPUNode("c-good"), good).
+		WithStatusSubresource(sb, &gpuv1alpha1.SwiftGPUNode{}).Build()
+	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
+
+	ready, _, err := r.reconcileNativeGPU(context.Background(), sb)
+	if err != nil || !ready {
+		t.Fatalf("reconcileNativeGPU: ready=%v err=%v", ready, err)
+	}
+	if sb.Status.GPU == nil || sb.Status.GPU.NodeName != "c-good" {
+		t.Fatalf("status.gpu = %+v, want an allocation on c-good", sb.Status.GPU)
+	}
 }

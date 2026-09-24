@@ -71,7 +71,7 @@ func TestFindAndAllocate_HGXShared_FMVersionMismatch_Rejected(t *testing.T) {
 	profile := sharedProfileWithFMVersion("hgx4", "default", 4, "560.35.03") // mismatch
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -102,7 +102,7 @@ func TestFindAndAllocate_HGXShared_FMVersionMatch_Allocates(t *testing.T) {
 	profile := sharedProfileWithFMVersion("hgx4", "default", 4, "550.163.01") // match
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).
 		Build()
 	r := &SwiftGPUReconciler{Client: c, Scheme: scheme.Scheme}
@@ -121,7 +121,7 @@ func TestGPUNodeHasCapacity_HGXShared_FMVersionMismatch(t *testing.T) {
 	profile := sharedProfileWithFMVersion("hgx4", "default", 4, "560.35.03")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node).WithStatusSubresource(node).Build()
+		WithObjects(node, kubeNode(node.Name)).WithStatusSubresource(node).Build()
 
 	err := GPUNodeHasCapacity(context.Background(), c, "hgx-0", profile)
 	if err == nil {
@@ -138,7 +138,7 @@ func TestReserveOnNode_HGXShared_FMVersionMismatch(t *testing.T) {
 	profile := sharedProfileWithFMVersion("hgx4", "default", 4, "560.35.03")
 
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, guest, profile).
+		WithObjects(node, kubeNode(node.Name), guest, profile).
 		WithStatusSubresource(node, guest).Build()
 
 	_, _, _, err := ReserveOnNode(context.Background(), c, guest, profile, "hgx-0")

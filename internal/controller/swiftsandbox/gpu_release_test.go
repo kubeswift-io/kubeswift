@@ -24,7 +24,7 @@ func allocatedGPUSandbox(t *testing.T, podPhase corev1.PodPhase, mut func(*sandb
 	sb := nativeGPUSandbox("gpu-sb", "default", "gtx")
 	sb.UID = "sb-uid"
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(sb, oneGPUNode("worker-1"), pcieProfile("gtx", "default")).
+		WithObjects(sb, oneGPUNode("worker-1"), workerNode("worker-1"), pcieProfile("gtx", "default")).
 		WithStatusSubresource(&sandboxv1alpha1.SwiftSandbox{}, &gpuv1alpha1.SwiftGPUNode{}).Build()
 	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
 	if ready, _, err := r.reconcileNativeGPU(ctx, sb); err != nil || !ready {

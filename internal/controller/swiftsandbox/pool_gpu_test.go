@@ -31,7 +31,7 @@ func TestAllocateSlotGPU_StampsSlotAndConsumesNode(t *testing.T) {
 	profile := pcieProfile("gtx", "default")
 	pool := gpuPool("gp", "default", "gtx")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, profile).WithStatusSubresource(node).Build()
+		WithObjects(node, workerNode(node.Name), profile).WithStatusSubresource(node).Build()
 	r := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme}
 
 	slot := r.slotTemplate(pool, "gp-slot-aaaaa")
@@ -56,7 +56,7 @@ func TestAllocateSlotGPU_RejectsHGXTier(t *testing.T) {
 	profile.Spec.Tier = "hgx-shared"
 	pool := gpuPool("gp", "default", "hgx")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
-		WithObjects(node, profile).WithStatusSubresource(node).Build()
+		WithObjects(node, workerNode(node.Name), profile).WithStatusSubresource(node).Build()
 	r := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme}
 
 	err := r.allocateSlotGPU(context.Background(), pool, r.slotTemplate(pool, "gp-slot-x"))

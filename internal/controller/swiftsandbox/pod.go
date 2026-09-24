@@ -244,6 +244,17 @@ func buildIntentConfigMap(sb *sandboxv1alpha1.SwiftSandbox, intentJSON []byte) *
 	}
 }
 
+// launcherNodeSelector is the nodeSelector a sandbox launcher runs under: a
+// kernel node, narrowed by the sandbox's (or pool's) own selector. A native GPU
+// is allocated only on a node that satisfies it.
+func launcherNodeSelector(sel map[string]string) map[string]string {
+	out := map[string]string{kernelNodeLabel: "true"}
+	for k, v := range sel {
+		out[k] = v
+	}
+	return out
+}
+
 // buildPod builds the sandbox launcher pod: a sandbox-materialize init container
 // (pulls the image + produces the RO ext4 in the node cache) followed by the
 // swiftletd launcher (mode-3 direct-kernel boot of that rootfs). RestartPolicy
@@ -251,10 +262,7 @@ func buildIntentConfigMap(sb *sandboxv1alpha1.SwiftSandbox, intentJSON []byte) *
 func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 
-	nodeSelector := map[string]string{kernelNodeLabel: "true"}
-	for k, v := range sb.Spec.NodeSelector {
-		nodeSelector[k] = v
-	}
+	nodeSelector := launcherNodeSelector(sb.Spec.NodeSelector)
 	// Native SwiftGPU: pin to the node the controller allocated the device(s) on
 	// (the DRA backend instead lets the scheduler place the claim). The GPU node
 	// must also be a kernel node — the kernel-node label above still applies.

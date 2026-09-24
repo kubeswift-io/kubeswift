@@ -220,6 +220,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A native GPU could be allocated on a node its workload could never run
+  on.** The allocator took the first SwiftGPUNode with enough free GPUs. It did
+  not check `vfioReady` (which the API docs said it did) or the discovery
+  phase, whether the Kubernetes Node was cordoned or gone, a SwiftGuest's
+  `spec.nodeName`, or a sandbox's `nodeSelector` and kernel-node requirement.
+  The launcher is pinned to the GPU's node, so it sat Pending (or failed
+  gpu-init) holding GPUs another node could have supplied. New allocations now
+  skip such nodes. An allocation a workload already holds is left where it is.
+
 - **GPU discovery could erase an allocation and let a GPU be handed out
   twice.** Each discovery cycle read the SwiftGPUNode, merged in the hardware
   it found, and patched status without a `resourceVersion`. `status.gpus` is an
