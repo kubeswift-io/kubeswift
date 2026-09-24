@@ -17,7 +17,11 @@ All notable changes to KubeSwift are documented here.
   dead weight that widened exposure of a node-wide private key to anyone who can
   read Secrets there. Only the destination node's identity is copied now; the
   source node's identity is still required to exist (the per-guest copy fails if
-  it is not provisioned).
+  it is not provisioned). The destination node's identity copy is now reclaimed
+  when the migration ends (at the terminal transition, and on mid-flight
+  deletion), guarded so a copy another active migration in the namespace still
+  needs is kept — previously these copies carried no owner and were never
+  cleaned up, so a node private key sat in the tenant namespace indefinitely.
 
 - **`swiftctl ssh` leaked the user's private key into logs.** The key was
   embedded in the pod-exec command, which the Kubernetes apiserver records in

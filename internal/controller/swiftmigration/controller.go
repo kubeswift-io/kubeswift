@@ -219,6 +219,13 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// an unnecessary API roundtrip on every spurious enqueue.
 	if isTerminalPhase(mig.Status.Phase) {
 		if hasFinalizer(&mig) {
+			// Reclaim the per-node identity copies before dropping the
+			// finalizer, so a node-wide private key does not linger in the
+			// tenant namespace after the migration ends (TTL deletion is
+			// opt-in, so it cannot be relied on for this).
+			if err := r.cleanupCopiedNodeIdentities(ctx, &mig); err != nil {
+				return ctrl.Result{}, fmt.Errorf("cleanup copied node identities: %w", err)
+			}
 			if err := r.removeFinalizer(ctx, &mig); err != nil {
 				return ctrl.Result{}, err
 			}
