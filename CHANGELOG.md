@@ -8,6 +8,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **The source node's migration private key was copied into the tenant
+  namespace unnecessarily.** With live-migration mTLS enabled, Validating copied
+  both participating nodes' identity Secrets — cert **and** private key — into
+  the guest's namespace, but only the destination node's copy is ever mounted
+  (by the destination pod's stunnel server). The source pod reads the per-guest
+  Secret instead, so the source node's full identity in the tenant namespace was
+  dead weight that widened exposure of a node-wide private key to anyone who can
+  read Secrets there. Only the destination node's identity is copied now; the
+  source node's identity is still required to exist (the per-guest copy fails if
+  it is not provisioned).
+
 - **`swiftctl ssh` leaked the user's private key into logs.** The key was
   embedded in the pod-exec command, which the Kubernetes apiserver records in
   its audit log's request URI and which appears in `/proc/<pid>/cmdline` of the
