@@ -148,6 +148,13 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Every guest's status was rewritten on every reconcile.** The SwiftGuest
+  controller writes status only when it changed, but its condition helper
+  restamped `lastTransitionTime` on every call, so the status always differed:
+  each 30s resync of each guest was an apiserver write (and a watch event to
+  every client), and the timestamps no longer said when anything happened.
+  `lastTransitionTime` now moves only when the condition's status changes.
+
 - **An in-place memory restore could resume old RAM over a newer disk.** A
   local/s3/oci memory snapshot captures memory and device state, not the disk,
   and the in-place restore reopens the guest's live disk. When the guest kept

@@ -490,20 +490,27 @@ func SetPodScheduledCondition(status *swiftv1alpha1.SwiftGuestStatus, pod *corev
 	setCondition(status, cond)
 }
 
+// setCondition sets or updates the condition of cond.Type.
+//
+// lastTransitionTime moves only when the condition's status does, as the
+// field means (apimeta.SetStatusCondition's rule). It used to be restamped on
+// every call, so every reconcile of every guest changed its status and wrote
+// it -- the unchanged-status check before the write could never hold -- and
+// the timestamps said nothing about when anything happened.
 func setCondition(status *swiftv1alpha1.SwiftGuestStatus, cond metav1.Condition) {
 	cond.ObservedGeneration = 0 // Status has no generation; controller sets when updating
-	now := metav1.Now()
-	cond.LastTransitionTime = now
-
-	found := false
 	for i := range status.Conditions {
-		if status.Conditions[i].Type == cond.Type {
-			status.Conditions[i] = cond
-			found = true
-			break
+		existing := &status.Conditions[i]
+		if existing.Type != cond.Type {
+			continue
 		}
+		cond.LastTransitionTime = existing.LastTransitionTime
+		if existing.Status != cond.Status || cond.LastTransitionTime.IsZero() {
+			cond.LastTransitionTime = metav1.Now()
+		}
+		*existing = cond
+		return
 	}
-	if !found {
-		status.Conditions = append(status.Conditions, cond)
-	}
+	cond.LastTransitionTime = metav1.Now()
+	status.Conditions = append(status.Conditions, cond)
 }

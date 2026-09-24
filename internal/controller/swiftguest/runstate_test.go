@@ -3,8 +3,10 @@ package swiftguest
 import (
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -221,5 +223,30 @@ func TestClearRunState_ANewReasonIsRecorded(t *testing.T) {
 	ClearRunState(st, "Stopped", "stopped")
 	if c := findCondition(st, "GuestRunning"); c == nil || c.Reason != "Stopped" {
 		t.Errorf("GuestRunning = %+v, want the newer reason", c)
+	}
+}
+
+// Re-setting a condition to the status it already has must not change it:
+// the controller writes status only when it changed, and a restamped
+// lastTransitionTime made every reconcile of every guest a write.
+func TestSetCondition_KeepsTransitionTimeUnlessStatusChanges(t *testing.T) {
+	st := &swiftv1alpha1.SwiftGuestStatus{}
+	past := metav1.NewTime(metav1.Now().Add(-time.Hour))
+	st.Conditions = []metav1.Condition{{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "VmRunning", LastTransitionTime: past}}
+	before := st.DeepCopy()
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "VmRunning"})
+	if !equality.Semantic.DeepEqual(before, st) {
+		t.Errorf("re-setting an unchanged condition changed the status:\n before %+v\n after  %+v", before.Conditions, st.Conditions)
+	}
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "Other", Message: "m"})
+	if c := findCondition(st, "GuestRunning"); !c.LastTransitionTime.Equal(&past) || c.Reason != "Other" {
+		t.Errorf("a reason-only change must update the reason and keep the transition time, got %+v", c)
+	}
+
+	setCondition(st, metav1.Condition{Type: "GuestRunning", Status: metav1.ConditionFalse, Reason: "Stopped"})
+	if c := findCondition(st, "GuestRunning"); c.LastTransitionTime.Equal(&past) {
+		t.Error("a status change must move the transition time")
 	}
 }
