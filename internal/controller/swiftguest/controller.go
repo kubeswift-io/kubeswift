@@ -681,6 +681,12 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 			// reason instead of recreating the launcher.
 			return ctrl.Result{}, hostPathErr
 		}
+		// A stopping guest's launcher can finish terminating between the stop
+		// check above and this lookup. Never start a new one for it: the next
+		// pass takes the stop path and records the guest Stopped.
+		if rg.GetLifecycle() == "stop" {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		// Self-heal a stale migration PodRef before creating the pod.
 		// If status.PodRef points at a <guest>-mig-<uid> pod from a prior
 		// live migration that no longer exists, clear it so the next

@@ -230,6 +230,12 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A stopping guest could briefly get a new launcher.** If its launcher
+  finished terminating between the controller's stop check and its launcher
+  lookup in the same pass, the controller created a fresh launcher, which
+  exited at once. It now waits for the next pass, which records the guest
+  Stopped.
+
 - **A sandbox pool could delete a slot a checkout had just claimed.**
   Scale-down, stale-slot recycling and pool deletion delete warm slots from a
   list read earlier. A checkout that claimed one of those slots in between
