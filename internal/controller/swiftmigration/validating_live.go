@@ -80,6 +80,19 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 			migrationv1alpha1.FailureReasonEligibilityMismatch)
 	}
 
+	// Storage gate — the controller-side twin of the webhook's
+	// gateLiveModeStorage, and the check EligibilityMismatch was defined for.
+	// webhook.enabled defaults to false, so admission may never have run it: an
+	// explicit mode=live on RWO or Filesystem storage would otherwise go on to
+	// a destination pod that cannot attach the disk (Multi-Attach), or live-
+	// migrate on storage the project declares unsafe. A missing class defers to
+	// resolution, as the webhook does.
+	if gate, _, err := r.liveStorageGate(ctx, &guest); err != nil {
+		return phaseTransient(fmt.Errorf("check live-migration storage: %w", err))
+	} else if gate != nil {
+		return phaseFailure(gate.Error(), migrationv1alpha1.FailureReasonEligibilityMismatch)
+	}
+
 	// Stamp status.Mode + SourceNode + DestinationNode + SourcePodUID.
 	// Mode may already be "live" (B1 dispatch path) or "" + spec=live;
 	// either way we set it explicitly here for clarity.

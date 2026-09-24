@@ -591,15 +591,9 @@ func (v *Validator) gateLiveModeStorage(ctx context.Context, guest *swiftv1alpha
 		return fmt.Errorf("look up SwiftGuestClass %q for live-mode storage check: %w",
 			guest.Spec.GuestClassRef.Name, err)
 	}
-	storage := resolved.MergeStorage(guest, &class)
-	if storage.IsLiveMigrationCapable() {
-		return nil
-	}
-	return fmt.Errorf(
-		"SwiftGuest %q resolved storage is accessMode=%s volumeMode=%s; live migration requires accessMode=ReadWriteMany AND volumeMode=Block (Filesystem RWX is not live-migration-capable). "+
-			"Set spec.storage on the SwiftGuest or its SwiftGuestClass to ReadWriteMany+Block, or use spec.mode=offline.",
-		guest.Name, storage.AccessMode, storage.VolumeMode,
-	)
+	// The rule itself is shared with the controller (auto-mode resolution and
+	// the Validating-live gate), so admission and reconcile cannot drift.
+	return resolved.LiveMigrationStorageError(guest, &class)
 }
 
 // checkPerSourceNodeConcurrency rejects a live-mode SwiftMigration

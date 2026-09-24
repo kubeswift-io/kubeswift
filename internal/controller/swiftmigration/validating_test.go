@@ -29,6 +29,10 @@ func validatingScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// newGuestClass returns a class whose storage is live-migration-capable
+// (RWX+Block), the precondition every live-path test assumes; offline
+// validation does not gate on storage, so offline tests are unaffected. Tests
+// of the storage gate itself override Spec.Storage.
 func newGuestClass(name string, cpu, memMi int64) *swiftv1alpha1.SwiftGuestClass {
 	return &swiftv1alpha1.SwiftGuestClass{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -38,6 +42,10 @@ func newGuestClass(name string, cpu, memMi int64) *swiftv1alpha1.SwiftGuestClass
 			RootDisk: swiftv1alpha1.RootDiskSpec{
 				Size:   resource.MustParse("40Gi"),
 				Format: swiftv1alpha1.DiskFormatRaw,
+			},
+			Storage: &swiftv1alpha1.StorageSpec{
+				AccessMode: corev1.ReadWriteMany,
+				VolumeMode: corev1.PersistentVolumeBlock,
 			},
 		},
 	}

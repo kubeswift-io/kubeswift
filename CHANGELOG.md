@@ -148,6 +148,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Draining a node could hang on a guest with ordinary storage.** Every drain
+  migration uses `mode: auto`, and auto resolution never checked storage, so a
+  default disk-boot guest (ReadWriteOnce/Filesystem) resolved to live; its
+  destination pod hit Multi-Attach, the migration failed `DstNeverReady`, and
+  the drain stayed blocked instead of falling back to offline as documented. Its
+  comment assumed Validating-live would reject incapable storage, but no such
+  check existed in the controller — only in the webhook, which is off by
+  default and only applied to explicit `mode: live`. The storage rule
+  (kernel-boot, or ReadWriteMany+Block root storage) now lives in one shared
+  helper used by the webhook, by auto resolution (incapable storage resolves
+  offline), and by Validating-live (explicit `mode: live` on incapable storage
+  fails with `EligibilityMismatch`, the reason defined for exactly this).
+
 - **The gateway UI froze on a member cluster after about an hour, with no
   error.** A multi-cluster guest or migration stream ran one watch per member,
   and when the apiserver ended a member's watch — its routine watch timeout, a

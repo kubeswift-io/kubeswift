@@ -78,6 +78,41 @@ func newSourcePod(guestName, ns, uid string) *corev1.Pod {
 	}
 }
 
+// An explicit mode=live on storage that cannot be live-migrated must fail in
+// Validating with EligibilityMismatch. webhook.enabled defaults to false, so
+// the controller is the only place this is guaranteed to be checked.
+func TestValidatingLive_NonLiveCapableStorage_FailsEligibility(t *testing.T) {
+	scheme := validatingScheme(t)
+	guest := newGuestForValidating("guest", "default", "class-default")
+	class := newGuestClass("class-default", 2, 2048)
+	class.Spec.Storage = nil // defaults: ReadWriteOnce + Filesystem
+	node := newSpaciousNode("worker-2", 8, 65536)
+	srcPod := newSourcePod("guest", "default", "src-pod-uid-1")
+	mig := newMigration("m", "default")
+	mig.Spec.Mode = migrationv1alpha1.SwiftMigrationModeLive
+	mig.Spec.AllowIPChange = true
+	mig.Spec.Timeout = &metav1.Duration{Duration: 5 * 60 * 1e9}
+	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseValidating
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, class, node, srcPod).
+		WithStatusSubresource(mig).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	result := r.handleValidatingLive(context.Background(), mig, mig.Status.DeepCopy())
+	if result.FailureMsg == "" {
+		t.Fatal("expected a storage-gate failure for RWO/Filesystem storage")
+	}
+	if result.FailureReason != migrationv1alpha1.FailureReasonEligibilityMismatch {
+		t.Errorf("FailureReason: want EligibilityMismatch, got %q", result.FailureReason)
+	}
+	if !strings.Contains(result.FailureMsg, "ReadWriteMany") {
+		t.Errorf("failure message should name the requirement; got %q", result.FailureMsg)
+	}
+}
+
 func TestValidatingLive_HappyPath_AdvancesToPreparing(t *testing.T) {
 	scheme := validatingScheme(t)
 	guest := newGuestForValidating("guest", "default", "class-default")

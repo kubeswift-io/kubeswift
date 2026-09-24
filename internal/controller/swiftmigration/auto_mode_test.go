@@ -16,11 +16,13 @@ func TestResolveAutoMode_NoVFIO_AllowIPChange_ResolvesToLive(t *testing.T) {
 	scheme := testScheme(t)
 	guest := &swiftv1alpha1.SwiftGuest{
 		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{GuestClassRef: corev1.LocalObjectReference{Name: "class-default"}},
 	}
 	mig := newMigration("m", "default")
 	mig.Spec.AllowIPChange = true
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest).Build()
+	// newGuestClass carries live-capable (RWX+Block) storage.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, newGuestClass("class-default", 2, 2048)).Build()
 	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
 
 	if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
@@ -28,6 +30,65 @@ func TestResolveAutoMode_NoVFIO_AllowIPChange_ResolvesToLive(t *testing.T) {
 	}
 	if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeLive {
 		t.Errorf("status.Mode: want live, got %q", mig.Status.Mode)
+	}
+}
+
+// C4: a disk-boot guest on storage that cannot be live-migrated (the default
+// RWO/Filesystem) must resolve auto to OFFLINE. It used to resolve live, so a
+// drain migration's destination pod hit Multi-Attach and failed DstNeverReady,
+// blocking the drain instead of taking the documented offline path.
+func TestResolveAutoMode_NonLiveCapableStorage_ResolvesToOffline(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		st   *swiftv1alpha1.StorageSpec
+	}{
+		{"default RWO/Filesystem", nil},
+		{"RWX Filesystem", &swiftv1alpha1.StorageSpec{AccessMode: corev1.ReadWriteMany, VolumeMode: corev1.PersistentVolumeFilesystem}},
+		{"RWO Block", &swiftv1alpha1.StorageSpec{AccessMode: corev1.ReadWriteOnce, VolumeMode: corev1.PersistentVolumeBlock}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := testScheme(t)
+			guest := &swiftv1alpha1.SwiftGuest{
+				ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+				Spec: swiftv1alpha1.SwiftGuestSpec{
+					ImageRef:      &corev1.LocalObjectReference{Name: "img"},
+					GuestClassRef: corev1.LocalObjectReference{Name: "c"},
+				},
+			}
+			class := newGuestClass("c", 2, 2048)
+			class.Spec.Storage = tc.st
+			mig := newMigration("m", "default")
+			mig.Spec.AllowIPChange = true
+
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest, class).Build()
+			r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+			if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
+				t.Fatalf("expected nil result; got %+v", res)
+			}
+			if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeOffline {
+				t.Errorf("status.Mode: want offline for non-live-capable storage, got %q", mig.Status.Mode)
+			}
+		})
+	}
+}
+
+// A kernel-boot guest has no root-disk PVC, so it stays live-eligible under
+// auto regardless of the class's storage defaults.
+func TestResolveAutoMode_KernelBoot_ResolvesToLive(t *testing.T) {
+	scheme := testScheme(t)
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{KernelRef: &corev1.LocalObjectReference{Name: "k"}},
+	}
+	mig := newMigration("m", "default")
+	mig.Spec.AllowIPChange = true
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(guest).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme}
+	if res := r.resolveAutoMode(context.Background(), mig, &mig.Status); res != nil {
+		t.Fatalf("expected nil result; got %+v", res)
+	}
+	if mig.Status.Mode != migrationv1alpha1.SwiftMigrationModeLive {
+		t.Errorf("status.Mode: want live for kernel-boot, got %q", mig.Status.Mode)
 	}
 }
 
