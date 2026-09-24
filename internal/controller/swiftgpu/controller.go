@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,15 @@ type SwiftGPUReconciler struct {
 
 // Reconcile implements the reconcile loop.
 func (r *SwiftGPUReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	res, err := r.reconcile(ctx, req)
+	if apierrors.IsConflict(err) {
+		// The guest changed under this pass; retry from the newer object.
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return res, err
+}
+
+func (r *SwiftGPUReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var guest swiftv1alpha1.SwiftGuest
@@ -314,7 +324,11 @@ func (r *SwiftGPUReconciler) patchStatus(ctx context.Context, guest *swiftv1alph
 	if equality.Semantic.DeepEqual(guest.Status, *status) {
 		return nil
 	}
-	patch := client.MergeFrom(guest.DeepCopy())
+	// Optimistic lock: status.conditions is an atomic list, and setting
+	// GPUAllocated resends all of it. From a stale read that would put back
+	// an old GuestRunning written by swiftletd. A conflict retries with a
+	// fresh read (see Reconcile).
+	patch := client.MergeFromWithOptions(guest.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	guest.Status = *status
 	return r.Status().Patch(ctx, guest, patch)
 }

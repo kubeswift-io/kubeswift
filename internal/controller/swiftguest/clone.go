@@ -242,8 +242,11 @@ func (r *SwiftGuestReconciler) stampCloneAnnotations(ctx context.Context, guest 
 	if err := r.Patch(ctx, patched, client.MergeFrom(guest)); err != nil {
 		return err
 	}
-	// Reflect the stamp in-memory so the rest of this reconcile sees it.
+	// Reflect the stamp in-memory so the rest of this reconcile sees it, and
+	// the new resourceVersion so this pass's (optimistically locked) status
+	// patch does not conflict with its own write.
 	guest.Annotations = patched.Annotations
+	guest.ResourceVersion = patched.ResourceVersion
 	return nil
 }
 

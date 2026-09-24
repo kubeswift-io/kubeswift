@@ -98,6 +98,10 @@ type SwiftGuestReconciler struct {
 
 // Reconcile implements the reconcile loop.
 func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return conflictRequeue(r.reconcile(ctx, req))
+}
+
+func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var guest swiftv1alpha1.SwiftGuest
@@ -845,9 +849,24 @@ func (r *SwiftGuestReconciler) patchStatus(ctx context.Context, guest *swiftv1al
 	if equality.Semantic.DeepEqual(guest.Status, status) {
 		return nil
 	}
-	patch := client.MergeFrom(guest.DeepCopy())
+	// Optimistic lock: status.conditions is an atomic list, so this patch
+	// replaces all of it whenever any condition changed. From a stale read it
+	// would put back a GuestRunning that swiftletd has since changed (and
+	// swiftletd, which writes the list the same way, would drop ours). A
+	// conflict is retried with a fresh read (conflictRequeue).
+	patch := client.MergeFromWithOptions(guest.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	guest.Status = *status
 	return r.Status().Patch(ctx, guest, patch)
+}
+
+// conflictRequeue turns an optimistic-lock conflict into a prompt, quiet
+// retry: the guest changed under this reconcile (swiftletd reported, another
+// controller wrote), and the next pass starts from the newer object.
+func conflictRequeue(res ctrl.Result, err error) (ctrl.Result, error) {
+	if apierrors.IsConflict(err) {
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+	return res, err
 }
 
 // swiftImageToSwiftGuests enqueues SwiftGuests that reference a SwiftImage when the SwiftImage changes.

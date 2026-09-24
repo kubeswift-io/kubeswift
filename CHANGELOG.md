@@ -148,6 +148,18 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **swiftletd's `GuestRunning` report wiped the guest's other conditions.**
+  `status.conditions` is an atomic list, so swiftletd's merge patch of just
+  `[GuestRunning]` replaced the whole list, dropping `GPUAllocated`,
+  `StorageReady` and the rest, and a running GPU guest then read as Pending.
+  In the other direction, the SwiftGuest and GPU controllers' status patches
+  resent the full list from a possibly stale read and could put back a
+  `GuestRunning` that swiftletd had just changed. swiftletd now reads the
+  conditions, updates only `GuestRunning` (keeping its transition time unless
+  the status changes), and writes them back with the `resourceVersion` it read,
+  retrying on conflict. Both controllers' status patches are optimistically
+  locked, and a conflict is retried promptly from a fresh read.
+
 - **A kube-ovn guest got a new IP after a stop/start.** The kube-ovn IP pin was
   taken from `status.network.primaryIP`, which is now correctly cleared when
   the launcher goes away (stop, poweroff, offline migration). Every restarted
