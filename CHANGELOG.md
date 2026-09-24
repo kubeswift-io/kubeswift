@@ -230,6 +230,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A guest could grow swiftletd's memory, or stall it, through the vsock
+  agent reply.** swiftletd read the in-guest agent's reply (identity
+  regeneration, warm-slot exec) until a newline, with no size limit and a
+  timeout that restarted on every read. A guest that never ended its reply
+  grew swiftletd's memory without bound, and one that sent a byte at a time
+  held the action loop indefinitely. Replies are now capped at 16 MiB, and
+  the timeout covers the whole reply.
+
 - **A vhost-user queue size below 1 kept the launcher from starting.**
   `vhostUserDevices[].queueSizes` is signed in the API but read as unsigned by
   swiftletd, so a negative entry made the whole runtime intent unreadable and

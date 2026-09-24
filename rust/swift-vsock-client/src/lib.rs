@@ -14,7 +14,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// AF_VSOCK port the guest agent (`cmd/kubeswift-guest-agent`) listens on.
 /// Shared constant — must match the agent's `DefaultPort`.
@@ -22,6 +22,12 @@ pub const AGENT_PORT: u32 = 1024;
 
 /// Protocol version (must match the agent's `ProtocolVersion`).
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Largest reply accepted from the guest. The agent caps an exec reply's
+/// stdout and stderr at 1 MiB each; JSON escaping can grow those several times
+/// over, which this leaves room for. The guest is untrusted: without a cap a
+/// reply that never ends grew swiftletd's memory without bound.
+pub const MAX_REPLY_BYTES: usize = 16 << 20;
 
 #[derive(Debug)]
 pub enum VsockError {
@@ -140,17 +146,35 @@ pub fn request_line(
     }
     writer.flush()?;
 
-    // Read the response line (the agent writes one line then closes).
+    // Read the response line (the agent writes one line then closes), within
+    // one deadline for the whole reply: a per-read timeout let a guest that
+    // trickles a byte at a time hold the caller indefinitely.
+    let deadline = Instant::now() + timeout;
     let mut resp = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(VsockError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "guest reply not complete before the timeout",
+            )));
+        }
+        reader.get_ref().set_read_timeout(Some(left))?;
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
+        let scan_from = resp.len();
         resp.extend_from_slice(&buf[..n]);
-        if resp.contains(&b'\n') {
+        if resp[scan_from..].contains(&b'\n') {
             break;
+        }
+        if resp.len() > MAX_REPLY_BYTES {
+            return Err(VsockError::Decode(format!(
+                "guest reply exceeds {} bytes without a newline",
+                MAX_REPLY_BYTES
+            )));
         }
     }
     Ok(resp)
@@ -318,6 +342,78 @@ mod tests {
         let req = IdentityRequest::regenerate(vec![], None, None, false);
         let err = regenerate_identity(&sock, &req, Duration::from_secs(5)).unwrap_err();
         assert!(matches!(err, VsockError::Handshake(_)), "got {:?}", err);
+        h.join().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    // Accepts one connection, completes the handshake, reads the request, then
+    // hands the stream to `reply` to misbehave with.
+    fn hostile_agent(
+        path: std::path::PathBuf,
+        reply: impl FnOnce(std::os::unix::net::UnixStream) + Send + 'static,
+    ) -> thread::JoinHandle<()> {
+        let listener = UnixListener::bind(&path).unwrap();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut r = BufReader::new(stream);
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            w.write_all(b"OK 1\n").unwrap();
+            line.clear();
+            r.read_line(&mut line).unwrap();
+            reply(w);
+        })
+    }
+
+    fn test_socket(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vsock-test-{}-{}", tag, std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock = dir.join("vsock.sock");
+        let _ = std::fs::remove_file(&sock);
+        sock
+    }
+
+    // A guest that never ends its reply is cut off at MAX_REPLY_BYTES instead
+    // of growing swiftletd's memory without bound.
+    #[test]
+    fn an_endless_reply_is_capped() {
+        let sock = test_socket("cap");
+        let h = hostile_agent(sock.clone(), |mut w| {
+            let chunk = vec![b'x'; 1 << 20];
+            for _ in 0..(MAX_REPLY_BYTES / chunk.len() + 2) {
+                if w.write_all(&chunk).is_err() {
+                    return; // the client gave up, as it should
+                }
+            }
+        });
+        let err = request_line(&sock, AGENT_PORT, b"{}", Duration::from_secs(10)).unwrap_err();
+        assert!(matches!(err, VsockError::Decode(_)), "got {:?}", err);
+        h.join().unwrap();
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    // A guest that trickles its reply cannot stretch the call past the
+    // timeout: it bounds the whole reply, not each read.
+    #[test]
+    fn a_trickled_reply_is_bounded_by_the_timeout() {
+        let sock = test_socket("trickle");
+        let h = hostile_agent(sock.clone(), |mut w| {
+            for _ in 0..40 {
+                if w.write_all(b"x").is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let err = request_line(&sock, AGENT_PORT, b"{}", Duration::from_millis(500)).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert!(matches!(err, VsockError::Io(_)), "got {:?}", err);
         h.join().unwrap();
         let _ = std::fs::remove_file(&sock);
     }
