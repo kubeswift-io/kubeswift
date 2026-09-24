@@ -89,9 +89,10 @@ func main() {
 	webhookHost := flag.String("webhook-host", defaultWebhookHost, "Host for webhook server")
 	webhookCertDir := flag.String("webhook-cert-dir", defaultCertDir, "Directory containing webhook TLS certs (tls.crt, tls.key)")
 	metricsAddr := flag.String("metrics-bind-address", ":8080", "Address for metrics endpoint")
-	metricsSecure := flag.Bool("metrics-secure", false,
+	metricsSecure := flag.Bool("metrics-secure", true,
 		"Serve metrics over HTTPS to callers the apiserver authenticates and authorizes for GET /metrics "+
-			"(grant scrapers the kubeswift-metrics-reader ClusterRole). Off by default: turning it on changes how Prometheus must scrape.")
+			"(grant scrapers the kubeswift-metrics-reader ClusterRole). The metrics name every tenant's guests, "+
+			"images and namespaces; =false serves them over plain HTTP to anyone who can reach the pod.")
 	probeAddr := flag.String("health-probe-bind-address", ":8081", "Address for the /healthz and /readyz endpoints")
 	var allowedHostPaths stringSliceFlag
 	flag.Var(&allowedHostPaths, "allowed-hostpath-prefix",

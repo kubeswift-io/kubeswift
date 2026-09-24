@@ -25,11 +25,17 @@ controllerManager:
     # Serve /metrics over HTTPS, only to callers the apiserver authenticates
     # and authorizes for GET /metrics. The metrics name every tenant's guests,
     # images and namespaces, and plain HTTP hands them to anyone who can reach
-    # the pod. Bind the kubeswift-metrics-reader ClusterRole to your
-    # Prometheus ServiceAccount; the ServiceMonitor (monitoring.enabled)
-    # switches to https + its token. Off by default because it changes how
-    # every scraper must connect.
-    secure: false
+    # the pod. The ServiceMonitor (monitoring.enabled) scrapes with https +
+    # Prometheus's own token; the scraper's ServiceAccount must be bound to the
+    # kubeswift-metrics-reader ClusterRole (readers below, or by hand). false
+    # serves plain HTTP to any caller, as releases before v0.15.0 did.
+    secure: true
+    # ServiceAccounts bound to kubeswift-metrics-reader, i.e. allowed to scrape
+    # the secure endpoint. kube-prometheus-stack's Prometheus, for example:
+    #   readers:
+    #     - name: kube-prometheus-stack-prometheus
+    #       namespace: monitoring
+    readers: []
 
 swiftletd:
   # DaemonSet: disabled by default. swiftletd is designed to run only inside SwiftGuest pods

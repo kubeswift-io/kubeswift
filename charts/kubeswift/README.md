@@ -73,7 +73,8 @@ key named instead of being silently ignored. Delete the key.
 | `controllerManager.image.tag` | Controller image tag (`latest` → `v<appVersion>`) | `latest` |
 | `controllerManager.replicas` | Controller replicas | `1` |
 | `controllerManager.resources` | Requests/limits | `100m`/`128Mi` … `500m`/`512Mi` |
-| `controllerManager.metrics.secure` | Serve `/metrics` over HTTPS to authorized scrapers only (bind `kubeswift-metrics-reader`) | `false` |
+| `controllerManager.metrics.secure` | Serve `/metrics` over HTTPS to authorized scrapers only (bind `kubeswift-metrics-reader`); `false` serves plain HTTP to anyone | `true` |
+| `controllerManager.metrics.readers` | ServiceAccounts (`{name, namespace}`) bound to `kubeswift-metrics-reader`, i.e. allowed to scrape | `[]` |
 | `swiftletd.daemonset.enabled` | Standalone swiftletd DaemonSet — leave off; swiftletd runs as the launcher container inside guest pods | `false` |
 | `swiftletd.image.registry` | Launcher image registry | `ghcr.io/kubeswift-io/kubeswift` |
 | `swiftletd.image.tag` | Launcher image tag (as above) | `latest` |

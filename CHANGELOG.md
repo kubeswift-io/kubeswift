@@ -19,7 +19,25 @@ an existing schedule whose template sets one must drop it before its next
 edit; the controller already ignores it. Snapshots already captured are
 unaffected: they keep the directory they were captured into.
 
+**The controller's `/metrics` is HTTPS and authorized by default.**
+`controllerManager.metrics.secure` (and the binary's `--metrics-secure`) now
+defaults to `true`. A scraper needs `https`, a ServiceAccount token, and a
+binding to the `kubeswift-metrics-reader` ClusterRole; without the binding it
+gets `403` and the dashboards and alerts go quiet. Bind Prometheus with
+`controllerManager.metrics.readers` (new) or `kubectl create clusterrolebinding
+kubeswift-metrics-reader --clusterrole=kubeswift-metrics-reader
+--serviceaccount=<ns>:<sa>`. The chart's ServiceMonitor and
+`config/grafana/servicemonitor.yaml` scrape with https and Prometheus's token.
+`secure: false` keeps plain HTTP. An upgrade with `--reuse-values` keeps the
+setting it had.
+
 ### Security
+
+- **The controller served its metrics to anyone who could reach it (G15).**
+  `/metrics` on port 8080 was plain HTTP with no authentication, and the
+  metrics name every tenant's guests, images and namespaces. Serving them over
+  HTTPS to authenticated, authorized callers was opt-in; it is now the default,
+  for the chart and the binary (so the kustomize install too).
 
 - **One namespace could delete, or read, another namespace's snapshots on a
   node.** A local snapshot was captured into whatever single directory under

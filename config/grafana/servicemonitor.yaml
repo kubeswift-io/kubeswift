@@ -9,6 +9,17 @@
 #   kubectl apply -f config/grafana/servicemonitor.yaml
 #
 # Adjust namespace + the release label selector to match your install.
+#
+# The controller serves /metrics over HTTPS to authorized callers only
+# (--metrics-secure, the default since v0.15.0), so bind Prometheus's
+# ServiceAccount to the kubeswift-metrics-reader ClusterRole:
+#
+#   kubectl create clusterrolebinding kubeswift-metrics-reader \
+#     --clusterrole=kubeswift-metrics-reader \
+#     --serviceaccount=<prometheus-namespace>:<prometheus-serviceaccount>
+#
+# For a controller run with --metrics-secure=false, drop scheme, tlsConfig and
+# bearerTokenFile below.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -32,3 +43,8 @@ spec:
     - port: metrics # the named port on kubeswift-controller-manager-metrics (8080)
       interval: 30s
       path: /metrics
+      # A self-signed certificate, and Prometheus's own ServiceAccount token.
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
