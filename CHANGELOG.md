@@ -207,6 +207,17 @@ setting it had.
   backend. Each scheduled snapshot now gets its own directory, and the
   controller drops a template `hostPath` that an existing schedule carries.
 
+### CI
+
+- **`test/migration/migration-test.sh` runs on a shared cluster.** It no
+  longer fails to pick nodes on kubectl 1.32 (a negated jsonpath filter) or
+  counts an untainted control plane as a worker; it creates its own guest
+  class instead of expecting `default`, takes the SSH identity from
+  `--identity` rather than a hard-coded key, and uncordons only the nodes it
+  cordoned rather than every node. `--mode live` runs a live migration and
+  checks that a tmpfs file and the guest's uptime survive it; `--source`,
+  `--target`, `--guest-class`, `--storage-class` and `--no-cleanup` are new.
+
 ---
 
 ## [v0.14.1] — 2026-09-24
