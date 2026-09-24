@@ -49,9 +49,16 @@ var capabilities = []capability{
 		},
 	},
 	{
+		// Not pods/exec: the launcher is privileged, so exec in it is root on
+		// its node. The gateway authorizes these and runs the bridge itself
+		// (exec_bridge.go).
 		key: "console", displayName: "Console",
-		description: "Open a VM serial console (exec into the launcher pod).",
-		rules:       []rbacv1.PolicyRule{rule([]string{""}, []string{"pods/exec"}, []string{"create"})},
+		description: "Open a VM serial console, a sandbox shell and a sandbox's logs.",
+		rules: []rbacv1.PolicyRule{
+			rule([]string{"swift.kubeswift.io"}, []string{"swiftguests/console"}, []string{"create"}),
+			rule([]string{"sandbox.kubeswift.io"}, []string{"swiftsandboxes/exec"}, []string{"create"}),
+			rule([]string{"sandbox.kubeswift.io"}, []string{"swiftsandboxes/log"}, []string{"get"}),
+		},
 	},
 	{
 		key: "migrate", displayName: "Migrate",

@@ -1,0 +1,104 @@
+{{- if eq (include "kubeswift.gatewayConsole" .) "true" }}
+# The console, the sandbox shell and the sandbox log view (the gateway's
+# /console, /sandbox-exec and /sandbox-logs) exec a bridge command in the
+# guest's launcher: socat to its serial or vsock socket, or tail of its logs.
+# The launcher is privileged, so exec in it is root on its node. Users are
+# therefore never given pods/exec for these: the gateway checks the user's
+# create on swiftguests/console or swiftsandboxes/exec, or get on
+# swiftsandboxes/log, and runs the bridge as its own member credential, the
+# kubeswift-gateway ServiceAccount (an edge member's, or a self-federating
+# hub's own).
+#
+# That credential holds pods/exec below, and the policy after it admits the
+# credential's exec only in a launcher container and only for the bridge
+# commands (internal/gateway/exec_bridge.go, whose tests keep these patterns
+# identical to its own). Every variable part of a command is a runtime
+# directory named after a namespace and a DNS name, so nothing the shell treats
+# specially can reach it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubeswift-gateway-console
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+rules:
+  # Resolve the launcher: status.podRef of the guest or sandbox, and the pod's
+  # label naming it.
+  - apiGroups: ["swift.kubeswift.io"]
+    resources: ["swiftguests"]
+    verbs: ["get"]
+  - apiGroups: ["sandbox.kubeswift.io"]
+    resources: ["swiftsandboxes"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-gateway-console
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-gateway-console
+subjects:
+  - kind: ServiceAccount
+    name: kubeswift-gateway
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-gateway-exec-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CONNECT"]
+        resources: ["pods/exec", "pods/attach", "pods/portforward"]
+  matchConditions:
+    - name: gateway-credential
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:{{ .Values.namespace }}:kubeswift-gateway'
+  variables:
+    - name: shInLauncher
+      expression: >-
+        request.subResource == 'exec' &&
+        has(object.container) && object.container == 'launcher' &&
+        has(object.command) && size(object.command) == 3 &&
+        object.command[0] == 'sh' && object.command[1] == '-c'
+  validations:
+    - expression: >-
+        variables.shInLauncher && (
+        object.command[2].matches(r'^for i in \$\(seq 1 15\); do test -S /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/serial\.sock && break; sleep 1; done; test -S /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/serial\.sock \|\| \{ echo serial socket not found; exit 1; \}; exec socat -,raw,echo=0 UNIX-CONNECT:/var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/serial\.sock$') ||
+        object.command[2].matches(r'^for i in \$\(seq 1 10\); do test -S /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/vsock\.sock && break; sleep 1; done; exec socat -t10 - UNIX-CONNECT:/var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/vsock\.sock$') ||
+        object.command[2].matches(r'^tail -q -n \+1 -F /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/serial\.sock\.log /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/workload\.log$') ||
+        object.command[2].matches(r'^cat /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/serial\.sock\.log && \{ cat /var/lib/kubeswift/run/[a-z0-9][a-z0-9.-]*/workload\.log 2>/dev/null \|\| true; \}$'))
+      message: >-
+        the kubeswift gateway's credential may exec only the console, sandbox
+        shell and sandbox log bridges, in a launcher container
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-gateway-exec-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: gateway
+spec:
+  policyName: kubeswift-gateway-exec-gate
+  validationActions: ["Deny"]
+{{- end }}

@@ -127,7 +127,7 @@ still adds that component in any role. See [`docs/ui/gateway.md`](../../docs/ui/
 | `federation.selfRegister.enabled` | (role=hub) Register this cluster as a local member via the gateway's in-cluster SA — no credential Secret | `true` |
 | `federation.selfRegister.displayName` | UI label for the self entry | `""` (release name) |
 | `federation.selfRegister.prometheusEndpoint` | Explicit telemetry endpoint for the self entry (else auto-discovered) | `""` |
-| `federation.edge.applyMemberRBAC` | (role=edge) Apply the member-RBAC (impersonator + VM-reader + Prometheus-discovery) at install | `true` |
+| `federation.edge.applyMemberRBAC` | (role=edge) Apply the member-RBAC (impersonator + VM-reader + Prometheus-discovery + the console bridge grant and its `kubeswift-gateway-exec-gate` policy) at install | `true` |
 | `federation.edge.operatorGroups` | IdP groups (the impersonated subjects) bound to the VM-reader role on this edge | `[]` |
 | `federation.edge.displayName` | UI label the hub shows for this edge | `""` (release name) |
 

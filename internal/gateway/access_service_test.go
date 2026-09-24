@@ -155,17 +155,22 @@ func TestAccess_CreateRole_ComposesRules(t *testing.T) {
 	if cr.Labels[roleLabel] != "true" || cr.Annotations[roleCapsAnno] != "view-vms,console" {
 		t.Errorf("metadata = %+v", cr.ObjectMeta)
 	}
-	// Rules include pods/exec (console) — proof the capability rules were composed.
+	// Rules include the console's (swiftguests/console) — proof the capability
+	// rules were composed — and no pods/exec, which in a privileged launcher is
+	// root on its node.
 	found := false
 	for _, r := range cr.Rules {
 		for _, res := range r.Resources {
-			if res == "pods/exec" {
+			switch res {
+			case "swiftguests/console":
 				found = true
+			case "pods/exec":
+				t.Errorf("composed role grants pods/exec: %+v", r)
 			}
 		}
 	}
 	if !found {
-		t.Errorf("composed role missing the console (pods/exec) rule: %+v", cr.Rules)
+		t.Errorf("composed role missing the console (swiftguests/console) rule: %+v", cr.Rules)
 	}
 }
 
