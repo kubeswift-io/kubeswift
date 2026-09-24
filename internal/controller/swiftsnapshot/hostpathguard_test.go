@@ -42,21 +42,46 @@ func TestCheckLocalHostPath_RejectsEscapes(t *testing.T) {
 	}
 }
 
-func TestCheckLocalHostPath_AcceptsThePermittedPrefix(t *testing.T) {
-	ok := swiftsnapshotwebhook.LocalBackendHostPathPrefix + "tenant-s1"
-	if err := checkLocalHostPath(localSnap(ok)); err != nil {
-		t.Errorf("rejected a legitimate path %q: %v", ok, err)
-	}
-}
-
-func TestCheckLocalHostPath_RequiresTheFields(t *testing.T) {
-	if err := checkLocalHostPath(localSnap("")); err == nil {
-		t.Error("accepted an empty hostPath")
+func TestCheckLocalHostPath_AcceptsTheDerivedDir(t *testing.T) {
+	for _, ok := range []string{
+		swiftsnapshotwebhook.LocalBackendHostPathPrefix + "tenant_s1",
+		swiftsnapshotwebhook.LocalBackendHostPathPrefix + "tenant_s1/",
+		"",
+	} {
+		if err := checkLocalHostPath(localSnap(ok)); err != nil {
+			t.Errorf("rejected %q: %v", ok, err)
+		}
 	}
 	s := localSnap("")
 	s.Spec.Backend.Local = nil
-	if err := checkLocalHostPath(s); err == nil {
-		t.Error("accepted backend.type=local with no backend.local")
+	if err := checkLocalHostPath(s); err != nil {
+		t.Errorf("rejected backend.type=local with no backend.local: %v", err)
+	}
+}
+
+// A single safe segment is not enough any more: it could be another tenant's
+// directory, which the capture empties and a delete removes.
+func TestCheckLocalHostPath_RejectsAnotherDirectory(t *testing.T) {
+	for _, hp := range []string{
+		swiftsnapshotwebhook.LocalBackendHostPathPrefix + "victim_db",
+		swiftsnapshotwebhook.LocalBackendHostPathPrefix + "tenant-s1", // the old <ns>-<name> form
+		swiftsnapshotwebhook.LocalBackendHostPathPrefix + "shared",
+	} {
+		if err := checkLocalHostPath(localSnap(hp)); err == nil {
+			t.Errorf("accepted %q", hp)
+		}
+	}
+}
+
+// Once a capture has begun its directory is the recorded one and the spec's
+// hostPath is not read, so a snapshot an earlier version captured into the
+// directory its author chose is not failed after the upgrade.
+func TestCheckLocalHostPath_CapturedSnapshotKeepsWorking(t *testing.T) {
+	s := localSnap(swiftsnapshotwebhook.LocalBackendHostPathPrefix + "mine")
+	s.Status.NodeName = "n1"
+	s.Status.MemorySnapshot = &snapshotv1alpha1.MemorySnapshotRef{Handle: swiftsnapshotwebhook.LocalBackendHostPathPrefix + "mine"}
+	if err := checkLocalHostPath(s); err != nil {
+		t.Errorf("failed a captured snapshot: %v", err)
 	}
 }
 

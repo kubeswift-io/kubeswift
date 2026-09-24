@@ -40,7 +40,7 @@ type DownloadJobParams struct {
 
 // BuildDownloadJob constructs the node-pinned download Job: it pulls the
 // snapshot's artifacts from object storage into the node-local cache hostPath
-// (S3LocalDir) and sha256-verifies them against the manifest. Credentials come
+// (NodeDir) and sha256-verifies them against the manifest. Credentials come
 // from the snapshot's referenced Secret as the standard AWS env vars. Runs as
 // root because it writes the kubelet-created root-owned cache hostPath; still
 // drop ALL / no-priv-esc / ro-rootfs, and the mount exposes only the single
@@ -134,7 +134,7 @@ func BuildDownloadJob(p DownloadJobParams) *batchv1.Job {
 						Name: "cache",
 						VolumeSource: corev1.VolumeSource{
 							HostPath: &corev1.HostPathVolumeSource{
-								Path: S3LocalDir(snap),
+								Path: NodeDir(snap),
 								Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 							},
 						},
@@ -154,7 +154,7 @@ const ociDownloadAuthMount = "/oras-auth"
 // Digest (status.oci.manifestDigest) so it materializes the exact captured
 // artifact; Tag is passed for the reference. The caller sets the ownerRef.
 type OCIDownloadJobParams struct {
-	// Snapshot supplies the node-local cache dir (S3LocalDir, backend-neutral).
+	// Snapshot supplies the node-local cache dir (NodeDir, backend-neutral).
 	Snapshot *snapshotv1alpha1.SwiftSnapshot
 	// Repository / Tag / Digest identify the artifact; Digest pins it.
 	Repository string
@@ -172,7 +172,7 @@ type OCIDownloadJobParams struct {
 
 // BuildOCIDownloadJob constructs the node-pinned oci download Job: it pulls the
 // snapshot's OCI artifact from the registry into the node-local cache hostPath
-// (S3LocalDir) — ORAS verifies every blob's digest against the manifest. Runs
+// (NodeDir) — ORAS verifies every blob's digest against the manifest. Runs
 // as root because it writes the kubelet-created root-owned cache hostPath; still
 // drop ALL / no-priv-esc / ro-rootfs. Registry credentials, when configured,
 // come from a dockerconfigjson Secret at DOCKER_CONFIG; else anonymous.
@@ -194,7 +194,7 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 		Name: "cache",
 		VolumeSource: corev1.VolumeSource{
 			HostPath: &corev1.HostPathVolumeSource{
-				Path: S3LocalDir(p.Snapshot),
+				Path: NodeDir(p.Snapshot),
 				Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 			},
 		},

@@ -182,7 +182,7 @@ func TestPrepareCloneFromSnapshot_TierC_DownloadsThenProceeds(t *testing.T) {
 		t.Fatalf("after download completes, should proceed; fail=%q requeue=%v err=%v", fail, requeue, err)
 	}
 	if g.Annotations[AnnotationRestoreNodeName] != "worker-2" ||
-		g.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns-snap" {
+		g.Annotations[AnnotationRestoreSnapshotPath] != "/var/lib/kubeswift/snapshots/ns_snap" {
 		t.Errorf("Tier C restore annotations wrong: %+v", g.Annotations)
 	}
 }

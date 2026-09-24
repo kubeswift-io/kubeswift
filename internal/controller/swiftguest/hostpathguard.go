@@ -1,10 +1,14 @@
 package swiftguest
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 	"github.com/kubeswift-io/kubeswift/internal/webhook/hostpath"
@@ -13,10 +17,45 @@ import (
 // restoreSnapshotDirSegment is the single directory name a restore snapshot
 // path may carry after clonecommon.HostPathBase. The SwiftRestore and
 // cloneFromSnapshot controllers only ever produce the snapshot's own
-// node-local dir there — the local backend's hostPath (one safe segment, see
-// swiftsnapshot.ValidateLocalHostPath) or S3LocalDir ("<ns>-<name>"). Both are
-// a single [A-Za-z0-9._-] segment starting alphanumeric.
+// node-local dir there (clonecommon.NodeDir): "<ns>_<name>" for a snapshot
+// captured by this version, or what an earlier one used — the local
+// backend's hostPath (one safe segment) or "<ns>-<name>". All are a single
+// [A-Za-z0-9._-] segment starting alphanumeric.
 var restoreSnapshotDirSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// restoreSnapshotOwnerViolation binds an active-restore snapshot path to the
+// guest's own namespace. validateRestoreSnapshotPath only checks its shape,
+// and every snapshot directory on a node has that shape, so a tenant who can
+// annotate their own SwiftGuest could name another namespace's snapshot and
+// boot its memory image — secrets and all — in their own VM.
+//
+// A directory this version derives ("<ns>_<name>", clonecommon.SnapshotDir)
+// names its namespace. An older one does not ("<ns>-<name>" is ambiguous, and
+// a local hostPath was any name), so it is accepted only if a SwiftSnapshot in
+// the guest's namespace was captured into it. Only the restore launcher mounts
+// the path. A violation is handled like a disallowed host path: a guest with
+// no launcher fails, and a running launcher is left alone but not recreated.
+// err is a failed lookup, to retry.
+func (r *SwiftGuestReconciler) restoreSnapshotOwnerViolation(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) (violation, err error) {
+	params, ok := RestoreParamsFromAnnotations(guest.Annotations)
+	if !ok {
+		return nil, nil
+	}
+	dir := strings.TrimSuffix(params.SnapshotPath, "/")
+	if clonecommon.SnapshotDirNamespaced(dir, guest.Namespace) {
+		return nil, nil
+	}
+	var snaps snapshotv1alpha1.SwiftSnapshotList
+	if err := r.List(ctx, &snaps, client.InNamespace(guest.Namespace)); err != nil {
+		return nil, fmt.Errorf("list SwiftSnapshots to check the restore snapshot path: %w", err)
+	}
+	for i := range snaps.Items {
+		if snaps.Items[i].Status.NodeName != "" && clonecommon.NodeDir(&snaps.Items[i]) == dir {
+			return nil, nil
+		}
+	}
+	return fmt.Errorf("restore snapshot path %q is not the directory of a SwiftSnapshot in namespace %s", params.SnapshotPath, guest.Namespace), nil
+}
 
 // validateRestoreSnapshotPath rejects an active-restore snapshot path that is
 // not clonecommon.HostPathBase followed by exactly one safe segment.

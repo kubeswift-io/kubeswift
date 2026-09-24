@@ -156,22 +156,20 @@ func (r *SwiftSnapshotReconciler) handleLocalDeletion(
 	if snap.Spec.Backend.Type != snapshotv1alpha1.SnapshotBackendLocal {
 		return r.removeFinalizer(ctx, snap)
 	}
-	if snap.Spec.Backend.Local == nil || snap.Spec.Backend.Local.HostPath == "" {
-		// No hostPath to clean. Drop the finalizer — there's nothing
-		// for the cleanup pod to do.
-		return r.removeFinalizer(ctx, snap)
-	}
 	// If the snapshot never recorded a node (e.g. failed during
-	// Pending before we set status.NodeName), there's no node to
-	// schedule the cleanup pod on. Best we can do is drop the
-	// finalizer; orphan cleanup is operator-driven (out of scope per
-	// the commit's narrowing).
+	// Pending before we set status.NodeName), no capture began, so
+	// nothing was written and there's no node to schedule the cleanup
+	// pod on. Drop the finalizer.
 	if snap.Status.NodeName == "" {
 		return r.removeFinalizer(ctx, snap)
 	}
-	// hostPath subdir to remove. Defensive: we extract the trailing
-	// path component and remove only that — never the parent.
-	subdir := pathSubdir(snap.Spec.Backend.Local.HostPath)
+	// The directory the capture went into (clonecommon.NodeDir), not
+	// spec.backend.local.hostPath: a snapshot that never captured wrote
+	// nothing, and deleting what its spec names would let a tenant name
+	// another tenant's directory and delete the snapshot to remove it.
+	// Defensive: we extract the trailing path component and remove only
+	// that — never the parent.
+	subdir := pathSubdir(captureDestDir(snap))
 	if subdir == "" || subdir == "." || subdir == "/" {
 		// Malformed hostPath. Refuse to construct a cleanup command
 		// that would touch the entire snapshot tree. Drop the
@@ -279,7 +277,7 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 				// No shell: the path is the argv operand to rm, so a subdir
 				// carrying a shell metacharacter cannot be interpreted (it was
 				// already constrained to a single [A-Za-z0-9._-] segment by
-				// ValidateLocalHostPath and pathSubdir). "--" stops rm from
+				// ValidateSnapshotDir and pathSubdir). "--" stops rm from
 				// reading the path as an option even if it began with '-'.
 				Command: []string{"rm", "-rf", "--"},
 				Args:    []string{HostPathBaseMount + "/" + subdir},
@@ -560,11 +558,11 @@ func hasFinalizer(snap *snapshotv1alpha1.SwiftSnapshot, target string) bool {
 // pathSubdir returns the trailing path component of an absolute hostPath under
 // HostPathBaseDir, or "" if the path is not a single safe segment under it —
 // the caller treats "" as a refusal-to-act. This is the last check before the
-// path reaches the cleanup Pod, and it applies the SAME rule as the admission
-// and reconcile guards (ValidateLocalHostPath), so the delete path is
-// self-protecting even for an object persisted before those guards existed.
+// path reaches the cleanup Pod (ValidateSnapshotDir), so the delete path is
+// self-protecting even for an object persisted before the other guards
+// existed.
 func pathSubdir(hostPath string) string {
-	if swiftsnapshotwebhook.ValidateLocalHostPath(hostPath) != nil {
+	if swiftsnapshotwebhook.ValidateSnapshotDir(hostPath) != nil {
 		return ""
 	}
 	return strings.TrimPrefix(strings.TrimSuffix(hostPath, "/"), HostPathBaseDir)

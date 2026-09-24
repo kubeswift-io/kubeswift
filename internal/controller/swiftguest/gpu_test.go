@@ -564,7 +564,7 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 				// into the launcher (constrained to the snapshot base by
 				// validateRestoreSnapshotPath).
 				AnnotationActiveRestore:       "restore-1",
-				AnnotationRestoreSnapshotPath: "/var/lib/kubeswift/snapshots/default-snap-1",
+				AnnotationRestoreSnapshotPath: "/var/lib/kubeswift/snapshots/default_snap-1",
 			},
 		},
 		Spec: swiftv1alpha1.SwiftGuestSpec{

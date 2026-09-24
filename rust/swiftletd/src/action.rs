@@ -1829,10 +1829,10 @@ fn snapshot_root() -> String {
 
 /// The directory a capture may wipe and write: `file://` + the snapshot root
 /// ([`SNAPSHOT_ROOT`]) + one segment of `[A-Za-z0-9._-]` starting
-/// alphanumeric, the same rule the controller applies to
-/// `spec.backend.local.hostPath` (and that the s3/oci `<namespace>-<name>`
-/// directories satisfy). Anything else -- the root itself, a nested path,
-/// `..`, another scheme -- is refused.
+/// alphanumeric, the same rule the controller applies to every snapshot
+/// directory (the derived `<namespace>_<name>`, and the local hostPath or
+/// `<namespace>-<name>` of a snapshot an earlier version captured). Anything
+/// else -- the root itself, a nested path, `..`, another scheme -- is refused.
 fn capture_dest_dir(url: &str) -> Result<&str, String> {
     let root = snapshot_root();
     let refuse = || {
@@ -1896,7 +1896,7 @@ async fn dispatch_capture(
     // when those files already exist with "File exists (os error 17)".
     //
     // The SwiftSnapshot controller owns naming the path (under
-    // /var/lib/kubeswift/snapshots/<ns>-<name>/) but cannot mkdir or
+    // /var/lib/kubeswift/snapshots/<ns>_<name>/) but cannot mkdir or
     // rm on the source node's filesystem itself; the launcher pod has
     // the hostPath mount and is the only place this can happen.
     //

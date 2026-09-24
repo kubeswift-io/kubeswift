@@ -69,7 +69,7 @@ const (
 // ociLocalDir is the node-local hostPath directory the oci backend captures into
 // (and the push Job reads from). Shares the backend-neutral snapshot cache path.
 func ociLocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return clonecommon.S3LocalDir(snap)
+	return clonecommon.NodeDir(snap)
 }
 
 // ociTag resolves the artifact tag: the operator-supplied tag, or a stable

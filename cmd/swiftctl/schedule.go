@@ -42,9 +42,8 @@ keeping only the most recent --keep-last.
 
 Backends mirror 'swiftctl snapshot create' (csi-volume-snapshot default, or
 local). For the s3 backend, apply a YAML manifest (it needs bucket/endpoint/
-credentials). NOTE: the local backend writes a fixed --hostpath, so scheduled
-local snapshots overwrite each other — use csi-volume-snapshot (or s3) for
-scheduling.`,
+credentials). Each scheduled local snapshot is captured into its own
+directory, derived from its name, on the node running the source VM.`,
 	Example: `  swiftctl schedule create nightly-db --guest db --schedule "0 2 * * *" --keep-last 7
   swiftctl schedule create hourly --guest web --schedule "0 * * * *" --keep-last 24 --vsclass csi-hostpath-snapclass`,
 	Args: cobra.ExactArgs(1),
@@ -80,7 +79,7 @@ func init() {
 	scheduleCreateCmd.Flags().StringVar(&scheduleCron, "schedule", "", "5-field cron expression, UTC (required), e.g. \"0 2 * * *\"")
 	scheduleCreateCmd.Flags().StringVar(&scheduleBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot or local")
 	scheduleCreateCmd.Flags().StringVar(&scheduleVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only)")
-	scheduleCreateCmd.Flags().StringVar(&scheduleHostPath, "hostpath", "", "On-node directory for local backend (under /var/lib/kubeswift/snapshots/)")
+	scheduleCreateCmd.Flags().StringVar(&scheduleHostPath, "hostpath", "", "No longer accepted: each scheduled local snapshot is captured into a directory derived from its name")
 	scheduleCreateCmd.Flags().BoolVar(&scheduleIncludeMem, "include-memory", true, "Backend-determined (no-op on csi-volume-snapshot, which is disk-only)")
 	scheduleCreateCmd.Flags().IntVar(&scheduleKeepLast, "keep-last", 0, "Keep only the most recent N Ready snapshots (0 = keep all; rely on per-snapshot ttl)")
 	scheduleCreateCmd.Flags().BoolVar(&scheduleSuspend, "suspend", false, "Create the schedule suspended")
@@ -116,10 +115,11 @@ func runScheduleCreate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--hostpath is only valid for --backend=local")
 		}
 	case snapshotv1alpha1.SnapshotBackendLocal:
-		if scheduleHostPath == "" {
-			return fmt.Errorf("--hostpath is required for --backend=local")
+		// A template hostPath would name one directory for every snapshot of
+		// the schedule, each capture wiping the last; the webhook rejects it.
+		if scheduleHostPath != "" {
+			return fmt.Errorf("--hostpath is no longer accepted: each scheduled local snapshot is captured into a directory derived from its name")
 		}
-		tmpl.Backend.Local = &snapshotv1alpha1.LocalBackend{HostPath: scheduleHostPath}
 	}
 
 	sched := &snapshotv1alpha1.SwiftSnapshotSchedule{

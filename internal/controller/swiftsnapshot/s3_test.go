@@ -40,7 +40,7 @@ func TestS3Helpers(t *testing.T) {
 	if got := s3Location(s); got != "s3://backups/kubeswift/team-a/snap1/" {
 		t.Errorf("location = %q", got)
 	}
-	if got := s3LocalDir(s); got != "/var/lib/kubeswift/snapshots/team-a-snap1" {
+	if got := s3LocalDir(s); got != "/var/lib/kubeswift/snapshots/team-a_snap1" {
 		t.Errorf("localDir = %q", got)
 	}
 	if got := s3UploadJobName(s); got != "snap1-s3-upload" {
@@ -78,7 +78,7 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 		t.Errorf("snapshot volume must mount %s read-only; got %+v", s3UploadMount, vm)
 	}
 	hp := pod.Volumes[0].VolumeSource.HostPath
-	if hp == nil || hp.Path != "/var/lib/kubeswift/snapshots/team-a-snap1" {
+	if hp == nil || hp.Path != "/var/lib/kubeswift/snapshots/team-a_snap1" {
 		t.Errorf("hostPath = %+v", hp)
 	}
 

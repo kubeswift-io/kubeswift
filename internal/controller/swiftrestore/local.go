@@ -269,7 +269,7 @@ func (r *SwiftRestoreReconciler) diskDivergence(
 // The version-check pre-flight runs first; on a blocking mismatch the
 // restore goes straight to Failed with the version-specific reason.
 // On version OK, the controller validates the snapshot status fields
-// it depends on (NodeName, Backend.Local.HostPath), then either
+// it depends on (NodeName; the directory is its NodeDir), then either
 // stamps the existing source SwiftGuest with restore annotations
 // (in-place) or creates a fresh target SwiftGuest from the source's
 // spec (clone). Both paths transition to Restoring.
@@ -294,18 +294,11 @@ func (r *SwiftRestoreReconciler) handlePendingLocal(
 			"SwiftSnapshot "+snap.Name+" has no status.nodeName — Tier B restore requires the source node")
 		return true, 0, nil
 	}
-	if snap.Spec.Backend.Local == nil || snap.Spec.Backend.Local.HostPath == "" {
-		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
-		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-			"SwiftSnapshot "+snap.Name+" has no backend.local.hostPath — Tier B restore requires the snapshot dir")
-		return true, 0, nil
-	}
-
-	// Local backend: the snapshot dir is the operator-supplied hostPath, pinned
+	// Local backend: the snapshot dir is the one it was captured into, pinned
 	// to the capture node. The s3 backend reaches materializeRestoreTarget from
 	// handleDownloading with a download-cache dir + a chosen node instead.
 	return r.materializeRestoreTarget(ctx, restore, snap, status,
-		snap.Spec.Backend.Local.HostPath, snap.Status.NodeName)
+		clonecommon.NodeDir(snap), snap.Status.NodeName)
 }
 
 // materializeRestoreTarget is the backend-agnostic tail of the restore: given

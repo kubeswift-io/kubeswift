@@ -72,11 +72,11 @@ func (r *SwiftRestoreReconciler) hypervisorVersionBlocked(
 }
 
 // s3RestoreLocalDir is the node-local cache directory the download Job writes
-// to (and CH --restore then reads). Derived deterministically from the
-// snapshot's identity so it is stable across reconciles and matches the
-// capture-side layout when the target happens to be the capture node.
+// to (and CH --restore then reads): the snapshot's NodeDir, stable across
+// reconciles and the same directory as the capture when the target happens to
+// be the capture node.
 func s3RestoreLocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return clonecommon.S3LocalDir(snap)
+	return clonecommon.NodeDir(snap)
 }
 
 // s3RestoreKeyPrefix is the object-key prefix the artifacts live under, derived

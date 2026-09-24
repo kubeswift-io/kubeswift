@@ -41,7 +41,7 @@ status field is the operator-visible mirror.
 $ swiftctl snapshot describe db-mem-2026-04-26
 Name:        db-mem-2026-04-26
 Backend:     local
-HostPath:    /var/lib/kubeswift/snapshots/default-db-mem-2026-04-26
+Directory:   /var/lib/kubeswift/snapshots/default_db-mem-2026-04-26
 Phase:       Ready
 Pause Window: 16700ms
 ...

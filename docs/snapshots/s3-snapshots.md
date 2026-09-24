@@ -40,7 +40,8 @@ RESTORE (SwiftRestore from an s3-backed SwiftSnapshot)
 
 S3 is the only cross-node layer. The capture's node-local cache and the
 restore's node-local cache are staging dirs under
-`/var/lib/kubeswift/snapshots/<namespace>-<name>/` — the durable copy is in
+`/var/lib/kubeswift/snapshots/<namespace>_<name>/` (`<namespace>-<name>/` for a
+snapshot an earlier version captured) — the durable copy is in
 the bucket. The upload Job pins to the capture node (where the artifacts were
 written); the download Job pins to the **restore-target node** (where CH will
 `--restore`).

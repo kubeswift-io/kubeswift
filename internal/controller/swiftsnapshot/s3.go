@@ -116,26 +116,18 @@ const (
 )
 
 // captureDestDir is the node-local directory the launcher captures the snapshot
-// into. The local backend uses the operator-supplied hostPath; the s3 backend
-// uses a controller-derived dir the upload Job then reads.
+// into, on every backend: the snapshot's NodeDir. For a snapshot not yet
+// captured that is clonecommon.SnapshotDir, derived from its namespace and
+// name. The local backend no longer captures into an author-chosen hostPath
+// (see SnapshotDir for why); the s3/oci upload Job reads the same directory.
 func captureDestDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendS3 {
-		return s3LocalDir(snap)
-	}
-	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
-		return ociLocalDir(snap)
-	}
-	if snap.Spec.Backend.Local != nil {
-		return snap.Spec.Backend.Local.HostPath
-	}
-	return ""
+	return clonecommon.NodeDir(snap)
 }
 
 // s3LocalDir is the node-local hostPath directory the s3 backend captures into
-// (and the upload Job reads from). Derived deterministically — the s3 backend
-// does not take an operator-supplied hostPath (unlike the local backend).
+// (and the upload Job reads from).
 func s3LocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return clonecommon.S3LocalDir(snap)
+	return clonecommon.NodeDir(snap)
 }
 
 // s3KeyPrefix is the object-key prefix for this snapshot:

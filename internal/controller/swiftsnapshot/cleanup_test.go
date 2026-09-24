@@ -172,12 +172,39 @@ func TestHandleDeletion_CreatesCleanupPod(t *testing.T) {
 		t.Errorf("cleanup pod node = %q, want worker-1", pod.Spec.NodeName)
 	}
 	args := strings.Join(pod.Spec.Containers[0].Args, " ")
-	if !strings.Contains(args, "default-snap1") {
+	if !strings.Contains(args, "default_snap1") {
 		t.Errorf("cleanup args missing subdir name: %q", args)
 	}
 	// Defense check: must not rm the parent.
 	if strings.Contains(args, "rm -rf "+HostPathBaseMount+" ") || strings.HasSuffix(args, "rm -rf "+HostPathBaseMount) {
 		t.Errorf("cleanup args targets parent mount, not subdir: %q", args)
+	}
+}
+
+// Cleanup removes the directory the capture recorded, not whatever the spec
+// names: an earlier version captured into the author's hostPath and recorded
+// it, and that recorded directory is what holds the data.
+func TestHandleDeletion_RemovesTheRecordedDir(t *testing.T) {
+	snap := makeLocalSnap("snap1", "default", "g1")
+	now := metav1.Now()
+	snap.DeletionTimestamp = &now
+	snap.Finalizers = []string{HostPathFinalizer}
+	snap.Status.NodeName = "worker-1"
+	snap.Spec.Backend.Local.HostPath = HostPathBaseDir + "somewhere-else"
+	snap.Status.MemorySnapshot = &snapshotv1alpha1.MemorySnapshotRef{Handle: HostPathBaseDir + "mine"}
+	r, c := newReconciler(t, snap)
+
+	if _, err := r.handleDeletion(context.Background(), snap); err != nil {
+		t.Fatalf("handleDeletion: %v", err)
+	}
+	var pod corev1.Pod
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: cleanupPodName(snap), Namespace: "default"}, &pod); err != nil {
+		t.Fatalf("cleanup pod not created: %v", err)
+	}
+	args := strings.Join(pod.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "/mine") || strings.Contains(args, "somewhere-else") {
+		t.Errorf("cleanup args = %q, want the recorded dir only", args)
 	}
 }
 

@@ -190,14 +190,22 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 	if guest.Status.Runtime != nil {
 		status.Hypervisor = guest.Status.Runtime.Hypervisor
 	}
+	// Resolve the destination directory before recording the node: with no
+	// node recorded it is the derived clonecommon.SnapshotDir, whatever the
+	// backend. swiftletd mkdir's it before capture.
+	destDir := captureDestDir(snap)
 	status.NodeName = pod.Spec.NodeName
 	status.SnapshotDirVersion = SnapshotDirVersionV1
-
-	// Resolve destination directory. For the local backend the webhook
-	// ensures the operator supplied a hostPath under HostPathBaseDir; for the
-	// s3 backend the controller derives the dir (s3LocalDir). swiftletd mkdir's
-	// it before capture.
-	destDir := captureDestDir(snap)
+	// Record the directory with the node, in the same status write, so the
+	// restore, clone, upload and cleanup paths read where this capture went
+	// rather than re-deriving it (clonecommon.NodeDir). A node without a
+	// directory then means an earlier version began the capture.
+	if status.MemorySnapshot == nil {
+		status.MemorySnapshot = &snapshotv1alpha1.MemorySnapshotRef{}
+	}
+	if status.MemorySnapshot.Handle == "" {
+		status.MemorySnapshot.Handle = destDir
+	}
 	srcURL := destDir
 	if !strings.HasSuffix(srcURL, "/") {
 		srcURL = srcURL + "/"
@@ -323,11 +331,12 @@ func (r *SwiftSnapshotReconciler) handleCapturingLocal(
 		}
 	}
 
-	// MemorySnapshot ref: handle is the on-node hostPath. Size in
-	// bytes is computed lazily by SwiftRestore at restore time
-	// (du(1)-style on a path requires either shelling out from the
-	// controller pod or a DaemonSet helper, neither of which is in
-	// Phase 2 commit 8's scope).
+	// MemorySnapshot ref: handle is the on-node directory the capture went
+	// into, recorded when it began (or, for a capture an earlier version
+	// began, the directory that version used). Size in bytes is computed
+	// lazily by SwiftRestore at restore time (du(1)-style on a path requires
+	// either shelling out from the controller pod or a DaemonSet helper,
+	// neither of which is in Phase 2 commit 8's scope).
 	now := metav1.Now()
 	status.CapturedAt = &now
 	status.MemorySnapshot = &snapshotv1alpha1.MemorySnapshotRef{

@@ -41,22 +41,30 @@ spec:
     name: db
   backend:
     type: local
-    local:
-      hostPath: /var/lib/kubeswift/snapshots/default-db-mem-2026-04-26
   includeMemory: true       # default; explicit here for clarity
   resumeAfterSnapshot: true # default; resume the VM once capture done
 ```
 
-The `hostPath` must be under `/var/lib/kubeswift/snapshots/` — the
-admission webhook rejects other prefixes. The directory is created
-on the node where the source VM is running; KubeSwift schedules a
-cleanup pod on that node when the SwiftSnapshot is deleted.
+The snapshot is written to `/var/lib/kubeswift/snapshots/<namespace>_<name>`
+on the node where the source VM is running — here
+`/var/lib/kubeswift/snapshots/default_db-mem-2026-04-26`. The directory is
+derived from the snapshot's namespace and name, so no two snapshots share one
+and no snapshot can name another's. `spec.backend.local.hostPath` may be
+omitted, or set to exactly that directory; anything else is rejected.
+`status.memorySnapshot.handle` records it once the capture begins. KubeSwift
+schedules a cleanup pod on that node when the SwiftSnapshot is deleted.
+
+In earlier versions `hostPath` was any directory under
+`/var/lib/kubeswift/snapshots/` the author chose. That let one namespace name
+another's directory, which the capture empties and the cleanup removes, and
+made every snapshot of a schedule share its template's directory. Snapshots
+captured that way keep their directory: restores and cleanup use the one
+recorded when the capture began.
 
 Equivalent CLI:
 
 ```bash
-swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local \
-  --hostpath /var/lib/kubeswift/snapshots/default-db-mem-2026-04-26
+swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local
 ```
 
 ## Restoring
@@ -252,7 +260,9 @@ bootcmd is the only post-resume disk write of consequence
 ## Cleanup
 
 Deleting a SwiftSnapshot triggers a one-shot cleanup pod on the
-source node that runs `rm -rf` on the hostPath subdirectory. The
+source node that runs `rm -rf` on the snapshot's directory (the one its
+capture recorded; a snapshot that never began capturing wrote nothing and
+has nothing removed). The
 finalizer `kubeswift.io/snapshot-hostpath-cleanup` blocks deletion
 until cleanup completes.
 

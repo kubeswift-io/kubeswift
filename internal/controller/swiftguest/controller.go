@@ -544,6 +544,14 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 	// controller never edits a live launcher, so it is left running and keeps
 	// being reported, with the violation on Resolved. It is not recreated.
 	hostPathErr := checkHostPaths(&guest, r.AllowedHostPathPrefixes)
+	if hostPathErr == nil {
+		// The restore snapshot path is mounted into the restore launcher too,
+		// and must belong to the guest's namespace.
+		var lookupErr error
+		if hostPathErr, lookupErr = r.restoreSnapshotOwnerViolation(ctx, &guest); lookupErr != nil {
+			return ctrl.Result{}, lookupErr
+		}
+	}
 	if hostPathErr != nil {
 		SetResolvedCondition(status, false, hostPathErr.Error())
 		if !launcherExists {

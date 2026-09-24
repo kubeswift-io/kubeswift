@@ -29,7 +29,7 @@ func makeSnap(backend snapshotv1alpha1.SnapshotBackendType) *snapshotv1alpha1.Sw
 	}
 	if backend == snapshotv1alpha1.SnapshotBackendLocal {
 		s.Spec.Backend.Local = &snapshotv1alpha1.LocalBackend{
-			HostPath: "/var/lib/kubeswift/snapshots/default-snap1",
+			HostPath: "/var/lib/kubeswift/snapshots/default_snap1",
 		}
 	}
 	return s
@@ -77,23 +77,19 @@ func TestValidate_LocalBackend_OK(t *testing.T) {
 	}
 }
 
-func TestValidate_LocalBackend_RequiresLocalCarrier(t *testing.T) {
+// The directory is derived, so neither backend.local nor its hostPath is
+// needed.
+func TestValidate_LocalBackend_LocalCarrierOptional(t *testing.T) {
+	v := &Validator{}
 	snap := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
 	snap.Spec.Backend.Local = nil
-	v := &Validator{}
-	_, err := v.ValidateCreate(context.Background(), snap)
-	if err == nil || !strings.Contains(err.Error(), "spec.backend.local is required") {
-		t.Errorf("expected backend.local required, got: %v", err)
+	if _, err := v.ValidateCreate(context.Background(), snap); err != nil {
+		t.Errorf("backend.local omitted: %v", err)
 	}
-}
-
-func TestValidate_LocalBackend_HostPathRequired(t *testing.T) {
-	snap := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+	snap = makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
 	snap.Spec.Backend.Local.HostPath = ""
-	v := &Validator{}
-	_, err := v.ValidateCreate(context.Background(), snap)
-	if err == nil || !strings.Contains(err.Error(), "hostPath is required") {
-		t.Errorf("expected hostPath required, got: %v", err)
+	if _, err := v.ValidateCreate(context.Background(), snap); err != nil {
+		t.Errorf("hostPath omitted: %v", err)
 	}
 }
 
@@ -102,8 +98,8 @@ func TestValidate_LocalBackend_HostPathInvalidPrefix(t *testing.T) {
 	snap.Spec.Backend.Local.HostPath = "/tmp/some-snapshot"
 	v := &Validator{}
 	_, err := v.ValidateCreate(context.Background(), snap)
-	if err == nil || !strings.Contains(err.Error(), "must be under /var/lib/kubeswift/snapshots/") {
-		t.Errorf("expected prefix rejection, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "must be omitted or be /var/lib/kubeswift/snapshots/default_snap1") {
+		t.Errorf("expected rejection naming the derived dir, got: %v", err)
 	}
 }
 
@@ -117,11 +113,38 @@ func TestValidate_LocalBackend_HostPathParentTraversal(t *testing.T) {
 	}
 }
 
+// A hostPath is accepted only as the directory derived for the snapshot. Any
+// other name -- another tenant's directory, the old "<ns>-<name>" form, a
+// directory shared by several snapshots -- let a capture empty, or a delete
+// remove, a directory the snapshot did not own.
+func TestValidateLocalHostPath_OnlyTheDerivedDir(t *testing.T) {
+	for _, hp := range []string{
+		"/var/lib/kubeswift/snapshots/default_snap1",
+		"/var/lib/kubeswift/snapshots/default_snap1/",
+		"",
+	} {
+		if err := ValidateLocalHostPath("default", "snap1", hp); err != nil {
+			t.Errorf("hostPath %q should be accepted, got: %v", hp, err)
+		}
+	}
+	for _, hp := range []string{
+		"/var/lib/kubeswift/snapshots/other_snap1",   // another namespace's directory
+		"/var/lib/kubeswift/snapshots/default-snap1", // the old, ambiguous form
+		"/var/lib/kubeswift/snapshots/default_snap2", // another snapshot's
+		"/var/lib/kubeswift/snapshots/",
+		"/var/lib/kubeswift/snapshots/default_snap1/x",
+	} {
+		if err := ValidateLocalHostPath("default", "snap1", hp); err == nil {
+			t.Errorf("hostPath %q should be rejected", hp)
+		}
+	}
+}
+
 // The prefix itself, a glob, shell metacharacters and a nested path must all be
-// refused: the value is mounted into a privileged Job and handed to rm, so the
-// shared root would wipe every namespace's snapshots and a metacharacter would
-// reach a shell. A single safe segment is accepted.
-func TestValidate_LocalBackend_HostPathSegmentRules(t *testing.T) {
+// refused: a snapshot directory is mounted into a privileged Job and handed to
+// rm, so the shared root would wipe every namespace's snapshots and a
+// metacharacter would reach a shell. A single safe segment is accepted.
+func TestValidateSnapshotDir_SegmentRules(t *testing.T) {
 	reject := []string{
 		"/var/lib/kubeswift/snapshots/",         // the shared root itself
 		"/var/lib/kubeswift/snapshots/*",        // glob
@@ -130,19 +153,21 @@ func TestValidate_LocalBackend_HostPathSegmentRules(t *testing.T) {
 		"/var/lib/kubeswift/snapshots/a/b",      // nested
 		"/var/lib/kubeswift/snapshots/-rf",      // leading dash (rm flag)
 		"/var/lib/kubeswift/snapshots/..",       // dot-dot
+		"/tmp/x",                                // outside the root
 	}
 	for _, hp := range reject {
-		if err := ValidateLocalHostPath(hp); err == nil {
-			t.Errorf("hostPath %q should be rejected", hp)
+		if err := ValidateSnapshotDir(hp); err == nil {
+			t.Errorf("dir %q should be rejected", hp)
 		}
 	}
 	for _, hp := range []string{
-		"/var/lib/kubeswift/snapshots/default-snap1",
+		"/var/lib/kubeswift/snapshots/default_snap1",
+		"/var/lib/kubeswift/snapshots/default-snap1", // captured by an earlier version
 		"/var/lib/kubeswift/snapshots/ns-name-1700000000",
 		"/var/lib/kubeswift/snapshots/a.b_c-1/",
 	} {
-		if err := ValidateLocalHostPath(hp); err != nil {
-			t.Errorf("hostPath %q should be accepted, got: %v", hp, err)
+		if err := ValidateSnapshotDir(hp); err != nil {
+			t.Errorf("dir %q should be accepted, got: %v", hp, err)
 		}
 	}
 }

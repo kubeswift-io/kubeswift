@@ -81,11 +81,25 @@ func TestValidate_BadTemplate(t *testing.T) {
 	}))
 	errHas(t, err, "template.spec is invalid")
 
-	// local backend missing hostPath → also a template shape error.
-	_, err = v.ValidateCreate(context.Background(), sched(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+}
+
+// Each scheduled local snapshot is captured into a directory derived from its
+// own name, so a local template needs no hostPath and may not name one: it
+// would be one directory for every snapshot, each capture wiping the last.
+func TestValidate_LocalTemplate(t *testing.T) {
+	v := &Validator{}
+	if _, err := v.ValidateCreate(context.Background(), sched(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
 		s.Spec.Template.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{Type: snapshotv1alpha1.SnapshotBackendLocal}
+	})); err != nil {
+		t.Errorf("local template without hostPath: %v", err)
+	}
+	_, err := v.ValidateCreate(context.Background(), sched(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		s.Spec.Template.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{
+			Type:  snapshotv1alpha1.SnapshotBackendLocal,
+			Local: &snapshotv1alpha1.LocalBackend{HostPath: "/var/lib/kubeswift/snapshots/nightly"},
+		}
 	}))
-	errHas(t, err, "template.spec is invalid")
+	errHas(t, err, "hostPath must be omitted")
 }
 
 func TestValidate_UpdateRunsSameRules(t *testing.T) {

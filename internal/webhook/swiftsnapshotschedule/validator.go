@@ -63,6 +63,13 @@ func validateSchedule(s *snapshotv1alpha1.SwiftSnapshotSchedule) error {
 	if d := s.Spec.StartingDeadlineSeconds; d != nil && *d < 0 {
 		return fmt.Errorf("spec.startingDeadlineSeconds must be >= 0")
 	}
+	// Each scheduled snapshot is captured into the directory derived from its
+	// own name, so a template hostPath could only name the directory every one
+	// of them would share (each capture wiping the last). The controller
+	// ignores it; reject it here so the manifest does not claim otherwise.
+	if l := s.Spec.Template.Spec.Backend.Local; l != nil && l.HostPath != "" {
+		return fmt.Errorf("spec.template.spec.backend.local.hostPath must be omitted: each scheduled snapshot is captured into a directory derived from its own name")
+	}
 	// The template must be a valid SwiftSnapshot (shape rules only — the source
 	// guest need not exist at schedule-create time).
 	tmpl := &snapshotv1alpha1.SwiftSnapshot{Spec: s.Spec.Template.Spec}

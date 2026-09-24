@@ -12,7 +12,7 @@
 # property: role and peer are env-parameterized, never image-baked, so the
 # controller can DeepCopy the source pod's sidecar onto the destination and
 # flip its role rather than maintaining two images.
-FROM alpine:3.24
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown

@@ -231,6 +231,14 @@ func (r *SwiftSnapshotScheduleReconciler) createScheduledSnapshot(ctx context.Co
 		},
 		Spec: *sched.Spec.Template.Spec.DeepCopy(),
 	}
+	// A local snapshot is captured into the directory derived from its own
+	// name, which a template cannot name. A template hostPath (a schedule
+	// written before that, or with the webhook off) named one directory for
+	// every snapshot, so each capture wiped the previous one; it would now
+	// fail each snapshot instead. Drop it.
+	if l := snap.Spec.Backend.Local; l != nil {
+		l.HostPath = ""
+	}
 	if err := ctrl.SetControllerReference(sched, snap, r.Scheme); err != nil {
 		return err
 	}
