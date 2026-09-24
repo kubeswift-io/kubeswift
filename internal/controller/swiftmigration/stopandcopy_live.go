@@ -334,7 +334,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 	// guest.status.podRef so the check works whether or not the
 	// caller has already loaded the SwiftMigration's Conditions.
 	if guest.Status.PodRef != nil && guest.Status.PodRef.Name == dstName {
-		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName)
+		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName, dstPod.UID)
 	}
 
 	sub := deriveSubstate(mig, srcArg, dstArg)
@@ -525,7 +525,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		// in the cutover handler executes ONLY the pending step;
 		// next reconcile reads cluster state and proceeds. Forward-
 		// only retry-in-place; no rollback.
-		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName)
+		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName, dstPod.UID)
 
 	case substateDstFailed:
 		// dst reported migration-status=failed with matching $RECV_ID.

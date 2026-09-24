@@ -8,6 +8,22 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Live migrations hung in `Resuming` until their timeout** (#646,
+  regression from #641 in v0.14.0). The cutover pointed the guest's
+  `status.podRef` at the destination launcher by name but kept the source
+  launcher's UID. Since #641 the guest controller reads a launcher whose UID
+  differs from `podRef.uid` as a new run and clears its run state, and the
+  destination launcher had already reported `GuestRunning=True` — once, before
+  the cutover. The migration then waited for a condition nothing would write
+  again until `spec.timeout` (30m by default) failed it; with one in-flight live
+  migration allowed per source node, nothing else could live-migrate or drain
+  off that node meanwhile. The VM itself had moved and kept running. The
+  cutover now sets the UID as well: a live migration carries the same run.
+  Offline migration was not affected, nor were guests on a primary UDN, whose
+  `GuestRunning` the controller derives itself. A migration already hung when the
+  controller is upgraded stays hung until its timeout, and its guest reports
+  `GuestRunning=False` while running until its launcher next restarts.
+
 - **A guest whose launcher had not started still reported itself running**
   (#643, follow-up to #634). v0.14.0 clears a guest's run state when its
   launcher changes, which covers a restart but not the state a PREVIOUS
