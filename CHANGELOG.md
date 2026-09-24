@@ -8,6 +8,17 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **With `auth-mode=insecure`, any web page could drive the gateway.** There is
+  no token in that mode, yet the Connect API answered every origin with
+  `Access-Control-Allow-Origin: *`, mutating RPCs included. The WebSocket
+  origin check also accepted any request whose Origin host matched its Host
+  header, which a DNS-rebinding page satisfies. A page the operator visited
+  could therefore delete VMs or open a console or sandbox shell. In insecure
+  mode, browser requests to both the RPC and WebSocket surfaces are now
+  accepted only from explicitly listed origins, or same-origin via localhost or
+  an IP address (a port-forward). A same-origin DNS name must be listed in
+  `gateway.corsAllowOrigin`. Authenticated modes are unchanged.
+
 - **A vhost-user socket path could attach a host disk to the guest.** Cloud
   Hypervisor takes each device as one comma-separated `key=value` string, and
   swiftletd wrote the guest's vhost-user socket paths, virtiofs tags and

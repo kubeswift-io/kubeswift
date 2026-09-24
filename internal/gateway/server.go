@@ -26,7 +26,11 @@ type ConnectHandler struct {
 type Server struct {
 	Addr          string
 	AllowedOrigin string
-	Handlers      []ConnectHandler
+	// Origins, when set, polices browser (Origin-bearing) requests to the
+	// Connect surface the same way as the raw-WS planes. Required for
+	// auth-mode=insecure (see withCORS).
+	Origins  *OriginPolicy
+	Handlers []ConnectHandler
 	// RawHandlers are non-Connect routes (e.g. the WebSocket console plane),
 	// mounted on the same mux. They handle their own protocol upgrade.
 	RawHandlers []ConnectHandler
@@ -60,7 +64,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:              s.Addr,
-		Handler:           h2c.NewHandler(withCORS(mux, s.AllowedOrigin), &http2.Server{}),
+		Handler:           h2c.NewHandler(withCORS(mux, s.AllowedOrigin, s.Origins), &http2.Server{}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -92,17 +96,33 @@ func okHandler(w http.ResponseWriter, _ *http.Request) {
 // surface. Auth rides the Authorization header (a bearer token the gateway
 // impersonates from — PR C2), never cookies, so credentials are not enabled and
 // a wildcard origin is acceptable for a token-auth API.
-func withCORS(h http.Handler, origin string) http.Handler {
+//
+// Not with auth-mode=insecure, where there is no token: "*" there let any page
+// the operator visited drive every RPC, mutating ones included, on a gateway
+// the browser could reach. A strict origin policy refuses a browser request
+// from an origin it does not allow, and names only that origin in the CORS
+// response.
+func withCORS(h http.Handler, origin string, policy *OriginPolicy) http.Handler {
 	if origin == "" {
 		origin = "*"
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		allow := origin
+		if policy != nil && policy.strict {
+			if r.Header.Get("Origin") != "" && !policy.Allow(r) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			allow = policy.AllowedOrigin(r)
+		}
+		if allow != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allow)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms, Grpc-Timeout, X-Grpc-Web, X-User-Agent, Authorization")
 		w.Header().Set("Access-Control-Expose-Headers", "Grpc-Status, Grpc-Message, Grpc-Status-Details-Bin, Connect-Protocol-Version")
 		w.Header().Set("Access-Control-Max-Age", "7200")
-		if origin != "*" {
+		if allow != "*" {
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {

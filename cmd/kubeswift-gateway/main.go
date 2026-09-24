@@ -159,6 +159,7 @@ func main() {
 	srv := &gateway.Server{
 		Addr:          *listen,
 		AllowedOrigin: *corsOrigin,
+		Origins:       wsOrigin,
 		Handlers: []gateway.ConnectHandler{
 			{Path: clusterPath, Handler: clusterHandler},
 			{Path: guestPath, Handler: guestHandler},
