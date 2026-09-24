@@ -1,0 +1,25 @@
+{{- /*
+controllerManager.metrics.readers: the scrapers allowed to GET the secure
+/metrics endpoint. Its own file, not rbac.yaml: hack/sync-kustomize.sh copies
+rbac.yaml into the kustomize install, which has no values to render this with.
+*/ -}}
+{{- with (and .Values.controllerManager.metrics .Values.controllerManager.metrics.readers) }}
+# controllerManager.metrics.readers: the scrapers allowed to GET the secure
+# /metrics endpoint.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubeswift-metrics-reader
+  labels:
+    app.kubernetes.io/name: kubeswift
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubeswift-metrics-reader
+subjects:
+  {{- range . }}
+  - kind: ServiceAccount
+    name: {{ required "controllerManager.metrics.readers[].name is required" .name | quote }}
+    namespace: {{ required "controllerManager.metrics.readers[].namespace is required" .namespace | quote }}
+  {{- end }}
+{{- end }}

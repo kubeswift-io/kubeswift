@@ -295,7 +295,8 @@ rules:
 ---
 # Bind to a metrics scraper's ServiceAccount (e.g. Prometheus) while
 # controllerManager.metrics.secure is on (the default): only callers allowed
-# to GET /metrics are served. controllerManager.metrics.readers binds it.
+# to GET /metrics are served. With the chart, controllerManager.metrics.readers
+# binds it (controller-manager/metrics-readers.yaml).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -305,24 +306,3 @@ metadata:
 rules:
   - nonResourceURLs: ["/metrics"]
     verbs: ["get"]
-{{- with (and .Values.controllerManager.metrics .Values.controllerManager.metrics.readers) }}
----
-# controllerManager.metrics.readers: the scrapers allowed to GET the secure
-# /metrics endpoint.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubeswift-metrics-reader
-  labels:
-    app.kubernetes.io/name: kubeswift
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubeswift-metrics-reader
-subjects:
-  {{- range . }}
-  - kind: ServiceAccount
-    name: {{ required "controllerManager.metrics.readers[].name is required" .name | quote }}
-    namespace: {{ required "controllerManager.metrics.readers[].namespace is required" .namespace | quote }}
-  {{- end }}
-{{- end }}
