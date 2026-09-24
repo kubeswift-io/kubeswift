@@ -148,6 +148,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A warm GPU pool could free GPUs that were still in use.** The pool's slot
+  GPU cleanup matched allocations by the bare `<pool>-slot-` name prefix, so it
+  also freed the GPU of a standalone SwiftSandbox named like a slot and of every
+  slot of a pool whose own name began with `<pool>-slot-`. Deleting the pool
+  released every slot's GPU outright, including those of claimed slots whose
+  checkouts were still running. The set of live slot pods also came from the
+  informer cache, where a slot created moments earlier might not appear yet. In
+  each case the device was handed to the next consumer while a VM still had it.
+  The cleanup now matches only this pool's exact slot-name shape, never frees a
+  GPU a SwiftSandbox by that name still owns, and reads the live pods uncached.
+  Pool deletion removes idle warm slots and then waits, holding its finalizer,
+  until the pods of claimed slots are gone before releasing their GPUs.
+
 - **Editing a guest's GPU request could leak the GPU and wedge the guest in
   `Terminating`.** `gpuProfileRef` and `gpuResourceClaim` are mutable, but the
   GPU controller chose what to do from the current spec. Removing the ref after

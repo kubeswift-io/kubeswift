@@ -16,11 +16,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftgpu"
@@ -103,8 +103,22 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// per-slot SwiftGPU allocations (status fields on separate SwiftGPUNodes, not
 		// owner-ref'd) are released before the pool goes.
 		if controllerutil.ContainsFinalizer(&pool, poolGPUFinalizer) {
-			if err := r.reconcileSlotGPUGC(ctx, &pool, map[string]bool{}); err != nil {
+			// Release only what no pod still holds. This used to pass an EMPTY
+			// live set, freeing the GPUs of claimed slots whose checkouts were
+			// still running (their pods belong to the claiming SwiftSandbox and
+			// outlive the pool) and of warm pods still terminating — the device
+			// was then allocated again while in use.
+			if err := r.deleteWarmSlots(ctx, &pool); err != nil {
 				return ctrl.Result{}, err
+			}
+			held, err := r.reconcileSlotGPUGC(ctx, &pool)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if held {
+				ctrllog.FromContext(ctx).Info("pool deletion waiting: a slot pod still holds a GPU (terminating, or a checkout still running)",
+					"pool", req.NamespacedName)
+				return ctrl.Result{RequeueAfter: poolGPUReleaseRecheck}, nil
 			}
 			controllerutil.RemoveFinalizer(&pool, poolGPUFinalizer)
 			if err := r.Update(ctx, &pool); err != nil {
@@ -138,13 +152,6 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	var ready, warmLive, claimed int
 	var warmPods []*corev1.Pod
-	// Every pool pod that still EXISTS (any phase, incl. terminating) — used to GC
-	// the GPUs of slots whose pods are gone. A terminating pod's CH may still hold
-	// its VFIO group, so its allocation is kept until the pod is truly gone.
-	liveSlotPods := map[string]bool{}
-	for i := range pods.Items {
-		liveSlotPods[pods.Items[i].Name] = true
-	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
@@ -177,7 +184,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Release the GPU of any slot whose pod is gone (drain / checkout completion /
 	// churn). Runs before warming so freed GPUs are available for new slots.
-	if err := r.reconcileSlotGPUGC(ctx, &pool, liveSlotPods); err != nil {
+	if _, err := r.reconcileSlotGPUGC(ctx, &pool); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -330,7 +337,7 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 // createWarmSlot brings up one warm slot: the intent ConfigMap + launcher pod (+ a
 // deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
 func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string) error {
-	slot := r.slotTemplate(pool, pool.Name+"-slot-"+utilrand.String(5))
+	slot := r.slotTemplate(pool, newSlotName(pool))
 
 	// Warm GPU pool: allocate a GPU for this slot and stamp its spec.gpuProfileRef
 	// + status.GPU so the launch builders produce a GPU-aware slot (node pin,
