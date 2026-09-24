@@ -148,6 +148,12 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A guest with SR-IOV NICs on two different resources lost the second NIC.**
+  swiftletd took each VF's PCI address from its resource's `PCIDEVICE_*` list
+  using one counter shared across all resources, so the first NIC on a second
+  resource asked for index 1 of a one-entry list, found nothing, and was
+  dropped with only a log line. Addresses are now counted per resource.
+
 - **A GPU sandbox released its GPU while still using it, and never released it
   when it finished.** Deleting a native-GPU SwiftSandbox freed its GPU at once,
   but its launcher pod is garbage-collected only after the sandbox is gone, so

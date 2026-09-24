@@ -778,6 +778,36 @@ pub fn discover_sriov_vf_address(resource_name: &str, index: usize) -> Option<St
     }
 }
 
+/// Hands out SR-IOV VF addresses in NIC order, counting separately per
+/// device-plugin resource. Each resource's allocated VFs arrive in their own
+/// `PCIDEVICE_<RESOURCE>` list, so the n-th NIC on a resource takes that
+/// resource's n-th address. One counter shared by every resource made a guest
+/// with NICs on two resources ask the second resource for index 1 of its
+/// one-entry list, and the second NIC was silently dropped.
+#[derive(Debug, Default)]
+pub struct SriovVfCursor {
+    next: std::collections::HashMap<String, usize>,
+}
+
+impl SriovVfCursor {
+    /// The next VF address of `resource_name` from the device-plugin env.
+    pub fn next_address(&mut self, resource_name: &str) -> Option<String> {
+        self.next_address_with(resource_name, discover_sriov_vf_address)
+    }
+
+    /// As `next_address`, with the address lookup injected (tests).
+    pub fn next_address_with(
+        &mut self,
+        resource_name: &str,
+        lookup: impl Fn(&str, usize) -> Option<String>,
+    ) -> Option<String> {
+        let idx = self.next.entry(resource_name.to_string()).or_insert(0);
+        let addr = lookup(resource_name, *idx)?;
+        *idx += 1;
+        Some(addr)
+    }
+}
+
 /// Load runtime intent from the canonical path.
 pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
     let contents = std::fs::read_to_string(path)
@@ -788,6 +818,35 @@ pub fn load_intent(path: &str) -> Result<RuntimeIntent, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // NICs on two SR-IOV resources: each takes its own resource's first VF.
+    // A single shared counter asked the second resource for index 1 of its
+    // one-entry list and dropped that NIC.
+    #[test]
+    fn sriov_vf_cursor_counts_per_resource() {
+        let lookup = |res: &str, idx: usize| -> Option<String> {
+            let vfs: &[&str] = match res {
+                "intel.com/sriov_a" => &["0000:3b:02.0", "0000:3b:02.1"],
+                "intel.com/sriov_b" => &["0000:5e:02.0"],
+                _ => &[],
+            };
+            vfs.get(idx).map(|s| s.to_string())
+        };
+        let mut c = SriovVfCursor::default();
+        assert_eq!(
+            c.next_address_with("intel.com/sriov_a", lookup).as_deref(),
+            Some("0000:3b:02.0")
+        );
+        assert_eq!(
+            c.next_address_with("intel.com/sriov_b", lookup).as_deref(),
+            Some("0000:5e:02.0")
+        );
+        assert_eq!(
+            c.next_address_with("intel.com/sriov_a", lookup).as_deref(),
+            Some("0000:3b:02.1")
+        );
+        assert_eq!(c.next_address_with("intel.com/sriov_b", lookup), None);
+    }
 
     #[test]
     fn test_base64_encode_known_vectors() {

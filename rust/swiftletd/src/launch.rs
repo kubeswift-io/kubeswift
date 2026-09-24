@@ -694,18 +694,15 @@ fn build_ch_nics(
     if let Some(nics) = intent.nics() {
         let mut ch_nics = vec![];
         let mut vfio_devs = vec![];
-        let mut sriov_idx = 0usize;
+        let mut sriov_vfs = crate::intent::SriovVfCursor::default();
         for n in nics {
             if n.is_sriov() {
                 if let Some(dev) = &n.sriov_device {
-                    if let Some(addr) =
-                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
-                    {
+                    if let Some(addr) = sriov_vfs.next_address(&dev.resource_name) {
                         vfio_devs.push(VFIODeviceConfig {
                             sysfs_path: format!("/sys/bus/pci/devices/{}/", addr),
                             gpu_direct_clique: -1, // Not applicable for SR-IOV NICs
                         });
-                        sriov_idx += 1;
                     } else {
                         log::error!(
                             "SR-IOV VF address not found for resource {}",
@@ -779,13 +776,11 @@ fn build_qemu_nics(
         let mut qemu_nics = vec![];
         let mut vfio_devs = vec![];
         let mut net_idx = 0usize;
-        let mut sriov_idx = 0usize;
+        let mut sriov_vfs = crate::intent::SriovVfCursor::default();
         for n in nics {
             if n.is_sriov() {
                 if let Some(dev) = &n.sriov_device {
-                    if let Some(addr) =
-                        crate::intent::discover_sriov_vf_address(&dev.resource_name, sriov_idx)
-                    {
+                    if let Some(addr) = sriov_vfs.next_address(&dev.resource_name) {
                         vfio_devs.push(QemuVFIODevice {
                             host_address: addr,
                             // SR-IOV VFs attach flat to pcie.0 (no SXM
@@ -793,7 +788,6 @@ fn build_qemu_nics(
                             pcie_root_port: false,
                             no_mmap: false,
                         });
-                        sriov_idx += 1;
                     } else {
                         log::error!(
                             "SR-IOV VF address not found for resource {}",
