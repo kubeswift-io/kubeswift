@@ -54,7 +54,8 @@ type SnapshotDeletionPolicy string
 
 const (
 	// SnapshotDeletionPolicyDelete purges the backend artifacts (local hostPath
-	// / s3 objects) when the SwiftSnapshot is deleted. The default.
+	// / s3 objects / oci artifacts) when the SwiftSnapshot is deleted. The
+	// default.
 	SnapshotDeletionPolicyDelete SnapshotDeletionPolicy = "Delete"
 	// SnapshotDeletionPolicyRetain leaves the backend artifacts in place when
 	// the SwiftSnapshot is deleted (the finalizer is dropped without a purge),
@@ -209,8 +210,10 @@ type SwiftSnapshotSpec struct {
 
 	// DeletionPolicy controls whether deleting this SwiftSnapshot also purges
 	// its backend artifacts. Delete (default) purges the local hostPath / s3
-	// objects; Retain leaves them in place (the cleanup finalizer is dropped
-	// without a purge) for out-of-band archival. Ignored for
+	// objects / oci artifacts; Retain leaves them in place (the cleanup
+	// finalizer is dropped without a purge) for out-of-band archival. The
+	// capture node's local copy of an s3/oci capture is removed either way. A
+	// registry that refuses deletes leaves the oci artifact in place. Ignored for
 	// csi-volume-snapshot — the VolumeSnapshotClass deletionPolicy governs the
 	// underlying VolumeSnapshot.
 	// +kubebuilder:default=Delete

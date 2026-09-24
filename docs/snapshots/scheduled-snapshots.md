@@ -75,8 +75,8 @@ keep-N safety:
   in-flight `SwiftRestore` is **skipped** by keep-N (and ttl) — pruned later once
   the reference clears (the shared reference-block gate).
 - A pruned snapshot is deleted like any other, so its **`deletionPolicy`** runs:
-  `Delete` purges the backend artifacts (hostPath / S3 objects), `Retain` keeps
-  them.
+  `Delete` purges the backend artifacts (hostPath / S3 objects / OCI
+  artifacts), `Retain` keeps them.
 
 ## Backend guidance
 

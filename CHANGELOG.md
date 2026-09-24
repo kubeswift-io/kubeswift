@@ -148,6 +148,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Deleting an s3 or oci snapshot left the guest's RAM on the capture node,
+  and oci artifacts were never deleted.** An s3/oci capture writes the full
+  memory image to a node-local directory before uploading it, and nothing
+  removed that directory: every such snapshot's RAM, secrets included, stayed
+  on the node's disk after the snapshot was deleted. oci snapshots also had no
+  cleanup at all, so `deletionPolicy: Delete` left every pushed artifact in the
+  registry. Deleting an s3/oci snapshot now removes the capture-node copy
+  (under either policy), and deleting an oci snapshot with `Delete` removes
+  its memory, disk and data-disk artifacts from the registry. A registry that
+  refuses deletes leaves the artifact in place rather than blocking the
+  deletion. Download caches written on other nodes by restores and clones are
+  still not tracked.
+
 - **With scoped launcher RBAC, a live-migrated guest lost its API access when
   its migration was deleted.** After a live migration the guest runs in the
   renamed destination pod, whose per-pod grant was owned by the
