@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -48,6 +49,12 @@ func (r *SwiftGuestReconciler) retireLegacySeedConfigMap(ctx context.Context, gu
 	var cm corev1.ConfigMap
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: name}, &cm); err != nil {
 		return client.IgnoreNotFound(err) // already gone: nothing to do
+	}
+	// Only the one this guest created. A ConfigMap that merely has the name
+	// "<guest>-seed" -- the user's own, or another tool's -- is not ours to
+	// delete.
+	if !metav1.IsControlledBy(&cm, guest) {
+		return nil
 	}
 
 	var pods corev1.PodList

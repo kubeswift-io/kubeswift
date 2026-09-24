@@ -220,6 +220,12 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **The legacy seed-ConfigMap cleanup could delete a ConfigMap KubeSwift did
+  not create.** Retiring the pre-v0.12 plaintext seed ConfigMap deleted any
+  ConfigMap named `<guest>-seed` that no pod was mounting, including one the
+  user or another tool owned. Only the ConfigMap the guest controls is removed
+  now.
+
 - **A refused sandbox exec hung forever in the gateway and in `swiftctl`.** When
   the exec into the launcher was refused (no `pods/exec` permission, pod not
   running), the stream ended without reading stdin, and the vsock handshake
