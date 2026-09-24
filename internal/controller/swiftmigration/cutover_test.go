@@ -16,6 +16,7 @@ import (
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 )
 
 // cutoverFixture builds a SwiftMigration in the cutover state: phase
@@ -225,6 +226,55 @@ func TestCutover_Step1WritesPodRefSwappedCondition_W21(t *testing.T) {
 	migWithStatus.Status = *status
 	if !isPostCutover(migWithStatus) {
 		t.Errorf("isPostCutover should return true after W21 condition write")
+	}
+}
+
+// The v0.14.0 live-migration hang. Cutover step 1 moved podRef.name to the
+// dst pod but left podRef.uid naming the source pod. The SwiftGuest
+// controller reads a launcher whose UID differs from podRef.uid as a NEW run
+// and clears the run state — erasing the GuestRunning=True the dst swiftletd
+// had already written (once, at receive completion, i.e. BEFORE cutover), so
+// Resuming waited for it until spec.timeout. The dst launcher carries the
+// same running VM: its run state must survive the podRef swap.
+func TestCutover_Step1KeepsTheRunTheDestinationReported(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	dst.UID = "dst-uid"
+	// As the SwiftGuest controller left it on the source launcher, plus the
+	// dst swiftletd's GuestRunning=True written at receive completion.
+	guest.Status.PodRef = &corev1.ObjectReference{Name: "guest", Namespace: "default", UID: src.UID}
+	guest.Status.Conditions = []metav1.Condition{{
+		Type: "GuestRunning", Status: metav1.ConditionTrue, Reason: "VmRunning",
+		Message: "VM is running", LastTransitionTime: metav1.Now(),
+	}}
+
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, src, dst).
+		WithStatusSubresource(mig, guest).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(20)}
+
+	status := mig.Status.DeepCopy()
+	if res := r.handleStopAndCopyLive(context.Background(), mig, status); res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("cutover step 1: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+
+	var got swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "guest", Namespace: "default"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.PodRef == nil || got.Status.PodRef.Name != dst.Name || got.Status.PodRef.UID != dst.UID {
+		t.Errorf("podRef = %+v, want the dst pod by name AND uid (%s/%s)", got.Status.PodRef, dst.Name, dst.UID)
+	}
+
+	// What the SwiftGuest controller does on its next reconcile.
+	swiftguest.MapPodToStatus(dst, &got.Status)
+	for _, cond := range got.Status.Conditions {
+		if cond.Type == "GuestRunning" && cond.Status != metav1.ConditionTrue {
+			t.Fatalf("GuestRunning = %s (%s: %s) after cutover; the migrated VM never stopped, and Resuming waits for this",
+				cond.Status, cond.Reason, cond.Message)
+		}
 	}
 }
 

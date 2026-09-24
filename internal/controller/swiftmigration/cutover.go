@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
@@ -126,7 +127,7 @@ func deriveCutoverStep(
 // cluster state."
 //
 // **Step 1 is two writes on different resources**:
-//   - SwiftGuest.status.podRef.name = dst-pod-name (load-bearing —
+//   - SwiftGuest.status.podRef = dst pod, name and UID (load-bearing —
 //     this is the cutover commit point per §3.5)
 //   - SwiftMigration.status.cutoverStep1At = now() (audit timestamp)
 //
@@ -154,6 +155,7 @@ func (r *SwiftMigrationReconciler) executeCutover(
 	guest *swiftv1alpha1.SwiftGuest,
 	srcPod *corev1.Pod, // nil if NotFound
 	dstName string,
+	dstUID types.UID,
 ) *phaseResult {
 	// Cutover step 2 looks up src pod by status.SourcePodRef.Name
 	// (locked in at Validating-live, W26 fix). Pre-W26 this used
@@ -183,7 +185,7 @@ func (r *SwiftMigrationReconciler) executeCutover(
 
 	switch step {
 	case cutoverStep1Pending:
-		return r.cutoverStep1(ctx, mig, status, guest, dstName)
+		return r.cutoverStep1(ctx, mig, status, guest, dstName, dstUID)
 	case cutoverStep1TimestampOnly:
 		return r.cutoverStep1Timestamp(ctx, status)
 	case cutoverStep2Pending:
@@ -201,7 +203,7 @@ func (r *SwiftMigrationReconciler) executeCutover(
 	}
 }
 
-// cutoverStep1 issues the SwiftGuest podRef.name patch and the
+// cutoverStep1 issues the SwiftGuest podRef patch (name + UID) and the
 // SwiftMigration cutoverStep1At timestamp patch. Two patches on
 // different resources; both via status subresource.
 //
@@ -225,22 +227,31 @@ func (r *SwiftMigrationReconciler) cutoverStep1(
 	status *migrationv1alpha1.SwiftMigrationStatus,
 	guest *swiftv1alpha1.SwiftGuest,
 	dstName string,
+	dstUID types.UID,
 ) *phaseResult {
 	setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverPodRef)
 
-	// Step 1a: patch SwiftGuest.status.podRef.name = dst-pod-name.
+	// Step 1a: patch SwiftGuest.status.podRef to the dst pod — name AND
+	// UID. The UID is load-bearing: the SwiftGuest controller treats a
+	// launcher whose UID differs from podRef.uid as a new run and clears
+	// the run state (MapPodToStatus). A live migration carries the SAME
+	// running VM, and the dst swiftletd has already written
+	// GuestRunning=True by now — once, at receive completion. Leaving the
+	// source pod's UID here let that clear erase it, and every live
+	// migration then waited in Resuming until spec.timeout.
 	guestPatch := client.MergeFrom(guest.DeepCopy())
 	if guest.Status.PodRef == nil {
 		guest.Status.PodRef = &corev1.ObjectReference{}
 	}
 	guest.Status.PodRef.Name = dstName
 	guest.Status.PodRef.Namespace = guest.Namespace
+	guest.Status.PodRef.UID = dstUID
 	if err := r.Status().Patch(ctx, guest, guestPatch); err != nil {
 		return phaseTransient(fmt.Errorf("cutover step 1a (SwiftGuest podRef patch): %w", err))
 	}
 	if r.Recorder != nil {
 		r.Recorder.Eventf(mig, corev1.EventTypeNormal, "CutoverStep1",
-			"patched SwiftGuest %q status.podRef.name = %q", guest.Name, dstName)
+			"patched SwiftGuest %q status.podRef = %q (uid %s)", guest.Name, dstName, dstUID)
 	}
 
 	// Step 1b: stamp cutoverStep1At on SwiftMigration. Tail-call into
