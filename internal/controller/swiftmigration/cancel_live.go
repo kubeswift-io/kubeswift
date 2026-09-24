@@ -152,15 +152,23 @@ func (r *SwiftMigrationReconciler) honorCancel(
 		return false, ctrl.Result{}, nil
 	}
 
-	if isPostCutover(mig) {
-		// Post-cutover: set CancelIgnored condition, return
-		// false-handled so phase dispatch proceeds normally.
-		// Migration completes to Completed; the condition is
-		// informational audit-trail.
+	// Committed = post-cutover OR the source already reported complete. In
+	// both, the destination holds the only running copy, so a cancel must NOT
+	// tear it down — it is ignored and the migration completes. Only the
+	// pre-commit case (source still running) drives to Cancelled. A transient
+	// error reading the source pod requeues rather than risking a destroy.
+	committed, err := r.liveCommitted(ctx, mig)
+	if err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("cancel: determine commit point: %w", err)
+	}
+	if committed {
+		// Set CancelIgnored condition, return false-handled so phase
+		// dispatch proceeds normally. Migration completes to Completed;
+		// the condition is informational audit-trail.
 		return r.markCancelIgnored(ctx, mig)
 	}
 
-	// Pre-cutover: drive to Cancelled.
+	// Pre-commit: the source is still running — drive to Cancelled.
 	res, terr := r.transitionCancelLive(ctx, mig)
 	return true, res, terr
 }

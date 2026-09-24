@@ -105,6 +105,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A live-migration cancel or timeout could destroy the only running copy of
+  the VM.** The controller treated cutover step 1 (the `PodRefSwapped`
+  condition) as the point of no return, but the real commit point is earlier:
+  when the source launcher reports `migration-status=complete`, its Cloud
+  Hypervisor has already exited and the destination holds the only running copy.
+  In the window between those two events a `spec.cancelRequested`, a
+  `spec.timeout` expiry, or a timeout landing between cutover step 1 and step 2
+  would fail the migration and delete the destination pod — losing the guest.
+  The commit point is now defined as "source reported complete" (in one helper)
+  and honoured by both the cancel handler (a cancel past it is ignored and the
+  migration completes) and the StopAndCopy timeout (not enforced once the source
+  has completed or cutover has begun; the migration only moves forward). A cancel
+  or timeout *before* the commit point still aborts as before. (Deleting the
+  SwiftMigration object mid-transfer is handled separately.)
+
 - **Live migrations hung in `Resuming` until their timeout** (#646,
   regression from #641 in v0.14.0). The cutover pointed the guest's
   `status.podRef` at the destination launcher by name but kept the source

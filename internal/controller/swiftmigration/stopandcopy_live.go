@@ -212,15 +212,11 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		)
 	}
 
-	// spec.timeout enforcement (F4.3). Total-migration cap from
-	// status.StartedAt; default 30m.
-	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
-		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
-			return phaseFailure(
-				fmt.Sprintf("spec.timeout=%s exceeded since StartedAt; migration did not complete in time", mig.Spec.Timeout.Duration),
-				migrationv1alpha1.FailureReasonTimeout)
-		}
-	}
+	// spec.timeout is enforced BELOW, after the source pod is resolved and the
+	// cutover short-circuit has run — never here at the top. Once the source
+	// has reported complete (or cutover has begun), the destination holds the
+	// only running copy, and failing the migration on timeout would delete it.
+	// The check must see the commit point first.
 
 	// Resolve source guest.
 	var guest swiftv1alpha1.SwiftGuest
@@ -335,6 +331,24 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 	// caller has already loaded the SwiftMigration's Conditions.
 	if guest.Status.PodRef != nil && guest.Status.PodRef.Name == dstName {
 		return r.executeCutover(ctx, mig, status, &guest, srcArg, dstName, dstPod.UID)
+	}
+
+	// spec.timeout enforcement (F4.3): total-migration cap from
+	// status.StartedAt; default 30m. Checked HERE, after the cutover
+	// short-circuit above, and only while the migration is still pre-commit —
+	// i.e. the source has NOT reported complete. Once the source reports
+	// complete its Cloud Hypervisor has exited and the destination is the only
+	// running copy; failing on timeout then would delete the destination pod
+	// (onTerminalPhase → cleanupDstPod) and lose the guest. Past the commit
+	// point the migration only moves forward: substateSrcCompleted below
+	// dispatches straight into executeCutover.
+	if !srcReportedComplete(mig, srcArg) &&
+		mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
+		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
+			return phaseFailure(
+				fmt.Sprintf("spec.timeout=%s exceeded since StartedAt; migration did not complete in time", mig.Spec.Timeout.Duration),
+				migrationv1alpha1.FailureReasonTimeout)
+		}
 	}
 
 	sub := deriveSubstate(mig, srcArg, dstArg)
