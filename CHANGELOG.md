@@ -8,6 +8,23 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A member kubeconfig could exfiltrate the gateway's own token or run code as
+  the gateway.** A member `Cluster`'s credential Secret is supplied by whoever
+  registers it, and the gateway loaded its kubeconfig with every field honoured,
+  so one with `tokenFile: /var/run/secrets/.../token` and an attacker-controlled
+  `server` made the gateway send its own ServiceAccount token to the attacker,
+  and an `exec`/auth-provider plugin ran as the gateway process. The gateway now
+  rejects a member kubeconfig that references gateway-local files or plugins
+  (`tokenFile`, `exec`, auth-provider, client cert/key/CA file paths); inline
+  credential data is unaffected.
+
+- **OIDC mode did not require `email_verified`.** The default username claim is
+  `email`, but the gateway never checked `email_verified`, so on an IdP that lets
+  a user set or change their own email an attacker could claim a privileged
+  operator's address and be impersonated as them on every federated member. The
+  gateway now requires `email_verified=true` when the username claim is `email`,
+  matching kube-apiserver's OIDC authenticator.
+
 - **An unauthenticated request could OOM the gateway.** The Connect service
   handlers had no read-size cap, and Connect reads and decompresses a request
   message in full before the handler — and therefore before authentication —

@@ -306,6 +306,9 @@ func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) 
 		if err != nil {
 			return nil, fmt.Errorf("parse kubeconfig: %w", err)
 		}
+		if err := sanitizeMemberRESTConfig(cfg); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
 	tok := sec.Data["token"]
@@ -321,6 +324,35 @@ func (p *ClientPool) buildConfig(ctx context.Context, c *fleetv1alpha1.Cluster) 
 		cfg.TLSClientConfig.CAData = ca
 	}
 	return cfg, nil
+}
+
+// sanitizeMemberRESTConfig rejects a member kubeconfig that resolves its
+// credentials against the GATEWAY's own filesystem or an external command,
+// rather than carrying them inline. A member credential Secret is supplied by
+// whoever registers the Cluster (an edge admin, or anyone who can write Secrets
+// in the hub namespace), so an unsanitized kubeconfig can point tokenFile at
+// the gateway's own ServiceAccount token and a server the attacker controls —
+// the gateway then sends that token to the attacker — or run an exec/auth
+// plugin as the gateway process. Inline data (token, client-certificate-data,
+// client-key-data, certificate-authority-data) is unaffected.
+func sanitizeMemberRESTConfig(cfg *rest.Config) error {
+	var bad []string
+	if cfg.BearerTokenFile != "" {
+		bad = append(bad, "tokenFile")
+	}
+	if cfg.ExecProvider != nil {
+		bad = append(bad, "exec credential plugin")
+	}
+	if cfg.AuthProvider != nil {
+		bad = append(bad, "auth-provider plugin")
+	}
+	if cfg.TLSClientConfig.CertFile != "" || cfg.TLSClientConfig.KeyFile != "" || cfg.TLSClientConfig.CAFile != "" {
+		bad = append(bad, "client certificate/key/CA file path")
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("member kubeconfig references gateway-local files or plugins (%s); supply inline credentials only", strings.Join(bad, ", "))
+	}
+	return nil
 }
 
 // DynamicFor returns a dynamic client for the named member, impersonating the
