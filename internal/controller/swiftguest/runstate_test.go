@@ -58,8 +58,14 @@ func TestClearRunState_DropsTheRunsProcessConsoleAndLeases(t *testing.T) {
 	st.Runtime = &swiftv1alpha1.GuestRuntimeStatus{PID: 4242, Hypervisor: "qemu"}
 	st.Console = &swiftv1alpha1.GuestConsoleStatus{SerialSocket: "/run/kubeswift/serial.sock"}
 	st.Network.Interfaces = []swiftv1alpha1.GuestNetworkInterface{{Name: "eth0"}}
+	st.Network.Ready = true
+	st.Network.Egress = "ClusterServices"
 
 	ClearRunState(st, "Stopped", "stopped")
+
+	if st.Network.Ready || st.Network.Egress != "" {
+		t.Errorf("network ready=%v egress=%q; both were observations of the last run", st.Network.Ready, st.Network.Egress)
+	}
 
 	if st.Runtime == nil || st.Runtime.PID != 0 || st.Runtime.Hypervisor != "qemu" {
 		t.Errorf("runtime = %+v, want pid cleared and hypervisor kept", st.Runtime)

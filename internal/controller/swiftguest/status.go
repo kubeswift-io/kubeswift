@@ -116,8 +116,11 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 	}
 	if status.Network != nil {
 		status.Network.PrimaryIP = ""
-		// Per-interface addresses are leases of the same run.
+		// Per-interface addresses are leases of the same run, and readiness
+		// and egress reachability were observations of it.
 		status.Network.Interfaces = nil
+		status.Network.Ready = false
+		status.Network.Egress = ""
 	}
 	// The hypervisor process and its serial socket went with the launcher.
 	// The hypervisor kind is not run-scoped: it says what the guest runs
