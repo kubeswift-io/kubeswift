@@ -73,9 +73,10 @@ spec:
             {{- if .Values.migration.mtls.enabled }}
             - --migration-mtls-enabled=true
             {{- end }}
-            {{- if $metricsSecure }}
-            - --metrics-secure=true
-            {{- end }}
+            {{- /* Always explicit: the binary's default is secure, and an
+                   upgrade with --reuse-values that kept secure: false (or
+                   predates the key) must keep serving plain HTTP. */}}
+            - --metrics-secure={{ ternary "true" "false" (not (not $metricsSecure)) }}
             {{- range .Values.swiftGuest.allowedHostPathPrefixes }}
             - --allowed-hostpath-prefix={{ . }}
             {{- end }}

@@ -48,13 +48,22 @@ dashboards under `config/grafana/*.json` as ConfigMaps labeled
 
 ### Securing the metrics endpoint
 
-By default the controller serves `/metrics` over plain HTTP on port 8080, to
-anyone who can reach the pod. The metrics name every tenant's guests, images
-and namespaces. With `controllerManager.metrics.secure=true` the controller
-serves them over HTTPS (a self-signed certificate) and only to callers that
-the API server authenticates and that are allowed to `get` the `/metrics`
-non-resource URL. Bind the `kubeswift-metrics-reader` ClusterRole to your
-Prometheus ServiceAccount:
+The metrics name every tenant's guests, images and namespaces, so since
+v0.15.0 the controller serves `/metrics` on port 8080 over HTTPS (a
+self-signed certificate) and only to callers that the API server
+authenticates and that may `get` the `/metrics` non-resource URL. Bind the
+`kubeswift-metrics-reader` ClusterRole to your Prometheus ServiceAccount, with
+the chart:
+
+```yaml
+controllerManager:
+  metrics:
+    readers:
+      - name: kube-prometheus-stack-prometheus   # your Prometheus's SA
+        namespace: monitoring
+```
+
+or by hand:
 
 ```bash
 kubectl create clusterrolebinding kubeswift-metrics-reader \
@@ -62,9 +71,12 @@ kubectl create clusterrolebinding kubeswift-metrics-reader \
   --serviceaccount=<prometheus-namespace>:<prometheus-serviceaccount>
 ```
 
-The chart's ServiceMonitor switches to `https` with Prometheus's own
-ServiceAccount token when the setting is on. A scraper configured by hand
-needs the same.
+The chart's ServiceMonitor scrapes with `https` and Prometheus's own
+ServiceAccount token, as does `config/grafana/servicemonitor.yaml`. A scraper
+configured by hand needs the same, or it gets `401`/`403`.
+`controllerManager.metrics.secure=false` (`--metrics-secure=false` on the
+binary) serves plain HTTP to anyone who can reach the pod, as releases before
+v0.15.0 did.
 
 The controller also serves `/healthz` and `/readyz` on port 8081. Readiness
 waits for the webhook server when webhooks are enabled.

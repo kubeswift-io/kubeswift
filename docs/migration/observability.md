@@ -58,7 +58,9 @@ sum by (mode) (increase(kubeswift_migration_total{result="failed"}[1h]))
 If you run the Prometheus Operator, point a `ServiceMonitor`/`PodMonitor` at the
 controller-manager metrics service. The controller-runtime metrics registry
 (which these metrics register with) is served on the manager's metrics bind
-address — match it to your deploy's `--metrics-bind-address`.
+address — match it to your deploy's `--metrics-bind-address`. It is HTTPS and
+needs an authorized token by default; see
+[Securing the metrics endpoint](../observability/README.md#securing-the-metrics-endpoint).
 
 ## Grafana dashboard
 

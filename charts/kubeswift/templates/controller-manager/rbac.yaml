@@ -293,9 +293,10 @@ rules:
     resources: ["pods"]
     verbs: ["get", "patch"]
 ---
-# Bind to a metrics scraper's ServiceAccount (e.g. Prometheus) when
-# controllerManager.metrics.secure is on: only callers allowed to GET /metrics
-# are served.
+# Bind to a metrics scraper's ServiceAccount (e.g. Prometheus) while
+# controllerManager.metrics.secure is on (the default): only callers allowed
+# to GET /metrics are served. With the chart, controllerManager.metrics.readers
+# binds it (controller-manager/metrics-readers.yaml).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

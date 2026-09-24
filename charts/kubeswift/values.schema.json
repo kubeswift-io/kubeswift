@@ -16,7 +16,21 @@
         "metrics": {
           "type": "object",
           "additionalProperties": false,
-          "properties": { "secure": { "type": "boolean" } }
+          "properties": {
+            "secure": { "type": "boolean" },
+            "readers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "namespace"],
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 },
+                  "namespace": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
         }
       }
     },
