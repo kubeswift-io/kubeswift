@@ -1202,15 +1202,22 @@ async fn dispatch_migration_send(
     // `send-migration` NON-BLOCKING (#8021): the call returns 204 the
     // instant CH accepts the migration while pre-copy/stop-and-copy run on
     // a background thread. CH <= v52 blocks the call until the source has
-    // exited. This decides how completion is detected below. On a query
-    // failure we fall back to the historic (blocking) assumption — no
-    // worse than the pre-v53 behaviour.
-    let non_blocking = client
-        .version()
-        .ok()
-        .and_then(|v| v.major_minor())
-        .map(|(major, _)| major >= 53)
-        .unwrap_or(false);
+    // exited. This decides how completion is detected below. The probe is
+    // retried briefly: a wrong guess on v53 reports a migration still running
+    // in the background as failed. If it still cannot tell, fall back to the
+    // historic (blocking) assumption — no worse than the pre-v53 behaviour,
+    // and the non-blocking path must not be taken on a v52 CH, whose exit
+    // ordering it would break.
+    let non_blocking = match probe_ch_major(&client) {
+        Some(major) => major >= 53,
+        None => {
+            log::warn!(
+                "dispatch_migration_send id={} could not determine the Cloud Hypervisor version; assuming a blocking (<= v52) send",
+                action.id
+            );
+            false
+        }
+    };
 
     // Phase 3b PR 1 Commit D — spawn the progress-estimate emitter BEFORE
     // the send_migration call. Drop guard ensures the emitter is signaled
@@ -1741,6 +1748,19 @@ fn sanitize_ch_error(raw: &str) -> &'static str {
     } else {
         "ch_error"
     }
+}
+
+/// The local Cloud Hypervisor's major version, asked up to three times.
+fn probe_ch_major(client: &swift_ch_client::ApiClient) -> Option<u32> {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if let Some((major, _)) = client.version().ok().and_then(|v| v.major_minor()) {
+            return Some(major);
+        }
+    }
+    None
 }
 
 /// Args parsed from `kubeswift.io/snapshot-action-args` for the

@@ -230,6 +230,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A successful live migration could be reported as failed on some Cloud
+  Hypervisor builds.** swiftletd picks between CH v52's blocking
+  send-migration and v53's non-blocking one from the CH version. It read
+  git-describe or dirty builds (`v53.0-3-gabc1234`, `v53.0-dirty`) as
+  unparseable and assumed v52. On v53 it then saw the guest still running
+  right after the send was accepted and wrote `migration-status: failed`,
+  while the migration completed in the background. The version's minor
+  component is now read up to its first non-digit, and a failed probe is
+  retried before the v52 assumption is used.
+
 - **A guest could grow swiftletd's memory, or stall it, through the vsock
   agent reply.** swiftletd read the in-guest agent's reply (identity
   regeneration, warm-slot exec) until a newline, with no size limit and a
