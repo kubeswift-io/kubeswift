@@ -229,3 +229,58 @@ another go-ahead between them.
   - S1 is controller Ready; the VAPs as expected; the sov-side console grant and
     exec gate present; `kubeswift-vm-reader` without `pods/exec`.
   - Its webhook is off, so skip the `--dry-run=server` check and say so.
+
+## Go-ahead, re-issued: candidate `d232581`
+
+This section supersedes the candidate above. Phase 1 had not started on
+`2d146eb`, so nothing is to be undone.
+
+**Candidate: main @ `d232581`.** It is `2d146eb` plus #662, the fix to
+`test/migration/migration-test.sh`. The product code is identical.
+- **Wherever this plan says `2d146eb`, read `d232581`:** the chart
+  `0.0.0-dev.d232581`, every image tag `sha-d232581` (all nine, `ui` excepted),
+  and the checkout for CRDs, scripts and `exec_bridge.go`.
+- **Build check:** the Release Dev run for `d232581` started at about 23:50
+  UTC. The "Image published?" check and its 45-minute wait apply as written.
+- **Later commits:** a commit on main after `d232581` that touches only docs does
+  not change the candidate; stay on `d232581`.
+
+Phase 1: **GO**. Phase 2: **GO** once Phase 1 has succeeded on dev.
+Phase 3: **GO** per cluster, once Phase 1 has succeeded on that cluster. Push
+`phase1.md`, `phase2.md` and `phase3.md` as each finishes. The stop conditions
+and every amendment above still hold, except for D7.
+
+**D7 is restored, run from the fixed script** (this replaces the "D7 is
+replaced" amendment).
+
+Setup, from the checkout at `d232581`:
+- an ephemeral key: `ssh-keygen -t ed25519 -N '' -f /tmp/val-mig-key`, then
+  `export KUBESWIFT_TEST_IDENTITY=/tmp/val-mig-key`;
+- `swiftctl`: the script builds `./bin/swiftctl` with Go if it is missing. If
+  the host has no Go, set `SWIFTCTL=` to a `swiftctl` built from `d232581`.
+
+The runs, one after the other:
+- **D7a, offline:**
+  `test/migration/migration-test.sh --mode offline --source <worker-1> --target <worker-2>`,
+  using the two KVM workers named in `phase0.md`.
+  - **Pass:** "All checks passed". That covers the disk sentinel, the guest on
+    the target, and the webhook refusing a migration with `migration.enabled=false`.
+- **D7b, live:**
+  `test/migration/migration-test.sh --mode live --guest-class small-migratable --source <worker-1> --target <worker-2> --no-cleanup`.
+  - **Pass:**
+    - "All checks passed" (the disk and tmpfs sentinels, continuous uptime,
+      `status.mode` = `live`);
+    - then, before cleaning up, the source launcher pod is gone and
+      `status.podRef` names the `<guest>-mig-<uid>` pod on the target.
+  - **Cleanup:** `kubectl delete ns migration-e2e`. `small-migratable` is the
+    cluster's own class, so the script leaves it.
+- **Record for each run:**
+  - the script's full output;
+  - the migration's `phase`/`phaseDetail` sequence;
+  - the time to Completed;
+  - `kubectl get nodes` before and after. The script must leave no cordon
+    behind, and must not lift a cordon it did not set.
+- **Script defect vs product failure:** if the script itself misbehaves (as
+  opposed to the migration failing), record it as a defect of the script with
+  the evidence. Then fall back to the hand-made live migration from the
+  earlier D7 amendment, so D7 still gets a verdict.
