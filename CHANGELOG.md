@@ -8,6 +8,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **swiftletd wiped whatever directory a snapshot capture named.** Before a
+  capture, swiftletd empties the destination directory, and it took that
+  path from the launcher pod's `snapshot-action-args` annotation without
+  checking it. Every launcher mounts the node-wide
+  `/var/lib/kubeswift/snapshots` read-write, so anyone who could patch a
+  launcher pod could point a capture at that root and delete every
+  namespace's snapshots on the node. swiftletd now accepts only
+  `file:///var/lib/kubeswift/snapshots/<name>/`, with `<name>` a single safe
+  segment, which is the rule the controller already applies.
+
 - **A checked-out warm-pool sandbox ran with no ingress isolation.** A warm
   slot's deny-ingress NetworkPolicy selected the pod by its sandbox label, and
   checkout rewrites that label to the claiming sandbox's name. From the moment

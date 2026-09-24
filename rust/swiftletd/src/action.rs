@@ -1771,6 +1771,61 @@ fn default_true() -> bool {
     true
 }
 
+/// Node directory every snapshot capture lands under (the launcher's
+/// `kubeswift-snapshots` hostPath mount).
+const SNAPSHOT_ROOT: &str = "/var/lib/kubeswift/snapshots/";
+
+#[cfg(not(test))]
+fn snapshot_root() -> String {
+    SNAPSHOT_ROOT.to_string()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests capture into a tempdir; this stands in for [`SNAPSHOT_ROOT`].
+    static TEST_SNAPSHOT_ROOT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn snapshot_root() -> String {
+    TEST_SNAPSHOT_ROOT
+        .with(|r| r.borrow().clone())
+        .unwrap_or_else(|| SNAPSHOT_ROOT.to_string())
+}
+
+/// The directory a capture may wipe and write: `file://` + the snapshot root
+/// ([`SNAPSHOT_ROOT`]) + one segment of `[A-Za-z0-9._-]` starting
+/// alphanumeric, the same rule the controller applies to
+/// `spec.backend.local.hostPath` (and that the s3/oci `<namespace>-<name>`
+/// directories satisfy). Anything else -- the root itself, a nested path,
+/// `..`, another scheme -- is refused.
+fn capture_dest_dir(url: &str) -> Result<&str, String> {
+    let root = snapshot_root();
+    let refuse = || {
+        format!(
+            "destination_url must be file://{}<name>/ with <name> a single [A-Za-z0-9._-] segment starting alphanumeric (got {:?})",
+            root, url
+        )
+    };
+    let path = url.strip_prefix("file://").ok_or_else(refuse)?;
+    let seg = path
+        .strip_prefix(root.as_str())
+        .ok_or_else(refuse)?
+        .trim_end_matches('/');
+    let first_alnum = seg
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric());
+    let safe = seg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if !first_alnum || !safe {
+        return Err(refuse());
+    }
+    Ok(path.trim_end_matches('/'))
+}
+
 /// Capture handler: pause → snapshot → (optional) resume.
 ///
 /// Sequence in detail:
@@ -1823,14 +1878,18 @@ async fn dispatch_capture(
     // launcher pod (one capture-action in flight at a time, gated by
     // action-id) and across launchers each SwiftSnapshot owns a
     // unique destination subdirectory.
-    if let Some(local_path) = args.destination_url.strip_prefix("file://") {
-        let local_path = local_path.trim_end_matches('/');
-        // remove_dir_all on a missing path returns an error we ignore;
-        // the create_dir_all below is the only authoritative step.
-        let _ = std::fs::remove_dir_all(local_path);
-        if let Err(e) = std::fs::create_dir_all(local_path) {
-            return Err(format!("create destination dir {}: {}", local_path, e));
-        }
+    //
+    // The path comes from a pod annotation, which anyone who can patch the
+    // pod can write, and every launcher mounts the node-wide snapshot root
+    // read-write. So it is checked here, not only in the controller: a
+    // destination of the root itself (or one reaching outside it) would wipe
+    // every namespace's snapshots on the node.
+    let local_path = capture_dest_dir(&args.destination_url)?;
+    // remove_dir_all on a missing path returns an error we ignore;
+    // the create_dir_all below is the only authoritative step.
+    let _ = std::fs::remove_dir_all(local_path);
+    if let Err(e) = std::fs::create_dir_all(local_path) {
+        return Err(format!("create destination dir {}: {}", local_path, e));
     }
 
     let timeout =
@@ -2714,6 +2773,38 @@ async fn handle_namespace(
 
 #[cfg(test)]
 mod tests {
+
+    // A capture may only wipe one snapshot's own directory under the node's
+    // snapshot root: the path is annotation-supplied and the root is shared by
+    // every namespace on the node.
+    #[test]
+    fn capture_dest_dir_accepts_one_segment_under_the_root_only() {
+        TEST_SNAPSHOT_ROOT.with(|r| *r.borrow_mut() = None);
+        assert_eq!(
+            capture_dest_dir("file:///var/lib/kubeswift/snapshots/ns-snap/"),
+            Ok("/var/lib/kubeswift/snapshots/ns-snap")
+        );
+        assert_eq!(
+            capture_dest_dir("file:///var/lib/kubeswift/snapshots/db.v1_2"),
+            Ok("/var/lib/kubeswift/snapshots/db.v1_2")
+        );
+        for bad in [
+            "file:///var/lib/kubeswift/snapshots/",
+            "file:///var/lib/kubeswift/snapshots",
+            "file:///var/lib/kubeswift/snapshots/../kernels/",
+            "file:///var/lib/kubeswift/snapshots/..",
+            "file:///var/lib/kubeswift/snapshots/a/b/",
+            "file:///var/lib/kubeswift/snapshots/.hidden/",
+            "file:///var/lib/kubeswift/snapshots/-x/",
+            "file:///var/lib/kubeswift/snapshots/a b/",
+            "file:///etc/",
+            "file:///var/lib/kubeswift/snapshotsX/a/",
+            "/var/lib/kubeswift/snapshots/a/",
+            "http://example.com/var/lib/kubeswift/snapshots/a/",
+        ] {
+            assert!(capture_dest_dir(bad).is_err(), "{bad} must be refused");
+        }
+    }
     use super::*;
 
     fn ann(kvs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -3130,7 +3221,14 @@ mod tests {
     /// non-existent destination dirs at runtime) succeeds in tests
     /// without root permissions.
     fn tmp_dest_url(tmp: &tempfile::TempDir, sub: &str) -> String {
+        use_snapshot_root(tmp);
         format!("file://{}/{}/", tmp.path().display(), sub)
+    }
+
+    /// Point capture's snapshot root at tmp for this test thread.
+    fn use_snapshot_root(tmp: &tempfile::TempDir) {
+        let root = format!("{}/", tmp.path().display());
+        TEST_SNAPSHOT_ROOT.with(|r| *r.borrow_mut() = Some(root));
     }
 
     #[tokio::test]
@@ -3237,6 +3335,7 @@ mod tests {
         // already exists, no error, snapshot proceeds.
         let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
         let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
         let pre_existing = dest_tmp.path().join("preexisting");
         std::fs::create_dir_all(&pre_existing).unwrap();
         let dest_url = format!("file://{}/", pre_existing.display());
@@ -3253,6 +3352,7 @@ mod tests {
         // doesn't block the new capture.
         let server = MultiMockServer::spawn(vec![no_content(), no_content(), no_content()]);
         let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
         let snap_dir = dest_tmp.path().join("stale-snap");
         std::fs::create_dir_all(&snap_dir).unwrap();
         // Pre-populate with the three known CH outputs.
@@ -3270,6 +3370,28 @@ mod tests {
         assert!(!snap_dir.join("config.json").exists());
         assert!(!snap_dir.join("state.json").exists());
         assert!(!snap_dir.join("memory-ranges").exists());
+    }
+
+    // The snapshot root itself is refused before anything is wiped or the VM
+    // is paused: every namespace's snapshots on the node live under it.
+    #[tokio::test]
+    async fn capture_refuses_the_snapshot_root_and_wipes_nothing() {
+        let dest_tmp = tempfile::tempdir().unwrap();
+        use_snapshot_root(&dest_tmp);
+        let other = dest_tmp.path().join("other-tenant-snap");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("state.json"), b"{}").unwrap();
+        let action = capture_action(serde_json::json!({
+            "destination_url": format!("file://{}/", dest_tmp.path().display()),
+        }));
+        let err = dispatch(&action, Path::new("/does/not/matter"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("destination_url must be"), "{err}");
+        assert!(
+            other.join("state.json").exists(),
+            "another snapshot was wiped"
+        );
     }
 
     #[tokio::test]
