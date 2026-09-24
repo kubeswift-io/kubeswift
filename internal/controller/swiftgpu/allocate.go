@@ -228,9 +228,11 @@ func fmVersionString(node *gpuv1alpha1.SwiftGPUNode) string {
 // deallocateGPUs releases the GPU allocation recorded in guest.status.gpu from
 // the SwiftGPUNode. No-op if no allocation is recorded or the node is gone.
 func (r *SwiftGPUReconciler) deallocateGPUs(ctx context.Context, guest *swiftv1alpha1.SwiftGuest) error {
-	if guest.Status.GPU == nil {
-		return nil
-	}
+	// No early return on a nil status.GPU: the SwiftGPUNodes are the record of
+	// what is allocated, and status.GPU can be missing while an allocation is
+	// held (the status patch after marking the GPUs failed). Returning early
+	// there leaked the reservation. DeallocateForWorkload is idempotent.
+	//
 	// Free the guest's GPUs (and FM partitions) on EVERY SwiftGPUNode, not just
 	// status.GPU.NodeName. During a VFIO offline migration's reserve-before-stop
 	// window the guest is briefly allocated on BOTH the source
@@ -262,6 +264,34 @@ func DeallocateForWorkload(ctx context.Context, c client.Client, allocatedTo str
 		}
 	}
 	return nil
+}
+
+// nativeAllocationHeld reports whether any SwiftGPUNode records a GPU or Fabric
+// Manager partition AllocatedTo the given identity — whether a native
+// allocation is outstanding, whatever the workload's spec says now. Native
+// allocations live on the SwiftGPUNodes (DRA ones do not), so this is the
+// source of truth for "what must be released".
+func nativeAllocationHeld(ctx context.Context, c client.Client, allocatedTo string) (bool, error) {
+	var nodes gpuv1alpha1.SwiftGPUNodeList
+	if err := c.List(ctx, &nodes); err != nil {
+		return false, fmt.Errorf("list SwiftGPUNodes: %w", err)
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		for _, g := range n.Status.GPUs {
+			if g.AllocatedTo == allocatedTo {
+				return true, nil
+			}
+		}
+		if n.Status.FabricManager != nil {
+			for _, p := range n.Status.FabricManager.Partitions {
+				if p.AllocatedTo == allocatedTo {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // selectGPUs picks count free GPUs from gpus, preferring GPUs on the same NUMA

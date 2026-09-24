@@ -148,6 +148,19 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Editing a guest's GPU request could leak the GPU and wedge the guest in
+  `Terminating`.** `gpuProfileRef` and `gpuResourceClaim` are mutable, but the
+  GPU controller chose what to do from the current spec. Removing the ref after
+  allocation made it return early: on delete the finalizer was never removed, so
+  the guest stayed `Terminating` forever and its GPU stayed allocated to it.
+  Switching from the native backend to DRA ran DRA's no-op release and leaked the
+  native GPUs the same way. Release now follows the allocation recorded on the
+  SwiftGPUNodes rather than the spec: deletion frees everything the guest holds,
+  and a guest that no longer requests native GPUs gets them returned once its
+  launcher has let go of the VFIO group, with its stale GPU status cleared. The
+  native release also no longer skips a guest whose `status.gpu` is missing,
+  which leaked the reservation when the status write after allocation failed.
+
 - **A failed sandbox workload could be reported `Completed` with exit code 0.**
   swiftletd recovers the workload's exit code from the console log, but two bugs
   lost it and let the SwiftSandbox controller fall back to the launcher's own
