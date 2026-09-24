@@ -70,6 +70,36 @@ unaffected: they keep the directory they were captured into.
 
 ### Fixed
 
+- **An in-place restore of a running guest reported Ready and booted the guest
+  cold.** The restore force-deletes the guest's launcher and waits for
+  GuestRunning, but the guest still carried the replaced launcher's status,
+  which said GuestRunning=True: the VM the snapshot left paused. The restore
+  went straight to resume, and the replaced launcher's swiftletd, still alive
+  for a moment and polling its pod by name, found the resume action on the new
+  pod, resumed its own paused VM and reported it done. The restore was Ready
+  in seconds and removed its annotations, so the new launcher read an intent
+  with no restore in it and booted the guest from its disk, memory lost. The
+  restore now waits for its own launcher: a restore-receive pod created after
+  the restore started, which the guest's `status.podRef` names; it sends the
+  resume action to that pod's UID only. swiftletd exits when its pod has been
+  replaced by another of the same name, rather than act on it. Found by the
+  kind e2e (local-roundtrip), which failed on it once the restore's address
+  was fixed.
+
+- **A guest restored in place reported no address** (a regression from #641
+  in v0.14.0). A restore resumes the guest's memory, network configuration
+  included, so the guest never asks DHCP for an address and the launcher's
+  lease poller has none to report. Since #641 a new launcher clears the
+  address the last one reported, so `status.network.primaryIP` stayed empty
+  after every in-place restore until the guest renewed its lease, and anything
+  that reaches the guest by it (`swiftctl ssh`, the nightly local-roundtrip
+  e2e) could not. A capture now records the guest's address in
+  `status.guestSpec.primaryIP`, and the restore launcher is created with it,
+  as a migration destination is with its source's. A later lease still
+  replaces it. A clone takes a lease of its own and is unchanged. Snapshots
+  captured before this version have no recorded address, and restore as
+  before.
+
 - **A cancelled live migration could destroy the guest it migrated.**
   swiftletd ran each action on its action loop and waited for it, and a
   receive lasts the whole migration, so the destination saw a cancel only
