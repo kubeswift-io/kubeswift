@@ -170,3 +170,19 @@ func TestRegistry_CreatedPhaseMigration(t *testing.T) {
 		t.Errorf("a pending guest must stay pending across a reload, got created=%v err=%v", created, err)
 	}
 }
+
+// A created guest records the base device it was snapshotted from, which is
+// what lets eviction keep a base running guests share.
+func TestEnsureGuest_RecordsTheBaseItCameFrom(t *testing.T) {
+	x, _ := createdRig(t)
+	if _, err := x.EnsureGuest(context.Background(), "img", "ns/g/1", "ks-guest-1", 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	order, shared, err := x.Reg.EvictionOrder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared != 1 || strings.Join(order, ",") != "img" {
+		t.Errorf("order = %v shared = %d; want img held by the guest", order, shared)
+	}
+}

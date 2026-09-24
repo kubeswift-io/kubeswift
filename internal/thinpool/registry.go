@@ -74,6 +74,22 @@ type registryState struct {
 	// "created" key at all, and load() treats that — and only that — as legacy,
 	// marking every guest it names as created (they were, or stranded as before).
 	Created map[string]bool `json:"created"`
+	// Derived records, for each guest, the device id of the base its snapshot
+	// was taken from.
+	//
+	// Eviction needs it. A base is a cache, and evicting one is meant to buy
+	// room, but dm-thin frees only the blocks nothing else references: a base
+	// that live guests were snapshotted from shares nearly all its blocks with
+	// them, so deleting it frees almost nothing and still costs the next guest
+	// of that image a full rebuild. Least-recently-used alone cannot see that,
+	// and an old base every running guest shares went first.
+	//
+	// The base's device id, not its digest: ids are never reused, while a
+	// digest whose base was evicted and rebuilt names a new device that the
+	// older guests share nothing with. Guests created before this field
+	// existed have no entry and are not counted (the node cannot tell which
+	// base they came from), which is how eviction behaved before.
+	Derived map[string]uint32 `json:"derived,omitempty"`
 	// Reserved holds the pool space promised to base builds still writing
 	// (see Reserve). Checking free space is not enough on its own: two builds
 	// of different images could each see room for itself, both write, and
@@ -198,6 +214,7 @@ func (r *Registry) Forget(key string) error {
 		}
 		delete(st.Guests, key)
 		delete(st.Created, key)
+		delete(st.Derived, key)
 		return true, nil
 	})
 }
@@ -214,17 +231,22 @@ func (r *Registry) GuestCreated(key string) (bool, error) {
 	return created, err
 }
 
-// MarkGuestCreated records that key's snapshot exists. Call it only after
+// MarkGuestCreated records that key's snapshot exists, taken from the base
+// with device id baseID (see registryState.Derived). Call it only after
 // create_snap has succeeded.
-func (r *Registry) MarkGuestCreated(key string) error {
+func (r *Registry) MarkGuestCreated(key string, baseID uint32) error {
 	return r.withLock(func(st *registryState) (bool, error) {
 		if _, ok := st.Guests[key]; !ok {
 			return false, fmt.Errorf("marking guest %s created: no id allocated for it", key)
 		}
-		if st.Created[key] {
+		if st.Created[key] && st.Derived[key] == baseID {
 			return false, nil
 		}
 		st.Created[key] = true
+		if st.Derived == nil {
+			st.Derived = map[string]uint32{}
+		}
+		st.Derived[key] = baseID
 		return true, nil
 	})
 }
@@ -340,16 +362,58 @@ func (r *Registry) TouchBase(digest string) error {
 // with no recorded use sorts first: nothing is known to have wanted it.
 func (r *Registry) BasesByLeastRecentUse() ([]string, error) {
 	var out []string
-	when := map[string]time.Time{}
 	err := r.withLock(func(st *registryState) (bool, error) {
+		all := make([]string, 0, len(st.Bases))
 		for d := range st.Bases {
-			out = append(out, d)
-			if t, err := time.Parse(time.RFC3339, st.Used[d]); err == nil {
-				when[d] = t
-			}
+			all = append(all, d)
 		}
+		out = lruOrder(st, all)
 		return false, nil
 	})
+	return out, err
+}
+
+// EvictionOrder returns every base in the order to evict them: those no
+// guest on this node was snapshotted from first, then those live guests
+// share, least recently used first within each. shared counts the second
+// group.
+//
+// Evicting a shared base still happens when nothing else frees enough, since
+// it may free the blocks its guests have all overwritten, but it is the last
+// resort: it frees little and costs a rebuild (see registryState.Derived).
+func (r *Registry) EvictionOrder() (order []string, shared int, err error) {
+	err = r.withLock(func(st *registryState) (bool, error) {
+		inUse := map[uint32]bool{}
+		for g, base := range st.Derived {
+			if _, live := st.Guests[g]; live {
+				inUse[base] = true
+			}
+		}
+		var free, held []string
+		for d, id := range st.Bases {
+			if inUse[id] {
+				held = append(held, d)
+			} else {
+				free = append(free, d)
+			}
+		}
+		order = append(lruOrder(st, free), lruOrder(st, held)...)
+		shared = len(held)
+		return false, nil
+	})
+	return order, shared, err
+}
+
+// lruOrder sorts digests least recently used first; one with no recorded use
+// sorts first.
+func lruOrder(st *registryState, digests []string) []string {
+	out := append([]string(nil), digests...)
+	when := map[string]time.Time{}
+	for _, d := range out {
+		if t, err := time.Parse(time.RFC3339, st.Used[d]); err == nil {
+			when[d] = t
+		}
+	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := when[out[i]], when[out[j]]
 		if a.Equal(b) {
@@ -357,7 +421,7 @@ func (r *Registry) BasesByLeastRecentUse() ([]string, error) {
 		}
 		return a.Before(b)
 	})
-	return out, err
+	return out
 }
 
 func (r *Registry) Bases() ([]string, error) {

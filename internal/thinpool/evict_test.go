@@ -152,3 +152,51 @@ func TestMakeRoomFor_StopsOnARealFailure(t *testing.T) {
 		t.Errorf("bases = %s; a failed eviction must not forget the base", got)
 	}
 }
+
+// deriveGuest records guest g as snapshotted from base k.
+func deriveGuest(t *testing.T, x *Materializer, g, k string) {
+	t.Helper()
+	baseID, ok, err := x.Reg.BaseID(k)
+	if err != nil || !ok {
+		t.Fatalf("base %s: known=%v err=%v", k, ok, err)
+	}
+	if _, _, err := x.Reg.AllocateGuest(g); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.Reg.MarkGuestCreated(g, baseID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A base running guests were snapshotted from shares nearly all its blocks
+// with them, so evicting it frees almost nothing and still costs a rebuild.
+// The least recently used base used to go first regardless; an unshared one
+// goes first now.
+func TestMakeRoomFor_EvictsUnsharedBasesBeforeShared(t *testing.T) {
+	x, f := evictRig(t, 1000, 1000) // full; a is the least recently used
+	deriveGuest(t, x, "ns/vm/uid-1", "a")
+	freed := uint64(0)
+	f.onCall = func(name string, args ...string) {
+		if strings.Contains(strings.Join(args, " "), "delete") {
+			freed += 400
+			f.out["dmsetup --noudevsync status kstest"] = poolStatus(1000-freed, 1000)
+		}
+	}
+	if err := x.makeRoomFor(context.Background(), 20<<20, "d"); err != nil {
+		t.Fatal(err)
+	}
+	if got := bases(t, x); got != "a,c" {
+		t.Errorf("bases = %s; want b evicted (least recently used of the unshared) and a, which a guest shares, kept", got)
+	}
+}
+
+// Shared bases are the last resort, not off limits: when nothing else frees
+// enough they are evicted too, and a failure says how many were shared.
+func TestMakeRoomFor_SharedBasesAreTheLastResort(t *testing.T) {
+	x, _ := evictRig(t, 1000, 1000) // full, and evicting frees nothing
+	deriveGuest(t, x, "ns/vm/uid-1", "a")
+	err := x.makeRoomFor(context.Background(), 20<<20, "d")
+	if err == nil || !strings.Contains(err.Error(), "evicted 3 of 3 other bases (1 of them shared by running guests") {
+		t.Fatalf("err = %v; want every base tried, the shared one counted", err)
+	}
+}

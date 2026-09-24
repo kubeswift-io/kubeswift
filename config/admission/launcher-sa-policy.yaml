@@ -93,9 +93,10 @@ spec:
 # edit/admin roles can) could do this. Nothing legitimate creates such a
 # Secret for a launcher SA, so only the controller may.
 #
-# Not covered here (see docs/security-audit.md): TokenRequest
-# (serviceaccounts/token), impersonation of the launcher SA, and pods/exec into
-# a launcher pod, which the built-in edit/admin roles also grant.
+# TokenRequest is the third way to a launcher token, and has its own gate
+# below. Not covered here (see docs/security-audit.md): impersonation of the
+# launcher SA, and pods/exec into a launcher pod, which the built-in edit/admin
+# roles also grant.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -141,4 +142,60 @@ metadata:
     app.kubernetes.io/component: admission-policy
 spec:
   policyName: kubeswift-launcher-sa-token-secret-gate
+  validationActions: [Deny]
+---
+# TokenRequest (POST serviceaccounts/<name>/token) mints a token for a
+# ServiceAccount directly -- no pod, no Secret. The built-in edit and admin
+# roles grant `create serviceaccounts/token`, so anyone holding them in a
+# namespace where a guest runs could mint a launcher token, patch the
+# privileged launcher, and have node root: the escalation the two gates above
+# close for pods and Secrets.
+#
+# The kubelet is the one legitimate requester. It mints the projected token
+# every launcher pod mounts, authenticating as system:node:<node> in the
+# system:nodes group, and refusing it would leave every launcher unable to
+# start; that is why the exemption is written against the group rather than
+# left to the controller-only rule the other gates use. (The node authorizer
+# already limits a kubelet to the ServiceAccounts of pods bound to it.) The
+# controller is exempt as in the other gates.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-launcher-sa-tokenrequest-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["serviceaccounts/token"]
+  variables:
+    - name: launcherSAs
+      expression: "['kubeswift-launcher', 'kubeswift-sandbox-launcher']"
+    - name: controllerUser
+      expression: "'system:serviceaccount:kubeswift-system:controller-manager'"
+  validations:
+    - expression: >-
+        !(request.name in variables.launcherSAs) ||
+        request.userInfo.username == variables.controllerUser ||
+        (has(request.userInfo.groups) && 'system:nodes' in request.userInfo.groups)
+      message: >-
+        tokens for the KubeSwift launcher ServiceAccounts are reserved: their
+        pods run privileged, so only the kubelet (for a launcher pod's projected
+        token) and the KubeSwift controller may request one
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-launcher-sa-tokenrequest-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: kubeswift-launcher-sa-tokenrequest-gate
   validationActions: [Deny]

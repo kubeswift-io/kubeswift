@@ -590,13 +590,20 @@ Practically:
   ServiceAccount unless the controller creates it. Without it, anyone who can
   create Secrets in the namespace could have the token controller mint a
   long-lived launcher token with no pod involved.
+- **TokenRequest — closed.** `kubeswift-launcher-sa-tokenrequest-gate`
+  rejects `create serviceaccounts/token` for a launcher ServiceAccount unless
+  the requester is the kubelet (group `system:nodes`, which mints the projected
+  token every launcher pod mounts) or the controller. The built-in `edit` and
+  `admin` roles grant that verb, so without the gate they could mint a launcher
+  token directly.
 - **Still open: other routes to the same power.** The built-in `edit` and
-  `admin` roles also grant `create serviceaccounts/token` (TokenRequest for the
-  launcher ServiceAccount), `impersonate serviceaccounts` (act as it), and
-  `create pods/exec`, which reaches the privileged launcher *directly*; the VM
-  console and `swiftctl ssh` use exactly that. None of these is gated. **Treat
-  `edit`/`admin` in a namespace that runs launchers as node-admin**, or grant
-  a narrower role there that omits these verbs.
+  `admin` roles also grant `impersonate serviceaccounts` (act as the launcher
+  ServiceAccount) and `create pods/exec`, which reaches the privileged launcher
+  *directly*; the VM console and `swiftctl ssh` use exactly that. Neither is
+  gated: admission policy cannot see impersonation, and gating exec would take
+  the console with it. **Treat `edit`/`admin` in a namespace that runs
+  launchers as node-admin**, or grant a narrower role there that omits these
+  verbs.
 - **Removing the grant** — move swiftletd's status reporting off pod annotations
   onto a channel that needs no write access to its own pod. Would close it at the
   source rather than by admission; a rework of the status path in both the
