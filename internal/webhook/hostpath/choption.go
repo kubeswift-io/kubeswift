@@ -47,6 +47,13 @@ func ValidateCHOptionValues(spec *swiftv1alpha1.SwiftGuestSpec) error {
 		if err := check(fmt.Sprintf("spec.vhostUserDevices[%d].virtioId", i), d.VirtioID, chTokenValue); err != nil {
 			return err
 		}
+		// Also caught by the CRD schema; checked here for objects written
+		// before it had the minimum. swiftletd reads the sizes as unsigned.
+		for j, q := range d.QueueSizes {
+			if q < 1 {
+				return fmt.Errorf("spec.vhostUserDevices[%d].queueSizes[%d] = %d; a queue size must be at least 1", i, j, q)
+			}
+		}
 	}
 	return nil
 }

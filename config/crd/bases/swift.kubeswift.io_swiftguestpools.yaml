@@ -1156,9 +1156,11 @@ spec:
                             queueSizes:
                               description: |-
                                 QueueSizes optionally sets per-queue sizes for a generic device. Ignored
-                                for blk. When empty, Cloud Hypervisor's defaults apply.
+                                for blk. When empty, Cloud Hypervisor's defaults apply. Each size is at
+                                least 1.
                               items:
                                 format: int32
+                                minimum: 1
                                 type: integer
                               type: array
                             socket:

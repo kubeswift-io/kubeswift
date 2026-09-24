@@ -34,3 +34,22 @@ func TestValidateCHOptionValues_AcceptsOrdinaryValues(t *testing.T) {
 		t.Errorf("ordinary values rejected: %v", err)
 	}
 }
+
+// swiftletd reads queue sizes as unsigned: one below 1 made the whole runtime
+// intent unreadable, and the launcher exited before it could report anything.
+func TestValidateCHOptionValues_RejectsANonPositiveQueueSize(t *testing.T) {
+	for _, q := range []int32{0, -1} {
+		spec := swiftv1alpha1.SwiftGuestSpec{VhostUserDevices: []swiftv1alpha1.VhostUserDevice{{
+			Name: "g", Type: "generic", Socket: "/var/run/spdk/vhost.0", VirtioID: "block", QueueSizes: []int32{256, q},
+		}}}
+		if err := ValidateCHOptionValues(&spec); err == nil || !strings.Contains(err.Error(), "queueSizes[1]") {
+			t.Errorf("queue size %d: err=%v", q, err)
+		}
+	}
+	ok := swiftv1alpha1.SwiftGuestSpec{VhostUserDevices: []swiftv1alpha1.VhostUserDevice{{
+		Name: "g", Type: "generic", Socket: "/var/run/spdk/vhost.0", VirtioID: "block", QueueSizes: []int32{1, 256},
+	}}}
+	if err := ValidateCHOptionValues(&ok); err != nil {
+		t.Errorf("valid queue sizes rejected: %v", err)
+	}
+}

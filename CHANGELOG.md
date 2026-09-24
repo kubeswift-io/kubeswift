@@ -230,6 +230,13 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A vhost-user queue size below 1 kept the launcher from starting.**
+  `vhostUserDevices[].queueSizes` is signed in the API but read as unsigned by
+  swiftletd, so a negative entry made the whole runtime intent unreadable and
+  the launcher exited before it could report why. The CRD now requires each
+  size to be at least 1, and the controller refuses such a guest (covering
+  objects written before the schema change).
+
 - **Long SwiftSnapshot, SwiftRestore, SwiftGuest or SwiftImage names broke
   their Jobs.** Derived Job names (`<snapshot>-s3-upload`, `-oci-push`,
   `-oci-disk-<disk>`, `<restore>-oci-download`, `swiftguest-rootclone-<guest>`,
