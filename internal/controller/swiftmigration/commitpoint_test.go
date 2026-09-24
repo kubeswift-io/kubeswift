@@ -135,3 +135,54 @@ func TestCommitPoint_CancelBeforeSrcCompleteStillCancels(t *testing.T) {
 		t.Error("pre-commit cancel was ignored; the source is still running and the cancel must abort the migration")
 	}
 }
+
+// Deleting the SwiftMigration object mid-transfer, before the source has
+// reported complete, is an abort: the destination pod must be deleted so it
+// cannot complete the receive into an orphan (which, with runPolicy=Always,
+// would boot a second copy from the same disk — split-brain).
+func TestCommitPoint_DeletePreCommitDeletesDestination(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Finalizers = []string{FinalizerName}
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+	// Source is mid-send, NOT complete → pre-commit.
+	stamp(src, migrationActionVerbSend, sendActionID(mig), "sending", sendActionID(mig), "")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	ctx := context.Background()
+	if err := r.Delete(ctx, mig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var p corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); !apierrors.IsNotFound(err) {
+		t.Errorf("pre-commit deletion left the destination pod alive; it will complete into an orphan (err=%v)", err)
+	}
+}
+
+// Deleting the SwiftMigration object after the source has reported complete
+// must NOT delete the destination pod — it holds the only running copy.
+func TestCommitPoint_DeletePostCommitPreservesDestination(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Finalizers = []string{FinalizerName}
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+	stamp(src, migrationActionVerbSend, sendActionID(mig), migrationStatusComplete, sendActionID(mig), "sent")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	ctx := context.Background()
+	if err := r.Delete(ctx, mig); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var p corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); apierrors.IsNotFound(err) {
+		t.Error("post-commit deletion deleted the destination pod — the only running copy of the guest")
+	}
+}

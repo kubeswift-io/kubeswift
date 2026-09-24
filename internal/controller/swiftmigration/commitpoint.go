@@ -72,3 +72,30 @@ func (r *SwiftMigrationReconciler) liveCommitted(
 	}
 	return srcReportedComplete(mig, &srcPod), nil
 }
+
+// deletionCommitted reports whether a migration being deleted has passed its
+// commit point, mode-aware. For live it is liveCommitted (source reported
+// complete, or PodRefSwapped). For offline it is the guest.spec.nodeName patch
+// that cutover applies (mirrors onTerminalPhase's offline check). Before the
+// commit point a deletion is an abort; after it, the destination holds the only
+// running copy and must be preserved.
+func (r *SwiftMigrationReconciler) deletionCommitted(
+	ctx context.Context,
+	mig *migrationv1alpha1.SwiftMigration,
+) (bool, error) {
+	if mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		return r.liveCommitted(ctx, mig)
+	}
+	// Offline: cutover patches guest.spec.nodeName to the destination node.
+	if mig.Status.DestinationNode == "" {
+		return false, nil
+	}
+	var guest swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKey{Name: mig.Spec.GuestRef.Name, Namespace: mig.Namespace}, &guest); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return guest.Spec.NodeName == mig.Status.DestinationNode, nil
+}

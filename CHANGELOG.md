@@ -117,8 +117,19 @@ All notable changes to KubeSwift are documented here.
   and honoured by both the cancel handler (a cancel past it is ignored and the
   migration completes) and the StopAndCopy timeout (not enforced once the source
   has completed or cutover has begun; the migration only moves forward). A cancel
-  or timeout *before* the commit point still aborts as before. (Deleting the
-  SwiftMigration object mid-transfer is handled separately.)
+  or timeout *before* the commit point still aborts as before.
+
+- **Deleting a live SwiftMigration mid-transfer could orphan the destination or
+  split-brain the guest.** The deletion (finalizer) handler decided pre- vs
+  post-cutover by phase, treating all of StopAndCopy as post-cutover: it left
+  the destination pod — which the SwiftGuest owns, so it is not garbage-collected
+  with the migration — receiving into an orphan that nothing would cut over to,
+  and with `runPolicy: Always` the SwiftGuest controller then booted a second
+  copy from the same disk. Deletion now uses the same commit point: before it
+  (source still running) the deletion is an abort that restores the source and
+  deletes the destination pod; after it the destination is preserved as the
+  running guest. Offline deletion is unchanged (its commit point is the
+  `spec.nodeName` patch).
 
 - **Live migrations hung in `Resuming` until their timeout** (#646,
   regression from #641 in v0.14.0). The cutover pointed the guest's

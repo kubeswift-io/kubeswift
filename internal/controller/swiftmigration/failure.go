@@ -86,26 +86,39 @@ func (r *SwiftMigrationReconciler) handleCancellation(
 		return ctrl.Result{}, nil
 	}
 
-	// Decide pre-cutover vs post-cutover by examining the
-	// SwiftMigration's phase. Preparing and earlier are pre-cutover;
-	// StopAndCopy and later are post-cutover.
-	postCutover := false
-	switch mig.Status.Phase {
-	case migrationv1alpha1.SwiftMigrationPhaseStopAndCopy,
-		migrationv1alpha1.SwiftMigrationPhaseResuming,
-		migrationv1alpha1.SwiftMigrationPhaseCompleted:
-		postCutover = true
+	// Decide pre-commit vs committed by the commit point, mode-aware — NOT by
+	// phase. Deleting a live migration while it is in StopAndCopy but the
+	// source has not yet reported complete is a PRE-commit abort: the source is
+	// still the running copy, so the destination pod must be torn down. The old
+	// phase check treated all of StopAndCopy as committed, which left the
+	// destination receiving into an orphan pod nothing would cut over to — and
+	// with runPolicy=Always the SwiftGuest controller then boots a second copy
+	// from the same disk (split-brain). Past the commit point the destination
+	// holds the only running copy and is preserved.
+	committed, err := r.deletionCommitted(ctx, mig)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("cancellation: determine commit point: %w", err)
 	}
 
-	if err := r.cleanupSourceGuest(ctx, mig, !postCutover); err != nil {
+	if err := r.cleanupSourceGuest(ctx, mig, !committed); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleanup source guest on cancellation: %w", err)
+	}
+
+	// Pre-commit live abort: delete the destination pod the controller created
+	// in Preparing-live so it cannot complete the receive into an orphan.
+	// Mirrors onTerminalPhase's W17 handling. Committed deletions leave the
+	// destination in place — it is the canonical guest now.
+	if !committed && mig.Status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		if err := r.cleanupDstPod(ctx, mig, &mig.Status); err != nil {
+			return ctrl.Result{}, fmt.Errorf("cleanup destination pod on cancellation: %w", err)
+		}
 	}
 
 	if r.Recorder != nil {
 		reason := ReasonCancelled
 		msg := "migration cancelled; source guest cleanup complete"
-		if postCutover {
-			msg = "migration cancelled post-cutover; destination guest continues running"
+		if committed {
+			msg = "migration cancelled after the commit point; destination guest continues running"
 		}
 		r.Recorder.Event(mig, corev1.EventTypeNormal, reason, msg)
 	}
