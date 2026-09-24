@@ -597,8 +597,11 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 	} else if (rg.PreparedImage.PVCName != "" || rg.RootDisk.FromOCI) && !rg.HasKernel() {
 		res, err := r.EnsureRootDiskClone(ctx, &guest, rg)
 		if err != nil {
-			// Clone not ready — requeue
+			// Clone not ready — requeue, saying why on StorageReady (it used to
+			// be dropped, so a failed clone Job left the guest in Scheduling
+			// with nothing naming the cause).
 			status.Phase = swiftv1alpha1.SwiftGuestPhaseScheduling
+			setRootDiskCloneCondition(status, &guest.Status, err)
 			if patchErr := r.patchStatus(ctx, &guest, status); patchErr != nil {
 				return ctrl.Result{}, patchErr
 			}
@@ -866,7 +869,10 @@ func findCondition(status *swiftv1alpha1.SwiftGuestStatus, condType string) *met
 }
 
 func (r *SwiftGuestReconciler) patchStatus(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, status *swiftv1alpha1.SwiftGuestStatus) error {
-	if equality.Semantic.DeepEqual(guest.Status, status) {
+	// Compare values: guest.Status against the pointer never matched, so every
+	// reconcile sent a patch -- and, with the optimistic lock below, one that a
+	// stale cache turned into a conflict and a requeue.
+	if equality.Semantic.DeepEqual(guest.Status, *status) {
 		return nil
 	}
 	// Optimistic lock: status.conditions is an atomic list, so this patch

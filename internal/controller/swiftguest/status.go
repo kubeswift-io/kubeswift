@@ -2,6 +2,7 @@ package swiftguest
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -426,6 +427,37 @@ func SetStorageReadyCondition(status *swiftv1alpha1.SwiftGuestStatus, ok bool, r
 		cond.Message = message
 	}
 	setCondition(status, cond)
+}
+
+// Root-disk clone reasons on StorageReady.
+const (
+	reasonRootDiskCloning     = "RootDiskCloning"
+	reasonRootDiskCloneFailed = "RootDiskCloneFailed"
+)
+
+// setRootDiskCloneCondition reports on StorageReady why the root disk is not
+// ready yet: RootDiskCloneFailed for a failure retrying will not fix,
+// RootDiskCloning otherwise. A storage pre-flight failure already on the
+// condition is left in place: it is the more basic problem.
+//
+// The pre-flight sets StorageReady=True earlier in the same pass, so this
+// flips it back every time; keeping the stored transition time for an
+// unchanged reason stops that from rewriting the status on every requeue.
+func setRootDiskCloneCondition(status, stored *swiftv1alpha1.SwiftGuestStatus, err error) {
+	if c := findCondition(status, ConditionStorageReady); c != nil && c.Status == metav1.ConditionFalse &&
+		c.Reason != reasonRootDiskCloning && c.Reason != reasonRootDiskCloneFailed {
+		return
+	}
+	reason := reasonRootDiskCloning
+	var failure *rootDiskFailure
+	if errors.As(err, &failure) {
+		reason = reasonRootDiskCloneFailed
+	}
+	SetStorageReadyCondition(status, false, reason, err.Error())
+	if prev := findCondition(stored, ConditionStorageReady); prev != nil &&
+		prev.Status == metav1.ConditionFalse && prev.Reason == reason {
+		findCondition(status, ConditionStorageReady).LastTransitionTime = prev.LastTransitionTime
+	}
 }
 
 // ConditionDataDisksReady is True once every secondary VM data disk

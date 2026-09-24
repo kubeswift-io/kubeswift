@@ -547,7 +547,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromSourceClone(
 	var srcPVC corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, client.ObjectKey{Name: sourceRootPVC, Namespace: guest.Namespace}, &srcPVC); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil, fmt.Errorf("cloneFromSnapshot: source root PVC %s not found — a memory-only clone needs the source guest's disk (use a full-state includeDisk snapshot for source-independent clones)", sourceRootPVC)
+			return true, nil, rootDiskFailed("cloneFromSnapshot: source root PVC %s not found — a memory-only clone needs the source guest's disk (use a full-state includeDisk snapshot for source-independent clones)", sourceRootPVC)
 		}
 		return true, nil, err
 	}

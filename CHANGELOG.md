@@ -230,6 +230,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A failed root-disk clone was never reported.** Every error from
+  preparing a disk-boot guest's root disk, including a clone or download Job
+  that had failed for good, was dropped on requeue. The guest sat in
+  Scheduling with nothing naming the cause. `StorageReady` is now False with
+  reason `RootDiskCloning` while the disk is being prepared, or
+  `RootDiskCloneFailed` with the Job's failure message when retrying won't
+  help. A storage pre-flight failure already on the condition takes
+  precedence.
+
+- **The SwiftGuest controller sent a status patch on every reconcile.** Its
+  "nothing changed" check compared the stored status with a pointer, which
+  never matched. With the optimistic lock added in this release, a stale
+  cached read turned that no-op patch into a conflict and an extra reconcile.
+  An unchanged status is no longer patched.
+
 - **A stopped guest kept its last run's pid, console socket and interface
   addresses.** Clearing the run state when a launcher goes away dropped the
   conditions and the primary IP but left `status.runtime.pid`,

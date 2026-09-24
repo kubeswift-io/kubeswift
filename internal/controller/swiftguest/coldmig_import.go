@@ -134,7 +134,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 			return true, &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return true, nil, fmt.Errorf("full-state clone disk download failed: %s", c.Message)
+			return true, nil, rootDiskFailed("full-state clone disk download failed: %s", c.Message)
 		}
 	}
 	return true, nil, fmt.Errorf("full-state clone disk download in progress")
@@ -339,7 +339,7 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 		done := false
 		for _, c := range job.Status.Conditions {
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-				return fmt.Errorf("clone data-disk %s download failed: %s", art.Name, c.Message)
+				return rootDiskFailed("clone data-disk %s download failed: %s", art.Name, c.Message)
 			}
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 				done = true
