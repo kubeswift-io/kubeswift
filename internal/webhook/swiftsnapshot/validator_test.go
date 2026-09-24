@@ -112,8 +112,38 @@ func TestValidate_LocalBackend_HostPathParentTraversal(t *testing.T) {
 	snap.Spec.Backend.Local.HostPath = "/var/lib/kubeswift/snapshots/../etc"
 	v := &Validator{}
 	_, err := v.ValidateCreate(context.Background(), snap)
-	if err == nil || !strings.Contains(err.Error(), "must not contain '..'") {
-		t.Errorf("expected parent-traversal rejection, got: %v", err)
+	if err == nil {
+		t.Errorf("expected parent-traversal rejection, got nil")
+	}
+}
+
+// The prefix itself, a glob, shell metacharacters and a nested path must all be
+// refused: the value is mounted into a privileged Job and handed to rm, so the
+// shared root would wipe every namespace's snapshots and a metacharacter would
+// reach a shell. A single safe segment is accepted.
+func TestValidate_LocalBackend_HostPathSegmentRules(t *testing.T) {
+	reject := []string{
+		"/var/lib/kubeswift/snapshots/",         // the shared root itself
+		"/var/lib/kubeswift/snapshots/*",        // glob
+		"/var/lib/kubeswift/snapshots/a b",      // space
+		"/var/lib/kubeswift/snapshots/a;rm -rf", // shell metacharacter
+		"/var/lib/kubeswift/snapshots/a/b",      // nested
+		"/var/lib/kubeswift/snapshots/-rf",      // leading dash (rm flag)
+		"/var/lib/kubeswift/snapshots/..",       // dot-dot
+	}
+	for _, hp := range reject {
+		if err := ValidateLocalHostPath(hp); err == nil {
+			t.Errorf("hostPath %q should be rejected", hp)
+		}
+	}
+	for _, hp := range []string{
+		"/var/lib/kubeswift/snapshots/default-snap1",
+		"/var/lib/kubeswift/snapshots/ns-name-1700000000",
+		"/var/lib/kubeswift/snapshots/a.b_c-1/",
+	} {
+		if err := ValidateLocalHostPath(hp); err != nil {
+			t.Errorf("hostPath %q should be accepted, got: %v", hp, err)
+		}
 	}
 }
 

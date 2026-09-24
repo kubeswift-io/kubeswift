@@ -7,6 +7,7 @@ package swiftsnapshot
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -316,26 +317,50 @@ func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	return nil
 }
 
-// validateLocalBackend enforces the local-backend completeness rules:
-//   - backend.local must be set (operator must declare where the snapshot lives)
-//   - backend.local.hostPath must be set
-//   - hostPath must live under LocalBackendHostPathPrefix
-//   - hostPath must not contain ".." (parent-directory traversal)
-func validateLocalBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
-	if snap.Spec.Backend.Local == nil {
-		return fmt.Errorf("spec.backend.local is required when spec.backend.type=local")
-	}
-	hp := snap.Spec.Backend.Local.HostPath
+// localBackendHostPathSegment is the single directory name permitted after
+// LocalBackendHostPathPrefix: one path segment of a conservative charset. It
+// starts with an alphanumeric (so the name can never be read as an `rm` flag)
+// and admits only [A-Za-z0-9._-] thereafter — no '/', no '..', and no shell
+// metacharacter. The controller only ever generates "<ns>-<name>" and
+// "<ns>-<name>-<unix>" names, which are RFC 1123 labels joined with '-' and so
+// always match.
+var localBackendHostPathSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidateLocalHostPath is the security boundary for the local snapshot
+// backend. spec.backend.local.hostPath is mounted into a privileged Job and
+// handed to `rm -rf` (cleanup) and swiftletd's remove_dir_all (capture), so it
+// must be LocalBackendHostPathPrefix followed by exactly one safe segment.
+//
+// A prefix test alone is not enough: the prefix itself
+// ("/var/lib/kubeswift/snapshots/") satisfies HasPrefix, and deleting the
+// shared root wipes every namespace's snapshots on the node; a segment like
+// "*" or one carrying ';', '$', spaces or backticks would reach a shell; and a
+// nested path escapes the single-subdir model the cleanup pod assumes.
+func ValidateLocalHostPath(hp string) error {
 	if hp == "" {
 		return fmt.Errorf("spec.backend.local.hostPath is required when spec.backend.type=local")
 	}
 	if !strings.HasPrefix(hp, LocalBackendHostPathPrefix) {
 		return fmt.Errorf("spec.backend.local.hostPath must be under %s (got %q)", LocalBackendHostPathPrefix, hp)
 	}
-	if strings.Contains(hp, "..") {
-		return fmt.Errorf("spec.backend.local.hostPath must not contain '..' (got %q)", hp)
+	seg := strings.TrimSuffix(strings.TrimPrefix(hp, LocalBackendHostPathPrefix), "/")
+	if seg == "" {
+		return fmt.Errorf("spec.backend.local.hostPath must name a subdirectory under %s, not the directory itself (got %q)", LocalBackendHostPathPrefix, hp)
+	}
+	if !localBackendHostPathSegment.MatchString(seg) {
+		return fmt.Errorf("spec.backend.local.hostPath must be %s<name>, where <name> is a single path segment of [A-Za-z0-9._-] starting alphanumeric (got %q)", LocalBackendHostPathPrefix, hp)
 	}
 	return nil
+}
+
+// validateLocalBackend enforces the local-backend completeness rules:
+//   - backend.local must be set (operator must declare where the snapshot lives)
+//   - backend.local.hostPath must be a single safe segment under the prefix
+func validateLocalBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	if snap.Spec.Backend.Local == nil {
+		return fmt.Errorf("spec.backend.local is required when spec.backend.type=local")
+	}
+	return ValidateLocalHostPath(snap.Spec.Backend.Local.HostPath)
 }
 
 func specsEqual(a, b *snapshotv1alpha1.SwiftSnapshotSpec) bool {

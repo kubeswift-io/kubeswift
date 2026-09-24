@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 )
 
 // HostPathFinalizer is added to local-backend SwiftSnapshots once they
@@ -233,14 +234,13 @@ func (r *SwiftSnapshotReconciler) createCleanupPod(
 			Containers: []corev1.Container{{
 				Name:  "rm",
 				Image: CleanupImage,
-				// The shell-quoted subdir is generated from the
-				// trailing path component of the operator-set
-				// hostPath, which the webhook constrained to
-				// /var/lib/kubeswift/snapshots/<...> with no `..`.
-				// We additionally guard against empty/./.. above,
-				// so this rm cannot escape the parent.
-				Command: []string{"sh", "-c"},
-				Args:    []string{fmt.Sprintf("rm -rf %s/%s", HostPathBaseMount, subdir)},
+				// No shell: the path is the argv operand to rm, so a subdir
+				// carrying a shell metacharacter cannot be interpreted (it was
+				// already constrained to a single [A-Za-z0-9._-] segment by
+				// ValidateLocalHostPath and pathSubdir). "--" stops rm from
+				// reading the path as an option even if it began with '-'.
+				Command: []string{"rm", "-rf", "--"},
+				Args:    []string{HostPathBaseMount + "/" + subdir},
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      "snapshots",
 					MountPath: HostPathBaseMount,
@@ -348,23 +348,15 @@ func hasFinalizer(snap *snapshotv1alpha1.SwiftSnapshot, target string) bool {
 	return false
 }
 
-// pathSubdir returns the trailing path component of an absolute
-// hostPath under HostPathBaseDir. Returns empty if the path doesn't
-// match the expected shape — caller treats empty as a refusal-to-act.
+// pathSubdir returns the trailing path component of an absolute hostPath under
+// HostPathBaseDir, or "" if the path is not a single safe segment under it —
+// the caller treats "" as a refusal-to-act. This is the last check before the
+// path reaches the cleanup Pod, and it applies the SAME rule as the admission
+// and reconcile guards (ValidateLocalHostPath), so the delete path is
+// self-protecting even for an object persisted before those guards existed.
 func pathSubdir(hostPath string) string {
-	hp := strings.TrimSuffix(hostPath, "/")
-	if !strings.HasPrefix(hp, HostPathBaseDir) {
+	if swiftsnapshotwebhook.ValidateLocalHostPath(hostPath) != nil {
 		return ""
 	}
-	tail := strings.TrimPrefix(hp, HostPathBaseDir)
-	// Reject paths that contain further slashes — we only support a
-	// single subdirectory under HostPathBaseDir, which is what the
-	// webhook + controller produce.
-	if strings.Contains(tail, "/") {
-		return ""
-	}
-	if tail == "" || tail == "." || tail == ".." {
-		return ""
-	}
-	return tail
+	return strings.TrimPrefix(strings.TrimSuffix(hostPath, "/"), HostPathBaseDir)
 }

@@ -8,6 +8,22 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A local-backend SwiftSnapshot could delete every namespace's snapshots on
+  a node.** `spec.backend.local.hostPath` is mounted into a privileged Job and
+  handed to `rm -rf` (cleanup) and swiftletd's `remove_dir_all` (capture), but
+  the guard only checked the prefix and rejected `..`. The prefix itself
+  (`/var/lib/kubeswift/snapshots/`) passed, so pointing a snapshot at the shared
+  root and deleting it wiped every namespace's snapshots and s3/oci caches on
+  the node; a segment like `*` or one carrying `;`/`$`/spaces passed too, and
+  the cleanup Pod ran it through `sh -c` unquoted. The hostPath is now
+  constrained to the prefix plus exactly one `[A-Za-z0-9._-]` segment (rejecting
+  the shared root, globs, shell metacharacters and nested paths), enforced by
+  the same validator in the webhook and — because `webhook.enabled` defaults to
+  false — in the controller before any capture, and again before cleanup. The
+  cleanup Pod no longer uses a shell: the path is passed as an argv operand to
+  `rm`. The controller only ever generates `<ns>-<name>` names, so no legitimate
+  snapshot is affected.
+
 - **A SwiftImage import could reach data outside the image it named.** The
   import Job runs privileged (Linux images need a loop-mount to patch GRUB for
   the serial console), and it processed the tenant-supplied disk two ways that
