@@ -70,6 +70,20 @@ unaffected: they keep the directory they were captured into.
 
 ### Fixed
 
+- **A guest restored in place reported no address** (a regression from #641
+  in v0.14.0). A restore resumes the guest's memory, network configuration
+  included, so the guest never asks DHCP for an address and the launcher's
+  lease poller has none to report. Since #641 a new launcher clears the
+  address the last one reported, so `status.network.primaryIP` stayed empty
+  after every in-place restore until the guest renewed its lease, and anything
+  that reaches the guest by it (`swiftctl ssh`, the nightly local-roundtrip
+  e2e) could not. A capture now records the guest's address in
+  `status.guestSpec.primaryIP`, and the restore launcher is created with it,
+  as a migration destination is with its source's. A later lease still
+  replaces it. A clone takes a lease of its own and is unchanged. Snapshots
+  captured before this version have no recorded address, and restore as
+  before.
+
 - **A cancelled live migration could destroy the guest it migrated.**
   swiftletd ran each action on its action loop and waited for it, and a
   receive lasts the whole migration, so the destination saw a cancel only

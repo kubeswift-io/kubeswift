@@ -375,7 +375,8 @@ func guestRootDiskPopulated(guest *swiftv1alpha1.SwiftGuest) bool {
 	}
 }
 
-// capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs. When
+// capturedGuestSpec freezes the SwiftGuest spec fields SwiftRestore needs, and
+// the primary address the memory image holds (status.network.primaryIP). When
 // rg is non-nil (a full-state oci capture, where the source is live at capture
 // time so it resolves cleanly), it also freezes the launcher-sufficient surface a
 // source-independent clone needs when the source guest/image/seedProfile are gone.
@@ -386,6 +387,9 @@ func capturedGuestSpec(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGue
 	out := &snapshotv1alpha1.CapturedGuestSpec{}
 	if guest.Spec.ImageRef != nil {
 		out.ImageName = guest.Spec.ImageRef.Name
+	}
+	if n := guest.Status.Network; n != nil {
+		out.PrimaryIP = n.PrimaryIP
 	}
 	if rg == nil {
 		return out

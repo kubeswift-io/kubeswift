@@ -367,6 +367,16 @@ func (r *SwiftGuestReconciler) buildBasePod(
 
 	if params, ok := RestoreParamsFromAnnotations(guest.Annotations); ok {
 		pod := BuildRestorePod(guest, rg, seedConfigMapName, intentConfigMapName, rootDiskClone, params)
+		ip, err := r.restoredGuestIP(ctx, guest, rg, params)
+		if err != nil {
+			return nil, err
+		}
+		if ip != "" {
+			if pod.Annotations == nil {
+				pod.Annotations = map[string]string{}
+			}
+			pod.Annotations[PodAnnotationGuestIP] = ip
+		}
 		applyNodeName(pod, guest)
 		applySchedulerName(pod, guest)
 		return pod, nil

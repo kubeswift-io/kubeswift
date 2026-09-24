@@ -582,11 +582,11 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 	}
 	// buildPod resolves spec.NodeName to run the scheduler's taint check
 	// (nodeplacement.go), so the fake client must know corev1 and hold the node.
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	// The restore branch looks up the SwiftRestore for the captured address,
+	// so it also needs the snapshot types.
+	c := fake.NewClientBuilder().WithScheme(kscheme.Scheme).
 		WithObjects(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}}).Build()
-	r := &SwiftGuestReconciler{Client: c, Scheme: scheme}
+	r := &SwiftGuestReconciler{Client: c, Scheme: kscheme.Scheme}
 
 	pod, err := r.buildPod(context.Background(), guest, rg, "seed-cm", "intent-cm", nil)
 	if err != nil {

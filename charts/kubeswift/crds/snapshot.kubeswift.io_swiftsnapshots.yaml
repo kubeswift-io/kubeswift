@@ -448,6 +448,14 @@ spec:
                   osType:
                     description: OSType is the source OS family ("linux" or "windows").
                     type: string
+                  primaryIP:
+                    description: |-
+                      PrimaryIP is the guest's primary address when the capture began
+                      (status.network.primaryIP). The memory image holds the guest's network
+                      configuration, so a guest restored in place resumes with this address
+                      and does not ask DHCP for one; the restore launcher reports it until the
+                      guest's next lease says otherwise.
+                    type: string
                   rootDiskSize:
                     description: RootDiskSize is the resolved root disk size (e.g.
                       "40Gi").

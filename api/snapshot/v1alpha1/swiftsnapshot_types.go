@@ -271,6 +271,14 @@ type CapturedGuestSpec struct {
 	MemoryMi  int64  `json:"memoryMi,omitempty"`
 	ImageName string `json:"imageName,omitempty"`
 
+	// PrimaryIP is the guest's primary address when the capture began
+	// (status.network.primaryIP). The memory image holds the guest's network
+	// configuration, so a guest restored in place resumes with this address
+	// and does not ask DHCP for one; the restore launcher reports it until the
+	// guest's next lease says otherwise.
+	// +optional
+	PrimaryIP string `json:"primaryIP,omitempty"`
+
 	// The fields below are the launcher-sufficient surface for a
 	// source-independent (fully cross-cluster) full-state clone: captured
 	// while the source is live so a clone can resume when the source

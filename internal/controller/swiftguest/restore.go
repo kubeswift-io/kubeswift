@@ -45,13 +45,17 @@
 package swiftguest
 
 import (
+	"context"
+	"net"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 )
@@ -471,6 +475,40 @@ func snapshotStagerInitContainer(params RestoreParams) corev1.Container {
 			{Name: snapshotStagingVolume, MountPath: RestoreStagingPath},
 		},
 	}
+}
+
+// restoredGuestIP is the address a guest restored in place comes back with:
+// the primary IP its snapshot recorded when the capture began. The memory
+// image holds the guest's network configuration, so the resumed guest does not
+// ask DHCP for an address and the launcher's lease poller finds no lease. A new
+// launcher clears what the last one reported, so without this the guest would
+// report no address until its lease came up for renewal. The restore launcher
+// is created with it as its guest-ip annotation, as a migration destination is
+// with its source's; a later lease replaces it.
+//
+// "" for a clone, which regenerates its identity and takes a lease of its own,
+// for a primary-UDN guest, whose address is its pod's, and when the restore,
+// its snapshot or the recorded address is missing.
+func (r *SwiftGuestReconciler) restoredGuestIP(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, params RestoreParams) (string, error) {
+	if params.IsClone() || (rg != nil && rg.GetPrimaryUDNInterface() != "") {
+		return "", nil
+	}
+	var restore snapshotv1alpha1.SwiftRestore
+	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: guest.Annotations[AnnotationActiveRestore]}, &restore); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	var snap snapshotv1alpha1.SwiftSnapshot
+	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: restore.Spec.SnapshotRef.Name}, &snap); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	if snap.Spec.GuestRef.Name != guest.Name || snap.Status.GuestSpec == nil {
+		return "", nil
+	}
+	ip := snap.Status.GuestSpec.PrimaryIP
+	if net.ParseIP(ip) == nil {
+		return "", nil
+	}
+	return ip, nil
 }
 
 // RestoreParamsFromAnnotations extracts a RestoreParams from a
