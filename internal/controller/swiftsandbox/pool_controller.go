@@ -381,6 +381,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	pod := buildPod(slot, kernelName)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
+	pod.Labels[SlotNameLabelKey] = slot.Name
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}
@@ -416,6 +417,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 
 	if networked(slot) {
 		np := buildNetworkPolicy(slot)
+		np.Spec.PodSelector = metav1.LabelSelector{MatchLabels: map[string]string{SlotNameLabelKey: slot.Name}}
 		if np.Labels == nil {
 			np.Labels = map[string]string{}
 		}

@@ -6,6 +6,14 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
 
+// SlotNameLabelKey carries a warm slot's own name on its pod. Unlike
+// SandboxLabelKey, it does not change at checkout, so the slot's deny-ingress
+// NetworkPolicy -- which selects on it -- keeps covering the pod after a
+// sandbox claims it. Selecting on SandboxLabelKey, which checkout rewrites to
+// the claiming sandbox's name, left every checked-out workload with no ingress
+// isolation.
+const SlotNameLabelKey = "sandbox.kubeswift.io/slot"
+
 // SlotProfileAnnotation records, on a warm slot pod, the security-relevant
 // settings it was booted with (see slotProfile).
 const SlotProfileAnnotation = "sandbox.kubeswift.io/slot-profile"

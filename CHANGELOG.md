@@ -8,6 +8,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A checked-out warm-pool sandbox ran with no ingress isolation.** A warm
+  slot's deny-ingress NetworkPolicy selected the pod by its sandbox label, and
+  checkout rewrites that label to the claiming sandbox's name. From the moment
+  of checkout the policy matched nothing, and the workload accepted inbound
+  traffic from the whole cluster. Slot pods now carry a stable slot-name label
+  that the policy selects on. At checkout the slot's NetworkPolicy and intent
+  ConfigMap move to the claiming sandbox, as its pod does, so they are removed
+  with it instead of piling up until the pool is deleted.
+
 - **A legacy token Secret could mint a launcher ServiceAccount token.** The
   launcher-SA admission gate stops a pod from naming a launcher ServiceAccount,
   but creating a `kubernetes.io/service-account-token` Secret annotated with
