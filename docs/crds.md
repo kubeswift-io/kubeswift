@@ -295,8 +295,8 @@ Manages a kernel + initramfs OCI artifact. The controller pulls artifacts to lab
 | `initramfsDigest` | string | Content digest of the rootfs.cpio.gz layer. |
 
 The artifact path on each node is deterministic:
-`/var/lib/kubeswift/kernels/<namespace>-<name>/bzImage`
-`/var/lib/kubeswift/kernels/<namespace>-<name>/rootfs.cpio.gz`
+`/var/lib/kubeswift/kernels/<namespace>/<name>/bzImage`
+`/var/lib/kubeswift/kernels/<namespace>/<name>/rootfs.cpio.gz`
 
 This path is computed at runtime and never stored in status.
 

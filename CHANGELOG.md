@@ -8,6 +8,18 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **Kernel artifacts collided across namespaces on a node.** The per-node
+  kernel directory was `/var/lib/kubeswift/kernels/<namespace>-<name>`, and
+  since both a namespace and a name can contain `-`, the join was ambiguous:
+  namespace `team` + kernel `a-prod` and namespace `team-a` + kernel `prod`
+  mapped to the same directory. One tenant's pull Job would then overwrite the
+  other tenant's kernel and initramfs, which the victim's guests and sandboxes
+  boot. The namespace and name are now separate path segments
+  (`/var/lib/kubeswift/kernels/<namespace>/<name>`); neither can contain `/`, so
+  the mapping is unambiguous. The path is derived, never stored, so existing
+  kernels re-pull to the new layout on the next reconcile (a no-op if already
+  present).
+
 - **A virtio-fs sandbox could poison the node's shared rootfs cache.** The
   launcher container — which runs the untrusted guest — mounted the node rootfs
   cache (`/var/lib/kubeswift/sandbox-rootfs`) read-write. That cache is shared,

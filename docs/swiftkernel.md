@@ -120,10 +120,10 @@ spec:
 Artifacts are stored at a deterministic path on each node:
 
 ```
-/var/lib/kubeswift/kernels/<namespace>-<name>/
+/var/lib/kubeswift/kernels/<namespace>/<name>/
 ```
 
-For the example above: `/var/lib/kubeswift/kernels/default-faas-minimal/`. This path is not stored in status — it is computed from the namespace and name.
+For the example above: `/var/lib/kubeswift/kernels/default/faas-minimal/`. This path is not stored in status — it is computed from the namespace and name.
 
 The directory contains the raw OCI artifact layers as pulled by ORAS. For the faas-minimal profile, this means `bzImage` and `rootfs.cpio.gz`.
 

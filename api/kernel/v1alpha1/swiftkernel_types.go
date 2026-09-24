@@ -6,9 +6,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// KernelLocalPath returns the hostPath directory where kernel artifacts are stored for this SwiftKernel.
+// KernelLocalPath returns the hostPath directory where kernel artifacts are
+// stored for this SwiftKernel.
+//
+// Namespace and name are nested as separate path segments, NOT joined with '-'.
+// Both can contain '-', so "%s-%s" is ambiguous: namespace "team" + kernel
+// "a-prod" and namespace "team-a" + kernel "prod" would collide on one node
+// directory, and one tenant's pull Job would overwrite the other tenant's
+// kernel and initramfs — which the victim's guests and sandboxes then boot.
+// Neither a namespace nor a name can contain '/', so nesting is unambiguous.
 func KernelLocalPath(namespace, name string) string {
-	return fmt.Sprintf("/var/lib/kubeswift/kernels/%s-%s", namespace, name)
+	return fmt.Sprintf("/var/lib/kubeswift/kernels/%s/%s", namespace, name)
 }
 
 // SwiftKernelPhase is the phase of a SwiftKernel.

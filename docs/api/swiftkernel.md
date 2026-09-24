@@ -45,7 +45,7 @@ spec:
 | `kernelDigest` | (reserved) Digest of pulled kernel artifact |
 | `initramfsDigest` | (reserved) Digest of pulled initramfs artifact |
 
-The local path where artifacts land is deterministic and not stored in status: `/var/lib/kubeswift/kernels/<namespace>-<name>/`.
+The local path where artifacts land is deterministic and not stored in status: `/var/lib/kubeswift/kernels/<namespace>/<name>/`.
 
 ## Per-node pull
 
@@ -54,7 +54,7 @@ The SwiftKernel controller creates one pull Job per labeled node. Each Job:
 - Uses the `ghcr.io/oras-project/oras:v1.3.1` container image
 - Has `nodeSelector: {"kubeswift.io/kernel-node": "true", "kubernetes.io/hostname": "<nodeName>"}`
 - Mounts `/var/lib/kubeswift/kernels` as a hostPath volume
-- Runs `oras pull` into `/var/lib/kubeswift/kernels/<namespace>-<name>/`
+- Runs `oras pull` into `/var/lib/kubeswift/kernels/<namespace>/<name>/`
 
 When a new node is labeled, the controller starts a pull Job for it on the next reconcile.
 
