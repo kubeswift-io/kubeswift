@@ -148,6 +148,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A GPU sandbox released its GPU while still using it, and never released it
+  when it finished.** Deleting a native-GPU SwiftSandbox freed its GPU at once,
+  but its launcher pod is garbage-collected only after the sandbox is gone, so
+  the running Cloud Hypervisor still held the VFIO group and the next
+  consumer's bind failed with "Resource busy" (the race already fixed for
+  SwiftGuests). A Completed or Failed sandbox, meanwhile, kept its GPU reserved
+  until it was deleted, which is never without a TTL. Deletion now deletes the
+  launcher and releases the GPU once it is gone, and a finished sandbox
+  returns its GPU as soon as its launcher has exited.
+
 - **An offline migration could hang forever and block every later migration
   and drain of its guest.** `spec.timeout` was enforced only for live
   migrations. An offline migration stuck in Preparing (a volume that never
