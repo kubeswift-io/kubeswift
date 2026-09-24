@@ -37,6 +37,16 @@ type Server struct {
 func (s *Server) NeedLeaderElection() bool { return false }
 
 // Start serves until ctx is cancelled, then drains gracefully.
+// MaxRequestBytes caps the decompressed size of any Connect request message.
+// The gateway's messages are small control-plane payloads (guest specs,
+// resource lists, a resource-apply manifest at most), so 4 MiB is generous
+// while still bounding what an unauthenticated caller can make the server
+// allocate: Connect reads and gunzips the whole message before the handler —
+// and thus before auth — runs, so an uncapped handler lets one small gzip body
+// inflate to gigabytes and OOM the gateway. Applied via connect.WithReadMaxBytes
+// on every service handler in cmd/kubeswift-gateway.
+const MaxRequestBytes = 4 << 20
+
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	for _, h := range s.Handlers {

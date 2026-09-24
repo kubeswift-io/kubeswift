@@ -102,37 +102,46 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Audit: every RPC is recorded; mutations unconditionally, reads at V(1).
-	// The gateway previously logged nothing at all, which is why a SwiftGuest
-	// deletion could not be attributed after the fact. See internal/gateway/audit.go.
-	audit := connect.WithInterceptors(gateway.NewAuditInterceptor(
-		ctrl.Log.WithName("kubeswift-gateway").WithName("audit"), auth))
+	// Handler options shared by every Connect service:
+	//   - Audit: every RPC is recorded; mutations unconditionally, reads at
+	//     V(1). The gateway previously logged nothing, so a SwiftGuest deletion
+	//     could not be attributed after the fact. See internal/gateway/audit.go.
+	//   - ReadMaxBytes: cap the DECOMPRESSED request size. Connect reads and
+	//     gunzips the whole message before the handler (and thus before auth)
+	//     runs, so without a cap one unauthenticated request with a small gzip
+	//     body could inflate to gigabytes and OOM the gateway (chart limit
+	//     256Mi). The cap makes Connect abort such a message instead.
+	handlerOpts := []connect.HandlerOption{
+		connect.WithInterceptors(gateway.NewAuditInterceptor(
+			ctrl.Log.WithName("kubeswift-gateway").WithName("audit"), auth)),
+		connect.WithReadMaxBytes(gateway.MaxRequestBytes),
+	}
 
 	clusterSvc := gateway.NewClusterService(mgr.GetClient(), *clustersNS, watcher, pool, auth)
-	clusterPath, clusterHandler := kubeswiftv1connect.NewClusterServiceHandler(clusterSvc, audit)
+	clusterPath, clusterHandler := kubeswiftv1connect.NewClusterServiceHandler(clusterSvc, handlerOpts...)
 
 	guestSvc := gateway.NewGuestService(pool, auth)
-	guestPath, guestHandler := kubeswiftv1connect.NewGuestServiceHandler(guestSvc, audit)
+	guestPath, guestHandler := kubeswiftv1connect.NewGuestServiceHandler(guestSvc, handlerOpts...)
 
 	// Migrations (P2): read plane over SwiftMigrations (the UI polls it live).
 	migSvc := gateway.NewMigrationService(pool, auth)
-	migPath, migHandler := kubeswiftv1connect.NewMigrationServiceHandler(migSvc, audit)
+	migPath, migHandler := kubeswiftv1connect.NewMigrationServiceHandler(migSvc, handlerOpts...)
 
 	// Telemetry (P1): per-VM range metrics from each member's Prometheus.
 	telSvc := gateway.NewTelemetryService(pool, auth)
-	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc, audit)
+	telPath, telHandler := kubeswiftv1connect.NewTelemetryServiceHandler(telSvc, handlerOpts...)
 
 	// Explorer (P2): read-only generic resource browser (nodes, namespaces,
 	// networking, storage, secrets — metadata only — and the KubeSwift CRDs).
 	resSvc := gateway.NewResourceService(pool, auth)
-	resPath, resHandler := kubeswiftv1connect.NewResourceServiceHandler(resSvc, audit)
+	resPath, resHandler := kubeswiftv1connect.NewResourceServiceHandler(resSvc, handlerOpts...)
 
 	// Access (B3): the RBAC editor backend — list/create KubeSwift roles + assign
 	// them to OIDC users/groups (cluster-wide or per-namespace), as the user.
 	accessSvc := gateway.NewAccessService(pool, auth)
-	accessPath, accessHandler := kubeswiftv1connect.NewAccessServiceHandler(accessSvc, audit)
+	accessPath, accessHandler := kubeswiftv1connect.NewAccessServiceHandler(accessSvc, handlerOpts...)
 	// Console stays a P0 stub (CodeUnimplemented) until the console plane lands.
-	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{}, audit)
+	conPath, conHandler := kubeswiftv1connect.NewConsoleServiceHandler(kubeswiftv1connect.UnimplementedConsoleServiceHandler{}, handlerOpts...)
 
 	// Console plane (D5 bootstrap): a raw WebSocket at /console that exec-bridges
 	// the guest's serial socket. Not a Connect RPC — browsers can't do bidi

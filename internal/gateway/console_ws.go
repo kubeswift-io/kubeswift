@@ -139,6 +139,7 @@ func (h *ConsoleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return // Upgrade already wrote the response
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxWSMessageBytes)
 
 	wc := &wsConn{conn: conn}
 	if streamErr := executor.StreamWithContext(r.Context(), remotecommand.StreamOptions{

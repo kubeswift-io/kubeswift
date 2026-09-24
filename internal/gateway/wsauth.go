@@ -35,6 +35,14 @@ const (
 	// connection if it offers subprotocols and the server selects none, so a
 	// client offering the bearer above MUST also offer this one.
 	WSProtocol = "kubeswift.io"
+
+	// maxWSMessageBytes caps a single inbound WebSocket message on the raw
+	// planes (/console, /sandbox-exec). Their inbound traffic is terminal
+	// keystrokes and resize events — small — but gorilla's default read limit
+	// is unlimited, so without this one client could send a multi-hundred-MB
+	// frame and OOM the shared gateway for every tenant. Set with
+	// conn.SetReadLimit right after each upgrade.
+	maxWSMessageBytes = 1 << 20
 )
 
 // wsAuthHeader extracts the caller's bearer for a WebSocket upgrade and returns

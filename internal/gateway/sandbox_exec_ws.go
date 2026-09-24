@@ -167,6 +167,7 @@ func (h *SandboxExecHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxWSMessageBytes)
 
 	fw := guestagent.NewFrameWriter(inW)
 

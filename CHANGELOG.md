@@ -8,6 +8,15 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **An unauthenticated request could OOM the gateway.** The Connect service
+  handlers had no read-size cap, and Connect reads and decompresses a request
+  message in full before the handler — and therefore before authentication —
+  runs, so a single small gzip body could inflate to gigabytes and exhaust the
+  gateway (chart memory limit 256Mi). Every Connect handler now caps the
+  decompressed request at 4 MiB (`connect.WithReadMaxBytes`), and the raw
+  WebSocket planes (`/console`, `/sandbox-exec`) cap a single inbound message at
+  1 MiB (`SetReadLimit`), which gorilla otherwise leaves unbounded.
+
 - **The controller no longer caches every Secret in the cluster.** The default
   cached client backs each typed read with an informer, so a single Secret read
   made controller-runtime watch and hold every Secret in the cluster in the
