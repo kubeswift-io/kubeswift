@@ -8,7 +8,7 @@ chrono = "0.4"
 env_logger = "0.11"
 libc = "0.2"
 log = "0.4"
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "signal"] }
 # kube + k8s-openapi are version-locked and must move together (a Dependabot
 # group enforces it). Features are only what swiftletd actually uses: a client
 # that patches pod annotations, plus one DynamicObject status patch. "runtime"

@@ -5,6 +5,7 @@ mod kube_client;
 mod launch;
 mod lease;
 mod report;
+mod shutdown;
 
 use std::env;
 use std::path::Path;
@@ -384,6 +385,14 @@ fn main() {
             // arriving terminal status. The watchdog's `decide_watchdog`
             // is the canonical write-once guard for the D1+D2 race.
             let watchdog_dst = intent.is_migration_receiver();
+            // Graceful shutdown: handle SIGTERM (swiftletd is PID 1, so without a
+            // handler the kernel drops it and the kubelet SIGKILLs the hypervisor at
+            // the end of the grace period). Installed before launch::run blocks.
+            shutdown::spawn_sigterm_handler(shutdown::PowerTarget::for_hypervisor(
+                intent.hypervisor(),
+                runtime_dir.api_socket(),
+                runtime_dir.root().join("qmp.sock"),
+            ));
             let result = launch::run(&intent, &runtime_dir, on_socket_ready);
             let abnormal_exit_detail: Option<String> = match &result {
                 Ok((exit_status, _, _)) if !exit_status.success() => {

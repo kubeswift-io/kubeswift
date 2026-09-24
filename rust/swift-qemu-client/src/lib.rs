@@ -19,6 +19,15 @@ use std::time::Duration;
 
 use qmp::QmpClient;
 
+/// Ask the guest behind a QMP socket to power itself off (ACPI
+/// `system_powerdown`) without holding a [`QemuProcess`]. Used by swiftletd's
+/// SIGTERM handler, which runs on its own thread while the main thread waits
+/// on the child. Returns once QEMU acknowledges the command, not when the guest
+/// has finished shutting down.
+pub fn request_powerdown(qmp_socket: &Path) -> Result<(), String> {
+    QmpClient::new(qmp_socket.to_path_buf()).powerdown()
+}
+
 /// Managed QEMU process with lifecycle control via QMP.
 pub struct QemuProcess {
     child: Child,

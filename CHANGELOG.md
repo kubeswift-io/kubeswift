@@ -148,6 +148,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Stopping, deleting or draining a guest killed its VM instead of shutting it
+  down.** swiftletd runs as PID 1 in the launcher container and installed no
+  SIGTERM handler, and the kernel drops a signal sent to a PID-namespace init
+  with no handler. So every launcher-pod deletion — `runPolicy: Stopped`, guest
+  delete, node drain, and the source teardown of an offline migration — sent a
+  SIGTERM that was silently ignored, and the kubelet SIGKILLed Cloud
+  Hypervisor/QEMU at the end of the grace period. The guest never received an
+  ACPI power-off and lost its dirty page cache, leaving filesystems needing
+  journal replay or damaged (worst for Windows/NTFS), including the disk an
+  offline migration then booted on the target. swiftletd now handles SIGTERM by
+  pressing the guest's ACPI power button (Cloud Hypervisor `vm.power-button`,
+  QEMU `system_powerdown`); the guest shuts down cleanly within the pod's grace
+  period and swiftletd reports `VmStopped`. A guest that ignores ACPI is killed
+  at the end of the grace period as before.
+
 - **Draining a node could hang on a guest with ordinary storage.** Every drain
   migration uses `mode: auto`, and auto resolution never checked storage, so a
   default disk-boot guest (ReadWriteOnce/Filesystem) resolved to live; its

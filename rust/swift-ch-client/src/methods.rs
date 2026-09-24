@@ -171,6 +171,16 @@ impl ApiClient {
             .map(drop)
     }
 
+    /// Press the virtual ACPI power button. Unlike [`shutdown`] (which stops
+    /// the VM's vCPUs outright, like pulling the plug), this asks the GUEST OS
+    /// to shut itself down: it flushes its page cache, unmounts filesystems and
+    /// powers off, after which Cloud Hypervisor exits. Returns once CH has
+    /// accepted the request, not when the guest has finished shutting down.
+    pub fn power_button(&self) -> Result<(), ApiError> {
+        self.request_ok("PUT", "/api/v1/vm.power-button", None)
+            .map(drop)
+    }
+
     /// Send the running VM's state to a destination CH instance over the
     /// migration channel.
     ///
@@ -454,6 +464,20 @@ mod tests {
 
     fn no_content() -> Vec<u8> {
         b"HTTP/1.1 204 No Content\r\n\r\n".to_vec()
+    }
+
+    // power_button must hit vm.power-button (ACPI, guest shuts itself down),
+    // NOT vm.shutdown (stops the vCPUs outright, like pulling the plug).
+    #[test]
+    fn power_button_sends_put_vm_power_button() {
+        let server = MockServer::spawn(no_content());
+        let client = ApiClient::new(server.path.clone());
+        client.power_button().unwrap();
+        let req = String::from_utf8(server.collect_request()).unwrap();
+        assert!(
+            req.starts_with("PUT /api/v1/vm.power-button "),
+            "unexpected request line: {req}"
+        );
     }
 
     #[test]
