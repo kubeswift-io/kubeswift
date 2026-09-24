@@ -4,7 +4,103 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.14.1] — 2026-09-24
+
+A security and correctness release: the fixes from a full review of the
+codebase (#647), and the v0.14.0 live-migration hang (#646). No new features.
+
+Several routes from namespace-level access to node root are closed: an
+annotation that mounted any node path into the privileged launcher, a snapshot
+`hostPath` that deleted every namespace's snapshots on a node, an image import
+that followed symlinks or qcow2 backing files out of the image, a vhost-user
+socket path that attached a host disk, and a legacy token Secret that minted a
+launcher ServiceAccount token. The gateway rejects member kubeconfigs that
+would leak its own token, requires `email_verified` in OIDC mode, and audits
+console and exec sessions.
+
+Several fixes are about not losing data. Stopping, deleting or draining a guest
+killed its VM instead of shutting it down, because swiftletd ignored SIGTERM. A
+live migration could boot a second copy of a VM or destroy the only running
+one. An in-place restore could resume old RAM over a newer disk. Deleting an S3
+snapshot deleted its siblings, and deleting a SwiftGuestPool deleted every
+replica's data disk.
+
+**CRDs changed this release**: `swiftsnapshots` (`status.captureStartedAt`),
+`swiftguestpools` (a rule rejecting `maxUnavailable` and `maxSurge` both 0, and
+a minimum vhost-user queue size), `swiftguests` (the same minimum), plus
+description-only changes to `swiftrestores`, `swiftmigrations` and
+`swiftsnapshotschedules`. Apply them before upgrading. Without the new
+`swiftsnapshots` schema, `captureStartedAt` is pruned and the capture deadline
+silently keeps counting from the snapshot's creation.
+
+### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.14.1 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+Most of this release changes nothing you have to act on. These may:
+
+- **Gateway: member kubeconfigs with file or plugin references are refused.** A
+  member `Cluster` whose credential Secret uses `tokenFile`, `exec`, an
+  auth-provider, or a client cert/key/CA *file path* goes unreachable. Use
+  inline data instead (`token`, `client-certificate-data`,
+  `certificate-authority-data`).
+- **Gateway: a remote member needs `spec.prometheusEndpoint` for VM charts.**
+  Prometheus auto-discovery now serves only the local cluster. Set a URL the
+  hub can reach. The member's `PrometheusEndpointResolved` condition says when
+  it is missing.
+- **Gateway, OIDC: `email_verified=true` is required** when the username claim
+  is `email` (the default). An IdP that does not send the claim needs it
+  turned on, or a different username claim.
+- **Gateway, `authMode: insecure`: browsers are accepted only from listed
+  origins**, or same-origin through localhost or an IP address (a
+  port-forward). A UI served under a DNS name must be listed in
+  `gateway.corsAllowOrigin`. Authenticated modes are unchanged.
+- **Stopping a guest now shuts it down.** A guest gets an ACPI power-off and has
+  the pod's grace period to shut down, so a stop, delete or drain takes as long
+  as the guest's shutdown. A guest that ignores ACPI is killed at the end of the
+  grace period, as before.
+- **Deleting a SwiftGuestPool keeps its replicas' PVCs.** Existing PVCs lose the
+  pool's owner reference on the next reconcile. Delete them by hand when the
+  data is no longer wanted.
+- **An in-place memory restore over a diverged disk is refused** with reason
+  `DiskDiverged`. This covers a guest that kept running after the capture or
+  was relaunched since. Set `snapshot.kubeswift.io/accept-disk-divergence:
+  "true"` on the SwiftRestore only if you know the disk is safe. Any restore
+  onto an existing guest other than an in-place memory restore now fails with
+  `OverwriteUnsupported` instead of reporting Ready with nothing restored.
+- **Offline migrations now time out** at `spec.timeout`.
+  `timeoutStrategy: ignore` disables that, for live and offline alike.
+- **A SwiftGuestPool can no longer set both `maxUnavailable` and `maxSurge`
+  to 0.** It could never roll out. An existing pool set that way reports a
+  `RolloutBlocked` event until the strategy is changed.
+- **Warm sandbox slots are recycled once** after the upgrade, because each slot
+  now records the image, network mode and verification key it booted with.
+- **Kernels re-pull once, into `/var/lib/kubeswift/kernels/<namespace>/<name>`.**
+  The old `<namespace>-<name>` directories are left on the nodes. Remove them
+  once no launcher started before the upgrade is still running.
+- **`gpu-init` refuses a GPU whose IOMMU group holds an unrelated device**, such
+  as the node's NIC or NVMe controller, instead of taking that device from the
+  host. It names the device.
+- **The kustomize install (`make deploy`) needs Kubernetes 1.30+**, for the
+  ValidatingAdmissionPolicy it now installs. The Helm chart is unchanged there:
+  it installs the policy only where the API exists.
+- **Controller probes.** The controller serves `/healthz` and `/readyz` on
+  `:8081`, and the chart wires them up. `controllerManager.metrics.secure=true`
+  serves `/metrics` over HTTPS to authorized scrapers only. It is off by
+  default. Before turning it on, bind `kubeswift-metrics-reader` to your
+  scraper.
+- **A live migration already hung in `Resuming` (#646) stays hung** until its
+  timeout. Its guest reads `GuestRunning=False` while running until its launcher
+  next restarts.
+- **kube-ovn guests now keep their address** through a stop and start. A
+  running guest's address is recorded on the upgrade. A guest stopped while on
+  v0.14.0 has none recorded, so it gets a new address when it next starts.
+
+`ui.image.tag` stays at `v0.12.4`, still kubeswift-ui's latest release.
 
 ### Security
 
@@ -829,12 +925,26 @@ All notable changes to KubeSwift are documented here.
   current pod, so nothing re-evaluates it. Found while upgrading the fleet to
   v0.14.0, on a guest stuck Pending against a volume that would not attach: it
   reported `GuestRunning=True` with an address, because the launcher that
-  reported them was two pods ago. A Pending pod has started no containers, so no
-  VM is running behind it whatever the last launcher said. Clearing there
-  catches the case and heals a guest upgraded into it. `ClearRunState` is now
-  idempotent as well: a condition already False for the same reason is left
-  alone, so a guest sitting Pending is not rewritten, and does not claim a
-  transition, on every reconcile.
+  reported them was two pods ago. A Pending pod whose launcher container has not
+  started has no VM behind it, whatever the last launcher said (one whose
+  launcher runs beside a sidecar that is still starting does; see above).
+  Clearing there catches the case and heals a guest upgraded into it.
+  `ClearRunState` is now idempotent as well: a condition already False for the
+  same reason is left alone, so a guest sitting Pending is not rewritten, and
+  does not claim a transition, on every reconcile.
+
+### Docs
+
+- **The GitOps example pinned `"0.13.x"`.** v0.14.0 bumped every exact install
+  pin but not the Flux example's minor range, so a cluster set up from it
+  stayed on 0.13.15. The example, the GitOps quickstart and troubleshooting now
+  say `"0.14.x"`.
+
+### CI
+
+- **Minor-range pins are checked too.** `hack/verify-doc-versions.sh` now fails
+  when a `"X.Y.x"` range in the README, docs or examples names a minor other
+  than the chart's, as it already did for `--version` and `image.tag` pins.
 
 ---
 

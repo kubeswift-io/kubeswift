@@ -9,6 +9,7 @@
 # WHAT IS CHECKED: pins in commands a reader would copy and run --
 #   --version X.Y.Z          the chart version
 #   image.tag=vX.Y.Z         an image tag override
+#   "X.Y.x"                  a minor-range pin (the GitOps example's semver)
 #
 # WHAT IS NOT: prose stating when something appeared, e.g. "a v0.13.11 field"
 # or "spec.importStorageClassName (v0.13.11)". Those are history and are
@@ -45,6 +46,21 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
-count=$(grep -rcE -- '--version [0-9]+\.[0-9]+\.[0-9]+|image\.tag=v[0-9]+\.[0-9]+\.[0-9]+' \
+# Minor-range pins (semver: "X.Y.x"), which the GitOps example and its docs
+# recommend. The exact pins above were bumped for v0.14.0 but these were not:
+# the Flux example kept "0.13.x", so a reader following it installed 0.13.15
+# and never received a 0.14 release. The range must name the chart's minor.
+minor="${chart%.*}"
+bad=$(grep -rnE '"[0-9]+\.[0-9]+\.x"' README.md docs/ examples/ 2>/dev/null \
+      | grep -v "\"${minor//./\\.}\.x\"" \
+      || true)
+
+if [ -n "$bad" ]; then
+  echo "verify-doc-versions: docs pin a minor range other than the chart's (${minor}.x):" >&2
+  echo "$bad" | sed 's/^/  /' >&2
+  exit 1
+fi
+
+count=$(grep -rcE -- '--version [0-9]+\.[0-9]+\.[0-9]+|image\.tag=v[0-9]+\.[0-9]+\.[0-9]+|"[0-9]+\.[0-9]+\.x"' \
           README.md docs/ examples/ 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
 echo "verify-doc-versions: $count install pins, all at $chart"

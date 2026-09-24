@@ -41,7 +41,7 @@ func validateKernel(sk *kernelv1alpha1.SwiftKernel) error {
 			img[i:i+1], i, img)
 	}
 	if strings.Contains(img, "..") {
-		// The artifact lands under /var/lib/kubeswift/kernels/<ns>-<name>/ on
+		// The artifact lands under /var/lib/kubeswift/kernels/<ns>/<name>/ on
 		// the node; a reference is never a path, and "…" in one is a smell.
 		return fmt.Errorf("spec.ociRef.image must not contain '..' (got %q)", img)
 	}

@@ -27,7 +27,7 @@ metadata: { name: kubeswift, namespace: flux-system }
 spec:
   interval: 10m
   url: oci://ghcr.io/kubeswift-io/charts/kubeswift
-  ref: { semver: "0.13.x" }
+  ref: { semver: "0.14.x" }
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -50,8 +50,8 @@ Three load-bearing choices:
   silently strip new fields (see [overview.md](overview.md)).
 - **Pin the chart to a minor range, not `>=0.1.0`.** KubeSwift is pre-1.0 and
   its APIs are `v1alpha1`: a wide-open range lets Flux roll the platform across
-  a breaking minor unattended. `"0.13.x"` takes patches automatically and makes
-  a minor bump a reviewed commit. Pin exactly (`0.14.0`) if you want even
+  a breaking minor unattended. `"0.14.x"` takes patches automatically and makes
+  a minor bump a reviewed commit. Pin exactly (`0.14.1`) if you want even
   patches gated.
 - **`webhook.enabled: true` needs cert-manager** on the cluster (the chart's
   Certificate/Issuer objects require its CRDs). Without cert-manager, set it
