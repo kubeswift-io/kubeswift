@@ -270,6 +270,18 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		status.StartedAt = &now
 	}
 
+	// spec.timeout for offline migrations. Live mode enforces it in its own
+	// handlers, where it must respect the commit point; offline had no check
+	// at all, so one stuck in Preparing or Resuming kept the guest's
+	// migration-in-progress marker for good and blocked every later
+	// migration and drain of it. Failing is safe on either side of the
+	// offline cutover (onTerminalPhase): before it the source is restarted
+	// where it was; after it the guest stays on the target, already
+	// runPolicy=Running, and only the marker is cleared.
+	if phase != migrationv1alpha1.SwiftMigrationPhasePending && !isLiveMode(&mig, status) && timeoutExceeded(&mig, status) {
+		return r.dispatchResult(ctx, &mig, status, timeoutFailure(&mig))
+	}
+
 	switch phase {
 	case migrationv1alpha1.SwiftMigrationPhasePending:
 		// Transition to Validating on first reconcile.

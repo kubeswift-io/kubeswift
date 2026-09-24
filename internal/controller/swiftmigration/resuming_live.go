@@ -134,12 +134,8 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 	// spec.timeout enforcement. F4.3 per §4.3: total-migration cap
 	// from status.StartedAt. Default 30m; webhook minimum
 	// 60s for mode=live.
-	if mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
-		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
-			return phaseFailure(
-				fmt.Sprintf("spec.timeout=%s exceeded since StartedAt; migration did not complete in time", mig.Spec.Timeout.Duration),
-				migrationv1alpha1.FailureReasonTimeout)
-		}
+	if timeoutExceeded(mig, status) {
+		return timeoutFailure(mig)
 	}
 
 	// Get the dst pod via canonicalPodName resolution (Group A.7's

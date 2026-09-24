@@ -44,8 +44,7 @@ const (
 )
 
 // SwiftMigrationTimeoutStrategy controls behavior when a migration exceeds
-// spec.timeout. Phase 1 supports cancel only; ignore is reserved for live
-// mode (Phase 3) where it controls the pre-copy convergence trade-off.
+// spec.timeout: cancel fails it, ignore lets it run on.
 // +kubebuilder:validation:Enum=cancel;ignore
 type SwiftMigrationTimeoutStrategy string
 
@@ -301,8 +300,10 @@ type SwiftMigrationSpec struct {
 	// +optional
 	// +kubebuilder:default="30m0s"
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
-	// TimeoutStrategy controls behavior on timeout. Phase 1 supports cancel
-	// only (the default); ignore is reserved for live mode.
+	// TimeoutStrategy controls behavior on timeout: cancel (the default) fails
+	// the migration once Timeout has elapsed (a live migration only before its
+	// commit point, after which it always runs to completion); ignore never
+	// times the migration out.
 	// +kubebuilder:default=cancel
 	TimeoutStrategy SwiftMigrationTimeoutStrategy `json:"timeoutStrategy,omitempty"`
 	// Reason is a free-form informational string. Drain-initiated migrations

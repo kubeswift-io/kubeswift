@@ -148,6 +148,16 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **An offline migration could hang forever and block every later migration
+  and drain of its guest.** `spec.timeout` was enforced only for live
+  migrations. An offline migration stuck in Preparing (a volume that never
+  detached) or Resuming (a target that never boots) kept the guest's
+  migration-in-progress marker indefinitely. Offline migrations now fail at
+  `spec.timeout`: before the cutover the guest is restarted where it was, and
+  after it the guest stays on the target; the marker is released either way.
+  `timeoutStrategy: ignore`, which was accepted but never read, now disables
+  the timeout (live and offline).
+
 - **A powered-off guest blocked node drains.** The eviction webhook denied the
   eviction of every SwiftGuest launcher and marked the guest for migration,
   including a launcher that had already exited (a stopped or failed guest).

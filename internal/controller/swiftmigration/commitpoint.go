@@ -2,6 +2,8 @@ package swiftmigration
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -98,4 +100,24 @@ func (r *SwiftMigrationReconciler) deletionCommitted(
 		return false, err
 	}
 	return guest.Spec.NodeName == mig.Status.DestinationNode, nil
+}
+
+// timeoutExceeded reports whether spec.timeout has run out since StartedAt and
+// the timeout strategy says to act on it. timeoutStrategy: ignore turns the
+// backstop off (it used to be accepted and never read).
+func timeoutExceeded(mig *migrationv1alpha1.SwiftMigration, status *migrationv1alpha1.SwiftMigrationStatus) bool {
+	if mig.Spec.TimeoutStrategy == migrationv1alpha1.SwiftMigrationTimeoutStrategyIgnore {
+		return false
+	}
+	if mig.Spec.Timeout == nil || mig.Spec.Timeout.Duration <= 0 || status.StartedAt == nil {
+		return false
+	}
+	return time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration
+}
+
+// timeoutFailure is the terminal result for an expired spec.timeout.
+func timeoutFailure(mig *migrationv1alpha1.SwiftMigration) *phaseResult {
+	return phaseFailure(
+		fmt.Sprintf("spec.timeout=%s exceeded since StartedAt; migration did not complete in time", mig.Spec.Timeout.Duration),
+		migrationv1alpha1.FailureReasonTimeout)
 }

@@ -342,13 +342,8 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 	// (onTerminalPhase → cleanupDstPod) and lose the guest. Past the commit
 	// point the migration only moves forward: substateSrcCompleted below
 	// dispatches straight into executeCutover.
-	if !srcReportedComplete(mig, srcArg) &&
-		mig.Spec.Timeout != nil && mig.Spec.Timeout.Duration > 0 && status.StartedAt != nil {
-		if time.Since(status.StartedAt.Time) > mig.Spec.Timeout.Duration {
-			return phaseFailure(
-				fmt.Sprintf("spec.timeout=%s exceeded since StartedAt; migration did not complete in time", mig.Spec.Timeout.Duration),
-				migrationv1alpha1.FailureReasonTimeout)
-		}
+	if !srcReportedComplete(mig, srcArg) && timeoutExceeded(mig, status) {
+		return timeoutFailure(mig)
 	}
 
 	sub := deriveSubstate(mig, srcArg, dstArg)
