@@ -322,7 +322,7 @@ spec:
         name: default
 ```
 
-This creates PVCs named `stateful-pool-home-0`, `stateful-pool-home-1`, etc.
+This creates PVCs named `home-stateful-pool-0`, `home-stateful-pool-1`, etc. (`<template-name>-<pool-name>-<index>`), each labelled `swift.kubeswift.io/pool=stateful-pool`.
 
 ### PVC lifecycle
 

@@ -719,7 +719,8 @@ func (r *SwiftGuestPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("swiftguestpool").
 		For(&swiftv1alpha1.SwiftGuestPool{}).
 		Owns(&swiftv1alpha1.SwiftGuest{}).
-		Owns(&corev1.PersistentVolumeClaim{}).
+		// Per-replica PVCs are retained, not owned (see ensurePVC), and
+		// nothing here reacts to their changes.
 		Owns(&corev1.Service{}).
 		Complete(r)
 }

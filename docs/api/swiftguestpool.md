@@ -26,7 +26,7 @@ SwiftGuestPool manages a **fleet of identical SwiftGuest replicas**. It maintain
 | `updateStrategy.rollingUpdate.maxSurge` | No | Max extra replicas above the desired count during a rolling update (integer). Default `0`. `maxUnavailable` and `maxSurge` cannot both be `0`. |
 | `spreadPolicy` | No | `Spread` (prefer distinct nodes) or `Pack` (default, no spread preference). |
 | `topologySpreadConstraints` | No | List of Kubernetes topology spread constraints applied to each replica's launcher pod. Overrides `spreadPolicy` when set. |
-| `volumeClaimTemplates` | No | List of PVC templates. One PVC per template per replica, named `<pool-name>-<template-name>-<index>`. |
+| `volumeClaimTemplates` | No | List of PVC templates. One PVC per template per replica, named `<template-name>-<pool-name>-<index>`. |
 
 ## Status
 
@@ -104,7 +104,9 @@ For advanced use cases, set `topologySpreadConstraints` directly. This overrides
 
 ## PVC per replica
 
-The `volumeClaimTemplates` field creates a unique PVC for each replica. PVC names follow the pattern `<pool-name>-<template-name>-<index>`. PVCs are NOT deleted when a replica is deleted or the pool is scaled down -- this preserves data across restarts and updates.
+The `volumeClaimTemplates` field creates a unique PVC for each replica. PVC names follow the pattern `<template-name>-<pool-name>-<index>`, and each PVC is labelled `swift.kubeswift.io/pool=<pool-name>`. PVCs are NOT deleted when a replica is deleted, when the pool is scaled down, or when the pool itself is deleted -- this preserves data across restarts and updates. The pool has no owner reference on them, so garbage collection leaves them alone.
+
+A replica reuses an existing PVC of its name only if the PVC carries that pool label. Names alone can collide (template `data-web` in pool `x` and template `data` in pool `web-x` both give `data-web-x-0`). A PVC labelled for another pool is refused, and the replica is not created.
 
 To reference the PVC inside the guest template, use `dataDiskRef` or a seed profile that mounts the PVC.
 

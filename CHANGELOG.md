@@ -230,6 +230,18 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **Deleting a SwiftGuestPool deleted every replica's data disk.** PVCs from
+  `volumeClaimTemplates` had the pool as their controller owner, so garbage
+  collection removed them with the pool. The pool guide says they survive
+  pool deletion and are cleaned up by hand. They now carry no owner
+  reference, and existing PVCs have the pool's reference removed on the next
+  reconcile. A replica also adopted any existing PVC with its name, and names
+  can collide across pools (template `data-web` in pool `x`, template `data`
+  in pool `web-x`), so two pools' replicas could share one disk. A PVC is now
+  reused only if its `swift.kubeswift.io/pool` label names the pool. The docs
+  also had the PVC name order backwards: it is
+  `<template-name>-<pool-name>-<index>`.
+
 - **A live migration could boot a second copy of the VM, or hang in
   Resuming.** After a successful send, the source Cloud Hypervisor exits and,
   with plaintext transport, the source launcher pod exits 0. Until cutover
