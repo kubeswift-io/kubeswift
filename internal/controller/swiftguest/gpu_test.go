@@ -558,11 +558,13 @@ func TestBuildPodDispatcher_NodeName_RestoreBranch(t *testing.T) {
 			Name:      "restoring",
 			Namespace: "default",
 			Annotations: map[string]string{
-				// The exact annotation key/value comes from
-				// RestoreParamsFromAnnotations; it is enough that the
-				// annotation is present and parseable. Use the same
-				// constant the controller writes.
-				"snapshot.kubeswift.io/active-restore": `{"snapshotName":"snap-1","backendType":"local","snapshotPath":"/var/lib/kubeswift/snapshots/default-snap-1","sourceGuest":"src","clone":false}`,
+				// The annotations RestoreParamsFromAnnotations reads: the
+				// presence of active-restore selects the restore branch, and
+				// restore-snapshot-path is the node-local snapshot dir mounted
+				// into the launcher (constrained to the snapshot base by
+				// validateRestoreSnapshotPath).
+				AnnotationActiveRestore:       "restore-1",
+				AnnotationRestoreSnapshotPath: "/var/lib/kubeswift/snapshots/default-snap-1",
 			},
 		},
 		Spec: swiftv1alpha1.SwiftGuestSpec{

@@ -8,6 +8,21 @@ All notable changes to KubeSwift are documented here.
 
 ### Security
 
+- **A SwiftGuest annotation could mount an arbitrary node path into the
+  privileged launcher.** Restore mode is selected by the
+  `snapshot.kubeswift.io/active-restore` annotation, and
+  `snapshot.kubeswift.io/restore-snapshot-path` was mounted into the privileged
+  restore launcher as a hostPath verbatim. The controller host-path allowlist
+  (`checkHostPaths`) validates `spec.filesystems[].source.hostPath` but never
+  saw this annotation-sourced path, so a tenant who can patch their own
+  SwiftGuest could set `active-restore` plus `restore-snapshot-path: /` and get
+  the host root — or any node path — mounted into a privileged pod, i.e. node
+  root. The restore snapshot path is now constrained to the snapshot base
+  (`/var/lib/kubeswift/snapshots/`) plus one safe segment at the same controller
+  chokepoint, matching the only values the SwiftRestore and cloneFromSnapshot
+  controllers ever write (the snapshot's node-local dir). A guest carrying an
+  out-of-bounds restore path now fails loudly instead of building the launcher.
+
 - **A local-backend SwiftSnapshot could delete every namespace's snapshots on
   a node.** `spec.backend.local.hostPath` is mounted into a privileged Job and
   handed to `rm -rf` (cleanup) and swiftletd's `remove_dir_all` (capture), but
