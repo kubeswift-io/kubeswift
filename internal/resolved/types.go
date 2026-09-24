@@ -13,7 +13,7 @@ import (
 
 // KernelBoot holds resolved kernel boot information.
 type KernelBoot struct {
-	LocalPath     string // e.g. /var/lib/kubeswift/kernels/default-faas-minimal
+	LocalPath     string // e.g. /var/lib/kubeswift/kernels/default/faas-minimal
 	KernelCmdline string // effective cmdline: guest override > kernel default
 }
 
