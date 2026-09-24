@@ -220,6 +220,14 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **GPU discovery could erase an allocation and let a GPU be handed out
+  twice.** Each discovery cycle read the SwiftGPUNode, merged in the hardware
+  it found, and patched status without a `resourceVersion`. `status.gpus` is an
+  atomic list, so when the list changed (a driver rebind, for instance), the
+  patch resent all of it from the earlier read. An allocation the controller
+  made in between was reverted to free. Discovery's status write is now
+  optimistically locked and, on a conflict, re-reads and re-merges.
+
 - **The legacy seed-ConfigMap cleanup could delete a ConfigMap KubeSwift did
   not create.** Retiring the pre-v0.12 plaintext seed ConfigMap deleted any
   ConfigMap named `<guest>-seed` that no pod was mounting, including one the
