@@ -1398,6 +1398,10 @@ spec:
                     - maxSurge
                     - maxUnavailable
                     type: object
+                    x-kubernetes-validations:
+                    - message: 'maxUnavailable and maxSurge cannot both be 0: no replica
+                        could ever be replaced'
+                      rule: self.maxUnavailable > 0 || self.maxSurge > 0
                   type:
                     default: RollingUpdate
                     description: 'Type of update strategy: RollingUpdate or Recreate.'

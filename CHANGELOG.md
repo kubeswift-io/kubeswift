@@ -148,6 +148,26 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **SwiftGuestPool rolling updates could take the whole pool down, or never
+  finish.** Availability was counted from the replicas that existed rather than
+  the ones serving, so a replacement created in the same pass (still booting)
+  counted as available: with 2 replicas and `maxUnavailable: 1` the second
+  replica was deleted while the first one's replacement was still starting, and
+  both were down at once. `maxSurge` only filled missing indices below the
+  desired count, of which a rollout has none, so the documented zero-downtime
+  setting `maxUnavailable: 0, maxSurge: 1` never replaced anything. And rolling
+  back a rollout whose new replicas never became ready deadlocked: the broken
+  replicas were the unavailable ones, so the budget was spent and none could be
+  replaced. A replica now counts as available only while it is `Running` with
+  `GuestRunning=True` and not terminating. Outdated replicas that are not
+  serving are replaced first, outside the budget. `maxSurge` brings up
+  current-template replicas above the desired count (the next indices), which
+  are removed once the rollout is done and every replica is serving. The CRD now
+  rejects `maxUnavailable` and `maxSurge` both 0, which could never make
+  progress. An existing pool set that way reports a `RolloutBlocked` event
+  instead of stalling silently. The docs no longer claim percentage values,
+  which the integer fields never accepted.
+
 - **A running guest could be stuck reporting `GuestRunning=False`.** The
   controller cleared a guest's run state whenever its launcher pod was
   `Pending`, on the premise that a Pending pod has started nothing. But a pod

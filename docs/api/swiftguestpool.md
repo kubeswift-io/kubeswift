@@ -22,8 +22,8 @@ SwiftGuestPool manages a **fleet of identical SwiftGuest replicas**. It maintain
 | `template.metadata.annotations` | No | Annotations applied to each created SwiftGuest. |
 | `template.spec` | Yes | SwiftGuestSpec used to create each replica. Supports all SwiftGuest fields (`imageRef`, `kernelRef`, `guestClassRef`, `seedProfileRef`, `gpuProfileRef`, `dataDiskRef`, `dataDiskRefs` (incl. blank disks), `runPolicy`, `interfaces`). |
 | `updateStrategy.type` | No | `RollingUpdate` (default) or `Recreate`. |
-| `updateStrategy.rollingUpdate.maxUnavailable` | No | Max replicas unavailable during rolling update. Integer or percentage. Default `1`. |
-| `updateStrategy.rollingUpdate.maxSurge` | No | Max replicas above desired count during rolling update. Integer or percentage. Default `0`. |
+| `updateStrategy.rollingUpdate.maxUnavailable` | No | Max replicas not serving during a rolling update (integer). Default `1`. |
+| `updateStrategy.rollingUpdate.maxSurge` | No | Max extra replicas above the desired count during a rolling update (integer). Default `0`. `maxUnavailable` and `maxSurge` cannot both be `0`. |
 | `spreadPolicy` | No | `Spread` (prefer distinct nodes) or `Pack` (default, no spread preference). |
 | `topologySpreadConstraints` | No | List of Kubernetes topology spread constraints applied to each replica's launcher pod. Overrides `spreadPolicy` when set. |
 | `volumeClaimTemplates` | No | List of PVC templates. One PVC per template per replica, named `<pool-name>-<template-name>-<index>`. |
@@ -50,7 +50,7 @@ inference-pool-1
 inference-pool-2
 ```
 
-If a replica is deleted (manually or during rollout), the controller recreates it with the same index to maintain stable identity. Indices are never reused across different generations -- a rolling update creates new replicas before deleting old ones when `maxSurge > 0`.
+If a replica is deleted (manually or during rollout), the controller recreates it with the same index to maintain stable identity. With `maxSurge > 0`, a rolling update first brings up temporary surge replicas at indices `replicas` .. `replicas + maxSurge - 1`, and removes them once the rollout is done and every replica is serving. A surge replica with `volumeClaimTemplates` gets its own per-index PVCs, which are retained like those of a scaled-down replica.
 
 ## Labels and annotations
 
@@ -82,10 +82,11 @@ When `updateStrategy.type=RollingUpdate` and the `template.spec` changes:
 
 1. The controller computes a new `currentTemplateHash`.
 2. Replicas whose `swift.kubeswift.io/template-hash` annotation differs from the current hash are considered outdated.
-3. The controller deletes outdated replicas up to `maxUnavailable` at a time.
-4. New replicas are created with the updated template (up to `maxSurge` above desired count).
-5. The controller waits for new replicas to reach `GuestRunning=True` before continuing.
-6. The `Progressing` condition is set to `True` during rollout and `False` when complete.
+3. Outdated replicas that are not serving (not `Running` with `GuestRunning=True`) are replaced first. They add no unavailability, and replacing them lets a rollback of a rollout that never became ready go through.
+4. With `maxSurge > 0`, up to `maxSurge` surge replicas are created from the updated template above the desired count.
+5. Serving outdated replicas are deleted only while at least `replicas - maxUnavailable` replicas, surge replicas included, stay serving. A replica that was just created or is still booting or terminating counts as unavailable. The deleted index is recreated from the updated template once the old replica is gone.
+6. Surge replicas are removed once no outdated replica remains and every replica is serving.
+7. The `Progressing` condition is set to `True` during rollout and `False` when complete.
 
 When `updateStrategy.type=Recreate`:
 
