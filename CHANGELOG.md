@@ -70,6 +70,31 @@ unaffected: they keep the directory they were captured into.
 
 ### Fixed
 
+- **A cancelled live migration could destroy the guest it migrated.**
+  swiftletd ran each action on its action loop and waited for it, and a
+  receive lasts the whole migration, so the destination saw a cancel only
+  after its receive returned. A cancel written mid-transfer was therefore
+  processed after the receive succeeded: it SIGKILLed the destination's Cloud
+  Hypervisor, by then the only copy of the guest, since the source's exits
+  after a successful send. The controller ignores a cancel once the migration
+  is past its commit point, but the annotation it had already written stayed on
+  the destination pod. The destination now refuses a cancel once its VM is
+  Running, and writes no status for it.
+
+- **swiftletd's action loop was held by every action it ran.** A migration
+  cancel could never interrupt the receive it was meant to stop, so it took
+  effect only through the controller's 30-second force-delete fallback. A long
+  sandbox exec held up the pod's snapshot and migration actions. Each dispatch
+  now runs on a thread of its own and the loop keeps polling: a cancel kills
+  the receiving Cloud Hypervisor within a poll interval, and its
+  `failed`/`cancelled` acknowledgement is not overwritten by the interrupted
+  receive's own failure. The order actions ran in is kept. An action written
+  while another runs in its namespace, or while snapshot, migration and
+  identity actions (which all act on the same VM) run, waits and then runs,
+  rather than being rejected, which a controller treats as failure. A sandbox
+  exec runs independently. A cancel interrupts only a receive; during a send
+  it waits, as before.
+
 - **Making room for a shared base evicted the bases running guests used.**
   Eviction went strictly least recently used first, and could not tell a base
   that guests on the node were snapshotted from from one nothing used. dm-thin

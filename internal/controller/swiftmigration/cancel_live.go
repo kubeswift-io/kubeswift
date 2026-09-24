@@ -62,9 +62,18 @@ const (
 // cancelAckTimeout is the upper bound for waiting on D1's cancel-ack
 // (swiftletd-on-dst writes migration-status=failed after SIGKILL of
 // receiver CH; rust/swiftletd/src/action.rs::dispatch_migration_cancel).
-// D1's SIGKILL is synchronous and dst-side; ack typically arrives
-// within seconds. 30s is the upper bound for "swiftletd unreachable
-// or stuck."
+// D1's SIGKILL is synchronous and dst-side, and swiftletd dispatches it
+// while the receive is still running, so the ack arrives within a poll
+// interval or two. (Until swiftletd ran dispatches off its action loop, the
+// cancel was seen only after the receive returned, and this timeout was
+// the only way a mid-transfer cancel ever took effect.) 30s is the upper
+// bound for "swiftletd unreachable or stuck."
+//
+// swiftletd refuses the cancel once the destination's VM is Running: the
+// receive has completed and that VM is the only copy. It writes no status
+// then, so this waits out the budget -- but by then the source has
+// reported complete, the reconcile sees the commit point, and the cancel
+// is ignored before the fallback below can delete the destination.
 //
 // **W12 inheritance note**: if D1's ack is not observed within 30s
 // (e.g., swiftletd unreachable, network partition between controller
