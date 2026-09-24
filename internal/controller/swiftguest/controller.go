@@ -652,7 +652,7 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var existingPod corev1.Pod
 	var podForMetrics *corev1.Pod
-	var cloneIdentityRequeue time.Duration
+	var cloneIdentityRequeue, ipWaitRequeue time.Duration
 	if err := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
@@ -717,14 +717,19 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// restore intent's AutoResume is set, so the clone comes up RUNNING with
 		// no controller-driven resume round-trip needed (replaces the former
 		// resumeCloneIfNeeded; Bug #73 / CH v52 capabilities assessment).
-		// If guest is running but IP not yet discovered, requeue to catch annotation update
+		// kube-ovn primary: remember the address so the next launcher keeps it.
+		if err := r.recordKubeOVNIP(ctx, &guest, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		// A running guest whose IP is not discovered yet: look again soon. The
+		// pod watch delivers swiftletd's IP annotation anyway, so this is only a
+		// backstop -- and the guest still gets its Service and PDB below. It
+		// used to return here, so a guest that never reports an IP (static
+		// address, SR-IOV, DHCP timeout) had no drain-protecting PDB at all and
+		// was requeued every 5s forever.
 		if status.Phase == swiftv1alpha1.SwiftGuestPhaseRunning &&
 			(status.Network == nil || status.Network.PrimaryIP == "") {
-			recordGuestMetrics(&guest, &guest.Status, status, podForMetrics)
-			if err := r.patchStatus(ctx, &guest, status); err != nil {
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			ipWaitRequeue = 30 * time.Second
 		}
 		// TODO: consider updating pod spec if resolved changed (e.g., resources)
 	}
@@ -752,8 +757,13 @@ func (r *SwiftGuestReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Requeue while an agent-enabled clone's identity regen is still in flight
-	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state).
-	return ctrl.Result{RequeueAfter: cloneIdentityRequeue}, nil
+	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state),
+	// or while a running guest's IP is still undiscovered.
+	requeue := cloneIdentityRequeue
+	if ipWaitRequeue > 0 && (requeue == 0 || ipWaitRequeue < requeue) {
+		requeue = ipWaitRequeue
+	}
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 func recordGuestMetrics(guest *swiftv1alpha1.SwiftGuest, oldStatus, newStatus *swiftv1alpha1.SwiftGuestStatus, pod *corev1.Pod) {

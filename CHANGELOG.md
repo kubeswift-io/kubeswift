@@ -148,6 +148,22 @@ All notable changes to KubeSwift are documented here.
 
 ### Fixed
 
+- **A kube-ovn guest got a new IP after a stop/start.** The kube-ovn IP pin was
+  taken from `status.network.primaryIP`, which is now correctly cleared when
+  the launcher goes away (stop, poweroff, offline migration). Every restarted
+  guest was therefore unpinned and handed a fresh address, breaking the
+  documented stable static IP. The IP kube-ovn assigns is now recorded on the
+  guest as `swift.kubeswift.io/kube-ovn-ip` and pinned from there. Remove the
+  annotation to release the pin.
+
+- **A running guest that never reported an IP had no drain protection.** While
+  waiting for the guest's IP, the controller returned early every 5 seconds,
+  skipping the per-guest Service and the PodDisruptionBudget that keeps a drain
+  from evicting the VM. A guest that never reports one (static address, SR-IOV,
+  DHCP timeout) therefore never got either, and was polled every 5 seconds
+  forever. It now gets both, and the IP is looked for again every 30 seconds
+  (the pod watch delivers it sooner).
+
 - **Every guest's status was rewritten on every reconcile.** The SwiftGuest
   controller writes status only when it changed, but its condition helper
   restamped `lastTransitionTime` on every call, so the status always differed:

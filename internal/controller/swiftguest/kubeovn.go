@@ -74,6 +74,14 @@ var networkAttachmentDefinitionGVK = schema.GroupVersionKind{
 	Kind:    "NetworkAttachmentDefinition",
 }
 
+// AnnotationKubeOVNIP records, on a SwiftGuest whose primary rides a kube-ovn
+// NAD, the IP kube-ovn last gave it. It is what pins the IP across launchers.
+// status.network.primaryIP cannot: it describes the running VM and is cleared
+// when the launcher goes (stop, poweroff, offline migration), so pinning from
+// it handed every restarted guest a new address. Remove the annotation to let
+// kube-ovn allocate afresh (e.g. after moving the guest to another subnet).
+const AnnotationKubeOVNIP = "swift.kubeswift.io/kube-ovn-ip"
+
 // KubeOVNMACAnnotationKey / KubeOVNIPAnnotationKey build a kube-ovn provider's
 // per-provider mac/ip annotation key.
 func KubeOVNMACAnnotationKey(provider string) string { return provider + KubeOVNMACAnnotationSuffix }
@@ -128,6 +136,43 @@ func kubeOVNPrimaryProvider(ctx context.Context, c client.Client, guest *swiftv1
 	return provider, primaryMAC(guest, iface), true, nil
 }
 
+// kubeOVNPinnedIP is the IP to pin the guest's port to, once one is known: the
+// recorded AnnotationKubeOVNIP, else the running VM's address. net.ParseIP
+// guards a malformed value.
+func kubeOVNPinnedIP(guest *swiftv1alpha1.SwiftGuest) string {
+	if ip := guest.Annotations[AnnotationKubeOVNIP]; ip != "" && net.ParseIP(ip) != nil {
+		return ip
+	}
+	if guest.Status.Network != nil {
+		if ip := guest.Status.Network.PrimaryIP; ip != "" && net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return ""
+}
+
+// recordKubeOVNIP stores the running guest's IP in AnnotationKubeOVNIP when its
+// primary rides a kube-ovn NAD and the recorded one differs, so the next
+// launcher is pinned to it. A no-op for every other networking mode.
+func (r *SwiftGuestReconciler) recordKubeOVNIP(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, status *swiftv1alpha1.SwiftGuestStatus) error {
+	if status.Network == nil || status.Network.PrimaryIP == "" || net.ParseIP(status.Network.PrimaryIP) == nil {
+		return nil
+	}
+	ip := status.Network.PrimaryIP
+	if guest.Annotations[AnnotationKubeOVNIP] == ip {
+		return nil
+	}
+	if _, _, ok, err := kubeOVNPrimaryProvider(ctx, r.Client, guest); err != nil || !ok {
+		return err
+	}
+	patch := client.MergeFrom(guest.DeepCopy())
+	if guest.Annotations == nil {
+		guest.Annotations = map[string]string{}
+	}
+	guest.Annotations[AnnotationKubeOVNIP] = ip
+	return r.Patch(ctx, guest, patch)
+}
+
 // kubeOVNBackend is the ovnBackend for kube-ovn-managed primary NADs. Stateless;
 // the client is passed per call.
 type kubeOVNBackend struct{}
@@ -141,8 +186,8 @@ func (kubeOVNBackend) Detect(ctx context.Context, c client.Client, guest *swiftv
 }
 
 // Identity computes the kube-ovn LSP-identity annotations for the launcher pod and
-// the live-migration dst pod. The pinned IP (status's kube-ovn-assigned IP) is set
-// once known; on first boot it is empty and kube-ovn allocates dynamically.
+// the live-migration dst pod. The IP is pinned once known (kubeOVNPinnedIP); on
+// first boot it is empty and kube-ovn allocates dynamically.
 func (kubeOVNBackend) Identity(ctx context.Context, c client.Client, guest *swiftv1alpha1.SwiftGuest, migName string) (ovnIdentity, error) {
 	provider, mac, ok, err := kubeOVNPrimaryProvider(ctx, c, guest)
 	if err != nil {
@@ -153,14 +198,7 @@ func (kubeOVNBackend) Identity(ctx context.Context, c client.Client, guest *swif
 	}
 	macKey := KubeOVNMACAnnotationKey(provider)
 
-	// Pin the IP once it is known (status carries the kube-ovn-assigned IP from a
-	// prior boot). net.ParseIP guards a malformed status value.
-	ip := ""
-	if guest.Status.Network != nil {
-		if pip := guest.Status.Network.PrimaryIP; pip != "" && net.ParseIP(pip) != nil {
-			ip = pip
-		}
-	}
+	ip := kubeOVNPinnedIP(guest)
 
 	pod := map[string]string{macKey: mac}
 	if ip != "" {
