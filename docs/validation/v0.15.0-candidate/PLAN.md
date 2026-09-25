@@ -863,3 +863,32 @@ stop Phase 2 at once, leave everything in place, and report.
 - **sov:** S1 as before, plus the events RBAC check.
 
 **v0.15.0 is tagged only after round 5 passes and William gives the word.**
+
+### Round 5: William's decisions (23:10 UTC)
+
+1. **Step 4 is approved.** Delete the 7 cp-1 Orphan objects (type `replica`)
+   listed in `phase0-r5.md`, in Longhorn's own way, by deleting the
+   `orphans.longhorn.io` objects.
+   - Leave the worker-2 orphans alone. They were not part of the approval.
+   - Before deleting each Orphan, re-check that it still names a data
+     directory with no Longhorn volume, PV or Replica. Skip and record any
+     that no longer fits.
+2. **R5-A's temporary StorageClass is approved:** `val-r5-degraded`, a copy of
+   `longhorn-migratable` with `numberOfReplicas: "4"`. Delete it when R5-A is
+   done.
+3. **Delete the SwiftImage `gpu-cells/gpu-worker-noble`,** with its import
+   PVC `gpu-cells/swiftimage-import-gpu-worker-noble` (6.3 GiB on cp-1).
+   - Right before deleting, re-check that no SwiftGuest, SwiftGuestPool,
+     SwiftSandbox or SwiftSandboxPool in any namespace references it.
+   - If anything does, do not delete it; report instead.
+   - This is the only exception to "never touch `gpu-cells`":
+     - `innercp`, its PVCs, the SwiftImage `gpu-cells/ubuntu-noble` and its
+       PVC stay untouched;
+     - the namespace stays too.
+
+Then:
+- re-measure cp-1;
+- run the fresh-volume check;
+- record all of this in `phase0-r5.md`.
+
+Phase 1 r5 does not wait for it.
