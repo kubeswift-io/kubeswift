@@ -333,6 +333,12 @@ func (r *SwiftMigrationReconciler) onTerminalPhase(
 	// in place because it IS the canonical guest at that point
 	// (the migration crossed the cutover commit point).
 	if !postCutover && status.Mode == migrationv1alpha1.SwiftMigrationModeLive {
+		// The send too: a source launcher busy with an earlier send would
+		// take it up later, against the deleted destination
+		// (clearSourceSend).
+		if err := r.clearSourceSend(ctx, mig); err != nil {
+			return err
+		}
 		if err := r.cleanupDstPod(ctx, mig, status); err != nil {
 			return err
 		}

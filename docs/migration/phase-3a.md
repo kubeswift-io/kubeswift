@@ -262,6 +262,10 @@ terminal phase (Completed / Failed / Cancelled).
     - `issuing receive on destination`
     - `destination receiving`
     - `issuing send on source`
+    - `waiting for the source launcher to finish a previous send`
+      (the source launcher is still running an earlier send, for
+      example a cancelled one; this migration's transfer has not
+      started)
     - `transferring guest state`
     - `src migration complete; preparing cutover`
     - `cutover: updating canonical pod`

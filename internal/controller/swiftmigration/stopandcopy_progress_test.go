@@ -16,6 +16,10 @@ func TestStampTransferProgress(t *testing.T) {
 			Annotations: map[string]string{AnnotationMigrationProgressEstimate: v},
 		}}
 	}
+	withID := func(p *corev1.Pod, id string) *corev1.Pod {
+		p.Annotations[AnnotationMigrationProgressEstimateID] = id
+		return p
+	}
 	cases := []struct {
 		name string
 		pod  *corev1.Pod
@@ -29,11 +33,15 @@ func TestStampTransferProgress(t *testing.T) {
 		{"absent annotation", &corev1.Pod{}, nil},
 		{"unparseable", podWith("soon"), nil},
 		{"nil pod", nil, nil},
+		// The estimate outlives its send: one naming another send is the
+		// previous send's last value.
+		{"this send's estimate", withID(podWith("40"), "m:send:1"), ptr.To[int32](40)},
+		{"a previous send's estimate", withID(podWith("95"), "old:send:1"), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			status := &migrationv1alpha1.SwiftMigrationStatus{}
-			stampTransferProgress(status, tc.pod)
+			stampTransferProgress(status, tc.pod, "m:send:1")
 			switch {
 			case tc.want == nil && status.TransferProgress != nil:
 				t.Errorf("want unchanged (nil); got %d", *status.TransferProgress)

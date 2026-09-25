@@ -559,22 +559,49 @@ func TestStopAndCopyLive_PreSend_WritesSendAction(t *testing.T) {
 	}
 }
 
+// Send-pending reports "transferring", with progress, only once the source
+// launcher has taken this send up. Before that nothing moves; a launcher still
+// running an earlier send is said to be busy, and that send's progress is not
+// this one's (lab validation of v0.15.0: a migration showed "transferring" at
+// 95% while its source never started it).
 func TestStopAndCopyLive_SendPending_RequeuesWithDetail(t *testing.T) {
-	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
-	mig.Status.RecvAttempts = 1
-	mig.Status.SendAttempts = 1
-	// dst verb incidental: src send-action presence gates send-pending.
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
-	stamp(src, migrationActionVerbSend, sendActionID(mig), "", "", "")
-	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	for _, tc := range []struct {
+		name         string
+		statusVerb   string
+		statusID     func(*migrationv1alpha1.SwiftMigration) string
+		wantDetail   string
+		wantProgress bool
+	}{
+		{"not taken up yet", "", func(*migrationv1alpha1.SwiftMigration) string { return "" },
+			migrationv1alpha1.PhaseDetailLiveIssuingSend, false},
+		{"taken up", migrationStatusSending, sendActionID,
+			migrationv1alpha1.PhaseDetailLiveTransferring, true},
+		{"source busy with an earlier send", migrationStatusSending,
+			func(*migrationv1alpha1.SwiftMigration) string { return "earlier:send:1" },
+			migrationv1alpha1.PhaseDetailLiveSourceBusy, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+			mig.Status.RecvAttempts = 1
+			mig.Status.SendAttempts = 1
+			mig.Status.PhaseDetail = migrationv1alpha1.PhaseDetailLiveIssuingSend
+			stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
+			stamp(src, migrationActionVerbSend, sendActionID(mig), tc.statusVerb, tc.statusID(mig), "")
+			src.Annotations[AnnotationMigrationProgressEstimate] = "95"
+			r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
-	status := mig.Status.DeepCopy()
-	res := r.handleStopAndCopyLive(context.Background(), mig, status)
-	if res.FailureMsg != "" || res.Advanced {
-		t.Errorf("expected requeue; got %+v", res)
-	}
-	if status.PhaseDetail != migrationv1alpha1.PhaseDetailLiveTransferring {
-		t.Errorf("phaseDetail: want Transferring, got %q", status.PhaseDetail)
+			status := mig.Status.DeepCopy()
+			res := r.handleStopAndCopyLive(context.Background(), mig, status)
+			if res.FailureMsg != "" || res.Advanced {
+				t.Errorf("expected requeue; got %+v", res)
+			}
+			if status.PhaseDetail != tc.wantDetail {
+				t.Errorf("phaseDetail: want %q, got %q", tc.wantDetail, status.PhaseDetail)
+			}
+			if got := status.TransferProgress != nil; got != tc.wantProgress {
+				t.Errorf("progress stamped = %v, want %v", got, tc.wantProgress)
+			}
+		})
 	}
 }
 

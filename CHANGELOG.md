@@ -133,6 +133,19 @@ setting it had.
 
 ### Fixed
 
+- **A cancelled or failed live migration's send could run later, against
+  the deleted destination.** swiftletd leaves an action that arrives while
+  another is running waiting, and takes it up when the running one finishes.
+  A migration that ended before its source launcher got to its send left the
+  send on the source pod. The launcher took it up minutes later (7.5 in the
+  lab) and connected to the destination pod's old IP, where any pod that had
+  taken the IP and listened on the migration port would have received the
+  guest's memory. A cancel or a pre-cutover failure now takes the send off the
+  source pod. Until the source launcher has taken a send up, the migration no
+  longer reports `transferring guest state`: it reports `waiting for the source
+  launcher to finish a previous send` while the launcher is busy. Its
+  `transferProgress` no longer starts from the previous send's last estimate.
+
 - **Cancelling a live migration mid-transfer force-deleted the destination at
   once.** The controller gives swiftletd 30 s to stop the receive before it
   force-deletes the destination pod, but it timed those 30 s from the
