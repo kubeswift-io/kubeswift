@@ -140,10 +140,12 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	kernelName := defaultKernelProfile
-	if pool.Spec.KernelProfileRef != nil && pool.Spec.KernelProfileRef.Name != "" {
-		kernelName = pool.Spec.KernelProfileRef.Name
-	}
+	// The slot shape carries the pool's gpuProfileRef, so the rule a standalone
+	// sandbox uses gives a GPU pool the module-capable gpu-sandbox kernel. The
+	// pool used to read only kernelProfileRef, and its GPU slots booted the
+	// base kernel, which cannot load the NVIDIA driver.
+	slotShape := r.slotTemplate(&pool, "")
+	kernelName := resolveKernelProfile(slotShape)
 
 	// Census of the pool's live slots.
 	var pods corev1.PodList
@@ -199,9 +201,28 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
+	if want > 0 {
+		// A slot whose kernel is missing or not Ready boots on an empty kernel
+		// directory and fails, and the census then replaces it with another
+		// that fails the same way. Warm nothing until the kernel can be booted,
+		// and say why on the pool. Slots already running are left alone.
+		//
+		// This runs before a GPU pool allocates a slot's GPU, so no GPU is held
+		// for a slot that cannot boot. The slot is not pinned to its GPU's node
+		// yet, so unless the pool's nodeSelector names a host, the kernel's
+		// overall phase decides (checkKernel).
+		reason, msg, err := checkKernel(ctx, r.Client, slotShape, kernelName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if reason != "" {
+			return r.degradedAfter(ctx, &pool, ready, claimed, reason, msg, kernelRecheckInterval)
+		}
+	}
+
 	// Resolve the image only when we must — creating slots, or not yet resolved — so a
 	// steady Ready pool does no per-reconcile registry calls.
-	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
 	var ri *resolvedImage
 	var modelPath string
 	if want > 0 || pool.Status.Rootfs == nil || pool.Status.Rootfs.Digest == "" {
@@ -326,7 +347,9 @@ func warmSlotTopologySpread(poolName string) []corev1.TopologySpreadConstraint {
 // pool's slot shape, with NO workload command — the slot boots as a bridge-side idle
 // keeper (kubeswift.idle=1) and a checkout injects the workload later over vsock. The
 // launch builders read only its fields; the resulting pod/ConfigMap/NetworkPolicy are
-// owned by the POOL.
+// owned by the POOL. It carries the pool's gpuProfileRef so resolveKernelProfile
+// picks the kernel a GPU slot needs; the GPU itself is allocated per slot, by
+// allocateSlotGPU.
 func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSandboxPool, name string) *sandboxv1alpha1.SwiftSandbox {
 	return &sandboxv1alpha1.SwiftSandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace},
@@ -339,6 +362,7 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 			Memory:             pool.Spec.Memory,
 			Network:            pool.Spec.Network,
 			KernelProfileRef:   pool.Spec.KernelProfileRef,
+			GPUProfileRef:      pool.Spec.GPUProfileRef,
 			NodeSelector:       pool.Spec.NodeSelector,
 			Model:              pool.Spec.Model,
 		},

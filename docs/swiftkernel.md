@@ -96,7 +96,7 @@ Removing the label from a node does not delete already-pulled artifacts. It prev
 
 **Pulling** — At least one node has a pull Job running. Other nodes may already be Ready.
 
-**Ready** — All labeled nodes have pulled the artifact successfully. SwiftGuest can now reference this SwiftKernel.
+**Ready** — All labeled nodes have pulled the artifact successfully. SwiftGuest can now reference this SwiftKernel. SwiftSandboxes and warm-pool slots also wait for Ready before a launcher pod is created, except that a sandbox pinned to one node (a native GPU sandbox) needs only that node's `nodeStatuses` entry to be Ready.
 
 **Failed** — A pull Job failed on at least one node. The Failed condition includes the node name and error message. This state requires manual intervention (fix the issue and delete the failed Job to retry).
 

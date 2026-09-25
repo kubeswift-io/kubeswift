@@ -582,7 +582,7 @@ subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
 | `imagePullSecret` / `verifyKeySecretRef` / `rootfsMode` | string / SecretObjectReference / enum | Same semantics as `SwiftSandbox`, applied to every slot. |
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`) of each warm slot. |
 | `network.mode` | enum | `restricted` (default), `open`, or `none` — applies to every slot. |
-| `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`) and extra node constraints. |
+| `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`, or `gpu-sandbox` when `gpuProfileRef` is set) and extra node constraints. |
 | `gpuProfileRef` | LocalObjectReference | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation, pre-booted. `tier: pcie` only. |
 | `model` | SandboxModel | Preloads a read-only model artifact into every slot. |
 | `minWarm` | int32 | Desired Ready (unclaimed) warm slots. Default `1`. The scale-subresource target. |

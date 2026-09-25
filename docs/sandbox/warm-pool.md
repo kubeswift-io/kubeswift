@@ -81,7 +81,7 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | `minWarm` | int32 | `1` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
-| `kernelProfileRef.name` | string | `sandbox` | SwiftKernel the slots boot. |
+| `kernelProfileRef.name` | string | `sandbox` (`gpu-sandbox` when `gpuProfileRef` is set) | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `gpuProfileRef.name` | string | — | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation against this `SwiftGPUProfile`, pre-booted. Trades an idle GPU per slot for latency — size `minWarm` ≤ your free GPU count. `tier: pcie` only; `hgx-shared`/`hgx-full` are rejected. See [GPU sandboxes › Warm GPU pools](gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start). |
 | `model.imageRef` / `model.mountPath` | string / string (default `/model`) | — | Preloads a read-only, node-shared model artifact into every slot over virtio-fs (digest-keyed cache, cosign-verifiable). See [GPU sandboxes › Model preload](gpu-sandboxes.md#model-preload). |
@@ -90,7 +90,7 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 
 | Field | Type | Description |
 |---|---|---|
-| `phase` | enum | `Pending` (resolving image/kernel), `Warming` (bringing slots up toward `minWarm`), `Ready` (buffer at target), `Degraded` (cannot reach `minWarm` — e.g. no schedulable node). |
+| `phase` | enum | `Pending` (resolving image/kernel), `Warming` (bringing slots up toward `minWarm`), `Ready` (buffer at target), `Degraded` (cannot reach `minWarm` — e.g. no schedulable node, or the slots' SwiftKernel is missing or not `Ready`: `Resolved=False` with reason `KernelNotFound` or `KernelNotReady`, and no slot is created until it is). |
 | `warmReplicas` | int32 | Ready, unclaimed slots right now. |
 | `claimedReplicas` | int32 | Slots currently checked out (each owned by its SwiftSandbox). |
 | `rootfs.digest` / `rootfs.cachePath` | string | The shared materialized rootfs. |
