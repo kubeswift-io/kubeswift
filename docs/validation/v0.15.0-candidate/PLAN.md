@@ -744,3 +744,122 @@ does not depend on the candidate.
 - **If you cannot reach 35% within those limits,** stop and report what is
   left on cp-1's disk (the largest volumes and their owners). William decides
   from there.
+
+## Round 5 go-ahead: candidate `08d0165`
+
+**Where round 4 ended.** Round 4 finished at 22:44 with T3 and T5 passing,
+once William authorised freeing space. Two items are still open:
+- V4a live, blocked by storage;
+- V9b, skipped because there was no free GPU.
+
+**Merged since `9604992`,** fixing round 4's findings 1, 2, 4 and 5 (finding 3
+is IPAM, #672; finding 6 is not changed):
+
+| PR | Change | What round 5 checks |
+|---|---|---|
+| #681 | A guest whose SwiftImage (root or data disk) is still importing waits. It stays `Pending`, or keeps its phase if it is past `Pending`, with `Resolved=False` "SwiftImage not Ready". It goes `Failed` only if the image is `Failed`. (Finding 2.) | R5-B |
+| #682 | `DstNeverReady` says why. After `within 1m0s budget:` it gives the destination pod's state and its two latest Warning events, such as `FailedAttachVolume`, and it records a `DestinationPodNeverReady` event. An offline `Timeout` while the guest's pod is not Ready gets the same cause. The controller ClusterRole gains `list` on `events`. (Finding 1.) | Phase 1, R5-A |
+| #683 | A sandbox's phase never goes back (finding 4). A failed or succeeded warm slot is deleted, with a `SlotEnded` Warning event on its pool, and it frees its GPU (finding 5). A checked-out sandbox whose slot pod ends fails with `SlotEnded`; one whose slot pod is gone fails with `SlotLost`, naming the pod. | Phase 1 (`ft-gpu-pool`), R5-C, V9b |
+| #684 | `migration-test.sh --mode live` waits for the guest's Longhorn volumes to be `healthy` before it migrates, for up to `LONGHORN_HEALTHY_WAIT_MIN` minutes (default 15). | V4a live |
+
+**Candidate: main @ `08d0165`.** Everything in round 4 holds, with `08d0165` in
+place of `9604992`:
+- the chart `0.0.0-dev.08d0165`;
+- all nine image tags `sha-08d0165` (`ui` excepted);
+- the checkout, CRDs first, the stop conditions, and the Phase 0 amendments.
+
+**No CRD changed since `9604992`.** Apply them first anyway, as always.
+- **RBAC changed:** the controller ClusterRole adds `list` on `events`. The
+  Helm upgrade applies it.
+- **Swiftletd:** no Rust changed since `9604992`, so launchers still on
+  `sha-9604992` interoperate with `sha-08d0165` ones.
+- **Build check:** use the Release Dev run for `08d0165`, with the same check and
+  45-minute wait as before.
+- **Reports:**
+  - `phase0-r5.md` for the preparation;
+  - `phase1-r5.md`, `phase2-r5.md` and `phase3-r5.md` for the phases.
+
+### Order on dev (after `phase0-r5.md`)
+
+The preparation stopped at 30.9% free, with cp-1 `Schedulable=True`, above
+Longhorn's 25%. Step 4, deleting the 7 orphaned replicas (58.7 GiB), waits
+for William's explicit OK.
+1. **Phase 1 r5: GO now.** It does not need the extra space.
+2. **Step 4, once William confirms it:**
+   - delete the 7 cp-1 Orphan objects listed in `phase0-r5.md`;
+   - re-measure cp-1;
+   - run the 1 GiB `longhorn-migratable` fresh-volume check;
+   - update `phase0-r5.md`.
+
+   Leave the worker-2 orphans alone unless William includes them.
+3. **Phase 2 r5: run V4a live first,** while there is the most room.
+   - **If step 4 is not confirmed yet,** run V4a live at the current 30.9%,
+     provided the fresh-volume check passes there: a new 1 GiB
+     `longhorn-migratable` PVC gets 3 `healthy` replicas.
+   - **Then the rest,** in the table's order.
+   - **Keep cp-1 above 25%:** delete each scenario's guests and images as soon
+     as it has passed and its evidence is recorded. Keep a failed scenario's
+     objects.
+   - **If cp-1 reads `Schedulable=False` again,** stop creating volumes and
+     report. Do not delete anything beyond the preparation's list.
+
+### Before Phase 1, on EVERY cluster: the runPolicy pre-check
+Run the same pre-check as round 4:
+- List the guests with `runPolicy: Stopped` and phase `Running`.
+- Record the list in `phase1-r5.md`.
+- If it lists any guest, do not upgrade that cluster.
+
+(The clusters already run #678, so the list should be empty.)
+
+### Phase 1 r5: GO per cluster, once its pre-check is clean
+Phase 1 as before, on all three clusters, with `08d0165`. Record the same items
+as round 4, and also:
+- **Baselines.** Dev `gpu-cells/innercp` and ntx `capi-udn/ks-udn-cp-54klw`
+  keep the same UID, 0 restarts, and stay `Running`.
+- **Events RBAC (#682).**
+  `kubectl auth can-i list events --as=system:serviceaccount:kubeswift-system:controller-manager`
+  prints `yes`. Use the controller's namespace if it is not
+  `kubeswift-system`.
+- **`field-testing/ft-gpu-pool` on dev (#683).** Only observe it: do not
+  change the pool.
+  - Within a few minutes of the upgrade, the `Failed` slot
+    `ft-gpu-pool-slot-dfjtk` should be deleted.
+  - The pool should get a `SlotEnded` Warning event that names the slot and
+    its failure message. Record the event text.
+  - The GPU should no longer be allocated to that slot. Check it the same way
+    round 4 did.
+  - The pool may warm a replacement (its image resolves). If so, record
+    whether the replacement runs.
+  - If the replacement ends too, count the `SlotEnded` events over 10
+    minutes. A delete-and-recreate loop is a finding.
+- On dev, `--metrics-secure=true` survives the upgrade.
+
+### Phase 2 r5 (dev): GO once Phase 1 r5 has succeeded on dev
+
+- Use new namespaces `val-r5-*`.
+- Every guest used must be created after the upgrade, with a launcher running
+  `swiftletd:sha-08d0165`.
+
+| # | Scenario | Pass |
+|---|---|---|
+| R5-A | **`DstNeverReady` names its cause (#682).** A volume that is kept degraded on purpose: (1) Create a temporary StorageClass `val-r5-degraded`, a copy of `longhorn-migratable` with `numberOfReplicas: "4"`. With 3 nodes and hard anti-affinity, the fourth replica never schedules, so every volume in it stays `degraded`. This is a new StorageClass, not a change to a Longhorn setting. (2) Create a SwiftGuestClass `val-r5-degraded` using it (RWX Block, 2 CPU, 2Gi, 10Gi root) and a guest in `val-r5-dnr`. Once the guest is `Running`, confirm its volume reads `degraded`: `kubectl -n longhorn-system get volumes.longhorn.io <PV volumeHandle>`. (3) Live-migrate it: `swiftctl -n val-r5-dnr migrate <guest> --to <other node> --preferred-mode live --allow-ip-change --name r5a-mig`. (4) Delete the guest, the class and the StorageClass afterwards. If the lab's permission check refuses the StorageClass, ask William. If he declines, SKIP with the reason; the unit tests cover the message. | The SwiftMigration fails `DstNeverReady` after about 60 s. Its `status.failureMessage` goes on after `within 1m0s budget:` to name the cause, including a `Warning FailedAttachVolume: …` event. A `DestinationPodNeverReady` Warning event is on the SwiftMigration. The guest is still `Running` on its source, with the same pod UID. No destination pod is left. Paste the full message. |
+| R5-B | **A guest waits for its importing image (#681).** (a) In `val-r5-img`, apply a SwiftImage for the Noble cloud image and, in the same `kubectl apply`, a SwiftGuest that uses it. Watch `status.phase` and the `Resolved` condition every 2 s until the guest is `Running`. (b) Apply a SwiftImage whose URL returns 404, with a guest that uses it. | (a) While the image imports, the guest is `Pending` with `Resolved=False` "SwiftImage not Ready". It is never `Failed` and gets no launcher pod. The controller logs `waiting to resolve`. The guest boots once the image is `Ready`. Record how long it waited. (b) The guest stays `Pending` while the import Job retries, which takes about 10 minutes with the Job's default 6 retries. Once the image reads `Failed`, the guest goes `Failed` with `Resolved=False`. Record both times. |
+| R5-C | **Sandbox phase and ended slots (#683).** (a) Run three one-shot SwiftSandboxes, two exiting 0 and one exiting 3, and poll `status.phase` every 0.5 s. (b) Create a non-GPU SwiftSandboxPool with one slot in `val-r5-sbx`. Check out a SwiftSandbox from it (`spec.poolRef`, command `sleep 600`). Once it is `Running`, force-delete its claimed slot pod: `kubectl delete pod <slot> --grace-period=0 --force`. | (a) The phase sequence never goes back: no `Materializing` after `Running`. The exit-0 sandboxes end `Completed`, and the exit-3 one ends `Failed` with exit code 3. (b) Within about 10 s the sandbox is `Failed` with reason `SlotLost`, and its message names the slot pod. The pool warms a new slot. |
+| V4a live | **Run first.** Run `migration-test.sh --mode live --source <worker> --target <worker> --storage-class longhorn-migratable` from the candidate checkout. | The script logs `Longhorn volume … is healthy` before it migrates, then "All checks passed". The guest starts on `--source`, and D7b's `observedTransferDuration` is set. While it runs, watch the phaseDetail as V5 did: `destination running; waiting for the source's report` appears whenever `DestinationRunning` does. Record how long the volume wait took. |
+| V9b | **Only if Phase 1 showed the dev GPU freed** and `ft-gpu-pool` is not holding it with a replacement. Create round 4's V9b GPU pool (`gpuProfileRef`, no `kernelProfileRef`) in `val-r5-gpu`, check the pass, then delete the pool at once so the GPU is free again. Otherwise SKIP with the reason. | As in round 4: the slot pod mounts `/var/lib/kubeswift/kernels/<ns>/gpu-sandbox`. After the pool is deleted, the GPU is no longer allocated. |
+| V1 | **Regression: smoke.** `NAMESPACE=val-r5-smoke make smoke-test` (all scenarios), then `make smoke-test-cleanup` with the same `NAMESPACE`. | As in round 4. |
+| V11-R2 | **Regression:** the R2 in-place restore in `val-r5-rt`, exactly as in round 4. | As in round 4. |
+
+R7, R8, R9, V2 to V8, V10, T3 and T5 are not re-run: nothing merged since
+round 4 touches them. D12's browser half is still William's.
+
+**Stop condition:** as before. If a guest is ever left without a running VM,
+stop Phase 2 at once, leave everything in place, and report.
+- **If every scenario passes,** delete the `val-r5-*` namespaces and any
+  `val-r4-*` still left, and report any that does not finish deleting.
+
+### Phase 3 r5: GO per cluster, once Phase 1 r5 has succeeded on it
+- **ntx:** N3 as before, plus the events RBAC check.
+- **sov:** S1 as before, plus the events RBAC check.
+
+**v0.15.0 is tagged only after round 5 passes and William gives the word.**
