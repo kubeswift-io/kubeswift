@@ -386,3 +386,64 @@ func TestReconcile_StoppedGuest_NoMigrationMarkerCleared(t *testing.T) {
 		})
 	}
 }
+
+// terminatingPod is a pod on nodeName requesting cpu, with a graceful delete in
+// progress. The fake client keeps it while its finalizer holds it.
+func terminatingPod(name, nodeName, cpu string) *corev1.Pod {
+	now := metav1.Now()
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns,
+			DeletionTimestamp: &now, Finalizers: []string{"test.kubeswift.io/hold"},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Containers: []corev1.Container{{
+				Name:      "c",
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// A peer that fits only once a pod being deleted there is gone is not a target
+// yet: the drain retries later instead of creating a migration there now, and
+// takes the peer once the pod is gone.
+func TestReconcile_PeerFitsOnlyOnceTerminatingPodGone_NotYet(t *testing.T) {
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1"), smallClass(),
+		terminatingPod("prev-dst", "worker-1", "8"))
+	res := reconcileGuest(t, r, "g")
+	if migs := listMigs(t, c); len(migs) != 0 {
+		t.Fatalf("a peer still held by a terminating pod is not a target yet; got %d migration(s)", len(migs))
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("should requeue to retry once the terminating pod is gone")
+	}
+
+	var p corev1.Pod
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: "prev-dst"}, &p); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	p.Finalizers = nil
+	if err := c.Update(context.Background(), &p); err != nil {
+		t.Fatalf("release pod: %v", err)
+	}
+	reconcileGuest(t, r, "g")
+	migs := listMigs(t, c)
+	if len(migs) != 1 || migs[0].Spec.Target.NodeName != "worker-1" {
+		t.Fatalf("once the pod is gone the peer is the target; got %+v", migs)
+	}
+}
+
+// A peer that fits now is chosen over one that fits only once its terminating
+// pods are gone, even when the latter would win the name tiebreak.
+func TestReconcile_PrefersPeerThatFitsNow(t *testing.T) {
+	r, c := newR(guest("g", drain("worker-2"), statusNode("worker-2")), node("worker-2"), node("worker-1"), node("worker-3"), smallClass(),
+		terminatingPod("prev-dst", "worker-1", "8"))
+	reconcileGuest(t, r, "g")
+	migs := listMigs(t, c)
+	if len(migs) != 1 || migs[0].Spec.Target.NodeName != "worker-3" {
+		t.Fatalf("want one migration to worker-3 (fits now); got %+v", migs)
+	}
+}

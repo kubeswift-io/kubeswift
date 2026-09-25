@@ -243,6 +243,20 @@ takes the new default.
   (`kubeswift.io/migration-progress-estimate-id`), so a new migration no
   longer shows the previous send's last value.
 
+- **A migration started right after a cancelled one to the same node failed
+  at once.** The capacity check in Validating counts the pods already being
+  deleted on the target node, as the scheduler does until they are gone, and
+  the cancelled migration's destination pod was still terminating. In the lab
+  a live migration created 0.7 s after the cancel failed with `insufficient
+  CPU headroom: need 2, have 290m`, on a node with room for it once that pod
+  was gone. A target that fits only once its terminating pods are gone is now
+  waited for: the migration stays in Validating with phaseDetail `waiting for
+  terminating pods on the target node to release resources` and `Compatible`
+  `Unknown`, and fails with the same message if the node still does not fit
+  after 2 minutes. A target that would not fit even without those pods fails
+  at once, as before. The drain controller does not pick such a node until
+  the pods are gone, and `swiftctl migrate --check` says why it does not fit.
+
 - **A cancelled live migration could destroy the guest it migrated.**
   swiftletd ran each action on its action loop and waited for it, and a
   receive lasts the whole migration, so the destination saw a cancel only

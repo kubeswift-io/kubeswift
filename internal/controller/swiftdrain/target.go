@@ -78,6 +78,9 @@ func (r *Reconciler) selectTarget(ctx context.Context, guest *swiftv1alpha1.Swif
 			skipped++
 			continue
 		}
+		// A node that fits only once pods already being deleted there are
+		// gone (swiftmigration.TerminatingPodsError) is not a target yet:
+		// the no-target retry picks it up once they are.
 		if err := swiftmigration.NodeHasCapacity(ctx, r.Client, n, &class); err != nil {
 			skipped++
 			continue

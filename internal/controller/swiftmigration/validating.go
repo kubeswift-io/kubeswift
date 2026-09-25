@@ -2,10 +2,13 @@ package swiftmigration
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +32,8 @@ import (
 //     status records the actual selection for operator visibility).
 //   - Run the manual capacity check (spike Q2): the target node must
 //     have headroom for the guest's CPU + memory + launcher overhead.
+//     A node short only by what pods already being deleted there hold
+//     is waited for, not failed (checkNodeCapacity).
 //   - Set IPWillChange condition when allowIPChange=true triggered.
 //   - Set Compatible=True and transition to Preparing on success.
 //   - Set Compatible=False and Failed phase on any rejection.
@@ -143,8 +148,8 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	// overhead. spike Q2 found this approach is the cleanest gate
 	// (server dry-run skips the scheduler; real-pod-probe leaves
 	// debris).
-	if err := r.checkNodeCapacity(ctx, &node, &class); err != nil {
-		return phaseFailure(err.Error(), "")
+	if res := r.checkNodeCapacity(ctx, status, &node, &class, ""); res != nil {
+		return res
 	}
 
 	// GPU target pre-flight (VFIO release-and-reallocate): the target node must
@@ -171,25 +176,97 @@ func (r *SwiftMigrationReconciler) handleValidating(
 	return phaseAdvance()
 }
 
-// checkNodeCapacity verifies the target node has headroom for the
-// guest's CPU + memory (including launcher overhead).
+// terminatingPodsWait bounds how long Validating waits for pods already
+// being deleted on the target node to release what the destination needs.
+// Launcher pods are deleted with a 30 s grace period, after which the kubelet
+// kills them; the rest is margin for the kubelet and the API server to remove
+// the pod objects. A pod still there after this is stuck (a finalizer, an
+// unreachable kubelet), and the migration fails as it would have without the
+// wait.
+const terminatingPodsWait = 2 * time.Minute
+
+// terminatingPodsPollInterval is the requeue cadence during that wait. The
+// removal of those pods does not enqueue this migration: a cancelled
+// migration's destination pod maps to that migration, and other workloads'
+// pods map to none.
+const terminatingPodsPollInterval = 3 * time.Second
+
+// phaseDetailAwaitingTerminatingPods is the Validating phaseDetail while the
+// target node fits the guest only once pods already being deleted there are
+// gone. Stable per the phaseDetail vocabulary discipline (see
+// api/migration/v1alpha1): operators may match on it.
+const phaseDetailAwaitingTerminatingPods = "waiting for terminating pods on the target node to release resources"
+
+// checkNodeCapacity runs the capacity gate of the Validating phase, in both
+// modes. nil means the target node fits the guest.
 //
-// Returns a structured error message (not a Go error) when capacity
-// is insufficient — caller maps to Failed phase with the message in
-// status.failureMessage. Returns nil when the check passes.
+// A node short only by what pods already being deleted on it hold
+// (TerminatingPodsError) is waited for rather than failed. A migration
+// created right after a cancelled one to the same node used to fail at once,
+// on the cancelled migration's destination pod that was still terminating
+// (lab validation of v0.15.0, round 3). Creating the destination then would
+// not help, since the scheduler also counts a terminating pod until it is
+// gone, so the migration stays in Validating and requeues. The wait is timed
+// from the Compatible condition, Unknown while it lasts, so a controller
+// restart does not restart it. Once terminatingPodsWait has run out, or when
+// the node would not fit even without those pods, the migration fails with
+// NodeHasCapacity's message and failureReason ("" in offline mode).
 func (r *SwiftMigrationReconciler) checkNodeCapacity(
 	ctx context.Context,
+	status *migrationv1alpha1.SwiftMigrationStatus,
 	node *corev1.Node,
 	class *swiftv1alpha1.SwiftGuestClass,
-) error {
-	return NodeHasCapacity(ctx, r.Client, node, class)
+	failureReason migrationv1alpha1.FailureReasonCode,
+) *phaseResult {
+	err := NodeHasCapacity(ctx, r.Client, node, class)
+	if err == nil {
+		return nil
+	}
+	var terminating *TerminatingPodsError
+	if errors.As(err, &terminating) && awaitTerminatingPods(status, err, time.Now()) {
+		setPhaseDetail(status, phaseDetailAwaitingTerminatingPods)
+		return phaseRequeue(terminatingPodsPollInterval)
+	}
+	// A wait that ends in failure must not leave Compatible Unknown on a
+	// Failed migration.
+	if c := apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionCompatible); c != nil && c.Status == metav1.ConditionUnknown {
+		setCondition(status, migrationv1alpha1.SwiftMigrationConditionCompatible,
+			metav1.ConditionFalse, ReasonValidationFailed, err.Error())
+	}
+	return phaseFailure(err.Error(), failureReason)
 }
+
+// awaitTerminatingPods reports whether Validating should keep waiting for
+// pods being deleted on the target node: terminatingPodsWait, timed from the
+// Compatible condition's lastTransitionTime, has not run out. It sets that
+// condition Unknown, which starts the wait on the first pass and leaves its
+// time alone after.
+func awaitTerminatingPods(status *migrationv1alpha1.SwiftMigrationStatus, shortfall error, now time.Time) bool {
+	setCondition(status, migrationv1alpha1.SwiftMigrationConditionCompatible, metav1.ConditionUnknown,
+		ReasonAwaitingTerminatingPods, "the target node fits the guest once pods being deleted there are gone: "+shortfall.Error())
+	c := apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionCompatible)
+	return now.Sub(c.LastTransitionTime.Time) < terminatingPodsWait
+}
+
+// TerminatingPodsError is NodeHasCapacity's error for a node that lacks
+// headroom only because of pods already being deleted on it: once they are
+// gone, it fits. The kube-scheduler counts a terminating pod's requests until
+// the pod object is gone, so a pod created there now would stay Pending; the
+// node fits later, not now. The message is the plain insufficient-headroom
+// one, so a caller that does not look for this type (errors.As) treats the
+// node as not fitting, which is right for a caller that needs it to fit now.
+type TerminatingPodsError struct {
+	msg string
+}
+
+func (e *TerminatingPodsError) Error() string { return e.msg }
 
 // NodeHasCapacity verifies the node has headroom for the guest's CPU +
 // memory (including launcher overhead). Exported so the Phase 4 drain
 // controller reuses the exact capacity gate the migration Validating phase
 // applies, instead of a second, drift-prone copy. Returns nil when the node
-// fits; a descriptive error otherwise.
+// fits; a descriptive error otherwise, a *TerminatingPodsError when the node
+// would fit once pods already being deleted on it are gone.
 func NodeHasCapacity(
 	ctx context.Context,
 	c client.Client,
@@ -210,12 +287,18 @@ func NodeHasCapacity(
 	// (field selectors require an indexer setup that the fake client
 	// doesn't provide by default). The filter by spec.nodeName is
 	// done manually below; the cluster is small enough this is cheap.
+	//
+	// Pods already being deleted are counted, as the scheduler counts
+	// them until they are gone. Their share is also summed on its own,
+	// to tell a node that fits once they are gone from one that does not.
 	var pods corev1.PodList
 	if err := c.List(ctx, &pods); err != nil {
 		return fmt.Errorf("list pods for capacity check: %w", err)
 	}
 	usedCPU := *resource.NewQuantity(0, resource.DecimalSI)
 	usedMem := *resource.NewQuantity(0, resource.BinarySI)
+	terminatingCPU := *resource.NewQuantity(0, resource.DecimalSI)
+	terminatingMem := *resource.NewQuantity(0, resource.BinarySI)
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		if p.Spec.NodeName != node.Name {
@@ -224,31 +307,12 @@ func NodeHasCapacity(
 		if p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded {
 			continue
 		}
-		for j := range p.Spec.Containers {
-			c := &p.Spec.Containers[j]
-			if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-				usedCPU.Add(cpu)
-			}
-			if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-				usedMem.Add(mem)
-			}
-		}
-		// Init containers can request resources; per Kubernetes
-		// scheduler logic, the effective request is max(initRequest,
-		// sum(containerRequests)). For the capacity-check headroom we
-		// take the conservative sum: include init container requests
-		// alongside main container requests. Init containers are
-		// short-lived but during their run they reserve resources, so
-		// counting them prevents pessimistic "this fits" outcomes
-		// from briefly-stalled scheduling.
-		for j := range p.Spec.InitContainers {
-			c := &p.Spec.InitContainers[j]
-			if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-				usedCPU.Add(cpu)
-			}
-			if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-				usedMem.Add(mem)
-			}
+		cpu, mem := podRequests(p)
+		usedCPU.Add(cpu)
+		usedMem.Add(mem)
+		if p.DeletionTimestamp != nil {
+			terminatingCPU.Add(cpu)
+			terminatingMem.Add(mem)
 		}
 	}
 
@@ -265,15 +329,61 @@ func NodeHasCapacity(
 	overhead := resource.NewQuantity(int64(swiftguest.LauncherMemoryOverheadMiB)*1024*1024, resource.BinarySI)
 	needMem.Add(*overhead)
 
-	if headroomCPU.Cmp(needCPU) < 0 {
-		return fmt.Errorf("target node %q has insufficient CPU headroom: need %s, have %s (allocatable %s, used %s)",
+	var msg string
+	switch {
+	case headroomCPU.Cmp(needCPU) < 0:
+		msg = fmt.Sprintf("target node %q has insufficient CPU headroom: need %s, have %s (allocatable %s, used %s)",
 			node.Name, needCPU.String(), headroomCPU.String(), allocCPU.String(), usedCPU.String())
-	}
-	if headroomMem.Cmp(needMem) < 0 {
-		return fmt.Errorf("target node %q has insufficient memory headroom: need %s, have %s (allocatable %s, used %s)",
+	case headroomMem.Cmp(needMem) < 0:
+		msg = fmt.Sprintf("target node %q has insufficient memory headroom: need %s, have %s (allocatable %s, used %s)",
 			node.Name, needMem.String(), headroomMem.String(), allocMem.String(), usedMem.String())
+	default:
+		return nil
 	}
-	return nil
+
+	// The shortfall is only the terminating pods' when both CPU and memory
+	// fit once they are gone.
+	releasedCPU := headroomCPU.DeepCopy()
+	releasedCPU.Add(terminatingCPU)
+	releasedMem := headroomMem.DeepCopy()
+	releasedMem.Add(terminatingMem)
+	if releasedCPU.Cmp(needCPU) >= 0 && releasedMem.Cmp(needMem) >= 0 {
+		return &TerminatingPodsError{msg: msg}
+	}
+	return errors.New(msg)
+}
+
+// podRequests sums the CPU and memory requests of a pod's containers.
+func podRequests(p *corev1.Pod) (cpu, mem resource.Quantity) {
+	cpu = *resource.NewQuantity(0, resource.DecimalSI)
+	mem = *resource.NewQuantity(0, resource.BinarySI)
+	for j := range p.Spec.Containers {
+		c := &p.Spec.Containers[j]
+		if q, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+			cpu.Add(q)
+		}
+		if q, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+			mem.Add(q)
+		}
+	}
+	// Init containers can request resources; per Kubernetes
+	// scheduler logic, the effective request is max(initRequest,
+	// sum(containerRequests)). For the capacity-check headroom we
+	// take the conservative sum: include init container requests
+	// alongside main container requests. Init containers are
+	// short-lived but during their run they reserve resources, so
+	// counting them prevents pessimistic "this fits" outcomes
+	// from briefly-stalled scheduling.
+	for j := range p.Spec.InitContainers {
+		c := &p.Spec.InitContainers[j]
+		if q, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+			cpu.Add(q)
+		}
+		if q, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+			mem.Add(q)
+		}
+	}
+	return cpu, mem
 }
 
 // isDefaultNodeLocalNetworking mirrors the webhook's helper. Duplicated

@@ -75,6 +75,11 @@ const (
 	ReasonGuestNotFound      = "GuestNotFound"
 	ReasonTargetNodeNotFound = "TargetNodeNotFound"
 	ReasonIPWillChange       = "IPWillChange"
+
+	// ReasonAwaitingTerminatingPods is the Compatible condition's reason
+	// (status Unknown) while Validating waits for pods being deleted on the
+	// target node to release the resources the destination needs.
+	ReasonAwaitingTerminatingPods = "AwaitingTerminatingPods"
 )
 
 // SwiftMigrationReconciler reconciles SwiftMigration resources.

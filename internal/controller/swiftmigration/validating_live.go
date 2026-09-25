@@ -186,8 +186,8 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 		}
 		return phaseTransient(fmt.Errorf("get SwiftGuestClass: %w", err))
 	}
-	if err := r.checkNodeCapacity(ctx, &node, &class); err != nil {
-		return phaseFailure(err.Error(), migrationv1alpha1.FailureReasonOther)
+	if res := r.checkNodeCapacity(ctx, status, &node, &class, migrationv1alpha1.FailureReasonOther); res != nil {
+		return res
 	}
 
 	// CPU pre-flight: silent success per design §7.3.

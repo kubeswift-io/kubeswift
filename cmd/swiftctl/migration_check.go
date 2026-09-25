@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -84,7 +85,12 @@ func runMigratePreflight(cmd *cobra.Command, c client.Client, guestName, ns stri
 		if class, err := guestClass(ctx, c, &guest); err != nil {
 			line(info, "capacity not checked: %v", err)
 		} else if err := swiftmigration.NodeHasCapacity(ctx, c, &tnode, class); err != nil {
-			line(warn, "target node capacity: %v", err)
+			var terminating *swiftmigration.TerminatingPodsError
+			if errors.As(err, &terminating) {
+				line(warn, "target node capacity: %v; pods being deleted there hold the difference, and a migration waits for them", err)
+			} else {
+				line(warn, "target node capacity: %v", err)
+			}
 		} else {
 			line(ok, "target node %q has capacity for the guest (%s CPU / %s memory)",
 				target, class.Spec.CPU.String(), class.Spec.Memory.String())
