@@ -134,17 +134,17 @@ func (r *SwiftKernelReconciler) CheckNodePullStatus(ctx context.Context, sk *ker
 	if job.Status.Succeeded > 0 {
 		return kernelv1alpha1.SwiftKernelPhaseReady, "", nil
 	}
-	if job.Status.Failed > 0 {
-		msg := "pull job failed"
-		if len(job.Status.Conditions) > 0 {
-			for _, c := range job.Status.Conditions {
-				if c.Type == batchv1.JobFailed {
-					msg = c.Message
-					break
-				}
+	// A failed pod is not a failed pull: the Job starts another, up to its
+	// backoff limit. Failed is final for a SwiftKernel, so only the Job's own
+	// Failed condition may put it there.
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			msg := c.Message
+			if msg == "" {
+				msg = "pull job failed"
 			}
+			return kernelv1alpha1.SwiftKernelPhaseFailed, msg, nil
 		}
-		return kernelv1alpha1.SwiftKernelPhaseFailed, msg, nil
 	}
 	return kernelv1alpha1.SwiftKernelPhasePulling, "", nil
 }
