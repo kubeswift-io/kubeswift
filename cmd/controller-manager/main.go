@@ -298,6 +298,12 @@ func main() {
 		SnapshotS3Image:       swiftsnapshot.SnapshotS3Image(),
 		SnapshotORASImage:     swiftsnapshot.SnapshotORASImage(),
 		VolumeSnapshotEnabled: volumeSnapshotEnabled,
+		// Node-directory cleanup pods run here: a snapshot's own namespace
+		// refuses new pods while it is being deleted. The raw variable, not
+		// leaderElectionNS: unset, they run in the snapshot's namespace
+		// rather than in a namespace that may not exist.
+		ControllerNamespace: os.Getenv(leaderElectionNSEnv),
+		Recorder:            mgr.GetEventRecorderFor("swiftsnapshot-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftSnapshot controller")
 		os.Exit(1)

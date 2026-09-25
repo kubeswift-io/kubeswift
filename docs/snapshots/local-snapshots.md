@@ -51,8 +51,9 @@ on the node where the source VM is running — here
 derived from the snapshot's namespace and name, so no two snapshots share one
 and no snapshot can name another's. `spec.backend.local.hostPath` may be
 omitted, or set to exactly that directory; anything else is rejected.
-`status.memorySnapshot.handle` records it once the capture begins. KubeSwift
-schedules a cleanup pod on that node when the SwiftSnapshot is deleted.
+`status.memorySnapshot.handle` records it once the capture begins. When the
+SwiftSnapshot is deleted, a cleanup pod on that node removes the directory (see
+[Cleanup](#cleanup)).
 
 In earlier versions `hostPath` was any directory under
 `/var/lib/kubeswift/snapshots/` the author chose. That let one namespace name
@@ -264,12 +265,36 @@ source node that runs `rm -rf` on the snapshot's directory (the one its
 capture recorded; a snapshot that never began capturing wrote nothing and
 has nothing removed). The
 finalizer `kubeswift.io/snapshot-hostpath-cleanup` blocks deletion
-until cleanup completes.
+until cleanup completes. The controller deletes the pod once it has
+succeeded.
+
+The cleanup pod runs in the controller's namespace (`kubeswift-system` by
+default), not the snapshot's. A namespace being deleted accepts no new pods,
+so deleting a namespace that holds local snapshots cleans them up the same way
+as deleting the snapshots. Before v0.15.0 the pod ran in the snapshot's
+namespace, which refused it, and the namespace stayed `Terminating`; one stuck
+that way finishes deleting once the controller is upgraded.
+
+The pod mounts `/var/lib/kubeswift/snapshots/` from the host, so the
+controller's namespace must admit hostPath pods: Pod Security level
+`privileged`, which the shared-base disk release Jobs that run there need too.
+Neither the chart nor `helm install --create-namespace` sets Pod Security
+labels on it, so it takes the cluster's default level. If your cluster
+defaults to `baseline` or `restricted`, label it:
+
+```bash
+kubectl label namespace kubeswift-system pod-security.kubernetes.io/enforce=privileged
+```
 
 If the cleanup pod fails (e.g. node is unreachable, hostPath was
 already removed manually), the finalizer is retained and the
-operator can `kubectl delete pod swift-snap-cleanup-<snap-name>` to
-trigger a re-create on the next reconcile pass.
+operator can delete the pod to trigger a re-create on the next
+reconcile pass. Its labels name the snapshot:
+
+```bash
+kubectl -n kubeswift-system delete pod -l \
+  snapshot.kubeswift.io/swift-snapshot-namespace=<namespace>,snapshot.kubeswift.io/swift-snapshot=<name>
+```
 
 If the source node is permanently lost, you can manually remove
 the finalizer to allow GC:
@@ -278,6 +303,7 @@ the finalizer to allow GC:
 kubectl patch swiftsnapshot/<name> -p '{"metadata":{"finalizers":[]}}' --type=merge
 ```
 
-The hostPath remains on the lost node's storage (or doesn't, if the
-node is truly gone). Orphan cleanup of pre-existing directories is
-not in Phase 2 scope.
+The controller then deletes the snapshot's cleanup pod. The hostPath
+remains on the lost node's storage (or doesn't, if the node is truly
+gone). Orphan cleanup of pre-existing directories is not in Phase 2
+scope.

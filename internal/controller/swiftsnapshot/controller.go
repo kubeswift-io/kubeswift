@@ -21,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -50,6 +51,14 @@ type SwiftSnapshotReconciler struct {
 	// discovery check in main. When false, the csi-volume-snapshot backend is
 	// unavailable; the local and s3 backends are unaffected.
 	VolumeSnapshotEnabled bool
+	// ControllerNamespace is the controller's own namespace (POD_NAMESPACE),
+	// where the node-directory cleanup pods run. Empty (unit tests, a
+	// controller run outside the cluster) runs them in the snapshot's own
+	// namespace instead.
+	ControllerNamespace string
+	// Recorder reports on the SwiftSnapshot a purge that deletion had to
+	// skip. Optional.
+	Recorder record.EventRecorder
 }
 
 // Reconcile drives the SwiftSnapshot state machine.
@@ -58,14 +67,21 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	var snap snapshotv1alpha1.SwiftSnapshot
 	if err := r.Get(ctx, req.NamespacedName, &snap); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if !isNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		// Gone. A cleanup pod has no owner reference, so one left behind
+		// (the finalizer was removed by hand while it ran) is deleted here.
+		return ctrl.Result{}, r.deleteOrphanCleanupPods(ctx, req.Namespace)
 	}
 
 	// Deletion path: when the SwiftSnapshot is being deleted and our
 	// finalizer is present, run the hostPath cleanup pod. Drop the
 	// finalizer once cleanup completes so the apiserver can GC. This
 	// runs before the terminal-state check because deletion can
-	// happen from any phase.
+	// happen from any phase. The cleanup pod usually runs in the
+	// controller's namespace and nothing owns it, so the RequeueAfter
+	// below polls it until it finishes.
 	if snap.DeletionTimestamp != nil {
 		done, err := r.handleDeletion(ctx, &snap)
 		if err != nil {
@@ -487,7 +503,9 @@ func isNotFound(err error) bool {
 // architect Q1 pod-death-recovery requirement. We can't Owns(Pod)
 // because the launcher pod is owned by the SwiftGuest, not the
 // SwiftSnapshot, so EnqueueRequestsFromMapFunc maps Pod events to
-// the SwiftSnapshots that reference that pod's guest.
+// the SwiftSnapshots that reference that pod's guest. The same watch
+// maps a node-directory cleanup pod, which nothing owns, to its
+// snapshot by label.
 func (r *SwiftSnapshotReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&snapshotv1alpha1.SwiftSnapshot{}).
@@ -517,6 +535,9 @@ func (r *SwiftSnapshotReconciler) podToSnapshots(ctx context.Context, obj client
 	if !ok {
 		return nil
 	}
+	if pod.Labels[cleanupRoleLabel] == cleanupRoleValue {
+		return r.cleanupPodToSnapshot(pod)
+	}
 	var snaps snapshotv1alpha1.SwiftSnapshotList
 	if err := r.List(ctx, &snaps, client.InNamespace(pod.Namespace)); err != nil {
 		// Drop the event silently; the periodic resync (10h default)
@@ -542,4 +563,21 @@ func (r *SwiftSnapshotReconciler) podToSnapshots(ctx context.Context, obj client
 		})
 	}
 	return out
+}
+
+// cleanupPodToSnapshot maps a cleanup pod to the SwiftSnapshot it cleans up
+// after, so its completion is seen without waiting for the next poll, and a
+// pod whose snapshot is gone reaches Reconcile's not-found path, which
+// deletes it. The informer's initial list and its resyncs deliver every
+// cleanup pod here again, so one left while the controller was down is found
+// too. A name the label had to shorten names no snapshot; the not-found path
+// matches pods by UID and is safe for it.
+func (r *SwiftSnapshotReconciler) cleanupPodToSnapshot(pod *corev1.Pod) []ctrlreconcile.Request {
+	ns, name := pod.Labels[snapshotNamespaceLabel], pod.Labels[snapshotNameLabel]
+	if ns == "" || name == "" || pod.Namespace != r.cleanupPodNamespace(ns) {
+		// A pod from an earlier version (owned by its snapshot, which
+		// collects it), or one outside where cleanup pods run.
+		return nil
+	}
+	return []ctrlreconcile.Request{{NamespacedName: client.ObjectKey{Namespace: ns, Name: name}}}
 }
