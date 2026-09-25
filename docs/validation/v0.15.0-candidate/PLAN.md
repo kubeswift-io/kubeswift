@@ -576,3 +576,115 @@ otherwise keep it for inspection.
 - **ntx:** N3 as before: same launcher UID, 0 restarts, no status churn. N1
   and N2 are still not re-run.
 - **sov:** S1 as before.
+
+## Round 4: candidate `9604992`
+
+Round 3 (`phase2-r3.md`) passed with no guest lost. Since then, round 3's
+findings and the other items open before v0.15.0 were fixed and merged:
+
+| PR | Change | What round 4 checks |
+|---|---|---|
+| #671 | The committed-cutover wait has its own phaseDetail, `destination running; waiting for the source's report`. The never-set "src migration complete" is gone from the docs. | V5 |
+| #673 | A migration whose target fits only once pods already terminating there are gone waits in Validating (phaseDetail `waiting for terminating pods on the target node to release resources`, up to 2 min), instead of failing. | V6 |
+| #674 | Warm GPU pools boot `gpu-sandbox` (#659). A sandbox or pool whose SwiftKernel is missing or not Ready gets no pod and reports `KernelNotFound`/`KernelNotReady` (#660). | V9 |
+| #675 | Snapshot cleanup pods run in the controller's namespace, so a namespace holding a snapshot finishes deleting. The three stuck namespaces should clear after the upgrade. | Phase 1, V8 |
+| #676 | SwiftGuest and SwiftSandbox report `status.network.podIP` and `status.network.primaryIPScope`. The columns are `Guest IP` and `Pod IP`, plus `IP Scope` in `-o wide`. | V2 |
+| #677 | SwiftKernel pull Jobs are named for the current directory, so every kernel re-pulls once after the upgrade (#658). A kernel-boot guest waits for a pulling kernel instead of failing. | Phase 1, V10 |
+| #678 | `spec.runPolicy: Stopped` stops a running guest, and waits while a migration, restore or capture owns it. | Phase 1 pre-check, V3 |
+| #679 | Test scripts: `migration-test.sh` places its guest on `--source`; smoke runs in `$NAMESPACE` and cleans up only what it created; the `GuestRunning=`/`hypervisor=` warnings are fixed; `identity_of` reads the default-route MAC; clonestrategy's speedup is informational; `gpu-alloc` can pass. | V1, V4, V7 |
+| #680 | A live cutover moves a pinned guest's `spec.nodeName` to the target. | V4 |
+
+**Candidate: main @ `9604992`.** Everything in round 3 holds with `9604992` in
+place of `f260277`:
+- the chart `0.0.0-dev.9604992`;
+- all nine image tags `sha-9604992` (`ui` excepted);
+- the checkout, CRDs first, the stop conditions, and the Phase 0 amendments.
+
+**CRDs changed:** `swiftguests` and `swiftsandboxes` gained `podIP` and
+`primaryIPScope`, and their printer columns changed. Apply the CRDs before the
+Helm upgrade, as always.
+- **Build check:** Release Dev run for `9604992`. Apply the same check and
+  45-minute wait as before.
+- **Reports:** write `phase1-r4.md`, `phase2-r4.md` and `phase3-r4.md`.
+
+### Before Phase 1, on EVERY cluster: the runPolicy pre-check (#678)
+From this version on, a guest whose spec says `runPolicy: Stopped` but that
+still runs is shut down by the controller.
+
+1. Before upgrading a cluster, list those guests:
+   ```sh
+   kubectl get swiftguests -A -o json | jq -r '.items[]
+     | select(.spec.runPolicy == "Stopped" and .status.phase == "Running")
+     | "\(.metadata.namespace)/\(.metadata.name)"'
+   ```
+2. Record the output in `phase1-r4.md`.
+3. **If it lists any guest, do not upgrade that cluster.** Report the list
+   and wait for William. Upgrading would stop those guests, and on ntx that
+   may include CAPI-managed guests.
+4. Also record, per cluster:
+   - the pod-security labels of the controller namespace:
+     `kubectl get ns kubeswift-system --show-labels`. Snapshot cleanup pods now
+     run there and need a namespace that admits hostPath pods (#675).
+   - `kubectl get swiftkernels -A` and `kubectl get jobs -A -l
+     app.kubernetes.io/component=swiftkernel-pull` (expect none with that
+     label yet), plus the names of the existing `swiftkernel-pull-*` Jobs.
+
+### Phase 1 r4: GO per cluster, once its pre-check is clean
+Phase 1 as before, on all three clusters, with `9604992`. Record the same
+items as round 3, and also:
+- **Baselines.** Dev `gpu-cells/innercp` and ntx `capi-udn/ks-udn-cp-54klw`:
+  same UID, 0 restarts, still `Running`. Record whether either is a
+  kernel-boot guest.
+- **Kernel re-pull (#677).** Within about 5 minutes of the upgrade:
+  - every SwiftKernel goes `Pulling`, then back to `Ready`;
+  - new Jobs `swiftkernel-pull-<kernel>-<node>-<8 hex>` appear with label
+    `kubeswift.io/swiftkernel=<kernel>`;
+  - the old unhashed Jobs are deleted;
+  - no running guest changes phase meanwhile.
+
+  Record the timeline.
+- **Stuck namespaces (#675).** `val-d2` and `val-d3` on dev, and `val-n2r` on
+  ntx, should finish deleting within a few minutes of the upgrade.
+  - Record when each namespace goes.
+  - Record the cleanup pods seen in `kubeswift-system`: label
+    `snapshot.kubeswift.io/role=hostpath-cleanup`, name
+    `swift-snap-cleanup-<snapshot>-<hash>`.
+  - If one is still `Terminating` after 10 minutes, collect:
+    - the controller log lines naming it;
+    - `kubectl get pods -n kubeswift-system -l snapshot.kubeswift.io/role=hostpath-cleanup -o wide`;
+    - the events in `kubeswift-system`.
+- On dev, `--metrics-secure=true` survives the upgrade.
+
+### Phase 2 r4 (dev): GO once Phase 1 r4 has succeeded on dev
+
+Use new namespaces `val-r4-*`. Every guest used must be created after the
+upgrade: check that its launcher runs `swiftletd:sha-9604992`.
+
+| # | Scenario | Pass |
+|---|---|---|
+| V1 | **Smoke, in a namespace:** `NAMESPACE=val-r4-smoke make smoke-test` (all scenarios, `gpu-alloc` included), then `make smoke-test-cleanup` with the same `NAMESPACE`. | Every scenario PASS or an explained SKIP. There is no `WARN: GuestRunning=`/`hypervisor=`, cleanup removes only the run's objects, and the shared `default/ubuntu-noble` (if present) is untouched. |
+| V2 | **Guest and pod IPs (#676).** List `kubectl get swiftguest -A` and `-o wide` with at least two nat guests running (the smoke guests will do). | The columns read `Guest IP`/`Pod IP` (and `IP Scope` in wide). Two nat guests that share a Guest IP have different Pod IPs, and `status.network.primaryIPScope` is `Pod`. `status.network.podIP` equals the launcher pod's IP. |
+| V3 | **runPolicy Stopped (#678).** (a) Patch a running test guest to `runPolicy: Stopped` with kubectl. (b) Start a live migration of another guest and, while it is in StopAndCopy, patch that guest to `Stopped`. | (a) Within about 30 s the launcher is deleted, a `Stopping` event is recorded, the guest powers off (no hard kill in the launcher log) and ends `Stopped`. (b) A `StopDeferred` event names the SwiftMigration, the migration completes, and only then does the guest stop. |
+| V4 | **Migration script and pinned repin (#679, #680).** (a) `migration-test.sh --mode offline` and `--mode live` with `--source`/`--target` naming two workers, on the 3-node cluster. (b) Live-migrate a new guest created with `spec.nodeName: <source>`; after it completes, delete its launcher pod. | (a) "All checks passed" for both, with the guest landing on `--source` both times, and D7b's `observedTransferDuration` set. (b) After the migration `spec.nodeName` names the target, and the relaunched pod runs on the target. |
+| V5 | **The DestinationRunning wait (#671).** During a live migration, watch the phaseDetail at about 0.2 s. | Between "transferring guest state" and "cutover: completing" the phaseDetail reads `destination running; waiting for the source's report` whenever `DestinationRunning` appears. There is no `SourceCompleteMissing`. |
+| V6 | **A migration right after a cancel, to a busy node (#673).** Repeat round 3's T4 first run: cancel a migration to a node with room for only one destination (worker-2, where `innercp` runs), then create the next one to the same node within 1 s. | The new migration does not fail. It shows `waiting for terminating pods on the target node to release resources` with `Compatible=Unknown` (reason `AwaitingTerminatingPods`), then proceeds once the old destination pod is gone, and completes. Record the wait. |
+| V7 | **clonestrategy on Longhorn (#679):** `clonestrategy-test.sh --vsclass longhorn-snapshot-vsc` in `val-r4-cs`. | PASS. The speedup is printed as informational, and the new clone-seed and `dataSource` checks pass. |
+| V8 | **Snapshot namespace deletion (#675).** In `val-r4-snap`, run a local memory snapshot of a running guest (`local-roundtrip-test.sh --no-cleanup`), then `kubectl delete ns val-r4-snap`. | The namespace is gone within about 2 minutes. The cleanup pod ran in `kubeswift-system` and was deleted after it succeeded. The snapshot directory `/var/lib/kubeswift/snapshots/val-r4-snap_<name>` is gone from the node. |
+| V9 | **Sandbox kernel checks (#674).** (a) Create a SwiftSandbox in a new namespace `val-r4-nok` that has no SwiftKernel named `sandbox`. (b) If a GPU pool can be created without disturbing `innercp` (a free GPU), create a warm pool with `gpuProfileRef` and no `kernelProfileRef`; otherwise SKIP with the reason. | (a) The sandbox stays `Pending` with `Resolved=False`, reason `KernelNotFound`, and no launcher pod. Creating the SwiftKernel there lets it start once the kernel is Ready. (b) The slot pod mounts `/var/lib/kubeswift/kernels/<ns>/gpu-sandbox`. |
+| V10 | **Kernel-boot after the re-pull (#677).** The smoke `kernel-boot` scenario from V1, plus one SwiftSandbox. | Both boot. No `Cannot open initramfs file` appears in any launcher log. |
+| V11 | **Regression: R2 in-place restore, T3 cancel mid-transfer, T5 cancel racing completion** (three attempts back to back), exactly as in round 3. | As in round 3. |
+
+R7, R8 and R9 are not re-run; nothing merged touches them. D12's browser half
+is still William's.
+
+**Stop condition.** As before: if a guest is ever left without a running VM,
+stop Phase 2 at once, leave everything in place, and report. If every scenario
+passes, delete the `val-r4-*` namespaces. Their deletion is itself a check of
+#675: report any namespace that does not finish deleting.
+
+### Phase 3 r4: GO per cluster, once Phase 1 r4 has succeeded on it
+- **ntx:**
+  - N3 as before;
+  - `val-n2r` finishes deleting (Phase 1);
+  - the ntx SwiftKernels re-pull and return to `Ready`.
+- **sov:** S1 as before.
