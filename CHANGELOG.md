@@ -219,6 +219,15 @@ takes the new default.
   captured before this version have no recorded address, and restore as
   before.
 
+- **A live-migrated guest pinned to its node went back to the source.** An
+  offline migration moves a guest's `spec.nodeName` to the target along with
+  the guest, but a live migration moved only the VM: a guest pinned with
+  `spec.nodeName` stayed pinned to the source, and its next launcher (a
+  restart, a crash under `RestartOnFailure`) started there, away from the node
+  it had been migrated to. The live cutover now moves the pin to the target
+  too. An unpinned guest stays unpinned. Found while fixing the migration
+  test script for lab validation.
+
 - **A live-migrated guest's launcher reported its status to the wrong
   object.** swiftletd patched the SwiftGuest named like its pod, but a live
   migration's destination pod, which becomes the guest's launcher, is named
