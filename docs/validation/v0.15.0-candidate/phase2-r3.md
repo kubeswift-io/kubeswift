@@ -126,7 +126,7 @@ progress over time: null → 3 → 6 → 9 (progress-estimate-id=t3-cancel:send:
 worker-2:
 
 ```text
-t4-a  Failed  "target node \"boba\" has insufficient CPU headroom: need 2, have 290m (allocatable 8, used 7710m)"
+t4-a  Failed  "target node \"<worker-2>\" has insufficient CPU headroom: need 2, have 290m (allocatable 8, used 7710m)"
 t4-b  created 11:34:18.9 → StopAndCopy "waiting for the source launcher to finish a previous send" (11:34:28.5) → cancelled while waiting → Cancelled 11:34:33
 t4-c  created 11:34:34.3 → Failed, the same CPU-headroom message
 ```
