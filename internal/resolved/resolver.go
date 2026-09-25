@@ -263,7 +263,11 @@ func (r *resolver) resolveDataDiskImage(ctx context.Context, namespace, name str
 		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: name}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not Ready", AffectedResource: name}
+		return nil, &ResolutionError{
+			Reason:           "dataDiskRef SwiftImage not Ready",
+			AffectedResource: name,
+			Waiting:          image.Status.Phase != imagev1alpha1.SwiftImagePhaseFailed,
+		}
 	}
 	pi := mergePreparedImage(image)
 	return &pi, nil

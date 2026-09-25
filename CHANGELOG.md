@@ -379,6 +379,17 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   Pull Jobs are now named `swiftkernel-pull-<name>-<node>-<hash>` and labeled
   `kubeswift.io/swiftkernel=<name>`.
 
+- **A guest created with its SwiftImage read `Failed` until the import
+  finished.** A SwiftImage that was not yet `Ready` failed the guest's
+  resolution like a missing one, so the guest went `Failed` while the image
+  imported, and went on to boot once it was `Ready`. A SwiftGuestPool deletes
+  `Failed` replicas, so a pool created with its image churned through them. A
+  guest now waits for an image that is still importing, as for a pulling
+  kernel: it stays `Pending` (a running guest keeps its phase) with
+  `Resolved=False` "SwiftImage not Ready", and is checked again every 10
+  seconds. Only a `Failed` image fails the guest. The same holds for an
+  image-backed data disk. Found by lab validation of v0.15.0.
+
 - **One failed import pod failed the SwiftImage for good.** The import Job
   retries a failed pod up to its backoff limit, but the controller marked the
   image `Failed` (`ImportFailed`) as soon as the first pod failed. `Failed` is
