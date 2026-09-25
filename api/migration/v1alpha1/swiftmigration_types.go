@@ -222,10 +222,14 @@ const (
 // scripts; dashboards may match against them; reconcile-loop recovery
 // reads them.
 const (
-	PhaseDetailLiveIssuingRecv       = "issuing receive on destination"
-	PhaseDetailLiveDestReceiving     = "destination receiving"
-	PhaseDetailLiveIssuingSend       = "issuing send on source"
-	PhaseDetailLiveTransferring      = "transferring guest state"
+	PhaseDetailLiveIssuingRecv   = "issuing receive on destination"
+	PhaseDetailLiveDestReceiving = "destination receiving"
+	PhaseDetailLiveIssuingSend   = "issuing send on source"
+	PhaseDetailLiveTransferring  = "transferring guest state"
+	// PhaseDetailLiveSourceBusy: the send is written on the source, but its
+	// launcher is still running an earlier send and has not taken this one
+	// up. No guest state is moving yet.
+	PhaseDetailLiveSourceBusy        = "waiting for the source launcher to finish a previous send"
 	PhaseDetailLiveSrcCompleted      = "src migration complete; preparing cutover"
 	PhaseDetailLiveCutoverPodRef     = "cutover: updating canonical pod"
 	PhaseDetailLiveCutoverDeleteSrc  = "cutover: deleting source pod"

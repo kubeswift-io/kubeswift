@@ -93,6 +93,7 @@ func isPreCutoverPhaseDetail(detail string) bool {
 		migrationv1alpha1.PhaseDetailLiveDestReceiving,
 		migrationv1alpha1.PhaseDetailLiveIssuingSend,
 		migrationv1alpha1.PhaseDetailLiveTransferring,
+		migrationv1alpha1.PhaseDetailLiveSourceBusy,
 		migrationv1alpha1.PhaseDetailLiveSrcCompleted:
 		return true
 	default:

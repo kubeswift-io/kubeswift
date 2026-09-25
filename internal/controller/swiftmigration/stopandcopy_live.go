@@ -504,13 +504,27 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
 	case substateSendPending:
+		// The send is written, but only a source launcher that has taken it
+		// up is transferring. One still running an earlier send leaves it
+		// waiting (it once took a cancelled migration's send up minutes
+		// later): say so, rather than show "transferring" with the earlier
+		// send's progress.
+		if !podStatusMatches(srcArg, migrationStatusSending, sendActionID(mig)) {
+			if srcArg != nil && srcArg.Annotations[AnnotationMigrationStatus] == migrationStatusSending {
+				setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveSourceBusy)
+				setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy, fmt.Sprintf(
+					"the source launcher is still running send %q; this migration's send has not started",
+					srcArg.Annotations[AnnotationMigrationStatusID]))
+			}
+			return phaseRequeue(stopAndCopyLivePollInterval)
+		}
 		setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveTransferring)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonStopAndCopy,
 			"transferring guest state from source to destination")
 		// Phase 5: surface the swiftletd pre-copy progress estimate so
 		// operators see movement on `kubectl get swiftmigration` instead of a
 		// static "transferring" for the whole send window.
-		stampTransferProgress(status, srcArg)
+		stampTransferProgress(status, srcArg, sendActionID(mig))
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
 	case substateSrcCompleted, substateDstRunning:
@@ -748,8 +762,16 @@ func stampTransferDuration(
 // migration-progress-estimate annotation (an integer percentage) as
 // status.TransferProgress (Phase 5). Best-effort: a missing or unparseable
 // annotation leaves the field unchanged; the value is clamped to [0,100].
-func stampTransferProgress(status *migrationv1alpha1.SwiftMigrationStatus, srcPod *corev1.Pod) {
+//
+// The estimate outlives its send, so one naming another send (its
+// AnnotationMigrationProgressEstimateID) is the previous send's last value:
+// a new migration once started at the previous one's 95%. A launcher that
+// predates the id writes none; its estimate is taken as is.
+func stampTransferProgress(status *migrationv1alpha1.SwiftMigrationStatus, srcPod *corev1.Pod, sendID string) {
 	if srcPod == nil {
+		return
+	}
+	if id, ok := srcPod.Annotations[AnnotationMigrationProgressEstimateID]; ok && id != sendID {
 		return
 	}
 	v := srcPod.Annotations[AnnotationMigrationProgressEstimate]

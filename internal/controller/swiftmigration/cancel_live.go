@@ -260,6 +260,13 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 		return ctrl.Result{}, fmt.Errorf("get source guest: %w", err)
 	}
 
+	// Take this migration's send off the source first, so a launcher still
+	// busy with an earlier send cannot take it up later, after the
+	// destination is gone (clearSourceSend).
+	if err := r.clearSourceSend(ctx, mig); err != nil {
+		return ctrl.Result{}, fmt.Errorf("clear send action on source pod: %w", err)
+	}
+
 	// Pre-cutover dst pod name comes from B2.2's deterministic
 	// derivation (NOT from canonicalPodName, because pre-cutover
 	// guest.status.podRef.name still points at the src pod).
