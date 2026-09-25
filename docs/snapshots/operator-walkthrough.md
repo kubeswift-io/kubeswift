@@ -843,7 +843,9 @@ kubectl delete namespace snapshots-wt-s5
 
 The `kubeswift.io/snapshot-hostpath-cleanup` finalizer triggers an
 on-node cleanup pod that removes the snapshot directory before the
-SwiftSnapshot is GC'd.
+SwiftSnapshot is GC'd. The pod runs in the controller's namespace
+(`kubeswift-system`), since `snapshots-wt-s5` accepts no new pods once
+its deletion has begun.
 
 ### What's next
 

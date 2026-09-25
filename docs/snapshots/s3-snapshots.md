@@ -217,3 +217,14 @@ objects under `<prefix>/<namespace>/<name>/`. With either policy, the copy of
 the capture left on the capture node (which holds the guest's RAM) is removed
 from that node. Download caches written on other nodes by restores and clones
 are not tracked and are not removed.
+
+The capture-node copy is removed by the same cleanup pod as a local
+snapshot's directory, which runs in the controller's namespace (see
+[local snapshots: Cleanup](local-snapshots.md#cleanup)). The purge runs as a
+Job in the snapshot's namespace, because it reads the credentials Secret
+there. A namespace being deleted accepts no new Job, so when a snapshot is
+deleted with its namespace and its purge has not started, the controller
+drops the finalizer without purging rather than hold the namespace in
+`Terminating`, and logs the prefix that may remain (`admits no purge Job`).
+Delete snapshots before their namespace to have them purged. The oci backend
+does the same with its registry artifacts.

@@ -290,6 +290,26 @@ takes the new default.
   failed pull pod on one node failed the kernel. Delete and recreate an image
   or kernel that failed this way.
 
+- **A namespace holding a local snapshot never finished deleting.** The
+  snapshot's `kubeswift.io/snapshot-hostpath-cleanup` finalizer removes its
+  directory on the capture node with a one-shot pod, which the controller
+  created in the snapshot's own namespace. A namespace being deleted refuses
+  new pods, so the controller retried forever (`create cleanup pod: pods
+  "swift-snap-cleanup-<name>" is forbidden: unable to create new content in
+  namespace <ns> because it is being terminated`) and the namespace stayed
+  `Terminating`. This predates v0.15.0; lab validation found it on three
+  clusters. The cleanup pod now runs in the controller's namespace
+  (`POD_NAMESPACE`, `kubeswift-system` by default), which must admit a
+  hostPath pod (Pod Security `privileged`), and the controller deletes it once
+  it has succeeded or its snapshot is gone. The s3 and oci backends remove
+  their capture-node copy the same way. Their purge Job reads the tenant's
+  credentials Secret, so it still runs in the snapshot's namespace; when that
+  namespace is being deleted and refuses the Job, the finalizer is dropped
+  without the purge, and the controller logs the S3 prefix or OCI artifacts
+  that may remain (a `PurgeSkipped` Warning event is attempted too, but the
+  terminating namespace refuses it). Namespaces already stuck this way finish
+  deleting after the upgrade, with no manual step.
+
 - **Scheduled local snapshots overwrote each other.** Every snapshot of a
   schedule copied the template's `hostPath`, so each capture emptied the
   directory holding the previous snapshot, and pruning the oldest removed the
