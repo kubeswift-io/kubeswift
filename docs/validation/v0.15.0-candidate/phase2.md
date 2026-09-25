@@ -46,6 +46,27 @@ If the timeout takes that path, it deletes the only running VM, which is the
 #653 failure class. I am watching without intervening, and will append the
 outcome below.
 
+### Update, 02:26 UTC: the timeout deleted the only running VM
+
+I watched through the timeout without intervening:
+
+```text
+02:18:47 SwiftMigration d9-a2b  Failed  failureReason=Timeout  "spec.timeout=30m0s exceeded since StartedAt; migration did not complete in time"
+02:18:47 event DestinationPodCleanedUp  deleted destination pod "mig16-mig-1db32d" after pre-cutover Failed
+02:18:47 dst swiftletd: sigterm_received; requesting guest ACPI power-off -> 02:18:52 vm_stopped_gracefully
+02:18:52 dst swiftletd: ERROR report_failed: ApiError: swiftguests.swift.kubeswift.io "mig16-mig-1db32d" not found
+02:26:22 SwiftGuest mig16: runPolicy=Running, phase=Stopped, podRef=mig16 (the Succeeded source pod), no IP;
+         pods for the guest: only mig16 (Succeeded). No launcher has been re-created.
+```
+
+- **The guest now has no running VM and no launcher.** The migration completed
+  at the VM level at 01:51:34, and the controller then destroyed the migrated VM
+  at the timeout.
+- The ACPI power-off was graceful, so the RWX disk should be consistent, but
+  the guest's in-memory state is gone. The tmpfs sentinel is lost.
+- **Separate small defect:** the destination swiftletd reports to a SwiftGuest
+  named after its *pod* (`mig16-mig-1db32d`), not after the guest (`mig16`).
+
 **Everything is left in place for inspection.** Namespace `val-d8` holds guests
 `mig16` and `mig16b`, SwiftMigrations `d8-cancel`, `d9-a1`, `d9-a2` and
 `d9-a2b`, and the cluster-scoped SwiftGuestClass `val-migratable-16g`.
