@@ -105,6 +105,50 @@ func TestDstPodName_OversizeName_Errors(t *testing.T) {
 	}
 }
 
+// The destination pod becomes the guest's launcher under another name, so it
+// names its guest for swiftletd's GuestRunning reports, even when cloned from
+// a source pod an older controller built without the variable, and over a
+// wrong value.
+func TestNewDstPod_NamesItsGuest(t *testing.T) {
+	scheme := testScheme(t)
+	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")
+	mig.Spec.Target.NodeName = "worker-2"
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "default", UID: "guest-uid"},
+	}
+	for name, env := range map[string][]corev1.EnvVar{
+		"source without it":   nil,
+		"source with another": {{Name: swiftguest.EnvGuestName, Value: "stale"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := templateSrcPod("guest", "default")
+			for i := range src.Spec.Containers {
+				if src.Spec.Containers[i].Name == LauncherContainerName {
+					src.Spec.Containers[i].Env = append(src.Spec.Containers[i].Env, env...)
+				}
+			}
+			dst, err := newDstPod(mig, guest, src, scheme, dstSidecarConfig{}, "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, c := range dst.Spec.Containers {
+				if c.Name != LauncherContainerName {
+					continue
+				}
+				for _, e := range c.Env {
+					if e.Name == swiftguest.EnvGuestName {
+						got = append(got, e.Value)
+					}
+				}
+			}
+			if len(got) != 1 || got[0] != guest.Name {
+				t.Errorf("%s = %v, want exactly [%q]", swiftguest.EnvGuestName, got, guest.Name)
+			}
+		})
+	}
+}
+
 func TestNewDstPod_SetsNameLabelsAnnotationsEnvNodeName(t *testing.T) {
 	scheme := testScheme(t)
 	mig := newMigrationWithUID("mig-a", "default", "abcdef1234567890abcdef1234567890")

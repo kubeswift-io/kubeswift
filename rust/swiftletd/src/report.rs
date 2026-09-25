@@ -118,6 +118,17 @@ pub fn upsert_condition(
     }
 }
 
+/// The SwiftGuest a launcher reports its GuestRunning condition to:
+/// `KUBESWIFT_GUEST_NAME` when set, else the pod name. The two differ for a
+/// live migration's destination pod, `<guest>-mig-<uid>`, which becomes the
+/// guest's launcher; reporting by pod name patched a SwiftGuest that does
+/// not exist, so a migrated guest that later stopped or failed never said
+/// so. Launcher pods built before the controller set the variable keep the
+/// pod name, which is the guest's for every pod but a migration's.
+pub fn guest_name(env_guest: Option<String>, pod_name: Option<String>) -> Option<String> {
+    env_guest.filter(|g| !g.is_empty()).or(pod_name)
+}
+
 /// Reports runtime and console to the launcher pod annotations.
 /// The controller maps these annotations to SwiftGuest status.
 pub async fn report_guest_runtime(
@@ -229,10 +240,22 @@ pub fn report_guest_cr_enabled(v: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_sandbox_exit_code, read_console_tail, report_guest_cr_enabled, upsert_condition,
-        SANDBOX_CONSOLE_TAIL_BYTES,
+        guest_name, parse_sandbox_exit_code, read_console_tail, report_guest_cr_enabled,
+        upsert_condition, SANDBOX_CONSOLE_TAIL_BYTES,
     };
     use serde_json::json;
+
+    // A migration's destination pod is not named like its guest; the
+    // controller names the guest in KUBESWIFT_GUEST_NAME.
+    #[test]
+    fn guest_name_prefers_the_guest_over_the_pod() {
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(guest_name(s("vm-a"), s("vm-a-mig-1db32d")), s("vm-a"));
+        // Pods built before the variable existed, or an empty value.
+        assert_eq!(guest_name(None, s("vm-a")), s("vm-a"));
+        assert_eq!(guest_name(s(""), s("vm-a")), s("vm-a"));
+        assert_eq!(guest_name(None, None), None);
+    }
 
     #[test]
     fn sandbox_exit_code_parsing() {

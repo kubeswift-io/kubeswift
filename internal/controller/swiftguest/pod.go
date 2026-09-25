@@ -414,6 +414,12 @@ func podLabels(guest *swiftv1alpha1.SwiftGuest) map[string]string {
 	return labels
 }
 
+// EnvGuestName names, in the launcher container, the SwiftGuest swiftletd
+// reports its GuestRunning condition to. It is not always the pod's name: a
+// live migration's destination pod, which becomes the guest's launcher, is
+// <guest>-mig-<uid> (swiftmigration sets it there too).
+const EnvGuestName = "KUBESWIFT_GUEST_NAME"
+
 func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGuest, intentConfigMapName string) *corev1.Pod {
 	volumes := []corev1.Volume{
 		{
@@ -537,6 +543,7 @@ func buildKernelBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGu
 								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 							},
 						},
+						{Name: EnvGuestName, Value: guest.Name},
 					},
 					Resources:    resources,
 					VolumeMounts: mounts,
@@ -663,6 +670,7 @@ func buildDiskBootPod(guest *swiftv1alpha1.SwiftGuest, rg *resolved.ResolvedGues
 								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 							},
 						},
+						{Name: EnvGuestName, Value: guest.Name},
 					},
 					Resources:     resources,
 					VolumeMounts:  mounts,

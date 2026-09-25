@@ -608,6 +608,7 @@ func BuildGPUDiskBootPod(
 								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 							},
 						},
+						{Name: EnvGuestName, Value: guest.Name},
 					},
 					Resources:     resources,
 					VolumeMounts:  mounts,
