@@ -2,11 +2,13 @@ package swiftsandbox
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -208,5 +210,186 @@ func TestPoolDeletion_WaitsForClaimedSlotBeforeReleasingItsGPU(t *testing.T) {
 	}
 	if err := c.Get(ctx, req.NamespacedName, &p); !apierrors.IsNotFound(err) {
 		t.Errorf("pool should be gone once nothing is held, got err=%v", err)
+	}
+}
+
+// A slot pod that has ended holds no GPU: the kubelet reports Succeeded or
+// Failed only once the pod's containers have stopped. Such a pod used to count
+// as live, and a failed slot kept its GPU for as long as the pod stayed.
+func TestReconcileSlotGPUGC_ReleasesTheGPUOfAnEndedSlot(t *testing.T) {
+	pool := gpuPool("gp", "default", "gtx")
+	for _, tc := range []struct {
+		phase    corev1.PodPhase
+		released bool
+	}{
+		{corev1.PodFailed, true},
+		{corev1.PodSucceeded, true},
+		{corev1.PodRunning, false},
+		{corev1.PodPending, false},
+	} {
+		slot := poolPod("gp-slot-aaaaa")
+		slot.Status.Phase = tc.phase
+		c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+			WithObjects(allocatedNode("sandbox:default/gp-slot-aaaaa"), slot).
+			WithStatusSubresource(&gpuv1alpha1.SwiftGPUNode{}).Build()
+		r := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme}
+		held, err := r.reconcileSlotGPUGC(context.Background(), pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := nodeAllocatedTo(t, c); (got == "") != tc.released {
+			t.Errorf("slot %s: allocatedTo=%q, want released=%v", tc.phase, got, tc.released)
+		}
+		if held == tc.released {
+			t.Errorf("slot %s: held=%v, want %v", tc.phase, held, !tc.released)
+		}
+	}
+}
+
+// slotPodIn is slot gp-slot-dfjtk of pool gp in the given state: Running with
+// its launcher ready, or Failed the way the lab's slot failed.
+func slotPodIn(phase corev1.PodPhase, state string) *corev1.Pod {
+	p := poolPod("gp-slot-dfjtk")
+	p.Labels[SlotStateLabelKey] = state
+	p.Status.Phase = phase
+	launcher := corev1.ContainerStatus{Name: launcherName, Ready: true,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
+	if phase == corev1.PodFailed {
+		launcher = corev1.ContainerStatus{Name: launcherName, State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "Cannot open initramfs file"},
+		}}
+	}
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{launcher}
+	return p
+}
+
+// A checkout whose GPU slot pod died before the workload reported: the
+// sandbox fails, keeps the ended pod for its logs, and the pool's next pass
+// returns the slot's GPU, since an ended pod no longer holds it.
+func TestCheckout_EndedGPUSlotFailsTheSandboxAndReturnsItsGPU(t *testing.T) {
+	ctx := context.Background()
+	pool := gpuPool("gp", "default", "gtx")
+	pool.Spec.Image = "!!! not a ref !!!" // the pool is Degraded as well; the GPU still comes back
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "default", UID: "uid-job"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{Image: pool.Spec.Image, PoolRef: &corev1.LocalObjectReference{Name: "gp"}},
+		Status:     sandboxv1alpha1.SwiftSandboxStatus{Phase: sandboxv1alpha1.SwiftSandboxRunning, PodRef: "gp-slot-dfjtk"},
+	}
+	slot := slotPodIn(corev1.PodFailed, slotStateClaimed)
+	slot.Labels[SandboxLabelKey] = sb.Name
+	slot.Annotations = map[string]string{annSandboxExecActionID: string(sb.UID), annSandboxExecAction: "run"}
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithObjects(pool, sb, slot, allocatedNode("sandbox:default/gp-slot-dfjtk"), workerNode("worker-1"),
+			pcieProfile("gtx", "default"), readyKernel("default", gpuSandboxKernelProfile)).
+		WithStatusSubresource(&sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxPool{}, &gpuv1alpha1.SwiftGPUNode{}).
+		Build()
+	sr := &SwiftSandboxReconciler{Client: c, APIReader: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
+	pr := &SwiftSandboxPoolReconciler{Client: c, APIReader: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := sr.reconcileClaimedSlot(ctx, sb); err != nil {
+		t.Fatalf("reconcileClaimedSlot: %v", err)
+	}
+	var got sandboxv1alpha1.SwiftSandbox
+	if err := c.Get(ctx, client.ObjectKeyFromObject(sb), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed || !strings.Contains(got.Status.Message, "Cannot open initramfs file") {
+		t.Errorf("sandbox = %s (%q), want Failed naming the slot's failure", got.Status.Phase, got.Status.Message)
+	}
+
+	reconcilePool(t, pr, "gp")
+	if owner := nodeAllocatedTo(t, c); owner != "" {
+		t.Errorf("the ended slot's GPU should be released, allocatedTo=%q", owner)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(slot), &corev1.Pod{}); err != nil {
+		t.Errorf("the claimed slot pod belongs to its sandbox and should be kept: %v", err)
+	}
+}
+
+// Lab, round 4: a GPU pool's only GPU stayed allocated to a slot that had
+// failed the day before, and the pool, Degraded on an image it could not
+// resolve, never got it back. A failed warm slot is now deleted and its GPU
+// released on every pass, whether or not the image resolves, and a
+// replacement takes the GPU once it does. A running slot keeps its GPU. A
+// failed claimed slot belongs to its sandbox, which deletes it; its GPU is
+// released all the same.
+func TestPoolReconcile_FailedSlotReleasesItsGPU(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		slot       *corev1.Pod
+		resolvable bool
+		keepSlot   bool   // the slot pod is still there
+		wantGPU    string // "" free, "slot" still the slot's, "new" a new slot's
+		wantPhase  sandboxv1alpha1.SwiftSandboxPoolPhase
+		wantEvent  bool // a SlotEnded event names the failure
+	}{
+		{"failed warm slot, image does not resolve", slotPodIn(corev1.PodFailed, slotStateWarm), false,
+			false, "", sandboxv1alpha1.SwiftSandboxPoolDegraded, true},
+		{"failed warm slot, image resolves", slotPodIn(corev1.PodFailed, slotStateWarm), true,
+			false, "new", sandboxv1alpha1.SwiftSandboxPoolWarming, true},
+		{"running warm slot, image does not resolve", slotPodIn(corev1.PodRunning, slotStateWarm), false,
+			true, "slot", sandboxv1alpha1.SwiftSandboxPoolDegraded, false},
+		{"failed claimed slot, image does not resolve", slotPodIn(corev1.PodFailed, slotStateClaimed), false,
+			true, "", sandboxv1alpha1.SwiftSandboxPoolDegraded, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := gpuPool("gp", "default", "gtx")
+			pool.Spec.Image = "!!! not a ref !!!" // fails in resolveImage where a 429 does
+			if tc.resolvable {
+				pool.Spec.Image = testImage(t)
+			}
+			tc.slot.Annotations = map[string]string{SlotProfileAnnotation: poolSlotProfile(pool)}
+			r, c := poolReconciler(pool, tc.slot, allocatedNode("sandbox:default/gp-slot-dfjtk"),
+				workerNode("worker-1"), pcieProfile("gtx", "default"), readyKernel("default", gpuSandboxKernelProfile))
+			reconcilePool(t, r, "gp")
+
+			var p corev1.Pod
+			err := c.Get(ctx, client.ObjectKeyFromObject(tc.slot), &p)
+			if tc.keepSlot && err != nil {
+				t.Errorf("slot pod should be kept: %v", err)
+			}
+			if !tc.keepSlot && !apierrors.IsNotFound(err) {
+				t.Errorf("ended warm slot should be deleted, got err=%v", err)
+			}
+
+			got := nodeAllocatedTo(t, c)
+			switch tc.wantGPU {
+			case "":
+				if got != "" {
+					t.Errorf("GPU should be released, allocatedTo=%q", got)
+				}
+			case "slot":
+				if got != "sandbox:default/gp-slot-dfjtk" {
+					t.Errorf("a running slot's GPU must be kept, allocatedTo=%q", got)
+				}
+			case "new":
+				name, _ := strings.CutPrefix(got, "sandbox:default/")
+				if name == "gp-slot-dfjtk" || !isPoolSlotName(pool, name) {
+					t.Errorf("GPU should go to a replacement slot, allocatedTo=%q", got)
+				}
+				if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, &p); err != nil {
+					t.Errorf("replacement slot %q not created: %v", name, err)
+				}
+			}
+
+			var after sandboxv1alpha1.SwiftSandboxPool
+			if err := c.Get(ctx, client.ObjectKeyFromObject(pool), &after); err != nil {
+				t.Fatal(err)
+			}
+			if after.Status.Phase != tc.wantPhase {
+				t.Errorf("pool phase = %q, want %q (%s)", after.Status.Phase, tc.wantPhase, after.Status.Message)
+			}
+
+			rec := r.Recorder.(*record.FakeRecorder)
+			var events []string
+			for len(rec.Events) > 0 {
+				events = append(events, <-rec.Events)
+			}
+			all := strings.Join(events, "\n")
+			if got := strings.Contains(all, "SlotEnded") && strings.Contains(all, "Cannot open initramfs file"); got != tc.wantEvent {
+				t.Errorf("SlotEnded event naming the failure = %v, want %v (events: %v)", got, tc.wantEvent, events)
+			}
+		})
 	}
 }
