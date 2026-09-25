@@ -176,6 +176,10 @@ action loop keeps polling while a receive runs, D1 is dispatched
 within a poll interval (2s) of the cancel annotation, and
 `spec.cancelRequested` lands in the few-seconds range. The 30s
 force-delete remains the backstop for an unreachable swiftletd.
+The 30s run from the cancel, which the controller records on the
+destination pod (`kubeswift.io/migration-cancel-issued-at`).
+Before v0.15.0 they ran from the destination pod's creation, so
+the backstop fired on every mid-transfer cancel.
 
 D1 refuses to kill a destination whose VM is already `Running`:
 the receive has completed and that VM is the only copy of the

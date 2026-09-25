@@ -40,9 +40,13 @@ const (
 	// transferring substate and surfaces it as status.transferProgress
 	// (Phase 5). Best-effort and approximate — see the field docstring.
 	AnnotationMigrationProgressEstimate = "kubeswift.io/migration-progress-estimate"
-	MigrationActionCancel               = "cancel"
-	MigrationStatusFailed               = "failed"
-	MigrationStatusFailedCancelDt       = "cancelled" // expected substring in status-detail
+	// AnnotationMigrationCancelIssuedAt records, on the destination pod and
+	// in the same patch as the cancel action, when the controller issued
+	// the cancel (RFC 3339). The cancel-ack budget runs from it.
+	AnnotationMigrationCancelIssuedAt = "kubeswift.io/migration-cancel-issued-at"
+	MigrationActionCancel             = "cancel"
+	MigrationStatusFailed             = "failed"
+	MigrationStatusFailedCancelDt     = "cancelled" // expected substring in status-detail
 
 	// MigrationStatusRejected is swiftletd's status for an action it
 	// refused to execute (Phase 2 PR-B's decide() rejection path —
@@ -238,44 +242,9 @@ func (r *SwiftMigrationReconciler) markCancelIgnored(
 //  5. Set phase=Cancelled, FailureReason=Cancelled, ready
 //     condition + recorder event.
 //
-// status.cancelStartedAt is the budget anchor (stamped on first
-// cancel reconcile). The field is NOT in the CRD as a dedicated
-// field — we reuse the action-id annotation's apiserver
-// CreationTimestamp on dst pod for budget anchoring (the cancel
-// annotation lands once and never moves; its presence implies
-// when cancel was issued). Belt-and-suspenders: also stamp on a
-// SwiftMigration phaseDetail transition so operators see
-// progress.
-//
-// For B2.4 simplicity, the budget anchor is the SwiftMigration's
-// status.PreparingStartedAt OR status.ResumingStartedAt, whichever
-// is most recent — these are existing fields. If neither is set
-// (early Validating cancel), use status.StartedAt. If even that
-// is missing, just bypass the budget check and immediately try
-// the cancel-then-delete sequence (no D1 to ack a recently-
-// pre-existing cancel; happens only on contrived test fixtures).
-//
-// Since cancel timing inputs aren't load-bearing for B2.4's
-// correctness, we anchor the 30s budget on the cancel-action
-// annotation's actual write time — read it back from the dst
-// pod after the patch. If we just wrote it, we know "now" is the
-// boundary; if it was already there, its CreationTimestamp is
-// authoritative on what the annotation map's modification time
-// records (not directly observable per-key, so we approximate
-// via the Pod's metadata.ResourceVersion change time isn't
-// available either). Pragmatic: use a SwiftMigration condition
-// (CancelInFlight) timestamp as the budget anchor — set when the
-// cancel annotation is first written. controller-runtime persists
-// the condition timestamp survives leader-handover.
-//
-// **Implementation note**: rather than a new condition, B2.4 uses
-// the simpler approach of stamping `status.cancelIssuedAt` as a
-// transient in-memory field and reading the cancel annotation's
-// presence on dst pod as the steady-state cue. CRD-level addition
-// of cancelIssuedAt is deferred — for B2.4's unit-test scope, the
-// time-since-now() computation works against the wall clock, and
-// real-cluster reconciles re-derive the budget anchor each time
-// from the dst pod's annotations.
+// The 30s budget runs from AnnotationMigrationCancelIssuedAt, which step 2
+// writes on the dst pod in the same patch as the cancel action; it survives
+// leader handover with the pod.
 func (r *SwiftMigrationReconciler) transitionCancelLive(
 	ctx context.Context,
 	mig *migrationv1alpha1.SwiftMigration,
@@ -306,9 +275,9 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 	switch {
 	case apierrors.IsNotFound(getErr):
 		// Dst pod was never created (cancel during Validating, or
-		// Preparing failed before Create). Nothing to cancel via
-		// swiftletd; drive directly to Cancelled.
-		return r.finalizeCancelled(ctx, mig, "destination pod was never created; cancel completes without swiftletd ack")
+		// Preparing failed before Create), or is already gone. Nothing
+		// to cancel via swiftletd; drive directly to Cancelled.
+		return r.finalizeCancelled(ctx, mig, "destination pod does not exist; cancel completes without swiftletd ack")
 	case getErr != nil:
 		return ctrl.Result{}, fmt.Errorf("get destination pod: %w", getErr)
 	}
@@ -330,6 +299,7 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 		}
 		dst.Annotations[AnnotationMigrationAction] = MigrationActionCancel
 		dst.Annotations[AnnotationMigrationActionID] = cid
+		dst.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
 		if perr := r.Patch(ctx, &dst, patch); perr != nil {
 			return ctrl.Result{}, fmt.Errorf("write cancel annotation on dst pod %q: %w", dst.Name, perr)
 		}
@@ -363,22 +333,25 @@ func (r *SwiftMigrationReconciler) transitionCancelLive(
 		dstStatusID == cid &&
 		strings.Contains(strings.ToLower(dstStatusDetail), MigrationStatusFailedCancelDt)
 
-	// Budget anchor: the cancel annotation has been on dst pod
-	// since the previous reconcile that issued it. We can't observe
-	// the precise per-key annotation modification time, but the
-	// dst pod's metadata.ResourceVersion only bumps on apiserver
-	// writes; the wall-clock since the cancel-write reconcile is
-	// approximated by SwiftMigration.metadata.GenerationDelta. For
-	// B2.4 simplicity, anchor on
-	// dst.CreationTimestamp - cancelAckTimeout vs now: any pod
-	// older than cancelAckTimeout that still hasn't acked is past
-	// the budget. This is a conservative upper bound (the cancel
-	// annotation was written sometime AFTER pod creation, so the
-	// budget is slightly more generous than 30s in real terms).
-	// Cluster integration testing in Group C will validate this
-	// approximation against real D1 ack timing.
-	budgetExceeded := !dst.CreationTimestamp.IsZero() &&
-		time.Since(dst.CreationTimestamp.Time) > cancelAckTimeout
+	// The ack budget runs from when the cancel was issued, recorded with
+	// it. It used to run from the destination pod's creation, and a
+	// migration is always well past 30s into its transfer before anyone
+	// can cancel it, so every mid-transfer cancel force-deleted the
+	// destination at once: swiftletd never got to stop the receive, and
+	// the vanished destination left the source's send hung until TCP gave
+	// up, ~16 minutes in the lab (validation of v0.15.0, D8). A cancel
+	// written without the timestamp (an older controller) gets one now and
+	// a fresh budget.
+	issuedAt, perr := time.Parse(time.RFC3339, dst.Annotations[AnnotationMigrationCancelIssuedAt])
+	if perr != nil && !ackObserved {
+		patch := client.MergeFrom(dst.DeepCopy())
+		dst.Annotations[AnnotationMigrationCancelIssuedAt] = time.Now().UTC().Format(time.RFC3339)
+		if err := r.Patch(ctx, &dst, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("stamp cancel time on dst pod %q: %w", dst.Name, err)
+		}
+		return ctrl.Result{RequeueAfter: cancelPollInterval}, nil
+	}
+	budgetExceeded := perr == nil && time.Since(issuedAt) > cancelAckTimeout
 
 	if !ackObserved && !budgetExceeded {
 		// Still waiting for ack within budget.
@@ -425,7 +398,11 @@ func (r *SwiftMigrationReconciler) finalizeCancelled(
 	mig *migrationv1alpha1.SwiftMigration,
 	detail string,
 ) (ctrl.Result, error) {
-	patch := client.MergeFrom(mig.DeepCopy())
+	// Optimistic: a reconcile working from a stale copy (the cache not yet
+	// showing the Cancelled this reconcile's predecessor wrote) must not
+	// overwrite it. It used to, replacing "destination pod force-deleted"
+	// with "destination pod was never created" (D8).
+	patch := client.MergeFromWithOptions(mig.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	now := metav1.Now()
 	mig.Status.Phase = migrationv1alpha1.SwiftMigrationPhaseCancelled
 	mig.Status.CompletedAt = &now
@@ -434,6 +411,9 @@ func (r *SwiftMigrationReconciler) finalizeCancelled(
 	setReadyCondition(&mig.Status, metav1.ConditionFalse, ReasonCancelled, detail)
 	setPhaseDetail(&mig.Status, detail)
 	if perr := r.Status().Patch(ctx, mig, patch); perr != nil {
+		if apierrors.IsConflict(perr) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("patch terminal Cancelled status: %w", perr)
 	}
 	if r.Recorder != nil {

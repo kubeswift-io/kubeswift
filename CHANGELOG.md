@@ -133,6 +133,18 @@ setting it had.
 
 ### Fixed
 
+- **Cancelling a live migration mid-transfer force-deleted the destination at
+  once.** The controller gives swiftletd 30 s to stop the receive before it
+  force-deletes the destination pod, but it timed those 30 s from the
+  destination pod's creation, and a migration is always further into its
+  transfer than that. So every cancel skipped swiftletd, and the destination
+  vanished without closing its connection: the source's send then hung until
+  TCP gave up (about 16 minutes in the lab), and the guest could not be
+  migrated again until it did. The 30 s now run from the cancel itself,
+  recorded on the destination pod (`kubeswift.io/migration-cancel-issued-at`).
+  A cancel's final status is also no longer overwritten by a later pass that
+  reported "destination pod was never created".
+
 - **An in-place restore of a running guest reported Ready and booted the guest
   cold.** The restore force-deletes the guest's launcher and waits for
   GuestRunning, but the guest still carried the replaced launcher's status,
