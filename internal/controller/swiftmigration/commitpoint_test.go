@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -369,5 +370,83 @@ func TestCommitPoint_CancelAndDeleteRespectTheDestinationsReport(t *testing.T) {
 				t.Fatal("destination pod, running the only copy of the guest, was deleted")
 			}
 		})
+	}
+}
+
+// The destination commits the migration, but the source normally reports
+// complete a few seconds later, and its report carries the pause window. Lab
+// validation of v0.15.0 (round 2) saw every live migration cut over on the
+// destination's report 3-4 s before the source's, losing
+// observedTransferDuration and raising SourceCompleteMissing each time. A live
+// source launcher is waited for, briefly.
+func TestCommitPoint_DestinationReportWaitsBrieflyForALiveSource(t *testing.T) {
+	setup := func(t *testing.T, sinceDstRunning time.Duration) (*SwiftMigrationReconciler, *migrationv1alpha1.SwiftMigration, *migrationv1alpha1.SwiftMigrationStatus, *corev1.Pod) {
+		mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+		mig.Finalizers = []string{FinalizerName}
+		mig.Status.RecvAttempts = 1
+		mig.Status.SendAttempts = 1
+		mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+		guest.Status.PodRef = &corev1.ObjectReference{Name: src.Name, Namespace: "default", UID: src.UID}
+		stamp(src, migrationActionVerbSend, sendActionID(mig), "sending", sendActionID(mig), "")
+		stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+		if sinceDstRunning > 0 {
+			mig.Status.Conditions = append(mig.Status.Conditions, metav1.Condition{
+				Type: migrationv1alpha1.SwiftMigrationConditionDestinationRunning, Status: metav1.ConditionTrue,
+				Reason: "DestinationRunning", LastTransitionTime: metav1.NewTime(time.Now().Add(-sinceDstRunning)),
+			})
+		}
+		return newStopAndCopyReconciler(t, mig, guest, src, dst), mig, mig.Status.DeepCopy(), dst
+	}
+	podRefOf := func(t *testing.T, r *SwiftMigrationReconciler) string {
+		var g swiftv1alpha1.SwiftGuest
+		if err := r.Get(context.Background(), client.ObjectKey{Name: "guest", Namespace: "default"}, &g); err != nil {
+			t.Fatal(err)
+		}
+		if g.Status.PodRef == nil {
+			return ""
+		}
+		return g.Status.PodRef.Name
+	}
+
+	t.Run("waits within the grace", func(t *testing.T) {
+		r, mig, status, dst := setup(t, 0)
+		res := r.handleStopAndCopyLive(context.Background(), mig, status)
+		if res.FailureReason != "" {
+			t.Fatalf("failed: %s (%s)", res.FailureReason, res.FailureMsg)
+		}
+		if got := podRefOf(t, r); got == dst.Name {
+			t.Error("cut over at once; the live source had no chance to report")
+		}
+		if apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionDestinationRunning) == nil {
+			t.Error("DestinationRunning not recorded; the grace has nothing to run from")
+		}
+	})
+	t.Run("cuts over once the grace has run out", func(t *testing.T) {
+		r, mig, status, dst := setup(t, sourceReportGrace+time.Second)
+		if res := r.handleStopAndCopyLive(context.Background(), mig, status); res.FailureReason != "" {
+			t.Fatalf("failed: %s (%s)", res.FailureReason, res.FailureMsg)
+		}
+		if got := podRefOf(t, r); got != dst.Name {
+			t.Errorf("guest podRef = %q, want the destination %q after the grace", got, dst.Name)
+		}
+	})
+}
+
+// A source that reports within the grace takes the normal path, and its pause
+// window is recorded.
+func TestCommitPoint_SourceReportingWithinTheGraceKeepsThePauseWindow(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	guest.Status.PodRef = &corev1.ObjectReference{Name: src.Name, Namespace: "default", UID: src.UID}
+	stamp(src, migrationActionVerbSend, sendActionID(mig), migrationStatusComplete, sendActionID(mig), "sent")
+	src.Annotations[AnnotationMigrationPauseWindowMs] = "1234"
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+
+	status := mig.Status.DeepCopy()
+	r.handleStopAndCopyLive(context.Background(), mig, status)
+	if status.ObservedTransferDuration == nil || status.ObservedTransferDuration.Duration != 1234*time.Millisecond {
+		t.Errorf("observedTransferDuration = %v, want 1.234s from the source's report", status.ObservedTransferDuration)
 	}
 }
