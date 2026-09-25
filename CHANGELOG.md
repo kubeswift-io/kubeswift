@@ -333,9 +333,7 @@ takes the new default.
   the scheduler could place the guest there, and the run failed with "guest
   landed on ..., expected ...". It now cordons every other schedulable node
   while the guest is created and uncordons them as soon as its launcher is
-  scheduled. It does not pin the guest with `spec.nodeName` instead: a live
-  migration leaves that field naming the source, so the migrated guest would
-  go back there the next time its launcher starts.
+  scheduled, so the guest it migrates is an unpinned one, as most are.
 - **The smoke test runs in `$NAMESPACE` and deletes only what it created.**
   `make smoke-test` with `NAMESPACE` set failed at once, because the samples
   it applies name `namespace: default`; it now drops that line. Objects it

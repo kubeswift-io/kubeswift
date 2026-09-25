@@ -192,9 +192,8 @@ done
 # Put the guest on SOURCE_NODE: every other schedulable node is cordoned while
 # the guest is created, and uncordoned as soon as its launcher is scheduled.
 # Cordoning only the target let the scheduler pick a third node. The guest is
-# not pinned with spec.nodeName instead: a live migration moves the launcher
-# but leaves spec.nodeName as it was, so the migrated guest would still be
-# pinned to the source and go back there the next time its launcher starts.
+# not pinned with spec.nodeName instead: the test exercises the unpinned
+# guest, which is what a migration normally moves.
 if [[ "$(kubectl get node "$SOURCE_NODE" -o jsonpath='{.spec.unschedulable}')" == "true" ]]; then
   echo "Source node $SOURCE_NODE is cordoned; the guest cannot start there" >&2
   exit 2
