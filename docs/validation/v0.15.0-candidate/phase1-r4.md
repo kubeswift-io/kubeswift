@@ -6,7 +6,7 @@ Run 2026-09-25, 19:22–19:54 UTC. Node names are generalised as in `phase0.md`.
 |---|---|
 | ntx | **PASS** |
 | sov | **PASS** |
-| dev | **Upgrade applied, rollout FAILED: an environment failure on worker-2.** Multus there is being OOMKilled, so no new pod on worker-2 gets a network. The stop condition applies: **nothing more was run on dev. Phase 2 r4 has not started.** See "dev" below |
+| dev | **PASS after an environment fix.** The rollout first failed because worker-2's Multus was OOMKilled under the upgrade's pod burst. William authorised raising Multus's memory; with that done, everything rolled out and the kernels re-pulled by 20:21:20. See "dev" and "dev recovery" below |
 
 ## Build check
 
@@ -137,6 +137,40 @@ Unblocking it is William's call, for example raising the Multus DaemonSet's
 memory limit or restarting it once the burst has passed. After that the
 kubeswift DaemonSet pods and the three pull Jobs should proceed by themselves,
 and I can finish Phase 1 on dev and run Phase 2.
+
+## dev recovery (authorised by William, 20:12–20:21 UTC)
+
+Both changes are to the lab's `kube-system/kube-multus-ds`, which was
+installed with a plain `kubectl apply`. The original YAML was saved before
+patching. Re-applying the original manifest would revert both changes.
+
+1. **20:12:30: memory.** `requests.memory 50Mi → 100Mi`, `limits.memory
+   50Mi → 500Mi`. CPU was left at 100m. The replacement pod then stuck in
+   `Init:CrashLoopBackOff`:
+   `cp: cannot create regular file '/host/opt/cni/bin/multus-shim': Text file busy`.
+   - This is a known Multus deadlock. The stuck worker-2 pods keep retrying
+     sandbox creation, each retry runs the old `multus-shim`, and the shim
+     hangs waiting for the absent daemon. So the binary is always busy, and
+     the new daemon cannot install over it.
+2. **20:20:53: the init container copies with `cp -f`**, which unlinks a busy
+   target and writes a new file. Multus was `Running` at 20:20:57, 0 restarts.
+
+Recovery, from a 5 s watcher:
+
+```text
+20:21:09 multus Running r0; gpu-discovery 0/1, kubeswift-dra-driver 0/1; 3 kernels Pulling
+20:21:15 field-testing/ft-faas Ready
+20:21:20 gpu-discovery 1/1, kubeswift-dra-driver 1/1 (sha-9604992); default/gpu-sandbox, default/sandbox Ready  -> ALL RECOVERED
+pull Jobs: all 8 swiftkernel-pull-<kernel>-<node>-<8 hex> succeeded=1 (both workers), label kubeswift.io/swiftkernel=<kernel>
+innercp: same uid, 0 restarts, Running throughout
+```
+
+**With that, Phase 1 r4 on dev is complete:**
+- Helm rev 47, all nine images `sha-9604992`, `--metrics-secure=true`;
+- the 4 VAPs;
+- every SwiftKernel re-pulled under hashed Jobs, with the unhashed Jobs gone;
+- `val-d2` and `val-d3` gone;
+- no guest changed phase.
 
 ## Baselines
 
