@@ -82,6 +82,11 @@ const (
 	// Cancelled (the migration succeeded, the dst pod is canonical,
 	// the src is gone).
 	SwiftMigrationConditionCancelIgnored = "CancelIgnored"
+	// ConditionDestinationRunning is True once the live-mode destination
+	// has reported the guest running. That commits the migration; its
+	// lastTransitionTime starts the short wait for the source's own
+	// report before cutover proceeds without it.
+	SwiftMigrationConditionDestinationRunning = "DestinationRunning"
 )
 
 // Standard condition reasons for live-mode conditions.

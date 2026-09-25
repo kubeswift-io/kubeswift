@@ -251,9 +251,13 @@ setting it had.
   the destination's report that the guest runs there (`migration-status:
   running`) as the commit point: past it, a timeout, a cancel, a deletion, a
   missing source pod or a source failure report no longer tears the
-  destination down, and the migration cuts over. A migration past cutover
-  whose guest already runs on the destination now completes instead of
-  failing on a timeout that expired meanwhile. A migration's destination runs
+  destination down, and the migration cuts over. It first waits up to 30 s
+  for a live source launcher's own report, which normally follows within
+  seconds and carries the pause window (`observedTransferDuration`); a
+  `SourceCompleteMissing` warning event marks a cutover without it. A
+  migration past cutover whose guest already runs on the destination now
+  completes instead of failing on a timeout that expired meanwhile. A
+  migration's destination runs
   its source's launcher image, so the swiftletd half reaches a guest only once
   its launcher has been recreated on this version; the controller half
   protects every guest from the upgrade on.

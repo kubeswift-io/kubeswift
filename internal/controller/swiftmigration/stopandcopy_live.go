@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -514,13 +515,20 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
 	case substateSrcCompleted, substateDstRunning:
-		if sub == substateDstRunning && r.Recorder != nil {
-			// The source's own report is missing (lost write, or a source
-			// launcher that exited first); the destination's report
-			// commits alone. Recorded because it should be rare.
-			r.Recorder.Eventf(mig, corev1.EventTypeWarning, "SourceCompleteMissing",
-				"destination pod %q runs the guest but the source never reported complete (id=%s); cutting over",
-				dstName, sendActionID(mig))
+		if sub == substateDstRunning {
+			// Committed: nothing tears the destination down from here. But
+			// the source normally reports complete a few seconds after the
+			// destination reports running (3.6 s in the lab), and its report
+			// carries the pause window, while cutting over deletes its pod.
+			// So give a live source launcher a moment to report.
+			if awaitSourceReport(status, srcArg, time.Now()) {
+				return phaseRequeue(stopAndCopyLivePollInterval)
+			}
+			if r.Recorder != nil {
+				r.Recorder.Eventf(mig, corev1.EventTypeWarning, "SourceCompleteMissing",
+					"destination pod %q runs the guest; the source has not reported complete (id=%s) within %s, "+
+						"or its launcher is gone; cutting over", dstName, sendActionID(mig), sourceReportGrace)
+			}
 		}
 		// W1 gate per F1.2 satisfied: src wrote migration-status=
 		// complete with matching $SEND_ID. swiftletd-on-src's
@@ -742,6 +750,28 @@ func stampTransferDuration(
 	}
 	d := metav1.Duration{Duration: time.Duration(ms) * time.Millisecond}
 	status.ObservedTransferDuration = &d
+}
+
+// sourceReportGrace bounds how long a migration the destination has committed
+// waits for the source's own report before it cuts over without it. The
+// source normally reports a few seconds after the destination.
+const sourceReportGrace = 30 * time.Second
+
+// awaitSourceReport reports whether a cutover on the destination's report
+// should still wait for the source's: its launcher is live and the grace,
+// timed from the DestinationRunning condition, has not run out. A source pod
+// that is gone, finished or being deleted cannot report, and is not waited
+// for (the lab's round-1 loss: the source launcher had exited without
+// reporting).
+func awaitSourceReport(status *migrationv1alpha1.SwiftMigrationStatus, src *corev1.Pod, now time.Time) bool {
+	if src == nil || src.DeletionTimestamp != nil ||
+		src.Status.Phase == corev1.PodSucceeded || src.Status.Phase == corev1.PodFailed {
+		return false
+	}
+	setCondition(status, migrationv1alpha1.SwiftMigrationConditionDestinationRunning, metav1.ConditionTrue,
+		"DestinationRunning", "the destination reports the guest running; waiting briefly for the source's report")
+	c := apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionDestinationRunning)
+	return now.Sub(c.LastTransitionTime.Time) < sourceReportGrace
 }
 
 // stampTransferProgress surfaces the swiftletd-on-src
