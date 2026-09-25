@@ -267,12 +267,14 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 // sandbox-exec-status (mirroring our action-id = sb.UID), maps the exec exit code to the
 // terminal phase, and destroys the consumed slot (the pool replenishes a fresh one). The
 // slot's pod does NOT terminate on workload exit (its idle keeper keeps running), so the
-// terminal signal is the exec status annotation, not pod termination.
+// terminal signal is the exec status annotation, not pod termination. A slot pod that
+// ends, or goes away, before that status arrives ends the sandbox as Failed.
 func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
 	var pod corev1.Pod
 	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Status.PodRef}, &pod); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.fail(ctx, sb, "SlotLost", "claimed warm slot pod disappeared")
+			return r.fail(ctx, sb, "SlotLost", fmt.Sprintf(
+				"claimed warm slot pod %s is gone and the workload never reported an exit", sb.Status.PodRef))
 		}
 		return ctrl.Result{}, err
 	}
@@ -283,30 +285,51 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	}
 	applyGuestAnnotations(sb, &pod) // pid / ip (best-effort)
 
-	// Trust the exec status only once it mirrors OUR action-id.
-	if pod.Annotations[annSandboxExecStatusID] != string(sb.UID) {
-		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
-	}
-	switch pod.Annotations[annSandboxExecStatus] {
-	case "complete":
-		code := int32(0)
-		if n, err := strconv.ParseInt(pod.Annotations[annSandboxExecStatusDetail], 10, 32); err == nil {
-			code = int32(n)
+	// Trust the exec status only once it mirrors OUR action-id. A final status
+	// decides the outcome even if the pod has ended since: swiftletd writes it
+	// before its launcher stops.
+	if pod.Annotations[annSandboxExecStatusID] == string(sb.UID) {
+		switch pod.Annotations[annSandboxExecStatus] {
+		case "complete":
+			code := int32(0)
+			if n, err := strconv.ParseInt(pod.Annotations[annSandboxExecStatusDetail], 10, 32); err == nil {
+				code = int32(n)
+			}
+			sb.Status.ExitCode = &code
+			_ = r.Delete(ctx, &pod) // consume the slot; the pool replenishes a fresh warm one
+			if code == 0 {
+				return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited 0")
+			}
+			return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "WorkloadFailed",
+				fmt.Sprintf("workload exited %d", code))
+		case "failed":
+			_ = r.Delete(ctx, &pod)
+			return r.fail(ctx, sb, "ExecFailed",
+				"checkout exec failed: "+pod.Annotations[annSandboxExecStatusDetail])
 		}
-		sb.Status.ExitCode = &code
-		_ = r.Delete(ctx, &pod) // consume the slot; the pool replenishes a fresh warm one
-		if code == 0 {
-			return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited 0")
-		}
-		return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "WorkloadFailed",
-			fmt.Sprintf("workload exited %d", code))
-	case "failed":
-		_ = r.Delete(ctx, &pod)
-		return r.fail(ctx, sb, "ExecFailed",
-			"checkout exec failed: "+pod.Annotations[annSandboxExecStatusDetail])
-	default:
-		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
 	}
+
+	// No final status, and the slot pod has ended: swiftletd is gone with it,
+	// so the status will never come. The sandbox used to stay Running until
+	// spec.timeout, or for good without one. The workload's exit code is not
+	// known and stays unset; the launcher's goes in the message. The pod is
+	// kept for its logs, as a cold sandbox's launcher is. It holds nothing
+	// now: the pool releases the GPU of a slot pod that has ended.
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		return r.fail(ctx, sb, "SlotEnded", claimedSlotEndMessage(&pod))
+	}
+	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
+}
+
+// claimedSlotEndMessage names a claimed slot pod that ended before its
+// workload reported, how it ended, and why.
+func claimedSlotEndMessage(pod *corev1.Pod) string {
+	how := string(pod.Status.Phase)
+	if code, ok := launcherExitCode(pod); ok {
+		how += fmt.Sprintf(", launcher exit %d", code)
+	}
+	return fmt.Sprintf("claimed warm slot pod %s ended (%s) before the workload reported an exit: %s",
+		pod.Name, how, slotEndMessage(pod))
 }
 
 // adoptSlotObjects makes the claiming sandbox the controller of the slot's

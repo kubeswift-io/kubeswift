@@ -341,6 +341,19 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   or terminating keeps its GPU. Failed slots left by earlier versions are
   deleted on the pool's first pass after the upgrade.
 
+- **A checked-out sandbox whose slot died stayed `Running`.** A sandbox that
+  claims a warm slot learns its outcome from the exec status swiftletd writes
+  on the slot pod, and the controller never looked at the pod itself. When the
+  slot pod ended before that status was written, swiftletd went with it, and
+  the sandbox stayed `Running` until `spec.timeout`, or for good without one.
+  It now fails with reason `SlotEnded` and a message that names the pod, how
+  it ended and the launcher's exit code and message. The pod is kept for its
+  logs, as a cold sandbox's launcher is, and the pool returns a GPU slot's GPU
+  on its next pass. A slot pod that is gone fails the sandbox with `SlotLost`,
+  as before, and the message now names the pod. An exec status the workload
+  did report still decides the outcome, so a checkout that completed before
+  its slot pod ended is still `Completed`.
+
 - **A warm GPU pool booted its slots on the base `sandbox` kernel.** That
   kernel has no `CONFIG_MODULES`, so a slot could not load the NVIDIA driver
   its image ships, which is what the `gpu-sandbox` kernel exists for. A
