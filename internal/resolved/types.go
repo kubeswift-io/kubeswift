@@ -612,6 +612,10 @@ func (r *ResolvedGuest) GetVhostUserDevices() []runtimeintent.VhostUserDeviceInt
 type ResolutionError struct {
 	Reason           string `json:"reason"`
 	AffectedResource string `json:"affectedResource,omitempty"`
+	// Waiting marks a reference that is not usable yet but becomes usable
+	// without any change to the guest, such as a SwiftKernel still pulling.
+	// The guest waits for it instead of failing.
+	Waiting bool `json:"waiting,omitempty"`
 }
 
 func (e *ResolutionError) Error() string {

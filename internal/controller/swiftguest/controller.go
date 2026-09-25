@@ -34,6 +34,10 @@ import (
 // Only read by the controller; never written.
 const gpuHypervisorAnnotation = "kubeswift.io/hypervisor-override"
 
+// resolutionRetry is how soon a guest waiting on a reference that is not ready
+// yet, such as a pulling SwiftKernel, tries again. Nothing watches SwiftKernel.
+const resolutionRetry = 10 * time.Second
+
 const (
 	// SeedConfigMapSuffix names the rendered seed. It is a SECRET despite the
 	// constant name (kept to avoid churn across the pod builders): user-data
@@ -220,9 +224,26 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		if err != nil {
 			var re *resolved.ResolutionError
 			if errors.As(err, &re) {
-				// Set Resolved=False, phase=Failed; do not create pod
 				status := guest.Status.DeepCopy()
 				SetResolvedCondition(status, false, re.Reason)
+				if re.Waiting {
+					// Not a failure: no pod is created until it resolves, and
+					// it resolves by itself. A guest past Pending keeps its
+					// phase: a running VM booted with its kernel already, and
+					// Failed would have a SwiftGuestPool delete it to replace
+					// it. Every kernel re-pulls once after an upgrade from
+					// v0.14.1 (#658), so every kernel-boot guest waits here
+					// for as long as that takes.
+					if status.Phase == "" {
+						status.Phase = swiftv1alpha1.SwiftGuestPhasePending
+					}
+					if err := r.patchStatus(ctx, &guest, status); err != nil {
+						return ctrl.Result{}, err
+					}
+					logger.Info("waiting to resolve", "reason", re.Reason, "resource", re.AffectedResource)
+					return ctrl.Result{RequeueAfter: resolutionRetry}, nil
+				}
+				// Set Resolved=False, phase=Failed; do not create pod
 				status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
 				recordGuestMetrics(&guest, &guest.Status, status, nil)
 				if err := r.patchStatus(ctx, &guest, status); err != nil {

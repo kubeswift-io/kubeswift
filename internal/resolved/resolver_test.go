@@ -188,6 +188,43 @@ func TestResolve_FailsWhenSwiftSeedProfileDoesNotExistWhenReferenced(t *testing.
 	}
 }
 
+// A kernel still pulling is waited for; only a Failed one fails the guest.
+// Every kernel re-pulls once after an upgrade from v0.14.1 (#658), and a
+// guest failed for it would be deleted by its SwiftGuestPool.
+func TestResolve_KernelNotReadyWaitsUnlessFailed(t *testing.T) {
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{KernelRef: &corev1.LocalObjectReference{Name: "k"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+	}
+	for _, tc := range []struct {
+		phase   kernelv1alpha1.SwiftKernelPhase
+		waiting bool
+	}{
+		{"", true},
+		{kernelv1alpha1.SwiftKernelPhasePending, true},
+		{kernelv1alpha1.SwiftKernelPhasePulling, true},
+		{kernelv1alpha1.SwiftKernelPhaseFailed, false},
+	} {
+		sk := &kernelv1alpha1.SwiftKernel{
+			ObjectMeta: metav1.ObjectMeta{Name: "k", Namespace: "ns"},
+			Status:     kernelv1alpha1.SwiftKernelStatus{Phase: tc.phase},
+		}
+		c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(guestClass, sk).Build()
+		_, err := NewResolver(c).Resolve(context.Background(), guest)
+		var re *ResolutionError
+		if !errors.As(err, &re) {
+			t.Fatalf("kernel %q: expected ResolutionError, got %T: %v", tc.phase, err, err)
+		}
+		if re.Waiting != tc.waiting {
+			t.Errorf("kernel %q: Waiting = %v, want %v", tc.phase, re.Waiting, tc.waiting)
+		}
+	}
+}
+
 func TestResolve_ResolutionErrorIncludesReasonString(t *testing.T) {
 	re := &ResolutionError{Reason: "SwiftImage not Ready", AffectedResource: "img"}
 	if re.Error() != "SwiftImage not Ready" {

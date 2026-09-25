@@ -59,12 +59,14 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	nodeStatuses := make([]kernelv1alpha1.NodeKernelStatus, 0, len(nodeList.Items))
+	nodeNames := make([]string, 0, len(nodeList.Items))
 	var failedNode, failedMsg string
 	anyFailed := false
 	allReady := true
 
 	for _, node := range nodeList.Items {
 		nodeName := node.Name
+		nodeNames = append(nodeNames, nodeName)
 		nodePhase, errMsg, err := r.CheckNodePullStatus(ctx, &sk, nodeName)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -108,6 +110,11 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	status.NodeStatuses = nodeStatuses
 	sk.Status = *status
 	if err := r.Status().Update(ctx, &sk); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Every node's current Job exists by now: the loop created any missing.
+	if err := r.deleteSupersededPullJobs(ctx, &sk, nodeNames); err != nil {
 		return ctrl.Result{}, err
 	}
 

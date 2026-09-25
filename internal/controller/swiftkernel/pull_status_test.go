@@ -19,7 +19,7 @@ import (
 // otherwise fail the kernel for every node.
 func TestCheckNodePullStatus_FailsOnlyWhenTheJobDoes(t *testing.T) {
 	sk := &kernelv1alpha1.SwiftKernel{ObjectMeta: metav1.ObjectMeta{Name: "k", Namespace: "default"}}
-	name := pullJobName(sk.Name, "node-a")
+	name := pullJobName(sk.Name, "node-a", kernelv1alpha1.KernelLocalPath(sk.Namespace, sk.Name))
 	job := func(failed, succeeded int32, conds ...batchv1.JobCondition) *batchv1.Job {
 		return &batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},

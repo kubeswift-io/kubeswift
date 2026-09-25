@@ -61,18 +61,19 @@ controller logs if you expected snapshot-speed provisioning and got copy-speed.
 SwiftKernel is **namespaced**, and pulls its OCI artifact per node onto nodes
 labelled `kubeswift.io/kernel-node=true`.
 
-The GitOps trap: the pull is a Job named `swiftkernel-pull-<name>-<node>`, so
-re-pull is keyed on **(name, node)** and not on the artifact reference. Changing
-`spec.ociRef.image` to a new tag in Git will **not** re-pull on nodes that
-already ran the Job — Flux applies the change, the object updates, and nothing
-downloads. Either give the new kernel a new SwiftKernel name (the clean GitOps
-move, and the same pattern as SwiftImage), or delete the Job on each affected
-node to force it. The Jobs carry no distinguishing labels, so delete them by
-name (they are owned by the SwiftKernel and live in its namespace):
+The GitOps trap: the pull is a Job per node, named
+`swiftkernel-pull-<name>-<node>-<hash>` for the kernel, the node and the
+directory it pulls into, so re-pull is keyed on **(name, node)** and not on the
+artifact reference. Changing `spec.ociRef.image` to a new tag in Git will
+**not** re-pull on nodes that already ran the Job — Flux applies the change,
+the object updates, and nothing downloads. Either give the new kernel a new
+SwiftKernel name (the clean GitOps move, and the same pattern as SwiftImage),
+or delete the kernel's Jobs to force it. They carry the label
+`kubeswift.io/swiftkernel=<name>` and live in the kernel's namespace:
 
 ```bash
-kubectl -n <ns> get jobs | grep swiftkernel-pull
-kubectl -n <ns> delete job swiftkernel-pull-<name>-<node>
+kubectl -n <ns> get jobs -l kubeswift.io/swiftkernel=<name>
+kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>
 ```
 
 Prefer the rename. Deleting Jobs is an imperative fix to a declarative problem

@@ -77,18 +77,18 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 		return nil, nil
 	}
 	// Editing the image on an existing SwiftKernel does NOTHING, silently: the
-	// per-node pull Job is named pullJobName(name, node) with no image or digest
-	// in the key, and Create swallows AlreadyExists. So the new tag is never
-	// pulled and the node keeps serving the old artifact — with the CR happily
-	// reporting the new image. Warn rather than reject: re-pointing a kernel is
-	// legitimate, it just needs the Jobs deleted to take effect.
+	// per-node pull Job is named for the kernel, the node and the directory it
+	// pulls into, with no image or digest in the key, and Create swallows
+	// AlreadyExists. So the new tag is never pulled and the node keeps serving
+	// the old artifact — with the CR happily reporting the new image. Warn
+	// rather than reject: re-pointing a kernel is legitimate, it just needs the
+	// Jobs deleted to take effect.
 	if old.Spec.OCIRef.Image != sk.Spec.OCIRef.Image {
 		return admission.Warnings{
-			fmt.Sprintf("spec.ociRef.image changed (%s -> %s) but the per-node pull Job is keyed on "+
-				"(name,node) only, so nothing will be re-pulled and nodes keep serving the OLD artifact. "+
-				"Delete the pull Jobs to force it: kubectl -n %s delete job -l app=swiftkernel-pull "+
-				"(or: kubectl -n %s delete job swiftkernel-pull-%s-<node>)",
-				old.Spec.OCIRef.Image, sk.Spec.OCIRef.Image, sk.Namespace, sk.Namespace, sk.Name),
+			fmt.Sprintf("spec.ociRef.image changed (%s -> %s) but the per-node pull Job is not keyed on "+
+				"the image, so nothing will be re-pulled and nodes keep serving the OLD artifact. "+
+				"Delete the pull Jobs to force it: kubectl -n %s delete job -l kubeswift.io/swiftkernel=%s",
+				old.Spec.OCIRef.Image, sk.Spec.OCIRef.Image, sk.Namespace, sk.Name),
 		}, nil
 	}
 	return nil, nil
