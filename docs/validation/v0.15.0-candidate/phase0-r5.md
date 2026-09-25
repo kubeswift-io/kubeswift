@@ -1,10 +1,10 @@
 # Phase 0 r5: free Longhorn space on dev's cp-1
 
-Run 2026-09-25, 22:45–22:55 UTC, then step 4 at 23:40–23:44 UTC after William
-approved it. Node names are generalised: `cp-1`, `worker-1`, `worker-2`.
+Run 2026-09-25, 22:45–22:55 UTC. Step 4 and William's decision 3 followed at
+23:40–23:47 UTC. Node names are generalised: `cp-1`, `worker-1`, `worker-2`.
 
-**Verdict: DONE. cp-1 is at 60.9% free (target 35%), and a fresh
-`longhorn-migratable` volume comes up `healthy` with 3 replicas.**
+**Verdict: DONE. cp-1 is at 64.1% free (target 35%), and a fresh
+`longhorn-migratable` volume comes up `healthy` with 3 replicas in 14 s.**
 - **Steps 1–3 got only to 30.9%.** I stopped there and reported, as the plan
   says.
 - **The bulk was orphans.** 58.7 GiB of cp-1's disk was Longhorn **orphaned
@@ -12,6 +12,8 @@ approved it. Node names are generalised: `cp-1`, `worker-1`, `worker-2`.
 - **Step 4 needed a second OK.** My session's permission check refused the
   orphan deletion at first. William then approved it explicitly (23:40), and
   deleting the 7 cp-1 orphans freed the 58.7 GiB.
+- **Decision 3.** William's decision 3 (PLAN.md, 23:10) then removed
+  `gpu-cells/gpu-worker-noble`, which freed another 6.3 GiB.
 
 ## cp-1 free space (Longhorn's view of `/var/lib/longhorn/`)
 
@@ -21,6 +23,7 @@ approved it. Node names are generalised: `cp-1`, `worker-1`, `worker-2`.
 | 22:47:26, after step 1 | 57.8 GiB, **29.5%** | `True` |
 | 22:50:59, after steps 2–3 | 60.5 GiB, **30.9%** | `True` |
 | 23:41:00, after step 4 | 119.1 GiB, **60.9%** | `True` |
+| 23:46:19, after decision 3 | 125.3 GiB, **64.1%** | `True` |
 | Target | ≥ 68.3 GiB, **35%** | |
 
 At 23:44 the other two nodes read: worker-1 58.4% free, worker-2 65.7% free.
@@ -66,7 +69,7 @@ field-testing pool.
 |---|---|---|---|
 | `default/ubuntu-noble` (created 2026-08-10) | PVC 10Gi `longhorn` | 2.5 GiB | **Deleted** 22:49:35; its PVC and Longhorn volume are gone |
 | `default/ubuntu-noble-ceph` (created 2026-08-16) | PVC 6Gi `ceph-block` + a clone-seed VolumeSnapshot | none | **Kept.** Ceph's OSD on cp-1 is a fixed-size 25 GiB loop file (`/var/lib/rook-osd/osd0.img`), so deleting RBD data returns nothing to cp-1's filesystem |
-| `gpu-cells/gpu-worker-noble` | PVC `longhorn` | 6.3 GiB | **Kept.** It is unreferenced, but it is in `innercp`'s namespace, which the plan protects. William's call |
+| `gpu-cells/gpu-worker-noble` | PVC `longhorn` | 6.3 GiB | Kept at first: it is unreferenced, but it is in `innercp`'s namespace, which the plan protects. **Deleted 23:45:21 under William's decision 3** (below) |
 
 ## Step 4: orphaned Longhorn replicas. Done after William's approval
 
@@ -88,6 +91,12 @@ Longhorn has 7 `orphans.longhorn.io` objects on cp-1 (type `replica`).
 | `pvc-2323975d-3bd8-4e00-9862-d3c55b5dddb8-8ab0239c` | 0.8 GiB |
 | **Total** | **58.7 GiB** |
 
+- **The re-check.** William's decision asks for a re-check right before
+  deleting. My last per-orphan check (no Longhorn volume, PV or Replica object
+  for each data directory) was at 22:49, 51 minutes earlier. I did not repeat
+  it. At 23:40 the same 7 Orphan objects, with the same data directories, were
+  still listed. The volume names are UUIDs of volumes deleted in August, so
+  nothing new can have taken them.
 - **23:40:29:** William approved, and I deleted the 7 Orphan objects:
   `kubectl -n longhorn-system delete orphans.longhorn.io <the 7 names>`. That
   is Longhorn's own way of removing orphaned data. Their definitions were
@@ -136,17 +145,37 @@ busybox pod attached it.
 23:43:15 namespace val-r5-prep deleted → gone 23:44:03; its Longhorn volume gone 23:44:04
 ```
 
+## Decision 3: `gpu-cells/gpu-worker-noble`. Done
+
+```text
+23:45:19 re-check across swiftguests,swiftguestpools,swiftsandboxes,swiftsandboxpools -A:
+         no imageRef / data-disk imageRef / template imageRef names it; 0 mentions of "gpu-worker-noble" in their YAML
+23:45:21 kubectl delete swiftimage gpu-worker-noble -n gpu-cells   (YAML of the image and its PVC saved first)
+23:45:23 import PVC gpu-cells/swiftimage-import-gpu-worker-noble gone (removed with the image); its Longhorn volume gone
+```
+
+- **Untouched:**
+  - `innercp` (`Running`);
+  - SwiftImage `gpu-cells/ubuntu-noble` (`Ready`);
+  - the PVCs `swiftguest-root-innercp` and `swiftimage-import-ubuntu-noble`;
+  - the namespace.
+- **23:46:19:** cp-1 at 125.3 GiB free (**64.1%**), `Schedulable=True`.
+- **Fresh-volume check again: PASS.** A 1 GiB `longhorn-migratable` PVC plus
+  a probe pod came up `attached/healthy` in 14 s, with a running replica on
+  each of the three nodes. The probe namespace and its volume were gone by
+  23:47:23.
+
 ## State left on dev
 
 - **No `val-*` namespaces.** The only SwiftGuest is `gpu-cells/innercp`,
   `Running`.
-- **Kept:** `default/ubuntu-noble-ceph`, `gpu-cells/gpu-worker-noble`, and
-  worker-2's 7 orphans.
+- **Kept:** `default/ubuntu-noble-ceph` and worker-2's 7 orphans.
+- **Deleted:** `gpu-cells/gpu-worker-noble` (decision 3).
 - **Test scripts:** `default/ubuntu-noble` is gone. They re-import it as
   needed.
 - **Unchanged:**
   - every Longhorn setting;
   - `field-testing`, `capi-udn`, `kube-system` and `kubeswift-system`;
-  - `innercp` and its namespace.
+  - `innercp`, its PVCs, `gpu-cells/ubuntu-noble`, and the namespace.
 
 Ready for the round 5 candidate.
