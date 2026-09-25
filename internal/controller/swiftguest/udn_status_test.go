@@ -32,7 +32,7 @@ func TestMapPodToStatus_ModelA_DerivesIPFromOVNAnnotation(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Network == nil || status.Network.PrimaryIP != "10.50.0.26" {
 		t.Fatalf("primaryIP = %+v, want 10.50.0.26 (the UDN entry, not the infra-locked default)", status.Network)
@@ -60,7 +60,7 @@ func TestMapPodToStatus_ModelA_GuestRunningFalseWhenNotReady(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 	if gr := findCondition(status, "GuestRunning"); gr == nil || gr.Status != metav1.ConditionFalse {
 		t.Errorf("GuestRunning = %v, want False (launcher not ready)", gr)
 	}
@@ -80,7 +80,7 @@ func TestMapPodToStatus_NonModelA_NoDerivation(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 	if status.Network != nil && status.Network.PrimaryIP != "" {
 		t.Errorf("non-Model-A primaryIP = %q, want empty (no marker)", status.Network.PrimaryIP)
 	}

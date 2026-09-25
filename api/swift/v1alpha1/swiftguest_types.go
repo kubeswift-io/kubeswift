@@ -787,9 +787,48 @@ type GuestPort struct {
 	Expose string `json:"expose,omitempty"`
 }
 
+// PrimaryIPScope says where a guest's status.network.primaryIP can be reached
+// from.
+// +kubebuilder:validation:Enum=Pod;Network
+type PrimaryIPScope string
+
+const (
+	// PrimaryIPScopePod: primaryIP is the guest's address on its launcher
+	// pod's private nat network (the in-pod bridge and its DHCP range). Every
+	// nat launcher runs the same private subnet, so the address repeats across
+	// guests and is reachable only from inside that launcher pod.
+	PrimaryIPScopePod PrimaryIPScope = "Pod"
+	// PrimaryIPScopeNetwork: primaryIP is on a network outside the launcher
+	// pod (a multi-node NAD the primary interface rides, or an OVN-Kubernetes
+	// primary UDN) and is reachable on that network.
+	PrimaryIPScopeNetwork PrimaryIPScope = "Network"
+)
+
 // GuestNetworkStatus holds discovered guest network information.
 type GuestNetworkStatus struct {
-	PrimaryIP  string                  `json:"primaryIP,omitempty"`
+	// PrimaryIP is the guest's own address on its primary interface.
+	// primaryIPScope says where it can be reached from. A Pod-scope address
+	// repeats across guests, so it does not identify a guest.
+	// +optional
+	PrimaryIP string `json:"primaryIP,omitempty"`
+	// PrimaryIPScope says where primaryIP can be reached from. Pod: primaryIP
+	// is the guest's address on its launcher pod's private nat network. Every
+	// nat launcher uses the same private subnet, so the address repeats across
+	// guests and is reachable only from inside that launcher pod; reach the
+	// guest's declared ports on podIP instead. Network: primaryIP is on a
+	// network outside the pod (a multi-node NAD the primary interface rides,
+	// or an OVN-Kubernetes primary UDN) and is reachable on that network.
+	// Set whenever primaryIP is set, and cleared with it.
+	// +optional
+	PrimaryIPScope PrimaryIPScope `json:"primaryIPScope,omitempty"`
+	// PodIP is the IP of the launcher pod that currently runs the guest. On a
+	// nat guest it is where the ports declared in spec.network.ports are
+	// reachable (they are DNAT'd from the pod IP to the guest), and unlike a
+	// Pod-scope primaryIP it is unique in the cluster. It changes when the
+	// guest moves to a new launcher (a restart or a migration) and is cleared
+	// while no launcher runs the guest.
+	// +optional
+	PodIP      string                  `json:"podIP,omitempty"`
 	Interface  string                  `json:"interface,omitempty"`
 	Ready      bool                    `json:"ready,omitempty"`
 	Interfaces []GuestNetworkInterface `json:"interfaces,omitempty"`
@@ -934,7 +973,9 @@ type DataDiskStatus struct {
 // +kubebuilder:resource:path=swiftguests,scope=Namespaced,shortName=sg
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
-// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Guest IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Pod IP",type=string,JSONPath=`.status.network.podIP`
+// +kubebuilder:printcolumn:name="IP Scope",type=string,JSONPath=`.status.network.primaryIPScope`,priority=1
 // +kubebuilder:printcolumn:name="Hypervisor",type=string,JSONPath=`.status.runtime.hypervisor`,priority=1
 // +kubebuilder:printcolumn:name="OS",type=string,JSONPath=`.spec.osType`,priority=1
 // +kubebuilder:printcolumn:name="Service",type=string,JSONPath=`.status.network.serviceRef.name`,priority=1

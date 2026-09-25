@@ -351,9 +351,20 @@ type SandboxRuntimeStatus struct {
 // SandboxNetworkStatus reports the guest network, mapped from the swiftletd
 // lease-poller pod annotation. Absent for network:none sandboxes.
 type SandboxNetworkStatus struct {
-	// PrimaryIP is the guest's DHCP-assigned IP (network:restricted only).
+	// PrimaryIP is the guest's DHCP-assigned IP (absent for network:none).
 	// +optional
 	PrimaryIP string `json:"primaryIP,omitempty"`
+	// PrimaryIPScope says where primaryIP can be reached from, as on a
+	// SwiftGuest. A sandbox's guest always sits behind its launcher's nat, so
+	// it is Pod whenever primaryIP is set: the address is on the launcher
+	// pod's private network, repeats across sandboxes, and is reachable only
+	// from inside that launcher pod.
+	// +optional
+	PrimaryIPScope swiftv1alpha1.PrimaryIPScope `json:"primaryIPScope,omitempty"`
+	// PodIP is the IP of the launcher pod running the sandbox. Unlike
+	// primaryIP it is unique in the cluster.
+	// +optional
+	PodIP string `json:"podIP,omitempty"`
 }
 
 // SwiftSandboxStatus is the observed state.
@@ -413,7 +424,8 @@ type SwiftSandboxStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.spec.image`
 // +kubebuilder:printcolumn:name="Node",type=string,JSONPath=`.status.nodeName`
-// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Guest IP",type=string,JSONPath=`.status.network.primaryIP`
+// +kubebuilder:printcolumn:name="Pod IP",type=string,JSONPath=`.status.network.podIP`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftSandbox struct {
 	metav1.TypeMeta   `json:",inline"`

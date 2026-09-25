@@ -72,7 +72,9 @@ Represents a running virtual machine instance.
 | `runtime.pid` | int64 | Hypervisor process PID (set by swiftletd annotation). |
 | `runtime.hypervisor` | string | `cloud-hypervisor` or `qemu`. |
 | `console.serialSocket` | string | Path to serial.sock inside the launcher pod. |
-| `network.primaryIP` | string | Guest IP from DHCP lease. |
+| `network.primaryIP` | string | The guest's own address on its primary interface. Not unique across guests when `network.primaryIPScope` is `Pod`. |
+| `network.primaryIPScope` | string | Where `primaryIP` can be reached from. `Pod`: the launcher's private nat address, from the same range in every launcher pod and reachable only from inside it. `Network`: on a network outside the pod (a multi-node NAD primary or an OVN-Kubernetes primary UDN). Set whenever `primaryIP` is. |
+| `network.podIP` | string | IP of the launcher pod running the guest. A nat guest's `spec.network.ports` are reachable on it. |
 | `network.interfaces[]` | []GuestNetworkInterface | Interface name + IP pairs. |
 | `restartCount` | int32 | Number of times the VM has been restarted. |
 | `lastRestartTime` | Time | Timestamp of the last restart. |

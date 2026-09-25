@@ -146,7 +146,9 @@ spec:
 | `runtime.pid` | Hypervisor process PID |
 | `runtime.hypervisor` | `cloud-hypervisor` or `qemu` |
 | `console.serialSocket` | Path to serial socket for console access |
-| `network.primaryIP` | Guest IP discovered from DHCP lease (disk boot only) |
+| `network.primaryIP` | Guest IP discovered from DHCP lease (disk boot only). Not unique across guests when `primaryIPScope` is `Pod` |
+| `network.primaryIPScope` | `Pod`: `primaryIP` is the launcher's private nat address, reachable only from inside the launcher pod. `Network`: it is on a network outside the pod (multi-node NAD primary, OVN-Kubernetes primary UDN) |
+| `network.podIP` | IP of the launcher pod running the guest; a nat guest's `spec.network.ports` are reachable on it |
 | `network.interfaces` | List of {name, ip} for all guest interfaces |
 | `gpu.devices` | List of allocated GPU PCI addresses (when `gpuProfileRef` set) |
 | `gpu.partitionId` | Fabric Manager partition ID (-1 = none) |
@@ -159,11 +161,12 @@ spec:
 **Phase meanings:** `Pending` = resolution failed or unschedulable; `Scheduling` = pod pending; `Running` = VM up; `Stopped` = VM stopped; `Failed` = resolution, pod, or VM error.
 
 **What belongs to one run:** `GuestRunning`, `NetworkReady`, `EgressReady`,
-`PortsProgrammed`, `PodScheduled` and `network.primaryIP` describe a single
-launcher, and are cleared when the guest is stopped, when its launcher exits,
-and when a new launcher starts. So a stopped guest never reads as running, and a
-restarting one never reports the address the previous run held — a
-`kubectl wait` on those conditions waits for the run in front of it.
+`PortsProgrammed`, `PodScheduled`, `network.primaryIP` (with its scope) and
+`network.podIP` describe a single launcher, and are cleared when the guest is
+stopped, when its launcher exits, and when a new launcher starts. So a stopped
+guest never reads as running, and a restarting one never reports the address
+the previous run held — a `kubectl wait` on those conditions waits for the run
+in front of it.
 
 ## Example
 

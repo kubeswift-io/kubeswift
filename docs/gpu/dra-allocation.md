@@ -190,8 +190,8 @@ NAME                   STATE                AGE
 dra-gpu-vm-gpu-vkt4l   allocated,reserved   1m
 
 $ kubectl get swiftguest dra-gpu-vm
-NAME         PHASE     NODE   IP              AGE
-dra-gpu-vm   Running   worker-1   192.168.99.13   2m
+NAME         PHASE     NODE       GUEST IP        POD IP        AGE
+dra-gpu-vm   Running   worker-1   192.168.99.13   10.244.1.23   2m
 
 $ kubectl get swiftguest dra-gpu-vm -o jsonpath='{.status.gpu}'
 {"devices":["0000:01:00.0"],"hypervisor":"cloud-hypervisor","nodeName":"worker-1","partitionId":-1}

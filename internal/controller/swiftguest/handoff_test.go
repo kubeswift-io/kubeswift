@@ -26,7 +26,7 @@ func handedOffLauncher() *corev1.Pod {
 // migration then waited in Resuming until spec.timeout.
 func TestMapPodToStatus_AHandedOffLauncherChangesNothing(t *testing.T) {
 	st := ranStatus("pod-1")
-	MapPodToStatus(handedOffLauncher(), st)
+	MapPodToStatus(kernelGuest(), handedOffLauncher(), st)
 	if st.Phase != swiftv1alpha1.SwiftGuestPhaseRunning {
 		t.Errorf("phase = %q; the VM is still running, in the destination pod", st.Phase)
 	}

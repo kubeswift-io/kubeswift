@@ -96,7 +96,9 @@ sandbox to change image, resources, command, or network.
 | `rootfs.cachePath` | string | Node-local rootfs artifact path. |
 | `runtime.pid` | int64 | Hypervisor process PID (reported by swiftletd). |
 | `runtime.hypervisor` | string | Always `cloud-hypervisor`. |
-| `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. |
+| `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. An address on the launcher pod's private nat network, so it repeats across sandboxes. |
+| `network.primaryIPScope` | string | Always `Pod` when `primaryIP` is set: reachable only from inside the launcher pod. |
+| `network.podIP` | string | IP of the launcher pod, unique in the cluster. |
 | `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
 | `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
 | `model.digest` / `model.mountPath` / `model.cachePath` | string / string / string | The resolved model artifact once materialized. Absent when `spec.model` is unset. |

@@ -96,7 +96,7 @@ func TestMapPodToStatus_RestoreLauncherReportsTheCarriedAddress(t *testing.T) {
 	status := guest.Status.DeepCopy()
 	status.PodRef = &corev1.ObjectReference{Name: "g1", UID: "captured-launcher"}
 	status.Network = &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.168.99.14", Ready: true}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(guest, pod, status)
 	if status.Network == nil || status.Network.PrimaryIP != "192.168.99.14" {
 		t.Errorf("status.network after the restore launcher = %+v, want primaryIP 192.168.99.14", status.Network)
 	}

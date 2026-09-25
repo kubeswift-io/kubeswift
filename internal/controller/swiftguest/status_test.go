@@ -18,7 +18,7 @@ func TestMapPodToStatus_PendingScheduling(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseScheduling {
 		t.Errorf("phase = %v, want Scheduling", status.Phase)
@@ -44,7 +44,7 @@ func TestMapPodToStatus_PendingUnschedulable(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Phase != swiftv1alpha1.SwiftGuestPhasePending {
 		t.Errorf("phase = %v, want Pending", status.Phase)
@@ -65,7 +65,7 @@ func TestMapPodToStatus_Running(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseRunning {
 		t.Errorf("phase = %v, want Running", status.Phase)
@@ -99,7 +99,7 @@ func TestMapPodToStatus_Failed(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseFailed {
 		t.Errorf("phase = %v, want Failed", status.Phase)
@@ -118,7 +118,7 @@ func TestMapPodToStatus_Succeeded(t *testing.T) {
 		},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseStopped {
 		t.Errorf("phase = %v, want Stopped", status.Phase)
@@ -139,7 +139,7 @@ func TestMapPodToStatus_WithGuestIPAnnotation(t *testing.T) {
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	status := &swiftv1alpha1.SwiftGuestStatus{}
-	MapPodToStatus(pod, status)
+	MapPodToStatus(kernelGuest(), pod, status)
 
 	if status.Network == nil {
 		t.Fatal("status.Network = nil, want set")
@@ -157,7 +157,7 @@ func TestMapPodToStatus_WithGuestIPAnnotation(t *testing.T) {
 
 func TestMapPodToStatus_NilPod(t *testing.T) {
 	status := &swiftv1alpha1.SwiftGuestStatus{Phase: swiftv1alpha1.SwiftGuestPhaseRunning}
-	MapPodToStatus(nil, status)
+	MapPodToStatus(kernelGuest(), nil, status)
 	// Should not modify status
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseRunning {
 		t.Errorf("phase = %v, want Running (unchanged)", status.Phase)
