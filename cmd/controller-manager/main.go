@@ -332,6 +332,9 @@ func main() {
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("swiftmigration-controller"),
+		// Reads a destination pod's Events, uncached, to say why it never
+		// became Ready.
+		APIReader: mgr.GetAPIReader(),
 		// Phase 3c (Option B): destination-side mTLS wiring is gated on
 		// the same --migration-mtls-enabled flag that registers the
 		// migrationcert provisioner below. SystemNamespace is where the

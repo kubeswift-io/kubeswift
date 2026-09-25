@@ -18,7 +18,7 @@ import (
 
 // preparingLiveReadyBudget is the wall-clock window for the dst pod
 // to reach Ready before we transition the migration to Failed with
-// FailureReason=PodTerminated. Per design §2.3 Preparing actions
+// FailureReason=DstNeverReady. Per design §2.3 Preparing actions
 // step 5: "Up to ~60s budget; if not Ready in 60s, transition to
 // Failed".
 const preparingLiveReadyBudget = 60 * time.Second
@@ -57,7 +57,8 @@ const (
 //  5. Check dst pod readiness:
 //     - Ready → advance to StopAndCopy
 //     - Not Ready + within 60s budget → phaseRequeue
-//     - Not Ready + budget exceeded → Failed with PodTerminated
+//     - Not Ready + budget exceeded → Failed with DstNeverReady, the
+//     message saying why the pod is not Ready
 //
 // **Idempotency**: dst pod name is deterministic from
 // SwiftMigration.UID. Re-entry on leader handover observes the
@@ -264,12 +265,21 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		return phaseAdvance()
 	}
 
-	// Not Ready yet — check 60s budget.
+	// Not Ready yet — check 60s budget. The failure message says why the pod
+	// is not Ready, from its status and recent Warning events
+	// (dst_not_ready.go). A cause such as a volume the storage would not
+	// attach to the target node is otherwise recorded only against the pod,
+	// which the failure then deletes (onTerminalPhase).
 	if status.PreparingStartedAt != nil &&
 		time.Since(status.PreparingStartedAt.Time) > preparingLiveReadyBudget {
-		return phaseFailure(
-			fmt.Sprintf("destination pod %q never reached Ready within %s budget", existingDst.Name, preparingLiveReadyBudget),
-			migrationv1alpha1.FailureReasonDstNeverReady)
+		msg := fmt.Sprintf("destination pod %q never reached Ready within %s budget", existingDst.Name, preparingLiveReadyBudget)
+		if cause := r.podNotReadyCause(ctx, &existingDst); cause != "" {
+			msg += ": " + cause
+		}
+		if r.Recorder != nil {
+			r.Recorder.Event(mig, corev1.EventTypeWarning, eventReasonDestinationPodNeverReady, msg)
+		}
+		return phaseFailure(msg, migrationv1alpha1.FailureReasonDstNeverReady)
 	}
 
 	// Within budget; surface waiting state and requeue.

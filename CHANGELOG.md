@@ -244,6 +244,24 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   captured before this version have no recorded address, and restore as
   before.
 
+- **A live migration whose destination pod never became Ready did not say
+  why.** It failed `DstNeverReady` with only "destination pod … never reached
+  Ready within 1m0s budget". In the lab the cause was the storage: Longhorn
+  does not live-migrate a degraded volume, so it would not attach the volume
+  to the target node, and only the pod's `FailedAttachVolume` event and
+  Longhorn's attachment ticket said so. The failure message now says why the
+  pod was not Ready: the scheduler's message for an unschedulable pod, the
+  containers that did not start and why (`ImagePullBackOff`,
+  `CreateContainerConfigError`, a failed init container), and the pod's latest
+  Warning events, such as `FailedAttachVolume` or `FailedMount`, each message
+  cut at 300 characters. The same text is recorded as a
+  `DestinationPodNeverReady` Warning event on the SwiftMigration. An offline
+  migration that runs into `spec.timeout` waiting on its destination pod says
+  the same in its `Timeout` message. To read the pod's events the controller's
+  ClusterRole gains `list` on events, used uncached and for that one pod; with
+  a role that lacks it, the message carries the pod's status alone. The 60 s
+  budget and the `DstNeverReady` reason are unchanged.
+
 - **A live-migrated guest pinned to its node went back to the source.** An
   offline migration moves a guest's `spec.nodeName` to the target along with
   the guest, but a live migration moved only the VM: a guest pinned with
