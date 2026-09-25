@@ -220,7 +220,10 @@ setting it had.
   missing source pod or a source failure report no longer tears the
   destination down, and the migration cuts over. A migration past cutover
   whose guest already runs on the destination now completes instead of
-  failing on a timeout that expired meanwhile.
+  failing on a timeout that expired meanwhile. A migration's destination runs
+  its source's launcher image, so the swiftletd half reaches a guest only once
+  its launcher has been recreated on this version; the controller half
+  protects every guest from the upgrade on.
 
 ### CI
 
