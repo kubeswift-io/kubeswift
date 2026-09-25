@@ -200,13 +200,6 @@ setting it had.
   shared. Guests created by an earlier version have no record and are not
   counted.
 
-- **Scheduled local snapshots overwrote each other.** Every snapshot of a
-  schedule copied the template's `hostPath`, so each capture emptied the
-  directory holding the previous snapshot, and pruning the oldest removed the
-  directory all of them shared. The docs said not to schedule the local
-  backend. Each scheduled snapshot now gets its own directory, and the
-  controller drops a template `hostPath` that an existing schedule carries.
-
 - **One failed import pod failed the SwiftImage for good.** The import Job
   retries a failed pod up to its backoff limit, but the controller marked the
   image `Failed` (`ImportFailed`) as soon as the first pod failed. `Failed` is
@@ -216,6 +209,13 @@ setting it had.
   The size-measurement Job and the SwiftKernel pull Job had the same defect: one
   failed pull pod on one node failed the kernel. Delete and recreate an image
   or kernel that failed this way.
+
+- **Scheduled local snapshots overwrote each other.** Every snapshot of a
+  schedule copied the template's `hostPath`, so each capture emptied the
+  directory holding the previous snapshot, and pruning the oldest removed the
+  directory all of them shared. The docs said not to schedule the local
+  backend. Each scheduled snapshot now gets its own directory, and the
+  controller drops a template `hostPath` that an existing schedule carries.
 
 ### CI
 
