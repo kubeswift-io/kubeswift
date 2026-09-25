@@ -229,6 +229,46 @@ func TestCutover_Step1WritesPodRefSwappedCondition_W21(t *testing.T) {
 	}
 }
 
+// A guest pinned to its source node moves its pin to the target at cutover,
+// or its next launcher starts back on the source. An unpinned guest stays
+// unpinned. (Found by lab validation of v0.15.0: only an offline migration
+// repinned the guest.)
+func TestCutover_Step1RepinsAPinnedGuestToTheTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name, pinned, want string
+	}{
+		{name: "pinned to the source", pinned: "worker-1", want: "worker-2"},
+		{name: "unpinned", pinned: "", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mig, guest, src, dst := cutoverFixture(t)
+			guest.Spec.NodeName = tc.pinned
+			scheme := testScheme(t)
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(mig, guest, src, dst).
+				WithStatusSubresource(mig, guest).
+				Build()
+			r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(20)}
+
+			status := mig.Status.DeepCopy()
+			if res := r.handleStopAndCopyLive(context.Background(), mig, status); res.Err != nil || res.FailureMsg != "" {
+				t.Fatalf("unexpected failure: err=%v msg=%q", res.Err, res.FailureMsg)
+			}
+			var got swiftv1alpha1.SwiftGuest
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(guest), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Spec.NodeName != tc.want {
+				t.Errorf("spec.nodeName = %q, want %q", got.Spec.NodeName, tc.want)
+			}
+			if got.Status.PodRef == nil || got.Status.PodRef.Name != dst.Name {
+				t.Errorf("status.podRef = %+v, want the destination %q", got.Status.PodRef, dst.Name)
+			}
+		})
+	}
+}
+
 // The v0.14.0 live-migration hang. Cutover step 1 moved podRef.name to the
 // dst pod but left podRef.uid naming the source pod. The SwiftGuest
 // controller reads a launcher whose UID differs from podRef.uid as a NEW run

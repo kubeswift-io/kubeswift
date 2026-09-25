@@ -231,6 +231,21 @@ func (r *SwiftMigrationReconciler) cutoverStep1(
 ) *phaseResult {
 	setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveCutoverPodRef)
 
+	// A guest pinned to a node (spec.nodeName) is pinned to the target from
+	// here: the VM runs there, and a pin left on the source started the
+	// guest's next launcher back on the source, where its disk was no longer
+	// attached. An offline migration repins the guest as it moves it
+	// (stopandcopy.go); a live one moves only the VM, so it repins here. Before
+	// podRef names the destination, so a retry of this step still finds the
+	// pin to move. An unpinned guest stays unpinned.
+	if target := mig.Spec.Target.NodeName; guest.Spec.NodeName != "" && guest.Spec.NodeName != target {
+		specPatch := client.MergeFrom(guest.DeepCopy())
+		guest.Spec.NodeName = target
+		if err := r.Patch(ctx, guest, specPatch); err != nil {
+			return phaseTransient(fmt.Errorf("cutover step 1 (SwiftGuest spec.nodeName repin): %w", err))
+		}
+	}
+
 	// Step 1a: patch SwiftGuest.status.podRef to the dst pod — name AND
 	// UID. The UID is load-bearing: the SwiftGuest controller treats a
 	// launcher whose UID differs from podRef.uid as a new run and clears
