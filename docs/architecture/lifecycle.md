@@ -48,7 +48,11 @@ swiftletd patches SwiftGuest with GuestRunning:
 SwiftGuest `spec.runPolicy` controls desired state:
 
 - **Running** — Start and keep VM running (default)
-- **Stopped** — Do not start; if running, stop
+- **Stopped** — Do not start; if running, stop. The controller deletes the
+  launcher pod and swiftletd shuts the guest down over ACPI within the pod's
+  termination grace period. While a migration, restore or snapshot capture of
+  the guest is in flight, the stop waits for it (a `StopDeferred` event says
+  which)
 - **RestartOnFailure** — Restart VM on failure (non-zero exit) with exponential backoff: 10s → 20s → 40s → 80s → 160s → max 300s
 - **Always** — Restart VM on any exit with same backoff
 

@@ -67,7 +67,9 @@ the audit trail of every VM-fleet change). For a single dev cluster,
   Git-managed CRs are reverted on the next reconcile (default 10m). Imperative
   day-2 verbs that *don't* edit Git-managed specs remain fine: `swiftctl
   migrate`, snapshots/restores, `swiftctl stop` (note: a runPolicy flip done
-  via `kubectl` will be reverted; change it in Git).
+  via `kubectl` will be reverted; change it in Git). `runPolicy: Stopped` in
+  Git stops the guest: the controller shuts down a running guest whose spec
+  says Stopped, including one someone started by hand.
 - **Secrets must not live in seed user-data in Git.** See
   [secrets.md](secrets.md).
 - **Migrations move guests, Git doesn't know.** `spec.nodeName` written by the

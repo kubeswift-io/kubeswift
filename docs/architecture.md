@@ -93,7 +93,7 @@ The central controller. It watches `SwiftGuest`, `SwiftImage`, `SwiftKernel`, `S
 4. Creates the launcher pod with appropriate volumes, init containers, and node selectors
 5. After the pod exists, reads pod annotations set by swiftletd and maps them to SwiftGuest status fields
 
-The controller respects `runPolicy=Stopped` and does not recreate the pod when stopped. Launcher pods always have `restartPolicy: Never` — the controller owns VM lifecycle, not Kubernetes.
+The controller converges on `runPolicy=Stopped`: it deletes a running launcher pod (swiftletd shuts the guest down over ACPI within the pod's grace period), waiting first for any migration, restore or snapshot capture of the guest to finish, and does not recreate the pod while stopped. Launcher pods always have `restartPolicy: Never` — the controller owns VM lifecycle, not Kubernetes.
 
 ## Runtime plane
 

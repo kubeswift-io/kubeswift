@@ -242,8 +242,9 @@ func main() {
 	}
 
 	if err = (&swiftguest.SwiftGuestReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("swiftguest-controller"),
 		// Phase 3c (Option B): when mTLS is enabled, migration-eligible
 		// launcher pods carry an idle source-side stunnel client sidecar so
 		// a later live migration has its TLS client already in the

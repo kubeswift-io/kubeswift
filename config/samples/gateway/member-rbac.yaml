@@ -56,9 +56,8 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests"]
     verbs: ["update", "patch"]
-  # StopGuest also DELETES the launcher pod — the SwiftGuest stop guard is
-  # reactive (it blocks recreation, it does not stop a running VM), so a
-  # runPolicy patch alone would leave the guest running.
+  # StopGuest also DELETES the launcher pod, so the VM stops at once rather
+  # than on the SwiftGuest controller's next reconcile.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]

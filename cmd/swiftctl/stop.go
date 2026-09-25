@@ -15,11 +15,15 @@ var stopCmd = &cobra.Command{
 	SilenceUsage: true,
 	Long: `Stop a SwiftGuest by setting spec.runPolicy=Stopped and deleting the launcher pod.
 
-Both steps are required: the SwiftGuest stop guard is reactive — it prevents
-the pod from being recreated, it does not stop a running VM — so a runPolicy
-patch alone leaves the guest running. Deleting the launcher pod triggers
-swiftletd's graceful SIGTERM shutdown within the pod's termination grace
-period; the guard then keeps it stopped.`,
+Deleting the launcher pod triggers swiftletd's graceful SIGTERM shutdown (an
+ACPI power-off) within the pod's termination grace period, and the controller
+does not recreate it while runPolicy is Stopped.
+
+Setting runPolicy=Stopped any other way (kubectl, GitOps) stops a running
+guest too: the controller deletes its launcher pod the same way. It waits
+until no migration, restore or snapshot capture of the guest is in flight,
+and reports the wait as a StopDeferred event on the guest. This command does
+not wait; it deletes the pod at once.`,
 	Example: `  swiftctl stop sample
   swiftctl -n myns stop my-guest`,
 	Args: cobra.ExactArgs(1),
