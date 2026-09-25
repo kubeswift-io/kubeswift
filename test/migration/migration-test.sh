@@ -23,6 +23,11 @@
 #     on one (--guest-class).
 #   - An SSH identity (--identity, default $KUBESWIFT_TEST_IDENTITY or
 #     ~/.ssh/id_ed25519). Its public key is put into the test's seed profile.
+#   - live on Longhorn: Longhorn will not live-migrate a volume that is not
+#     healthy, and a new volume can stay degraded for minutes while it builds
+#     its replicas. The run waits for the guest's Longhorn volumes to be
+#     healthy before it migrates, for up to LONGHORN_HEALTHY_WAIT_MIN minutes
+#     (default 15). This needs read access to volumes.longhorn.io.
 #
 # Usage:
 #   ./migration-test.sh [--mode offline|live] [--source NODE] [--target NODE]
@@ -38,6 +43,7 @@ TARGET_NODE="${TARGET_NODE:-}"
 GUEST_CLASS="${GUEST_CLASS:-}"
 STORAGE_CLASS="${STORAGE_CLASS:-}"
 IDENTITY="${KUBESWIFT_TEST_IDENTITY:-${HOME}/.ssh/id_ed25519}"
+LONGHORN_HEALTHY_WAIT_MIN="${LONGHORN_HEALTHY_WAIT_MIN:-15}"
 NO_CLEANUP=false
 
 while [[ $# -gt 0 ]]; do
@@ -275,6 +281,44 @@ if [[ "$MODE" == "live" ]]; then
   guest_ssh "sudo mkdir -p /run/e2e && echo $SENTINEL | sudo tee /run/e2e/sentinel >/dev/null"
   uptime_before=$(guest_ssh "cut -d. -f1 /proc/uptime")
   echo "Guest uptime before: ${uptime_before}s"
+fi
+
+# Longhorn attaches a volume to a second node for a live migration only while
+# the volume is healthy; a degraded one leaves the destination pod waiting on
+# FailedAttachVolume until the migration fails DstNeverReady. Wait for each of
+# the guest's Longhorn volumes to be healthy first. Volumes of other drivers
+# are not checked.
+wait_longhorn_healthy() {
+  local p claim pv driver handle lhns rob
+  p=$(launcher_pod)
+  for claim in $(kubectl get pod "$p" -n "$NAMESPACE" \
+      -o jsonpath='{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}'); do
+    pv=$(kubectl get pvc "$claim" -n "$NAMESPACE" -o jsonpath='{.spec.volumeName}')
+    driver=$(kubectl get pv "$pv" -o jsonpath='{.spec.csi.driver}' 2>/dev/null || true)
+    [[ "$driver" == "driver.longhorn.io" ]] || continue
+    handle=$(kubectl get pv "$pv" -o jsonpath='{.spec.csi.volumeHandle}')
+    lhns=$(kubectl get volumes.longhorn.io -A --field-selector "metadata.name=$handle" \
+      -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)
+    if [[ -z "$lhns" ]]; then
+      echo "WARN: cannot read Longhorn volume $handle (PVC $claim); migrating without checking that it is healthy"
+      continue
+    fi
+    echo "Waiting for Longhorn volume $handle (PVC $claim) to be healthy (max ${LONGHORN_HEALTHY_WAIT_MIN}min)..."
+    rob=""
+    for _ in $(seq 1 $((LONGHORN_HEALTHY_WAIT_MIN * 12))); do
+      rob=$(kubectl get volumes.longhorn.io "$handle" -n "$lhns" -o jsonpath='{.status.robustness}' 2>/dev/null || true)
+      if [[ "$rob" == "healthy" ]]; then break; fi
+      sleep 5
+    done
+    [[ "$rob" == "healthy" ]] || {
+      echo "Longhorn volume $handle is ${rob:-unknown} after ${LONGHORN_HEALTHY_WAIT_MIN}min; Longhorn will not live-migrate it" >&2
+      exit 1
+    }
+    echo "Longhorn volume $handle is healthy"
+  done
+}
+if [[ "$MODE" == "live" ]]; then
+  wait_longhorn_healthy
 fi
 
 # Pin the source and migrate.

@@ -542,6 +542,13 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   landed on ..., expected ...". It now cordons every other schedulable node
   while the guest is created and uncordons them as soon as its launcher is
   scheduled, so the guest it migrates is an unpinned one, as most are.
+- **`test/migration/migration-test.sh --mode live` waits for a healthy
+  Longhorn volume.** It migrated as soon as the guest booted. Longhorn will
+  not live-migrate a degraded volume, and a new one can be degraded for
+  minutes while it builds its replicas, so the run failed with
+  `DstNeverReady`. It now waits for each of the guest's Longhorn volumes to
+  be `healthy` first, for up to `LONGHORN_HEALTHY_WAIT_MIN` minutes
+  (default 15). Volumes of other drivers are not checked.
 - **The smoke test runs in `$NAMESPACE` and deletes only what it created.**
   `make smoke-test` with `NAMESPACE` set failed at once, because the samples
   it applies name `namespace: default`; it now drops that line. Objects it
