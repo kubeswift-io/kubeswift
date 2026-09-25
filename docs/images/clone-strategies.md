@@ -91,7 +91,7 @@ The behaviour you observe depends on what your CSI driver does for `VolumeSnapsh
 
 | CSI driver | Snapshot semantics | Clone semantics | Speedup vs copy |
 |---|---|---|---|
-| **Longhorn (validated)** | Block-level snapshot | Full-copy from snapshot at clone time | ≈3–10× depending on source size |
+| **Longhorn (validated)** | Block-level snapshot | Full-copy from snapshot at clone time | Up to ≈3× at fleet scale on a small, matched-size source; none or slower for a single guest (the v0.15.0 lab measured 0.7×: copy 78 s, snapshot 110 s). See the caveat above. |
 | **Rook Ceph RBD** (validated 2026-08-16) | RBD snapshot (CoW) | RBD clone (CoW) | Measured ~1.5x to first boot at a 6 GiB source; the clone PVC itself binds with no data movement. **Filesystem root disks only — see the warning below.** |
 | **AWS EBS** (untested in Phase 0) | EBS snapshot | EBS clone (CoW with hydration) | Expected: large (no full data copy) |
 | **GCE PD** (untested in Phase 0) | PD snapshot | PD clone | Expected: large |

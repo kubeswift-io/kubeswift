@@ -469,6 +469,47 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   cordoned rather than every node. `--mode live` runs a live migration and
   checks that a tmpfs file and the guest's uptime survive it; `--source`,
   `--target`, `--guest-class`, `--storage-class` and `--no-cleanup` are new.
+- **`test/migration/migration-test.sh` puts its guest on the source node.**
+  It cordoned only the target, so on a cluster with a third schedulable node
+  the scheduler could place the guest there, and the run failed with "guest
+  landed on ..., expected ...". It now cordons every other schedulable node
+  while the guest is created and uncordons them as soon as its launcher is
+  scheduled, so the guest it migrates is an unpinned one, as most are.
+- **The smoke test runs in `$NAMESPACE` and deletes only what it created.**
+  `make smoke-test` with `NAMESPACE` set failed at once, because the samples
+  it applies name `namespace: default`; it now drops that line. Objects it
+  creates are labelled `kubeswift.io/smoke-test=<namespace>`; an object that
+  already exists, such as a shared `ubuntu-noble` SwiftImage or the
+  `default` SwiftGuestClass, is used as it is, and neither the run nor
+  `make smoke-test-cleanup` changes or deletes it. Cleanup used to delete
+  such objects by name.
+- **The smoke test no longer warns `GuestRunning=` and `hypervisor=` on a
+  healthy guest.** It read the GuestRunning condition and
+  `status.runtime.hypervisor` the moment `phase=Running` landed, before
+  either is written. It now waits up to 60 s for them.
+- **`test/snapshot/local-clone-identity-test.sh` compares real MACs.** It
+  read `/sys/class/net/eth0/address`, and Ubuntu Noble names its NIC `ens3`,
+  so the MAC was `missing` on the source and both clones and the MAC check
+  failed. It now reads the MAC of the interface holding the default route,
+  else of the first interface other than `lo`.
+- **`test/clonestrategy/clonestrategy-test.sh` passes on a full-copy CSI
+  driver.** It failed unless snapshot cloning was at least 3x faster than
+  copy, and Longhorn implements VolumeSnapshot + `dataSource` as a full copy,
+  so it failed there although the snapshot path worked. The speedup is now
+  printed with a note, and fails the test only with `--require-speedup [N]`
+  (N defaults to 3). The test now checks that the image publishes a
+  VolumeSnapshot clone seed and that each snapshot-strategy guest's root PVC
+  is cloned from one, so a silent fall back to copy still fails it.
+- **The smoke `gpu-alloc` scenario can pass.** Since v0.14.1 allocation takes
+  only a VFIO-ready SwiftGPUNode whose Node exists and is not cordoned, so the
+  scenario's `mock-gpu-node` was always refused (`NoCapacity`). The mock is
+  now named after a real Node that has no GPU and no SwiftGPUNode, and is
+  VFIO-ready. The test guest is `runPolicy: Stopped` and pinned to that Node:
+  allocation does not depend on runPolicy, and a Stopped guest never gets a
+  launcher, whose gpu-init would bind the mock's PCI address to vfio-pci on a
+  host without the GPU. The scenario is skipped when no Node qualifies, or
+  when another SwiftGuest in the cluster waits for a GPU and could be given
+  the mock one.
 
 ---
 

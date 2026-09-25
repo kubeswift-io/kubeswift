@@ -4,11 +4,27 @@
 # Provisions one SwiftImage with cloneStrategy=copy and one with
 # cloneStrategy=snapshot from the same source URL, then boots N guests
 # from each and times the wall-clock from SwiftGuest creation to
-# GuestRunning=True for each pair. The acceptance criterion (per the
-# Phase 1 design) is: snapshot mean must be at least MIN_SPEEDUP_X faster
-# than copy mean.
+# phase Running for each pair.
 #
-# Defaults: N=2 guests per strategy, MIN_SPEEDUP_X=3.
+# Pass/fail: both images reach Ready, the snapshot image publishes a
+# VolumeSnapshot clone seed, every guest reaches Running, and each
+# snapshot-strategy guest's root PVC is cloned from a VolumeSnapshot
+# (spec.dataSource).
+#
+# Speed: the mean speedup of snapshot over copy is printed, and by default it
+# does not fail the test. A CSI driver may implement VolumeSnapshot +
+# dataSource as a full copy (Longhorn does), and the snapshot path is still
+# correct there. --require-speedup [N] fails the test when snapshot is not at
+# least N times faster than copy (N defaults to MIN_SPEEDUP_X): the Phase 1
+# design's acceptance criterion, meant for a copy-on-write driver.
+#
+# Usage:
+#   ./clonestrategy-test.sh [--vsclass NAME] [--replicas N]
+#                           [--require-speedup [N]] [--min-speedup N]
+#                           [--no-cleanup]
+#
+# Defaults: N=2 guests per strategy, MIN_SPEEDUP_X=3 (--min-speedup sets it
+# without requiring it), speedup informational (REQUIRE_SPEEDUP=false).
 #
 # Requires:
 #   - kubectl, KubeSwift cluster with snapshot CRDs and controllers.
@@ -19,6 +35,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-default}"
 N="${N:-2}"
 MIN_SPEEDUP_X="${MIN_SPEEDUP_X:-3}"
+REQUIRE_SPEEDUP="${REQUIRE_SPEEDUP:-false}"
 GUEST_TIMEOUT_M="${GUEST_TIMEOUT_M:-10}"
 VSCLASS=""
 NO_CLEANUP=false
@@ -28,10 +45,18 @@ while [[ $# -gt 0 ]]; do
     --vsclass)        VSCLASS="$2"; shift 2 ;;
     --replicas)       N="$2"; shift 2 ;;
     --min-speedup)    MIN_SPEEDUP_X="$2"; shift 2 ;;
+    --require-speedup)
+      REQUIRE_SPEEDUP=true
+      if [[ "${2:-}" =~ ^[0-9]+$ ]]; then MIN_SPEEDUP_X="$2"; shift; fi
+      shift ;;
     --no-cleanup)     NO_CLEANUP=true; shift ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+if [[ ! "$MIN_SPEEDUP_X" =~ ^[0-9]+$ ]]; then
+  echo "the speedup threshold must be a whole number, got $MIN_SPEEDUP_X" >&2
+  exit 2
+fi
 
 if [[ -z "$VSCLASS" ]]; then
   VSCLASS=$(kubectl get volumesnapshotclass -o jsonpath='{range .items[?(@.metadata.annotations.snapshot\.storage\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)
@@ -41,8 +66,13 @@ if [[ -z "$VSCLASS" ]]; then
   exit 2
 fi
 
+if [[ "$REQUIRE_SPEEDUP" == "true" ]]; then
+  speedup_mode="required"
+else
+  speedup_mode="informational"
+fi
 echo "=== KubeSwift clone-strategy side-by-side test ==="
-echo "Namespace: $NAMESPACE  N=$N  MIN_SPEEDUP=${MIN_SPEEDUP_X}x  VSClass=$VSCLASS"
+echo "Namespace: $NAMESPACE  N=$N  MIN_SPEEDUP=${MIN_SPEEDUP_X}x (${speedup_mode})  VSClass=$VSCLASS"
 echo ""
 
 cleanup() {
@@ -117,6 +147,12 @@ EOF
 echo "  Waiting for both SwiftImages Ready (15m)..."
 kubectl wait --for=jsonpath='{.status.phase}'=Ready swiftimage/cs-source-copy -n "$NAMESPACE" --timeout=15m
 kubectl wait --for=jsonpath='{.status.phase}'=Ready swiftimage/cs-source-snap -n "$NAMESPACE" --timeout=15m
+seed_kind=$(kubectl get swiftimage cs-source-snap -n "$NAMESPACE" -o jsonpath='{.status.cloneSeed.kind}')
+if [[ "$seed_kind" != "VolumeSnapshot" ]]; then
+  echo "  FAIL: cs-source-snap is Ready without a VolumeSnapshot clone seed (status.cloneSeed.kind=${seed_kind:-unset})" >&2
+  exit 1
+fi
+echo "  cs-source-snap clone seed: $(kubectl get swiftimage cs-source-snap -n "$NAMESPACE" -o jsonpath='{.status.cloneSeed.name}')"
 
 # Boot N guests from each strategy, measuring wall-clock to Running.
 boot_one() {
@@ -160,6 +196,22 @@ for i in $(seq 1 "$N"); do
   echo "  cs-snap-$i: ${t}s"
 done
 
+# The snapshot path, not a fallback to copy: each snapshot-strategy guest's
+# root PVC is cloned from a VolumeSnapshot. (The controller falls back to copy
+# when the clone would change volumeMode, and the guests still boot.)
+echo ""
+echo "--- Checking the snapshot-strategy root PVCs ---"
+for i in $(seq 1 "$N"); do
+  source_kind=$(kubectl get pvc -n "$NAMESPACE" \
+    -l "swift.kubeswift.io/guest=cs-snap-${i},swift.kubeswift.io/role=root-disk" \
+    -o jsonpath='{.items[*].spec.dataSource.kind}')
+  if [[ "$source_kind" != "VolumeSnapshot" ]]; then
+    echo "  FAIL: cs-snap-$i root PVC is not cloned from a VolumeSnapshot (dataSource.kind=${source_kind:-none})" >&2
+    exit 1
+  fi
+  echo "  cs-snap-$i: root PVC dataSource VolumeSnapshot"
+done
+
 avg() { local sum=0; for x in "$@"; do sum=$((sum + x)); done; echo $((sum / $#)); }
 copy_avg=$(avg "${COPY_TIMES[@]}")
 snap_avg=$(avg "${SNAP_TIMES[@]}")
@@ -177,7 +229,8 @@ fi
 # integer compare: copy_avg / snap_avg >= MIN_SPEEDUP_X
 ratio_x10=$(( (copy_avg * 10) / snap_avg ))
 min_x10=$(( MIN_SPEEDUP_X * 10 ))
-echo "  speedup:      ${ratio_x10}/10 x  (min required: ${min_x10}/10 x)"
+speedup="$(( ratio_x10 / 10 )).$(( ratio_x10 % 10 ))x"
+echo "  speedup:      ${speedup}  (threshold ${MIN_SPEEDUP_X}x, ${speedup_mode})"
 
 if [[ "$ratio_x10" -ge "$min_x10" ]]; then
   echo ""
@@ -185,9 +238,20 @@ if [[ "$ratio_x10" -ge "$min_x10" ]]; then
   exit 0
 fi
 
+if [[ "$REQUIRE_SPEEDUP" != "true" ]]; then
+  echo ""
+  echo "  NOTE: snapshot was ${speedup} faster than copy, under ${MIN_SPEEDUP_X}x. Expected"
+  echo "  on a CSI driver that implements snapshot+dataSource as a full copy (e.g."
+  echo "  Longhorn); see docs/images/clone-strategies.md. Not a failure unless"
+  echo "  --require-speedup is given."
+  echo ""
+  echo "=== clone-strategy e2e PASS (snapshot path used; speedup informational) ==="
+  exit 0
+fi
+
 echo ""
 echo "=== clone-strategy e2e FAIL ==="
-echo "  snapshot strategy did not beat copy strategy by the required margin."
+echo "  snapshot strategy did not beat copy strategy by the required ${MIN_SPEEDUP_X}x."
 echo "  This may indicate a CSI driver where snapshot+dataSource is implemented"
 echo "  as a full copy (e.g. Longhorn). See docs/images/clone-strategies.md."
 exit 1
