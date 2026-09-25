@@ -3,6 +3,7 @@ package swiftguest
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -12,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -94,6 +96,15 @@ type SwiftGuestReconciler struct {
 	// cloneFromSnapshot guest cloning from an oci snapshot. Wired from
 	// KUBESWIFT_SNAPSHOT_ORAS_IMAGE.
 	SnapshotORASImage string
+
+	// Recorder reports on the guest what the controller does to it on its own,
+	// such as stopping it for runPolicy Stopped. Optional.
+	Recorder record.EventRecorder
+
+	// stopDeferred holds, per guest (namespace/name), the wait a runPolicy
+	// Stopped was last reported to be in (see reconcileStop), so it is
+	// reported once. An entry goes when the wait ends or the guest does.
+	stopDeferred sync.Map
 }
 
 // Reconcile implements the reconcile loop.
@@ -106,6 +117,9 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 
 	var guest swiftv1alpha1.SwiftGuest
 	if err := r.Get(ctx, req.NamespacedName, &guest); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.stopDeferred.Delete(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -404,30 +418,20 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// Guest is intentionally stopped. With no launcher, or one that has exited,
+	// the guest is recorded Stopped and the pass ends without recreating it. A
+	// launcher still up is shut down, unless another operation owns it; the pass
+	// then goes on, reporting it, until it is gone. See reconcileStop.
+	var stopRequeue time.Duration
 	if rg.GetLifecycle() == "stop" {
-		// Guest is intentionally stopped. If a pod exists and is completed or doesn't exist,
-		// update status to Stopped and return without recreating the pod.
-		var existingPod corev1.Pod
-		podErr := r.Get(ctx, client.ObjectKey{Namespace: guest.Namespace, Name: canonicalPodName(&guest)}, &existingPod)
-		if podErr != nil && client.IgnoreNotFound(podErr) != nil {
-			return ctrl.Result{}, podErr
+		requeue, done, err := r.reconcileStop(ctx, &guest, status)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-		podGone := apierrors.IsNotFound(podErr)
-		podDone := !podGone && (existingPod.Status.Phase == corev1.PodSucceeded || existingPod.Status.Phase == corev1.PodFailed)
-		if podGone || podDone {
-			status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
-			// Nothing of the last run is true of a stopped guest.
-			ClearRunState(status, "Stopped", "the guest is stopped; it has no launcher")
-			var podForStopped *corev1.Pod
-			if !podGone {
-				podForStopped = &existingPod
-			}
-			recordGuestMetrics(&guest, &guest.Status, status, podForStopped)
-			if err := r.patchStatus(ctx, &guest, status); err != nil {
-				return ctrl.Result{}, err
-			}
+		if done {
 			return ctrl.Result{}, nil
 		}
+		stopRequeue = requeue
 	}
 
 	// This block fires on launcher-pod TERMINAL states (Failed/Succeeded), i.e.
@@ -793,10 +797,13 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 
 	// Requeue while an agent-enabled clone's identity regen is still in flight
 	// (0 = no requeue once it reaches a terminal CloneIdentityRegenerated state),
-	// or while a running guest's IP is still undiscovered.
+	// while a running guest's IP is still undiscovered, or while a stopped
+	// guest's launcher shuts down or waits to be shut down.
 	requeue := cloneIdentityRequeue
-	if ipWaitRequeue > 0 && (requeue == 0 || ipWaitRequeue < requeue) {
-		requeue = ipWaitRequeue
+	for _, d := range []time.Duration{ipWaitRequeue, stopRequeue} {
+		if d > 0 && (requeue == 0 || d < requeue) {
+			requeue = d
+		}
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
@@ -901,6 +908,12 @@ func conflictRequeue(res ctrl.Result, err error) (ctrl.Result, error) {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	return res, err
+}
+
+func (r *SwiftGuestReconciler) event(guest *swiftv1alpha1.SwiftGuest, eventType, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(guest, eventType, reason, format, args...)
+	}
 }
 
 // swiftImageToSwiftGuests enqueues SwiftGuests that reference a SwiftImage when the SwiftImage changes.

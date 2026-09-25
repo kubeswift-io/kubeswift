@@ -83,10 +83,12 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 	}
 	// 0. Stop the source guest FIRST — flip runPolicy=Stopped so the SwiftGuest
 	//    controller does NOT recreate the launcher after we delete it in step 1.
-	//    The stop-guard is reactive: recreation happens while runPolicy=Running, so
-	//    a bare Delete without the Stopped flip lets the launcher resurrect — a
-	//    split-brain with the resumed clone AND a coherency race between the
-	//    disk-chunk Job (reads image.raw ro) and the resurrected guest's CH
+	//    (That controller also shuts a Stopped guest's launcher down, but not
+	//    while this snapshot is Uploading a full-state capture: step 1 does.)
+	//    Recreation happens while runPolicy=Running, so a bare Delete without
+	//    the Stopped flip lets the launcher resurrect — a split-brain with the
+	//    resumed clone AND a coherency race between the disk-chunk Job (reads
+	//    image.raw ro) and the resurrected guest's CH
 	//    (writes it rw). This is the "terminate the source" of capture-then-
 	//    terminate (design §2.1/§5): a full-state capture is a migration, so the
 	//    source stays down (the operator deletes it once the clone is up). Mirrors
@@ -289,9 +291,11 @@ func (r *SwiftSnapshotReconciler) capturedDataDisks(ctx context.Context, guest *
 // stopSourceGuest patches the source SwiftGuest to runPolicy=Stopped (idempotent)
 // so the SwiftGuest controller's stop-guard does not recreate the launcher after
 // handleFullStateDiskCapture deletes it. runPolicy must flip to Stopped BEFORE the
-// Delete (the guard is reactive — it prevents recreation, it does not stop a
-// running pod), so this is step 0. A source-gone (NotFound) or already-Stopped
-// guest is a no-op — the capture is re-entrant across requeues. The clone still
+// Delete (a launcher deleted while runPolicy is Running is recreated), so this is
+// step 0. The SwiftGuest controller leaves the delete to this snapshot while it
+// is Uploading, rather than shutting the launcher down for Stopped with its
+// grace period. A source-gone (NotFound) or already-Stopped guest is a no-op —
+// the capture is re-entrant across requeues. The clone still
 // resolves the source spec later (prepareCloneFromSnapshot needs the guest to
 // exist, not to be running); the operator deletes the stopped source once the
 // clone is up.

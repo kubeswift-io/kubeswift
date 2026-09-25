@@ -194,8 +194,8 @@ func TestGuestService_StartStopGuest(t *testing.T) {
 	if _, err := svc.StopGuest(context.Background(), connect.NewRequest(&kubeswiftv1.GuestActionRequest{Ref: ref})); err != nil {
 		t.Fatalf("StopGuest: %v", err)
 	}
-	// StopGuest must delete the launcher pod — the stop guard is reactive only,
-	// so a runPolicy patch alone would leave the VM running.
+	// StopGuest must delete the launcher pod, so the VM stops at once rather
+	// than on the controller's next reconcile.
 	if got := podCount(); got != 0 {
 		t.Errorf("StopGuest left %d launcher pods, want 0", got)
 	}

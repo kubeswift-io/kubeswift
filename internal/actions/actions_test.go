@@ -92,8 +92,8 @@ func TestStart_PatchesRunningKeepsPod(t *testing.T) {
 	}
 }
 
-// Stop patches runPolicy=Stopped AND deletes the launcher pod — both halves are
-// load-bearing (the stop guard is reactive; PR #267).
+// Stop patches runPolicy=Stopped AND deletes the launcher pod, so the VM stops
+// at once rather than on the controller's next reconcile (PR #267).
 func TestStop_PatchesStoppedAndDeletesPod(t *testing.T) {
 	dyn := fakeDyn(uGuest("default", "vm-a", "Running"), uPod("default", "vm-a", "vm-a"))
 

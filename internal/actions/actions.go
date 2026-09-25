@@ -74,13 +74,17 @@ func Start(ctx context.Context, dyn dynamic.Interface, namespace, name string) (
 	return SetRunPolicy(ctx, dyn, namespace, name, RunPolicyRunning)
 }
 
-// Stop sets runPolicy=Stopped AND deletes the launcher pod(s). Both steps are
-// required: the SwiftGuest stop guard is reactive — it prevents pod
-// *recreation*, it does not stop a running VM — so a runPolicy patch alone
-// leaves the guest running (verified on-cluster; the bug PR #267 fixed in the
-// gateway was exactly a Stop that patched but forgot the pod delete). Deleting
-// the launcher pod triggers swiftletd's graceful SIGTERM shutdown (within the
-// pod's termination grace period); the guard then keeps it stopped.
+// Stop sets runPolicy=Stopped AND deletes the launcher pod(s). The SwiftGuest
+// controller stops a running guest whose runPolicy is Stopped on its own, by
+// deleting its launcher the same way, so the patch alone stops the guest too;
+// deleting the pod here stops it at once rather than on the controller's next
+// reconcile. Unlike the controller, Stop does not wait for a migration,
+// restore or snapshot capture of the guest to finish. Deleting the launcher
+// pod triggers swiftletd's graceful SIGTERM shutdown (an ACPI power-off within
+// the pod's termination grace period); the controller then keeps it stopped.
+//
+// Stop is idempotent: the patch is the same each time, a pod already gone is
+// success, and deleting a terminating pod again does not change its shutdown.
 //
 // The returned object is the runPolicy=Stopped patch result.
 func Stop(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*unstructured.Unstructured, error) {

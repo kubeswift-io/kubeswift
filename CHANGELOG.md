@@ -36,7 +36,7 @@ helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1
   -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
 ```
 
-Three changes may need action:
+Four changes may need action:
 
 **A local snapshot's directory is now derived, not chosen.**
 `spec.backend.local.hostPath` must be omitted or be
@@ -88,6 +88,27 @@ kubeswift-metrics-reader --clusterrole=kubeswift-metrics-reader
 `secure: false` keeps plain HTTP. An upgrade with `--reuse-values` keeps the
 setting it had; the command above, which re-applies only your own values,
 takes the new default.
+
+**`spec.runPolicy: Stopped` stops a running guest.** The controller used to
+only keep a stopped guest's launcher from being recreated, so a guest set
+Stopped with `kubectl` or from Git kept running, with no event, until someone
+deleted its launcher pod; only `swiftctl stop` and the UI's Stop, which also
+delete the pod, stopped it. The controller now deletes the launcher pod
+itself, with its default grace period, so the guest shuts down over ACPI as
+with `swiftctl stop`, and records a `Stopping` event on the guest. While a
+migration, a restore or a snapshot capture of the guest is in flight it waits,
+and records a `StopDeferred` event naming the operation. Any guest whose spec
+says Stopped but that still runs stops on the upgrade. That includes a guest
+whose GitOps manifest carries `runPolicy: Stopped` and that someone started by
+hand: Flux or Argo CD put Stopped back in its spec, which used to leave it
+running. To keep such a guest running, set `runPolicy: Running` in its
+manifest before upgrading. To list the guests that will stop:
+
+```sh
+kubectl get swiftguests -A -o json | jq -r '.items[]
+  | select(.spec.runPolicy == "Stopped" and .status.phase == "Running")
+  | "\(.metadata.namespace)/\(.metadata.name)"'
+```
 
 ### Security
 

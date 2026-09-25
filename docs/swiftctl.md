@@ -127,11 +127,17 @@ swiftctl stop [guest-name]
 
 **What it does:**
 1. Patches `spec.runPolicy=Stopped`
-2. Sends `SIGTERM` to the hypervisor PID via pod exec
-3. Waits up to 30 seconds for the pod to terminate
-4. If still running after 30s: force-deletes the pod
+2. Deletes the launcher pod (selected by the `swift.kubeswift.io/guest`
+   label, so it also finds a live-migrated `<guest>-mig-<uid>` pod). swiftletd
+   turns the pod's SIGTERM into an ACPI power-off within the pod's
+   termination grace period.
 
 The controller sees `runPolicy=Stopped` and will not recreate the pod.
+Setting `runPolicy=Stopped` any other way (`kubectl`, GitOps) stops a running
+guest too: the controller deletes its launcher pod the same way, once no
+migration, restore or snapshot capture of the guest is in flight (a
+`StopDeferred` event on the guest names the one it waits for). `swiftctl stop`
+does not wait.
 
 **Examples:**
 

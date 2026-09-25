@@ -25,7 +25,19 @@ Before pod creation, the controller applies two guards in order:
 
 **Stopped guard** — If `spec.runPolicy=Stopped` and the pod is gone or
 completed, the controller sets `phase=Stopped` and returns without
-recreating the pod.
+recreating the pod. If the pod is still up, the controller deletes it with
+its default grace period, as `swiftctl stop` does: swiftletd turns the
+SIGTERM into an ACPI power-off, and the guest is `Stopped` once the pod is
+gone. It records a `Stopping` event on the guest, and until then keeps
+reporting the pod's status. A pod already terminating is not deleted again.
+The controller does not delete the pod while another operation owns it: a
+SwiftMigration of the guest that has not finished, a SwiftRestore onto it
+that is `Restoring` or `Resuming`, or a SwiftSnapshot of it that is
+`Capturing` (or `Uploading` a full-state `includeDisk` capture). It records a
+`StopDeferred` event naming that operation and stops the guest once it is
+over. An offline migration and a full-state capture set `runPolicy=Stopped`
+themselves and delete the pod on their own; they get no `StopDeferred`
+event.
 
 **Restart guard** — If `spec.runPolicy=RestartOnFailure` or `Always`
 and the pod has failed (or succeeded for Always), the controller:
