@@ -403,3 +403,176 @@ place and report.
   - N1 and N2 are not re-run: the fixes do not change them, and a worker-1
     Longhorn problem would block them anyway.
 - **sov:** S1 as before.
+
+## Round 3: candidate `f260277`
+
+Round 2 (`phase2-r2.md`) lost no guest and passed its criteria, but found
+defects in live-migration cancel and cutover. They are fixed and merged:
+
+| PR | Fix | Found by |
+|---|---|---|
+| #667 | A cancelled or failed live migration takes its send (`kubeswift.io/migration-action*` naming `<mig>:send:*`) off the source pod, so the source launcher cannot run it later. StopAndCopy says "transferring guest state" only once the source launcher has taken this send up. While the launcher still runs an earlier send, the phaseDetail is "waiting for the source launcher to finish a previous send". Progress is read only from this send's estimate. | R6, defect B and the stale 95 |
+| #668 | Once the destination reports `running`, the controller waits up to 30 s for a live source's own `complete` before cutting over (a new condition, `DestinationRunning`). This brings back `observedTransferDuration`, and makes `SourceCompleteMissing` the rare case again. A source pod that is gone, finished or being deleted is not waited for, and the migration stays committed through the wait. | R3/D7b (`observedTransferDuration` empty); R5 and R6-t3 (`SourceCompleteMissing`) |
+| #669 | swiftletd fails a send about 20 s after its connection to the destination closes while the source guest still runs (or if the connection never opens within 60 s), not at the 600 s deadline. The progress estimate now carries its send's id (`kubeswift.io/migration-progress-estimate-id`). | R4 (9 m 46 s); R6, defect A |
+
+**Candidate: main @ `f260277`.** Everything in round 2 holds with `f260277`
+in place of `7a1a76d`: the chart `0.0.0-dev.f260277`, all nine image tags
+`sha-f260277` (`ui` excepted), the checkout, CRDs first, the stop conditions,
+and the Phase 0 amendments.
+- **Build check:** Release Dev run 754 for `f260277` started at 10:50 UTC,
+  alongside runs 752 and 753 for the intermediate commits. Apply the same check
+  and 45-minute wait as before.
+- **Reports:** write `phase1-r3.md`, `phase2-r3.md` and `phase3-r3.md`. Leave
+  the earlier reports as they are.
+
+### Before Phase 1: dev housekeeping
+- **`val-r2`:** delete the namespace. Its guest `r4g` runs the round-2
+  launcher, so it cannot test #669, and round 2's evidence is in
+  `phase2-r2.md`. It holds no snapshots, so it should finish deleting. If it
+  sticks in Terminating, leave it and report it.
+- **`val-d8`:** delete the namespace too (round-1 evidence, already reported).
+  Keep the cluster-scoped class `val-migratable-16g`: round 3 uses it.
+- **`val-d2` and `val-d3`:** still don't touch them (they wait on William).
+- **Secure metrics:** dev's stay on. The upgrade reuses values.
+
+### Phase 1 r3: GO
+Phase 1 as before, on all three clusters, with `f260277`. Record the same items
+as round 2, including:
+- the running-guest baselines: dev `gpu-cells/innercp` and ntx
+  `capi-udn/ks-udn-cp-54klw`, same UID and 0 restarts;
+- on dev, that the controller still runs with `--metrics-secure=true`.
+
+### Phase 2 r3 (dev): GO once Phase 1 r3 has succeeded on dev
+
+#669 is in swiftletd, so it reaches only launchers created on the new image.
+**Every guest used below must be created after the upgrade.** Before migrating
+it, check that its launcher runs `swiftletd:sha-f260277`. Use a new namespace,
+`val-r3`.
+
+For every live SwiftMigration below, record:
+- its phase and phaseDetail sequence, with timestamps;
+- its events;
+- `status.transferProgress` over time;
+- once it ends: `observedDowntime`, `observedTransferDuration` and the
+  conditions.
+
+| # | Scenario | Pass |
+|---|---|---|
+| T1 | R1 boot smoke, `disk-boot` only | PASS |
+| T2 | R3 again: D7a and D7b, the migration script | See **T2** below |
+| T3 | R4 again: cancel mid-transfer | See **T3** below |
+| T4 | A migration right after a cancel (defects A and B, and R5's sequence) | See **T4** below |
+| T5 | R6 again: cancel racing completion, three attempts back to back | See **T5** below |
+
+R2, R7, R8 and R9 are not re-run: nothing merged touches them, and round 2's
+results stand. D12's browser half is still William's.
+
+**T2 passes if all of these hold:**
+- "All checks passed" for D7a and D7b.
+- D7b's SwiftMigration has `observedTransferDuration` and `observedDowntime`
+  set. `observedTransferDuration` was empty in round 2 and 19.8 s in round 1.
+- There is no `SourceCompleteMissing` event.
+- Record the `DestinationRunning` condition, if present, and the gap between
+  it and the source's `complete`.
+- The phaseDetail "src migration complete; preparing cutover" is defined but
+  never set. That predates these fixes, so its absence is not a failure: the
+  phase goes from "transferring guest state" to "cutover: completing", as in
+  round 2.
+
+**T3: setup.** As in R4:
+- a new guest `val-r3/t3g` of class `val-migratable-16g`;
+- a 10 GiB tmpfs of random data, rewritten in a loop;
+- a sentinel;
+- a live migration to another node, cancelled 15 s into "transferring guest
+  state".
+
+**T3 passes if all of these hold:**
+- The SwiftMigration ends `Cancelled` on the graceful path: "destination pod
+  deleted after swiftletd cancel ack", and no `CancelAckTimeout`.
+- Right after `Cancelled`, the source pod has no `kubeswift.io/migration-action`,
+  `-action-id` or `-action-args` naming this migration.
+- **The source's `migration-status` turns `failed` within 60 s of the
+  cancel.** The expected time is about 20 s after Cloud Hypervisor's
+  connection reset.
+- The source launcher's log has `migration_send_failed id=<this send>` with a
+  detail naming the closed migration connection, not "past the migration
+  deadline".
+- On the source guest, the sentinel is present, uptime is continuous, and SSH
+  works.
+- Record the cancel time, the time of Cloud Hypervisor's send error (the reset),
+  and the time of `migration_send_failed`.
+
+**T4: steps.** On the same guest, right after T3:
+1. Start `t4-a`, a live migration to T3's target node, and cancel it 15 s into
+   "transferring guest state".
+2. Once `t4-a` is `Cancelled`, stop the memory rewriter so the next migration
+   can converge. Within 5 s of the `Cancelled`, create `t4-b` to the same node.
+3. If `t4-b` shows "waiting for the source launcher to finish a previous
+   send", cancel it while it still shows that, then create `t4-c` to the same
+   node and let it complete. If `t4-b` never shows it, record that (the source
+   was free before `t4-b` needed it) and let `t4-b` complete.
+
+**T4 passes if all of these hold:**
+- No migration shows "transferring guest state" before the source's log has
+  `action_accept … id=<that migration>:send:<n>`.
+- The completing migration (`t4-b` or `t4-c`):
+  - its first `transferProgress` is a real, low value, not the previous
+    send's final estimate;
+  - while it transfers, the source pod's
+    `kubeswift.io/migration-progress-estimate-id` names its send;
+  - the source accepts its send within 60 s of `t4-a`'s cancel, not after
+    about 10 minutes as in round 2.
+- If `t4-b` was cancelled while waiting:
+  - its action annotations are gone from the source pod right after its
+    `Cancelled`;
+  - for the rest of Phase 2, the source log never shows `action_accept` or
+    `dispatch_migration_send` for `t4-b`.
+- The completing migration meets R5's criteria:
+  - it reaches `Completed`;
+  - the source launcher logs `w23_terminal_write_signal_fired id=<its send>
+    completed=true` before `w23_terminal_write_signal_received`;
+  - the source pod ends with `migration-status: complete` for its send;
+  - there is no `SourceCompleteMissing` event;
+  - `observedTransferDuration` is set.
+- In the survivor, the sentinel is present and uptime is continuous.
+
+**T5: setup.**
+- The T4 guest, with its memory rewriter stopped and a static 10 GiB of random
+  tmpfs data. A transfer takes about 155 s.
+- Its source launcher is T4's destination pod, created on the new image.
+- Run the attempts back to back. Start each one as soon as the previous one
+  has ended and the source's `migration-status` no longer reads `sending`.
+  This should take at most 60 s after a cancel; round 2 needed 600 s.
+
+The three attempts:
+- **t1:** cancel once `transferProgress` ≥ 90 (the value is real now).
+- **t2:** cancel about 10 s before the expected completion (about 145 s in).
+- **t3:** cancel as soon as the `DestinationRunning` condition appears. This
+  is the window #668 added: the destination runs and the controller waits for
+  the source. Poll it at about 0.2 s; the window is usually a few seconds.
+  - If you miss it, cancel at once anyway. Record when you cancelled relative
+    to the destination's `migration-status: running` and the source's
+    `complete`.
+
+**T5 passes if, in every attempt, all of these hold:**
+- Exactly one VM survives: either `Cancelled` with the source running, or
+  `Completed` with the destination running.
+- No SwiftMigration ends `Failed` after the destination reported `running`.
+- In the survivor, the sentinel is present and uptime is continuous.
+- A cancel sent after `DestinationRunning` gives `CancelIgnored`, and the
+  migration completes.
+- Each `Completed` attempt has `observedTransferDuration` set and no
+  `SourceCompleteMissing` event.
+- After each `Cancelled` attempt, the source's `migration-status` turns
+  `failed` within 60 s.
+- Report each attempt's timing and the gap before the next attempt.
+
+**Stop condition.** As in round 2: if a guest is ever left without a running VM
+(lost, killed, or stuck with no launcher), stop Phase 2 at once. Leave
+everything in place and report. If every scenario passes, delete `val-r3`;
+otherwise keep it for inspection.
+
+### Phase 3 r3: GO per cluster, once Phase 1 r3 has succeeded on it
+- **ntx:** N3 as before: same launcher UID, 0 restarts, no status churn. N1
+  and N2 are still not re-run.
+- **sov:** S1 as before.
