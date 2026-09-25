@@ -150,11 +150,10 @@ func guestRAMMiB(ctx context.Context, r *SwiftMigrationReconciler, guest *swiftv
 // handleStopAndCopyLive implements the live-mode StopAndCopy phase
 // per design §2.3 (sub-states) and §3.5 (cutover ordering invariant).
 //
-// **B3.1 SCOPE**: 6-substate state machine through src-completed.
-// The cutover sub-state (§3.5 3-step sequence) is intentionally
-// stubbed: when substateSrcCompleted is observed, the handler sets
-// phaseDetail to PhaseDetailLiveSrcCompleted and returns
-// phaseRequeue. **B3.2 lands the cutover sequence**.
+// Once the source reports complete (substateSrcCompleted), or the
+// destination reports the guest running (substateDstRunning) and a live
+// source has had a moment to report too, the handler runs the §3.5
+// cutover sequence (executeCutover) in the same reconcile.
 //
 // **State-machine pattern**: each reconcile reads observable cluster
 // state (src/dst pod annotations + SwiftMigration counters) via
@@ -536,6 +535,7 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 			// carries the pause window, while cutting over deletes its pod.
 			// So give a live source launcher a moment to report.
 			if awaitSourceReport(status, srcArg, time.Now()) {
+				setPhaseDetail(status, migrationv1alpha1.PhaseDetailLiveDestRunning)
 				return phaseRequeue(stopAndCopyLivePollInterval)
 			}
 			if r.Recorder != nil {

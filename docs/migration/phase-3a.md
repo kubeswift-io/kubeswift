@@ -267,7 +267,10 @@ terminal phase (Completed / Failed / Cancelled).
       example a cancelled one; this migration's transfer has not
       started)
     - `transferring guest state`
-    - `src migration complete; preparing cutover`
+    - `destination running; waiting for the source's report`
+      (the destination runs the guest, which commits the migration;
+      the controller waits up to 30 s for the source launcher's own
+      report, which carries the pause window, then cuts over)
     - `cutover: updating canonical pod`
     - `cutover: deleting source pod`
     - `cutover: completing`
