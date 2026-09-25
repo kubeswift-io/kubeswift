@@ -8,7 +8,7 @@
 | New CR field "doesn't work" after a chart upgrade (silently ignored) | **Stale CRD** — the release upgraded the controllers but not the CRDs | Ensure `upgrade.crds: CreateReplace`; verify with `kubectl explain <kind>.spec.<field>` |
 | CR create fails `connection refused ... :9443` | Webhook configurations exist but the controller runs webhook-disabled (cluster-state drift) | align `values.webhook.enabled` with the installed VWC/MWC, or `kubectl delete -k config/webhook` |
 | HelmRelease fails on `monitoring.coreos.com` kinds | `monitoring.*` enabled without the Prometheus Operator CRDs present | install kube-prometheus-stack first, or leave monitoring off |
-| Platform jumped a minor version unattended | `OCIRepository` `ref.semver` is a wide range such as `">=0.1.0"` | pin to a minor range (`"0.14.x"`) or an exact version |
+| Platform jumped a minor version unattended | `OCIRepository` `ref.semver` is a wide range such as `">=0.1.0"` | pin to a minor range (`"0.15.x"`) or an exact version |
 | Web console is old after a chart upgrade | `ui.image.tag` is not chart-derived; `kubeswift-ui` releases separately | raise `ui.image.tag` deliberately; a chart bump never moves it |
 
 ## Admission and RBAC

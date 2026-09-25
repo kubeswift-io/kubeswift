@@ -4,9 +4,39 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.15.0] — 2026-09-25
+
+A security release, with live-migration fixes found while validating it on
+three lab clusters.
+
+The UI's console, sandbox shell and sandbox logs no longer grant `pods/exec`
+in the privileged launcher, which was root on every node running a VM (G9).
+The controller's `/metrics` is HTTPS and authorized by default (G15). A
+namespace can no longer delete, overwrite or boot another namespace's
+snapshots on a node, a TokenRequest can no longer mint a launcher
+ServiceAccount token, and every image's base is pinned by digest.
+
+A live migration no longer deletes the only running copy of its guest when a
+completed transfer outruns its timeout. A cancel stops the transfer
+gracefully, frees the source for the next migration within seconds instead of
+ten minutes, and leaves no send behind to run later. An in-place restore
+resumes the snapshot, with its address, instead of booting the guest cold.
+
+**CRDs changed this release**: `swiftsnapshots` (`status.guestSpec.primaryIP`,
+and the local backend's `hostPath`, now derived) and description-only changes
+to `swiftsnapshotschedules`. Apply them before upgrading. Without the new
+`swiftsnapshots` schema, `status.guestSpec.primaryIP` is pruned, and a guest
+restored in place reports no address until its next DHCP lease.
 
 ### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.0 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+Three changes may need action:
 
 **A local snapshot's directory is now derived, not chosen.**
 `spec.backend.local.hostPath` must be omitted or be
@@ -56,7 +86,8 @@ kubeswift-metrics-reader --clusterrole=kubeswift-metrics-reader
 --serviceaccount=<ns>:<sa>`. The chart's ServiceMonitor and
 `config/grafana/servicemonitor.yaml` scrape with https and Prometheus's token.
 `secure: false` keeps plain HTTP. An upgrade with `--reuse-values` keeps the
-setting it had.
+setting it had; the command above, which re-applies only your own values,
+takes the new default.
 
 ### Security
 
@@ -283,10 +314,9 @@ setting it had.
   `SourceCompleteMissing` warning event marks a cutover without it. A
   migration past cutover whose guest already runs on the destination now
   completes instead of failing on a timeout that expired meanwhile. A
-  migration's destination runs
-  its source's launcher image, so the swiftletd half reaches a guest only once
-  its launcher has been recreated on this version; the controller half
-  protects every guest from the upgrade on.
+  migration's destination runs its source's launcher image, so the swiftletd
+  half reaches a guest only once its launcher has been recreated on this
+  version; the controller half protects every guest from the upgrade on.
 
 ### CI
 
