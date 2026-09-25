@@ -246,6 +246,17 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "guest running")
 	}
 
+	// The launcher has exited but the pod is not Succeeded/Failed yet: the
+	// kubelet reports the container's exit first and holds the pod at Running
+	// until it has finished stopping the pod, a few seconds later. The sandbox
+	// is past materializing, so it keeps its phase, and the pod's terminal
+	// phase decides Completed or Failed. This case used to fall through to
+	// Materializing, so a finishing sandbox went Running -> Materializing ->
+	// Completed.
+	if _, exited := launcherExitCode(pod); exited {
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
+	}
+
 	// Still coming up (materializing / launcher not ready).
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxMaterializing, "materializing rootfs")
 }

@@ -316,6 +316,15 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   exec runs independently. A cancel interrupts only a receive; during a send
   it waits, as before.
 
+- **A finishing sandbox went back to `Materializing` before it completed.**
+  The kubelet reports the launcher container's exit before it marks the pod
+  `Succeeded` or `Failed`: it keeps the pod `Running` until it has finished
+  stopping it. The controller took a `Running` pod whose launcher was not
+  running for one still coming up, so a one-shot sandbox read `Running`, then
+  `Materializing` for about 4 seconds in the lab, then `Completed`. The
+  sandbox now keeps its phase until the pod is terminal, and the terminal pod
+  still decides `Completed` or `Failed`.
+
 - **A warm GPU pool booted its slots on the base `sandbox` kernel.** That
   kernel has no `CONFIG_MODULES`, so a slot could not load the NVIDIA driver
   its image ships, which is what the `gpu-sandbox` kernel exists for. A
