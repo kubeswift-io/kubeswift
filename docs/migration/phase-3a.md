@@ -255,6 +255,15 @@ terminal phase (Completed / Failed / Cancelled).
   it up yet.
 - `Validating` — webhook + controller pre-flight checks
   (target node Ready, src pod UID stamped, mode resolution).
+  `phaseDetail` refines further:
+    - `waiting for terminating pods on the target node to release
+      resources` (the target has room for the destination only once
+      pods already being deleted there, such as a cancelled
+      migration's destination pod, are gone; the scheduler counts
+      them until then. `Compatible` is `Unknown` meanwhile. After 2
+      minutes the migration fails with the usual `insufficient
+      CPU/memory headroom` message, and at once if the target would
+      not fit even without those pods)
 - `Preparing` — destination pod created and waited until
   Ready.
 - `StopAndCopy` — memory transfer in progress. `phaseDetail`

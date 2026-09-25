@@ -60,6 +60,9 @@ const (
 	SwiftMigrationConditionReady = "Ready"
 	// ConditionCompatible is True when the Validating phase has determined
 	// the migration is feasible. Set False with reason on validation failure.
+	// Unknown while Validating waits for pods being deleted on the target
+	// node to release the resources the destination needs; its
+	// lastTransitionTime times that wait.
 	SwiftMigrationConditionCompatible = "Compatible"
 	// ConditionIPWillChange is True when the operator opted into spec.allowIPChange
 	// AND the guest is on default node-local networking AND source != target.

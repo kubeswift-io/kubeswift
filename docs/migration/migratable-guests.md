@@ -74,7 +74,9 @@ These bite in practice — check them before blaming the migration logic:
 
 - **Target-node capacity.** The Validating phase refuses a target without CPU
   headroom (`insufficient CPU headroom: need 2, have ...`). Always `--check`
-  first and target a node with room.
+  first and target a node with room. Room held by pods still terminating on
+  the target, such as a cancelled migration's destination pod, is waited for
+  (up to 2 minutes) rather than refused.
 - **mTLS identity is worker-node-only.** With `migration.mtls.enabled` (Phase
   3c), each **worker** node gets a per-node identity Secret
   (`kubeswift-migration-node-<node>`). A guest running on the **control-plane**
