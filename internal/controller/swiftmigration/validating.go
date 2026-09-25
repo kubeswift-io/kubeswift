@@ -220,6 +220,12 @@ func (r *SwiftMigrationReconciler) checkNodeCapacity(
 ) *phaseResult {
 	err := NodeHasCapacity(ctx, r.Client, node, class)
 	if err == nil {
+		// The wait is over. Its Unknown condition says the node does not fit
+		// yet; a later check that fails must not leave that behind.
+		if c := apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionCompatible); c != nil &&
+			c.Status == metav1.ConditionUnknown && c.Reason == ReasonAwaitingTerminatingPods {
+			apimeta.RemoveStatusCondition(&status.Conditions, migrationv1alpha1.SwiftMigrationConditionCompatible)
+		}
 		return nil
 	}
 	var terminating *TerminatingPodsError

@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
 // t4Message is the failure lab validation of v0.15.0 (round 3, T4) saw: an
@@ -195,6 +196,22 @@ func TestValidating_TerminatingPodOnTarget_WaitsThenAdvances(t *testing.T) {
 	}
 
 	releaseTerminatingPod(t, c, "guest-mig-prev")
+	// Once the node fits, the wait's Unknown condition goes, so a later
+	// Validating check that fails does not leave it behind.
+	var node corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "worker-2"}, &node); err != nil {
+		t.Fatal(err)
+	}
+	var class swiftv1alpha1.SwiftGuestClass
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "class-default"}, &class); err != nil {
+		t.Fatal(err)
+	}
+	if res := r.checkNodeCapacity(context.Background(), status, &node, &class, ""); res != nil {
+		t.Fatalf("checkNodeCapacity = %+v, want nil once the pod is gone", res)
+	}
+	if cond := compatibleCondition(status); cond != nil {
+		t.Errorf("Compatible = %+v, want the wait's condition removed", cond)
+	}
 	result = r.handleValidating(context.Background(), mig, status)
 	if !result.Advanced {
 		t.Fatalf("result = %+v, want Advanced once the terminating pod is gone", result)
