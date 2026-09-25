@@ -1,6 +1,8 @@
 # Phase 2 r4: dev suites on `9604992`
 
-Run 2026-09-25, 20:22–21:48 UTC, after Phase 1 r4 recovered on dev (`phase1-r4.md`).
+Run 2026-09-25, 20:22–21:48 UTC, then T3/T5 at 22:25–22:44 UTC after William
+authorised freeing Longhorn space. This follows Phase 1 r4's recovery on dev
+(`phase1-r4.md`).
 
 - Every guest was created after the upgrade, and every launcher checked ran
   `swiftletd:sha-9604992`.
@@ -10,21 +12,25 @@ Run 2026-09-25, 20:22–21:48 UTC, after Phase 1 r4 recovered on dev (`phase1-r4
   - `val-r4-cs`: V7;
   - `val-r4-snap`: V8;
   - `val-r4-nok`: V9;
-  - `val-r4-mig`: V3, V4b, V6;
+  - `val-r4-mig`: V3, V4b, V6, V11-T3/T5;
   - `val-r4-d7a`, `val-r4-d7b`, `val-r4-d7b2`: V4a;
   - `val-r4-rt`: V11-R2.
 
 **No guest was lost.** Every live migration that started either completed or
 left the guest running on its source.
 
-**Phase 2 is not complete.** V4a live and V11's T3/T5 are **blocked by the
-lab's Longhorn**, not by the candidate:
+**Everything passed except two items.** V9b was skipped because there is no
+free GPU. V4a live is blocked by the lab's Longhorn, not by the candidate:
 - cp-1's Longhorn disk is below Longhorn's minimum free space, so every new
   volume gets only 2 of its 3 replicas;
 - Longhorn will not live-migrate a degraded volume.
 
-The details are under V4. Because not everything passed, the `val-r4-*`
-namespaces are kept, as the plan says.
+The details are under V4.
+- T3 and T5 were first blocked the same way. After William authorised deleting
+  three finished test guests, they ran on a guest whose volume got all three
+  replicas.
+- Because V4a live did not pass, the `val-r4-*` namespaces are kept, as the
+  plan says.
 
 ## Results
 
@@ -34,13 +40,13 @@ namespaces are kept, as the plan says.
 | V2 | **PASS** |
 | V3 | **PASS**: (a) graceful power-off, `Stopped` 6 s after the patch; (b) `StopDeferred` names the migration, the migration completes, then the guest stops gracefully |
 | V4 | (a) offline **PASS**. (a) live **BLOCKED (environment)**: failed twice with `DstNeverReady`, because Longhorn would not migrate the fresh, degraded volume; the guest stayed on its source both times. (b) **PASS** |
-| V5 | **PASS**: `destination running; waiting for the source's report` appears with `DestinationRunning` in every live migration watched (v6-b, v4b-mig); 0 `SourceCompleteMissing` |
+| V5 | **PASS**: `destination running; waiting for the source's report` appears with `DestinationRunning` in every live migration watched (v6-b, v4b-mig, t5-t3); 0 `SourceCompleteMissing` |
 | V6 | **PASS**: waited 2.1 s in Validating (`AwaitingTerminatingPods`), then completed |
 | V7 | **PASS** (speedup 0.6x, informational) |
 | V8 | **PASS**: the namespace was gone in 19 s |
 | V9 | (a) **PASS**. (b) **SKIPPED**: there is no free GPU |
 | V10 | **PASS** |
-| V11 | R2 **PASS**. T3 and T5 **NOT RUN**: blocked by the same Longhorn cause as V4a live |
+| V11 | R2 **PASS**. T3 **PASS**: source `failed` 24 s after the cancel. T5 **PASS**: all three attempts; source free 27–28 s after each cancel; the `DestinationRunning` cancel gives `CancelIgnored` and completes |
 
 ## V1: smoke in a namespace (all scenarios). PASS
 
@@ -360,22 +366,104 @@ OK: sentinel survived: kubeswift-roundtrip-1790372758-30467
 - V8 had already run this script (on worker-1): PASS, sentinel kept, the
   address `192.168.99.10` before and after. This run adds the restore timing.
 
-### T3 and T5: NOT RUN (blocked)
+### Freeing Longhorn space for T3/T5 (authorised by William, 22:25)
 
-- **What they need.** Each needs a new `val-migratable-16g` guest live-migrated
-  to another node:
-  - T3: cancel 15 s into the transfer;
-  - T5: three attempts racing completion.
-- **Why they cannot run.** With cp-1's Longhorn disk below its threshold, such
-  a guest's volume gets 2 of 3 replicas and stays degraded. Longhorn then
-  refuses the migration, as in V4a live. The run would fail with
-  `DstNeverReady` before the transfer that T3 and T5 test.
-- **The guest reuse option does not fit.** The one healthy migratable guest
-  left (`v4p`) is 2 GiB, which is too small for T3's 10 GiB tmpfs.
-- **Partial cover.** V6 cancelled a live migration mid-transfer on this build
-  (`v6-a`, graceful path, no `CancelAckTimeout`). But it did not check T3's
-  source-side criteria (`migration-status` turning `failed`, the
-  `migration_send_failed` detail). So T3 is not claimed.
+- **First attempt, blocked.** T3/T5 were blocked at 21:48, as V4a live is. My
+  own attempt to delete finished test guests was refused by my session's
+  permission check.
+- **After authorisation.** William authorised deleting `val-r4-mig/v3a`, `v3b`
+  and `v4p`, all finished and passed. Their YAML was saved first.
+
+```text
+22:25:21 delete v3a v3b v4p;  22:25:34 their 3 Longhorn volumes gone
+22:25:49 cp-1 24.9% free   (Longhorn's disk stats lag a little)
+22:26:26 cp-1 26.6%  Schedulable=True
+22:26:56 26.3%   22:27:27 25.6%     <- the two degraded volumes (val-r4-d7b2, val-r4-rt) start rebuilding their third replica on cp-1
+22:28:29 t3g created; its volume got replicas on all three nodes
+22:30:56 t3g Running on <cp-1>, volume healthy;  cp-1 already back at 23.8%, Schedulable=False
+```
+
+- The room lasted only about 3 minutes. It was enough for one fresh volume,
+  and it is gone again.
+- The V11-R2 guest's volume is now healthy, and `val-r4-d7b2`'s is still
+  degraded.
+
+### T3: cancel mid-transfer. PASS
+
+**Setup, as in round 3:**
+- a new guest `val-r4-mig/t3g` (class `val-migratable-16g`, launcher
+  `sha-9604992`, on cp-1);
+- 10 GiB of random data in an 11G tmpfs, rewritten in a loop;
+- sentinel `VAL-R4-T3-1790375477` on tmpfs `/run/val`.
+
+A live migration to worker-2 was cancelled 15 s into "transferring guest state".
+
+```text
+22:32:25.200 t3-cancel created → <worker-2>
+22:32:41.737 "transferring guest state"   progress 3 → 6 → 9
+22:32:57.001 cancelRequested=true (progress 9)
+22:32:57     CancelIssued on the destination pod
+22:32:57.628 source pod: migration-action-id gone (0.6 s after the cancel)
+22:33:00.445 Cancelled "destination pod deleted after swiftletd cancel ack"   (no CancelAckTimeout)
+22:33:00.494 source CH: "Migration failed: … Connection reset by peer (os error 104)"       <- the reset, 3.5 s after the cancel
+22:33:20.665 source: migration_send_failed id=t3-cancel:send:1 detail=the migration connection to <dst-ip>:6789 closed,
+             and the source guest is still running (the transfer failed; CH v53 auto-resumed the source)
+22:33:20.702 w23_terminal_write_signal_fired id=t3-cancel:send:1 completed=false
+22:33:21.035 source migration-status=failed   <- 24.0 s after the cancel (round 3: 25.1 s)
+22:33:24     source pod same uid, 0 restarts; sentinel present; uptime 106 → 167 s over 61 s; SSH works
+```
+
+- **Right after `Cancelled`**, the source pod's migration annotations were:
+  `progress-estimate`, `progress-estimate-id`, `status`, `status-detail`,
+  `status-id` and `phase2-unsafe-plaintext`. There was no `migration-action`,
+  `-action-id` or `-action-args`.
+- **Informational:** the source's `progress-estimate` kept climbing after the
+  cancel, 9 → 23 by 22:33:17, until it saw the failure. It is a time-based
+  estimate for the send that is still in flight.
+
+### T5: cancel racing completion, three attempts back to back. PASS
+
+**Setup:**
+- the T3 guest, with its rewriter stopped at 22:33:57, holding a static
+  10 GiB of random tmpfs data;
+- source: T3's source pod on cp-1; target: worker-1.
+
+Each attempt started once the source's `migration-status` no longer read
+`sending`.
+
+| | t1: cancel at progress ≥ 90 | t2: cancel ~145 s into the transfer | t3: cancel on `DestinationRunning` |
+|---|---|---|---|
+| Created | 22:34:02.5 | 22:37:05.5 | 22:40:13.6 |
+| Source `action_accept` | 22:34:16.8 | 22:37:20.5 | 22:40:27.0 |
+| Cancel | 22:36:37.143 (progress 92) | 22:39:46.173 (progress 95) | 22:43:00.448 |
+| Outcome | `Cancelled` 22:36:42.0, graceful ack | `Cancelled` 22:39:50.96, graceful ack | **`CancelIgnored=True/PastCutover`**, then `Completed` 22:43:03.8 |
+| Source CH reset | 22:36:44.2 | 22:39:52.8 | n/a |
+| `migration_send_failed` | 22:37:04.375 | 22:40:12.946 | n/a |
+| Source `migration-status=failed` | 22:37:05.029 (**+27.9 s**) | 22:40:13.470 (**+27.3 s**) | `complete` 22:43:03.003 |
+| Survivor | source, sentinel present, uptime 366 s | source, sentinel present, uptime 555 s | destination, sentinel present, uptime 748 s |
+| Gap before the next attempt | 23.5 s | 22.6 s | |
+
+**t3 in detail:**
+
+```text
+22:42:59.963 destination: dispatch_migration_receive_complete id=t5-t3:recv:1 state=Running elapsed_ms=153221
+22:43:00.277 phaseDetail "destination running; waiting for the source's report"  DestinationRunning=True
+22:43:00.448 cancelRequested=true   <- 0.49 s after the destination ran, 0.17 s after the condition appeared
+22:43:00     event CancelIgnored: "spec.cancelRequested=true received post-cutover; migration cannot be reversed"
+22:43:02.628 source: dispatch_migration_send_complete id=t5-t3:send:1 elapsed_ms=155583 w22_send_completed_flag=set
+22:43:02.660 source: w23_terminal_write_signal_fired id=t5-t3:send:1 completed=true
+22:43:02.664 source: w23_terminal_write_signal_received; safe to exit
+22:43:02.893 "cutover: completing"
+22:43:03.844 Completed "destination guest healthy (IP 192.168.99.15)"
+             observedTransferDuration=2m35.583s  observedDowntime=1.810s
+```
+
+- **Timing:** the source reported `complete` 2.7 s after the destination ran,
+  close to round 3's 2.3–2.5 s.
+- **Survivors:** exactly one VM survived every attempt. Uptime is continuous
+  from 203 s at 22:34:00 to 748 s at 22:43:04 (544 s of wall clock). No
+  destination pod was left behind.
+- **Warning events in `val-r4-mig`:** 0 `SourceCompleteMissing`, 0 `CancelAckTimeout`.
 
 ## Findings
 
@@ -397,8 +485,8 @@ OK: sentinel survived: kubeswift-roundtrip-1790372758-30467
    - A recoverable wait is shown as a terminal phase. I did not check whether
      this predates the candidate.
 3. **Two guests on one node can share a Guest IP** (V4b). `v4p` and `innercp`
-   both have `192.168.99.20` on worker-2. The #676 columns tell them apart,
-   but William's round-1 concern stands.
+   both had `192.168.99.20` on worker-2 until `v4p` was deleted. The #676
+   columns tell them apart, but William's round-1 concern stands.
 4. **A sandbox's phase goes back one step before `Completed`** (V9a):
    `Running` → `Materializing` for about 4 s → `Completed`.
 5. **A failed warm-pool slot still holds the node's only GPU** (V9b).
@@ -412,35 +500,42 @@ OK: sentinel survived: kubeswift-roundtrip-1790372758-30467
 
 ## Environment notes (dev)
 
-- **cp-1's Longhorn disk is below its free-space threshold:** 42 GiB of
-  195 GiB (21%), with `storage-minimal-available-percentage=25`.
-  - This blocks V4a live, T3 and T5.
-  - Deleting the finished `val-r4-mig` guests (`v3a`, `v3b`, `v4p`, about
-    3.5 GiB each on cp-1) would bring it to about 27%. That is enough for
-    roughly one more fresh volume.
+- **cp-1's Longhorn disk is below its free-space threshold again:** 23.8%
+  free, with `storage-minimal-available-percentage=25` and
+  `replica-soft-anti-affinity=false`. It was 21% at 21:48.
+  - Deleting the three finished guests freed about 10 GiB. That lifted it to
+    26.6% for about 3 minutes, until the two degraded volumes rebuilt their
+    third replicas there.
+  - V4a live stays blocked. `migration-test.sh` would create a fresh volume
+    that gets only 2 of its 3 replicas.
+  - Even with space, the script migrates as soon as its guest boots. A fresh
+    volume here was degraded for 7 m 45 s while Longhorn rebuilt its replicas
+    (attempt 1).
   - A lasting fix is William's: free space on cp-1, or change the Longhorn
     setting.
-- **Worker-1 and worker-2 CPU is tight.**
-  - Worker-2 is at 6600m of 8000m: `innercp`, plus `v4p` since V4b.
-  - Worker-1 is at 4440m, with `val-r4-d7b2/e2e-guest` still running there.
-  - Worker-2 has no room for a 2-CPU destination now. Worker-1 has room for
-    one.
+- **CPU requests:**
+  - cp-1: 4430m of 8000m;
+  - worker-1: 6440m (`e2e-guest` and `t3g`);
+  - worker-2: 4600m (`innercp`).
 
 ## State left on dev
 
 - **Controller:** chart `0.0.0-dev.9604992` (rev 47), `--metrics-secure=true`.
-- **Namespaces kept** (not every scenario passed):
+- **Namespaces kept** (V4a live did not pass):
   - `val-r4-smoke`: V1 cleanup ran, so it holds no guests.
   - `val-r4-nok`: the SwiftKernel `sandbox`.
   - `val-r4-mig`:
-    - `v3a` and `v3b`, both `Stopped`;
-    - `v4p`, `Running` on worker-2;
-    - SwiftMigrations `v3b-mig`, `v4b-mig`, `v6-a`, `v6-b`.
+    - `t3g` (class `val-migratable-16g`), `Running` on worker-1 after T5-t3,
+      with its 10 GiB tmpfs still filled;
+    - SwiftMigrations `v3b-mig`, `v4b-mig`, `v6-a`, `v6-b`, `t3-cancel`,
+      `t5-t1`, `t5-t2`, `t5-t3`.
+    - `v3a`, `v3b` and `v4p` were deleted at 22:25, authorised by William; their
+      YAML was saved first.
   - `val-r4-d7b2`:
-    - `e2e-guest`, `Running` on worker-1, with the degraded volume;
+    - `e2e-guest`, `Running` on worker-1, with the still-degraded volume;
     - SwiftMigration `e2e-mig`, `Failed`.
   - `val-r4-rt`:
-    - `snapshot-local-source`, `Running` on cp-1;
+    - `snapshot-local-source`, `Running` on cp-1, its volume now healthy;
     - SwiftSnapshot `snapshot-local-mem` (local, with the cleanup finalizer);
     - SwiftRestore `snapshot-local-inplace`.
 - **Deleted during the run:**
@@ -449,6 +544,7 @@ OK: sentinel survived: kubeswift-roundtrip-1790372758-30467
   - `val-r4-d7b`.
 - **Unchanged:** `gpu-cells/innercp` (uid `10bd28b8-…`, 0 restarts), and
   `default/ubuntu-noble` (uid `ed9f5a44-…`, rv `11410`).
+- **Class:** the cluster-scoped `val-migratable-16g` is still there.
 - **Nodes:** none cordoned.
 - **Lab change from Phase 1** (authorised): `kube-system/kube-multus-ds` memory
   100Mi/500Mi, and `cp -f` in its init container.
