@@ -25,7 +25,13 @@ func ValidateExistence(
 		return &ResolutionError{Reason: "SwiftImage not found", AffectedResource: imgName}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
-		return &ResolutionError{Reason: "SwiftImage not Ready", AffectedResource: image.Name}
+		// Only Failed is final. An image still importing becomes Ready by
+		// itself, and a guest created alongside it waits for it.
+		return &ResolutionError{
+			Reason:           "SwiftImage not Ready",
+			AffectedResource: image.Name,
+			Waiting:          image.Status.Phase != imagev1alpha1.SwiftImagePhaseFailed,
+		}
 	}
 	if guest.Spec.SeedProfileRef != nil {
 		if seedProfile == nil {

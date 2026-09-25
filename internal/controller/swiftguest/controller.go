@@ -243,11 +243,12 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 				if re.Waiting {
 					// Not a failure: no pod is created until it resolves, and
 					// it resolves by itself. A guest past Pending keeps its
-					// phase: a running VM booted with its kernel already, and
-					// Failed would have a SwiftGuestPool delete it to replace
-					// it. Every kernel re-pulls once after an upgrade from
-					// v0.14.1 (#658), so every kernel-boot guest waits here
-					// for as long as that takes.
+					// phase: a running VM booted with its kernel or image
+					// already, and Failed would have a SwiftGuestPool delete
+					// it to replace it. Every kernel re-pulls once after an
+					// upgrade from v0.14.1 (#658), so every kernel-boot guest
+					// waits here for as long as that takes, and a guest
+					// created with its SwiftImage waits for the import.
 					if status.Phase == "" {
 						status.Phase = swiftv1alpha1.SwiftGuestPhasePending
 					}
