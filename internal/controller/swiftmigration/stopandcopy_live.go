@@ -265,22 +265,6 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		}
 	}
 
-	// F4.2 source-pod-replacement detection (UID check). Gated by
-	// shouldCheckSourcePodUID. Pre-cutover phases ALWAYS check;
-	// during cutover sub-states the gate flips off (B3.2 territory).
-	if shouldCheckSourcePodUID(mig) && status.SourcePodUID != "" {
-		if !srcPodPresent {
-			return phaseFailure(
-				fmt.Sprintf("source pod for SwiftGuest %q no longer exists during StopAndCopy", guest.Name),
-				migrationv1alpha1.FailureReasonSourcePodReplaced)
-		}
-		if srcPod.UID != status.SourcePodUID {
-			return phaseFailure(
-				fmt.Sprintf("source pod for SwiftGuest %q was replaced (UID changed from %q to %q)", guest.Name, status.SourcePodUID, srcPod.UID),
-				migrationv1alpha1.FailureReasonSourcePodReplaced)
-		}
-	}
-
 	// Resolve dst pod by deterministic name (B2.2's helper). Pre-
 	// cutover, status.podRef still points at src so canonicalPodName
 	// won't return the dst name; we derive it directly.
@@ -317,6 +301,28 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		srcArg = &srcPod
 	}
 
+	// Either witness of the hand-over commits the migration (commitpoint.go).
+	committed := passedCommitPoint(mig, srcArg, dstArg)
+
+	// F4.2 source-pod-replacement detection (UID check). Gated by
+	// shouldCheckSourcePodUID. Pre-cutover phases ALWAYS check;
+	// during cutover sub-states the gate flips off (B3.2 territory).
+	// Past the commit point it is off too: a source that handed the
+	// guest over exits, and failing the migration because its pod is
+	// gone would delete the destination running the only copy.
+	if !committed && shouldCheckSourcePodUID(mig) && status.SourcePodUID != "" {
+		if !srcPodPresent {
+			return phaseFailure(
+				fmt.Sprintf("source pod for SwiftGuest %q no longer exists during StopAndCopy", guest.Name),
+				migrationv1alpha1.FailureReasonSourcePodReplaced)
+		}
+		if srcPod.UID != status.SourcePodUID {
+			return phaseFailure(
+				fmt.Sprintf("source pod for SwiftGuest %q was replaced (UID changed from %q to %q)", guest.Name, status.SourcePodUID, srcPod.UID),
+				migrationv1alpha1.FailureReasonSourcePodReplaced)
+		}
+	}
+
 	// Cutover-in-progress short-circuit: if SwiftGuest.status.podRef.name
 	// already equals the dst pod name, cutover step 1 has succeeded.
 	// Subsequent reconciles dispatch directly to the cutover handler
@@ -336,13 +342,13 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 	// spec.timeout enforcement (F4.3): total-migration cap from
 	// status.StartedAt; default 30m. Checked HERE, after the cutover
 	// short-circuit above, and only while the migration is still pre-commit —
-	// i.e. the source has NOT reported complete. Once the source reports
-	// complete its Cloud Hypervisor has exited and the destination is the only
-	// running copy; failing on timeout then would delete the destination pod
+	// neither the source reported complete nor the destination reported
+	// running. Past that point the destination is the only running copy;
+	// failing on timeout then would delete the destination pod
 	// (onTerminalPhase → cleanupDstPod) and lose the guest. Past the commit
-	// point the migration only moves forward: substateSrcCompleted below
-	// dispatches straight into executeCutover.
-	if !srcReportedComplete(mig, srcArg) && timeoutExceeded(mig, status) {
+	// point the migration only moves forward: substateSrcCompleted and
+	// substateDstRunning below dispatch straight into executeCutover.
+	if !committed && timeoutExceeded(mig, status) {
 		return timeoutFailure(mig)
 	}
 
@@ -507,7 +513,15 @@ func (r *SwiftMigrationReconciler) handleStopAndCopyLive(
 		stampTransferProgress(status, srcArg)
 		return phaseRequeue(stopAndCopyLivePollInterval)
 
-	case substateSrcCompleted:
+	case substateSrcCompleted, substateDstRunning:
+		if sub == substateDstRunning && r.Recorder != nil {
+			// The source's own report is missing (lost write, or a source
+			// launcher that exited first); the destination's report
+			// commits alone. Recorded because it should be rare.
+			r.Recorder.Eventf(mig, corev1.EventTypeWarning, "SourceCompleteMissing",
+				"destination pod %q runs the guest but the source never reported complete (id=%s); cutting over",
+				dstName, sendActionID(mig))
+		}
 		// W1 gate per F1.2 satisfied: src wrote migration-status=
 		// complete with matching $SEND_ID. swiftletd-on-src's
 		// vm.send-migration internally probed the dst CH for

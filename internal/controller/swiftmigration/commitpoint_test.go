@@ -121,9 +121,10 @@ func TestCommitPoint_CancelBeforeSrcCompleteStillCancels(t *testing.T) {
 	mig.Status.RecvAttempts = 1
 	mig.Status.SendAttempts = 1
 	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
-	// Source is mid-send, NOT complete.
+	// Source is mid-send, NOT complete; the destination is still receiving
+	// (a destination that reported running would be committed).
 	stamp(src, migrationActionVerbSend, sendActionID(mig), "sending", sendActionID(mig), "")
-	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusReceiveReady, recvActionID(mig), "")
 	dst.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Minute))
 	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
 
@@ -234,5 +235,139 @@ func TestCommitPoint_DeletePostCommitFinishesCutover(t *testing.T) {
 func TestCommitPoint_GuestControllerReadsTheSameStatusKey(t *testing.T) {
 	if swiftguest.PodAnnotationMigrationStatus != AnnotationMigrationStatus {
 		t.Fatalf("swiftguest reads %q, swiftletd writes %q", swiftguest.PodAnnotationMigrationStatus, AnnotationMigrationStatus)
+	}
+}
+
+// The destination is the second witness of the commit point. In the lab's
+// validation of v0.15.0 (D9) the source launcher exited after a completed send
+// without writing complete: its pod Succeeded with migration-status still
+// "sending", while the destination reported running with the guest live.
+// spec.timeout then failed the migration as pre-cutover and deleted the
+// destination, leaving the guest with no VM. The destination's report alone
+// must commit the migration and drive it through cutover to Completed.
+func TestCommitPoint_TimeoutWithOnlyTheDestinationsReportCutsOver(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Finalizers = []string{FinalizerName}
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+	started := metav1.NewTime(time.Now().Add(-31 * time.Minute))
+	mig.Status.StartedAt = &started
+	mig.Spec.Timeout = &metav1.Duration{Duration: 30 * time.Minute}
+	mig.Status.PhaseDetail = migrationv1alpha1.PhaseDetailLiveIssuingSend
+	guest.Status.PodRef = &corev1.ObjectReference{Name: src.Name, Namespace: "default", UID: src.UID}
+	// swiftletd-on-dst reported the guest running (W16), as it did in the lab.
+	guest.Status.Conditions = []metav1.Condition{{
+		Type: guestRunningConditionType, Status: metav1.ConditionTrue,
+		Reason: "VmRunning", LastTransitionTime: metav1.Now(),
+	}}
+	stamp(src, migrationActionVerbSend, sendActionID(mig), "sending", sendActionID(mig), "")
+	src.Status.Phase = corev1.PodSucceeded
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	ctx := context.Background()
+
+	for i := 0; i < 6; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+	var got migrationv1alpha1.SwiftMigration
+	_ = r.Get(ctx, client.ObjectKeyFromObject(mig), &got)
+	if got.Status.Phase != migrationv1alpha1.SwiftMigrationPhaseCompleted {
+		t.Errorf("phase = %s (%s: %s), want Completed: the guest runs on the destination",
+			got.Status.Phase, got.Status.FailureReason, got.Status.FailureMessage)
+	}
+	var p corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); apierrors.IsNotFound(err) {
+		t.Fatal("destination pod, running the only copy of the guest, was deleted")
+	}
+	var g swiftv1alpha1.SwiftGuest
+	if err := r.Get(ctx, client.ObjectKeyFromObject(guest), &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.Status.PodRef == nil || g.Status.PodRef.Name != dst.Name {
+		t.Errorf("guest podRef = %+v, want the destination pod %q", g.Status.PodRef, dst.Name)
+	}
+}
+
+// A source that handed the guest over may be gone altogether. The pre-cutover
+// source-pod check must not fail the migration (and delete the destination)
+// once the destination runs the guest.
+func TestCommitPoint_SourcePodGoneAfterTheDestinationRunsCutsOver(t *testing.T) {
+	mig, guest, _, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Finalizers = []string{FinalizerName}
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+	mig.Status.PhaseDetail = migrationv1alpha1.PhaseDetailLiveIssuingSend
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	r := newStopAndCopyReconciler(t, mig, guest, dst) // no source pod
+
+	status := mig.Status.DeepCopy()
+	res := r.handleStopAndCopyLive(context.Background(), mig, status)
+	if res.FailureReason != "" {
+		t.Errorf("failed with %s (%s); the destination runs the guest", res.FailureReason, res.FailureMsg)
+	}
+}
+
+// The source reporting failure while the destination reports running can only
+// mean the hand-over finished after the source gave up on it (its deadline):
+// the destination runs the guest, so failing would delete the only copy.
+func TestCommitPoint_SourceFailedButDestinationRunningCutsOver(t *testing.T) {
+	mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+	mig.Status.RecvAttempts = 1
+	mig.Status.SendAttempts = 1
+	stamp(src, migrationActionVerbSend, sendActionID(mig), MigrationStatusFailed, sendActionID(mig), "past the migration deadline")
+	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+	if got := deriveSubstate(mig, src, dst); got != substateDstRunning {
+		t.Fatalf("substate = %v, want dst-running", got)
+	}
+	r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+	status := mig.Status.DeepCopy()
+	if res := r.handleStopAndCopyLive(context.Background(), mig, status); res.FailureReason != "" {
+		t.Errorf("failed with %s (%s); the destination runs the guest", res.FailureReason, res.FailureMsg)
+	}
+}
+
+// Cancel and deletion read the commit point through liveCommitted, which must
+// see the destination's report too.
+func TestCommitPoint_CancelAndDeleteRespectTheDestinationsReport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		delete bool
+	}{{"cancel", false}, {"delete", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mig, guest, src, dst := stopAndCopyFixture(t, "uid-1")
+			mig.Finalizers = []string{FinalizerName}
+			mig.Spec.CancelRequested = !tc.delete
+			mig.Status.RecvAttempts = 1
+			mig.Status.SendAttempts = 1
+			mig.Status.DestinationPodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: dst.Name}
+			stamp(src, migrationActionVerbSend, sendActionID(mig), "sending", sendActionID(mig), "")
+			stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "received")
+			dst.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Minute))
+			r := newStopAndCopyReconciler(t, mig, guest, src, dst)
+			ctx := context.Background()
+
+			committed, err := r.liveCommitted(ctx, mig)
+			if err != nil || !committed {
+				t.Fatalf("liveCommitted = %v, %v; want committed on the destination's report", committed, err)
+			}
+			if tc.delete {
+				if err := r.Delete(ctx, mig); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < 3; i++ {
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mig)}); err != nil {
+					t.Fatalf("reconcile %d: %v", i, err)
+				}
+			}
+			var p corev1.Pod
+			if err := r.Get(ctx, client.ObjectKeyFromObject(dst), &p); apierrors.IsNotFound(err) {
+				t.Fatal("destination pod, running the only copy of the guest, was deleted")
+			}
+		})
 	}
 }
