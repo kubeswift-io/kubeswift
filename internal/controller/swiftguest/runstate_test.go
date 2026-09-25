@@ -17,9 +17,13 @@ import (
 // ranStatus is a guest as its launcher left it: running, with an address.
 func ranStatus(podUID types.UID) *swiftv1alpha1.SwiftGuestStatus {
 	st := &swiftv1alpha1.SwiftGuestStatus{
-		Phase:   swiftv1alpha1.SwiftGuestPhaseRunning,
-		PodRef:  &corev1.ObjectReference{Name: testGuestName, Namespace: "ns", UID: podUID},
-		Network: &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.0.2.10"},
+		Phase:  swiftv1alpha1.SwiftGuestPhaseRunning,
+		PodRef: &corev1.ObjectReference{Name: testGuestName, Namespace: "ns", UID: podUID},
+		Network: &swiftv1alpha1.GuestNetworkStatus{
+			PrimaryIP:      "192.0.2.10",
+			PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
+			PodIP:          "10.244.1.7",
+		},
 	}
 	for _, t := range []string{"GuestRunning", ConditionPodScheduled,
 		swiftv1alpha1.ConditionNetworkReady, swiftv1alpha1.ConditionEgressReady,
@@ -48,6 +52,12 @@ func assertNotRunning(t *testing.T, st *swiftv1alpha1.SwiftGuestStatus, wantReas
 	}
 	if ip := st.Network.PrimaryIP; ip != "" {
 		t.Errorf("primaryIP = %q; the address went with the launcher", ip)
+	}
+	if scope := st.Network.PrimaryIPScope; scope != "" {
+		t.Errorf("primaryIPScope = %q; it describes a primaryIP that is gone", scope)
+	}
+	if ip := st.Network.PodIP; ip != "" {
+		t.Errorf("podIP = %q; it was the launcher's own address", ip)
 	}
 }
 
@@ -127,7 +137,7 @@ func TestMapPodToStatus_ANewLauncherStartsFromNothing(t *testing.T) {
 		Spec:       corev1.PodSpec{NodeName: "worker-1"},
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	}
-	MapPodToStatus(fresh, st)
+	MapPodToStatus(kernelGuest(), fresh, st)
 	assertNotRunning(t, st, "GuestStarting")
 	if st.PodRef == nil || st.PodRef.UID != "pod-2" {
 		t.Errorf("podRef = %+v, want the new launcher", st.PodRef)
@@ -142,7 +152,7 @@ func TestMapPodToStatus_TheSameLauncherKeepsItsState(t *testing.T) {
 		Spec:       corev1.PodSpec{NodeName: "worker-1"},
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}
-	MapPodToStatus(same, st)
+	MapPodToStatus(kernelGuest(), same, st)
 	if c := findCondition(st, "GuestRunning"); c == nil || c.Status != metav1.ConditionTrue {
 		t.Errorf("GuestRunning = %+v; the running launcher never stopped", c)
 	}
@@ -158,7 +168,7 @@ func TestMapPodToStatus_AnExitedLauncherIsNotRunning(t *testing.T) {
 		corev1.PodSucceeded: swiftv1alpha1.SwiftGuestPhaseStopped,
 	} {
 		st := ranStatus("pod-1")
-		MapPodToStatus(&corev1.Pod{
+		MapPodToStatus(kernelGuest(), &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1"},
 			Spec:       corev1.PodSpec{NodeName: "worker-1"},
 			Status:     corev1.PodStatus{Phase: phase},
@@ -187,7 +197,7 @@ func TestMapPodToStatus_APendingLauncherIsNotRunning(t *testing.T) {
 		Spec:       corev1.PodSpec{NodeName: "worker-1"},
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	}
-	MapPodToStatus(pending, st)
+	MapPodToStatus(kernelGuest(), pending, st)
 	assertNotRunning(t, st, "GuestStarting")
 	if st.Phase != swiftv1alpha1.SwiftGuestPhaseScheduling {
 		t.Errorf("phase = %q, want Scheduling", st.Phase)
@@ -211,7 +221,7 @@ func TestMapPodToStatus_PendingWithRunningLauncherKeepsRunState(t *testing.T) {
 			},
 		},
 	}
-	MapPodToStatus(pending, st)
+	MapPodToStatus(kernelGuest(), pending, st)
 	if c := findCondition(st, "GuestRunning"); c == nil || c.Status != metav1.ConditionTrue {
 		t.Errorf("GuestRunning = %+v; the launcher is running, only a sidecar is waiting", c)
 	}
@@ -221,7 +231,7 @@ func TestMapPodToStatus_PendingWithRunningLauncherKeepsRunState(t *testing.T) {
 
 	// The launcher itself waiting is still "not running".
 	pending.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
-	MapPodToStatus(pending, st)
+	MapPodToStatus(kernelGuest(), pending, st)
 	assertNotRunning(t, st, "GuestStarting")
 }
 

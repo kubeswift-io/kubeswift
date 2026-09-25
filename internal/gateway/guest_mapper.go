@@ -37,6 +37,8 @@ func guestToProto(cluster string, g *swiftv1alpha1.SwiftGuest) *kubeswiftv1.Gues
 	}
 	if g.Status.Network != nil {
 		out.PrimaryIp = g.Status.Network.PrimaryIP
+		out.PrimaryIpScope = string(g.Status.Network.PrimaryIPScope)
+		out.PodIp = g.Status.Network.PodIP
 	}
 	if !g.CreationTimestamp.IsZero() {
 		out.CreatedAt = timestamppb.New(g.CreationTimestamp.Time)

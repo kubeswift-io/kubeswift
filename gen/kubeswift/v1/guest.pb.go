@@ -35,7 +35,9 @@ type Guest struct {
 	NodeName string `protobuf:"bytes,3,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
 	// hypervisor is status.runtime.hypervisor (cloud-hypervisor|qemu).
 	Hypervisor string `protobuf:"bytes,4,opt,name=hypervisor,proto3" json:"hypervisor,omitempty"`
-	// primary_ip is status.network.primaryIP.
+	// primary_ip is status.network.primaryIP, the guest's own address. When
+	// primary_ip_scope is "Pod" it is private to the launcher pod and repeats
+	// across guests, so it does not identify a guest.
 	PrimaryIp string `protobuf:"bytes,5,opt,name=primary_ip,json=primaryIp,proto3" json:"primary_ip,omitempty"`
 	// boot_source is the resolved boot origin (image / kernel / clone) for the
 	// inventory row, summarized into one human string.
@@ -51,9 +53,18 @@ type Guest struct {
 	// labels carries the swift.kubeswift.io/* labels the UI groups by — pool
 	// membership and, critically, the swift.kubeswift.io/guest telemetry-join
 	// label (never pod name, which changes to <guest>-mig-<uid> post-migration).
-	Labels        map[string]string `protobuf:"bytes,13,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Labels map[string]string `protobuf:"bytes,13,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// pod_ip is status.network.podIP: the IP of the launcher pod running the
+	// guest, unique in the cluster. A nat guest's declared ports are reachable
+	// on it.
+	PodIp string `protobuf:"bytes,14,opt,name=pod_ip,json=podIp,proto3" json:"pod_ip,omitempty"`
+	// primary_ip_scope is status.network.primaryIPScope: "Pod" when primary_ip
+	// is reachable only from inside the launcher pod (nat), "Network" when it
+	// is on a network outside the pod (a multi-node NAD or a primary UDN).
+	// Empty when primary_ip is.
+	PrimaryIpScope string `protobuf:"bytes,15,opt,name=primary_ip_scope,json=primaryIpScope,proto3" json:"primary_ip_scope,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Guest) Reset() {
@@ -175,6 +186,20 @@ func (x *Guest) GetLabels() map[string]string {
 		return x.Labels
 	}
 	return nil
+}
+
+func (x *Guest) GetPodIp() string {
+	if x != nil {
+		return x.PodIp
+	}
+	return ""
+}
+
+func (x *Guest) GetPrimaryIpScope() string {
+	if x != nil {
+		return x.PrimaryIpScope
+	}
+	return ""
 }
 
 type ListGuestsRequest struct {
@@ -1586,7 +1611,7 @@ var File_kubeswift_v1_guest_proto protoreflect.FileDescriptor
 
 const file_kubeswift_v1_guest_proto_rawDesc = "" +
 	"\n" +
-	"\x18kubeswift/v1/guest.proto\x12\fkubeswift.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19kubeswift/v1/common.proto\"\xa4\x04\n" +
+	"\x18kubeswift/v1/guest.proto\x12\fkubeswift.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x19kubeswift/v1/common.proto\"\xe5\x04\n" +
 	"\x05Guest\x12)\n" +
 	"\x03ref\x18\x01 \x01(\v2\x17.kubeswift.v1.ObjectRefR\x03ref\x12\x14\n" +
 	"\x05phase\x18\x02 \x01(\tR\x05phase\x12\x1b\n" +
@@ -1610,7 +1635,9 @@ const file_kubeswift_v1_guest_proto_rawDesc = "" +
 	"\n" +
 	"conditions\x18\f \x03(\v2\x17.kubeswift.v1.ConditionR\n" +
 	"conditions\x127\n" +
-	"\x06labels\x18\r \x03(\v2\x1f.kubeswift.v1.Guest.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\r \x03(\v2\x1f.kubeswift.v1.Guest.LabelsEntryR\x06labels\x12\x15\n" +
+	"\x06pod_ip\x18\x0e \x01(\tR\x05podIp\x12(\n" +
+	"\x10primary_ip_scope\x18\x0f \x01(\tR\x0eprimaryIpScope\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb1\x01\n" +

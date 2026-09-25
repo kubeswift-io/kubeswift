@@ -135,13 +135,18 @@ func TestApplyGuestAnnotations(t *testing.T) {
 		"kubeswift.io/guest-runtime-pid": "4242",
 		"kubeswift.io/guest-hypervisor":  "cloud-hypervisor",
 		"kubeswift.io/guest-ip":          "192.168.99.12",
-	}}}
+	}}, Status: corev1.PodStatus{PodIP: "10.244.1.7"}}
 	applyGuestAnnotations(sb, pod)
 	if sb.Status.Runtime == nil || sb.Status.Runtime.PID != 4242 || sb.Status.Runtime.Hypervisor != "cloud-hypervisor" {
 		t.Fatalf("runtime not mapped: %+v", sb.Status.Runtime)
 	}
 	if sb.Status.Network == nil || sb.Status.Network.PrimaryIP != "192.168.99.12" {
 		t.Fatalf("network not mapped: %+v", sb.Status.Network)
+	}
+	// The lease is on the launcher's private nat bridge; the pod IP is the
+	// sandbox's cluster-unique address.
+	if sb.Status.Network.PrimaryIPScope != swiftv1alpha1.PrimaryIPScopePod || sb.Status.Network.PodIP != "10.244.1.7" {
+		t.Errorf("network = %+v, want primaryIPScope Pod and podIP 10.244.1.7", sb.Status.Network)
 	}
 	if msg := guestRunningMessage(sb); !strings.Contains(msg, "pid 4242") || !strings.Contains(msg, "192.168.99.12") {
 		t.Errorf("guestRunningMessage = %q", msg)

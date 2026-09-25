@@ -23,10 +23,14 @@ ten minutes, and leaves no send behind to run later. An in-place restore
 resumes the snapshot, with its address, instead of booting the guest cold.
 
 **CRDs changed this release**: `swiftsnapshots` (`status.guestSpec.primaryIP`,
-and the local backend's `hostPath`, now derived) and description-only changes
-to `swiftsnapshotschedules`. Apply them before upgrading. Without the new
-`swiftsnapshots` schema, `status.guestSpec.primaryIP` is pruned, and a guest
-restored in place reports no address until its next DHCP lease.
+and the local backend's `hostPath`, now derived), `swiftguests`
+(`status.network.podIP`, `status.network.primaryIPScope`, and the printer
+columns), `swiftsandboxes` (the same two fields, and its printer columns) and
+description-only changes to `swiftsnapshotschedules`. Apply them before
+upgrading. Without the new `swiftsnapshots` schema,
+`status.guestSpec.primaryIP` is pruned, and a guest restored in place reports
+no address until its next DHCP lease. Without the new `swiftguests` and
+`swiftsandboxes` schemas, the two new fields are pruned.
 
 ### Upgrade
 
@@ -377,6 +381,27 @@ takes the new default.
   migration's destination runs its source's launcher image, so the swiftletd
   half reaches a guest only once its launcher has been recreated on this
   version; the controller half protects every guest from the upgrade on.
+
+### Changed
+
+- **A guest reports its launcher pod's IP and where its own address can be
+  reached (`status.network.podIP`, `status.network.primaryIPScope`).** Every
+  nat launcher runs its own bridge (`br0`, 192.168.99.1/24) and hands out
+  192.168.99.10–20, so nat guests routinely reported the same
+  `status.network.primaryIP`, an address reachable only inside each guest's
+  own launcher pod. `kubectl get swiftguest -A`, the UI, swiftctl and anything
+  else keyed on it could not tell the guests apart, and nothing said the
+  address was pod-local. `primaryIP` stays the guest's own address (`swiftctl
+  ssh`, migration and restore read it). `podIP` is the IP of the launcher pod
+  running the guest, where a nat guest's declared ports are reachable; it
+  follows the guest to a new launcher and, at a live migration's cutover, to
+  the destination pod, and is cleared with the rest of the run state.
+  `primaryIPScope` is `Pod` for a nat address and `Network` for one on a
+  multi-node NAD primary or an OVN-Kubernetes primary UDN. The `IP` column is
+  now `Guest IP`, next to a new `Pod IP`; `-o wide` adds `IP Scope`.
+  SwiftSandbox reports the same two fields (its scope is always `Pod`) and
+  shows `Guest IP` and `Pod IP` too, `swiftctl describe` prints both, and the
+  gateway's `Guest` message carries them as `pod_ip` and `primary_ip_scope`.
 
 ### CI
 

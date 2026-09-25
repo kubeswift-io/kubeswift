@@ -19,7 +19,9 @@ message Guest {
   string node_name = 3;
   // hypervisor is status.runtime.hypervisor (cloud-hypervisor|qemu).
   string hypervisor = 4;
-  // primary_ip is status.network.primaryIP.
+  // primary_ip is status.network.primaryIP, the guest's own address. When
+  // primary_ip_scope is "Pod" it is private to the launcher pod and repeats
+  // across guests, so it does not identify a guest.
   string primary_ip = 5;
   // boot_source is the resolved boot origin (image / kernel / clone) for the
   // inventory row, summarized into one human string.
@@ -36,6 +38,15 @@ message Guest {
   // membership and, critically, the swift.kubeswift.io/guest telemetry-join
   // label (never pod name, which changes to <guest>-mig-<uid> post-migration).
   map<string, string> labels = 13;
+  // pod_ip is status.network.podIP: the IP of the launcher pod running the
+  // guest, unique in the cluster. A nat guest's declared ports are reachable
+  // on it.
+  string pod_ip = 14;
+  // primary_ip_scope is status.network.primaryIPScope: "Pod" when primary_ip
+  // is reachable only from inside the launcher pod (nat), "Network" when it
+  // is on a network outside the pod (a multi-node NAD or a primary UDN).
+  // Empty when primary_ip is.
+  string primary_ip_scope = 15;
 }
 
 message ListGuestsRequest {

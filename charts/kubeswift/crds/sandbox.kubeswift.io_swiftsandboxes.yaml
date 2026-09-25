@@ -27,7 +27,10 @@ spec:
       name: Node
       type: string
     - jsonPath: .status.network.primaryIP
-      name: IP
+      name: Guest IP
+      type: string
+    - jsonPath: .status.network.podIP
+      name: Pod IP
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -644,9 +647,25 @@ spec:
                   Network is the guest network (primaryIP), reported by the swiftletd lease
                   poller. Absent for network:none sandboxes.
                 properties:
+                  podIP:
+                    description: |-
+                      PodIP is the IP of the launcher pod running the sandbox. Unlike
+                      primaryIP it is unique in the cluster.
+                    type: string
                   primaryIP:
-                    description: PrimaryIP is the guest's DHCP-assigned IP (network:restricted
-                      only).
+                    description: PrimaryIP is the guest's DHCP-assigned IP (absent
+                      for network:none).
+                    type: string
+                  primaryIPScope:
+                    description: |-
+                      PrimaryIPScope says where primaryIP can be reached from, as on a
+                      SwiftGuest. A sandbox's guest always sits behind its launcher's nat, so
+                      it is Pod whenever primaryIP is set: the address is on the launcher
+                      pod's private network, repeats across sandboxes, and is reachable only
+                      from inside that launcher pod.
+                    enum:
+                    - Pod
+                    - Network
                     type: string
                 type: object
               nodeName:

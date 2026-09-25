@@ -169,7 +169,7 @@ Print a rich human-readable summary of SwiftGuest status.
 swiftctl describe [guest-name]
 ```
 
-**Output includes:** phase, node, run policy, image/kernel/class/seed refs, runtime (hypervisor, PID), console (serial socket path), network (primaryIP, interfaces), conditions, pod reference.
+**Output includes:** phase, node, run policy, image/kernel/class/seed refs, runtime (hypervisor, PID), console (serial socket path), network (primaryIP and its scope, the launcher pod IP, interfaces), conditions, pod reference.
 
 **Examples:**
 

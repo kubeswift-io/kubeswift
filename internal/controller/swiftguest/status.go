@@ -83,7 +83,8 @@ func dhcpTimeoutMessage(guest *swiftv1alpha1.SwiftGuest, raw string) string {
 // Run-scoped means "true of one launcher pod, and only while it runs":
 // GuestRunning and PortsProgrammed are written by swiftletd from inside it,
 // NetworkReady and EgressReady are observations of it, PodScheduled describes
-// it, and primaryIP is the lease the VM held. None of them outlive it.
+// it, primaryIP (and its scope) is the lease the VM held, and podIP is the
+// launcher's own address. None of them outlive it.
 //
 // Nothing used to clear them, so a stopped guest reported Running with an
 // address, and a restarting one reported the previous run's until its new
@@ -116,6 +117,8 @@ func ClearRunState(status *swiftv1alpha1.SwiftGuestStatus, reason, message strin
 	}
 	if status.Network != nil {
 		status.Network.PrimaryIP = ""
+		status.Network.PrimaryIPScope = ""
+		status.Network.PodIP = ""
 		// Per-interface addresses are leases of the same run, and readiness
 		// and egress reachability were observations of it.
 		status.Network.Interfaces = nil
@@ -141,8 +144,10 @@ func launcherHandedOff(pod *corev1.Pod) bool {
 	return pod != nil && pod.Annotations[PodAnnotationMigrationStatus] == "complete"
 }
 
-// MapPodToStatus updates status from pod phase and conditions.
-func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
+// MapPodToStatus updates status from pod phase and conditions. guest is the
+// SwiftGuest the pod runs: its spec says which network the primary interface
+// is on, which the pod alone does not show.
+func MapPodToStatus(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 	if pod == nil {
 		return
 	}
@@ -188,6 +193,29 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 				status.Network.Ready = true
 			}
 		}
+	}
+
+	// Say where primaryIP can be reached from: a nat guest's is private to its
+	// launcher pod and repeats across guests. Derived on every pass rather
+	// than only when an address is mapped, so a status written before the
+	// field existed gains it too.
+	if status.Network != nil {
+		status.Network.PrimaryIPScope = ""
+		if status.Network.PrimaryIP != "" {
+			status.Network.PrimaryIPScope = primaryIPScope(guest, pod)
+		}
+	}
+
+	// The launcher's own address: where a nat guest's declared ports are
+	// reachable, and unique in the cluster where a Pod-scope primaryIP is not.
+	// A new launcher's run state was cleared above, so the previous launcher's
+	// IP does not outlive it. A live migration's cutover moves podRef, UID
+	// included, to the destination pod, which is then the pod mapped here.
+	if pod.Status.PodIP != "" {
+		if status.Network == nil {
+			status.Network = &swiftv1alpha1.GuestNetworkStatus{}
+		}
+		status.Network.PodIP = pod.Status.PodIP
 	}
 
 	// Set network interfaces from pod annotation (set by swiftletd lease poller)
@@ -319,6 +347,25 @@ func MapPodToStatus(pod *corev1.Pod, status *swiftv1alpha1.SwiftGuestStatus) {
 			})
 		}
 	}
+}
+
+// primaryIPScope says where the guest's primaryIP can be reached from. It is
+// on a network outside the launcher pod when the primary interface rides a
+// multi-node NAD (the address comes from the NAD's IPAM) or the namespace's
+// primary OVN-Kubernetes UDN (the pod's UDN address, handed to the guest).
+// Otherwise the guest sits behind the launcher's nat, on the in-pod bridge,
+// whose subnet and DHCP range are the same in every launcher.
+// spec.network.binding is not read: the datapath follows the primary
+// interface (network-init.sh), so a bridge binding without a NAD primary
+// still leaves the guest on the in-pod bridge.
+func primaryIPScope(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod) swiftv1alpha1.PrimaryIPScope {
+	if pod.Annotations[PodAnnotationPrimaryUDNIface] != "" {
+		return swiftv1alpha1.PrimaryIPScopeNetwork
+	}
+	if guest != nil && guest.PrimaryIPPreservedCrossNode() {
+		return swiftv1alpha1.PrimaryIPScopeNetwork
+	}
+	return swiftv1alpha1.PrimaryIPScopePod
 }
 
 // launcherContainerRunning reports whether the pod's launcher (swiftletd)

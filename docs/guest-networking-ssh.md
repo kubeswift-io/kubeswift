@@ -27,6 +27,23 @@ Use `config/samples/swiftseedprofile-ssh.yaml` as a template. Samples include a 
 
 swiftletd polls the dnsmasq lease file and patches the pod annotation `kubeswift.io/guest-ip` when the VM obtains an IP. The controller copies this to SwiftGuest status.
 
+## Guest IP, Pod IP and IP Scope
+
+`status.network.primaryIP` is the guest's own address, and
+`status.network.primaryIPScope` says where it can be reached from. On a nat
+guest (the default) it is `Pod`: the address is on the launcher's private
+bridge, every nat launcher hands out the same range, so different guests
+routinely report the same `primaryIP`, and it is reachable only from inside
+that launcher pod. Identify a guest by its name, and reach it on
+`status.network.podIP`, the IP of the launcher pod that currently runs it: the
+ports in `spec.network.ports` are DNAT'd from it to the guest. `podIP` changes
+when the guest moves to a new launcher (a restart or a migration). The scope is
+`Network` when the primary interface rides a multi-node NAD (see
+[multi-node L2](networking/multi-node-l2.md)) or an OVN-Kubernetes primary UDN:
+`primaryIP` is then an address on that network, reachable there.
+`kubectl get swiftguest` shows `Guest IP` and `Pod IP`; `-o wide` adds
+`IP Scope`.
+
 ## Operator Workflow
 
 1. **Create SwiftSeedProfile** with `ssh_authorized_keys` in userData (or use `swiftseedprofile-ssh.yaml`).
@@ -52,7 +69,9 @@ swiftletd polls the dnsmasq lease file and patches the pod annotation `kubeswift
    ```bash
    ssh kubeswift@<primaryIP>
    ```
-   Use the private key matching the `ssh_authorized_keys` you provided.
+   Use the private key matching the `ssh_authorized_keys` you provided. When
+   `primaryIPScope` is `Pod`, run this from inside the launcher pod, or use
+   swiftctl ssh below, which does that for you.
 
 ## Using swiftctl ssh (recommended)
 

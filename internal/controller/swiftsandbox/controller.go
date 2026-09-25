@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
@@ -455,7 +456,14 @@ func applyGuestAnnotations(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
 		}
 	}
 	if ip := pod.Annotations[swiftguest.PodAnnotationGuestIP]; ip != "" {
-		sb.Status.Network = &sandboxv1alpha1.SandboxNetworkStatus{PrimaryIP: ip}
+		// A sandbox guest always sits behind its launcher's nat, on the in-pod
+		// bridge, whose subnet and DHCP range are the same in every launcher:
+		// the address repeats across sandboxes, and the pod IP tells them apart.
+		sb.Status.Network = &sandboxv1alpha1.SandboxNetworkStatus{
+			PrimaryIP:      ip,
+			PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
+			PodIP:          pod.Status.PodIP,
+		}
 	}
 }
 

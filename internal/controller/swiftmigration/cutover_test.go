@@ -269,12 +269,55 @@ func TestCutover_Step1KeepsTheRunTheDestinationReported(t *testing.T) {
 	}
 
 	// What the SwiftGuest controller does on its next reconcile.
-	swiftguest.MapPodToStatus(dst, &got.Status)
+	swiftguest.MapPodToStatus(&got, dst, &got.Status)
 	for _, cond := range got.Status.Conditions {
 		if cond.Type == "GuestRunning" && cond.Status != metav1.ConditionTrue {
 			t.Fatalf("GuestRunning = %s (%s: %s) after cutover; the migrated VM never stopped, and Resuming waits for this",
 				cond.Status, cond.Reason, cond.Message)
 		}
+	}
+}
+
+// After cutover the guest runs in the destination pod, so status.network.podIP
+// -- where a nat guest's ports are reachable -- must name the destination's
+// IP, not the deleted source's. The guest keeps its own nat address.
+func TestCutover_PodIPFollowsTheGuestToTheDestination(t *testing.T) {
+	mig, guest, src, dst := cutoverFixture(t)
+	dst.UID = "dst-uid"
+	src.Status.PodIP = "10.244.0.17"
+	guest.Status.PodRef = &corev1.ObjectReference{Name: "guest", Namespace: "default", UID: src.UID}
+	guest.Status.Network = &swiftv1alpha1.GuestNetworkStatus{
+		PrimaryIP:      "192.168.99.12",
+		PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
+		PodIP:          src.Status.PodIP,
+	}
+
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(mig, guest, src, dst).
+		WithStatusSubresource(mig, guest).
+		Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(20)}
+
+	status := mig.Status.DeepCopy()
+	if res := r.handleStopAndCopyLive(context.Background(), mig, status); res.Err != nil || res.FailureMsg != "" {
+		t.Fatalf("cutover step 1: err=%v msg=%q", res.Err, res.FailureMsg)
+	}
+	var got swiftv1alpha1.SwiftGuest
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "guest", Namespace: "default"}, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	// The handed-off source changes nothing; the destination, now podRef, does.
+	swiftguest.MapPodToStatus(&got, src, &got.Status)
+	swiftguest.MapPodToStatus(&got, dst, &got.Status)
+	n := got.Status.Network
+	if n == nil || n.PodIP != dst.Status.PodIP {
+		t.Fatalf("network = %+v, want podIP %s (the destination launcher)", n, dst.Status.PodIP)
+	}
+	if n.PrimaryIP != "192.168.99.12" || n.PrimaryIPScope != swiftv1alpha1.PrimaryIPScopePod {
+		t.Errorf("primaryIP = %q scope %q; the migrated VM keeps its own address", n.PrimaryIP, n.PrimaryIPScope)
 	}
 }
 

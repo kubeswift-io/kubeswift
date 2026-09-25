@@ -24,7 +24,11 @@ func TestGuestToProto(t *testing.T) {
 			Phase:    swiftv1alpha1.SwiftGuestPhaseRunning,
 			NodeName: "edge-2",
 			Runtime:  &swiftv1alpha1.GuestRuntimeStatus{Hypervisor: "cloud-hypervisor"},
-			Network:  &swiftv1alpha1.GuestNetworkStatus{PrimaryIP: "192.168.99.11"},
+			Network: &swiftv1alpha1.GuestNetworkStatus{
+				PrimaryIP:      "192.168.99.11",
+				PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
+				PodIP:          "10.244.1.7",
+			},
 			Conditions: []metav1.Condition{
 				{Type: "GuestRunning", Status: metav1.ConditionTrue},
 			},
@@ -45,6 +49,9 @@ func TestGuestToProto(t *testing.T) {
 	}
 	if got.PrimaryIp != "192.168.99.11" {
 		t.Errorf("PrimaryIp = %q", got.PrimaryIp)
+	}
+	if got.PrimaryIpScope != "Pod" || got.PodIp != "10.244.1.7" {
+		t.Errorf("PrimaryIpScope = %q, PodIp = %q", got.PrimaryIpScope, got.PodIp)
 	}
 	if got.GuestClass != "default" {
 		t.Errorf("GuestClass = %q", got.GuestClass)

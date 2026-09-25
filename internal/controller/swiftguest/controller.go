@@ -732,7 +732,7 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 	} else {
 		// Pod exists; update status from pod
 		podForMetrics = &existingPod
-		MapPodToStatus(&existingPod, status)
+		MapPodToStatus(&guest, &existingPod, status)
 		// AFTER MapPodToStatus, which is what populates status.Network: surface
 		// whether the guest ever acquired an IP, so "Running with no IP forever"
 		// stops being invisible on the CR (#527).

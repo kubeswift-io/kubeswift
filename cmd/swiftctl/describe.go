@@ -101,12 +101,22 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(out, "  SerialSocket: %s\n", serialSocket)
 
 	// Network
-	primaryIP := "(none)"
-	if guest.Status.Network != nil && guest.Status.Network.PrimaryIP != "" {
-		primaryIP = guest.Status.Network.PrimaryIP
+	primaryIP, ipScope, podIP := "(none)", "(none)", "(none)"
+	if n := guest.Status.Network; n != nil {
+		if n.PrimaryIP != "" {
+			primaryIP = n.PrimaryIP
+		}
+		if n.PrimaryIPScope != "" {
+			ipScope = describeIPScope(n.PrimaryIPScope)
+		}
+		if n.PodIP != "" {
+			podIP = n.PodIP
+		}
 	}
 	fmt.Fprintf(out, "\nNetwork:\n")
 	fmt.Fprintf(out, "  PrimaryIP:   %s\n", primaryIP)
+	fmt.Fprintf(out, "  IPScope:     %s\n", ipScope)
+	fmt.Fprintf(out, "  PodIP:       %s\n", podIP)
 	fmt.Fprintf(out, "  Interfaces:\n")
 	if guest.Status.Network != nil && len(guest.Status.Network.Interfaces) > 0 {
 		for _, iface := range guest.Status.Network.Interfaces {
@@ -156,6 +166,20 @@ func runDescribe(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(out, "  Namespace: %s\n", podNamespace)
 
 	return nil
+}
+
+// describeIPScope spells out what a primaryIP scope means for someone trying
+// to reach the guest: a Pod-scope address is the launcher's private nat
+// address, repeats across guests, and is not reachable from outside the pod.
+func describeIPScope(scope swiftv1alpha1.PrimaryIPScope) string {
+	switch scope {
+	case swiftv1alpha1.PrimaryIPScopePod:
+		return "Pod (private to the launcher pod; declared ports are reachable on PodIP)"
+	case swiftv1alpha1.PrimaryIPScopeNetwork:
+		return "Network (reachable on the guest's network)"
+	default:
+		return string(scope)
+	}
 }
 
 func orDefault(s, def string) string {
