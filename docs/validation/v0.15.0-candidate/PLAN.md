@@ -284,3 +284,122 @@ The runs, one after the other:
   opposed to the migration failing), record it as a defect of the script with
   the evidence. Then fall back to the hand-made live migration from the
   earlier D7 amendment, so D7 still gets a verdict.
+
+## Round 2: candidate `7a1a76d`
+
+Round 1 stopped at D9 (`phase2.md`): a completed live migration timed out and
+the controller deleted the destination, the only running copy. The root causes
+are fixed and merged:
+
+| PR | Fix | Found by |
+|---|---|---|
+| #663 | The source launcher now waits for its own send's `complete` write; a stale signal from an earlier cancelled or failed send released it early. The controller also takes the destination's `migration-status: running` as the commit point, so it cuts over instead of timing out and deleting the destination. | D9 |
+| #664 | The 30 s cancel-ack budget runs from the cancel (`kubeswift.io/migration-cancel-issued-at` on the destination pod), not from the destination pod's creation, so swiftletd gets to stop the receive gracefully. | D8, defect 1 (and defect 2, the 16-minute source hang) |
+| #665 | A migrated launcher reports GuestRunning to its guest (`KUBESWIFT_GUEST_NAME`), not to `<guest>-mig-<uid>`. | D9, `report_failed … not found` |
+| #666 | SwiftImage import and SwiftKernel pull fail only when their Job gives up, not on its first failed pod. | N1, the image `Failed` while its Job still retried |
+
+**Candidate: main @ `7a1a76d`.** Everything in this plan still holds with
+`7a1a76d` in place of `d232581`: the chart `0.0.0-dev.7a1a76d`, all nine image
+tags `sha-7a1a76d` (`ui` excepted), the checkout, CRDs first, the stop
+conditions, and the Phase 0 amendments.
+- **Build check:** Release Dev run 751 for `7a1a76d` started at 06:58 UTC,
+  alongside three runs for the intermediate commits. Apply the same check and
+  45-minute wait as before.
+- **Reports:** write `phase1-r2.md`, `phase2-r2.md` and `phase3-r2.md`. Leave
+  the round-1 reports as they are.
+
+### Before Phase 1: dev housekeeping
+- **`val-d8`:** keep it for inspection, but free its node: set
+  `val-d8/mig16b` to `spec.runPolicy: Stopped` and wait for its launcher pod to
+  go. Leave `mig16`, the SwiftMigrations and the namespace as they are.
+- **`val-d2` and `val-d3`:** they stay stuck in Terminating (a known,
+  pre-existing finalizer defect). Don't touch them.
+- **ntx leftovers** from round 1: leave them.
+
+### Phase 1 r2: GO
+Phase 1 as before, on all three clusters, with `7a1a76d`. Record the same items
+as round 1, including the running-guest baselines: dev `gpu-cells/innercp`
+and ntx `capi-udn/ks-udn-cp-54klw`, same UID and 0 restarts.
+
+### Phase 2 r2 (dev): GO once Phase 1 r2 has succeeded on dev
+
+The launcher-side fixes (#663's swiftletd half and #665) reach only launchers
+created on the new image. **Every guest used below must be created after the
+upgrade.** Before migrating it, check that its launcher runs
+`swiftletd:sha-7a1a76d`. Use a new namespace, `val-r2`.
+
+| # | Scenario | Pass |
+|---|---|---|
+| R1 | D1 boot smoke, `disk-boot` only | PASS |
+| R2 | D2, `local-roundtrip-test.sh` | PASS, as in round 1 (the address is kept; the restore takes more than ~5 s) |
+| R3 | D7a and D7b, the migration script, as in round 1 | "All checks passed" for both; the D7b checks as in round 1 |
+| R4 | **D8 again, cancel mid-transfer**, on a new `val-migratable-16g` guest with memory being rewritten, as in round 1. Cancel 15 s into "transferring guest state". | See **R4** below |
+| R5 | **The D9 failure sequence.** Right after R4, a plain live migration (no cancel) of the same guest back to its first node. | See **R5** below |
+| R6 | **D9, cancel racing completion.** Three attempts, cancelling at progress ≥ 95 or on "src migration complete", each on a guest that has already had a cancelled send. | See **R6** below |
+| R7 | **A migrated guest reports its stop.** After D7b (run with `--no-cleanup`), stop the migrated guest from inside (`sudo poweroff` over SSH). | See **R7** below |
+| R8 | **An import failure only when the Job gives up.** A SwiftImage whose `source.http.url` is `https://kubeswift.invalid/none.img`. | See **R8** below |
+| R9 | D13, secure metrics (never ran in round 1), exactly as in the Phase 0 amendments | As amended |
+
+D3–D6 and D10–D12 are not re-run: nothing merged touches them, and the
+round-1 results stand. D12's browser half is still William's.
+
+**R4 passes if all of these hold:**
+- The SwiftMigration ends `Cancelled`.
+- Its events show `CancelIssued`, then the graceful path: the final message
+  is "destination pod deleted after swiftletd cancel ack". There is no
+  `CancelAckTimeout` within 30 s of the cancel.
+- The destination launcher's log shows the cancel action dispatched, before any
+  SIGTERM.
+- On the source:
+  - the sentinel is present, uptime is continuous, and SSH works;
+  - its `migration-status` turns to `failed` within about a minute of the
+    cancel (round 1 took about 16 minutes);
+  - `ss -tn` in the source launcher shows no ESTABLISHED connection to the
+    old destination's port 6789 after that.
+
+  Record the timings.
+
+**R5 passes if all of these hold:**
+- The migration reaches `Completed`.
+- The sentinel and uptime survive.
+- The source launcher's log has `w23_terminal_write_signal_fired id=<this
+  send> completed=true` before `w23_terminal_write_signal_received`.
+- The source pod ends with `migration-status: complete` for this send.
+- No `SourceCompleteMissing` event, which should be rare. Report it if it
+  appears.
+
+This is the exact sequence that lost the guest in round 1.
+
+**R6 passes if, in every attempt:**
+- Exactly one VM survives: either Cancelled with the source running, or
+  Completed with the destination running.
+- No SwiftMigration ends `Failed` after the destination reported `running`.
+- The sentinel and uptime are intact in the survivor.
+
+Report each attempt's timing, its phase and phaseDetail sequence, and any
+`SourceCompleteMissing` or `CancelAckTimeout` event.
+
+**R7 passes if all of these hold:**
+- The destination launcher's container env has `KUBESWIFT_GUEST_NAME=<guest>`.
+- After the poweroff, the SwiftGuest shows `GuestRunning=False` with reason
+  `VmStopped`.
+- The launcher log has no `report_failed … not found`.
+
+**R8 passes if all of these hold:**
+- While the import Job retries (`status.failed` ≥ 1, no `Failed` condition),
+  the SwiftImage stays `Importing`.
+- It turns `Failed` only once the Job reports `Failed`
+  (`BackoffLimitExceeded`), with that message.
+- Report the time between the first failed pod and the image's `Failed`. It
+  takes about 10 minutes, so run it in parallel with the rest.
+
+**Stop condition.** If a guest is ever left without a running VM (lost,
+killed, or stuck with no launcher), stop Phase 2 at once. Leave everything in
+place and report.
+
+### Phase 3 r2: GO per cluster, once Phase 1 r2 has succeeded on it
+- **ntx:**
+  - N3 as before: same launcher UID, 0 restarts, no status churn.
+  - N1 and N2 are not re-run: the fixes do not change them, and a worker-1
+    Longhorn problem would block them anyway.
+- **sov:** S1 as before.
