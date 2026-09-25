@@ -223,6 +223,16 @@ setting it had.
   shared. Guests created by an earlier version have no record and are not
   counted.
 
+- **One failed import pod failed the SwiftImage for good.** The import Job
+  retries a failed pod up to its backoff limit, but the controller marked the
+  image `Failed` (`ImportFailed`) as soon as the first pod failed. `Failed` is
+  final, so a transient failure (a download interrupted, a volume slow to
+  attach) left the image failed even when a retry then succeeded, and its guests
+  failed with it. The image now stays `Importing` until the Job itself fails.
+  The size-measurement Job and the SwiftKernel pull Job had the same defect: one
+  failed pull pod on one node failed the kernel. Delete and recreate an image
+  or kernel that failed this way.
+
 - **Scheduled local snapshots overwrote each other.** Every snapshot of a
   schedule copied the template's `hostPath`, so each capture emptied the
   directory holding the previous snapshot, and pruning the oldest removed the

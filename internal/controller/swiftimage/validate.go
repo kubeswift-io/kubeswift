@@ -89,12 +89,13 @@ func (r *SwiftImageReconciler) Validate(ctx context.Context, img *imagev1alpha1.
 		return nil, err
 	}
 
-	// Job exists: check status
-	if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
-		return &ValidateResult{OK: false, Error: "measuring"}, nil
-	}
-	if job.Status.Failed > 0 {
+	// Job exists: check status. A failed pod is retried; only the Job failing
+	// fails the measurement (jobFailed).
+	if _, failed := jobFailed(&job); failed {
 		return &ValidateResult{OK: false, Error: "size measurement failed"}, nil
+	}
+	if job.Status.Succeeded == 0 {
+		return &ValidateResult{OK: false, Error: "measuring"}, nil
 	}
 
 	// Job succeeded: get logs from completed pod

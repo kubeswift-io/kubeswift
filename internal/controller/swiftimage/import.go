@@ -452,17 +452,24 @@ func (r *SwiftImageReconciler) CheckImportStatus(ctx context.Context, img *image
 		}
 		return imagev1alpha1.SwiftImagePhaseValidating, pvcRef, "", nil
 	}
-	if job.Status.Failed > 0 {
-		msg := "import job failed"
-		if len(job.Status.Conditions) > 0 {
-			for _, c := range job.Status.Conditions {
-				if c.Type == batchv1.JobFailed {
-					msg = c.Message
-					break
-				}
-			}
+	if msg, failed := jobFailed(&job); failed {
+		if msg == "" {
+			msg = "import job failed"
 		}
 		return imagev1alpha1.SwiftImagePhaseFailed, nil, msg, nil
 	}
 	return imagev1alpha1.SwiftImagePhaseImporting, nil, "", nil
+}
+
+// jobFailed reports whether the Job has stopped retrying, and why. A failed pod
+// is not a failed Job: the Job starts another, up to its backoff limit, and a
+// later pod may succeed. Failed is final for a SwiftImage, so only the Job's
+// own Failed condition may put it there.
+func jobFailed(job *batchv1.Job) (string, bool) {
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return c.Message, true
+		}
+	}
+	return "", false
 }
