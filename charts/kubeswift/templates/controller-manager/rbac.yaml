@@ -84,9 +84,15 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # events — create,patch record the controllers' events. list lets the
+  # SwiftMigration controller say why a destination pod never became Ready
+  # (FailedAttachVolume, FailedMount, FailedScheduling) in the migration's
+  # failure message. It lists one pod's events, uncached, when the migration
+  # fails, so no watch: through the cached client an informer would hold
+  # every Event in the cluster in memory.
   - apiGroups: [""]
     resources: ["events"]
-    verbs: ["create", "patch"]
+    verbs: ["create", "patch", "list"]
   # Leader election (controller-runtime uses coordination.k8s.io/leases)
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

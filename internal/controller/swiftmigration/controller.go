@@ -88,6 +88,13 @@ type SwiftMigrationReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 
+	// APIReader is an uncached reader (mgr.GetAPIReader). A migration that
+	// fails because its destination pod is not Ready lists that pod's Events
+	// through it to say why. Events are read uncached: through the cached
+	// client a single List would open an informer holding every Event in the
+	// cluster. Nil leaves Events out and reports the pod's status alone.
+	APIReader client.Reader
+
 	// MigrationMTLSEnabled mirrors the controller-manager's
 	// --migration-mtls-enabled flag (Phase 3c, Option B). When false
 	// (default) the live-migration data channel is plaintext exactly as
@@ -296,9 +303,10 @@ func (r *SwiftMigrationReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// migration and drain of it. Failing is safe on either side of the
 	// offline cutover (onTerminalPhase): before it the source is restarted
 	// where it was; after it the guest stays on the target, already
-	// runPolicy=Running, and only the marker is cleared.
+	// runPolicy=Running, and only the marker is cleared. After it the
+	// message also says why the destination pod is not Ready, when it is not.
 	if phase != migrationv1alpha1.SwiftMigrationPhasePending && !isLiveMode(&mig, status) && timeoutExceeded(&mig, status) {
-		return r.dispatchResult(ctx, &mig, status, timeoutFailure(&mig))
+		return r.dispatchResult(ctx, &mig, status, r.offlineTimeoutFailure(ctx, &mig, phase))
 	}
 
 	switch phase {

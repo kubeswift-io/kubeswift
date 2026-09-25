@@ -187,6 +187,107 @@ func TestPreparingLive_BudgetExceeded_FailsWithDstNeverReady(t *testing.T) {
 	}
 }
 
+// budgetExceededDst is the DstNeverReady setup: Preparing started 90s ago and
+// the destination pod, with UID dst-uid, is not Ready. The events are listed
+// through the fake client as APIReader.
+func budgetExceededDst(t *testing.T, podStatus corev1.PodStatus, events func(dst, src *corev1.Pod) []client.Object) (*SwiftMigrationReconciler, *record.FakeRecorder, *migrationv1alpha1.SwiftMigration) {
+	t.Helper()
+	scheme := testScheme(t)
+	mig, guest, src := preparingLiveFixture(t, "uid-1")
+	startedAt := metav1.NewTime(time.Now().Add(-90 * time.Second))
+	mig.Status.PreparingStartedAt = &startedAt
+	dst := preExistingDstPod(mig, guest, scheme, t)
+	dst.UID = "dst-uid"
+	dst.Status = podStatus
+
+	objs := []client.Object{mig, guest, src, dst}
+	if events != nil {
+		objs = append(objs, events(dst, src)...)
+	}
+	c := withEventIndex(fake.NewClientBuilder().WithScheme(scheme)).
+		WithObjects(objs...).
+		WithStatusSubresource(mig).
+		Build()
+	rec := record.NewFakeRecorder(10)
+	return &SwiftMigrationReconciler{Client: c, APIReader: c, Scheme: scheme, Recorder: rec}, rec, mig
+}
+
+// The lab's round-4 failure: the storage would not attach the volume to the
+// target node (Longhorn does not live-migrate a degraded volume), so the
+// destination pod sat in PodInitializing and the migration said only "never
+// reached Ready". The message now carries the pod's FailedAttachVolume event,
+// and the same text is recorded as a Warning event on the SwiftMigration.
+func TestPreparingLive_BudgetExceeded_MessageNamesAttachFailure(t *testing.T) {
+	attach := `AttachVolume.Attach failed for volume "pvc-1" : rpc error: code = Internal desc = volume pvc-1 failed to attach to node worker-2`
+	r, rec, mig := budgetExceededDst(t, corev1.PodStatus{
+		Phase:                 corev1.PodPending,
+		InitContainerStatuses: []corev1.ContainerStatus{waiting("network-init", "PodInitializing", "")},
+		ContainerStatuses:     []corev1.ContainerStatus{waiting("launcher", "PodInitializing", "")},
+	}, func(dst, src *corev1.Pod) []client.Object {
+		now := time.Now()
+		return []client.Object{
+			podEvent("dst.scheduled", dst, corev1.EventTypeNormal, "Scheduled", "Successfully assigned default/guest-mig-abcdef to worker-2", now),
+			podEvent("dst.attach", dst, corev1.EventTypeWarning, "FailedAttachVolume", attach, now.Add(-5*time.Second)),
+			podEvent("src.unhealthy", src, corev1.EventTypeWarning, "Unhealthy", "Readiness probe failed", now),
+		}
+	})
+
+	status := mig.Status.DeepCopy()
+	res := r.handlePreparingLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonDstNeverReady {
+		t.Fatalf("FailureReason: want DstNeverReady, got %q (msg %q)", res.FailureReason, res.FailureMsg)
+	}
+	want := `destination pod "guest-mig-abcdef" never reached Ready within 1m0s budget: ` +
+		`init container "network-init" waiting: PodInitializing; Warning FailedAttachVolume: ` + attach
+	if res.FailureMsg != want {
+		t.Errorf("FailureMsg:\n got %q\nwant %q", res.FailureMsg, want)
+	}
+	if !recordedEvent(rec, "Warning "+eventReasonDestinationPodNeverReady+" "+want) {
+		t.Errorf("no %s Warning event carrying the failure message", eventReasonDestinationPodNeverReady)
+	}
+}
+
+// An unschedulable destination pod: the scheduler's message names why.
+func TestPreparingLive_BudgetExceeded_MessageNamesSchedulingFailure(t *testing.T) {
+	unschedulable := "0/3 nodes are available: 1 node(s) didn't match Pod's node affinity/selector, 2 node(s) had untolerated taint {node.kubernetes.io/unreachable: }."
+	r, _, mig := budgetExceededDst(t, corev1.PodStatus{
+		Phase: corev1.PodPending,
+		Conditions: []corev1.PodCondition{{
+			Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+			Reason: corev1.PodReasonUnschedulable, Message: unschedulable,
+		}},
+	}, nil)
+
+	status := mig.Status.DeepCopy()
+	res := r.handlePreparingLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonDstNeverReady {
+		t.Fatalf("FailureReason: want DstNeverReady, got %q (msg %q)", res.FailureReason, res.FailureMsg)
+	}
+	if !strings.Contains(res.FailureMsg, "never reached Ready within 1m0s budget: not scheduled: Unschedulable: "+unschedulable) {
+		t.Errorf("FailureMsg does not carry the scheduling failure: %q", res.FailureMsg)
+	}
+}
+
+// When neither the pod's status nor its Warning events say anything, the
+// message is what it always was.
+func TestPreparingLive_BudgetExceeded_NoCauseLeavesMessageUnchanged(t *testing.T) {
+	r, rec, mig := budgetExceededDst(t, corev1.PodStatus{}, func(dst, _ *corev1.Pod) []client.Object {
+		return []client.Object{
+			podEvent("dst.scheduled", dst, corev1.EventTypeNormal, "Scheduled", "Successfully assigned default/guest-mig-abcdef to worker-2", time.Now()),
+		}
+	})
+
+	status := mig.Status.DeepCopy()
+	res := r.handlePreparingLive(context.Background(), mig, status)
+	want := `destination pod "guest-mig-abcdef" never reached Ready within 1m0s budget`
+	if res.FailureMsg != want || res.FailureReason != migrationv1alpha1.FailureReasonDstNeverReady {
+		t.Errorf("got %q / %q, want %q / DstNeverReady", res.FailureMsg, res.FailureReason, want)
+	}
+	if !recordedEvent(rec, "Warning "+eventReasonDestinationPodNeverReady+" "+want) {
+		t.Errorf("no %s Warning event", eventReasonDestinationPodNeverReady)
+	}
+}
+
 func TestPreparingLive_IdempotentReentry_ExistingPodNotRecreated(t *testing.T) {
 	// Simulates leader handover: dst pod already exists with correct
 	// shape. Reconcile must skip Create (no AlreadyExists error

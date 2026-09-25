@@ -162,7 +162,11 @@ annotation-only and not persisted to status.
 - **`Failed`, `failureReason=DstScheduleFailed` / `DstNeverReady`:** the
   destination pod could not schedule or never reached receive-ready;
   check target-node capacity and the boot-type node label
-  (`kubeswift.io/kernel-node=true` for kernel-boot guests).
+  (`kubeswift.io/kernel-node=true` for kernel-boot guests). A
+  `DstNeverReady` `failureMessage` says why the pod was not Ready, from its
+  status and latest Warning events (for example a `FailedAttachVolume` when
+  the storage would not attach the volume to the target node); see
+  [troubleshooting.md](troubleshooting.md).
 - **`describe` shows `Resuming` for a while:** expected — Resuming waits
   for the guest to report healthy on the destination (~17s warm cache).
   The controller is not stuck.
