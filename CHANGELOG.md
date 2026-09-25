@@ -334,6 +334,44 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   exec runs independently. A cancel interrupts only a receive; during a send
   it waits, as before.
 
+- **A finishing sandbox went back to `Materializing` before it completed.**
+  The kubelet reports the launcher container's exit before it marks the pod
+  `Succeeded` or `Failed`: it keeps the pod `Running` until it has finished
+  stopping it. The controller took a `Running` pod whose launcher was not
+  running for one still coming up, so a one-shot sandbox read `Running`, then
+  `Materializing` for about 4 seconds in the lab, then `Completed`. The
+  sandbox now keeps its phase until the pod is terminal, and the terminal pod
+  still decides `Completed` or `Failed`.
+
+- **A failed warm-pool slot kept its GPU, so the pool could not warm a
+  replacement.** Nothing deleted a warm slot whose launcher pod had ended: the
+  pool skipped it when counting its slots, and garbage collection removes slot
+  pods only with their pool. The pool freed a slot's GPU only once its pod was
+  gone, so a failed slot kept its GPU for good. In the lab, a single-GPU
+  node's GPU stayed with a slot that had failed a day earlier ("Cannot open
+  initramfs file", below). The pool now deletes a warm slot whose pod is
+  `Failed` or `Succeeded`, with a `SlotEnded` event that gives the reason, and
+  a slot pod in either phase no longer holds its GPU (the kubelet reports them
+  only once the pod's containers have stopped). Both happen on every pass,
+  before the kernel and image checks, so a `Degraded` pool (the lab's could
+  not resolve its image under Docker Hub's pull limit) still returns the GPU,
+  and warms a replacement once the image resolves. A slot pod that is running
+  or terminating keeps its GPU. Failed slots left by earlier versions are
+  deleted on the pool's first pass after the upgrade.
+
+- **A checked-out sandbox whose slot died stayed `Running`.** A sandbox that
+  claims a warm slot learns its outcome from the exec status swiftletd writes
+  on the slot pod, and the controller never looked at the pod itself. When the
+  slot pod ended before that status was written, swiftletd went with it, and
+  the sandbox stayed `Running` until `spec.timeout`, or for good without one.
+  It now fails with reason `SlotEnded` and a message that names the pod, how
+  it ended and the launcher's exit code and message. The pod is kept for its
+  logs, as a cold sandbox's launcher is, and the pool returns a GPU slot's GPU
+  on its next pass. A slot pod that is gone fails the sandbox with `SlotLost`,
+  as before, and the message now names the pod. An exec status the workload
+  did report still decides the outcome, so a checkout that completed before
+  its slot pod ended is still `Completed`.
+
 - **A warm GPU pool booted its slots on the base `sandbox` kernel.** That
   kernel has no `CONFIG_MODULES`, so a slot could not load the NVIDIA driver
   its image ships, which is what the `gpu-sandbox` kernel exists for. A
@@ -396,6 +434,17 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   and kernel `a` on node `b-c` did, one reading the other's pull as its own.
   Pull Jobs are now named `swiftkernel-pull-<name>-<node>-<hash>` and labeled
   `kubeswift.io/swiftkernel=<name>`.
+
+- **A guest created with its SwiftImage read `Failed` until the import
+  finished.** A SwiftImage that was not yet `Ready` failed the guest's
+  resolution like a missing one, so the guest went `Failed` while the image
+  imported, and went on to boot once it was `Ready`. A SwiftGuestPool deletes
+  `Failed` replicas, so a pool created with its image churned through them. A
+  guest now waits for an image that is still importing, as for a pulling
+  kernel: it stays `Pending` (a running guest keeps its phase) with
+  `Resolved=False` "SwiftImage not Ready", and is checked again every 10
+  seconds. Only a `Failed` image fails the guest. The same holds for an
+  image-backed data disk. Found by lab validation of v0.15.0.
 
 - **One failed import pod failed the SwiftImage for good.** The import Job
   retries a failed pod up to its backoff limit, but the controller marked the

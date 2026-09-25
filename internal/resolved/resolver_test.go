@@ -225,6 +225,44 @@ func TestResolve_KernelNotReadyWaitsUnlessFailed(t *testing.T) {
 	}
 }
 
+// An image still importing is waited for; only a Failed one fails the guest.
+// A guest created with its SwiftImage read Failed until the import finished,
+// and a SwiftGuestPool deletes Failed replicas (lab validation of v0.15.0).
+func TestResolve_ImageNotReadyWaitsUnlessFailed(t *testing.T) {
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	guest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+	}
+	for _, tc := range []struct {
+		phase   imagev1alpha1.SwiftImagePhase
+		waiting bool
+	}{
+		{"", true},
+		{imagev1alpha1.SwiftImagePhasePending, true},
+		{imagev1alpha1.SwiftImagePhaseImporting, true},
+		{imagev1alpha1.SwiftImagePhasePreparing, true},
+		{imagev1alpha1.SwiftImagePhaseFailed, false},
+	} {
+		image := &imagev1alpha1.SwiftImage{
+			ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+			Status:     imagev1alpha1.SwiftImageStatus{Phase: tc.phase},
+		}
+		c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(guestClass, image).Build()
+		_, err := NewResolver(c).Resolve(context.Background(), guest)
+		var re *ResolutionError
+		if !errors.As(err, &re) {
+			t.Fatalf("image %q: expected ResolutionError, got %T: %v", tc.phase, err, err)
+		}
+		if re.Waiting != tc.waiting {
+			t.Errorf("image %q: Waiting = %v, want %v", tc.phase, re.Waiting, tc.waiting)
+		}
+	}
+}
+
 func TestResolve_ResolutionErrorIncludesReasonString(t *testing.T) {
 	re := &ResolutionError{Reason: "SwiftImage not Ready", AffectedResource: "img"}
 	if re.Error() != "SwiftImage not Ready" {

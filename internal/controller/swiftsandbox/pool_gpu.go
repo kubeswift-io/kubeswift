@@ -111,11 +111,16 @@ func (r *SwiftSandboxPoolReconciler) podReader() client.Reader {
 }
 
 // reconcileSlotGPUGC releases the GPU of any of this pool's slots whose pod no
-// longer exists — draining (scale-down), checkout completion (the claiming
-// SwiftSandbox was deleted → its slot pod GC'd), or churn. A pod that still
-// EXISTS (any phase, incl. terminating, warm or claimed) keeps its allocation:
-// its CH may still hold the VFIO group. held reports whether any of this pool's
-// allocations is still backed by such a pod. A no-op for non-GPU pools.
+// longer exists or has ended — draining (scale-down), checkout completion (the
+// claiming SwiftSandbox was deleted → its slot pod GC'd), a slot that failed,
+// or churn. A pod that exists and has not ended (incl. terminating, warm or
+// claimed) keeps its allocation: its CH may still hold the VFIO group. A pod
+// that is Succeeded or Failed does not: the kubelet reports those phases only
+// once all its containers have stopped, the same rule launcherMayHoldGPU
+// applies to a sandbox's own launcher. A failed slot used to count as live and
+// kept its GPU for as long as its pod stayed. held reports whether any of this
+// pool's allocations is still backed by a pod that may hold it. A no-op for
+// non-GPU pools.
 //
 // The live-pod set is read UNCACHED: a slot created moments ago may not be in
 // the informer cache yet, and freeing its GPU then hands the device out twice.
@@ -131,7 +136,9 @@ func (r *SwiftSandboxPoolReconciler) reconcileSlotGPUGC(ctx context.Context, poo
 	}
 	live := make(map[string]bool, len(pods.Items))
 	for i := range pods.Items {
-		live[pods.Items[i].Name] = true
+		if p := &pods.Items[i]; p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
+			live[p.Name] = true
+		}
 	}
 
 	var nodes gpuv1alpha1.SwiftGPUNodeList
