@@ -303,9 +303,30 @@ impl ApiClient {
         deadline: Instant,
         poll: Duration,
     ) -> SendMigrationOutcome {
+        self.wait_for_send_migration_terminal_until(deadline, poll, |_| None)
+    }
+
+    /// [`wait_for_send_migration_terminal`](Self::wait_for_send_migration_terminal),
+    /// ending early as [`SendMigrationOutcome::Failed`] when `failed` returns
+    /// a reason. `failed` sees each `vm.info` sample the source is not yet
+    /// gone for: the source API has no failure signal of its own (see the
+    /// v53 spike), so the caller supplies one it can observe, such as the
+    /// migration connection having closed while the guest runs on. The
+    /// source-gone check runs first, so a completed migration is never
+    /// reported failed.
+    pub fn wait_for_send_migration_terminal_until(
+        &self,
+        deadline: Instant,
+        poll: Duration,
+        mut failed: impl FnMut(&Result<VmInfo, ApiError>) -> Option<String>,
+    ) -> SendMigrationOutcome {
         loop {
-            if classify_send_migration_sample(&self.vm_info()) == SendMigrationSample::SourceGone {
+            let sample = self.vm_info();
+            if classify_send_migration_sample(&sample) == SendMigrationSample::SourceGone {
                 return SendMigrationOutcome::Completed;
+            }
+            if let Some(reason) = failed(&sample) {
+                return SendMigrationOutcome::Failed(reason);
             }
             if Instant::now() >= deadline {
                 return SendMigrationOutcome::Failed(
@@ -709,6 +730,46 @@ mod tests {
             }
             other => panic!("expected Failed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn wait_until_ends_early_on_the_callers_failure() {
+        // The source answers Running and the deadline is far off: the
+        // caller's check (a closed migration connection, in swiftletd)
+        // ends the wait as Failed with its reason.
+        let body = br#"{"state":"Running"}"#;
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        let mut full = response.into_bytes();
+        full.extend_from_slice(body);
+        let server = MockServer::spawn(full);
+        let client = ApiClient::new(server.path.clone());
+        let started = Instant::now();
+        let outcome = client.wait_for_send_migration_terminal_until(
+            Instant::now() + Duration::from_secs(600),
+            Duration::from_millis(1),
+            |sample| match sample {
+                Ok(info) if info.state == "Running" => Some("connection closed".to_string()),
+                _ => None,
+            },
+        );
+        assert_eq!(
+            outcome,
+            SendMigrationOutcome::Failed("connection closed".to_string())
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn wait_until_never_fails_a_completed_migration() {
+        // The source is gone: Completed, whatever the caller's check says.
+        let tmp = tempfile::tempdir().unwrap();
+        let client = ApiClient::new(tmp.path().join("gone.sock"));
+        let outcome = client.wait_for_send_migration_terminal_until(
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+            |_| Some("would fail".to_string()),
+        );
+        assert_eq!(outcome, SendMigrationOutcome::Completed);
     }
 
     #[test]

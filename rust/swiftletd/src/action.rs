@@ -241,6 +241,12 @@ pub const MIGRATION_PAUSE_WINDOW_MS_KEY: &str = "kubeswift.io/migration-pause-wi
 /// "(estimate)" qualifier per design §6.2.
 pub const MIGRATION_PROGRESS_ESTIMATE_KEY: &str = "kubeswift.io/migration-progress-estimate";
 
+/// The send the progress estimate belongs to. The estimate outlives its send,
+/// and the controller used to read a previous send's last value as a new
+/// migration's progress (95% at the start); it now ignores one naming another
+/// send.
+pub const MIGRATION_PROGRESS_ESTIMATE_ID_KEY: &str = "kubeswift.io/migration-progress-estimate-id";
+
 /// Pod-network baseline bandwidth used to compute the
 /// `migration-progress-estimate` annotation per Phase 3b design doc
 /// §5.4. **Calico-VXLAN-specific** measurement from spike Q4 (107.2
@@ -1221,6 +1227,10 @@ fn spawn_progress_emitter(action_id: String, guest_ram_mib: Option<u32>) -> Prog
                 let pct = compute_progress_estimate(elapsed_s, expected_s);
                 let mut annotations = BTreeMap::new();
                 annotations.insert(MIGRATION_PROGRESS_ESTIMATE_KEY.to_string(), pct.to_string());
+                annotations.insert(
+                    MIGRATION_PROGRESS_ESTIMATE_ID_KEY.to_string(),
+                    action_id.clone(),
+                );
                 let patch = json!({"metadata": {"annotations": annotations}});
                 let pp = PatchParams::default();
                 match api.patch(&pod_name, &pp, &Patch::Merge(&patch)).await {
@@ -1343,8 +1353,24 @@ async fn dispatch_migration_send(
         // FAILURE case, where CH does NOT exit and the guest auto-resumes.
         MIGRATION_SEND_COMPLETED.store(true, Ordering::SeqCst);
         let deadline = started + timeout;
-        let outcome =
-            client.wait_for_send_migration_terminal(deadline, MIGRATION_SEND_POLL_INTERVAL);
+        // The deadline used to be the only way a failed transfer ended the
+        // wait: after a cancel, 600 s with this action slot busy. Watch the
+        // transfer's connection too (crate::migconn).
+        let mut watch = crate::migconn::parse_target(&args.target_url)
+            .map(|target| crate::migconn::Watch::new(target, std::time::Instant::now()));
+        let outcome = client.wait_for_send_migration_terminal_until(
+            deadline,
+            MIGRATION_SEND_POLL_INTERVAL,
+            |sample| {
+                let w = watch.as_mut()?;
+                let running = matches!(sample, Ok(info) if info.state == "Running");
+                w.sample(
+                    std::time::Instant::now(),
+                    running,
+                    crate::migconn::connected_to(w.target),
+                )
+            },
+        );
         if matches!(outcome, swift_ch_client::SendMigrationOutcome::Failed(_)) {
             // Migration did not complete — the source guest is still Running
             // (v53 auto-resumed it) and CH did NOT exit, so main.rs's

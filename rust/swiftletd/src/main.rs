@@ -4,6 +4,7 @@ mod intent;
 mod kube_client;
 mod launch;
 mod lease;
+mod migconn;
 mod report;
 mod shutdown;
 
