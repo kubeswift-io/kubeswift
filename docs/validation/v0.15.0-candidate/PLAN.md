@@ -688,3 +688,59 @@ passes, delete the `val-r4-*` namespaces. Their deletion is itself a check of
   - `val-n2r` finishes deleting (Phase 1);
   - the ntx SwiftKernels re-pull and return to `Ready`.
 - **sov:** S1 as before.
+
+## Round 5: preparation (GO now), then a focused re-run (candidate to follow)
+
+Round 4 (`phase2-r4.md`) passed everything it could run. Three scenarios were
+blocked by the lab's storage: V4a live, T3 and T5. Four findings are being
+fixed. **v0.15.0 is not tagged until round 5 passes.**
+
+The round 5 candidate (the fixes for findings 1, 2, 4 and 5) follows in a
+separate go-ahead, with its SHA. Start with the preparation below now: it
+does not depend on the candidate.
+
+### Preparation: free Longhorn space on dev's cp-1 (GO now)
+
+- **Target:** cp-1's Longhorn disk must be comfortably above
+  `storage-minimal-available-percentage=25`: at least 35% free (about 70 GiB of
+  195 GiB). New volumes then get all 3 replicas and can be live-migrated.
+  - T5 needs a 16 GiB guest, T3 the same class, and V4a a small guest, each
+    with a healthy volume.
+- **William has authorised you to delete guests and images to get there.**
+  Work in this order and stop as soon as the target is met.
+  1. **Round 4 leftovers.** Delete the namespaces `val-r4-mig`, `val-r4-d7b2`,
+     `val-r4-rt`, `val-r4-nok` and `val-r4-smoke`, with their guests,
+     SwiftMigrations, snapshots, images and PVCs.
+     - Save anything you still need from them first.
+     - Their deletion also re-checks #675: report any namespace that does not
+       finish deleting.
+  2. **Other validation leftovers.** Any remaining `val-*` namespace, and the
+     `val-migratable-16g` class only if nothing uses it (round 5 recreates what
+     it needs).
+  3. **Unused lab images.** SwiftImages that no SwiftGuest, SwiftGuestPool or
+     SwiftSandbox references, in any namespace except those listed under
+     "never" below.
+     - Check with `kubectl get swiftguests,swiftguestpools,swiftsandboxes -A -o yaml`
+       before deleting each one.
+     - `default/ubuntu-noble` may be deleted if needed; the test scripts
+       re-import it.
+     - Record each image you delete, its namespace and its size.
+  4. **Orphaned Longhorn volumes and snapshots** that no PVC uses (detached,
+     no workload). Delete these only with Longhorn's own UI or CLI state
+     showing them unused, and record each one.
+- **Never delete or modify:**
+  - `gpu-cells/innercp` and its image, PVCs and namespace;
+  - anything in `field-testing`, `capi-udn` or `kube-system`;
+  - the kubeswift install in `kubeswift-system`;
+  - any guest you did not create for validation, unless William names it.
+- **Do not lower `storage-minimal-available-percentage` or change other
+  Longhorn settings.** Freeing space is the fix.
+- **Report** in `phase0-r5.md`:
+  - cp-1's free space before and after;
+  - everything deleted;
+  - whether a fresh test volume now gets 3 healthy replicas: create a 1 GiB
+    `longhorn-migratable` PVC, check its robustness is `healthy`, and delete
+    it.
+- **If you cannot reach 35% within those limits,** stop and report what is
+  left on cp-1's disk (the largest volumes and their owners). William decides
+  from there.
