@@ -126,6 +126,17 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 // createLaunch resolves the image and creates the intent ConfigMap + launcher pod.
 func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, kernelName string) (ctrl.Result, error) {
+	// Every launcher pod of a sandbox (cold, or a pool miss) is created here,
+	// so this is where the kernel it boots must exist and be Ready. Checked
+	// before the image resolve, which is a registry request.
+	reason, msg, err := checkKernel(ctx, r.Client, sb, kernelName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if reason != "" {
+		return r.waitForKernel(ctx, sb, reason, msg)
+	}
+
 	auth, err := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Image)
 	if err != nil {
 		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
@@ -288,6 +299,22 @@ func (r *SwiftSandboxReconciler) terminal(ctx context.Context, sb *sandboxv1alph
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// waitForKernel holds the sandbox Pending, with no launcher pod, while its
+// SwiftKernel is missing or not Ready (checkKernel), and says so on
+// Resolved=False. Not terminal: the kernel may still appear or finish pulling.
+func (r *SwiftSandboxReconciler) waitForKernel(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
+	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
+		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+	})
+	sb.Status.Phase = sandboxv1alpha1.SwiftSandboxPending
+	sb.Status.Message = msg
+	if err := r.Status().Update(ctx, sb); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: kernelRecheckInterval}, nil
 }
 
 func (r *SwiftSandboxReconciler) setPhase(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, phase sandboxv1alpha1.SwiftSandboxPhase, msg string) (ctrl.Result, error) {

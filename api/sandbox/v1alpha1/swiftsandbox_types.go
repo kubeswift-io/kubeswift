@@ -296,6 +296,19 @@ const (
 	SwiftSandboxConditionScratchDiskReady = "ScratchDiskReady"
 )
 
+// Resolved=False reasons, on a SwiftSandbox or a SwiftSandboxPool, while the
+// kernel profile its launcher would boot cannot be booted. No launcher pod is
+// created until it can. Neither is terminal: the SwiftKernel may still be
+// created, or still be pulling its artifacts to the node.
+const (
+	// SwiftSandboxReasonKernelNotFound: no SwiftKernel of the kernel profile's
+	// name exists in the namespace.
+	SwiftSandboxReasonKernelNotFound = "KernelNotFound"
+	// SwiftSandboxReasonKernelNotReady: the SwiftKernel exists but is not Ready
+	// on the node the launcher is pinned to or, when it is not pinned, overall.
+	SwiftSandboxReasonKernelNotReady = "KernelNotReady"
+)
+
 // SandboxScratchDiskStatus reports the attached scratch disk.
 type SandboxScratchDiskStatus struct {
 	// PVCName is the bound PVC (sandbox-owned for blank, the operator's for pvcRef).

@@ -46,7 +46,8 @@ func intentConfigMapName(sb *sandboxv1alpha1.SwiftSandbox) string {
 // spec.kernelProfileRef always wins (operator override); otherwise a GPU sandbox
 // gets the module-capable gpu-sandbox kernel (its OCI image insmods the NVIDIA
 // driver, which the monolithic base sandbox kernel can't load), and everything
-// else gets the base sandbox kernel.
+// else gets the base sandbox kernel. A warm pool applies it to its slot template
+// (slotTemplate), so pool slots and standalone sandboxes cannot disagree.
 func resolveKernelProfile(sb *sandboxv1alpha1.SwiftSandbox) string {
 	if sb.Spec.KernelProfileRef != nil && sb.Spec.KernelProfileRef.Name != "" {
 		return sb.Spec.KernelProfileRef.Name
@@ -255,6 +256,24 @@ func launcherNodeSelector(sel map[string]string) map[string]string {
 	return out
 }
 
+// podNodeSelector is the nodeSelector of sb's launcher pod.
+func podNodeSelector(sb *sandboxv1alpha1.SwiftSandbox) map[string]string {
+	nodeSelector := launcherNodeSelector(sb.Spec.NodeSelector)
+	// Native SwiftGPU: pin to the node the controller allocated the device(s) on
+	// (the DRA backend instead lets the scheduler place the claim). The GPU node
+	// must also be a kernel node — the kernel-node label above still applies.
+	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil && sb.Status.GPU.NodeName != "" {
+		nodeSelector[corev1.LabelHostname] = sb.Status.GPU.NodeName
+	}
+	return nodeSelector
+}
+
+// pinnedNode is the node sb's launcher pod is pinned to, or "" when the
+// scheduler picks it.
+func pinnedNode(sb *sandboxv1alpha1.SwiftSandbox) string {
+	return podNodeSelector(sb)[corev1.LabelHostname]
+}
+
 // buildPod builds the sandbox launcher pod: a sandbox-materialize init container
 // (pulls the image + produces the RO ext4 in the node cache) followed by the
 // swiftletd launcher (mode-3 direct-kernel boot of that rootfs). RestartPolicy
@@ -262,13 +281,7 @@ func launcherNodeSelector(sel map[string]string) map[string]string {
 func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 	kernelDir := kernelv1alpha1.KernelLocalPath(sb.Namespace, kernelName)
 
-	nodeSelector := launcherNodeSelector(sb.Spec.NodeSelector)
-	// Native SwiftGPU: pin to the node the controller allocated the device(s) on
-	// (the DRA backend instead lets the scheduler place the claim). The GPU node
-	// must also be a kernel node — the kernel-node label above still applies.
-	if sb.Spec.GPUProfileRef != nil && sb.Status.GPU != nil && sb.Status.GPU.NodeName != "" {
-		nodeSelector["kubernetes.io/hostname"] = sb.Status.GPU.NodeName
-	}
+	nodeSelector := podNodeSelector(sb)
 
 	matArgs := []string{
 		"--image", sb.Spec.Image,

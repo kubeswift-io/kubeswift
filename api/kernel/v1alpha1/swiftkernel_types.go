@@ -58,6 +58,24 @@ type SwiftKernelStatus struct {
 	InitramfsDigest string             `json:"initramfsDigest,omitempty"`
 }
 
+// PhaseOn returns the phase that decides whether a launcher on nodeName can
+// boot this kernel. A launcher pinned to a node needs the artifacts only on
+// that node, so when the kernel reports a status for nodeName, that node's
+// phase is returned. Otherwise (nodeName empty because the scheduler picks the
+// node, or a node the kernel has not reported on) it is the overall phase,
+// which is Ready only once every kernel node has pulled the artifacts. The
+// overall phase is what the kernel-boot SwiftGuest path checks.
+func (k *SwiftKernel) PhaseOn(nodeName string) SwiftKernelPhase {
+	if nodeName != "" {
+		for _, ns := range k.Status.NodeStatuses {
+			if ns.NodeName == nodeName {
+				return ns.Phase
+			}
+		}
+	}
+	return k.Status.Phase
+}
+
 // SwiftKernel is the Schema for the swiftkernels API.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

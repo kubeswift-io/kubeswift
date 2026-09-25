@@ -268,6 +268,31 @@ takes the new default.
   exec runs independently. A cancel interrupts only a receive; during a send
   it waits, as before.
 
+- **A warm GPU pool booted its slots on the base `sandbox` kernel.** That
+  kernel has no `CONFIG_MODULES`, so a slot could not load the NVIDIA driver
+  its image ships, which is what the `gpu-sandbox` kernel exists for. A
+  standalone GPU sandbox with no `kernelProfileRef` gets `gpu-sandbox`, but the
+  pool read only its own `kernelProfileRef`. A pool with `gpuProfileRef` now
+  picks its kernel by the same rule as a sandbox, and an explicit
+  `kernelProfileRef` still wins. Slots already warm keep the kernel they booted
+  with; delete them and the pool warms replacements.
+
+- **A sandbox whose SwiftKernel did not exist was launched anyway, and failed
+  in the hypervisor.** The launcher mounts the kernel directory with
+  `DirectoryOrCreate`, so when the namespace had no SwiftKernel of that name,
+  or it had not finished pulling, the pod started on an empty directory and
+  Cloud Hypervisor failed with "Cannot open initramfs file". The sandbox
+  reported launcher exit 1, and nothing named the kernel. The controller now
+  looks the SwiftKernel up before it creates a launcher pod, as the kernel-boot
+  SwiftGuest path does. Until the kernel exists and is `Ready` (on the
+  sandbox's node, when the sandbox is pinned to one), the sandbox stays
+  `Pending` with no pod and `Resolved=False` with reason `KernelNotFound` or
+  `KernelNotReady`, and is checked again every 10 seconds. A warm pool checks
+  the kernel before it creates slots, and before a GPU pool allocates a slot's
+  GPU: it reports `Degraded` with those reasons and creates none, where it used
+  to create slots that failed and were replaced by more that failed the same
+  way.
+
 - **Making room for a shared base evicted the bases running guests used.**
   Eviction went strictly least recently used first, and could not tell a base
   that guests on the node were snapshotted from from one nothing used. dm-thin

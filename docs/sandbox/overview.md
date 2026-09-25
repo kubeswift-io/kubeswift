@@ -105,6 +105,13 @@ sandbox to change image, resources, command, or network.
 | `exitCode` | int32 | The workload's real exit code: `0` → `Completed`, non-zero → `Failed`. |
 | `message` | string | Human-readable status detail. |
 
+Until the SwiftKernel the sandbox boots (`kernelProfileRef`, or its default)
+exists in the sandbox's namespace and is `Ready`, the sandbox stays `Pending`
+with no launcher pod, and `Resolved` is `False` with reason `KernelNotFound` or
+`KernelNotReady`. A sandbox pinned to a node (a native GPU sandbox, or a
+`kubernetes.io/hostname` in `nodeSelector`) needs the kernel `Ready` on that
+node only. The controller checks again every 10 seconds.
+
 `kubectl get sbox` prints Phase, Image, Node, IP, and Age.
 
 ## Network modes

@@ -100,7 +100,8 @@ func TestPoolReconcile_ResolveFailureBacksOff(t *testing.T) {
 		// MinWarm 1 so a slot is wanted, and no digest yet, so it resolves.
 		Spec: sandboxv1alpha1.SwiftSandboxPoolSpec{Image: "!!! not a ref !!!", MinWarm: 1},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).
+	// A Ready kernel, so warming gets past the kernel check to the resolve.
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, readyKernel("ns", defaultKernelProfile)).
 		WithStatusSubresource(pool).Build()
 	r := &SwiftSandboxPoolReconciler{Client: c, APIReader: c, Scheme: s, Recorder: record.NewFakeRecorder(20)}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "p"}}
