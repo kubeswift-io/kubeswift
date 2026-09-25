@@ -19,7 +19,7 @@ Use this path for **remote clusters** (cloud, on-prem, etc.): install from the O
 
 ```bash
 helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
-  --version 0.14.1 \
+  --version 0.15.0 \
   -n kubeswift-system \
   --create-namespace
 ```
