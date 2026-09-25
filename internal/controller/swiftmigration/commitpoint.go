@@ -30,6 +30,14 @@ import (
 // such handler must treat "source reported complete" as committed, exactly like
 // post-cutover: drive the migration FORWARD to completion, never tear the
 // destination down.
+//
+// The destination is the second witness. swiftletd-on-dst writes
+// migration-status=running with this migration's $RECV_ID once
+// vm.receive-migration has returned with the guest live, which happens only
+// after the source handed the guest over. The source's "complete" can fail to
+// land: in the lab's validation of v0.15.0 the source launcher exited before
+// writing it, the spec.timeout then failed the migration as pre-cutover, and
+// the destination, running the only copy, was deleted. Either witness commits.
 
 // srcReportedComplete reports whether the source launcher pod carries
 // migration-status=complete with this migration's $SEND_ID — the commit point.
@@ -38,8 +46,22 @@ func srcReportedComplete(mig *migrationv1alpha1.SwiftMigration, src *corev1.Pod)
 	return podStatusMatches(src, migrationStatusComplete, sendActionID(mig))
 }
 
+// dstReportedRunning reports whether the destination launcher pod carries
+// migration-status=running with this migration's $RECV_ID: it runs the
+// migrated guest. A nil dst pod is not running.
+func dstReportedRunning(mig *migrationv1alpha1.SwiftMigration, dst *corev1.Pod) bool {
+	return podStatusMatches(dst, migrationStatusRunning, recvActionID(mig))
+}
+
+// passedCommitPoint reports whether either witness has seen the guest handed
+// over: the source reported complete, or the destination reported running.
+func passedCommitPoint(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod) bool {
+	return srcReportedComplete(mig, src) || dstReportedRunning(mig, dst)
+}
+
 // liveCommitted reports whether a live migration has passed the commit point:
-// cutover has stamped PodRefSwapped, or the source has reported complete. It is
+// cutover has stamped PodRefSwapped, the source has reported complete, or the
+// destination has reported running. It is
 // for handlers (cancel, deletion) that run before the StopAndCopy handler has
 // loaded the pods and so must look the source pod up themselves.
 //
@@ -67,12 +89,26 @@ func (r *SwiftMigrationReconciler) liveCommitted(
 	}
 	var srcPod corev1.Pod
 	if err := r.Get(ctx, client.ObjectKey{Name: srcPodLookupName(mig, &guest), Namespace: guest.Namespace}, &srcPod); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, err
+		}
+	} else if srcReportedComplete(mig, &srcPod) {
+		return true, nil
+	}
+	// The source pod may be gone, or never have written complete: the
+	// destination's own report commits too.
+	dstName, err := dstPodName(mig, guest.Name)
+	if err != nil {
+		return false, nil
+	}
+	var dstPod corev1.Pod
+	if err := r.Get(ctx, client.ObjectKey{Name: dstName, Namespace: guest.Namespace}, &dstPod); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	return srcReportedComplete(mig, &srcPod), nil
+	return dstReportedRunning(mig, &dstPod), nil
 }
 
 // deletionCommitted reports whether a migration being deleted has passed its

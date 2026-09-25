@@ -112,18 +112,17 @@ func TestDeriveSubstate_RecvReady_AdvancesToPreSend(t *testing.T) {
 	}
 }
 
-// TestDeriveSubstate_DstRunning_DoesNotAdvanceToPreSend is the negative
+// TestDeriveSubstate_DstRunning_CommitsRatherThanSending is the negative
 // guard pinning the post-PR-1 semantic: dst migration-status=running
-// is the TERMINAL receive-complete verb, NOT the recv→send trigger.
-// A dst showing "running" with the recv-action still present (and no
-// src send-action yet) must stay at recv-pending — gating recv→send on
-// "running" is exactly the Finding 2 deadlock. Pins the constant
-// distinction so a future refactor can't silently revert it.
-func TestDeriveSubstate_DstRunning_DoesNotAdvanceToPreSend(t *testing.T) {
+// is the TERMINAL receive-complete verb, NOT the recv→send trigger —
+// gating recv→send on "running" is exactly the Finding 2 deadlock. The
+// guest is live on the destination, so it is the commit point instead
+// (dstReportedRunning), whatever the source has or has not reported.
+func TestDeriveSubstate_DstRunning_CommitsRatherThanSending(t *testing.T) {
 	mig, _, src, dst := stopAndCopyFixture(t, "uid-1")
 	stamp(dst, migrationActionVerbReceive, recvActionID(mig), migrationStatusRunning, recvActionID(mig), "")
-	if got := deriveSubstate(mig, src, dst); got != substateRecvPending {
-		t.Errorf("substate: dst=running must NOT advance to pre-send (running is terminal, not the recv→send trigger); want recv-pending, got %v", got)
+	if got := deriveSubstate(mig, src, dst); got != substateDstRunning {
+		t.Errorf("substate: dst=running is the commit point, never the recv→send trigger; want dst-running, got %v", got)
 	}
 }
 

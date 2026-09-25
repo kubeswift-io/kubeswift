@@ -207,6 +207,21 @@ setting it had.
   backend. Each scheduled snapshot now gets its own directory, and the
   controller drops a template `hostPath` that an existing schedule carries.
 
+- **A live migration could delete the only running copy of the guest.** On a
+  launcher whose earlier migration send had failed or been cancelled, a later
+  send that completed let the source launcher exit before it wrote
+  `migration-status: complete`: the earlier send had left the exit signal
+  set. The controller, which took only the source's `complete` as the commit
+  point, then saw no progress, and the migration's `spec.timeout` failed it as
+  pre-cutover and deleted the destination pod, which ran the guest. The source
+  launcher now waits for its own send's write, and the controller also takes
+  the destination's report that the guest runs there (`migration-status:
+  running`) as the commit point: past it, a timeout, a cancel, a deletion, a
+  missing source pod or a source failure report no longer tears the
+  destination down, and the migration cuts over. A migration past cutover
+  whose guest already runs on the destination now completes instead of
+  failing on a timeout that expired meanwhile.
+
 ### CI
 
 - **`test/migration/migration-test.sh` runs on a shared cluster.** It no

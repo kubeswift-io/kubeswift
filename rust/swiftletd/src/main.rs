@@ -498,15 +498,15 @@ fn main() {
                             // anyway — controller's spec.timeout (5min
                             // default) is the ultimate floor for stuck-
                             // migration detection.
-                            let signal = action::migration_send_terminal_signal();
-                            let waited = rt.block_on(async {
-                                tokio::time::timeout(
-                                    std::time::Duration::from_secs(10),
-                                    signal.notified(),
-                                )
-                                .await
-                                .is_ok()
-                            });
+                            //
+                            // Waits for THIS send's write, not any send's
+                            // signal: an earlier failed or cancelled send
+                            // on this pod left a permit that used to end
+                            // the wait at once (see
+                            // action::wait_for_send_complete_written).
+                            let waited = rt.block_on(action::wait_for_send_complete_written(
+                                std::time::Duration::from_secs(10),
+                            ));
                             if waited {
                                 log::info!("w23_terminal_write_signal_received; safe to exit");
                             } else {

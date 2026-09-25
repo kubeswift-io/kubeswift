@@ -147,6 +147,50 @@ pub fn migration_send_terminal_signal() -> Arc<Notify> {
         .clone()
 }
 
+/// Set once the terminal write of a MigrationSend that COMPLETED has
+/// returned. main.rs may exit only on this, not on the signal alone.
+///
+/// The signal fires for every send, failed ones included, and a
+/// `notify_one` with no waiter leaves a permit. A pod whose earlier send
+/// failed or was cancelled therefore carries a stale permit: when a later
+/// send completes and CH exits, main's `.notified()` returned at once on
+/// that permit and the process exited before the completed send wrote
+/// `migration-status: complete`. The controller never saw the commit
+/// point, its spec.timeout then failed the migration as pre-cutover, and
+/// the destination pod, holding the only running copy of the guest, was
+/// deleted (lab validation of v0.15.0, D9). The signal now only wakes
+/// main to re-check this flag.
+static MIGRATION_SEND_COMPLETE_WRITTEN: AtomicBool = AtomicBool::new(false);
+
+/// Waits, up to `timeout`, until the completed send's terminal status
+/// write has returned. False on timeout.
+pub async fn wait_for_send_complete_written(timeout: Duration) -> bool {
+    wait_for_flag(
+        &MIGRATION_SEND_COMPLETE_WRITTEN,
+        &migration_send_terminal_signal(),
+        timeout,
+    )
+    .await
+}
+
+/// Waits until `flag` is set, woken by `signal`. A wake-up with the flag
+/// still clear (a permit left by an earlier notify) waits again.
+async fn wait_for_flag(flag: &AtomicBool, signal: &Notify, timeout: Duration) -> bool {
+    tokio::time::timeout(timeout, async {
+        loop {
+            // Created before the check: a notify between the check and the
+            // await stores a permit this future then consumes.
+            let notified = signal.notified();
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 use kube::api::{Api, Patch, PatchParams};
 use kube::Client;
 use serde_json::json;
@@ -2705,9 +2749,21 @@ async fn finish_main(
     // both success ("complete") and failure paths since a
     // future code change might add an exit-on-send-failure
     // path; cheap to fire either way.
+    //
+    // Only a send that completed releases main
+    // (MIGRATION_SEND_COMPLETE_WRITTEN): a failed or cancelled send's
+    // signal must not let a later completed send's exit skip its write.
     if done.pending.kind == ActionKind::MigrationSend {
+        let completed = done.result.is_ok();
+        if completed {
+            MIGRATION_SEND_COMPLETE_WRITTEN.store(true, Ordering::SeqCst);
+        }
         migration_send_terminal_signal().notify_one();
-        log::info!("w23_terminal_write_signal_fired id={}", done.pending.id);
+        log::info!(
+            "w23_terminal_write_signal_fired id={} completed={}",
+            done.pending.id,
+            completed
+        );
     }
     st.in_flight = None;
     // The id the annotations now carry: the cancel's, if one came.
@@ -4762,6 +4818,46 @@ mod tests {
             result.is_err(),
             "timeout-expiry path must return Err (Elapsed)"
         );
+    }
+
+    // An earlier send on the pod failed or was cancelled and fired the
+    // signal with nobody waiting, leaving a permit. It must not release
+    // main when a later send completes: main waits for that send's own
+    // write (lab validation of v0.15.0, D9).
+    #[tokio::test]
+    async fn w23_stale_permit_from_an_earlier_send_does_not_release_main() {
+        let flag = AtomicBool::new(false);
+        let signal = Notify::new();
+        signal.notify_one();
+        assert!(
+            !wait_for_flag(&flag, &signal, Duration::from_millis(200)).await,
+            "a stale permit released main before the completed send's write"
+        );
+    }
+
+    #[tokio::test]
+    async fn w23_released_by_the_completed_sends_write() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let signal = Arc::new(Notify::new());
+        signal.notify_one(); // stale, from an earlier send
+        let (f, s) = (flag.clone(), signal.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            f.store(true, Ordering::SeqCst);
+            s.notify_one();
+        });
+        assert!(
+            wait_for_flag(&flag, &signal, Duration::from_secs(10)).await,
+            "the completed send's write must release main"
+        );
+    }
+
+    // The write can land before main starts waiting.
+    #[tokio::test]
+    async fn w23_write_before_the_wait_releases_main_at_once() {
+        let flag = AtomicBool::new(true);
+        let signal = Notify::new();
+        assert!(wait_for_flag(&flag, &signal, Duration::from_millis(200)).await);
     }
 
     #[tokio::test]

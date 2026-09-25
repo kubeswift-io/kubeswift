@@ -81,6 +81,12 @@ const (
 	// refused the send-action with status=rejected. Same default
 	// rationale as substateDstRejected.
 	substateSrcRejected
+	// substateDstRunning is "dst pod reported migration-status=running
+	// with matching $RECV_ID": vm.receive-migration returned with the
+	// guest live on the destination. Committed, like substateSrcCompleted,
+	// when the source's own "complete" has not landed (see
+	// dstReportedRunning).
+	substateDstRunning
 )
 
 // String returns the design-doc sub-state name for diagnostic logging
@@ -106,6 +112,8 @@ func (s stopAndCopySubstate) String() string {
 		return "dst-rejected"
 	case substateSrcRejected:
 		return "src-rejected"
+	case substateDstRunning:
+		return "dst-running"
 	default:
 		return fmt.Sprintf("unknown(%d)", int(s))
 	}
@@ -191,13 +199,11 @@ const migrationStatusReceiveReady = "receive-ready"
 // migrationStatusRunning matches the dst-side TERMINAL-success verb
 // (StatusKind::Custom("running"), action.rs success_status). swiftletd
 // -on-dst writes "running" only AFTER vm.receive-migration completes
-// (CH state=Running with the migrated guest live). The controller does
-// NOT gate any transition on this verb: the W1 gate anchors on the
-// src-side "complete" (which swiftletd-on-src writes only after its
-// vm.send-migration internally probed dst CH for vm_info=Running per
-// F1.2). Kept as a named constant to document the dst terminal verb
-// and to keep the recv→send gate's "use receive-ready, not running"
-// distinction legible to future maintainers.
+// (CH state=Running with the migrated guest live). It never gates the
+// recv→send transition (that is receive-ready, above). It is the second
+// witness of the commit point, next to the src-side "complete": the
+// destination runs the guest, so the migration can only move forward
+// (dstReportedRunning).
 const migrationStatusRunning = "running"
 
 // migrationStatusComplete matches the src-side W1-gate-passing verb
@@ -239,6 +245,13 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 	if podStatusMatches(src, migrationStatusComplete, sid) {
 		return substateSrcCompleted
 	}
+	// The destination runs the guest: committed even though the source's
+	// "complete" has not landed, and checked before the source's failure,
+	// since failing now would delete the only running copy
+	// (dstReportedRunning).
+	if podStatusMatches(dst, migrationStatusRunning, rid) {
+		return substateDstRunning
+	}
 	if podStatusMatches(src, MigrationStatusFailed, sid) {
 		return substateSrcFailed
 	}
@@ -249,12 +262,9 @@ func deriveSubstate(mig *migrationv1alpha1.SwiftMigration, src, dst *corev1.Pod)
 	}
 
 	// Dst-side terminal: failed (D2 watchdog or CH receive error).
-	// We do NOT gate any transition on dst-side "running": post PR 1
-	// Commit C, dst "running" is the TERMINAL receive-complete verb
-	// (vm.receive-migration returned, guest live), not an intermediate
-	// signal. The W1 gate anchors on src="complete" (which implies dst
-	// is running per the F1.2 probe), so dst "running" needs no
-	// separate consumer here. The recv→send transition gates on
+	// Dst "running" is the TERMINAL receive-complete verb
+	// (vm.receive-migration returned, guest live), handled above as the
+	// commit point; it never gates recv→send, which keys on
 	// dst="receive-ready" (the pre-dispatch readiness verb) below.
 	if podStatusMatches(dst, MigrationStatusFailed, rid) {
 		return substateDstFailed

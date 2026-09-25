@@ -131,12 +131,11 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 		status.ResumingStartedAt = &now
 	}
 
-	// spec.timeout enforcement. F4.3 per §4.3: total-migration cap
-	// from status.StartedAt. Default 30m; webhook minimum
-	// 60s for mode=live.
-	if timeoutExceeded(mig, status) {
-		return timeoutFailure(mig)
-	}
+	// spec.timeout (F4.3 per §4.3: total-migration cap from
+	// status.StartedAt; default 30m, webhook minimum 60s for mode=live)
+	// is enforced only while still waiting, below. The guest is past
+	// cutover: once it runs on the destination the migration completes,
+	// however late, rather than being reported Failed.
 
 	// Get the dst pod via canonicalPodName resolution (Group A.7's
 	// helper; same shape as the SwiftGuest controller's pod lookups).
@@ -155,6 +154,9 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 	// terminating dst pod can't have a GuestRunning condition flipped
 	// True yet.
 	if dstPod.Status.Phase != corev1.PodRunning {
+		if timeoutExceeded(mig, status) {
+			return timeoutFailure(mig)
+		}
 		setPhaseDetail(status, phaseDetailLiveResumingWaiting)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming,
 			fmt.Sprintf("destination pod %q phase=%s; awaiting Running", dstPodName, dstPod.Status.Phase))
@@ -165,6 +167,9 @@ func (r *SwiftMigrationReconciler) handleResumingLive(
 	// SwiftGuest. swiftletd-on-dst writes this via DynamicObject the
 	// same way Phase 1's first-boot does.
 	if !isGuestRunningTrue(&guest) {
+		if timeoutExceeded(mig, status) {
+			return timeoutFailure(mig)
+		}
 		setPhaseDetail(status, phaseDetailLiveResumingWaiting)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonResuming,
 			"awaiting GuestRunning=True on destination (live resume + swiftletd condition write)")
