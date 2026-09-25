@@ -204,6 +204,12 @@ func newDstPod(
 	if err := addReceiverEnvToLauncher(pod); err != nil {
 		return nil, err
 	}
+	// The destination becomes the guest's launcher under another name; its
+	// swiftletd reports GuestRunning to the guest named here. Set even if the
+	// source pod carried it: a source built by an older controller did not.
+	if err := setLauncherEnv(pod, swiftguest.EnvGuestName, guest.Name); err != nil {
+		return nil, err
+	}
 
 	// W-3c-1 / TFU #24: repoint the runtime-intent volume at the FROZEN
 	// per-migration intent CM (lifecycle: start), so a stop-during-migration
@@ -321,24 +327,28 @@ func mergeAnnotationsForDst(srcAnnotations map[string]string, mtlsEnabled bool, 
 // error if no container named "launcher" exists (which would mean
 // the src pod is malformed).
 func addReceiverEnvToLauncher(pod *corev1.Pod) error {
+	// Replace any existing KUBESWIFT_MIGRATION_ROLE entry; src pod
+	// shouldn't have one, but if a future src-side use ever sets it,
+	// our value wins.
+	return setLauncherEnv(pod, EnvKubeswiftMigrationRole, EnvKubeswiftMigrationRoleReceiver)
+}
+
+// setLauncherEnv sets name=value in the pod's launcher container,
+// replacing any existing entry of that name. Returns an error if no
+// container named "launcher" exists.
+func setLauncherEnv(pod *corev1.Pod, name, value string) error {
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]
 		if c.Name != LauncherContainerName {
 			continue
 		}
-		// Replace any existing KUBESWIFT_MIGRATION_ROLE entry; src pod
-		// shouldn't have one, but if a future src-side use ever sets
-		// it, our value wins.
 		filtered := c.Env[:0]
 		for _, e := range c.Env {
-			if e.Name != EnvKubeswiftMigrationRole {
+			if e.Name != name {
 				filtered = append(filtered, e)
 			}
 		}
-		c.Env = append(filtered, corev1.EnvVar{
-			Name:  EnvKubeswiftMigrationRole,
-			Value: EnvKubeswiftMigrationRoleReceiver,
-		})
+		c.Env = append(filtered, corev1.EnvVar{Name: name, Value: value})
 		return nil
 	}
 	return fmt.Errorf("dst pod construction: src pod has no container named %q", LauncherContainerName)

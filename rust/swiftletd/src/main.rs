@@ -211,6 +211,11 @@ fn main() {
             );
 
             let (namespace, name) = (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok());
+            // GuestRunning reports go to the SwiftGuest, which is not always
+            // named like this pod (a migration's destination pod is
+            // <guest>-mig-<uid>); pod annotations keep using `name`.
+            let guest_name =
+                report::guest_name(env::var("KUBESWIFT_GUEST_NAME").ok(), name.clone());
 
             // Model A (guest on the namespace primary OVN-K UDN): swiftletd CANNOT reach
             // the apiserver from a primary-UDN pod — the UDN is bridged to the guest and
@@ -243,7 +248,7 @@ fn main() {
                 if is_primary_udn || !report_cr {
                     return;
                 }
-                let (Some(ns), Some(n)) = (&namespace, &name) else {
+                let (Some(ns), Some(n)) = (&namespace, &guest_name) else {
                     return;
                 };
                 rt.block_on(async {
@@ -334,6 +339,7 @@ fn main() {
                 namespace.as_ref().zip(name.as_ref()).map(|_| {
                     let ns = namespace.clone().unwrap();
                     let name = name.clone().unwrap();
+                    let guest = guest_name.clone().unwrap_or_else(|| name.clone());
                     let rt_clone = Arc::clone(&rt);
                     move |pid: u32, serial_socket_path: String, hypervisor: String| {
                         log::info!(
@@ -352,7 +358,7 @@ fn main() {
                             };
                             if report_cr {
                                 if let Err(e) =
-                                    report::report_guest_running(&client, &ns, &name, true, None)
+                                    report::report_guest_running(&client, &ns, &guest, true, None)
                                         .await
                                 {
                                     log::error!("report_running_failed: {}", e);

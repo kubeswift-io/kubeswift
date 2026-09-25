@@ -163,6 +163,17 @@ setting it had.
   captured before this version have no recorded address, and restore as
   before.
 
+- **A live-migrated guest's launcher reported its status to the wrong
+  object.** swiftletd patched the SwiftGuest named like its pod, but a live
+  migration's destination pod, which becomes the guest's launcher, is named
+  `<guest>-mig-<uid>`. Its reports that the VM stopped or failed went to a
+  SwiftGuest that does not exist (`report_failed … not found`), so a migrated
+  guest that later shut down or crashed was not marked so by its launcher.
+  Launchers now carry the guest's name (`KUBESWIFT_GUEST_NAME`), and a
+  migration's destination pod gets it even when its source pod predates this
+  version. Launchers started before the upgrade keep the old behaviour until
+  they are recreated.
+
 - **A cancelled live migration could destroy the guest it migrated.**
   swiftletd ran each action on its action loop and waited for it, and a
   receive lasts the whole migration, so the destination saw a cancel only
