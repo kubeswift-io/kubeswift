@@ -70,9 +70,13 @@ after: pods "e2e-guest" not found; status.podRef = e2e-guest-mig-b6d910 (Running
 
 - **`DestinationRunning` → source `complete`:** the cutover followed
   `DestinationRunning` by ≤ ~1.6 s, with no `SourceCompleteMissing`.
-- I could not read the source's exact `complete` timestamp. My log follower
-  timed out before the source pod started (D7b's setup took ~12 min), and the
-  pod was deleted at cutover.
+- I could not read the source's exact `complete` timestamp, because I never
+  captured the source log. The pod was deleted at cutover.
+  - **Correction (round 4):** my log-follower helper ran its wait loop in the
+    foreground. It blocked the D7b script from starting for ~12 min, until
+    the helper gave up, and it therefore never attached.
+  - D7b's setup itself was not slow, and the ~12 min gap between D7a and D7b
+    was my harness, not the cluster.
 - T4 and T5 give the exact gap: 2.3 s and 2.5 s.
 - "src migration complete; preparing cutover" did not appear. As the go-ahead
   says, that predates these fixes.
