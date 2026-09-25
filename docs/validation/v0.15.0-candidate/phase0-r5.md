@@ -1,14 +1,17 @@
 # Phase 0 r5: free Longhorn space on dev's cp-1
 
-Run 2026-09-25, 22:45–22:55 UTC. Node names are generalised: `cp-1`, `worker-1`,
-`worker-2`.
+Run 2026-09-25, 22:45–22:55 UTC, then step 4 at 23:40–23:44 UTC after William
+approved it. Node names are generalised: `cp-1`, `worker-1`, `worker-2`.
 
-**Verdict: stopped at 30.9% free, short of the 35% target, as the plan says
-to.**
-- **The space is there.** 58.7 GiB of cp-1's disk is Longhorn **orphaned
-  replica data** (step 4). Deleting it would bring cp-1 to about 61% free.
-- **Why it isn't deleted yet.** My session's permission check refused the
-  orphan deletion, so step 4 is waiting for William's explicit OK.
+**Verdict: DONE. cp-1 is at 60.9% free (target 35%), and a fresh
+`longhorn-migratable` volume comes up `healthy` with 3 replicas.**
+- **Steps 1–3 got only to 30.9%.** I stopped there and reported, as the plan
+  says.
+- **The bulk was orphans.** 58.7 GiB of cp-1's disk was Longhorn **orphaned
+  replica data** from 2026-08-10.
+- **Step 4 needed a second OK.** My session's permission check refused the
+  orphan deletion at first. William then approved it explicitly (23:40), and
+  deleting the 7 cp-1 orphans freed the 58.7 GiB.
 
 ## cp-1 free space (Longhorn's view of `/var/lib/longhorn/`)
 
@@ -17,7 +20,10 @@ to.**
 | 22:45:47, before | 46.5 GiB of 195 GiB, **23.8%** | `False/DiskPressure` |
 | 22:47:26, after step 1 | 57.8 GiB, **29.5%** | `True` |
 | 22:50:59, after steps 2–3 | 60.5 GiB, **30.9%** | `True` |
+| 23:41:00, after step 4 | 119.1 GiB, **60.9%** | `True` |
 | Target | ≥ 68.3 GiB, **35%** | |
+
+At 23:44 the other two nodes read: worker-1 58.4% free, worker-2 65.7% free.
 
 Earlier, at 22:25, William authorised deleting `val-r4-mig/v3a`, `v3b` and
 `v4p`. That is recorded in `phase2-r4.md`, and those three are not repeated here.
@@ -62,7 +68,7 @@ field-testing pool.
 | `default/ubuntu-noble-ceph` (created 2026-08-16) | PVC 6Gi `ceph-block` + a clone-seed VolumeSnapshot | none | **Kept.** Ceph's OSD on cp-1 is a fixed-size 25 GiB loop file (`/var/lib/rook-osd/osd0.img`), so deleting RBD data returns nothing to cp-1's filesystem |
 | `gpu-cells/gpu-worker-noble` | PVC `longhorn` | 6.3 GiB | **Kept.** It is unreferenced, but it is in `innercp`'s namespace, which the plan protects. William's call |
 
-## Step 4: orphaned Longhorn replicas. BLOCKED on permission
+## Step 4: orphaned Longhorn replicas. Done after William's approval
 
 Longhorn has 7 `orphans.longhorn.io` objects on cp-1 (type `replica`).
 - **Their volumes are gone.** For each one there is no Longhorn volume, no PV
@@ -82,20 +88,24 @@ Longhorn has 7 `orphans.longhorn.io` objects on cp-1 (type `replica`).
 | `pvc-2323975d-3bd8-4e00-9862-d3c55b5dddb8-8ab0239c` | 0.8 GiB |
 | **Total** | **58.7 GiB** |
 
-- **The fix.** Deleting these 7 Orphan objects, Longhorn's own way of
-  removing orphaned data, would free about 58.7 GiB: cp-1 goes to about
-  119 GiB free, about 61%.
-- **Worker-2 too.** The same 7 volumes also left orphans on worker-2. They do
-  not affect cp-1 and were not measured.
+- **23:40:29:** William approved, and I deleted the 7 Orphan objects:
+  `kubectl -n longhorn-system delete orphans.longhorn.io <the 7 names>`. That
+  is Longhorn's own way of removing orphaned data. Their definitions were
+  saved first.
+  - 23:40:30: 0 orphans left on cp-1.
+  - 23:41:00: cp-1 at 119.1 GiB free (60.9%), exactly the measured 58.7 GiB
+    more.
+- **Worker-2 still has 7 orphans** from the same 7 volumes. They do not
+  affect cp-1, and they were left as they are.
 
 ## What is left on cp-1's disk
 
-`df`: 135.0 GiB used of 195.6 GiB. Measured with a read-only
+Measured before step 4. `df`: 135.0 GiB used of 195.6 GiB, measured with a read-only
 `kubectl debug node/<cp-1>` pod (busybox `du`/`df`), deleted afterwards.
 
 | Path | Size | What |
 |---|---|---|
-| `/var/lib/longhorn` | 78.8 GiB | 58.7 GiB orphans (above) + ~20 GiB live replicas (below) |
+| `/var/lib/longhorn` | 78.8 GiB | 58.7 GiB orphans (deleted in step 4) + ~20 GiB live replicas (below) |
 | `/var/lib/rook-osd` | 25.0 GiB | the Ceph OSD loop file (fixed size) |
 | `/var/lib/k0s` | 23.7 GiB | k0s: containerd images and state |
 | `/var/log` | 3.6 GiB | |
@@ -112,13 +122,31 @@ Live Longhorn replicas on cp-1:
 | `field-testing/swiftimage-import-ubuntu-noble` | 2.6 GiB |
 | `keycloak/keycloak-data` | 0.2 GiB |
 
-## Fresh-volume check
+## Fresh-volume check. PASS
 
-Not run: the target was not reached.
+A 1 GiB `longhorn-migratable` PVC (RWX, Block, 3 replicas) in a scratch
+namespace `val-r5-prep`. A detached volume reports robustness `unknown`, so a
+busybox pod attached it.
 
-## Next
+```text
+23:42:50 PVC + pod created
+23:42:53 volume detached/unknown   replicas: 3 × stopped
+23:42:57 volume attaching          replicas: <worker-2> running, <cp-1> running, <worker-1> running
+23:43:04 volume attached/healthy   (14 s)
+23:43:15 namespace val-r5-prep deleted → gone 23:44:03; its Longhorn volume gone 23:44:04
+```
 
-- **Waiting for William** to confirm step 4, deleting the 7 cp-1 orphans.
-- **After that:** re-measure, then run the 1 GiB `longhorn-migratable` PVC
-  check, then update this report.
-- **No Longhorn setting was changed.**
+## State left on dev
+
+- **No `val-*` namespaces.** The only SwiftGuest is `gpu-cells/innercp`,
+  `Running`.
+- **Kept:** `default/ubuntu-noble-ceph`, `gpu-cells/gpu-worker-noble`, and
+  worker-2's 7 orphans.
+- **Test scripts:** `default/ubuntu-noble` is gone. They re-import it as
+  needed.
+- **Unchanged:**
+  - every Longhorn setting;
+  - `field-testing`, `capi-udn`, `kube-system` and `kubeswift-system`;
+  - `innercp` and its namespace.
+
+Ready for the round 5 candidate.
