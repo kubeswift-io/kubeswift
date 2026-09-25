@@ -157,8 +157,25 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	profile := poolSlotProfile(&pool)
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		// Terminal/terminating slots don't count — owner-GC or the next pass replaces them.
-		if p.DeletionTimestamp != nil || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+		// Terminating slots don't count; warming below replaces them.
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			// A slot whose launcher has exited never becomes Ready again
+			// (RestartPolicy Never). A warm one used to be left in place:
+			// owner GC removes it only with the pool, so it stayed, and on a
+			// GPU pool it kept its GPU from any replacement. Delete it here,
+			// ahead of the kernel and image checks below that can end the
+			// pass early; the GC below releases its GPU. A claimed slot is
+			// its sandbox's to delete.
+			if p.Labels[SlotStateLabelKey] == slotStateWarm {
+				if err := deleteWarmSlot(ctx, r.Client, p); err != nil {
+					return ctrl.Result{}, err
+				}
+				r.Recorder.Eventf(&pool, corev1.EventTypeWarning, "SlotEnded",
+					"warm slot %s ended (%s): %s; deleted it", p.Name, p.Status.Phase, slotEndMessage(p))
+			}
 			continue
 		}
 		// Converge the scoped grant (#515) for every LIVE slot, warm or claimed.
@@ -489,6 +506,15 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: poolPollInterval}, nil
+}
+
+// slotEndMessage says why an ended slot's launcher pod stopped, for the event
+// that records its deletion (its logs go with it).
+func slotEndMessage(p *corev1.Pod) string {
+	if p.Status.Phase == corev1.PodFailed {
+		return podFailureMessage(p)
+	}
+	return "launcher exited"
 }
 
 // degraded surfaces a resolve/warm failure honestly (Resolved=False, phase=Degraded)
