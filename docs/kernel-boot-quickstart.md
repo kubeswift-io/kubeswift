@@ -63,7 +63,7 @@ If the phase stays Pending, verify that at least one node has the `kubeswift.io/
 To check pull Job progress:
 
 ```bash
-kubectl get jobs -l app.kubernetes.io/managed-by=swiftkernel
+kubectl get jobs -l kubeswift.io/swiftkernel=faas-minimal
 ```
 
 ## Step 4: Apply SwiftGuest with kernelRef
@@ -132,10 +132,11 @@ kubectl delete swiftkernel faas-minimal
 
 **SwiftKernel stays Pending:** No nodes have the `kubeswift.io/kernel-node=true` label. Label a node and wait for the next reconcile.
 
-**SwiftKernel stays Pulling:** The pull Job is still running. Check Job logs:
+**SwiftKernel stays Pulling:** The pull Job is still running. Find the node's Job and check its logs:
 
 ```bash
-kubectl logs job/swiftkernel-pull-faas-minimal-<nodename>
+kubectl get jobs -l kubeswift.io/swiftkernel=faas-minimal
+kubectl logs job/swiftkernel-pull-faas-minimal-<nodename>-<hash>
 ```
 
 Common causes: OCI image not found, registry authentication required (set `spec.ociRef.pullSecret`), slow network.

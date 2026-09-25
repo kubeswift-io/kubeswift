@@ -280,6 +280,32 @@ takes the new default.
   shared. Guests created by an earlier version have no record and are not
   counted.
 
+- **After an upgrade to v0.14.1, kernel-boot guests and sandboxes could not
+  boot** (#658). v0.14.1 moved each kernel's directory on the nodes from
+  `/var/lib/kubeswift/kernels/<namespace>-<name>` to `<namespace>/<name>`, but
+  nothing pulled the kernel into the new one: a node counted as Ready once its
+  pull Job had succeeded, and the Job from before the upgrade had. The
+  SwiftKernel stayed `Ready`, guest and sandbox pods mounted the new
+  directory, which the kubelet created empty, and the VM failed with `Cannot
+  open initramfs file`. A pull Job's name now carries a hash of its node and
+  of the directory it pulls into, so a node is Ready only once a pull into the
+  current directory has succeeded. After the upgrade to v0.15.0 every kernel
+  pulls again into `<namespace>/<name>` by itself and reports `Pulling` until
+  it has, and the Jobs from before the upgrade are deleted once their
+  replacements exist. The workaround, deleting those Jobs by hand, is no
+  longer needed. The old `<namespace>-<name>` directories stay on the nodes:
+  remove them by hand once no launcher started before v0.14.1 is still
+  running. A kernel-boot SwiftGuest now waits for a pulling kernel instead of
+  failing: a new guest stays `Pending`, and a running one keeps its phase. It
+  used to be marked `Failed`, running or not, so while a kernel pulled (also
+  after a node was newly labeled) a SwiftGuestPool could delete its running
+  replicas to replace them. A SwiftSandbox does not check its kernel, so one
+  started on a node before the pull reaches it still fails. The hash also
+  stops two kernels in a namespace sharing a Job, as kernel `a-b` on node `c`
+  and kernel `a` on node `b-c` did, one reading the other's pull as its own.
+  Pull Jobs are now named `swiftkernel-pull-<name>-<node>-<hash>` and labeled
+  `kubeswift.io/swiftkernel=<name>`.
+
 - **One failed import pod failed the SwiftImage for good.** The import Job
   retries a failed pod up to its backoff limit, but the controller marked the
   image `Failed` (`ImportFailed`) as soon as the first pod failed. `Failed` is
@@ -406,7 +432,13 @@ Most of this release changes nothing you have to act on. These may:
   `RolloutBlocked` event until the strategy is changed.
 - **Warm sandbox slots are recycled once** after the upgrade, because each slot
   now records the image, network mode and verification key it booted with.
-- **Kernels re-pull once, into `/var/lib/kubeswift/kernels/<namespace>/<name>`.**
+- **Kernels move to `/var/lib/kubeswift/kernels/<namespace>/<name>`, but are
+  not re-pulled there** (#658). This entry said they re-pull once; they do
+  not. A kernel pulled before the upgrade stays `Ready` with the new directory
+  empty, so kernel-boot guests and sandboxes started after the upgrade fail
+  with `Cannot open initramfs file`. v0.15.0 re-pulls them by itself. On
+  v0.14.1, re-pull each kernel by deleting its pull Jobs, for every kernel
+  and node: `kubectl -n <ns> delete job swiftkernel-pull-<kernel>-<node>`.
   The old `<namespace>-<name>` directories are left on the nodes. Remove them
   once no launcher started before the upgrade is still running.
 - **`gpu-init` refuses a GPU whose IOMMU group holds an unrelated device**, such
@@ -627,9 +659,8 @@ Most of this release changes nothing you have to act on. These may:
   other tenant's kernel and initramfs, which the victim's guests and sandboxes
   boot. The namespace and name are now separate path segments
   (`/var/lib/kubeswift/kernels/<namespace>/<name>`); neither can contain `/`, so
-  the mapping is unambiguous. The path is derived, never stored, so existing
-  kernels re-pull to the new layout on the next reconcile (a no-op if already
-  present).
+  the mapping is unambiguous. Existing kernels are not re-pulled into the new
+  layout, although this entry said they were: see Upgrade (#658).
 
 - **A virtio-fs sandbox could poison the node's shared rootfs cache.** The
   launcher container — which runs the untrusted guest — mounted the node rootfs

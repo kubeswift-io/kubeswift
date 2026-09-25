@@ -107,7 +107,14 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 		return nil, &ResolutionError{Reason: "SwiftKernel not found", AffectedResource: guest.Spec.KernelRef.Name}
 	}
 	if sk.Status.Phase != kernelv1alpha1.SwiftKernelPhaseReady {
-		return nil, &ResolutionError{Reason: "SwiftKernel not Ready", AffectedResource: guest.Spec.KernelRef.Name}
+		// Only Failed is final. A kernel still pulling, to a newly labeled node
+		// or into a new directory after an upgrade (#658), becomes Ready by
+		// itself.
+		return nil, &ResolutionError{
+			Reason:           "SwiftKernel not Ready",
+			AffectedResource: guest.Spec.KernelRef.Name,
+			Waiting:          sk.Status.Phase != kernelv1alpha1.SwiftKernelPhaseFailed,
+		}
 	}
 
 	// Fetch SeedProfile if referenced

@@ -28,7 +28,7 @@
 | Infra Kustomization stuck `Ready=False` waiting forever | `wait: true` blocking on async image import | set `wait: false` on the infra Kustomization |
 | Edit to a Ready SwiftImage rejected ("spec is immutable") | Image specs are immutable post-import by design | add a NEW SwiftImage with a new name; repoint guests |
 | Edit to `cloneStrategy` or `importStorageClassName` rejected while the image is still importing | those two freeze as soon as the import leaves `Pending`, earlier than the whole-spec rule | delete and recreate the SwiftImage; you cannot move a started import to another class |
-| A new kernel tag in Git never lands on the nodes | SwiftKernel re-pull is keyed on **(name, node)**, not on `spec.ociRef.image` — the pull Job already exists | give the new kernel a new SwiftKernel name, or delete `swiftkernel-pull-<name>-<node>` per node |
+| A new kernel tag in Git never lands on the nodes | SwiftKernel re-pull is keyed on **(name, node)**, not on `spec.ociRef.image` — the pull Job already exists | give the new kernel a new SwiftKernel name, or `kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>` |
 | Provisioning is copy-speed when `cloneStrategy: snapshot` was requested | volume-mode mismatch between the import PVC and the resolved guest storage; the controller downgrades to copy rather than build an unbootable disk | check controller logs; align the guest class volume mode with the image, or accept the copy path |
 
 ## Workloads

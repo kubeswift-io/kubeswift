@@ -88,9 +88,9 @@ func TestValidateCreate_RejectsNewlineInCmdline(t *testing.T) {
 
 func TestValidateUpdate_WarnsThatAnImageChangeDoesNothing(t *testing.T) {
 	// The real trap this webhook exists to surface: the per-node pull Job is
-	// named pullJobName(name, node) with no image in the key, and Create
-	// swallows AlreadyExists — so re-pointing a SwiftKernel at a new tag is a
-	// silent no-op and nodes keep serving the old artifact.
+	// named for the kernel, node and directory with no image in the key, and
+	// Create swallows AlreadyExists — so re-pointing a SwiftKernel at a new tag
+	// is a silent no-op and nodes keep serving the old artifact.
 	v := &Validator{}
 	old := sk("ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.12", "")
 	new := sk("ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13", "")
