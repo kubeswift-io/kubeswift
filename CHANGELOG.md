@@ -309,7 +309,8 @@ takes the new default.
   running`) as the commit point: past it, a timeout, a cancel, a deletion, a
   missing source pod or a source failure report no longer tears the
   destination down, and the migration cuts over. It first waits up to 30 s
-  for a live source launcher's own report, which normally follows within
+  (phaseDetail `destination running; waiting for the source's report`) for
+  a live source launcher's own report, which normally follows within
   seconds and carries the pause window (`observedTransferDuration`); a
   `SourceCompleteMissing` warning event marks a cutover without it. A
   migration past cutover whose guest already runs on the destination now

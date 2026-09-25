@@ -77,6 +77,9 @@ func TestShouldCheckSourcePodUID_StopAndCopy_CutoverDetails_ReturnsFalse(t *test
 	// territory, source-pod-replacement detection MUST be off — the
 	// source pod is intentionally being retired by the cutover.
 	cutover := []string{
+		// The destination runs the guest: the migration is committed, and a
+		// replaced source pod must not fail it.
+		migrationv1alpha1.PhaseDetailLiveDestRunning,
 		migrationv1alpha1.PhaseDetailLiveCutoverPodRef,
 		migrationv1alpha1.PhaseDetailLiveCutoverDeleteSrc,
 	}

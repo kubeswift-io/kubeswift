@@ -420,6 +420,10 @@ func TestCommitPoint_DestinationReportWaitsBrieflyForALiveSource(t *testing.T) {
 		if apimeta.FindStatusCondition(status.Conditions, migrationv1alpha1.SwiftMigrationConditionDestinationRunning) == nil {
 			t.Error("DestinationRunning not recorded; the grace has nothing to run from")
 		}
+		// The transfer is over: the wait must not read "transferring guest state".
+		if status.PhaseDetail != migrationv1alpha1.PhaseDetailLiveDestRunning {
+			t.Errorf("phaseDetail = %q, want %q", status.PhaseDetail, migrationv1alpha1.PhaseDetailLiveDestRunning)
+		}
 	})
 	t.Run("cuts over once the grace has run out", func(t *testing.T) {
 		r, mig, status, dst := setup(t, sourceReportGrace+time.Second)

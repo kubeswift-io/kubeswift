@@ -234,7 +234,14 @@ const (
 	// PhaseDetailLiveSourceBusy: the send is written on the source, but its
 	// launcher is still running an earlier send and has not taken this one
 	// up. No guest state is moving yet.
-	PhaseDetailLiveSourceBusy        = "waiting for the source launcher to finish a previous send"
+	PhaseDetailLiveSourceBusy = "waiting for the source launcher to finish a previous send"
+	// PhaseDetailLiveDestRunning: the destination reports the guest running,
+	// which commits the migration, and the controller waits briefly for the
+	// source's own report before it cuts over. No guest state is moving.
+	PhaseDetailLiveDestRunning = "destination running; waiting for the source's report"
+	// PhaseDetailLiveSrcCompleted is never emitted: the source's complete
+	// report goes straight into the cutover, whose details follow. Kept so
+	// code that matches on it still compiles.
 	PhaseDetailLiveSrcCompleted      = "src migration complete; preparing cutover"
 	PhaseDetailLiveCutoverPodRef     = "cutover: updating canonical pod"
 	PhaseDetailLiveCutoverDeleteSrc  = "cutover: deleting source pod"
