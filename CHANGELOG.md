@@ -199,6 +199,19 @@ setting it had.
   version. Launchers started before the upgrade keep the old behaviour until
   they are recreated.
 
+- **After a cancelled or failed live migration, the guest could not be
+  migrated again for 10 minutes.** Cloud Hypervisor v53 gives the source no
+  failure signal, since a failed transfer resumes the guest there, so
+  swiftletd waited out its 600 s action deadline even when the transfer had
+  failed seconds in. A migration started meanwhile did not run until then.
+  swiftletd now also watches the transfer's connection in the pod's socket
+  table. Once that connection has been gone for 20 s and the guest still runs
+  on the source, it reports the send failed. The deadline remains the
+  backstop, and the watch never fails a send while the tables cannot be
+  read. The progress estimate on the source pod now names its send
+  (`kubeswift.io/migration-progress-estimate-id`), so a new migration no
+  longer shows the previous send's last value.
+
 - **A cancelled live migration could destroy the guest it migrated.**
   swiftletd ran each action on its action loop and waited for it, and a
   receive lasts the whole migration, so the destination saw a cancel only
