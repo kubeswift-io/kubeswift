@@ -2,6 +2,13 @@
 # KubeSwift smoke test — multi-scenario VM boot validation.
 # Requires: kubectl, KubeSwift cluster with CRDs and controllers deployed.
 #
+# Runs in $NAMESPACE (default: default); the samples' `namespace: default` is
+# dropped when they are created. Objects the run creates are labelled
+# kubeswift.io/smoke-test=<namespace>, and cleanup (--cleanup-only, or the end
+# of a run without --no-cleanup) deletes only those. An object that already
+# exists, such as a shared SwiftImage or the cluster's `default`
+# SwiftGuestClass, is used as it is: not updated and not deleted.
+#
 # Usage: ./boot-test.sh [OPTIONS]
 #   --timeout-image MIN   Image import timeout (default: 15)
 #   --timeout-guest MIN   Guest running timeout (default: 5)
@@ -45,55 +52,60 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Label on every object this script creates; its value is the namespace of the
+# run, so the cluster-scoped objects of runs in different namespaces are told
+# apart.
+OWNER_LABEL="kubeswift.io/smoke-test"
+OWNED="${OWNER_LABEL}=${NAMESPACE}"
+
 # --- Cleanup function ---
-# Deletes all resources created by any scenario. Safe to call multiple times.
-# All deletes use --ignore-not-found so missing resources are not errors.
+# Deletes the objects that carry this run's label, and nothing else: an object
+# the run found already there and reused (a lab's shared SwiftImage, the
+# cluster's `default` SwiftGuestClass) is left alone. Safe to call multiple
+# times, and from a later invocation (--cleanup-only), since the label is on
+# the objects themselves.
 
 cleanup_all() {
   echo ""
-  echo "=== Cleaning up smoke-test resources ==="
+  echo "=== Cleaning up smoke-test resources (label ${OWNED}) ==="
 
-  # 1. Guests first (they own launcher pods)
+  # 0. The gpu-alloc mock SwiftGPUNode before its guest, so that its GPU is
+  #    never free for another guest to take. It is named after a real Node,
+  #    which has no GPU.
+  echo "  Deleting mock SwiftGPUNode..."
+  kubectl delete swiftgpunode -l "$OWNED" \
+    --ignore-not-found --timeout=30s 2>/dev/null || true
+
+  # 1. Guests (they own launcher pods). Their seed Secret and runtime-intent
+  #    ConfigMap are owned by the guest and go with it.
   echo "  Deleting SwiftGuests..."
-  kubectl delete swiftguest sample multi-nic-test faas-test qemu-test gpu-test \
+  kubectl delete swiftguest -l "$OWNED" \
     -n "$NAMESPACE" --ignore-not-found --wait --timeout=60s 2>/dev/null || true
 
   # 2. Images (each has a backing PVC)
   echo "  Deleting SwiftImages..."
-  kubectl delete swiftimage ubuntu-noble ubuntu-noble-qemu ubuntu-noble-multinic \
+  kubectl delete swiftimage -l "$OWNED" \
     -n "$NAMESPACE" --ignore-not-found --wait --timeout=60s 2>/dev/null || true
 
   # 3. Kernels
   echo "  Deleting SwiftKernels..."
-  kubectl delete swiftkernel faas-minimal \
+  kubectl delete swiftkernel -l "$OWNED" \
     -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
 
-  # 4. GPU resources (cluster-scoped SwiftGPUNode, namespaced SwiftGPUProfile)
-  echo "  Deleting GPU resources..."
-  kubectl delete swiftgpunode mock-gpu-node \
-    --ignore-not-found --timeout=30s 2>/dev/null || true
-  kubectl delete swiftgpuprofile a100-pcie-single \
+  # 4. GPU profiles
+  echo "  Deleting SwiftGPUProfiles..."
+  kubectl delete swiftgpuprofile -l "$OWNED" \
     -n "$NAMESPACE" --ignore-not-found --timeout=30s 2>/dev/null || true
 
   # 5. Seed profiles
   echo "  Deleting SwiftSeedProfiles..."
-  kubectl delete swiftseedprofile minimal qemu-test-seed \
+  kubectl delete swiftseedprofile -l "$OWNED" \
     -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
 
-  # 6. Shared resources (guest class)
+  # 6. Guest class (cluster-scoped)
   echo "  Deleting SwiftGuestClass..."
-  kubectl delete swiftguestclass default \
-    -n "$NAMESPACE" --ignore-not-found --wait --timeout=30s 2>/dev/null || true
-
-  # 7. ConfigMaps created by the controller for seed/intent
-  echo "  Deleting ConfigMaps..."
-  kubectl delete configmap \
-    sample-seed sample-runtime-intent \
-    multi-nic-test-seed multi-nic-test-runtime-intent \
-    faas-test-runtime-intent \
-    qemu-test-seed qemu-test-runtime-intent \
-    gpu-test-seed gpu-test-runtime-intent \
-    -n "$NAMESPACE" --ignore-not-found --timeout=10s 2>/dev/null || true
+  kubectl delete swiftguestclass -l "$OWNED" \
+    --ignore-not-found --wait --timeout=30s 2>/dev/null || true
 
   echo "  Cleanup done."
 }
@@ -120,9 +132,39 @@ apply_rbac() {
   kubectl apply -k "$RBAC_DIR" >/dev/null 2>&1 || true
 }
 
+# sample FILE: print a sample manifest without its `namespace: default`, so it
+# is created in $NAMESPACE (kubectl refuses -n with a different namespace in
+# the object).
+sample() {
+  sed -E '/^  namespace: default$/d' "$SAMPLES_DIR/$1"
+}
+
+# create_owned: create the objects of the manifest on stdin in $NAMESPACE,
+# labelled ${OWNED}. An object that already exists is used as it is: it is not
+# updated, and cleanup, which deletes only labelled objects, leaves it. Any
+# other error fails.
+create_owned() {
+  local manifest out line obj rc=0 failed=false
+  manifest=$(kubectl label --local -f - "$OWNED" -o json) || return 1
+  out=$(printf '%s\n' "$manifest" | kubectl create -n "$NAMESPACE" -f - 2>&1) || rc=$?
+  while IFS= read -r line; do
+    case "$line" in
+      "" | *" created") ;;
+      *"(AlreadyExists)"*)
+        obj="${line##*: }"
+        echo "  Using the existing ${obj% already exists} as it is"
+        ;;
+      *) echo "  $line" >&2; failed=true ;;
+    esac
+  done <<<"$out"
+  if [[ "$failed" == "true" || ( "$rc" -ne 0 && "$out" != *"(AlreadyExists)"* ) ]]; then
+    return 1
+  fi
+}
+
 apply_shared() {
-  kubectl apply -f "$SAMPLES_DIR/shared/swiftguestclass-default.yaml" -n "$NAMESPACE" >/dev/null
-  kubectl apply -f "$SAMPLES_DIR/shared/swiftseedprofile-minimal.yaml" -n "$NAMESPACE" >/dev/null
+  sample shared/swiftguestclass-default.yaml | create_owned
+  sample shared/swiftseedprofile-minimal.yaml | create_owned
 }
 
 wait_image_ready() {
@@ -163,10 +205,27 @@ wait_guest_ip() {
   return 1
 }
 
+# guest_field NAME JSONPATH [WANT]: print a SwiftGuest status field once it
+# equals WANT (or, without WANT, once it is set), polling for up to 60 s.
+# The GuestRunning condition and status.runtime are written moments after
+# phase=Running, so a single read at that instant found them empty. Prints
+# the last value read when the time runs out.
+guest_field() {
+  local name="$1" path="$2" want="${3:-}" got=""
+  for _ in $(seq 1 30); do
+    got=$(kubectl get "swiftguest/$name" -n "$NAMESPACE" -o jsonpath="$path" 2>/dev/null || true)
+    if [[ -n "$want" && "$got" == "$want" ]] || [[ -z "$want" && -n "$got" ]]; then
+      break
+    fi
+    sleep 2
+  done
+  echo "$got"
+}
+
 check_hypervisor() {
   local name="$1" expected="$2"
   local actual
-  actual=$(kubectl get "swiftguest/$name" -n "$NAMESPACE" -o jsonpath='{.status.runtime.hypervisor}' 2>/dev/null || echo "")
+  actual=$(guest_field "$name" '{.status.runtime.hypervisor}')
   if [[ "$actual" == "$expected" ]]; then
     echo "  hypervisor=$actual (expected)"
   else
@@ -182,15 +241,15 @@ scenario_disk_boot() {
 
   apply_rbac
   apply_shared
-  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftimage-ubuntu-noble.yaml" -n "$NAMESPACE" >/dev/null
-  kubectl apply -f "$SAMPLES_DIR/disk-boot/swiftguest-sample.yaml" -n "$NAMESPACE" >/dev/null
+  sample disk-boot/swiftimage-ubuntu-noble.yaml | create_owned
+  sample disk-boot/swiftguest-sample.yaml | create_owned
 
   wait_image_ready "ubuntu-noble" || { RESULTS[disk-boot]="FAIL"; return; }
   wait_guest_running "sample" || { RESULTS[disk-boot]="FAIL"; return; }
 
   # Verify GuestRunning condition
   local gr
-  gr=$(kubectl get swiftguest/sample -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="GuestRunning")].status}' 2>/dev/null || echo "")
+  gr=$(guest_field sample '{.status.conditions[?(@.type=="GuestRunning")].status}' True)
   if [[ "$gr" != "True" ]]; then
     echo "  WARN: GuestRunning=$gr"
   fi
@@ -219,7 +278,7 @@ scenario_kernel_boot() {
 
   apply_rbac
   apply_shared
-  kubectl apply -f "$SAMPLES_DIR/kernel-boot/swiftkernel-faas.yaml" -n "$NAMESPACE" >/dev/null
+  sample kernel-boot/swiftkernel-faas.yaml | create_owned
 
   echo "  Waiting for SwiftKernel faas-minimal Ready..."
   if ! kubectl wait --for=jsonpath='{.status.phase}'=Ready swiftkernel/faas-minimal -n "$NAMESPACE" --timeout="5m" 2>/dev/null; then
@@ -228,7 +287,7 @@ scenario_kernel_boot() {
     return
   fi
 
-  kubectl apply -f "$SAMPLES_DIR/kernel-boot/swiftguest-faas.yaml" -n "$NAMESPACE" >/dev/null
+  sample kernel-boot/swiftguest-faas.yaml | create_owned
   wait_guest_running "faas-test" || { RESULTS[kernel-boot]="FAIL"; return; }
   check_hypervisor "faas-test" "cloud-hypervisor"
   wait_guest_ip "faas-test" || { RESULTS[kernel-boot]="FAIL"; return; }
@@ -245,7 +304,7 @@ scenario_qemu_boot() {
 
   apply_rbac
   apply_shared
-  kubectl apply -f "$SAMPLES_DIR/qemu-boot/swiftguest-qemu.yaml" -n "$NAMESPACE" >/dev/null
+  sample qemu-boot/swiftguest-qemu.yaml | create_owned
 
   wait_image_ready "ubuntu-noble-qemu" || { RESULTS[qemu-boot]="FAIL"; return; }
   wait_guest_running "qemu-test" || { RESULTS[qemu-boot]="FAIL"; return; }
@@ -257,28 +316,116 @@ scenario_qemu_boot() {
 }
 
 # --- Scenario 4: GPU Allocation (control plane only, no hardware) ---
+#
+# Allocation takes a SwiftGPUNode only when it is VFIO-ready and a Node of the
+# same name exists and is not cordoned, so a mock called mock-gpu-node was
+# always refused (NoCapacity). The mock is named after a real Node instead:
+# one that is not cordoned, has no SwiftGPUNode, and is not labelled
+# kubeswift.io/gpu-node=true (gpu-discovery runs there and owns that Node's
+# SwiftGPUNode). That Node has no GPU, so nothing may start there with the
+# mock's device:
+#   - the test guest is created Stopped. Allocation does not depend on
+#     runPolicy, and a Stopped guest never gets a launcher, whose gpu-init
+#     would bind the device's PCI address to vfio-pci;
+#   - spec.nodeName limits its allocation to the mock, so no real GPU is
+#     reserved;
+#   - the mock is given its GPU only once the test guest waits for it, and not
+#     at all while another SwiftGuest in the cluster waits for a GPU, which
+#     could take it instead. Its PCI address is one no host has;
+#   - cleanup deletes the mock before the guest, so its GPU is never free.
+
+# mock_gpu_node: print the Node to name the mock SwiftGPUNode after: the mock
+# an earlier run in this namespace left, else the first qualifying Node by
+# name. Prints nothing when there is none.
+mock_gpu_node() {
+  local existing taken node unschedulable gpu
+  existing=$(kubectl get swiftgpunode -l "$OWNED" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -n "$existing" ]]; then
+    echo "$existing"
+    return
+  fi
+  taken=" $(kubectl get swiftgpunode -o jsonpath='{.items[*].metadata.name}') " || return 0
+  while read -r node unschedulable gpu; do
+    [[ "$unschedulable" == "true" || "$gpu" == "true" || "$taken" == *" $node "* ]] && continue
+    echo "$node"
+    return
+  done < <(kubectl get nodes --no-headers \
+    -o custom-columns='NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable,GPU:.metadata.labels.kubeswift\.io/gpu-node' |
+    sort)
+}
 
 scenario_gpu_alloc() {
   echo ""
   echo "--- Scenario: gpu-alloc (control plane allocation, no GPU hardware) ---"
 
-  apply_shared
+  local guests waiting mock created=false
+  if ! guests=$(kubectl get swiftguest -A -o jsonpath='{range .items[?(@.spec.gpuProfileRef)]}{.metadata.namespace}/{.metadata.name} {.status.conditions[?(@.type=="GPUAllocated")].status}{"\n"}{end}'); then
+    echo "  SKIP: cannot list SwiftGuests in all namespaces to check that none waits for a GPU"
+    RESULTS[gpu-alloc]="SKIP"
+    return
+  fi
+  waiting=$(awk -v self="${NAMESPACE}/gpu-test" '$1 != self && $2 != "True" { print $1 }' <<<"$guests")
+  if [[ -n "$waiting" ]]; then
+    echo "  SKIP: SwiftGuests wait for a GPU and could be given the mock one: ${waiting//$'\n'/ }"
+    RESULTS[gpu-alloc]="SKIP"
+    return
+  fi
+  mock=$(mock_gpu_node)
+  if [[ -z "$mock" ]]; then
+    echo "  SKIP: no Node to name the mock SwiftGPUNode after (every Node is cordoned, labelled kubeswift.io/gpu-node=true, or has a SwiftGPUNode)"
+    RESULTS[gpu-alloc]="SKIP"
+    return
+  fi
 
-  # Create mock SwiftGPUNode with a fake GPU
-  echo "  Creating mock SwiftGPUNode..."
-  cat <<'MOCK_EOF' | kubectl apply -f - >/dev/null
+  apply_shared
+  sample gpu-pcie/swiftgpuprofile-a100-pcie.yaml | create_owned || { RESULTS[gpu-alloc]="FAIL"; return; }
+
+  echo "  Mock SwiftGPUNode $mock (named after an existing Node, which has no GPU)"
+  if ! kubectl get swiftgpunode "$mock" >/dev/null 2>&1; then
+    create_owned <<MOCK_EOF || { RESULTS[gpu-alloc]="FAIL"; return; }
 apiVersion: gpu.kubeswift.io/v1alpha1
 kind: SwiftGPUNode
 metadata:
-  name: mock-gpu-node
+  name: ${mock}
   labels:
     kubeswift.io/gpu-node: "true"
 MOCK_EOF
+    created=true
+  fi
+  # Never write to a SwiftGPUNode this test did not create.
+  if [[ "$(kubectl get swiftgpunode "$mock" -o jsonpath='{.metadata.labels.kubeswift\.io/smoke-test}' 2>/dev/null || true)" != "$NAMESPACE" ]]; then
+    echo "  FAIL: SwiftGPUNode $mock was not created by this test; left untouched"
+    RESULTS[gpu-alloc]="FAIL"
+    return
+  fi
 
-  # Patch status subresource with mock GPU data
-  kubectl patch swiftgpunode mock-gpu-node --type=merge --subresource=status -p '{
+  # Stopped, and pinned to the mock: see the note above this scenario.
+  cat <<GPU_EOF | create_owned || { RESULTS[gpu-alloc]="FAIL"; return; }
+apiVersion: swift.kubeswift.io/v1alpha1
+kind: SwiftGuest
+metadata:
+  name: gpu-test
+spec:
+  imageRef:
+    name: ubuntu-noble-qemu
+  gpuProfileRef:
+    name: a100-pcie-single
+  guestClassRef:
+    name: default
+  seedProfileRef:
+    name: minimal
+  nodeName: ${mock}
+  runPolicy: Stopped
+GPU_EOF
+
+  # Give the mock its GPU, unless it was reused with one: that GPU may already
+  # be allocated to gpu-test.
+  if [[ "$created" == "false" && -n "$(kubectl get swiftgpunode "$mock" -o jsonpath='{.status.gpus}' 2>/dev/null || true)" ]]; then
+    echo "  Reusing the mock's GPU from an earlier run"
+  elif ! kubectl patch swiftgpunode "$mock" --type=merge --subresource=status -p '{
     "status": {
       "phase": "Ready",
+      "vfioReady": true,
       "gpuCount": 1,
       "freeGPUs": 1,
       "gpuModel": "NVIDIA A100-PCIe",
@@ -289,7 +436,7 @@ MOCK_EOF
       },
       "gpus": [{
         "index": 0,
-        "pciAddress": "0000:41:00.0",
+        "pciAddress": "ffff:ff:1f.7",
         "vendor": "NVIDIA",
         "model": "NVIDIA A100-PCIe",
         "deviceId": "10de:20b0",
@@ -300,18 +447,17 @@ MOCK_EOF
         "allocatedTo": ""
       }]
     }
-  }' >/dev/null 2>&1
+  }' >/dev/null; then
+    echo "  FAIL: could not set the mock SwiftGPUNode status"
+    RESULTS[gpu-alloc]="FAIL"
+    return
+  fi
 
-  # Create GPU profile
-  kubectl apply -f "$SAMPLES_DIR/gpu-pcie/swiftgpuprofile-a100-pcie.yaml" -n "$NAMESPACE" >/dev/null
-
-  # Create GPU guest — it will get GPUAllocated but won't actually run (no real node)
-  kubectl apply -f "$SAMPLES_DIR/gpu-pcie/swiftguest-gpu.yaml" -n "$NAMESPACE" >/dev/null
-
-  # Wait for GPUAllocated condition
-  echo "  Waiting for GPUAllocated=True (30s)..."
+  # Wait for GPUAllocated condition. A guest refused before the mock had its
+  # GPU is retried when the SwiftGPUNode changes, and after 30 s.
+  echo "  Waiting for GPUAllocated=True (60s)..."
   local allocated=""
-  for _ in $(seq 1 15); do
+  for _ in $(seq 1 30); do
     allocated=$(kubectl get swiftguest/gpu-test -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="GPUAllocated")].status}' 2>/dev/null || echo "")
     if [[ "$allocated" == "True" ]]; then
       break
@@ -326,18 +472,20 @@ MOCK_EOF
   else
     echo "  GPUAllocated=True"
 
-    # Verify GPU status fields populated
-    local devices hypervisor
+    # Verify GPU status fields populated, from the mock
+    local devices hypervisor gpunode
     devices=$(kubectl get swiftguest/gpu-test -n "$NAMESPACE" -o jsonpath='{.status.gpu.devices}' 2>/dev/null || echo "")
     hypervisor=$(kubectl get swiftguest/gpu-test -n "$NAMESPACE" -o jsonpath='{.status.gpu.hypervisor}' 2>/dev/null || echo "")
+    gpunode=$(kubectl get swiftguest/gpu-test -n "$NAMESPACE" -o jsonpath='{.status.gpu.nodeName}' 2>/dev/null || echo "")
     echo "  gpu.devices=$devices"
     echo "  gpu.hypervisor=$hypervisor"
+    echo "  gpu.nodeName=$gpunode"
 
-    if [[ -n "$devices" ]] && [[ -n "$hypervisor" ]]; then
+    if [[ -n "$devices" ]] && [[ -n "$hypervisor" ]] && [[ "$gpunode" == "$mock" ]]; then
       RESULTS[gpu-alloc]="PASS"
       echo "  gpu-alloc: PASS"
     else
-      echo "  FAIL: GPU status fields not populated"
+      echo "  FAIL: GPU status fields not populated, or not from the mock"
       RESULTS[gpu-alloc]="FAIL"
     fi
   fi
@@ -354,7 +502,7 @@ scenario_multi_nic() {
 
   # Create a dedicated SwiftImage for this scenario to avoid PVC lock races
   # with other scenarios (e.g., disk-boot) that use a different SwiftImage.
-  cat <<'IMG_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+  cat <<'IMG_EOF' | create_owned
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
 metadata:
@@ -371,7 +519,7 @@ IMG_EOF
   wait_image_ready "ubuntu-noble-multinic" || { RESULTS[multi-nic]="FAIL"; return; }
 
   # Apply a SwiftGuest with explicit interfaces field (single primary, no Multus needed)
-  cat <<'MULTINIC_EOF' | kubectl apply -n "$NAMESPACE" -f - >/dev/null
+  cat <<'MULTINIC_EOF' | create_owned
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:

@@ -117,9 +117,14 @@ wait_for_ssh() {
 
 # identity_of: run a fixed bash one-liner inside the guest and parse
 # four space-separated fields: machine-id sshfp hostname mac.
+#
+# The MAC is that of the interface holding the default route, else of the
+# first interface other than lo. Ubuntu Noble names its NIC ens3, so reading
+# eth0 gave "missing" for every guest.
 identity_of() {
   local guest="$1"
-  guest_exec "$guest" "bash -c 'mid=\$(cat /etc/machine-id 2>/dev/null || echo missing); sshfp=\$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk \"{print \\\$2}\"); if [ -z \"\$sshfp\" ]; then sshfp=\$(ssh-keygen -lf /etc/ssh/ssh_host_rsa_key.pub 2>/dev/null | awk \"{print \\\$2}\"); fi; [ -z \"\$sshfp\" ] && sshfp=missing; hn=\$(hostname 2>/dev/null || echo missing); mac=\$(cat /sys/class/net/eth0/address 2>/dev/null || echo missing); echo \"\$mid \$sshfp \$hn \$mac\"'" 2>/dev/null | tail -1
+  local mac_cmd="dev=\$(ip route show default 2>/dev/null | sed -n \"s/.* dev \\([^ ]*\\).*/\\1/p\" | head -n 1); if [ -z \"\$dev\" ]; then for p in /sys/class/net/*; do [ \"\${p##*/}\" = lo ] || { dev=\${p##*/}; break; }; done; fi; mac=\$(cat \"/sys/class/net/\$dev/address\" 2>/dev/null); [ -n \"\$mac\" ] || mac=missing"
+  guest_exec "$guest" "bash -c 'mid=\$(cat /etc/machine-id 2>/dev/null || echo missing); sshfp=\$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk \"{print \\\$2}\"); if [ -z \"\$sshfp\" ]; then sshfp=\$(ssh-keygen -lf /etc/ssh/ssh_host_rsa_key.pub 2>/dev/null | awk \"{print \\\$2}\"); fi; [ -z \"\$sshfp\" ] && sshfp=missing; hn=\$(hostname 2>/dev/null || echo missing); ${mac_cmd}; echo \"\$mid \$sshfp \$hn \$mac\"'" 2>/dev/null | tail -1
 }
 
 # epoch_now / elapsed_since: integer-second timing helpers.
@@ -328,7 +333,7 @@ check_diff() {
 check_diff "machine-id"  "$SRC_MID"   "$A_MID"   "$B_MID"
 check_diff "ssh-fp"      "$SRC_SSHFP" "$A_SSHFP" "$B_SSHFP"
 check_diff "hostname"    "$SRC_HOST"  "$A_HOST"  "$B_HOST"
-check_diff "mac (eth0)"  "$SRC_MAC"   "$A_MAC"   "$B_MAC"
+check_diff "mac"         "$SRC_MAC"   "$A_MAC"   "$B_MAC"
 
 if [[ $fail -ne 0 ]]; then
   exit 1

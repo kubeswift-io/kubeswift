@@ -14,7 +14,9 @@
 #   - Two schedulable nodes that can run guests (/dev/kvm). By default the
 #     first two nodes, sorted by name, that are not cordoned and carry
 #     neither the control-plane label nor its taint; pass --source/--target
-#     to choose.
+#     to choose. While the guest is created, every other schedulable node is
+#     cordoned so its launcher lands on the source; they are uncordoned as
+#     soon as the launcher is scheduled.
 #   - offline: a storage class that attaches across nodes (Longhorn, Ceph
 #     RBD, EBS — NOT local-path-provisioner). live: an RWX Block class
 #     (--storage-class, e.g. longhorn-migratable) or an existing guest class
@@ -79,11 +81,15 @@ uncordon_node() {
   for n in "${CORDONED[@]}"; do [[ "$n" == "$1" ]] || keep+=("$n"); done
   CORDONED=("${keep[@]+"${keep[@]}"}")
 }
-cleanup() {
+uncordon_all() {
   local n
   for n in "${CORDONED[@]+"${CORDONED[@]}"}"; do
     kubectl uncordon "$n" >/dev/null 2>&1 || true
   done
+  CORDONED=()
+}
+cleanup() {
+  uncordon_all
   if [[ "$NO_CLEANUP" == "true" ]]; then
     echo "--no-cleanup: leaving ${NAMESPACE}${CREATED_CLASS:+ and SwiftGuestClass ${CREATED_CLASS}} intact"
     return
@@ -143,9 +149,6 @@ fi
 
 kubectl create namespace "$NAMESPACE" 2>/dev/null || true
 
-# Cordon the target so the source guest lands on SOURCE_NODE.
-cordon_node "$TARGET_NODE"
-
 cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
 apiVersion: image.kubeswift.io/v1alpha1
 kind: SwiftImage
@@ -176,7 +179,36 @@ spec:
   metaData: |
     instance-id: migration-e2e-source
     local-hostname: e2e-source
----
+EOF
+
+echo "Waiting for SwiftImage Ready (max 5min)..."
+for _ in $(seq 1 60); do
+  phase=$(kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [[ "$phase" == "Ready" ]]; then break; fi
+  sleep 5
+done
+[[ "$phase" == "Ready" ]] || { echo "SwiftImage failed to reach Ready: phase=$phase" >&2; exit 1; }
+
+# Put the guest on SOURCE_NODE: every other schedulable node is cordoned while
+# the guest is created, and uncordoned as soon as its launcher is scheduled.
+# Cordoning only the target let the scheduler pick a third node. The guest is
+# not pinned with spec.nodeName instead: a live migration moves the launcher
+# but leaves spec.nodeName as it was, so the migrated guest would still be
+# pinned to the source and go back there the next time its launcher starts.
+if [[ "$(kubectl get node "$SOURCE_NODE" -o jsonpath='{.spec.unschedulable}')" == "true" ]]; then
+  echo "Source node $SOURCE_NODE is cordoned; the guest cannot start there" >&2
+  exit 2
+fi
+mapfile -t OTHERS < <(
+  kubectl get nodes --no-headers -o custom-columns='NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable' |
+    awk -v src="$SOURCE_NODE" '$1 != src && $2 != "true" { print $1 }')
+OTHERS=("${OTHERS[@]+"${OTHERS[@]}"}")
+for n in "${OTHERS[@]+"${OTHERS[@]}"}"; do
+  cordon_node "$n"
+done
+echo "Cordoned while the guest is placed: ${OTHERS[*]+"${OTHERS[*]}"}"
+
+cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuest
 metadata:
@@ -194,13 +226,16 @@ spec:
     preferredMode: ${MODE}
 EOF
 
-echo "Waiting for SwiftImage Ready (max 5min)..."
+echo "Waiting for the launcher to be scheduled (max 5min)..."
+placed=""
 for _ in $(seq 1 60); do
-  phase=$(kubectl get swiftimage ubuntu-noble -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)
-  if [[ "$phase" == "Ready" ]]; then break; fi
+  placed=$(kubectl get swiftguest e2e-guest -n "$NAMESPACE" -o jsonpath='{.status.nodeName}' 2>/dev/null || true)
+  if [[ -n "$placed" ]]; then break; fi
   sleep 5
 done
-[[ "$phase" == "Ready" ]] || { echo "SwiftImage failed to reach Ready: phase=$phase" >&2; exit 1; }
+uncordon_all
+[[ -n "$placed" ]] || { echo "SwiftGuest launcher was not scheduled within 5min" >&2; exit 1; }
+echo "Launcher scheduled on $placed; the other nodes are uncordoned"
 
 echo "Waiting for SwiftGuest Running with primaryIP (max 3min)..."
 for _ in $(seq 1 36); do
@@ -243,8 +278,7 @@ if [[ "$MODE" == "live" ]]; then
   echo "Guest uptime before: ${uptime_before}s"
 fi
 
-# Free the target, pin the source, and migrate.
-uncordon_node "$TARGET_NODE"
+# Pin the source and migrate.
 cordon_node "$SOURCE_NODE"
 
 T0=$(date +%s)

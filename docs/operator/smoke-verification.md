@@ -46,6 +46,11 @@ make smoke-test
 
 **Environment:** `NAMESPACE=my-ns` to use a different namespace.
 
+The test reuses objects that already exist (a shared SwiftImage, the
+`default` SwiftGuestClass) without changing them, and cleanup
+(`make smoke-test-cleanup`) deletes only the objects it created, which carry
+the label `kubeswift.io/smoke-test=<namespace>`.
+
 ## Prerequisites
 
 | Check | Verify |
