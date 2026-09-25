@@ -76,6 +76,9 @@ func TestCancelLive_PreCutover_FirstReconcile_WritesAnnotation(t *testing.T) {
 	if got.Annotations[AnnotationMigrationActionID] != cancelID(mig) {
 		t.Errorf("cancel action-id annotation: want %q, got %q", cancelID(mig), got.Annotations[AnnotationMigrationActionID])
 	}
+	if at, err := time.Parse(time.RFC3339, got.Annotations[AnnotationMigrationCancelIssuedAt]); err != nil || time.Since(at) > time.Minute {
+		t.Errorf("cancel issued-at annotation: want the time of the cancel, got %q (%v)", got.Annotations[AnnotationMigrationCancelIssuedAt], err)
+	}
 }
 
 func TestCancelLive_PreCutover_AckObserved_DeletesAndFinalizes(t *testing.T) {
@@ -124,8 +127,9 @@ func TestCancelLive_PreCutover_AckIdempotent_NoExtraAnnotationWrite(t *testing.T
 	cid := cancelID(mig)
 	// Cancel annotation already present (re-entry case).
 	dst.Annotations = map[string]string{
-		AnnotationMigrationAction:   MigrationActionCancel,
-		AnnotationMigrationActionID: cid,
+		AnnotationMigrationAction:         MigrationActionCancel,
+		AnnotationMigrationActionID:       cid,
+		AnnotationMigrationCancelIssuedAt: time.Now().Add(-5 * time.Second).UTC().Format(time.RFC3339),
 		// No ack yet → re-entry must continue polling.
 	}
 
@@ -152,13 +156,13 @@ func TestCancelLive_PreCutover_AckIdempotent_NoExtraAnnotationWrite(t *testing.T
 
 func TestCancelLive_PreCutover_AckTimeout_ForceDeletes(t *testing.T) {
 	scheme := testScheme(t)
-	// Dst pod is 60s old (well past 30s ack budget); cancel
-	// annotation present but no ack.
-	mig, guest, dst := cancelFixture(t, 60*time.Second)
+	// Cancel issued 60s ago (well past the 30s ack budget), no ack.
+	mig, guest, dst := cancelFixture(t, 10*time.Minute)
 	cid := cancelID(mig)
 	dst.Annotations = map[string]string{
-		AnnotationMigrationAction:   MigrationActionCancel,
-		AnnotationMigrationActionID: cid,
+		AnnotationMigrationAction:         MigrationActionCancel,
+		AnnotationMigrationActionID:       cid,
+		AnnotationMigrationCancelIssuedAt: time.Now().Add(-60 * time.Second).UTC().Format(time.RFC3339),
 		// No ack → past budget → force delete.
 	}
 
@@ -209,8 +213,89 @@ func TestCancelLive_PreCutover_DstNotFound_FinalizesDirectly(t *testing.T) {
 	if updated.Status.Phase != migrationv1alpha1.SwiftMigrationPhaseCancelled {
 		t.Errorf("phase: want Cancelled, got %q", updated.Status.Phase)
 	}
-	if !strings.Contains(updated.Status.FailureMessage, "never created") {
-		t.Errorf("FailureMessage: want 'never created' detail, got %q", updated.Status.FailureMessage)
+	if !strings.Contains(updated.Status.FailureMessage, "does not exist") {
+		t.Errorf("FailureMessage: want 'does not exist' detail, got %q", updated.Status.FailureMessage)
+	}
+}
+
+// The budget runs from the cancel, not from the destination pod's creation:
+// a migration is always well past 30s into its transfer before it can be
+// cancelled, and anchoring on the pod force-deleted every destination at once,
+// before swiftletd could stop the receive (lab validation of v0.15.0, D8).
+func TestCancelLive_PreCutover_JustIssuedCancelWaitsForTheAck(t *testing.T) {
+	scheme := testScheme(t)
+	mig, guest, dst := cancelFixture(t, 10*time.Minute)
+	dst.Annotations = map[string]string{
+		AnnotationMigrationAction:         MigrationActionCancel,
+		AnnotationMigrationActionID:       cancelID(mig),
+		AnnotationMigrationCancelIssuedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, dst).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	handled, res, err := r.honorCancel(context.Background(), mig)
+	if !handled || err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("want a requeue while waiting for the ack; got handled=%v res=%+v err=%v", handled, res, err)
+	}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(dst), &corev1.Pod{}); err != nil {
+		t.Errorf("destination pod deleted before swiftletd could ack the cancel: %v", err)
+	}
+	var updated migrationv1alpha1.SwiftMigration
+	_ = c.Get(context.Background(), client.ObjectKeyFromObject(mig), &updated)
+	if updated.Status.Phase == migrationv1alpha1.SwiftMigrationPhaseCancelled {
+		t.Error("cancel finalized without waiting for the ack")
+	}
+}
+
+// A cancel issued by an older controller carries no issued-at: it gets one now
+// and a full budget, rather than an immediate force-delete.
+func TestCancelLive_PreCutover_CancelWithoutIssuedAtGetsAFreshBudget(t *testing.T) {
+	scheme := testScheme(t)
+	mig, guest, dst := cancelFixture(t, 10*time.Minute)
+	dst.Annotations = map[string]string{
+		AnnotationMigrationAction:   MigrationActionCancel,
+		AnnotationMigrationActionID: cancelID(mig),
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest, dst).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+
+	if handled, res, err := r.honorCancel(context.Background(), mig); !handled || err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("want a requeue; got handled=%v res=%+v err=%v", handled, res, err)
+	}
+	var got corev1.Pod
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(dst), &got); err != nil {
+		t.Fatalf("destination pod deleted: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, got.Annotations[AnnotationMigrationCancelIssuedAt]); err != nil {
+		t.Errorf("issued-at not stamped: %q", got.Annotations[AnnotationMigrationCancelIssuedAt])
+	}
+}
+
+// A reconcile working from a stale copy must not overwrite the Cancelled
+// status another reconcile wrote. In the lab a second pass, still seeing the
+// migration in progress, found the destination gone and replaced "destination
+// pod force-deleted" with "destination pod was never created" (D8).
+func TestCancelLive_FinalizeFromAStaleCopyDoesNotOverwrite(t *testing.T) {
+	scheme := testScheme(t)
+	mig, guest, _ := cancelFixture(t, 0)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mig, guest).WithStatusSubresource(mig).Build()
+	r := &SwiftMigrationReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	var fresh, stale migrationv1alpha1.SwiftMigration
+	_ = c.Get(ctx, client.ObjectKeyFromObject(mig), &fresh)
+	_ = c.Get(ctx, client.ObjectKeyFromObject(mig), &stale)
+	if _, err := r.finalizeCancelled(ctx, &fresh, "destination pod force-deleted"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.finalizeCancelled(ctx, &stale, "destination pod does not exist")
+	if err != nil || !res.Requeue {
+		t.Errorf("stale finalize: want a requeue, got res=%+v err=%v", res, err)
+	}
+	var got migrationv1alpha1.SwiftMigration
+	_ = c.Get(ctx, client.ObjectKeyFromObject(mig), &got)
+	if got.Status.FailureMessage != "destination pod force-deleted" {
+		t.Errorf("FailureMessage = %q, want the first finalize's", got.Status.FailureMessage)
 	}
 }
 
