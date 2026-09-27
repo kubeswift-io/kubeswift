@@ -247,8 +247,9 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
 - **A live migration whose destination pod never became Ready did not say
   why.** It failed `DstNeverReady` with only "destination pod … never reached
   Ready within 1m0s budget". In the lab the cause was the storage: Longhorn
-  does not live-migrate a degraded volume, so it would not attach the volume
-  to the target node, and only the pod's `FailedAttachVolume` event and
+  does not live-migrate a volume while one of its replicas is rebuilding, so
+  it would not attach the volume to the target node, and only the pod's
+  `FailedAttachVolume` event and
   Longhorn's attachment ticket said so. The failure message now says why the
   pod was not Ready: the scheduler's message for an unschedulable pod, the
   containers that did not start and why (`ImagePullBackOff`,
@@ -544,8 +545,8 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   scheduled, so the guest it migrates is an unpinned one, as most are.
 - **`test/migration/migration-test.sh --mode live` waits for a healthy
   Longhorn volume.** It migrated as soon as the guest booted. Longhorn will
-  not live-migrate a degraded volume, and a new one can be degraded for
-  minutes while it builds its replicas, so the run failed with
+  not live-migrate a volume while one of its replicas is rebuilding, and a
+  new volume rebuilds its replicas for minutes, so the run failed with
   `DstNeverReady`. It now waits for each of the guest's Longhorn volumes to
   be `healthy` first, for up to `LONGHORN_HEALTHY_WAIT_MIN` minutes
   (default 15). Volumes of other drivers are not checked.
