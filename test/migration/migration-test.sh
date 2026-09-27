@@ -23,11 +23,12 @@
 #     on one (--guest-class).
 #   - An SSH identity (--identity, default $KUBESWIFT_TEST_IDENTITY or
 #     ~/.ssh/id_ed25519). Its public key is put into the test's seed profile.
-#   - live on Longhorn: Longhorn will not live-migrate a volume that is not
-#     healthy, and a new volume can stay degraded for minutes while it builds
-#     its replicas. The run waits for the guest's Longhorn volumes to be
-#     healthy before it migrates, for up to LONGHORN_HEALTHY_WAIT_MIN minutes
-#     (default 15). This needs read access to volumes.longhorn.io.
+#   - live on Longhorn: Longhorn will not live-migrate a volume while one of
+#     its replicas is rebuilding, and a new volume rebuilds its replicas for
+#     minutes after it is created. The run waits for the guest's Longhorn
+#     volumes to be healthy before it migrates, for up to
+#     LONGHORN_HEALTHY_WAIT_MIN minutes (default 15). This needs read access
+#     to volumes.longhorn.io.
 #
 # Usage:
 #   ./migration-test.sh [--mode offline|live] [--source NODE] [--target NODE]
@@ -283,11 +284,12 @@ if [[ "$MODE" == "live" ]]; then
   echo "Guest uptime before: ${uptime_before}s"
 fi
 
-# Longhorn attaches a volume to a second node for a live migration only while
-# the volume is healthy; a degraded one leaves the destination pod waiting on
-# FailedAttachVolume until the migration fails DstNeverReady. Wait for each of
-# the guest's Longhorn volumes to be healthy first. Volumes of other drivers
-# are not checked.
+# Longhorn does not attach a volume to a second node for a live migration
+# while one of its replicas is rebuilding: the destination pod waits on
+# FailedAttachVolume until the migration fails DstNeverReady. A new volume
+# rebuilds for minutes after it is created. Waiting for healthy covers that
+# (it is stricter: a volume degraded only by an unschedulable replica would
+# migrate). Volumes of other drivers are not checked.
 wait_longhorn_healthy() {
   local p claim pv driver handle lhns rob
   p=$(launcher_pod)

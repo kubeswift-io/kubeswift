@@ -19,11 +19,11 @@ import (
 // A destination pod that never becomes Ready used to fail its migration with
 // only "never reached Ready within 1m0s budget". The cause was elsewhere: in
 // the lab it was the storage refusing to attach the volume to the target node
-// (Longhorn does not live-migrate a degraded volume), visible only as a
-// FailedAttachVolume event on the pod and in Longhorn's attachment ticket. An
-// attach failure leaves the pod's own status saying nothing more than
-// PodInitializing or ContainerCreating, so the pod's recent Warning events are
-// read as well.
+// (Longhorn does not live-migrate a volume while a replica is rebuilding),
+// visible only as a FailedAttachVolume event on the pod and in Longhorn's
+// attachment ticket. An attach failure leaves the pod's own status saying
+// nothing more than PodInitializing or ContainerCreating, so the pod's recent
+// Warning events are read as well.
 
 // eventInvolvedObjectNameField is the Event field selector the apiserver
 // supports for the object an event is about.
