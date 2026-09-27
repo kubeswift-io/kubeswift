@@ -892,3 +892,102 @@ Then:
 - record all of this in `phase0-r5.md`.
 
 Phase 1 r5 does not wait for it.
+
+## Round 6 go-ahead: candidate `4f08e87`
+
+**Round 5** (`phase0-r5.md` to `phase3-r5.md`) passed everything it ran. No
+guest was lost.
+- R5-A was not triggered, and it corrected round 4's reading.
+- V9b was skipped.
+
+**Its findings are fixed and merged:**
+
+| PR | Change | What round 6 checks |
+|---|---|---|
+| #685 | **A referenced object that does not exist yet is waited for, not failed.** This covers the SwiftImage, SwiftGuestClass, SwiftSeedProfile, SwiftKernel, and a data disk's image or PVC. The guest stays `Pending` with `Resolved=False` "… not found: …", and a running guest keeps its phase. **A guest that went `Failed` on resolution returns to `Pending` while it waits.** **A `Failed` image or kernel now reads** `SwiftImage failed: <its failure message>`, with one `ResolutionFailed` Warning event. (Findings 1 and 2.) | Phase 1, R6-A, R6-B, R6-C, R6-F |
+| #686 | **A failed sandbox or slot launcher says how it failed.** When there is no termination message, the `SlotEnded` event, a checkout's `SlotEnded` message and a cold sandbox's `GuestFailed` message fall back to a failed init container or `launcher exited <code> (<reason>)`. (Finding 4.) | R6-E (opportunistic) |
+| #687 | **Docs only:** Longhorn blocks a live migration while a replica is *rebuilding*, not merely when the volume is `degraded`. (Finding 3; thanks for the correction.) | none |
+
+**Candidate: main @ `4f08e87`.** Everything in round 5 holds, with `4f08e87` in
+place of `08d0165`:
+- the chart `0.0.0-dev.4f08e87`;
+- all nine image tags `sha-4f08e87` (`ui` excepted);
+- the checkout, CRDs first, the stop conditions, and the Phase 0 amendments.
+
+**What changed underneath:**
+- No CRD, RBAC or Rust change since `08d0165`, so launchers on `sha-08d0165`
+  interoperate.
+- **Build check:** use the Release Dev run for `4f08e87`, with the same check
+  and 45-minute wait.
+- **Reports:** `phase1-r6.md`, `phase2-r6.md` and `phase3-r6.md`.
+- **Space:** cp-1 was at 63.8% free after round 5, so no preparation is
+  needed. Record it at the start. If it is below 35%, stop and report.
+
+### Before Phase 1, on EVERY cluster: pre-checks
+1. **The runPolicy pre-check,** as in round 5. If it lists any guest, do not
+   upgrade that cluster.
+2. **New for #685:** list every guest that is `Failed` with `Resolved=False`,
+   recording its namespace, name, the `Resolved` message and whether it has a
+   launcher pod:
+   ```sh
+   kubectl get swiftguests -A -o json | jq -r '.items[]
+     | select(.status.phase == "Failed")
+     | [.metadata.namespace, .metadata.name,
+        ((.status.conditions // [])[] | select(.type == "Resolved") | "\(.status) \(.message)")]
+     | @tsv'
+   ```
+   - ntx's round-1 leftovers `default/sample` and `val-n2/snapshot-local-source`
+     are expected here.
+   - **After the upgrade:** a guest whose message is "… not found" or "… not
+     Ready" should read `Pending`. Any other stays `Failed`.
+   - **A guest going `Pending` must not start:** it gets no launcher pod
+     unless everything it references now exists and is `Ready`.
+   - **Stop condition:** if any listed guest gets a launcher pod after the
+     upgrade, stop and report which one and why.
+
+### Phase 1 r6: GO per cluster, once its pre-checks are clean
+Phase 1 as before, on all three clusters, with `4f08e87`. Record the same
+items as round 5, and also:
+- the pre-check 2 guests after the upgrade: phase, `Resolved` message, and
+  whether each has a launcher pod;
+- **`field-testing/ft-gpu-pool` on dev, observed only:**
+  - its slot `ft-gpu-pool-slot-j74r2` keeps running, with 0 restarts and the
+    same UID;
+  - the GPU stays allocated to it.
+
+  A controller upgrade must not disturb a running warm slot.
+
+### Phase 2 r6 (dev): GO once Phase 1 r6 has succeeded on dev
+
+Use new namespaces `val-r6-*`. Every guest used must be created after the
+upgrade, with a launcher running `swiftletd:sha-4f08e87`.
+- **Keep cp-1 roomy, as in round 5:** delete each scenario's namespace once
+  it has passed and its evidence is saved.
+- **Keep a failed scenario's objects.**
+
+| # | Scenario | Pass |
+|---|---|---|
+| R6-A | **A guest applied before its image, plus the V11-R2 regression (#685):** `local-roundtrip-test.sh --namespace val-r6-rt --no-cleanup`. The script applies the guest before its SwiftImage. Poll the guest's `status.phase` and its `Resolved` condition every 1 s from the moment it is created until it is `Running`. | The guest is **never `Failed`**. It is `Pending` with `Resolved=False`, first "SwiftImage not found: …" and then "SwiftImage not Ready", until the image is `Ready`. It then goes `Scheduling` and `Running`. It gets no `ResolutionFailed` event. The round trip passes as in round 5: sentinel kept, `primaryIP` the same before and after, and the restore time recorded. |
+| R6-B | **A failed image says so, and a recreated image is picked up (#685).** (1) In `val-r6-img`, apply a SwiftImage `img404` whose URL returns 404, followed in the same apply by a SwiftGuest `r6b` that uses it. (2) Once the image is `Failed`, record the guest. (3) Delete `img404` and apply a working Noble SwiftImage with the same name. Watch the guest until it is `Running`. | (1) The guest is `Pending` with "SwiftImage not Ready" while the import retries. (2) It is `Failed`, and its `Resolved` message is `SwiftImage failed: <the image's Failed condition message>` (for example "Job has reached the specified backoff limit"). There is exactly one `ResolutionFailed` Warning event on the guest carrying the same text, and no launcher pod. (3) Within about 10 s of the delete the guest reads `Pending` ("SwiftImage not found", then "not Ready"). It boots once the new image is `Ready`. Record the times. |
+| R6-C | **Other missing references wait (#685).** In `val-r6-ref`, apply a SwiftGuest that references a SwiftGuestClass `val-r6-class` and a SwiftSeedProfile `r6-seed`, neither of which exists yet, plus an existing Ready image. Wait 30 s. Then create the seed profile, wait 30 s, and create the class. | The guest is `Pending` throughout, never `Failed`, and gets no launcher pod. The `Resolved` message reads "SwiftGuestClass not found: …" while the class is missing. Once both exist, it boots within about 10 s plus the usual boot time. Delete the class afterwards. |
+| R6-D | **`DstNeverReady` names its cause, live (#682). Only with William's OK:** it deletes a Longhorn Replica object of a test volume. (1) Create a guest in `val-r6-dnr` on `longhorn-migratable`, and write several GiB to its disk, so a rebuild takes clearly longer than 60 s. (2) Delete one of its volume's Replica objects: `kubectl -n longhorn-system delete replicas.longhorn.io <one of that volume's replicas>`. (3) As soon as the engine lists a replica in mode `WO` (rebuilding), live-migrate the guest: `swiftctl … migrate … --preferred-mode live --name r6d-mig`. | The SwiftMigration fails `DstNeverReady` after about 60 s. Its `failureMessage` goes on after `within 1m0s budget:` to name the cause, including `Warning FailedAttachVolume: …`. There is a `DestinationPodNeverReady` event, the guest is still `Running` on its source with the same pod UID, and no destination pod is left. Paste the full message. If the rebuild finished before 60 s and the migration completed, record that as NOT TRIGGERED with the timings. If William declines, SKIP. |
+| R6-E | **Launcher failure messages (#686), opportunistic.** Nothing is forced. | If any sandbox or warm slot fails during the run, record its message or `SlotEnded` event. It should name an init container or `launcher exited <code> (<reason>)` rather than a bare "launcher pod failed". Otherwise record "not observed"; the unit tests cover it. |
+| R6-F | **A pool created with its image does not churn (#681, #685).** In `val-r6-pool`, apply a new SwiftImage and a 2-replica SwiftGuestPool using it, in one apply. Watch the pool's guests every 2 s until both replicas are `Running`. | While the image imports, both replicas are `Pending` and none is `Failed`. The number of SwiftGuest objects the pool has ever created is 2: no replica is deleted and replaced. Both boot once the image is `Ready`. |
+| V1 | **Regression: smoke.** `NAMESPACE=val-r6-smoke make smoke-test` (all scenarios), then cleanup with the same `NAMESPACE`. | As in round 5. |
+
+V4a, V9 and the T/R series are not re-run: nothing merged since `08d0165`
+touches migration or GPU allocation. V9b stays SKIPPED while `ft-gpu-pool`
+holds the GPU. D12's browser half is still William's.
+
+**Stop condition:** as before. If a guest is ever left without a running VM,
+stop Phase 2 at once, leave everything in place, and report.
+
+### Phase 3 r6: GO per cluster, once Phase 1 r6 has succeeded on it
+- **ntx:**
+  - N3 as before;
+  - the pre-check 2 leftovers (`default/sample`,
+    `val-n2/snapshot-local-source`) as recorded in Phase 1, and neither has a
+    launcher pod.
+- **sov:** S1 as before.
+
+**v0.15.0 is tagged only after round 6 passes and William gives the word.**
