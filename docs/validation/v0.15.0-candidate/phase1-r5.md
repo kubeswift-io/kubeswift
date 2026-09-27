@@ -86,6 +86,19 @@ A 3 s watcher after the upgrade:
 - The pool keeps retrying the image resolve. If the rate limit clears, it may
   warm a slot that takes the GPU again.
 
+**Later: the replacement runs.** The rate limit cleared, and the pool warmed a
+replacement:
+
+```text
+00:00:02 slot ft-gpu-pool-slot-j74r2 created; GPU allocated to it
+00:00:38 pool Ready; slot Running (0 restarts, swiftletd:sha-08d0165)
+         kernel mount /var/lib/kubeswift/kernels/field-testing/gpu-sandbox (the #659 fix)
+08:35    the same slot pod, still Running, 0 restarts: no delete-and-recreate loop
+         (the 23:50:58 SlotEnded event has aged out of the event store by now)
+```
+
+Because this slot holds the GPU, Phase 2's V9b is skipped (`phase2-r5.md`).
+
 ## ntx: PASS
 
 - **Upgrade:** Helm **29 → 30** at 23:51:39, rolled out by 23:52:04.
