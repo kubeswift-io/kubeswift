@@ -435,16 +435,28 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   Pull Jobs are now named `swiftkernel-pull-<name>-<node>-<hash>` and labeled
   `kubeswift.io/swiftkernel=<name>`.
 
-- **A guest created with its SwiftImage read `Failed` until the import
-  finished.** A SwiftImage that was not yet `Ready` failed the guest's
-  resolution like a missing one, so the guest went `Failed` while the image
-  imported, and went on to boot once it was `Ready`. A SwiftGuestPool deletes
-  `Failed` replicas, so a pool created with its image churned through them. A
-  guest now waits for an image that is still importing, as for a pulling
-  kernel: it stays `Pending` (a running guest keeps its phase) with
-  `Resolved=False` "SwiftImage not Ready", and is checked again every 10
-  seconds. Only a `Failed` image fails the guest. The same holds for an
-  image-backed data disk. Found by lab validation of v0.15.0.
+- **A guest created with, or before, its SwiftImage read `Failed` until the
+  import finished.** A SwiftImage that was not yet `Ready`, or did not exist
+  yet, failed the guest's resolution. The guest went `Failed` while the image
+  imported, then went on to boot once the image was `Ready`. A SwiftGuestPool
+  deletes `Failed` replicas, so a pool created with its image churned through
+  them.
+  - **A guest now waits** for an image that is still importing or not yet
+    created, as for a pulling kernel. A new guest stays `Pending`, a running
+    guest keeps its phase, and a guest that already went `Failed` this way
+    returns to `Pending`. It shows `Resolved=False` "SwiftImage not Ready" or
+    "SwiftImage not found: …", and it is checked again every 10 seconds.
+  - **Other missing references** are waited for the same way: the
+    SwiftGuestClass, the SwiftSeedProfile, the SwiftKernel, and a data disk's
+    image or PVC. A guest can be applied before, or in the same apply as,
+    what it references.
+  - **Only a `Failed` image or kernel fails the guest,** and the guest now
+    says so. It shows `Resolved=False` "SwiftImage failed: <the image's
+    failure message>" and gets a `ResolutionFailed` Warning event, where
+    before it showed "SwiftImage not Ready" as if the import were still
+    running.
+
+  Found by lab validation of v0.15.0.
 
 - **One failed import pod failed the SwiftImage for good.** The import Job
   retries a failed pod up to its backoff limit, but the controller marked the
