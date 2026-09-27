@@ -410,6 +410,12 @@ func sandboxWorkloadExitCode(pod *corev1.Pod) (int32, bool) {
 	return int32(n), true
 }
 
+// podFailureMessage says why a failed launcher pod stopped. The launcher
+// writes no termination message, so after the pod's own message (an
+// eviction, a node shutdown) it falls back to what the kubelet recorded: a
+// failed init container, or the launcher's exit code and reason (Error,
+// OOMKilled). The launcher's log is not copied in: it can hold the
+// workload's output, which only swiftsandboxes/log may read.
 func podFailureMessage(pod *corev1.Pod) string {
 	for i := range pod.Status.ContainerStatuses {
 		cs := &pod.Status.ContainerStatuses[i]
@@ -419,6 +425,21 @@ func podFailureMessage(pod *corev1.Pod) string {
 	}
 	if pod.Status.Message != "" {
 		return pod.Status.Message
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		cs := &pod.Status.InitContainerStatuses[i]
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return fmt.Sprintf("init container %s exited %d (%s)", cs.Name, t.ExitCode, t.Reason)
+		}
+	}
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if t := cs.State.Terminated; cs.Name == launcherName && t != nil {
+			return fmt.Sprintf("launcher exited %d (%s)", t.ExitCode, t.Reason)
+		}
+	}
+	if pod.Status.Reason != "" {
+		return "launcher pod failed: " + pod.Status.Reason
 	}
 	return "launcher pod failed"
 }

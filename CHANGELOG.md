@@ -358,6 +358,14 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   and warms a replacement once the image resolves. A slot pod that is running
   or terminating keeps its GPU. Failed slots left by earlier versions are
   deleted on the pool's first pass after the upgrade.
+  - **The event now says why the pod failed.** The launcher writes no
+    termination message, so the event read only "launcher pod failed". It
+    now falls back to what the kubelet recorded: a failed init container, or
+    the launcher's exit code and reason, for example `launcher exited 137
+    (OOMKilled)`.
+  - **A cold sandbox's `Failed` message** gets the same fallback.
+  - **The launcher's log is not copied in.** It can hold the workload's
+    output, which only `swiftsandboxes/log` may read.
 
 - **A checked-out sandbox whose slot died stayed `Running`.** A sandbox that
   claims a warm slot learns its outcome from the exec status swiftletd writes
