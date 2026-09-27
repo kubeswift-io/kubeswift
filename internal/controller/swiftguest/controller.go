@@ -249,7 +249,12 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 					// upgrade from v0.14.1 (#658), so every kernel-boot guest
 					// waits here for as long as that takes, and a guest
 					// created with its SwiftImage waits for the import.
-					if status.Phase == "" {
+					//
+					// A guest that Failed on resolution itself (Resolved was
+					// already False: a missing image before v0.15.0, or an
+					// image that failed and has since been recreated) never
+					// had a pod, and goes back to Pending while it waits.
+					if status.Phase == "" || (status.Phase == swiftv1alpha1.SwiftGuestPhaseFailed && failedResolving(&guest.Status)) {
 						status.Phase = swiftv1alpha1.SwiftGuestPhasePending
 					}
 					if err := r.patchStatus(ctx, &guest, status); err != nil {
@@ -259,10 +264,14 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 					return ctrl.Result{RequeueAfter: resolutionRetry}, nil
 				}
 				// Set Resolved=False, phase=Failed; do not create pod
+				newlyFailed := guest.Status.Phase != swiftv1alpha1.SwiftGuestPhaseFailed || !failedResolving(&guest.Status)
 				status.Phase = swiftv1alpha1.SwiftGuestPhaseFailed
 				recordGuestMetrics(&guest, &guest.Status, status, nil)
 				if err := r.patchStatus(ctx, &guest, status); err != nil {
 					return ctrl.Result{}, err
+				}
+				if newlyFailed {
+					r.event(&guest, corev1.EventTypeWarning, "ResolutionFailed", "%s", re.Reason)
 				}
 				logger.Info("resolution failed", "reason", re.Reason, "resource", re.AffectedResource)
 				return ctrl.Result{}, nil
@@ -930,6 +939,13 @@ func conflictRequeue(res ctrl.Result, err error) (ctrl.Result, error) {
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	return res, err
+}
+
+// failedResolving reports whether the guest's Resolved condition is False,
+// i.e. its last resolution did not succeed.
+func failedResolving(status *swiftv1alpha1.SwiftGuestStatus) bool {
+	c := findCondition(status, ConditionResolved)
+	return c != nil && c.Status == metav1.ConditionFalse
 }
 
 func (r *SwiftGuestReconciler) event(guest *swiftv1alpha1.SwiftGuest, eventType, reason, format string, args ...any) {

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -259,6 +260,103 @@ func TestResolve_ImageNotReadyWaitsUnlessFailed(t *testing.T) {
 		}
 		if re.Waiting != tc.waiting {
 			t.Errorf("image %q: Waiting = %v, want %v", tc.phase, re.Waiting, tc.waiting)
+		}
+	}
+}
+
+// A referenced object that does not exist yet is waited for, like an image
+// still importing: applying a guest before its SwiftImage, class, seed
+// profile or kernel is ordinary (lab validation of v0.15.0, round 5).
+func TestResolve_MissingReferenceWaits(t *testing.T) {
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseReady, PreparedArtifact: &imagev1alpha1.PreparedArtifactRef{Format: imagev1alpha1.DiskFormatRaw}},
+	}
+	diskGuest := func() *swiftv1alpha1.SwiftGuest {
+		return &swiftv1alpha1.SwiftGuest{
+			ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+			Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+		}
+	}
+	withSeed := diskGuest()
+	withSeed.Spec.SeedProfileRef = &corev1.LocalObjectReference{Name: "seed"}
+	kernelGuest := diskGuest()
+	kernelGuest.Spec.ImageRef = nil
+	kernelGuest.Spec.KernelRef = &corev1.LocalObjectReference{Name: "k"}
+
+	for _, tc := range []struct {
+		name   string
+		guest  *swiftv1alpha1.SwiftGuest
+		objs   []client.Object
+		reason string
+	}{
+		{"image", diskGuest(), []client.Object{guestClass}, "SwiftImage not found"},
+		{"class", diskGuest(), []client.Object{image}, "SwiftGuestClass not found"},
+		{"seed profile", withSeed, []client.Object{guestClass, image}, "SwiftSeedProfile not found"},
+		{"kernel", kernelGuest, []client.Object{guestClass}, "SwiftKernel not found"},
+	} {
+		c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(tc.objs...).Build()
+		_, err := NewResolver(c).Resolve(context.Background(), tc.guest)
+		var re *ResolutionError
+		if !errors.As(err, &re) {
+			t.Fatalf("%s: expected ResolutionError, got %T: %v", tc.name, err, err)
+		}
+		if !re.Waiting {
+			t.Errorf("%s: Waiting = false, want a wait for the missing object", tc.name)
+		}
+		if !strings.HasPrefix(re.Reason, tc.reason) {
+			t.Errorf("%s: Reason = %q, want it to start with %q", tc.name, re.Reason, tc.reason)
+		}
+	}
+}
+
+// A Failed image or kernel fails the guest, and the reason carries the
+// object's own failure message, so it cannot be read as "still importing".
+func TestResolve_FailedImageOrKernelNamesTheFailure(t *testing.T) {
+	guestClass := &swiftv1alpha1.SwiftGuestClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "gc"},
+		Spec:       swiftv1alpha1.SwiftGuestClassSpec{CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), RootDisk: swiftv1alpha1.RootDiskSpec{Size: resource.MustParse("10Gi"), Format: swiftv1alpha1.DiskFormatRaw}},
+	}
+	failedCond := []metav1.Condition{{Type: "Failed", Status: metav1.ConditionTrue, Reason: "ImportFailed", Message: "Job has reached the specified backoff limit"}}
+	image := &imagev1alpha1.SwiftImage{
+		ObjectMeta: metav1.ObjectMeta{Name: "img", Namespace: "ns"},
+		Status:     imagev1alpha1.SwiftImageStatus{Phase: imagev1alpha1.SwiftImagePhaseFailed, Conditions: failedCond},
+	}
+	kernel := &kernelv1alpha1.SwiftKernel{
+		ObjectMeta: metav1.ObjectMeta{Name: "k", Namespace: "ns"},
+		Status:     kernelv1alpha1.SwiftKernelStatus{Phase: kernelv1alpha1.SwiftKernelPhaseFailed},
+	}
+	diskGuest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{ImageRef: &corev1.LocalObjectReference{Name: "img"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+	}
+	kernelGuest := &swiftv1alpha1.SwiftGuest{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec:       swiftv1alpha1.SwiftGuestSpec{KernelRef: &corev1.LocalObjectReference{Name: "k"}, GuestClassRef: corev1.LocalObjectReference{Name: "gc"}},
+	}
+	for _, tc := range []struct {
+		name  string
+		guest *swiftv1alpha1.SwiftGuest
+		want  string
+	}{
+		{"image", diskGuest, "SwiftImage failed: Job has reached the specified backoff limit"},
+		{"kernel without a message", kernelGuest, "SwiftKernel failed"},
+	} {
+		c := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(guestClass, image, kernel).Build()
+		_, err := NewResolver(c).Resolve(context.Background(), tc.guest)
+		var re *ResolutionError
+		if !errors.As(err, &re) {
+			t.Fatalf("%s: expected ResolutionError, got %T: %v", tc.name, err, err)
+		}
+		if re.Waiting {
+			t.Errorf("%s: Waiting = true; a Failed object is final", tc.name)
+		}
+		if re.Reason != tc.want {
+			t.Errorf("%s: Reason = %q, want %q", tc.name, re.Reason, tc.want)
 		}
 	}
 }

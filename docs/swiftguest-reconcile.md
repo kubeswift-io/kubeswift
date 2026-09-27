@@ -4,7 +4,14 @@ The SwiftGuest controller reconciles SwiftGuest resources by resolving reference
 
 ## Flow
 
-1. **Resolve** – Resolver fetches SwiftGuestClass, SwiftImage, SwiftSeedProfile and produces ResolvedGuest. On failure: set `Resolved=False`, `phase=Failed`, return.
+1. **Resolve** – Resolver fetches SwiftGuestClass, SwiftImage, SwiftSeedProfile and produces ResolvedGuest.
+   - **Waits:** a referenced object that does not exist yet, or a SwiftImage or SwiftKernel that is not Ready (still importing or pulling).
+     - The guest gets `Resolved=False` with the reason, for example `SwiftImage not found: …` or `SwiftImage not Ready`.
+     - A new guest stays `Pending`, and a guest that is already running keeps its phase.
+     - No pod is created, and resolution is retried every 10 s.
+   - **Failures:** a Failed SwiftImage or SwiftKernel, or an invalid combination.
+     - The guest gets `Resolved=False` and `phase=Failed`, and a `ResolutionFailed` Warning event.
+     - A failed image's or kernel's own message is included, for example `SwiftImage failed: Job has reached the specified backoff limit`.
 
 2. **Seed rendering** – When ResolvedGuest has Seed, render userData/metaData/networkData and create Secret `<guest-name>-seed`.
 

@@ -10,6 +10,9 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -48,7 +51,7 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 	// Fetch GuestClass (cluster-scoped)
 	guestClass := &swiftv1alpha1.SwiftGuestClass{}
 	if err := r.client.Get(ctx, types.NamespacedName{Name: guest.Spec.GuestClassRef.Name}, guestClass); err != nil {
-		return nil, &ResolutionError{Reason: "SwiftGuestClass not found: " + err.Error(), AffectedResource: guest.Spec.GuestClassRef.Name}
+		return nil, notFound("SwiftGuestClass not found: ", guest.Spec.GuestClassRef.Name, err)
 	}
 
 	var rg *ResolvedGuest
@@ -104,7 +107,13 @@ func (r *resolver) Resolve(ctx context.Context, guest *swiftv1alpha1.SwiftGuest)
 func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.SwiftGuest, guestClass *swiftv1alpha1.SwiftGuestClass) (*ResolvedGuest, error) {
 	sk := &kernelv1alpha1.SwiftKernel{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.KernelRef.Name}, sk); err != nil {
-		return nil, &ResolutionError{Reason: "SwiftKernel not found", AffectedResource: guest.Spec.KernelRef.Name}
+		return nil, notFound("SwiftKernel not found: ", guest.Spec.KernelRef.Name, err)
+	}
+	if sk.Status.Phase == kernelv1alpha1.SwiftKernelPhaseFailed {
+		return nil, &ResolutionError{
+			Reason:           withFailure("SwiftKernel failed", sk.Status.Conditions),
+			AffectedResource: guest.Spec.KernelRef.Name,
+		}
 	}
 	if sk.Status.Phase != kernelv1alpha1.SwiftKernelPhaseReady {
 		// Only Failed is final. A kernel still pulling, to a newly labeled node
@@ -113,7 +122,7 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 		return nil, &ResolutionError{
 			Reason:           "SwiftKernel not Ready",
 			AffectedResource: guest.Spec.KernelRef.Name,
-			Waiting:          sk.Status.Phase != kernelv1alpha1.SwiftKernelPhaseFailed,
+			Waiting:          true,
 		}
 	}
 
@@ -122,7 +131,7 @@ func (r *resolver) resolveKernelBoot(ctx context.Context, guest *swiftv1alpha1.S
 	if guest.Spec.SeedProfileRef != nil {
 		sp := &seedv1alpha1.SwiftSeedProfile{}
 		if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.SeedProfileRef.Name}, sp); err != nil {
-			return nil, &ResolutionError{Reason: "SwiftSeedProfile not found: " + err.Error(), AffectedResource: guest.Spec.SeedProfileRef.Name}
+			return nil, notFound("SwiftSeedProfile not found: ", guest.Spec.SeedProfileRef.Name, err)
 		}
 		seedProfile = sp
 	}
@@ -250,9 +259,35 @@ func BlankDataDiskPVCName(guestName, diskName string) string {
 func (r *resolver) pvcIsBlock(ctx context.Context, namespace, name string) (bool, error) {
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, pvc); err != nil {
-		return false, &ResolutionError{Reason: "dataDiskRefs attachAsDisk PVC not found: " + err.Error(), AffectedResource: name}
+		return false, notFound("dataDiskRefs attachAsDisk PVC not found: ", name, err)
 	}
 	return pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock, nil
+}
+
+// notFound is the ResolutionError for a referenced object that could not be
+// read. An object that does not exist yet is a wait, not a failure: a guest
+// applied before its SwiftImage, class or seed profile (or ahead of it in
+// one apply) resolves once that object is created, as a pod waits for a
+// ConfigMap it mounts. Other lookup errors fail resolution as before.
+func notFound(reason, name string, err error) *ResolutionError {
+	return &ResolutionError{
+		Reason:           reason + err.Error(),
+		AffectedResource: name,
+		Waiting:          apierrors.IsNotFound(err),
+	}
+}
+
+// conditionFailed is the condition type SwiftImage and SwiftKernel set, with
+// the cause as its message, when they reach phase Failed.
+const conditionFailed = "Failed"
+
+// withFailure appends a failed object's own failure message to reason, so a
+// guest says why its image or kernel failed, not only that it is not Ready.
+func withFailure(reason string, conds []metav1.Condition) string {
+	if c := meta.FindStatusCondition(conds, conditionFailed); c != nil && c.Message != "" {
+		return reason + ": " + c.Message
+	}
+	return reason
 }
 
 // resolveDataDiskImage resolves an image-backed data disk's SwiftImage to its
@@ -260,13 +295,19 @@ func (r *resolver) pvcIsBlock(ctx context.Context, namespace, name string) (bool
 func (r *resolver) resolveDataDiskImage(ctx context.Context, namespace, name string) (*PreparedImage, error) {
 	image := &imagev1alpha1.SwiftImage{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, image); err != nil {
-		return nil, &ResolutionError{Reason: "dataDiskRef SwiftImage not found: " + err.Error(), AffectedResource: name}
+		return nil, notFound("dataDiskRef SwiftImage not found: ", name, err)
+	}
+	if image.Status.Phase == imagev1alpha1.SwiftImagePhaseFailed {
+		return nil, &ResolutionError{
+			Reason:           withFailure("dataDiskRef SwiftImage failed", image.Status.Conditions),
+			AffectedResource: name,
+		}
 	}
 	if image.Status.Phase != imagev1alpha1.SwiftImagePhaseReady {
 		return nil, &ResolutionError{
 			Reason:           "dataDiskRef SwiftImage not Ready",
 			AffectedResource: name,
-			Waiting:          image.Status.Phase != imagev1alpha1.SwiftImagePhaseFailed,
+			Waiting:          true,
 		}
 	}
 	pi := mergePreparedImage(image)
@@ -277,7 +318,7 @@ func (r *resolver) resolveDiskBoot(ctx context.Context, guest *swiftv1alpha1.Swi
 	// Fetch Image (namespaced)
 	image := &imagev1alpha1.SwiftImage{}
 	if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.ImageRef.Name}, image); err != nil {
-		return nil, &ResolutionError{Reason: "SwiftImage not found: " + err.Error(), AffectedResource: guest.Spec.ImageRef.Name}
+		return nil, notFound("SwiftImage not found: ", guest.Spec.ImageRef.Name, err)
 	}
 
 	// osType cross-check: the image is authoritative (it defines the OS); the
@@ -299,7 +340,7 @@ func (r *resolver) resolveDiskBoot(ctx context.Context, guest *swiftv1alpha1.Swi
 	if guest.Spec.SeedProfileRef != nil {
 		sp := &seedv1alpha1.SwiftSeedProfile{}
 		if err := r.client.Get(ctx, types.NamespacedName{Namespace: guest.Namespace, Name: guest.Spec.SeedProfileRef.Name}, sp); err != nil {
-			return nil, &ResolutionError{Reason: "SwiftSeedProfile not found: " + err.Error(), AffectedResource: guest.Spec.SeedProfileRef.Name}
+			return nil, notFound("SwiftSeedProfile not found: ", guest.Spec.SeedProfileRef.Name, err)
 		}
 		seedProfile = sp
 	}

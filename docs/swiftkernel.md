@@ -356,7 +356,7 @@ kubectl get swiftkernel faas-minimal -o jsonpath='{.status.phase}'
 kubectl describe pod <guest-name>
 ```
 
-The SwiftKernel must be Ready before the SwiftGuest controller creates the pod. While the SwiftKernel is Pending or Pulling, the guest waits with `Resolved=False` (`SwiftKernel not Ready`): a new guest stays Pending, and a running guest keeps its phase. If the SwiftKernel is Failed, the guest enters Failed phase.
+The SwiftKernel must be Ready before the SwiftGuest controller creates the pod. While the SwiftKernel is Pending or Pulling, the guest waits with `Resolved=False` (`SwiftKernel not Ready`): a new guest stays Pending, and a running guest keeps its phase. A SwiftKernel that does not exist yet is waited for the same way (`SwiftKernel not found: …`). If the SwiftKernel is Failed, the guest enters Failed phase with `Resolved=False` (`SwiftKernel failed: <the kernel's failure message>`) and a `ResolutionFailed` event.
 
 ### Kernel panic in guest
 
