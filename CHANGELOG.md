@@ -251,11 +251,18 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   it would not attach the volume to the target node, and only the pod's
   `FailedAttachVolume` event and
   Longhorn's attachment ticket said so. The failure message now says why the
-  pod was not Ready: the scheduler's message for an unschedulable pod, the
-  containers that did not start and why (`ImagePullBackOff`,
-  `CreateContainerConfigError`, a failed init container), and the pod's latest
-  Warning events, such as `FailedAttachVolume` or `FailedMount`, each message
-  cut at 300 characters. The same text is recorded as a
+  pod was not Ready:
+  - **a volume not attached to the target node yet**, from its
+    VolumeAttachment, with the driver's attach error once there is one.
+    Kubernetes raises `FailedAttachVolume` only when the attach call times
+    out, which in the lab came 34 s after the 60 s budget;
+  - the scheduler's message for an unschedulable pod;
+  - the containers that did not start and why (`ImagePullBackOff`,
+    `CreateContainerConfigError`, a failed init container);
+  - the pod's latest Warning events, such as `FailedAttachVolume` or
+    `FailedMount`.
+
+  Each message is cut at 300 characters. The same text is recorded as a
   `DestinationPodNeverReady` Warning event on the SwiftMigration. An offline
   migration that runs into `spec.timeout` waiting on its destination pod says
   the same in its `Timeout` message. To read the pod's events the controller's

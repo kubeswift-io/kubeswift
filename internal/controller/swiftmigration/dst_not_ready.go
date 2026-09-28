@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -23,7 +24,9 @@ import (
 // visible only as a FailedAttachVolume event on the pod and in Longhorn's
 // attachment ticket. An attach failure leaves the pod's own status saying
 // nothing more than PodInitializing or ContainerCreating, so the pod's recent
-// Warning events are read as well.
+// Warning events are read as well, and, because FailedAttachVolume comes only
+// once an attach call times out (after the 60 s budget in the lab), the
+// VolumeAttachment of each of the pod's volumes on its node.
 
 // eventInvolvedObjectNameField is the Event field selector the apiserver
 // supports for the object an event is about.
@@ -54,9 +57,72 @@ const eventReasonDestinationPodNotReady = "DestinationPodNotReady"
 // most recent Warning events, as "; "-separated parts. Empty when neither says
 // anything, so the caller's message stays as it was.
 func (r *SwiftMigrationReconciler) podNotReadyCause(ctx context.Context, pod *corev1.Pod) string {
-	parts := podStatusNotReadyCause(pod)
+	parts := r.podVolumeAttachCause(ctx, pod)
+	parts = append(parts, podStatusNotReadyCause(pod)...)
 	parts = append(parts, r.podWarningEvents(ctx, pod)...)
 	return strings.Join(parts, "; ")
+}
+
+// podVolumeAttachCause names the pod's volumes that are not attached to its
+// node yet, with the CSI driver's attach error once it has reported one.
+//
+// Lab validation of v0.15.0, round 6: a live migration of a Longhorn volume
+// with a replica still rebuilding failed DstNeverReady saying only `init
+// container "network-init" waiting: PodInitializing`. The kubelet starts no
+// container, init or otherwise, before the pod's volumes are attached, and
+// Kubernetes raises FailedAttachVolume only when an attach call times out:
+// 94 s after the pod was created, past the 60 s budget. The pod's
+// VolumeAttachment reads attached=false from the start.
+//
+// A volume whose driver needs no attach has no VolumeAttachment and is not
+// reported, nor is one whose attach has not been requested yet.
+func (r *SwiftMigrationReconciler) podVolumeAttachCause(ctx context.Context, pod *corev1.Pod) []string {
+	if pod.Spec.NodeName == "" {
+		return nil
+	}
+	claimOfPV := map[string]string{}
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim == nil {
+			continue
+		}
+		var pvc corev1.PersistentVolumeClaim
+		if err := r.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: v.PersistentVolumeClaim.ClaimName}, &pvc); err != nil {
+			continue
+		}
+		if pvc.Spec.VolumeName != "" {
+			claimOfPV[pvc.Spec.VolumeName] = pvc.Name
+		}
+	}
+	if len(claimOfPV) == 0 {
+		return nil
+	}
+	var vas storagev1.VolumeAttachmentList
+	if err := r.List(ctx, &vas); err != nil {
+		log.FromContext(ctx).Info("could not list VolumeAttachments; not reporting the pod's volume attach state",
+			"pod", pod.Name, "error", err.Error())
+		return nil
+	}
+	sort.Slice(vas.Items, func(i, j int) bool { return vas.Items[i].Name < vas.Items[j].Name })
+
+	var parts []string
+	for i := range vas.Items {
+		va := &vas.Items[i]
+		pv := va.Spec.Source.PersistentVolumeName
+		if pv == nil || va.Spec.NodeName != pod.Spec.NodeName || va.Status.Attached {
+			continue
+		}
+		claim, ok := claimOfPV[*pv]
+		if !ok {
+			continue
+		}
+		msg := ""
+		if va.Status.AttachError != nil {
+			msg = va.Status.AttachError.Message
+		}
+		parts = append(parts, notReadyDetail(
+			fmt.Sprintf("PVC %q not attached to node %s (VolumeAttachment %s)", claim, pod.Spec.NodeName, va.Name), "", msg))
+	}
+	return parts
 }
 
 // podStatusNotReadyCause reads why pod is not Ready from its status alone: a
