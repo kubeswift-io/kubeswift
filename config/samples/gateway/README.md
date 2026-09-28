@@ -11,9 +11,13 @@ hub.
      --set gateway.enabled=true --set gateway.authMode=token
    ```
 
-2. **On each member cluster**, apply [`member-rbac.yaml`](member-rbac.yaml) (lets
-   the gateway's member credential impersonate end users + read VMs as them), and
+2. **On each member cluster**, apply [`member-rbac.yaml`](member-rbac.yaml) and
    mint a credential (e.g. a ServiceAccount token) for the gateway.
+   - **Sections 1 to 3** let the gateway's member credential impersonate end
+     users and read VMs as them.
+   - **Section 4** gives the credential the console, sandbox-shell and log
+     bridge. That needs ValidatingAdmissionPolicy (Kubernetes 1.30+). On an older
+     member, remove section 4 before applying; the console then refuses.
 
 3. **On the hub**, apply [`cluster.yaml`](cluster.yaml) — a credential Secret + a
    `fleet.kubeswift.io/v1alpha1` Cluster — once per member (edit names/endpoints

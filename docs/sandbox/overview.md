@@ -114,7 +114,7 @@ with no launcher pod, and `Resolved` is `False` with reason `KernelNotFound` or
 `kubernetes.io/hostname` in `nodeSelector`) needs the kernel `Ready` on that
 node only. The controller checks again every 10 seconds.
 
-`kubectl get sbox` prints Phase, Image, Node, IP, and Age.
+`kubectl get sbox` prints Phase, Image, Node, Guest IP, Pod IP, and Age.
 
 ## Network modes
 
@@ -199,12 +199,14 @@ you're done inspecting it.
 
 ## Troubleshooting
 
+- **Stuck `Pending`** — `Resolved=False` with `KernelNotFound` or
+  `KernelNotReady`: create the SwiftKernel in the sandbox's namespace, or wait
+  until `kubectl get swiftkernel sandbox` reads `Ready`.
 - **Stuck `Materializing`** — check `kubectl describe pod <name>`. Unscheduled
-  usually means no node carries `kubeswift.io/kernel-node=true`, or the
-  `sandbox` SwiftKernel hasn't finished pulling to that node yet
-  (`kubectl get swiftkernel sandbox`). A failing `sandbox-materialize` init
-  container usually means the image pull failed — check `spec.image` and
-  `spec.imagePullSecret` and inspect the init container's logs.
+  usually means no node carries `kubeswift.io/kernel-node=true`. A failing
+  `sandbox-materialize` init container usually means the image pull failed —
+  check `spec.image` and `spec.imagePullSecret` and inspect the init
+  container's logs.
 - **`tty` reports "not a tty" inside an attached session** — a chroot/devpts
   cosmetic quirk. The session is a real TTY; shells, `vi`, and `top` all
   behave interactively.

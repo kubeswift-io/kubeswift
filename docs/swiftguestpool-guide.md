@@ -557,8 +557,9 @@ Common causes:
 Symptom: `FAILED` stays non-zero, the pool's events show `BackOff`.
 
 A replica that fails soon after it is created is not replaced straight away: a
-new copy usually fails the same way (a missing image or class, a host path the
-cluster does not allow). The pool waits 10s after creating it, doubling with each
+new copy usually fails the same way (a `Failed` image or kernel, a host path the
+cluster does not allow; a missing image or class leaves the replica `Pending`
+with `Resolved=False` instead). The pool waits 10s after creating it, doubling with each
 replacement that fails again, up to 5m. A replica that ran for 10m before failing
 is replaced at once, and so is a failed replica when you change the template.
 

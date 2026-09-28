@@ -22,6 +22,10 @@ Requirements when enabled:
 - A Grafana with the dashboard sidecar (the kube-prometheus-stack default) for
   the dashboard ConfigMaps. Set `monitoring.dashboards.namespace` to the
   namespace that Grafana's sidecar watches (often Grafana's own namespace).
+- Prometheus's ServiceAccount bound to `kubeswift-metrics-reader`, with
+  `controllerManager.metrics.readers` (the endpoint is HTTPS and authorized by
+  default; without the binding every scrape gets `403`). See
+  [Securing the metrics endpoint](#securing-the-metrics-endpoint).
 
 Sub-toggles: `monitoring.serviceMonitor.enabled`, `monitoring.dashboards.enabled`,
 `monitoring.prometheusRule.enabled` (all default true once `monitoring.enabled`).

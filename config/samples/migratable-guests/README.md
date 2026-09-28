@@ -52,7 +52,8 @@ and [`../multi-node-l2/`](../multi-node-l2/).
 
 Apply the shared bundle once (it creates the `default` SwiftGuestClass and the
 `minimal` SwiftSeedProfile these manifests reference — a missing seed profile
-is the most common "guest stuck Failed: ResolutionFailed" cause):
+is the most common cause of a guest stuck in `Pending` with `Resolved=False`
+"SwiftSeedProfile not found: …"):
 
 ```bash
 kubectl apply -f ../shared/                       # default class + minimal seed

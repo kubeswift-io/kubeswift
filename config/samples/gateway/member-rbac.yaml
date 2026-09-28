@@ -3,6 +3,10 @@
 # read the fleet's VMs as them. Bind your real users/groups (from your IdP) to
 # the reader role separately.
 #
+# Section 4 also grants the console, sandbox-shell and log bridge. It is safe
+# only behind its ValidatingAdmissionPolicy (Kubernetes 1.30+). On an older
+# member, delete section 4 before applying; the console then refuses.
+#
 # Assumes the member credential authenticates as the ServiceAccount
 # `kubeswift-gateway` in `kubeswift-system` — adjust to match your kubeconfig.
 apiVersion: v1

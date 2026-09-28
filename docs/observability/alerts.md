@@ -15,7 +15,9 @@ Each alert below lists what it means and the first diagnostic step.
 No healthy controller-manager scrape target. VM reconciliation, status
 reporting, and admission are all unavailable.
 → `kubectl -n kubeswift-system get pods -l app.kubernetes.io/component=controller-manager`;
-check pod events, logs, and that the metrics Service still has endpoints.
+check pod events, logs, and that the metrics Service still has endpoints. A
+`401`/`403` on the scrape means Prometheus's ServiceAccount is not bound to
+`kubeswift-metrics-reader` (`controllerManager.metrics.readers`).
 
 ### KubeSwiftReconcileErrorsHigh
 **warning · per-controller reconcile error ratio > 10% for 15m**

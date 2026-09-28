@@ -11,9 +11,9 @@
 # test/snapshot/local-clone-identity-test.sh. For production use,
 # adjust ssh_authorized_keys, the user list, and resource sizes.
 #
-# SwiftGuestClass first so the guest's resolver finds it on first
-# reconcile (otherwise the guest goes Failed=ResolutionFailed and
-# does not recover even when the class appears next).
+# SwiftGuestClass first so the guest resolves on its first reconcile.
+# Applied before the class, the guest waits in Pending with
+# Resolved=False "SwiftGuestClass not found: ..." until the class exists.
 apiVersion: swift.kubeswift.io/v1alpha1
 kind: SwiftGuestClass
 metadata:

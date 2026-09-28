@@ -96,7 +96,9 @@ Alternatively the Secret may carry a `token` (+ optional `ca.crt`) instead of a
 
 **Shortcut — install the member with `--set federation.role=edge`.** The chart
 then mints a least-privilege member ServiceAccount + a long-lived token Secret +
-the member-RBAC (impersonator + `kubeswift-vm-reader` + Prometheus-discovery), and
+the member-RBAC (impersonator + `kubeswift-vm-reader` + Prometheus-discovery, plus
+the console bridge grant `kubeswift-gateway-console` and its
+`kubeswift-gateway-exec-gate` policy on Kubernetes 1.30+), and
 its Helm NOTES print the ready-to-apply `Cluster` + `Secret` to run on the hub —
 so joining is install-then-copy-one-manifest, with no hand-crafted admin
 kubeconfig. The token is never printed by Helm (NOTES prints the `kubectl`

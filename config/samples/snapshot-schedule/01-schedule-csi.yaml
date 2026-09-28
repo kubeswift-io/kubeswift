@@ -1,6 +1,6 @@
 # Daily disk-only (CSI) snapshot of a SwiftGuest at 02:00 UTC, keeping the 7
 # most recent. csi-volume-snapshot is the recommended scheduling backend: each
-# tick takes a fresh per-snapshot VolumeSnapshot (no shared hostPath), and the
+# tick takes a fresh per-snapshot VolumeSnapshot (no node-local state), and the
 # capture is crash-consistent without pausing the VM.
 apiVersion: snapshot.kubeswift.io/v1alpha1
 kind: SwiftSnapshotSchedule

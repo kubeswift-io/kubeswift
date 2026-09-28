@@ -18,7 +18,7 @@ The control plane runs in the **controller-manager** Deployment (`kubeswift-syst
 
 | Step | Behavior |
 |------|----------|
-| Resolve | Fetches SwiftGuestClass + either SwiftImage (disk boot) or SwiftKernel (kernel boot) + optional SwiftSeedProfile; fails if refs missing or not Ready |
+| Resolve | Fetches SwiftGuestClass + either SwiftImage (disk boot) or SwiftKernel (kernel boot) + optional SwiftSeedProfile; waits (`Pending`, `Resolved=False`, retried every 10 s) while a ref is missing or not Ready; fails only on a `Failed` SwiftImage/SwiftKernel or an invalid combination (`ResolutionFailed` event) |
 | Seed | Renders NoCloud user-data/meta-data/network-config from SwiftSeedProfile into Secret `<guest>-seed` (disk boot only) |
 | Intent | Builds runtime-intent JSON into ConfigMap `<guest>-runtime-intent`. Includes `kernelBoot` field for kernel boot or `rootDisk` for disk boot. |
 | Pod (disk boot) | Creates pod with root-disk PVC, seed volume (optional), intent volume; launcher = swiftletd |

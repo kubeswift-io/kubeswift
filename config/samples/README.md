@@ -23,7 +23,7 @@ kubectl apply -f config/samples/shared/swiftseedprofile-minimal.yaml
 kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml
 kubectl get swiftimage ubuntu-noble -w  # wait for Ready (5-15 min)
 kubectl apply -f config/samples/disk-boot/swiftguest-sample.yaml
-kubectl get swiftguest sample -w        # wait for Running + IP
+kubectl get swiftguest sample -w        # wait for Running + a Guest IP
 swiftctl console sample                 # serial console
 swiftctl ssh sample -u kubeswift        # SSH access
 ```

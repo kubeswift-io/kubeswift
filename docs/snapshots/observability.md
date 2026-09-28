@@ -50,6 +50,8 @@ migration dashboard is
 ## Scraping
 
 Most clusters scrape the metrics Service via their existing Prometheus config.
+The endpoint is HTTPS and needs a token bound to `kubeswift-metrics-reader`; see
+[Securing the metrics endpoint](../observability/README.md#securing-the-metrics-endpoint).
 If you run the **Prometheus Operator**, a ready-made (operator-gated, NOT part of
 `make deploy`) ServiceMonitor is at
 [`config/grafana/servicemonitor.yaml`](../../config/grafana/servicemonitor.yaml):

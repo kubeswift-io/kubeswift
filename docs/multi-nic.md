@@ -100,6 +100,10 @@ of `namespace/name/interface-name`. This ensures:
 ## Status Reporting
 
 - `status.network.primaryIP` — IP from the primary NIC's DHCP lease (unchanged)
+- `status.network.primaryIPScope` — `Pod` for a nat address (private to the
+  launcher pod), `Network` for an address on a multi-node NAD primary or an
+  OVN-Kubernetes primary UDN
+- `status.network.podIP` — the launcher pod's IP
 - `status.network.interfaces[]` — all interfaces with name, MAC, and IP where discoverable
 - Secondary NIC IPs are NOT auto-discovered via dnsmasq. They come from the CNI
   plugin's IPAM or static cloud-init `networkData`. Secondary IPs configured

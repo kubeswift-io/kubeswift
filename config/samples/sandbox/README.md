@@ -6,7 +6,8 @@ itself up.
 
 - `swiftkernel-sandbox.yaml` — the `sandbox` kernel profile (pulled per node).
 - `swiftkernel-gpu-sandbox.yaml` — the module-capable `gpu-sandbox` kernel profile
-  (required for GPU sandboxes, either backend).
+  (required for GPU sandboxes, either backend, and GPU warm pools, whose slots
+  boot on it).
 - `swiftsandbox.yaml` — a restricted shell sandbox and a network-isolated one.
 - `swiftsandbox-verified.yaml` — a cosign-signature-verified sandbox
   (`verifyKeySecretRef`), plus a warm pool of verified slots.

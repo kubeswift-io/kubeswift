@@ -105,8 +105,9 @@ guest's eviction is blocked by the PDB with no auto-evacuation.
 
 > **Upgrade note (stale-CRD strip).** `spec.migration.drainPolicy` is a new
 > CRD field. If you upgrade via a custom pipeline that doesn't re-apply the
-> CRDs, the apiserver silently strips it. `make deploy*` / `helm upgrade`
-> re-apply the CRDs; verify with
+> CRDs, the apiserver silently strips it. `make deploy*` re-applies the CRDs;
+> `helm upgrade` does not, so run `kubectl apply -f charts/kubeswift/crds/`
+> before it. Verify with
 > `kubectl explain swiftguest.spec.migration.drainPolicy`.
 
 ## Walking through a drain

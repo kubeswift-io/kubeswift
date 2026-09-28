@@ -15,7 +15,7 @@
 #   4. SwiftImage ubuntu-noble Ready, SwiftGuestClass default, SwiftSeedProfile minimal
 #
 # Verify:
-#   kubectl get swiftguest dra-gpu-vm -w          # Pending -> Running with IP
+#   kubectl get swiftguest dra-gpu-vm -w          # Pending -> Running with a Guest IP
 #   kubectl get resourceclaim                     # dra-gpu-vm-gpu-* allocated,reserved
 #   kubectl get swiftguest dra-gpu-vm -o jsonpath='{.status.gpu}'
 #   swiftctl ssh dra-gpu-vm -- lspci | grep -i nvidia

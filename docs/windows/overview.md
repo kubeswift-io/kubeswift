@@ -50,12 +50,15 @@ referenced image's.
    (hostname, RDP, scripts).
 5. **`SwiftGuest`** with `osType: windows`, `imageRef`, `seedProfileRef`.
 6. **Manage over RDP** — discover the guest IP in `status.network.primaryIP`.
+   On a nat guest (`status.network.primaryIPScope: Pod`) that address is
+   private to the launcher pod: declare 3389 in `spec.network.ports` and connect
+   to `status.network.podIP`, or a Service in front of it.
 
 Ready-to-edit manifests: [`config/samples/windows/`](../../config/samples/windows/).
 
 ```sh
 kubectl apply -f config/samples/windows/   # after editing the image URL + password
-kubectl get swiftguest win-guest -o wide    # watch phase + primaryIP
+kubectl get swiftguest win-guest -o wide    # phase, Guest IP, Pod IP, IP Scope
 ```
 
 ## Requirements

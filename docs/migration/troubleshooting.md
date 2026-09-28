@@ -2,7 +2,6 @@
 
 | Symptom | Likely cause | Diagnostic / fix |
 |---|---|---|
-| Webhook rejects with "spec.mode=live is not yet shipped" | Operator submitted `mode: live` in Phase 1 | Use `mode: offline` or `mode: auto`. Live mode lands in Phase 3. |
 | Webhook rejects with "another SwiftMigration is already in progress" | A previous migration's `kubeswift.io/migration-in-progress` annotation is stranded on the SwiftGuest (likely from a force-deleted SwiftMigration that bypassed the finalizer) | `kubectl annotate swiftguest <name> kubeswift.io/migration-in-progress-` to clear, then resubmit. |
 | Webhook rejects with "VFIO devices ... cross-node migration is not supported in Phase 1" | Guest has `gpuProfileRef` set or a `type: sriov` interface | Phase 1 doesn't ship cross-node GPU/SR-IOV migration. Phase 4+ work. |
 | Webhook rejects with "default node-local bridge networking; cross-node migration would change the guest's IP" | Guest is on default networking and target ≠ source | Add `spec.allowIPChange: true` to the SwiftMigration to acknowledge the IP change, OR attach the guest to a multi-node network (Multus + macvlan, OVN-K layer-2). |

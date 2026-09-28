@@ -4,20 +4,22 @@ This guide covers metrics, Prometheus integration, and log collection for KubeSw
 
 ## Overview
 
-- **Metrics:** KubeSwift exposes Prometheus metrics via the controller-manager at `:8080/metrics`
+- **Metrics:** KubeSwift exposes Prometheus metrics via the controller-manager at `:8080/metrics`, over HTTPS and only to callers bound to the `kubeswift-metrics-reader` ClusterRole (`controllerManager.metrics.secure=true`, the default from v0.15.0)
 - **Scope:** Metrics include both controller-runtime built-ins and custom KubeSwift metrics
 - **Logs:** controller-manager uses klog; swiftletd uses structured env_logger
 
 ## Metrics Endpoint
 
-- **URL:** `http://<controller-manager-pod>:8080/metrics`
+- **URL:** `https://<controller-manager-pod>:8080/metrics` (a self-signed certificate)
 - **Service:** `kubeswift-controller-manager-metrics` (port 8080) in `kubeswift-system`
+- **Access:** a bearer token of a ServiceAccount bound to `kubeswift-metrics-reader`. Bind Prometheus with `controllerManager.metrics.readers`, or by hand: `kubectl create clusterrolebinding kubeswift-metrics-reader --clusterrole=kubeswift-metrics-reader --serviceaccount=<ns>:<sa>`. Without it a scrape gets `403`. `controllerManager.metrics.secure=false` serves plain HTTP. See [Securing the metrics endpoint](../observability/README.md#securing-the-metrics-endpoint).
 
 **Verify manually:**
 
 ```bash
-kubectl port-forward -n kubeswift-system deployment/kubeswift-controller-manager 8080:8080
-curl http://localhost:8080/metrics | grep kubeswift
+kubectl port-forward -n kubeswift-system deploy/controller-manager 8080:8080
+curl -sk -H "Authorization: Bearer $(kubectl create token <sa> -n <ns>)" \
+  https://localhost:8080/metrics | grep kubeswift
 ```
 
 ## Custom KubeSwift Metrics
@@ -58,6 +60,12 @@ spec:
     - port: metrics
       path: /metrics
       interval: 30s
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true   # the controller's certificate is self-signed
+      bearerTokenSecret:           # a token of a SA bound to kubeswift-metrics-reader
+        name: <secret-with-the-token>
+        key: token
 EOF
 ```
 
@@ -81,6 +89,11 @@ spec:
     - port: metrics
       path: /metrics
       interval: 30s
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true   # the controller's certificate is self-signed
+      # Prometheus's own ServiceAccount token; bind that SA to kubeswift-metrics-reader.
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
 EOF
 ```
 
@@ -97,6 +110,12 @@ scrape_configs:
       - role: endpoints
         namespaces:
           names: [kubeswift-system]
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true   # the controller's certificate is self-signed
+    # Prometheus's ServiceAccount token; bind that SA to kubeswift-metrics-reader.
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
     relabel_configs:
       - source_labels: [__meta_kubernetes_service_name]
         action: keep

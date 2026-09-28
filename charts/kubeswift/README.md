@@ -10,7 +10,9 @@ helm install kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift \
 ```
 
 The chart installs CRDs (`crds/`) on first install only; Helm does **not** upgrade
-them — re-apply `config/crd/bases/*.yaml` after a chart upgrade that changes a CRD.
+them — apply `kubectl apply -f charts/kubeswift/crds/` (the same files as
+`config/crd/bases/`) **before** a chart upgrade that changes a CRD, or the API
+server prunes the new fields.
 
 **Prerequisites**
 
@@ -51,7 +53,9 @@ helm install kubeswift … --set federation.role=edge \
 # Observability (kube-prometheus-stack)
 helm upgrade kubeswift … --set monitoring.enabled=true \
   --set monitoring.serviceMonitor.additionalLabels.release=kube-prometheus-stack \
-  --set monitoring.prometheusRule.additionalLabels.release=kube-prometheus-stack
+  --set monitoring.prometheusRule.additionalLabels.release=kube-prometheus-stack \
+  --set 'controllerManager.metrics.readers[0].name=kube-prometheus-stack-prometheus' \
+  --set 'controllerManager.metrics.readers[0].namespace=monitoring'
 ```
 
 `helm upgrade` reuses previously-set values only when you pass none; pass

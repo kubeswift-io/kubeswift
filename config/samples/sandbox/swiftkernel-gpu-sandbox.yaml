@@ -5,7 +5,8 @@
 # profile. Everything else (mode-3 direct-kernel boot, bridge-initramfs, OCI
 # rootfs + tmpfs overlay, vsock agent) is identical to the base sandbox kernel.
 #
-# Select it from a GPU SwiftSandbox with `spec.kernelProfileRef: {name: gpu-sandbox}`.
+# A GPU SwiftSandbox or GPU SwiftSandboxPool with no spec.kernelProfileRef
+# uses it by default; set kernelProfileRef only to override.
 # Prereq: a node labeled kubeswift.io/kernel-node=true (the per-node ORAS pull).
 # The NVIDIA driver rides the guest OCI image, NOT this kernel — build a CUDA
 # image whose driver version targets Linux 6.6.x (see docs/sandbox/gpu-sandboxes.md).
