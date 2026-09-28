@@ -158,7 +158,7 @@ spec:
 | `restartCount` | Number of times the guest has been restarted |
 | `lastRestartTime` | Timestamp of last restart |
 
-**Phase meanings:** `Pending` = resolution failed or unschedulable; `Scheduling` = pod pending; `Running` = VM up; `Stopped` = VM stopped; `Failed` = resolution, pod, or VM error.
+**Phase meanings:** `Pending` = waiting on a missing or not-Ready reference (`Resolved=False`) or unschedulable; `Scheduling` = pod pending; `Running` = VM up; `Stopped` = VM stopped; `Failed` = a `Failed` image or kernel or an invalid spec, a pod error, or a VM error.
 
 **What belongs to one run:** `GuestRunning`, `NetworkReady`, `EgressReady`,
 `PortsProgrammed`, `PodScheduled`, `network.primaryIP` (with its scope) and

@@ -28,10 +28,11 @@ preflight to Validating.
 
 ### IP preservation cross-node
 
-KubeSwift's default networking is a **node-local bridge** with per-
-node dnsmasq DHCP. The guest's IP is local to the node it runs on;
-cross-node migration produces a **fresh IP** from the destination
-node's bridge.
+KubeSwift's default (nat) networking is a **bridge inside each
+guest's launcher pod** (192.168.99.1/24). The guest's address is
+private to that pod (`status.network.primaryIPScope: Pod`); a
+cross-node migration moves the guest to a new launcher pod, with a new
+`status.network.podIP`.
 
 **The validation webhook rejects** cross-node migrations of guests
 on default networking unless the operator opts in via

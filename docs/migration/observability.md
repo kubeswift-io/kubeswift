@@ -27,7 +27,10 @@ RPC, so `transferProgress` stays unset there.
 ## Metrics
 
 The controller-manager exposes Prometheus metrics on its metrics endpoint
-(`/metrics`, default `:8443`/`:8080` per your deploy). Migration metrics:
+(`/metrics` on `:8080`, HTTPS and authorized by default: scrape it with a token
+bound to `kubeswift-metrics-reader`, see
+[Securing the metrics endpoint](../observability/README.md#securing-the-metrics-endpoint)).
+Migration metrics:
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|

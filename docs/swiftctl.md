@@ -208,6 +208,8 @@ Console:
 
 Network:
   PrimaryIP:   192.168.99.11
+  IPScope:     Pod (private to the launcher pod; declared ports are reachable on PodIP)
+  PodIP:       10.244.1.23
   Interfaces:
     - eth0: 192.168.99.11
 

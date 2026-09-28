@@ -43,13 +43,12 @@ kubectl apply -f config/samples/shared/
 kubectl apply -f config/samples/storage/swiftguestclass-rwx-migratable.yaml
 kubectl apply -f config/samples/disk-boot/swiftimage-ubuntu-noble.yaml \
                -f config/samples/rocky/swiftimage-rocky9.yaml
-# wait for both SwiftImages to reach Ready, THEN:
 kubectl apply -f config/samples/migratable-guests/lab-live-migration-set.yaml
 ```
 
-> **Apply images before guests.** A disk-boot guest created while its image is
-> still `Importing` fails resolution (`SwiftImage not Ready`) and a Failed guest
-> does not self-recover — recreate it once the image is `Ready`.
+> **Guests wait for their images.** A disk-boot guest created before its image
+> is `Ready` waits in `Pending` with `Resolved=False` ("SwiftImage not Ready", or
+> "SwiftImage not found" if the image does not exist yet) and boots once it is.
 
 More focused single-guest examples (incl. an IP-preserving variant) are in the
 [`migratable-guests/`](../../config/samples/migratable-guests/) directory README.

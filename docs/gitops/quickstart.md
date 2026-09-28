@@ -79,7 +79,7 @@ deliberately when you want a newer console.
 | `launcherSAGate.enabled` | `true` | A ValidatingAdmissionPolicy closing a privilege escalation on launcher ServiceAccounts. Rendered only where the cluster serves `ValidatingAdmissionPolicy` (GA in k8s 1.30+); on older clusters it is **silently skipped** and the namespace becomes your trust boundary. Leave on. |
 | `scopedLauncherRBAC.enabled` | `false` | Retires the shared namespace-wide launcher binding, leaving per-pod grants. Enabling it **deletes a live grant** — a one-way change to make deliberately, not as part of an unrelated values edit. |
 | `swiftGuest.allowedHostPathPrefixes` | `[]` (deny all) | Host paths a SwiftGuest may mount into its privileged launcher. Empty denies everything. Anything you add here is effectively node-root for whoever can author a SwiftGuest. |
-| `monitoring.*` | off | Needs the Prometheus Operator CRDs (`monitoring.coreos.com`) already present. Enabling it before they exist fails the HelmRelease. |
+| `monitoring.*` | off | Needs the Prometheus Operator CRDs (`monitoring.coreos.com`) already present. Enabling it before they exist fails the HelmRelease. Also set `controllerManager.metrics.readers` to Prometheus's ServiceAccount, or its scrapes get `403`. |
 | `gateway.*`, `ui.*`, `federation.*` | off | Multi-cluster console and fleet federation. `federation.selfRegister` makes the chart create a fleet `Cluster` for this cluster — do not also declare that object in Git. |
 
 ## 3. Layers 2 and 3

@@ -6,11 +6,11 @@ This document describes the SwiftGuest lifecycle: phases, conditions, and how po
 
 | Phase | Description |
 |-------|-------------|
-| **Pending** | Resolution failed or pod not yet scheduled |
+| **Pending** | Waiting on a missing or not-Ready reference (`Resolved=False`), or pod not yet scheduled |
 | **Scheduling** | Pod Pending (scheduling) |
 | **Running** | Pod Running; VM started; GuestRunning=True |
 | **Stopped** | VM stopped (runPolicy or explicit stop) |
-| **Failed** | Resolution failed, pod Failed, or VM failed |
+| **Failed** | A `Failed` image or kernel or an invalid spec (`Resolved=False`), pod Failed, or VM failed |
 
 ## Conditions
 

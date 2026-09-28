@@ -595,6 +595,28 @@ disk's image or PVC.
   shows `Guest IP` and `Pod IP` too, `swiftctl describe` prints both, and the
   gateway's `Guest` message carries them as `pod_ip` and `primary_ip_scope`.
 
+### Docs
+
+- **Examples and docs describe v0.15.0.** The docs for the v0.15.0 changes now
+  describe the new behaviour:
+  - HTTPS, authorized metrics, in every scrape example;
+  - the `Guest IP` and `Pod IP` columns;
+  - `runPolicy: Stopped` stopping a running guest;
+  - guests waiting for missing references;
+  - GPU pools booting `gpu-sandbox`;
+  - the migration cancel commit point.
+- **Standalone manifests.** `config/dra-driver/dra-driver.yaml` and
+  `config/daemonset/gpu-discovery.yaml` pin `v0.15.0`; they pinned v0.11.0 and
+  a dev build. `make deploy`'s gpu-discovery tag substitution now matches any
+  tag.
+- **Sample fixes:**
+  - `config/samples/model-a` failed to apply: its SwiftSeedProfile used the
+    wrong API group.
+  - The gateway member RBAC sample now says its console section needs
+    ValidatingAdmissionPolicy (Kubernetes 1.30+).
+- **Validation summary.** [`docs/validation/v0.15.0-release-validation.md`](docs/validation/v0.15.0-release-validation.md)
+  summarises the seven lab validation rounds behind this release.
+
 ### CI
 
 - **`test/migration/migration-test.sh` runs on a shared cluster.** It no

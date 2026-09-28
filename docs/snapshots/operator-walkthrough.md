@@ -121,17 +121,18 @@ Watch the SwiftImage become Ready and the SwiftGuest reach Running
 with an IP:
 
 ```
-[0s]   swiftimage=Importing  swiftguest=Failed
-[95s]  swiftimage=Ready      swiftguest=Failed
+[0s]   swiftimage=Importing  swiftguest=Pending
+[95s]  swiftimage=Ready      swiftguest=Pending
 [105s] swiftimage=Ready      swiftguest=Scheduling
 [189s] swiftimage=Ready      swiftguest=Running
 [200s] swiftimage=Ready      swiftguest=Running   ip=10.244.125.17
 ```
 
-> **Heads up.** The SwiftGuest briefly shows `phase=Failed` while
-> the SwiftImage is still importing. This is cosmetic — once the
-> image is Ready, the guest moves through `Scheduling → Running`
-> normally.
+> **Heads up.** The SwiftGuest waits in `Pending` with
+> `Resolved=False` "SwiftImage not Ready" while the SwiftImage is
+> still importing. Once the image is Ready, the guest moves through
+> `Scheduling → Running`. (Before v0.15.0 it showed `Failed` during
+> the import.)
 
 On this cluster the SwiftImage import took ~95 s and the SwiftGuest
 reached Running with an IP at ~200 s.
@@ -1092,8 +1093,6 @@ inputs with operator-comprehensible error messages — the operator
 "can I tell what went wrong?" audit.
 
 ### Manifests
-
-[`config/samples/snapshots-walkthrough/scenario-8-failure-modes/`](../../config/samples/snapshots-walkthrough/scenario-8-failure-modes/)
 
 Each test below applies a deliberately broken manifest with
 `--dry-run=server` so the apply is rejected by the admission

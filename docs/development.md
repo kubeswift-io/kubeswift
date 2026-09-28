@@ -208,7 +208,7 @@ When making changes, follow these:
 
 1. Create `internal/controller/<name>/controller.go` following existing patterns
 2. Register the controller in `cmd/controller-manager/main.go`
-3. Add RBAC rules to `config/rbac/role.yaml`
+3. Add RBAC rules to `charts/kubeswift/templates/controller-manager/rbac.yaml`, then run `make generate` (it syncs `config/manager/controller-manager-rbac.yaml`)
 4. Add scheme registration in `internal/scheme/` if a new API group is introduced
 5. Run `make generate` if new CRD types are added
 6. Copy CRDs: `cp config/crd/bases/*.yaml charts/kubeswift/crds/`

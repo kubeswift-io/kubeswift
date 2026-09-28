@@ -174,8 +174,10 @@ federation:
   # copy-one-manifest. The token is NEVER printed by Helm; NOTES prints the
   # kubectl commands to extract it. Ignored in other roles.
   edge:
-    # Apply the member-RBAC (impersonator + vm-reader + Prometheus-discovery) on
-    # this edge at install. false => apply config/samples/gateway/member-rbac.yaml
+    # Apply the member-RBAC (impersonator + vm-reader + Prometheus-discovery,
+    # plus the console bridge grant kubeswift-gateway-console and its
+    # kubeswift-gateway-exec-gate policy on Kubernetes 1.30+) on this edge at
+    # install. false => apply config/samples/gateway/member-rbac.yaml
     # yourself.
     applyMemberRBAC: true
     # IdP groups (the subjects the hub impersonates) to bind to the VM-reader role

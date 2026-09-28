@@ -195,13 +195,13 @@ kubectl patch smig my-guest-to-worker-1 \
   --type merge -p '{"spec":{"cancelRequested":true}}'
 ```
 
-The patch can be issued at any pre-cutover sub-state. Once
-cutover step 1 has crossed (SwiftGuest's `status.podRef.name`
-points at the dst pod), cancel-after-the-point sets a
-`CancelIgnored` condition on the SwiftMigration but does not
-roll back — the migration drives forward to Completed because
-the cluster-of-truth pod reference is already destination.
-Operators will see `phase: Completed` with
+The cancel takes effect until the commit point: the source reports
+`complete`, or the destination reports `running` (phaseDetail
+`destination running; waiting for the source's report`), whichever
+comes first. After that, the VM already runs on the destination, so a
+cancel sets a `CancelIgnored` condition (reason `PastCutover`) on the
+SwiftMigration and does not roll back — the migration drives forward
+to Completed. Operators will see `phase: Completed` with
 `conditions[type=CancelIgnored, status=True]`.
 
 ---
@@ -366,8 +366,9 @@ refresh the CRD on cluster:
 kubectl apply -f config/crd/bases/migration.kubeswift.io_swiftmigrations.yaml
 ```
 
-Or use `make deploy` / `helm upgrade` (both refresh CRDs as part of
-the deployment). This pattern applies to **every release that adds
+Or use `make deploy`, which refreshes CRDs as part of the deployment.
+`helm upgrade` does **not** upgrade CRDs: run
+`kubectl apply -f charts/kubeswift/crds/` before it. This pattern applies to **every release that adds
 new status fields** across any KubeSwift CRD, not just SwiftMigration.
 
 **Failure mode** if the CRD is stale: apiserver silently strips

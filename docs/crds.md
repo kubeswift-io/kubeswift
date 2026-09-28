@@ -57,7 +57,7 @@ Represents a running virtual machine instance.
 | Value | Behavior |
 |-------|----------|
 | `Running` | Controller ensures VM is running. Creates pod if absent. |
-| `Stopped` | Controller does not create a pod. Existing pod is left to terminate. |
+| `Stopped` | Controller does not create a pod, and deletes a running launcher pod with its grace period, so the guest shuts down over ACPI (`Stopping` event). While a migration, restore or snapshot capture is in flight it waits (`StopDeferred` event). |
 | `RestartOnFailure` | Restarts on pod failure with exponential backoff. Does not restart on clean exit. |
 | `Always` | Restarts on any pod exit with exponential backoff. |
 
