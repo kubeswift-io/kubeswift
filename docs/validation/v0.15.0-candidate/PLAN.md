@@ -991,3 +991,60 @@ stop Phase 2 at once, leave everything in place, and report.
 - **sov:** S1 as before.
 
 **v0.15.0 is tagged only after round 6 passes and William gives the word.**
+
+## Round 7 go-ahead: candidate `8afbad3`
+
+**Round 6** (`phase1-r6.md` to `phase3-r6.md`) passed everything except
+R6-D, which was PARTIAL.
+- **R6-D:** `DstNeverReady` fired safely at 60 s, but its message named only
+  `init container "network-init" waiting: PodInitializing`. Kubernetes
+  raised `FailedAttachVolume` at +94 s, past the budget.
+- **Findings 1 and 2 are addressed:**
+
+| PR / issue | Change | What round 7 checks |
+|---|---|---|
+| #691 | **The `DstNeverReady` message now leads with a volume not yet attached to the target.** It is read from the VolumeAttachment of each of the destination pod's PVs on its node, with the CSI driver's `attachError` once there is one. **No RBAC change:** the controller already lists VolumeAttachments. The troubleshooting row now says to wait for the target's VolumeAttachment to go before retrying. (Finding 1, and finding 2's docs.) | R7-D |
+| #692 (issue, after v0.15.0) | A pre-cutover failure's target attach can linger for about 4 min. A `Validating` wait for it is tracked there, not in this release. (Finding 2.) | none |
+
+Finding 3 (no `ResolutionFailed` event for guests already `Failed` before the
+upgrade) is intended: the event marks the transition.
+
+**Candidate: main @ `8afbad3`.** Everything in round 6 holds, with `8afbad3` in
+place of `4f08e87`:
+- the chart `0.0.0-dev.8afbad3`;
+- all nine image tags `sha-8afbad3` (`ui` excepted);
+- the checkout, CRDs first, the stop conditions, and the Phase 0 amendments.
+
+**What changed underneath:**
+- No CRD, RBAC, Rust or chart template change since `4f08e87`: only the
+  migration controller's failure message.
+- **Build check:** use the Release Dev run for `8afbad3`, as before.
+- **Reports:** `phase1-r7.md`, `phase2-r7.md` and `phase3-r7.md`.
+
+### Phase 1 r7: GO per cluster
+Phase 1 as in round 6 on all three clusters: both pre-checks, then the upgrade
+and the round 6 checks.
+- **Baselines:**
+  - `innercp`;
+  - `ks-udn-cp-54klw`;
+  - `ft-gpu-pool-slot-j74r2` (uid, restarts, GPU allocation).
+- **The ntx leftovers** stay `Failed` with no launcher pod.
+
+### Phase 2 r7 (dev): GO once Phase 1 r7 has succeeded on dev
+
+| # | Scenario | Pass |
+|---|---|---|
+| R7-D | **`DstNeverReady` names the volume attach (#691).** Repeat R6-D exactly, on the kept guest `val-r6-dnr/r6d`, with its 6 GiB fill. (1) Delete one of its volume's Replica objects. (2) The moment the engine lists a `WO` replica, live-migrate: `swiftctl -n val-r6-dnr migrate r6d --to <another node> --preferred-mode live --allow-ip-change --name r7d-mig`. **Needs William's OK again:** round 6's approval covered R6-D; confirm with him before deleting the replica. If he declines, SKIP. **Afterwards:** watch `kubectl get volumeattachments` for the volume until only the source node remains, and record how long that took (#692). | The SwiftMigration fails `DstNeverReady` at about 60 s. Its `failureMessage`, right after `within 1m0s budget:`, reads `PVC "<root pvc>" not attached to node <target> (VolumeAttachment csi-…)`, followed by the init container part. The `DestinationPodNeverReady` event carries the same text. The guest is untouched on its source: same launcher UID, uptime continuous, the fill intact. No destination pod is left. Paste the full message. |
+| V4a live | **Regression, happy path:** `migration-test.sh --mode live --source <worker> --target <worker> --storage-class longhorn-migratable` from the candidate checkout, in `val-r7-mig`. Run it after R7-D's target VolumeAttachment has gone. | "All checks passed", the Longhorn healthy wait logged, and `observedTransferDuration` set. |
+
+When both pass, delete `val-r6-dnr` and `val-r7-mig`. Nothing else is re-run:
+nothing merged since `4f08e87` touches other paths.
+
+**Stop condition:** as before. If a guest is ever left without a running VM,
+stop at once, leave everything in place, and report.
+
+### Phase 3 r7: GO per cluster, once Phase 1 r7 has succeeded on it
+- **ntx:** N3 as before.
+- **sov:** S1 as before.
+
+**v0.15.0 is tagged only after round 7 passes and William gives the word.**
