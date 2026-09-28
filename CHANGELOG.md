@@ -4,7 +4,7 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [v0.15.0] — 2026-09-25
+## [v0.15.0] — 2026-09-28
 
 A security release, with live-migration fixes found while validating it on
 three lab clusters.
@@ -21,6 +21,16 @@ completed transfer outruns its timeout. A cancel stops the transfer
 gracefully, frees the source for the next migration within seconds instead of
 ten minutes, and leaves no send behind to run later. An in-place restore
 resumes the snapshot, with its address, instead of booting the guest cold.
+
+**Also fixed by the validation rounds:**
+- A migration whose destination never becomes Ready says why.
+- `runPolicy: Stopped` stops a running guest.
+- A guest waits for a missing, importing or pulling image or kernel instead
+  of reading `Failed`.
+- A namespace holding a local snapshot finishes deleting.
+- Warm pools free the GPU of a failed slot, boot GPU slots on `gpu-sandbox`,
+  and never run a slot without its kernel.
+- Guests report their pod IP next to the guest IP.
 
 **CRDs changed this release**: `swiftsnapshots` (`status.guestSpec.primaryIP`,
 and the local backend's `hostPath`, now derived), `swiftguests`
@@ -40,7 +50,7 @@ helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.1
   -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
 ```
 
-Four changes may need action:
+Seven changes may need action:
 
 **A local snapshot's directory is now derived, not chosen.**
 `spec.backend.local.hostPath` must be omitted or be
@@ -113,6 +123,37 @@ kubectl get swiftguests -A -o json | jq -r '.items[]
   | select(.spec.runPolicy == "Stopped" and .status.phase == "Running")
   | "\(.metadata.namespace)/\(.metadata.name)"'
 ```
+
+**Snapshot cleanup pods now run in the controller's namespace.**
+- The pod that removes a local snapshot's directory from its node used to
+  run in the snapshot's namespace. It now runs in the controller's own
+  namespace (`kubeswift-system` by default).
+- That namespace must admit a hostPath pod: Pod Security `privileged`,
+  which is the default when a namespace has no `pod-security.kubernetes.io`
+  labels.
+- If you enforce `baseline` or `restricted` there, the cleanup pod is
+  refused. The snapshot then keeps its finalizer, and its namespace stays
+  `Terminating`.
+- To check: `kubectl get ns kubeswift-system --show-labels`.
+
+**The controller's ClusterRole gains `list` on `events`.**
+- The controller reads a destination pod's Warning events when a migration
+  fails, so the failure can say why.
+- The chart and `config/manager/controller-manager-rbac.yaml` add the
+  permission. An install that manages the controller's RBAC by hand should
+  add it.
+- Without it, the message gives only the pod's status.
+
+**A guest now waits for a reference that does not exist yet.** This covers
+its SwiftImage, SwiftGuestClass, SwiftSeedProfile, SwiftKernel, and a data
+disk's image or PVC.
+- The guest stays `Pending` with `Resolved=False` "… not found: …". It is no
+  longer marked `Failed`.
+- A reference with a typo therefore shows as a guest stuck in `Pending`.
+- Automation that watched for `Failed` to catch such a guest should check
+  the `Resolved` condition instead.
+- A `Failed` image or kernel still fails the guest, now with its own failure
+  message and a `ResolutionFailed` event.
 
 ### Security
 
