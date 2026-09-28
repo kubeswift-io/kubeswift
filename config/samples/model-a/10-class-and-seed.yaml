@@ -10,7 +10,7 @@ spec:
     size: "10Gi"
     format: raw
 ---
-apiVersion: swift.kubeswift.io/v1alpha1
+apiVersion: seed.kubeswift.io/v1alpha1
 kind: SwiftSeedProfile
 metadata:
   name: model-a-seed

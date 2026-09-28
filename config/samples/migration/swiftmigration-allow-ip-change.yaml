@@ -1,8 +1,8 @@
-# SwiftMigration with allowIPChange opt-in. KubeSwift's default
-# networking is a node-local bridge (10.244.125.0/24 by default,
-# served by per-node dnsmasq). The guest's IP is local to the node;
-# cross-node migration produces a fresh IP from the destination
-# node's bridge.
+# SwiftMigration with allowIPChange opt-in. KubeSwift's default (nat)
+# networking runs a bridge inside each guest's launcher pod
+# (192.168.99.1/24). The guest's address is reachable only inside that
+# pod (status.network.primaryIPScope: Pod); a cross-node migration moves
+# the guest to a new launcher pod, with a new status.network.podIP.
 #
 # The validation webhook rejects cross-node migrations of guests on
 # default networking unless this flag is set. When it is set and

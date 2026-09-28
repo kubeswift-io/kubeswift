@@ -1,6 +1,6 @@
 # SwiftSeedProfile with SSH key injection for guest access.
 # Replace the ssh_authorized_keys entry with your own for production.
-# After the guest boots, discover its IP and SSH: ssh kubeswift@<primaryIP>
+# After the guest boots: swiftctl ssh <guest> -u kubeswift
 apiVersion: seed.kubeswift.io/v1alpha1
 kind: SwiftSeedProfile
 metadata:

@@ -4,7 +4,10 @@
 # of `make deploy` (kustomize installs stay monitoring-CRD-free). Helm users
 # should prefer `--set monitoring.enabled=true`, which renders the chart's
 # equivalent (templates/monitoring/servicemonitor.yaml) plus the dashboard
-# ConfigMaps — this sample exists for non-Helm installs.
+# ConfigMaps — this sample exists for non-Helm installs. It selects the
+# chart's kubeswift-controller-manager-metrics Service; the kustomize install
+# (make deploy) ships no metrics Service, so create one with the labels below
+# and a port named "metrics" (8080) before applying this.
 #
 #   kubectl apply -f config/grafana/servicemonitor.yaml
 #

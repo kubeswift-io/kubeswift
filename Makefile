@@ -251,7 +251,7 @@ deploy: generate verify-crd-sync
 		KUBESWIFT_LAUNCHER_IMAGE=$(IMAGE_REGISTRY)/swiftletd:$(IMAGE_TAG)
 	@# GPU discovery: set image tag and deploy RBAC + DaemonSet.
 	kubectl apply -f config/rbac/gpu-discovery-rbac.yaml
-	sed 's|gpu-discovery:latest|gpu-discovery:$(IMAGE_TAG)|' config/daemonset/gpu-discovery.yaml | kubectl apply -f -
+	sed 's|gpu-discovery:[^[:space:]]*|gpu-discovery:$(IMAGE_TAG)|' config/daemonset/gpu-discovery.yaml | kubectl apply -f -
 
 # deploy-with-webhook layers config/overlays/webhook on top of the minimal
 # install. The overlay composes config/default + config/webhook and patches

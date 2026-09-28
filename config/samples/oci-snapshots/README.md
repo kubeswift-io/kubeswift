@@ -19,7 +19,7 @@ Prerequisites: the `ubuntu-noble` SwiftImage (Ready) and the
 ```bash
 kubectl apply -f config/samples/local-snapshots/01-seed-profile.yaml
 kubectl apply -f config/samples/oci-snapshots/02-source-guest.yaml
-kubectl get swiftguest snapshot-oci-source -w      # wait for Running + IP
+kubectl get swiftguest snapshot-oci-source -w      # wait for Running + a Guest IP
 kubectl apply -f config/samples/oci-snapshots/03-snapshot.yaml
 kubectl get swiftsnapshot snapshot-oci-mem -w      # Pending -> Capturing -> Uploading -> Ready
 kubectl apply -f config/samples/oci-snapshots/04-restore-clone.yaml

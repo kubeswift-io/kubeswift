@@ -1,6 +1,6 @@
 # The sandbox kernel profile: a direct-boot kernel + bridge-initramfs that boots
 # an OCI image as the VM root filesystem (RO base + tmpfs overlay). Consumed by a
-# SwiftSandbox (see docs/design/swiftsandbox-design.md, P4), NOT bootable as a
+# SwiftSandbox (see docs/sandbox/overview.md), NOT bootable as a
 # plain kernelRef SwiftGuest — the bridge needs an OCI rootfs disk the sandbox
 # controller supplies.
 #
