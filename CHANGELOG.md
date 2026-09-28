@@ -4,7 +4,7 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [v0.15.0] — 2026-09-25
+## [v0.15.0] — 2026-09-28
 
 A security release, with live-migration fixes found while validating it on
 three lab clusters.
