@@ -1048,3 +1048,64 @@ stop at once, leave everything in place, and report.
 - **sov:** S1 as before.
 
 **v0.15.0 is tagged only after round 7 passes and William gives the word.**
+
+## Release: tag v0.15.0 (GO, William's instruction, 2026-09-28)
+
+Round 7 passed. William has approved the release. The docs sweep, the release
+notes and the CI pin bump are merged, and main is at `37b8c27`. That commit
+differs from the validated `8afbad3` only in:
+- docs and samples;
+- CI workflows;
+- a `values.yaml` comment;
+- two standalone manifest pins;
+- one Makefile pattern.
+
+**No Go, Rust or chart-template change.**
+
+The driver session cannot push tags (HTTP 403 on `refs/tags`), so this
+session tags the release. It pushes as William, as he did for v0.14.1.
+
+### 1. Tag and push
+
+```sh
+git fetch origin
+git rev-parse origin/main          # expect 37b8c27e9ebc715d2f713a8302083ae870679bbf (or a descendant)
+git tag -s v0.15.0 -m "KubeSwift v0.15.0" 37b8c27e9ebc715d2f713a8302083ae870679bbf
+git tag -v v0.15.0                 # the signature verifies, the object is 37b8c27
+git push origin v0.15.0
+```
+
+- **Tag `37b8c27` itself**, even if main has moved on since.
+- **If `v0.15.0` already exists on origin,** do not move, delete or re-push it.
+  Report what it points at.
+
+### 2. Watch the release run
+
+The tag push starts **Release Stable** (`.github/workflows/release-stable.yaml`)
+and then **Verify Release**. Record for each:
+- the run URL;
+- every job's result;
+- the total time.
+
+**If a job fails,** do not re-tag and do not delete the tag. Record the
+failing step and its log excerpt, and stop.
+
+### 3. Check what was published
+
+| What | Command | Pass |
+|---|---|---|
+| **GitHub release** | `gh release view v0.15.0` (or the web page) | Not a draft, not a pre-release. The body **starts with** `## [v0.15.0] — 2026-09-28` and carries the whole CHANGELOG section (intro, Upgrade with "Seven changes may need action", Security, Fixed, Changed, Docs, CI), then **Install**, **Upgrade**, **Images**, **swiftctl** and **Supply chain**. |
+| **Release assets** | `gh release view v0.15.0 --json assets -q '.assets[].name'` | The swiftctl binaries, `SHA256SUMS`, `SHA256SUMS.sig` and `SHA256SUMS.pem`. |
+| **Chart** | `helm show chart oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.0` | `version: 0.15.0`, `appVersion: "0.15.0"`. |
+| **Images** | For each of the nine images: `cosign verify ghcr.io/kubeswift-io/kubeswift/<image>:v0.15.0 --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable\|rc)\.yaml@refs/tags/v.*$' --certificate-oidc-issuer https://token.actions.githubusercontent.com` | All nine verify: `controller-manager`, `swiftletd`, `gpu-discovery`, `migration-stunnel`, `kubeswift-gateway`, `kubeswift-dra-driver`, `sandbox-materialize`, `snapshot-s3`, `snapshot-oras`. |
+| **Binaries** | `cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem …`, then `sha256sum -c SHA256SUMS` on the downloaded binaries | Both pass. |
+| **Standalone manifests** | `config/dra-driver/dra-driver.yaml` and `config/daemonset/gpu-discovery.yaml` at the tag | They pin `v0.15.0`, and those image tags exist. |
+
+### 4. Report
+
+Write `release-v0.15.0.md` in this directory with steps 1 to 3, then commit
+and push it to this branch.
+
+**Do not upgrade the clusters to the stable chart** as part of this step.
+William decides that separately; it is optional, as the v0.14.1 fleet upgrade
+was.
