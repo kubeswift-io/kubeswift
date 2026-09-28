@@ -1097,9 +1097,20 @@ failing step and its log excerpt, and stop.
 | **GitHub release** | `gh release view v0.15.0` (or the web page) | Not a draft, not a pre-release. The body **starts with** `## [v0.15.0] — 2026-09-28` and carries the whole CHANGELOG section (intro, Upgrade with "Seven changes may need action", Security, Fixed, Changed, Docs, CI), then **Install**, **Upgrade**, **Images**, **swiftctl** and **Supply chain**. |
 | **Release assets** | `gh release view v0.15.0 --json assets -q '.assets[].name'` | The swiftctl binaries, `SHA256SUMS`, `SHA256SUMS.sig` and `SHA256SUMS.pem`. |
 | **Chart** | `helm show chart oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.0` | `version: 0.15.0`, `appVersion: "0.15.0"`. |
-| **Images** | For each of the nine images: `cosign verify ghcr.io/kubeswift-io/kubeswift/<image>:v0.15.0 --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable\|rc)\.yaml@refs/tags/v.*$' --certificate-oidc-issuer https://token.actions.githubusercontent.com` | All nine verify: `controller-manager`, `swiftletd`, `gpu-discovery`, `migration-stunnel`, `kubeswift-gateway`, `kubeswift-dra-driver`, `sandbox-materialize`, `snapshot-s3`, `snapshot-oras`. |
+| **Images** | The `cosign verify` loop below the table | All nine verify: `controller-manager`, `swiftletd`, `gpu-discovery`, `migration-stunnel`, `kubeswift-gateway`, `kubeswift-dra-driver`, `sandbox-materialize`, `snapshot-s3`, `snapshot-oras`. |
 | **Binaries** | `cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem …`, then `sha256sum -c SHA256SUMS` on the downloaded binaries | Both pass. |
 | **Standalone manifests** | `config/dra-driver/dra-driver.yaml` and `config/daemonset/gpu-discovery.yaml` at the tag | They pin `v0.15.0`, and those image tags exist. |
+
+The image check, for all nine:
+
+```sh
+for img in controller-manager swiftletd gpu-discovery migration-stunnel kubeswift-gateway \
+           kubeswift-dra-driver sandbox-materialize snapshot-s3 snapshot-oras; do
+  cosign verify "ghcr.io/kubeswift-io/kubeswift/$img:v0.15.0" \
+    --certificate-identity-regexp '^https://github\.com/kubeswift-io/kubeswift/\.github/workflows/release-(stable|rc)\.yaml@refs/tags/v.*$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null && echo "OK   $img" || echo "FAIL $img"
+done
+```
 
 ### 4. Report
 
