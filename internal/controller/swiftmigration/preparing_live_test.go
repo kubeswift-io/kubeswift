@@ -3,11 +3,13 @@ package swiftmigration
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -473,4 +475,112 @@ func preExistingDstPod(mig *migrationv1alpha1.SwiftMigration, guest *swiftv1alph
 			}},
 		},
 	}
+}
+
+// Lab validation of v0.15.0, round 6 (R6-D): a destination pod waiting on a
+// Longhorn volume with a replica still rebuilding. Kubernetes raised
+// FailedAttachVolume only at +94 s, past the budget, so the message said only
+// that network-init was PodInitializing. The VolumeAttachment on the target
+// node reads attached=false from the start, and now names the wait. The
+// source node's attached VolumeAttachment for the same volume is not reported.
+func TestPreparingLive_BudgetExceeded_MessageNamesVolumeNotAttached(t *testing.T) {
+	r, rec, mig := budgetExceededDst(t, corev1.PodStatus{
+		Phase:                 corev1.PodPending,
+		InitContainerStatuses: []corev1.ContainerStatus{waiting("network-init", "PodInitializing", "")},
+		ContainerStatuses:     []corev1.ContainerStatus{waiting("launcher", "PodInitializing", "")},
+	}, func(dst, _ *corev1.Pod) []client.Object {
+		dst.Spec.Volumes = append(dst.Spec.Volumes, corev1.Volume{
+			Name:         "root",
+			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "swiftguest-root-guest"}},
+		})
+		return []client.Object{
+			boundPVC("swiftguest-root-guest", "pvc-1"),
+			volumeAttachment("csi-src", "pvc-1", "worker-1", true, ""),
+			volumeAttachment("csi-dst", "pvc-1", "worker-2", false, ""),
+		}
+	})
+
+	status := mig.Status.DeepCopy()
+	res := r.handlePreparingLive(context.Background(), mig, status)
+	if res.FailureReason != migrationv1alpha1.FailureReasonDstNeverReady {
+		t.Fatalf("FailureReason: want DstNeverReady, got %q (msg %q)", res.FailureReason, res.FailureMsg)
+	}
+	want := `destination pod "guest-mig-abcdef" never reached Ready within 1m0s budget: ` +
+		`PVC "swiftguest-root-guest" not attached to node worker-2 (VolumeAttachment csi-dst); ` +
+		`init container "network-init" waiting: PodInitializing`
+	if res.FailureMsg != want {
+		t.Errorf("FailureMsg:\n got %q\nwant %q", res.FailureMsg, want)
+	}
+	if !recordedEvent(rec, "Warning "+eventReasonDestinationPodNeverReady+" "+want) {
+		t.Errorf("no %s Warning event carrying the failure message", eventReasonDestinationPodNeverReady)
+	}
+}
+
+func TestPodVolumeAttachCause(t *testing.T) {
+	pod := func(node string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"},
+			Spec: corev1.PodSpec{NodeName: node, Volumes: []corev1.Volume{
+				{Name: "root", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "root"}}},
+				{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}},
+				{Name: "seed", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "seed"}}},
+			}},
+		}
+	}
+	unbound := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "default"}}
+	cases := []struct {
+		name string
+		pod  *corev1.Pod
+		objs []client.Object
+		want []string
+	}{
+		{"attach error is quoted", pod("w2"), []client.Object{
+			boundPVC("root", "pv-root"), unbound,
+			volumeAttachment("va-1", "pv-root", "w2", false, "rpc error: code = Internal desc = volume pv-root failed to attach to node w2"),
+		}, []string{`PVC "root" not attached to node w2 (VolumeAttachment va-1): rpc error: code = Internal desc = volume pv-root failed to attach to node w2`}},
+		{"attached volume says nothing", pod("w2"), []client.Object{
+			boundPVC("root", "pv-root"), volumeAttachment("va-1", "pv-root", "w2", true, ""),
+		}, nil},
+		{"another node's attachment says nothing", pod("w2"), []client.Object{
+			boundPVC("root", "pv-root"), volumeAttachment("va-1", "pv-root", "w1", false, ""),
+		}, nil},
+		{"no attachment (no attach needed, or not requested yet) says nothing", pod("w2"), []client.Object{
+			boundPVC("root", "pv-root"),
+		}, nil},
+		{"unscheduled pod says nothing", pod(""), []client.Object{
+			boundPVC("root", "pv-root"), volumeAttachment("va-1", "pv-root", "w2", false, ""),
+		}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(tc.objs...).Build()
+			r := &SwiftMigrationReconciler{Client: c, APIReader: c}
+			if got := r.podVolumeAttachCause(context.Background(), tc.pod); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func boundPVC(name, pv string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: pv},
+	}
+}
+
+func volumeAttachment(name, pv, node string, attached bool, attachErr string) *storagev1.VolumeAttachment {
+	va := &storagev1.VolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: storagev1.VolumeAttachmentSpec{
+			Attacher: "driver.longhorn.io",
+			NodeName: node,
+			Source:   storagev1.VolumeAttachmentSource{PersistentVolumeName: &pv},
+		},
+		Status: storagev1.VolumeAttachmentStatus{Attached: attached},
+	}
+	if attachErr != "" {
+		va.Status.AttachError = &storagev1.VolumeError{Message: attachErr}
+	}
+	return va
 }
