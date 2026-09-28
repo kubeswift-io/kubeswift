@@ -110,7 +110,7 @@ existed.
 
 ## R6-D: `DstNeverReady` names its cause, live (#682). PARTIAL
 
-**Approved by William** (07:0x). A guest `val-r6-dnr/r6d`, class
+**Approved by William** in this session, before the scenario started. A guest `val-r6-dnr/r6d`, class
 `small-migratable` (`longhorn-migratable`), on cp-1.
 - **Data written:** 6 GiB of random data in `/var/tmp/fill` (volume actual
   size 9.3 GiB).
