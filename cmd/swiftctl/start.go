@@ -14,7 +14,10 @@ var startCmd = &cobra.Command{
 	Short:        "Start a SwiftGuest",
 	SilenceUsage: true,
 	Long: `Start a SwiftGuest by setting spec.runPolicy=Running.
-The controller creates a new launcher pod; swiftletd launches the VM.`,
+The controller creates a new launcher pod; swiftletd launches the VM.
+If the guest's launcher has exited (the guest was shut down from inside, or
+its launcher failed), start removes that pod so the controller creates a new
+one. A running guest is left as it is: use restart to recreate its pod.`,
 	Example: `  swiftctl start sample
   swiftctl -n myns start my-guest`,
 	Args: cobra.ExactArgs(1),
@@ -30,8 +33,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Start patches runPolicy=Running; the controller recreates the launcher
-	// pod. (To recreate the pod of an already-running guest, use `restart`.)
+	// Start patches runPolicy=Running and removes an exited launcher pod; the
+	// controller creates a new one. (To recreate the pod of an already-running
+	// guest, use `restart`.)
 	if _, err := actions.Start(context.Background(), dyn, ns, guestName); err != nil {
 		return fmt.Errorf("failed to start guest: %w", err)
 	}

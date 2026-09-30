@@ -5,12 +5,14 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func uGuest(ns, name, policy string) *unstructured.Unstructured {
@@ -72,10 +74,15 @@ func podCount(t *testing.T, dyn dynamic.Interface, ns string) int {
 	return len(l.Items)
 }
 
-// Start patches runPolicy=Running and leaves the launcher pod alone (the
-// controller recreates a stopped one; a running one keeps running).
+func withPhase(u *unstructured.Unstructured, phase string) *unstructured.Unstructured {
+	_ = unstructured.SetNestedField(u.Object, phase, "status", "phase")
+	return u
+}
+
+// Start patches runPolicy=Running and leaves a running launcher pod alone:
+// recreating it is restart, not start.
 func TestStart_PatchesRunningKeepsPod(t *testing.T) {
-	dyn := fakeDyn(uGuest("default", "vm-a", "Stopped"), uPod("default", "vm-a", "vm-a"))
+	dyn := fakeDyn(uGuest("default", "vm-a", "Stopped"), withPhase(uPod("default", "vm-a", "vm-a"), "Running"))
 
 	u, err := Start(context.Background(), dyn, "default", "vm-a")
 	if err != nil {
@@ -89,6 +96,68 @@ func TestStart_PatchesRunningKeepsPod(t *testing.T) {
 	}
 	if got := podCount(t, dyn, "default"); got != 1 {
 		t.Errorf("Start deleted the launcher pod: %d pods, want 1", got)
+	}
+}
+
+// Lab validation of v0.15.0: a guest powered off from inside read Stopped,
+// with runPolicy Running and its launcher pod Succeeded. `swiftctl start` only
+// re-set runPolicy=Running, so nothing changed, although it printed that the
+// controller would recreate the pod. Start removes the exited launcher, so it
+// does.
+func TestStart_RemovesAnExitedLauncher(t *testing.T) {
+	for _, phase := range []string{"Succeeded", "Failed"} {
+		dyn := fakeDyn(uGuest("default", "vm-a", "Running"), withPhase(uPod("default", "vm-a", "vm-a"), phase))
+		if _, err := Start(context.Background(), dyn, "default", "vm-a"); err != nil {
+			t.Fatalf("%s: Start: %v", phase, err)
+		}
+		if got := podCount(t, dyn, "default"); got != 0 {
+			t.Errorf("%s: Start left the exited launcher: %d pods, want 0", phase, got)
+		}
+		if got := runPolicyOf(t, dyn, "default", "vm-a"); got != RunPolicyRunning {
+			t.Errorf("%s: runPolicy=%q, want Running", phase, got)
+		}
+	}
+}
+
+// A source launcher that handed its VM to a live migration exits too, but the
+// VM runs in the destination: Start leaves both pods to the migration.
+func TestStart_LeavesAHandedOffLauncher(t *testing.T) {
+	src := withPhase(uPod("default", "vm-a", "vm-a"), "Succeeded")
+	src.SetAnnotations(map[string]string{podAnnotationMigrationStatus: "complete"})
+	dst := withPhase(uPod("default", "vm-a-mig-abcd", "vm-a"), "Running")
+	dyn := fakeDyn(uGuest("default", "vm-a", "Running"), src, dst)
+	if _, err := Start(context.Background(), dyn, "default", "vm-a"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := podCount(t, dyn, "default"); got != 2 {
+		t.Errorf("Start removed a migration's pod: %d pods, want 2", got)
+	}
+}
+
+// With no launcher at all (a guest stopped through runPolicy), Start only
+// patches: the controller creates the pod.
+func TestStart_NoPodIsSuccess(t *testing.T) {
+	dyn := fakeDyn(uGuest("default", "vm-a", "Stopped"))
+	if _, err := Start(context.Background(), dyn, "default", "vm-a"); err != nil {
+		t.Fatalf("Start with no pod should succeed: %v", err)
+	}
+	if got := runPolicyOf(t, dyn, "default", "vm-a"); got != RunPolicyRunning {
+		t.Errorf("runPolicy=%q, want Running", got)
+	}
+}
+
+// A caller that may patch the guest but not list pods starts it as before.
+func TestStart_PodListForbiddenStillStarts(t *testing.T) {
+	dyn := fakeDyn(uGuest("default", "vm-a", "Stopped"))
+	dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("list", "pods",
+		func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", nil)
+		})
+	if _, err := Start(context.Background(), dyn, "default", "vm-a"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := runPolicyOf(t, dyn, "default", "vm-a"); got != RunPolicyRunning {
+		t.Errorf("runPolicy=%q, want Running", got)
 	}
 }
 

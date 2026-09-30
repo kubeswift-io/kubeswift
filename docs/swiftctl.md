@@ -98,15 +98,21 @@ swiftctl -n myns ssh my-guest -u fedora
 
 ### start
 
-Set `spec.runPolicy=Running` and delete the existing pod so the controller recreates it.
+Set `spec.runPolicy=Running`, so the controller starts the guest.
 
 ```
 swiftctl start [guest-name]
 ```
 
 **What it does:**
-1. Patches `spec.runPolicy=Running` on the SwiftGuest
-2. Deletes the existing pod (if any) so the controller recreates it with the current intent
+1. Patches `spec.runPolicy=Running` on the SwiftGuest.
+2. Deletes the guest's launcher pod if it has exited: the guest was shut down
+   from inside (pod `Succeeded`) or its launcher failed (pod `Failed`). The
+   controller creates a launcher only when there is none, so without this a
+   guest already set to `Running` would stay down.
+
+A running launcher is left alone; to recreate it, use `swiftctl restart`. So is
+a source launcher that handed its VM to a live migration.
 
 **Examples:**
 
