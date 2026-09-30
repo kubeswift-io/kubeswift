@@ -1268,3 +1268,180 @@ branch. Include:
 - the images;
 - the baselines before and after;
 - step 5.
+
+## Regression run on the released v0.15.0 (GO, William's instruction, 2026-09-30)
+
+**The fleet upgrade above is superseded.** William upgraded dev, ntx and sov
+to v0.15.0 through another session. Do not run the "Upgrade the clusters"
+steps. Check the result instead, in Phase A below.
+
+**Goal: find any regression in the released build.**
+- The tag is `8afbad3`'s code, but the images are the release's own build.
+- Every launcher before now ran a `sha-*` dev image.
+- So this run re-covers every path the seven rounds tested, on
+  `swiftletd:v0.15.0` and the other `v0.15.0` images.
+
+**Compare against the earlier rounds.** For each scenario, report its key
+timings next to the last round's figure, for example restore time, transfer
+duration, downtime and time to boot. Flag anything more than 50% slower, or
+any new Warning event, error log line or phaseDetail, as a **finding**, even
+when the scenario passes.
+
+**Rules**, as in the rounds:
+- `--kubeconfig` on every command.
+- Run the scripts from a worktree at the tag `v0.15.0`
+  (`git fetch origin --tags`; `v0.15.0^{commit}` = `37b8c27…`).
+- **Fix nothing.** Collect the evidence and carry on with the next
+  independent scenario.
+- **Every guest a scenario uses is created in this run.** Record its launcher
+  image, which must be `swiftletd:v0.15.0`.
+- **Namespaces** are named `val-reg-<scenario>`. Delete each one once its
+  scenario has passed and its evidence is saved, which keeps cp-1 roomy. Keep
+  a failed scenario's objects.
+- **Hands off:**
+  - Do not touch `innercp`, `field-testing`, `capi-udn` or `kube-system`.
+  - Do not change any Longhorn setting, and do not delete Longhorn replicas.
+  - Do not free or take the GPU.
+  - The ntx leftovers stay as they are.
+- **Temporary cluster-scoped objects** (the SwiftGuestClass
+  `val-migratable-16g`, a SwiftKernel `sandbox` in a test namespace) are
+  deleted at the end.
+- **Stop condition:** if a guest is ever left without a running VM, stop at
+  once, leave everything in place, and report.
+
+**Reports:** `regression-a.md`, `regression-dev.md` and
+`regression-ntx-sov.md`, pushed to this branch as each finishes.
+- Phase B and C start as soon as Phase A is clean on that cluster, with no
+  go-ahead in between.
+- If Phase A finds a cluster whose controller is not healthy, or whose
+  kubeswift images are not `v0.15.0`, report and run nothing on that cluster.
+
+### Phase A: the upgrade's result, per cluster (read-only)
+
+| Check | Pass |
+|---|---|
+| **Helm** | `helm history`: the upgrade's revision is `deployed`, on chart `kubeswift-0.15.0`. Record the revision, and anything between it and the round-7 revision (dev 50, ntx 32, sov 38). |
+| **Values kept** | `diff <(helm get values <rel> -n <ns> --revision <round-7 rev> -o yaml) <(helm get values <rel> -n <ns> -o yaml)`: only the nine `image.tag` lines change, `sha-8afbad3` → `v0.15.0`. `ui.image.tag` stays `v0.12.4`, and `controllerManager.metrics.secure` is unchanged (dev `true` with its readers, ntx and sov `false`). Paste the redacted diff. Any other difference is a **finding**. |
+| **CRDs** | From the `v0.15.0` worktree, `kubectl diff --server-side -f charts/kubeswift/crds/` shows no difference. |
+| **Images** | Every kubeswift Deployment and DaemonSet pod runs `:v0.15.0` (the UI `v0.12.4`), with 0 restarts. Record each pod's age. |
+| **Controller** | 13 "Starting workers". Record every error line since it started, grouped by message. `--metrics-secure` is as in the values. It can list events: `kubectl auth can-i list events --as=system:serviceaccount:<ns>:<controller SA>`. |
+| **VAPs and RBAC** | As in round 7: 4 VAPs on dev, 3 on ntx, 4 on sov. On dev and sov, `kubeswift-gateway-console` exists, and `kubeswift-vm-reader` has no `pods/exec`. |
+| **SwiftKernels** | All `Ready` (4 on dev, `ft-faas` on ntx). |
+| **Existing guests** | Same launcher UID and 0 restarts as round 7: dev `innercp` (`10bd28b8-…`) and the `ft-gpu-pool` slot (`6aeee96c-…`, GPU still allocated); ntx `ks-udn-cp-54klw` (`a5420720-…`) and the other CAPI guest. The ntx leftovers are still `Failed`, with no pod. List each guest's launcher image. |
+| **Left over** | Any `val-*` namespace, non-terminal SwiftMigration, SwiftSnapshot or SwiftRestore, or Terminating namespace. The post-upgrade session may have left some. List them, and delete none that you did not create. |
+
+**Keep a controller log capture running** on every cluster from Phase A to
+the end, with `kubectl logs -f` to a local file. Restart the capture if the
+pod changes. The final report summarises its errors (see "At the end").
+
+### Phase B: dev
+
+**B1. Boot and networking**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G1 | **Smoke, all scenarios:** `NAMESPACE=val-reg-smoke make smoke-test`, then `make smoke-test-cleanup` with the same `NAMESPACE`. `gpu-alloc` SKIPs while the GPU is held; do not free it. | As in round 4's V1. Every scenario PASS or an explained SKIP. No `WARN: GuestRunning=`/`hypervisor=`. `default/ubuntu-noble` is untouched. |
+| G2 | **Guest and pod IPs:** round 4's V2, while G1's guests run (`--no-cleanup` if needed). | As in V2. |
+| G3 | **Cross-node TCP:** `make b0-cross-node-tcp-test`, then its cleanup. | PASS. |
+| G4 | **Kernel boot, no initramfs errors:** round 4's V10. The smoke `kernel-boot` from G1 is enough, plus one SwiftSandbox. | As in V10. |
+
+**B2. Images and references**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G5 | **A guest applied before its image, and in-place restore:** round 6's R6-A, `local-roundtrip-test.sh --namespace val-reg-rt --no-cleanup`, polling as in R6-A. | As in R6-A: never `Failed`, no `ResolutionFailed` event. Sentinel kept, the same `primaryIP` before and after, and the restore time recorded. Also check round 1's D4: `status.memorySnapshot.handle` is `/var/lib/kubeswift/snapshots/val-reg-rt_<name>`. |
+| G6 | **A failed image says so, and a recreated image is picked up:** round 6's R6-B, in `val-reg-img`. | As in R6-B, with exactly one `ResolutionFailed` event. Record how long the image took to go `Failed` (round 2's R8: the Job gives up in about 10 minutes, and the image is `Importing` until then). Run it in parallel with the rest. |
+| G7 | **Other missing references wait:** round 6's R6-C, in `val-reg-ref`. | As in R6-C. |
+| G8 | **A pool created with its image does not churn:** round 6's R6-F, in `val-reg-pool`. | As in R6-F: exactly 2 SwiftGuests ever created. |
+
+**B3. Snapshots and restore**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G9 | **Clone restore (Tier B):** `make local-clone-identity-test`. | PASS. |
+| G10 | **Tier A CSI snapshots:** `test/snapshot/snapshot-test.sh --vsclass longhorn-snapshot-vsc` and `test/clonestrategy/clonestrategy-test.sh --vsclass longhorn-snapshot-vsc`. | Both PASS. clonestrategy's speedup is informational. |
+| G11 | **Bad snapshot hostPath:** round 1's D4, second half. A local SwiftSnapshot with `spec.backend.local.hostPath: /var/lib/kubeswift/snapshots/elsewhere`. | Refused at admission (the webhook is on on dev). |
+| G12 | **A namespace holding a snapshot deletes:** round 4's V8, in `val-reg-snap`. | As in V8: gone within about 2 minutes, the cleanup pod ran in the controller namespace, and the node directory is gone. |
+
+**B4. runPolicy**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G13 | **runPolicy Stopped:** round 4's V3 (a) and (b). For (b), use a live migration from B5. | As in V3. (a) Graceful power-off, then `Stopped`. (b) `StopDeferred` names the migration, which completes before the guest stops. |
+
+**B5. Live migration.** Record for each migration what round 3 lists: the
+phase and phaseDetail sequence, events, `transferProgress`,
+`observedDowntime`, `observedTransferDuration` and the conditions. Watch the
+phaseDetail at about 0.2 s. `destination running; waiting for the source's
+report` must appear whenever `DestinationRunning` does (round 4's V5).
+
+| # | Scenario | Pass |
+|---|---|---|
+| G14 | **The migration script, offline and live:** `migration-test.sh --mode offline`, then `--mode live`, with `--source`/`--target` naming the two workers and `--storage-class longhorn-migratable`. | "All checks passed" for both. The guest starts on `--source`, and the live run logs the Longhorn healthy wait. `observedTransferDuration` is set, and there is no `SourceCompleteMissing`. |
+| G15 | **A pinned guest follows its migration:** round 4's V4 (b). | As in V4 (b). |
+| G16 | **A migrated guest reports its stop:** round 2's R7, on G15's guest. | As in R7. |
+| G17 | **Cancel mid-transfer:** round 3's T3, on a new guest of class `val-migratable-16g` in `val-reg-mig`. | As in T3. |
+| G18 | **A migration right after a cancel, to a busy node:** round 4's V6, on G17's guest. | As in V6. |
+| G19 | **Cancel racing completion, three attempts back to back:** round 3's T5, on the same guest. | As in T5. Exactly one VM survives each attempt, and a cancel after `DestinationRunning` gives `CancelIgnored`. |
+
+R6-D and R7-D (`DstNeverReady` on a rebuilding replica) are **not** re-run:
+they delete a Longhorn replica. The controller code is `8afbad3`'s, which
+round 7 passed.
+
+**B6. Sandboxes**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G20 | **Sandbox phases and a lost slot:** round 5's R5-C (a) and (b), in `val-reg-sbx`. | As in R5-C. The phase never goes back. Exit 0 ends `Completed`, and exit 3 ends `Failed` with code 3. `SlotLost` names the slot pod, and the pool warms a new slot. |
+| G21 | **A sandbox with no kernel waits:** round 4's V9 (a), in `val-reg-nok`. V9 (b) SKIPs while the GPU is held. | As in V9 (a). |
+| G22 | **Launcher failure messages,** opportunistic: round 6's R6-E. | Any failed sandbox or slot names an init container or `launcher exited <code> (<reason>)`. Otherwise "not observed". |
+
+**B7. Security**
+
+| # | Scenario | Pass |
+|---|---|---|
+| G23 | **TokenRequest gate:** round 1's D10, in `val-reg-tok`. | Refused by `kubeswift-launcher-sa-tokenrequest-gate`. |
+| G24 | **Gateway exec gate:** round 1's D11, with the bridge command from `consoleBridge()` in `internal/gateway/exec_bridge.go` at the tag. | A plain `sh -c id` as the gateway SA is refused. The bridge command is admitted: it connects, then interrupt it. |
+| G25 | **Secure metrics,** with no Helm change: round 1's D13 checks. | Plain HTTP fails, and an unbound token gets 403. The Prometheus target `kubeswift-controller-manager` is `up`, with `kubeswift_` series. |
+
+G24 covers the policy half of D12. Its browser half (the UI console with and
+without the Console capability) is William's: list the steps for him in the
+report.
+
+### Phase C: ntx and sov
+
+**ntx.** A worker-1 Longhorn attach failure is BLOCKED-ENV, as in round 1.
+Retry once pinned to worker-2.
+
+| # | Scenario | Pass |
+|---|---|---|
+| N1 | **Smoke on the OVN primary network:** `NAMESPACE=val-reg-smoke make smoke-test --scenario disk-boot` (or the script's equivalent). | PASS. The guest is reachable at its OVN address. |
+| N2 | **In-place restore:** `local-roundtrip-test.sh --namespace val-reg-rt`. | The sentinel survives, and the guest keeps its OVN address. |
+| N3 | **CAPI guests** after the whole run. | Same launcher UID, 0 restarts, and resourceVersion unchanged since Phase A. |
+| N4 | **TokenRequest gate:** as G23. | Refused. |
+
+**sov** has no KVM and no webhook.
+
+| # | Scenario | Pass |
+|---|---|---|
+| S1 | **Controller and policies:** controller Ready; the VAPs; the console grant and exec gate; `kubeswift-vm-reader` without `pods/exec`. | As in round 7. |
+| S2 | **TokenRequest gate:** as G23. | Refused. |
+| S3 | **Admission with no webhook:** apply a sample SwiftGuest in `val-reg-s3` with `--dry-run=server`. | Accepted by the API server (no webhook). Nothing is created. |
+
+### At the end, on every cluster
+
+- **Pods:** every kubeswift pod still has 0 restarts, with the same pod as in
+  Phase A.
+- **Controller log:** from the capture, count the `ERROR` lines and group
+  them by message. Tag each group with the scenario it came from, or "none".
+  Any panic, or an error with no scenario to explain it, is a **finding**.
+- **Alerts:** on dev, any kubeswift alert firing in Prometheus.
+- **Clean-up:**
+  - No `val-reg-*` namespace left, except failed scenarios'.
+  - No VolumeAttachment for a deleted test volume.
+  - `val-migratable-16g` is deleted.
+  - Report any namespace that does not finish deleting.
+- **Summary** at the top of each report:
+  - a PASS / FAIL / SKIPPED (why) table;
+  - the findings, each with its evidence;
+  - the timing comparison against the earlier rounds.
