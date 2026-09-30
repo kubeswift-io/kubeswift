@@ -1415,7 +1415,7 @@ Retry once pinned to worker-2.
 
 | # | Scenario | Pass |
 |---|---|---|
-| N1 | **Smoke on the OVN primary network:** `NAMESPACE=val-reg-smoke make smoke-test --scenario disk-boot` (or the script's equivalent). | PASS. The guest is reachable at its OVN address. |
+| N1 | **Smoke on the OVN primary network:** `NAMESPACE=val-reg-smoke test/smoke/boot-test.sh --scenario disk-boot --no-cleanup`, then `make smoke-test-cleanup` with the same `NAMESPACE`. | PASS. The guest is reachable at its OVN address. |
 | N2 | **In-place restore:** `local-roundtrip-test.sh --namespace val-reg-rt`. | The sentinel survives, and the guest keeps its OVN address. |
 | N3 | **CAPI guests** after the whole run. | Same launcher UID, 0 restarts, and resourceVersion unchanged since Phase A. |
 | N4 | **TokenRequest gate:** as G23. | Refused. |
