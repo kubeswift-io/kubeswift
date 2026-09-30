@@ -25,6 +25,7 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftgpu"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
+	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
@@ -133,6 +134,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err := r.Update(ctx, &pool); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+	// No slot can be warmed in a namespace being deleted. The pool is deleted
+	// next, and its deletion path above releases what it holds.
+	if terminating, err := namespaces.Terminating(ctx, r.Client, pool.Namespace); err != nil || terminating {
+		return ctrl.Result{}, err
 	}
 	// Warm slots run swiftletd, which reports via pod annotations — ensure the
 	// per-namespace reporter RoleBinding (idempotent), as the sandbox controller does.

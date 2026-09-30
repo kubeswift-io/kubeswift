@@ -25,6 +25,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/imageref"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/seed"
@@ -141,6 +142,14 @@ func (r *SwiftGuestReconciler) reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.ensureSharedBaseFinalizer(ctx, &guest); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+	// Nothing below can be built in a namespace being deleted. The guest is
+	// deleted next, and reconcileDeletion above takes it apart.
+	if terminating, err := namespaces.Terminating(ctx, r.Client, guest.Namespace); err != nil {
+		return ctrl.Result{}, err
+	} else if terminating {
+		logger.V(1).Info("namespace is being deleted; not building the guest", "namespace", guest.Namespace)
+		return ctrl.Result{}, nil
 	}
 
 	// Per-namespace RBAC bootstrap: idempotently ensure the
