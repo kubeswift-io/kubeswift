@@ -214,8 +214,8 @@ spec:
                 x-kubernetes-validations:
                 - message: accessMode=ReadWriteMany requires volumeMode=Block; Filesystem
                     RWX is not live-migration-capable
-                  rule: '!(self.accessMode == ''ReadWriteMany'' && (!has(self.volumeMode)
-                    || self.volumeMode == ''Filesystem''))'
+                  rule: '!(has(self.accessMode) && self.accessMode == ''ReadWriteMany''
+                    && (!has(self.volumeMode) || self.volumeMode == ''Filesystem''))'
             required:
             - cpu
             - memory
