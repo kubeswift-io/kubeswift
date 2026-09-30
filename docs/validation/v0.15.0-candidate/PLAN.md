@@ -1445,3 +1445,101 @@ Retry once pinned to worker-2.
   - a PASS / FAIL / SKIPPED (why) table;
   - the findings, each with its evidence;
   - the timing comparison against the earlier rounds.
+
+## v0.15.1 round: candidate `5968241` (GO, William's instruction, 2026-09-30)
+
+**The regression run is DONE** (`regression-a.md`, `regression-dev.md`,
+`regression-ntx-sov.md`). Thanks. Found no v0.15.0 regression. Four of its
+findings are fixed for v0.15.1:
+
+| PR | Change | Checked by |
+|---|---|---|
+| #696 | **An exited launcher stops rewriting its guest's status.** A Failed or Succeeded launcher pod still carrying swiftletd's `egress-cluster-reachable=true` flipped `EgressReady` on every pass (C1). A Succeeded launcher (a guest shut down from inside) flipped `PodScheduled`, which now reads `False/LauncherExited`. | V1, F1 |
+| #697 | **`swiftctl start` (and the UI's Start) relaunch a guest whose launcher has exited.** They delete the exited launcher pod (B2). A running launcher, and a source that handed its VM to a migration, are left alone. | F2 |
+| #698 | **A storage block without `accessMode` is accepted.** The SwiftGuest, SwiftGuestClass and SwiftGuestPool CRDs' rule now tests `has(self.accessMode)` (B1). | F3, G14 |
+| #699 | **Nothing is built in a namespace being deleted.** The guest, sandbox, sandbox pool and kernel controllers skip it, so deleting a namespace no longer logs 10–30 errors (B3). | F4 |
+| #700 | CI only: gitleaks allows the SSH key fingerprint `git tag -v` prints. | none |
+
+**Candidate: main @ `5968241`.**
+- The chart `0.0.0-dev.5968241`.
+- All nine image tags `sha-5968241` (`ui` excepted).
+- Build check: use the Release Dev run for `5968241`, with the same 45-minute
+  wait as before.
+- Reports: `v0151-phase1.md`, `v0151-dev.md` and `v0151-ntx-sov.md`.
+
+**What changed underneath:**
+- **CRDs:** `swiftguests`, `swiftguestclasses` and `swiftguestpools` (the
+  storage rule). Apply them first, as always.
+- No RBAC or chart template change. No Rust change, so running launchers are
+  unaffected.
+
+**Rules, as in the rounds:**
+- `--kubeconfig` on every command.
+- Scripts from a worktree at `5968241`.
+- Fix nothing. Guests created in this run only, with `swiftletd:sha-5968241`.
+- Namespaces `val-151-<scenario>`, deleted on PASS.
+- Hands off: `innercp`, `field-testing`, `capi-udn` and `kube-system`. No
+  Longhorn setting changes, no replica deletion, no GPU change.
+- **Stop condition:** a guest left without a running VM stops the round at
+  once. Report it.
+
+### Phase 1: upgrade, per cluster (dev, then ntx, then sov)
+
+- **Pre-checks as in round 7:**
+  - the runPolicy check;
+  - `Failed` guests;
+  - nothing in progress.
+- **Baselines:**
+  - dev `innercp` (`10bd28b8-…`) and the `ft-gpu-pool` slot;
+  - ntx `capi-udn/ks-udn-cp-54klw` and `ks-udn-md0-sz2ql-bz9zs`, whatever
+    state William has left them in.
+- **Upgrade:**
+  - CRDs from the `5968241` worktree;
+  - then `helm upgrade … --version 0.0.0-dev.5968241 --reuse-values` with the
+    nine `--set <c>.image.tag=sha-5968241`;
+  - a `--dry-run` first.
+- **Values:** `--reuse-values` keeps the current metrics setting (secure on
+  all three since the v0.15.0 upgrade). Change nothing else.
+- **After the upgrade:**
+  - the images;
+  - 13 workers and 0 errors;
+  - the VAPs as before;
+  - the baselines unchanged.
+
+**V1: churn stops (#696), ntx.** Run this only if the two CAPI guests are
+still `Failed`, with their evicted launcher pods.
+- Sample their resourceVersion every 30 s for 5 minutes after the new
+  controller starts.
+- **Pass:** it does not move, and `EgressReady` reads
+  `False/LauncherExited`, with its `lastTransitionTime` fixed.
+- If William has already restarted them, record that and SKIP.
+
+### Phase 2: dev
+
+| # | Scenario | Pass |
+|---|---|---|
+| F1 | **An exited launcher settles (#696).** (a) Create a small guest in `val-151-f1`, wait for `Running` and its IP, then power it off from inside (`sudo systemctl poweroff`). (b) Create a second guest and kill its hypervisor: `kubectl exec <launcher> -c launcher -- pkill -9 cloud-hypervisor`. | (a) The guest reads `Stopped`, its pod `Succeeded`, and `PodScheduled=False/LauncherExited`. Its resourceVersion does not move over 3 minutes (sample every 20 s). (b) Record the pod phase the kill gives. If `Failed`, the guest reads `Failed`, and its resourceVersion does not move over 3 minutes. If `Succeeded`, the same as (a). |
+| F2 | **Start relaunches an exited guest (#697),** on F1(a)'s guest, runPolicy still `Running`. (1) `swiftctl -n val-151-f1 start <guest>`. (2) Once it runs, run `swiftctl start` on it again. | (1) A new launcher pod, with a new UID, is created within about 10 s. The guest reaches `Running` with an IP, and SSH works. (2) Nothing is restarted: the same launcher UID, and uptime keeps counting. |
+| F3 | **A storage block without `accessMode` (#698).** Server dry runs of a SwiftGuestClass: (a) `storage: {storageClassName: longhorn-migratable}`; (b) `{accessMode: ReadWriteMany}`; (c) `{accessMode: ReadWriteMany, volumeMode: Block}`; (d) `{accessMode: ReadWriteOnce}`. The same (a) and (b) as a SwiftGuest's `spec.storage`. | (a), (c) and (d) are accepted. (b) is refused with `accessMode=ReadWriteMany requires volumeMode=Block …`, for both kinds. |
+| G14 | **The migration script, offline, as specified:** `migration-test.sh --mode offline --storage-class longhorn-migratable`, with `--source`/`--target` naming the two workers. It failed in the regression run (B1). Then `--mode live`, as there. | "All checks passed" for both. |
+| F4 | **Deleting a namespace logs no errors (#699).** In `val-151-f4`, create a small guest, a SwiftSandboxPool with `minWarm: 1`, and a namespaced SwiftKernel `sandbox` (as G21 did). Wait until the guest is `Running` and the slot is warm. Note the controller log line count, then `kubectl delete ns val-151-f4`. | The namespace is gone within about a minute. The controller log since the delete has **no** `being terminated` line for `val-151-f4`. Paste every ERROR line it does have. |
+| R | **Regression**, on paths the fixes touch: G1 (smoke, all scenarios); G5 (in-place restore, R6-A); G13 (a) (`runPolicy: Stopped`); G16 (a migrated guest reports its stop: `VmStopped`, then `LauncherExited`); G20 (sandbox phases and `SlotLost`). Each exactly as in the regression run. | As there. Report timings against the regression run's. |
+
+**The UI's Start** is William's, in the browser. It checks that a guest
+powered off from inside comes back when started. List the steps for him.
+
+### Phase 3: ntx and sov
+
+- **ntx:**
+  - V1, from Phase 1.
+  - N1 and N2 only if ntx's Longhorn has been repaired. Otherwise BLOCKED-ENV,
+    as before.
+  - N4 as before.
+- **sov:**
+  - S1 as before.
+  - F3's dry runs (a) and (b) for a SwiftGuestClass.
+
+**At the end:** the same checks as the regression run (pods, controller log,
+alerts, clean-up) on each cluster.
+
+**v0.15.1 is tagged only after this round passes and William gives the word.**
