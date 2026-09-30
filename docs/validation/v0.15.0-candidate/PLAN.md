@@ -1120,3 +1120,151 @@ and push it to this branch.
 **Do not upgrade the clusters to the stable chart** as part of this step.
 William decides that separately; it is optional, as the v0.14.1 fleet upgrade
 was.
+
+## Upgrade the clusters to v0.15.0 (GO, William's instruction, 2026-09-30)
+
+**Release step: DONE** (`release-v0.15.0.md`). Thanks.
+
+**William's instruction:** upgrade dev, ntx and sov to the stable chart
+`0.15.0`, **keeping their values**. They run the dev build
+`0.0.0-dev.8afbad3` today (dev rev 50, ntx rev 32, sov rev 38).
+
+**What changes.** Only the chart version and the nine pinned image tags, from
+`sha-8afbad3` to `v0.15.0`.
+- `v0.15.0` is `37b8c27`: `8afbad3` plus docs, samples, CI and the CHANGELOG.
+- `git diff 8afbad3 v0.15.0 -- '*.go' rust/ charts/kubeswift/templates/ charts/kubeswift/crds/`
+  is empty. `values.yaml` differs by one comment.
+- The images are the release's own build of that commit, so every kubeswift
+  Deployment and DaemonSet rolls, as in each round.
+
+**Keeping the values:**
+- Use `--reuse-values` with exactly the nine `--set <c>.image.tag=v0.15.0`,
+  and nothing else.
+- Leave `ui.image.tag` as it is (`v0.12.4`).
+- Every other value stays as it is. That includes
+  `controllerManager.metrics.secure`: `true` on dev with its readers, `false`
+  on ntx and sov. Switching ntx or sov to secure metrics is William's call,
+  not part of this step.
+- **Do not use `--reset-values` or `--reset-then-reuse-values`.** They would
+  apply 0.15.0's chart defaults to anything the values do not set: for
+  example, secure metrics on ntx and sov, or `tag: latest` for an image.
+
+**Rules**, as in the rounds:
+- `--kubeconfig` on every command.
+- Do not touch `innercp`, `field-testing`, `capi-udn` or `kube-system`.
+- Do not change any Longhorn setting.
+- Do not restart, migrate or delete any guest. The two ntx leftovers stay as
+  they are.
+
+**Order and stop conditions:**
+- Upgrade dev, then ntx, then sov.
+- **Unlike the rounds, a failure stops the fleet.** If the upgrade or a
+  rollout fails on a cluster, collect the evidence, **do not roll back, and do
+  not go on to the next cluster.** Report at once.
+- If a guest is ever left without a running VM, stop at once, leave everything
+  in place, and report.
+
+### 0. Once, before the first cluster
+
+```sh
+git fetch origin --tags
+git rev-parse 'v0.15.0^{commit}'   # expect 37b8c27e9ebc715d2f713a8302083ae870679bbf
+git worktree add <dir> v0.15.0     # the CRDs come from here
+helm show chart oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.0   # version: 0.15.0
+```
+
+### 1. Pre-checks, per cluster, right before its upgrade
+
+- **The Helm release** is deployed, on chart `kubeswift-0.0.0-dev.8afbad3`,
+  at the revision above.
+- **Save the current values:** `helm get values <release> -n <ns> -o yaml`,
+  to a local file. Do not commit it, as it may hold secrets.
+- **Nothing is in progress:** no non-terminal SwiftMigration, SwiftSnapshot or
+  SwiftRestore, no Terminating namespace, no `val-*` namespace. If other work
+  is running, wait for it and say so in the report.
+- **The round-7 pre-checks:**
+  - Stopped-but-Running: none.
+  - `Failed` guests: none on dev or sov. On ntx, only `default/sample` and
+    `val-n2/snapshot-local-source`, with no launcher pod.
+- **Baselines:**
+  - dev `gpu-cells/innercp`: launcher UID and restarts.
+  - dev `field-testing/ft-gpu-pool-slot-*`: UID, restarts, and its GPU
+    allocation.
+  - ntx `capi-udn/ks-udn-cp-54klw` and the other CAPI guest: UID, restarts
+    and resourceVersion.
+- **Watchers:** start the 3 s watchers on dev and ntx, as in round 7.
+
+### 2. CRDs
+
+From the `v0.15.0` worktree:
+
+```sh
+kubectl apply --server-side --force-conflicts -f charts/kubeswift/crds/
+```
+
+Expect 15 `serverside-applied`. They are the same as `8afbad3`'s.
+
+### 3. Dry run, then the upgrade
+
+```sh
+helm upgrade <release> oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.0 -n <ns> \
+  --reuse-values \
+  --set controllerManager.image.tag=v0.15.0 \
+  --set swiftletd.image.tag=v0.15.0 \
+  --set sandboxMaterialize.image.tag=v0.15.0 \
+  --set snapshotORAS.image.tag=v0.15.0 \
+  --set snapshotS3.image.tag=v0.15.0 \
+  --set migrationStunnel.image.tag=v0.15.0 \
+  --set gpuDiscovery.image.tag=v0.15.0 \
+  --set dra.image.tag=v0.15.0 \
+  --set gateway.image.tag=v0.15.0 \
+  --dry-run
+```
+
+**The dry run passes when:**
+- it exits 0;
+- the rendered manifests contain no `sha-8afbad3` and no `:latest`;
+- every kubeswift image is `:v0.15.0`, apart from the UI's `v0.12.4`.
+
+**Then run the same command without `--dry-run`,** and `kubectl rollout
+status` every kubeswift Deployment and DaemonSet (timeout 10m).
+
+### 4. Checks, per cluster, after its upgrade
+
+| Check | Pass |
+|---|---|
+| **Helm** | Revision +1, chart `kubeswift-0.15.0`, app version `0.15.0`, `deployed`. |
+| **Values** | `diff` the saved file against `helm get values -o yaml` now: **exactly the nine `image.tag` lines differ**, `sha-8afbad3` → `v0.15.0`. Any other difference is a FAIL. Paste the diff. |
+| **Images** | Every kubeswift Deployment and DaemonSet pod runs `:v0.15.0` (the UI `v0.12.4`). |
+| **Controller** | 13 "Starting workers", and no errors in its first 2 minutes. `--metrics-secure` is unchanged: `true` on dev, `false` on ntx and sov. On dev, the Prometheus target `kubeswift-controller-manager` is `up`. |
+| **VAPs** | The same set as round 7: 4 on dev, 3 on ntx, 4 on sov. |
+| **SwiftKernels** | As before: 4 `Ready` on dev, `ft-faas` `Ready` on ntx. |
+| **Guests** | The baselines are unchanged, including the GPU allocation, and the watchers saw no change. The ntx leftovers are still `Failed`, with no launcher pod. |
+
+**Expected, and not a failure:**
+- **Running guests keep their launcher's image** until they are next
+  restarted: `innercp`, the GPU pool slot and the CAPI guests.
+- **Live-migrating one of them is refused with `ImageTagMismatch`** until
+  then. That is the designed trip-wire.
+- **List each guest and its launcher image** in the report, and restart none.
+
+### 5. dev only: a post-upgrade check
+
+This is like the v0.14.1 check (guest `val141`, sandbox `val141-sbx`), in a
+namespace `val-v015`.
+- **A guest:** one small guest, with no GPU, reaches `Running` and is
+  reachable. Its launcher runs `swiftletd:v0.15.0`.
+- **A sandbox:** one sandbox reaches Ready and runs a command.
+- **Then delete `val-v015`.** It should finish deleting, with no
+  VolumeAttachment left.
+
+### 6. Report
+
+Write `upgrade-v0.15.0.md` in this directory, then commit and push it to this
+branch. Include:
+- a verdict per cluster;
+- the commands run;
+- the redacted values diffs;
+- the images;
+- the baselines before and after;
+- step 5.
