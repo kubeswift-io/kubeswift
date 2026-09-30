@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -66,12 +67,62 @@ func SetRunPolicy(ctx context.Context, dyn dynamic.Interface, namespace, name, p
 		Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 }
 
-// Start sets runPolicy=Running. The SwiftGuest controller recreates the launcher
-// pod once the policy is Running, so no pod action is needed here. (To force a
-// running guest's pod to be recreated, delete the pod — that is "restart", a
-// distinct operation, not "start".)
+// Start sets runPolicy=Running and removes a launcher pod that has already
+// exited, so the SwiftGuest controller creates a new one.
+//
+// The controller creates a launcher only when the guest has none. A guest that
+// was shut down from inside (its pod Succeeded) or whose launcher failed (pod
+// Failed) keeps that exited pod, so with runPolicy already Running the patch
+// alone changed nothing and the guest stayed down. A running launcher is left
+// alone (recreating it is "restart", a distinct operation), and so is one
+// that handed its VM to a live migration: the VM runs in the destination pod,
+// and the migration removes the source at cutover.
 func Start(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*unstructured.Unstructured, error) {
-	return SetRunPolicy(ctx, dyn, namespace, name, RunPolicyRunning)
+	u, err := SetRunPolicy(ctx, dyn, namespace, name, RunPolicyRunning)
+	if err != nil {
+		return nil, err
+	}
+	if err := deleteExitedLauncherPods(ctx, dyn, namespace, name); err != nil {
+		return nil, fmt.Errorf("runPolicy patched to Running but removing the exited launcher pod failed: %w", err)
+	}
+	return u, nil
+}
+
+// podAnnotationMigrationStatus is swiftletd's report on a migration launcher,
+// the same key as swiftguest.PodAnnotationMigrationStatus. "complete" on a
+// source pod means its VM now runs in the destination.
+const podAnnotationMigrationStatus = "kubeswift.io/migration-status"
+
+// deleteExitedLauncherPods deletes the guest's launcher pods that have exited
+// and did not hand their VM to a migration. A pod already gone is success.
+//
+// A caller that may not list pods gets what start did before it removed
+// exited launchers: the patch alone. The UI's Manage VMs capability grants
+// the pod access, as Stop needs it too.
+func deleteExitedLauncherPods(ctx context.Context, dyn dynamic.Interface, namespace, guestName string) error {
+	pods, err := dyn.Resource(PodGVR).Namespace(namespace).
+		List(ctx, metav1.ListOptions{LabelSelector: GuestLabel + "=" + guestName})
+	if apierrors.IsForbidden(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		phase, _, _ := unstructured.NestedString(pod.Object, "status", "phase")
+		if phase != string(corev1.PodSucceeded) && phase != string(corev1.PodFailed) {
+			continue
+		}
+		if pod.GetDeletionTimestamp() != nil || pod.GetAnnotations()[podAnnotationMigrationStatus] == "complete" {
+			continue
+		}
+		if err := dyn.Resource(PodGVR).Namespace(namespace).
+			Delete(ctx, pod.GetName(), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // Stop sets runPolicy=Stopped AND deletes the launcher pod(s). The SwiftGuest
