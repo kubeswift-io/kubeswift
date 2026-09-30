@@ -27,3 +27,15 @@ paths = [
   # positive.
   '''internal/gateway/resource_service_test\.go''',
 ]
+
+# SSH public-key fingerprints, as `git tag -v` / `git verify-commit` print them
+# for an SSH-signed tag: `Good "git" signature for <who> with ED25519 key
+# SHA256:<43 base64 chars>`. The release reports under docs/validation quote
+# that line as evidence the tag was verified. A fingerprint is the hash of a
+# PUBLIC key, and gitleaks matches it only because it follows the word "key".
+# Pinned to the whole phrase, on the line, so a real credential elsewhere on
+# such a line is not hidden by it.
+regexTarget = "line"
+regexes = [
+  '''signature for \S+ with (ED25519|ECDSA|RSA|ED25519-SK|ECDSA-SK) key SHA256:[A-Za-z0-9+/]{43}\s*$''',
+]
