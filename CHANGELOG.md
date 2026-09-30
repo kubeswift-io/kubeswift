@@ -4,6 +4,119 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.15.1] — 2026-09-30
+
+A patch release: four fixes found by a regression run of v0.15.0 on the three
+lab clusters. That run found no regression in v0.15.0 itself. No new features.
+
+- **A guest whose launcher has exited no longer rewrites its status every
+  30 seconds.**
+- **`swiftctl start` and the UI's Start bring back a guest that was shut down
+  from inside.**
+- **A storage block without `accessMode` is accepted.**
+- **Deleting a namespace no longer floods the controller log.**
+
+**CRDs changed this release:** `swiftguests`, `swiftguestclasses` and
+`swiftguestpools`, in one validation rule (the storage rule below). Apply them
+before upgrading. Without them, the old rule stays in force and nothing else is
+affected.
+
+### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.15.1 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+- **From v0.15.0:** nothing else needs action. The chart's templates, values
+  and RBAC are unchanged.
+- **From v0.14.x:** read v0.15.0's Upgrade section first. In particular,
+  `/metrics` becomes HTTPS and authorized by default. An upgrade that passes
+  the saved values, as above, takes the new default unless the values set
+  `controllerManager.metrics.secure`. `--reuse-values` keeps what the release
+  had.
+
+Two behaviour changes are visible, both toward what the documentation already
+said:
+
+- **A guest shut down from inside now reads `PodScheduled=False`**
+  (`LauncherExited`), like one whose launcher failed. It used to read `True`,
+  "Pod is scheduled and running".
+- **`swiftctl start`, and the UI's Start, delete an exited launcher pod** so
+  the controller creates a new one. A caller that may patch the guest but not
+  list pods gets the old behaviour: the patch alone. The UI's Manage VMs
+  capability already grants what is needed.
+
+### Fixed
+
+- **A guest whose launcher had exited rewrote its status about every 30 s**
+  (#696).
+  - **Seen with:** a failed or succeeded launcher pod that still existed, for
+    example one the kubelet evicted.
+  - **Cause, `EgressReady`:** the pod still carried swiftletd's
+    `egress-cluster-reachable=true`. Each pass set `EgressReady` True from it,
+    then the run-state clear set it back to False, moving its
+    `lastTransitionTime`.
+  - **Cause, `PodScheduled`:** for a guest shut down from inside, it flipped
+    the same way.
+  - **Effect:** about 110 status writes an hour per guest, and a transition
+    time that meant nothing. The lab's two evicted CAPI guests churned like
+    this.
+  - Since v0.14.0.
+- **`swiftctl start` did not start a guest that had shut down from inside**
+  (#697).
+  - With `runPolicy: Running` already set, it changed nothing, and it still
+    printed "controller will recreate the pod". The UI's Start used the same
+    code.
+  - `start` now deletes the exited launcher pod, and the controller creates a
+    new one.
+  - It leaves alone a running launcher (that is `restart`) and a source
+    launcher that handed its VM to a live migration.
+- **A storage block without `accessMode` was refused** (#698).
+  - The error was `spec.storage: Invalid value: "object": no such key:
+    accessMode`.
+  - **Cause:** the rule that rejects `ReadWriteMany` with `Filesystem`
+    compared `accessMode` without checking it was set. CEL fails on an absent
+    field rather than reading it as unset.
+  - **Affected:** any guest, class or pool template whose `storage` set, for
+    example, only `storageClassName`, unless it also set `volumeMode: Block`.
+    One example is `test/migration/migration-test.sh --mode offline
+    --storage-class …`.
+  - What the rule rejects is unchanged. Since v0.13.
+- **Deleting a namespace that held guests logged 10–30 reconciler errors**
+  (#699).
+  - Each was a create the API server refused because the namespace was being
+    deleted: launcher pods, ServiceAccounts, RoleBindings, ConfigMaps and
+    kernel pull Jobs.
+  - The guest, sandbox, sandbox pool and kernel controllers now build nothing
+    in a namespace being deleted.
+  - Their deletion paths, which must still run there, are unchanged.
+
+### Dependencies
+
+- `k8s.io/api`, `apimachinery`, `client-go`, `dynamic-resource-allocation`,
+  `apiextensions-apiserver` and `kubelet` 0.37.0 → 0.37.1 (#688).
+- `github.com/go-openapi/jsonpointer` 1.0.2 and `go.etcd.io/etcd/client/pkg/v3`
+  3.7.2, both indirect (#689).
+
+### CI
+
+- **gitleaks no longer flags the SSH key fingerprint that `git tag -v` prints**
+  (#700).
+  - The fingerprint is the hash of a public key. It was flagged because it
+    follows the word "key".
+  - The v0.15.0 release report quoted it, which failed the Secrets check on
+    every branch.
+  - The allowlist entry matches only that whole phrase at the end of a line.
+
+### Docs
+
+- `docs/swiftctl.md` said `start` deletes the existing pod in any case. It now
+  describes what `start` does.
+- `docs/swiftguest-reconcile.md` said a guest shut down from inside reads
+  `PodScheduled=True`. It now says `False`.
+
 ## [v0.15.0] — 2026-09-28
 
 A security release, with live-migration fixes found while validating it on
