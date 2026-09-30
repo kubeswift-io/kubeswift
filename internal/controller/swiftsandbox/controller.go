@@ -24,6 +24,7 @@ import (
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
@@ -68,6 +69,11 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return res, err
 		}
 		return r.handleRetention(ctx, &sb)
+	}
+	// Nothing below can be built in a namespace being deleted. The sandbox is
+	// deleted next, and handleDeletion above takes it apart.
+	if terminating, err := namespaces.Terminating(ctx, r.Client, sb.Namespace); err != nil || terminating {
+		return ctrl.Result{}, err
 	}
 
 	if err := swiftguest.EnsureLauncherRBAC(ctx, r.Client, sb.Namespace, swiftguest.SandboxLauncher); err != nil {

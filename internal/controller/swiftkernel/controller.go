@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 )
 
 // SwiftKernelReconciler reconciles SwiftKernel resources.
@@ -37,6 +38,11 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	if sk.Status.Phase == kernelv1alpha1.SwiftKernelPhaseFailed {
 		return ctrl.Result{}, nil
+	}
+	// No pull Job can be created in a namespace being deleted, and the kernel
+	// is deleted with it.
+	if terminating, err := namespaces.Terminating(ctx, r.Client, sk.Namespace); err != nil || terminating {
+		return ctrl.Result{}, err
 	}
 
 	var nodeList corev1.NodeList

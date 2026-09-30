@@ -113,3 +113,41 @@ func TestSlotsToDelete(t *testing.T) {
 		}
 	}
 }
+
+// Lab validation of v0.15.0: a pool in a namespace being deleted kept trying
+// to create its RBAC and warm slots there, and each refusal was logged as a
+// reconciler error. It is deleted with the namespace; nothing is warmed.
+func TestPoolReconcile_TerminatingNamespaceBuildsNothing(t *testing.T) {
+	for _, terminating := range []bool{false, true} {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns"}}
+		if terminating {
+			now := metav1.Now()
+			ns.DeletionTimestamp = &now
+			ns.Finalizers = []string{"kubernetes"}
+		}
+		pool := &sandboxv1alpha1.SwiftSandboxPool{
+			ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"},
+			Spec:       sandboxv1alpha1.SwiftSandboxPoolSpec{Image: "busybox:1", MinWarm: 0},
+			Status: sandboxv1alpha1.SwiftSandboxPoolStatus{
+				Rootfs: &sandboxv1alpha1.SandboxRootfsStatus{Digest: "sha256:deadbeef"},
+			},
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(ns, pool).WithStatusSubresource(pool).Build()
+		r := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Namespace: "ns", Name: "p"},
+		}); err != nil {
+			t.Fatalf("terminating=%v: reconcile: %v", terminating, err)
+		}
+		var rbs rbacv1.RoleBindingList
+		if err := c.List(context.Background(), &rbs); err != nil {
+			t.Fatal(err)
+		}
+		if terminating && len(rbs.Items) != 0 {
+			t.Errorf("created %d RoleBindings in a namespace being deleted", len(rbs.Items))
+		}
+		if !terminating && len(rbs.Items) == 0 {
+			t.Fatal("control: no RoleBinding in a live namespace, so the check above proves nothing")
+		}
+	}
+}
