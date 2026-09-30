@@ -24,7 +24,7 @@ The SwiftGuest controller reconciles SwiftGuest resources by resolving reference
    - Pod Pending (unschedulable) → `phase=Pending`; PodScheduled=False with reason
    - Pod Running → `phase=Running`; PodScheduled=True; nodeName; podRef
    - Pod Failed → `phase=Failed`; PodScheduled=False with reason
-   - Pod Succeeded → `phase=Stopped`; PodScheduled=True
+   - Pod Succeeded → `phase=Stopped`; PodScheduled=False (`LauncherExited`)
 
 ## Lifecycle guards
 
@@ -67,7 +67,7 @@ reset-in-place default; CH v51 exited on reboot, churning the pod.)
 ## Conditions
 
 - **Resolved** – True when resolution succeeded; False with reason when resolution failed.
-- **PodScheduled** – True when pod is Running or Succeeded; False when Pending or Failed.
+- **PodScheduled** – True when the pod is Running; False when it is Pending, Failed or Succeeded. It describes the current launcher's run, like `GuestRunning`, and is cleared when the launcher exits.
 
 ## Admission vs Reconcile
 

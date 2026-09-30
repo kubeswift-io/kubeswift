@@ -123,8 +123,9 @@ func TestMapPodToStatus_Succeeded(t *testing.T) {
 	if status.Phase != swiftv1alpha1.SwiftGuestPhaseStopped {
 		t.Errorf("phase = %v, want Stopped", status.Phase)
 	}
-	if !hasCondition(status, ConditionPodScheduled, metav1.ConditionTrue) {
-		t.Error("expected PodScheduled=True")
+	// PodScheduled describes the launcher's run, which has ended.
+	if !hasCondition(status, ConditionPodScheduled, metav1.ConditionFalse) {
+		t.Error("expected PodScheduled=False")
 	}
 }
 

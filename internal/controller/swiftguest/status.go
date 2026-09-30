@@ -78,6 +78,13 @@ func dhcpTimeoutMessage(guest *swiftv1alpha1.SwiftGuest, raw string) string {
 	return msg
 }
 
+// launcherExitedReason and launcherExitedMessage are what the run-scoped
+// conditions say once the guest's launcher pod has exited.
+const (
+	launcherExitedReason  = "LauncherExited"
+	launcherExitedMessage = "the launcher exited; the VM is not running"
+)
+
 // ClearRunState drops what described a launcher that is gone.
 //
 // Run-scoped means "true of one launcher pod, and only while it runs":
@@ -232,7 +239,13 @@ func MapPodToStatus(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *sw
 	// Egress reachability (service exposure §4): swiftletd reports whether the
 	// pod netns can reach the cluster DNS ClusterIP. No silent failure — surface
 	// it in status.network.egress + the EgressReady condition.
-	if raw, ok := pod.Annotations[PodAnnotationEgress]; ok && raw != "" {
+	//
+	// Not for a launcher that has exited: its annotation outlives it, and the
+	// terminal-phase clear below turns EgressReady back to False. Mapped first,
+	// a "true" flipped the condition on every pass, so each reconcile moved its
+	// lastTransitionTime and rewrote the status of a guest that had not changed
+	// (lab: evicted guests, about every 30 s).
+	if raw, ok := pod.Annotations[PodAnnotationEgress]; ok && raw != "" && !podFinished(pod) {
 		if status.Network == nil {
 			status.Network = &swiftv1alpha1.GuestNetworkStatus{}
 		}
@@ -293,12 +306,19 @@ func MapPodToStatus(guest *swiftv1alpha1.SwiftGuest, pod *corev1.Pod, status *sw
 		reason, msg := podFailureReason(pod)
 		// The launcher is gone, so the VM is too: say so rather than leave the
 		// last "running with an address" standing on a failed guest.
-		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
+		ClearRunState(status, launcherExitedReason, launcherExitedMessage)
 		SetPodScheduledCondition(status, pod, false, reason+": "+msg)
 	case corev1.PodSucceeded:
 		status.Phase = swiftv1alpha1.SwiftGuestPhaseStopped
-		ClearRunState(status, "LauncherExited", "the launcher exited; the VM is not running")
-		SetPodScheduledCondition(status, pod, true, "")
+		ClearRunState(status, launcherExitedReason, launcherExitedMessage)
+		// PodScheduled is run-scoped, so it says what ClearRunState says. It
+		// used to be set True ("scheduled and running") here, right after
+		// ClearRunState set it False, so each pass flipped it twice and
+		// rewrote the status of a guest that had stopped. Set here as well
+		// for a status that never had the condition, which ClearRunState
+		// leaves alone.
+		setCondition(status, metav1.Condition{Type: ConditionPodScheduled, Status: metav1.ConditionFalse,
+			Reason: launcherExitedReason, Message: launcherExitedMessage})
 	case corev1.PodPending:
 		// A Pending pod whose launcher has not started has no VM behind it —
 		// whatever the last launcher reported. This catches the run state a

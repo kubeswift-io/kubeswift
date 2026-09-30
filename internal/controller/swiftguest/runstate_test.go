@@ -287,3 +287,85 @@ func TestSetCondition_KeepsTransitionTimeUnlessStatusChanges(t *testing.T) {
 		t.Error("a status change must move the transition time")
 	}
 }
+
+// Lab validation of v0.15.0: two guests whose launchers the kubelet had
+// evicted rewrote their status about every 30 s. The failed pod still carried
+// swiftletd's egress-cluster-reachable=true, so each pass set EgressReady True
+// from it and then cleared it to False, moving its lastTransitionTime.
+func TestMapPodToStatus_AnExitedLauncherSettles(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodFailed, corev1.PodSucceeded} {
+		for _, egress := range []string{"true", "false"} {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: testGuestName, Namespace: "ns", UID: "pod-1",
+					Annotations: map[string]string{
+						PodAnnotationEgress:            egress,
+						PodAnnotationGuestIP:           "192.0.2.10",
+						PodAnnotationGuestRuntimePID:   "4242",
+						PodAnnotationGuestSerialSocket: "/run/kubeswift/serial.sock",
+					}},
+				Spec:   corev1.PodSpec{NodeName: "worker-1"},
+				Status: corev1.PodStatus{Phase: phase, Reason: "Evicted"},
+			}
+			st := ranStatus("pod-1")
+			MapPodToStatus(kernelGuest(), pod, st)
+			MapNetworkReadyCondition(kernelGuest(), pod, st)
+			// Backdate every transition, so a restamp cannot hide in the same instant.
+			for i := range st.Conditions {
+				st.Conditions[i].LastTransitionTime = metav1.NewTime(st.Conditions[i].LastTransitionTime.Add(-time.Hour))
+			}
+			settled := st.DeepCopy()
+
+			MapPodToStatus(kernelGuest(), pod, st)
+			MapNetworkReadyCondition(kernelGuest(), pod, st)
+			if !equality.Semantic.DeepEqual(settled, st) {
+				t.Errorf("%s, egress=%s: a second pass over the same exited launcher changed the status:\n before %+v\n after  %+v",
+					phase, egress, settled.Conditions, st.Conditions)
+			}
+			if c := findCondition(st, swiftv1alpha1.ConditionEgressReady); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "LauncherExited" {
+				t.Errorf("%s, egress=%s: EgressReady = %+v, want False/LauncherExited", phase, egress, c)
+			}
+			if st.Network.Egress != "" {
+				t.Errorf("%s, egress=%s: network.egress = %q; it was an observation of the exited launcher", phase, egress, st.Network.Egress)
+			}
+		}
+	}
+}
+
+// The same through Reconcile: once the guest's status says its launcher
+// exited, whether evicted (Failed) or shut down from inside (Succeeded),
+// reconciling it again writes nothing.
+func TestReconcile_ExitedLauncherDoesNotRewriteStatus(t *testing.T) {
+	for phase, want := range map[corev1.PodPhase]swiftv1alpha1.SwiftGuestPhase{
+		corev1.PodFailed:    swiftv1alpha1.SwiftGuestPhaseFailed,
+		corev1.PodSucceeded: swiftv1alpha1.SwiftGuestPhaseStopped,
+	} {
+		exited := runningLauncher("worker-1")
+		exited.UID = "pod-1"
+		exited.Annotations = map[string]string{PodAnnotationEgress: "true", PodAnnotationGuestIP: "192.0.2.10"}
+		exited.Status = corev1.PodStatus{Phase: phase}
+		if phase == corev1.PodFailed {
+			exited.Status.Reason = "Evicted"
+			exited.Status.Message = "The node was low on resource: ephemeral-storage."
+		}
+		c := guestClientBuilder(kernelGuest(), testGuestClass(), readyKernel(), exited).Build()
+		r := &SwiftGuestReconciler{Client: c, Scheme: scheme.Scheme}
+
+		first, _, err := reconcileGuest(t, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.Status.Phase != want {
+			t.Fatalf("%s: phase = %q, want %q", phase, first.Status.Phase, want)
+		}
+		for i := 0; i < 3; i++ {
+			again, _, err := reconcileGuest(t, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if again.ResourceVersion != first.ResourceVersion {
+				t.Fatalf("%s: pass %d rewrote the guest (resourceVersion %s -> %s):\n before %+v\n after  %+v",
+					phase, i+2, first.ResourceVersion, again.ResourceVersion, first.Status.Conditions, again.Status.Conditions)
+			}
+		}
+	}
+}
