@@ -4,7 +4,7 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [v0.15.1] — 2026-09-30
+## [v0.15.1] — 2026-10-01
 
 A patch release: four fixes found by a regression run of v0.15.0 on the three
 lab clusters. That run found no regression in v0.15.0 itself. No new features.
