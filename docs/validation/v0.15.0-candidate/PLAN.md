@@ -1543,3 +1543,80 @@ powered off from inside comes back when started. List the steps for him.
 alerts, clean-up) on each cluster.
 
 **v0.15.1 is tagged only after this round passes and William gives the word.**
+
+## Release: tag v0.15.1 (GO, William's instruction, 2026-10-01)
+
+**The v0.15.1 round passed** (`v0151-phase1.md`, `v0151-dev.md`,
+`v0151-ntx-sov.md`). Thanks. The release PR #701 and the CHANGELOG date fix
+#702 are merged, and main is at `70947a1`.
+
+**What that commit differs in.** Compared with the validated `5968241`, it
+changes only:
+- `CHANGELOG.md`;
+- `charts/kubeswift/Chart.yaml` (version and appVersion `0.15.1`);
+- the install pins in the README, docs and examples;
+- the two standalone manifests (`v0.15.1`).
+
+**No Go, Rust, CRD or chart-template change.**
+
+This session pushes the tag, as for v0.15.0. The driver session cannot push
+tags.
+
+### 1. Tag and push
+
+```sh
+git fetch origin
+git rev-parse origin/main          # expect 70947a12aab3c586aa63454f967afd77120e8cb9 (or a descendant)
+git tag -s v0.15.1 -m "KubeSwift v0.15.1" 70947a12aab3c586aa63454f967afd77120e8cb9
+git tag -v v0.15.1                 # the signature verifies, the object is 70947a1
+git push origin v0.15.1
+```
+
+- **Tag `70947a1` itself,** even if main has moved on since.
+- **If `v0.15.1` already exists on origin,** do not move, delete or re-push it.
+  Report what it points at.
+
+### 2. Watch the release run
+
+**Release Stable** starts on the tag push. **Verify Release does not:** it is
+`workflow_dispatch`-only (`release-v0.15.0.md`). Once Release Stable has
+finished, dispatch it:
+
+```sh
+gh workflow run verify-release.yaml --ref main -f tag=v0.15.1
+```
+
+Record for each run:
+- the URL;
+- every job's result;
+- the total time.
+
+**If a job fails,** do not re-tag and do not delete the tag. Record the
+failing step and its log excerpt, and stop.
+
+### 3. Check what was published
+
+**The checks are as in the v0.15.0 release step,** with `0.15.1` in place of
+`0.15.0`:
+- the GitHub release;
+- its assets;
+- the chart;
+- the nine `cosign verify` image checks;
+- the binaries' signature and checksums;
+- the standalone manifests.
+
+**What the release body must say:**
+- It **starts with** `## [v0.15.1] — 2026-10-01`.
+- It carries the whole CHANGELOG section: the intro, Upgrade, Fixed,
+  Dependencies, CI and Docs.
+- Then come **Install**, **Upgrade**, **Images**, **swiftctl** and **Supply
+  chain**.
+
+### 4. Report
+
+Write `release-v0.15.1.md` in this directory with steps 1 to 3, then commit
+and push it to this branch.
+
+**Do not upgrade the clusters to the stable chart** in this step. They run
+`0.0.0-dev.5968241`, which has the same code as `v0.15.1`. Moving them to
+`0.15.1` is William's call.
