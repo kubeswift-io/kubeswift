@@ -102,6 +102,25 @@ func TestValidate_LocalTemplate(t *testing.T) {
 	errHas(t, err, "hostPath must be omitted")
 }
 
+// A template oci tag would be one tag for every scheduled snapshot, each push
+// moving it off the last (#705); without one, each gets its own.
+func TestValidate_OCITemplate(t *testing.T) {
+	v := &Validator{}
+	oci := func(tag string) *snapshotv1alpha1.SwiftSnapshotSchedule {
+		return sched(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+			s.Spec.Template.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{
+				Type: snapshotv1alpha1.SnapshotBackendOCI,
+				OCI:  &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/vm-snapshots", Tag: tag},
+			}
+		})
+	}
+	if _, err := v.ValidateCreate(context.Background(), oci("")); err != nil {
+		t.Errorf("oci template without a tag: %v", err)
+	}
+	_, err := v.ValidateCreate(context.Background(), oci("nightly"))
+	errHas(t, err, "oci.tag must be omitted")
+}
+
 func TestValidate_UpdateRunsSameRules(t *testing.T) {
 	v := &Validator{}
 	bad := sched(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) { s.Spec.Schedule = "bogus" })

@@ -60,9 +60,10 @@ spec:
         type: oci
         oci:
           repository: ghcr.io/example-org/vm-snapshots
-          # An empty tag defaults to "<namespace>-<snapshot>". status.oci records
-          # the pushed reference AND the manifest digest, which is what a restore
-          # should pin.
+          # No tag: each scheduled snapshot is pushed under its own,
+          # "<namespace>-<snapshot>" (a template tag is refused). status.oci
+          # records the pushed reference AND the manifest digest, which is what
+          # a restore should pin.
           #
           # credentialsSecretRef is the same dockerconfigjson Secret the golden
           # image uses. SOPS-encrypt it: docs/gitops/secrets.md.

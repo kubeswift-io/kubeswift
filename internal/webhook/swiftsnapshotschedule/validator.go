@@ -70,6 +70,11 @@ func validateSchedule(s *snapshotv1alpha1.SwiftSnapshotSchedule) error {
 	if l := s.Spec.Template.Spec.Backend.Local; l != nil && l.HostPath != "" {
 		return fmt.Errorf("spec.template.spec.backend.local.hostPath must be omitted: each scheduled snapshot is captured into a directory derived from its own name")
 	}
+	// Likewise an oci tag would be one tag for every scheduled snapshot, each
+	// push moving it off the last (#705). The controller ignores it.
+	if o := s.Spec.Template.Spec.Backend.OCI; o != nil && o.Tag != "" {
+		return fmt.Errorf("spec.template.spec.backend.oci.tag must be omitted: each scheduled snapshot is pushed under its own tag, <namespace>-<name>")
+	}
 	// The template must be a valid SwiftSnapshot (shape rules only — the source
 	// guest need not exist at schedule-create time).
 	tmpl := &snapshotv1alpha1.SwiftSnapshot{Spec: s.Spec.Template.Spec}

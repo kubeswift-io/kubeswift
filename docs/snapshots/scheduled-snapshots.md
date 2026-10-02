@@ -90,6 +90,13 @@ keep-N safety:
   the controller ignores one an earlier version accepted, which named a single
   directory every snapshot of the schedule overwrote. The snapshots are node-local and
   go with the node; use s3 or oci for copies that outlive it.
+- **oci**: each scheduled snapshot is pushed under its own tag,
+  `<namespace>-<snapshot>`. Leave `backend.oci.tag` out of the template: the
+  webhook rejects one, and the controller ignores it. A fixed tag would name
+  only the newest snapshot and leave the older ones untagged, which some
+  registries (zot, for one) drop at once, so those snapshots could no longer
+  be restored. Deleting a snapshot, by hand or by `keepLast`, deletes only the
+  manifest digest it recorded.
 
 ## Status
 
