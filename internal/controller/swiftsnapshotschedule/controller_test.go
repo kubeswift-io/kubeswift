@@ -172,6 +172,38 @@ func TestReconcile_LocalTemplateHostPathDropped(t *testing.T) {
 	}
 }
 
+// A template oci tag would be one tag for every scheduled snapshot, each push
+// moving it off the last (#705). The scheduled snapshot carries none, so it
+// gets its own default tag.
+func TestReconcile_OCITemplateTagDropped(t *testing.T) {
+	s := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
+		lt := metav1.NewTime(baseTime.Add(-2 * time.Minute))
+		s.Status.LastScheduleTime = &lt
+		s.Spec.Template.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{
+			Type: snapshotv1alpha1.SnapshotBackendOCI,
+			OCI:  &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/vm-snapshots", Tag: "nightly"},
+		}
+	})
+	r, c := newSched(t, baseTime, s)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatal(err)
+	}
+	snaps := listSnaps(t, c)
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 scheduled snapshot, got %d", len(snaps))
+	}
+	if o := snaps[0].Spec.Backend.OCI; o == nil || o.Tag != "" || o.Repository != "registry.example.com/vm-snapshots" {
+		t.Errorf("backend.oci = %+v, want the repository kept and no tag", o)
+	}
+	var after snapshotv1alpha1.SwiftSnapshotSchedule
+	if err := c.Get(context.Background(), req().NamespacedName, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Spec.Template.Spec.Backend.OCI.Tag != "nightly" {
+		t.Error("the schedule's own template must not be modified")
+	}
+}
+
 func TestReconcile_Idempotent_SameTickNoDuplicate(t *testing.T) {
 	s := schedule(func(s *snapshotv1alpha1.SwiftSnapshotSchedule) {
 		lt := metav1.NewTime(baseTime.Add(-2 * time.Minute))

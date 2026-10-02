@@ -132,7 +132,10 @@ type OCIBackend struct {
 	Repository string `json:"repository,omitempty"`
 	// Tag is the artifact tag. Empty defaults to "<namespace>-<snapshot>", a
 	// stable per-snapshot tag; restore reads the artifact from Repository:Tag
-	// but pins it by digest (status.oci.manifestDigest).
+	// but pins it by digest (status.oci.manifestDigest), and deleting the
+	// snapshot deletes only that digest. A tag names whatever was pushed to it
+	// last, so give each snapshot its own; a SwiftSnapshotSchedule template
+	// must omit it.
 	// +optional
 	Tag string `json:"tag,omitempty"`
 	// Insecure allows a plaintext (http) registry instead of TLS. UNSAFE —

@@ -102,6 +102,10 @@ const (
 // namespace is being deleted.
 const ReasonPurgeSkipped = "PurgeSkipped"
 
+// ReasonPurgeIncomplete is the Warning event an oci deletion emits for an
+// artifact it leaves in the registry because no digest was recorded for it.
+const ReasonPurgeIncomplete = "PurgeIncomplete"
+
 const (
 	cleanupPodPrefix = "swift-snap-cleanup-"
 	// maxCleanupPodName keeps the name a DNS label: a pod's hostname is its
@@ -539,6 +543,11 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 // OCIArtifactFinalizer. deletionPolicy: Delete promised this, but the
 // controller never purged anything.
 //
+// Each artifact is deleted by the digest recorded when it was pushed, never by
+// its tag: two snapshots given the same tag push to it in turn, so the tag
+// names whichever pushed last (#705). An artifact with no recorded digest (its
+// push report was lost) is left in place and named in a Warning event.
+//
 // A registry that refuses deletes (several do not implement manifest DELETE)
 // fails the Job; the finalizer is then dropped with the artifact left in
 // place, rather than holding the snapshot -- and its namespace -- in
@@ -561,7 +570,14 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 	var job batchv1.Job
 	getErr := r.Get(ctx, client.ObjectKey{Name: ociDeleteJobName(snap), Namespace: snap.Namespace}, &job)
 	if apierrors.IsNotFound(getErr) {
-		j := buildOCIDeleteJob(snap, r.SnapshotORASImage, refs)
+		pinned, unpinned := splitPinned(refs)
+		if len(unpinned) > 0 {
+			r.warnUnpinned(ctx, snap, unpinned)
+		}
+		if len(pinned) == 0 {
+			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
+		}
+		j := buildOCIDeleteJob(snap, r.SnapshotORASImage, pinned)
 		if err := ctrl.SetControllerReference(snap, j, r.Scheme); err != nil {
 			return false, err
 		}
@@ -611,8 +627,33 @@ func (r *SwiftSnapshotReconciler) skipPurge(ctx context.Context, snap *snapshotv
 	return r.removeNamedFinalizer(ctx, snap, finalizer)
 }
 
-// ociArtifact is one registry artifact to delete.
-type ociArtifact struct{ repository, tag string }
+// ociArtifact is one registry artifact to delete. digest is the manifest
+// digest recorded at push time; it, not the tag, names what to delete.
+type ociArtifact struct{ repository, tag, digest string }
+
+// splitPinned separates the artifacts with a recorded digest from those
+// without one, which cannot be deleted safely.
+func splitPinned(refs []ociArtifact) (pinned, unpinned []ociArtifact) {
+	for _, a := range refs {
+		if a.digest == "" {
+			unpinned = append(unpinned, a)
+		} else {
+			pinned = append(pinned, a)
+		}
+	}
+	return pinned, unpinned
+}
+
+// warnUnpinned reports artifacts left in the registry for want of a digest.
+// Deleting them by tag could delete another snapshot's artifact (#705).
+func (r *SwiftSnapshotReconciler) warnUnpinned(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, unpinned []ociArtifact) {
+	msg := fmt.Sprintf("left in the registry because no digest was recorded at push time, and a tag may name another snapshot's artifact by now: %s. Delete what belongs to this snapshot by hand",
+		ociRefList(unpinned))
+	log.FromContext(ctx).Info(msg, "snapshot", snap.Namespace+"/"+snap.Name)
+	if r.Recorder != nil {
+		r.Recorder.Event(snap, corev1.EventTypeWarning, ReasonPurgeIncomplete, msg)
+	}
+}
 
 // ociRefList renders artifacts as a comma-separated list of references.
 func ociRefList(refs []ociArtifact) string {
@@ -631,17 +672,18 @@ func ociArtifactRefs(snap *snapshotv1alpha1.SwiftSnapshot) []ociArtifact {
 		return nil
 	}
 	var out []ociArtifact
-	add := func(ref string) {
+	add := func(ref, digest string) {
 		if a, ok := splitOCIReference(ref); ok {
+			a.digest = digest
 			out = append(out, a)
 		}
 	}
-	add(st.Reference)
+	add(st.Reference, st.ManifestDigest)
 	if st.Disk != nil {
-		add(st.Disk.Reference)
+		add(st.Disk.Reference, st.Disk.ManifestDigest)
 	}
 	for _, d := range st.DataDisks {
-		add(d.Reference)
+		add(d.Reference, d.ManifestDigest)
 	}
 	return out
 }
@@ -662,7 +704,8 @@ func ociDeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
 }
 
 // buildOCIDeleteJob runs snapshot-oras --mode=delete once per artifact (one
-// container each; the binary deletes a single tag). Registry credentials come
+// container each; the binary deletes a single manifest, by digest; the tag is
+// passed only so the Job shows which artifact it is). Registry credentials come
 // from the same dockerconfigjson Secret the push used. Node-agnostic,
 // non-root, no host access.
 func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs []ociArtifact) *batchv1.Job {
@@ -683,7 +726,7 @@ func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs 
 	}
 	containers := make([]corev1.Container, 0, len(refs))
 	for i, a := range refs {
-		args := []string{"--mode=delete", "--repository=" + a.repository, "--tag=" + a.tag}
+		args := []string{"--mode=delete", "--repository=" + a.repository, "--digest=" + a.digest, "--tag=" + a.tag}
 		if oci != nil && oci.Insecure {
 			args = append(args, "--insecure")
 		}

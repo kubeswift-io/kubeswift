@@ -10,7 +10,7 @@
 //
 //	snapshot-oras --mode=upload   --dir=/snap --repository=REPO --tag=TAG [--insecure] [--snapshot=ns/name] [--include-memory]
 //	snapshot-oras --mode=download --dir=/snap --repository=REPO --tag=TAG [--digest=sha256:...] [--insecure]
-//	snapshot-oras --mode=delete   --repository=REPO --tag=TAG [--insecure]
+//	snapshot-oras --mode=delete   --repository=REPO --digest=sha256:... [--tag=TAG] [--insecure]
 //
 // It also chunks/reassembles a golden raw VM disk (P3 — sparse, zero-skipping,
 // content-addressed chunks that dedup zero regions + unchanged cross-version
@@ -116,8 +116,10 @@ func (a runArgs) validate() error {
 			return fmt.Errorf("--tag or --digest is required for download-image")
 		}
 	case "delete":
-		if a.tag == "" {
-			return fmt.Errorf("--tag is required")
+		// By digest only: a tag names whatever was pushed to it last, which can
+		// be another snapshot's artifact by now (#705).
+		if a.digest == "" {
+			return fmt.Errorf("--digest is required for delete")
 		}
 	default:
 		return fmt.Errorf("--mode must be \"upload\", \"download\", \"upload-image\", \"download-image\", or \"delete\"")
@@ -205,7 +207,7 @@ func run(a runArgs) error {
 		}
 		reportTransfer(transferStats{Reference: ref, ManifestDigest: desc.Digest.String()})
 	case "delete":
-		return deleteArtifact(ctx, repo, a.tag)
+		return deleteArtifact(ctx, repo, a.digest)
 	}
 	return nil
 }

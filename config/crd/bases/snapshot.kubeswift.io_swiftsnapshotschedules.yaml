@@ -215,7 +215,10 @@ spec:
                                 description: |-
                                   Tag is the artifact tag. Empty defaults to "<namespace>-<snapshot>", a
                                   stable per-snapshot tag; restore reads the artifact from Repository:Tag
-                                  but pins it by digest (status.oci.manifestDigest).
+                                  but pins it by digest (status.oci.manifestDigest), and deleting the
+                                  snapshot deletes only that digest. A tag names whatever was pushed to it
+                                  last, so give each snapshot its own; a SwiftSnapshotSchedule template
+                                  must omit it.
                                 type: string
                             type: object
                           s3:

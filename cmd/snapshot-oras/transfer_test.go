@@ -4,11 +4,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"io"
+	"log"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/registry"
 	"oras.land/oras-go/v2/content/memory"
+	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry/remote"
 )
 
 func writeFile(t *testing.T, dir, name string, data []byte) {
@@ -110,7 +118,8 @@ func TestValidate(t *testing.T) {
 	}{
 		{"upload ok", runArgs{mode: "upload", dir: "/snap", repository: "r/x", tag: "t"}, true},
 		{"download ok", runArgs{mode: "download", dir: "/snap", repository: "r/x", tag: "t"}, true},
-		{"delete needs no dir", runArgs{mode: "delete", repository: "r/x", tag: "t"}, true},
+		{"delete needs no dir", runArgs{mode: "delete", repository: "r/x", digest: "sha256:abc"}, true},
+		{"delete needs a digest, not a tag", runArgs{mode: "delete", repository: "r/x", tag: "t"}, false},
 		{"upload needs dir", runArgs{mode: "upload", repository: "r/x", tag: "t"}, false},
 		{"needs repository", runArgs{mode: "upload", dir: "/snap", tag: "t"}, false},
 		{"needs tag", runArgs{mode: "upload", dir: "/snap", repository: "r/x"}, false},
@@ -124,5 +133,53 @@ func TestValidate(t *testing.T) {
 		if !c.ok && err == nil {
 			t.Errorf("%s: want error, got nil", c.name)
 		}
+	}
+}
+
+// Two snapshots given the same tag push to it in turn. Deleting the older one
+// used to resolve the tag, which by then named the newer artifact, and delete
+// that (#705). By digest, only the older artifact goes and the tag keeps the
+// newer one. Runs against a real (in-process) registry over HTTP.
+func TestDeleteArtifact_ByDigestSparesAMovedTag(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	defer srv.Close()
+	repo, err := remote.NewRepository(strings.TrimPrefix(srv.URL, "http://") + "/vm-snapshots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.PlainHTTP = true
+
+	push := func(content string) string {
+		t.Helper()
+		dir := t.TempDir()
+		writeFile(t, dir, "config.json", []byte(content))
+		_, stats, err := packAndPush(ctx, dir, repo, "shared", "ns/snap", false)
+		if err != nil {
+			t.Fatalf("push: %v", err)
+		}
+		return stats.ManifestDigest
+	}
+	older := push(`{"capture":1}`)
+	newer := push(`{"capture":2}`) // the tag now names this one
+	if older == newer {
+		t.Fatal("the two pushes produced the same manifest")
+	}
+
+	if err := deleteArtifact(ctx, repo, older); err != nil {
+		t.Fatalf("delete older: %v", err)
+	}
+	if _, err := repo.Resolve(ctx, older); !errors.Is(err, errdef.ErrNotFound) {
+		t.Errorf("older artifact still resolvable after its delete (err=%v)", err)
+	}
+	if d, err := repo.Resolve(ctx, "shared"); err != nil || d.Digest.String() != newer {
+		t.Errorf("the tag no longer names the newer artifact: digest=%v err=%v", d.Digest, err)
+	}
+	if _, err := repo.Resolve(ctx, newer); err != nil {
+		t.Errorf("newer artifact was deleted along with the older one: %v", err)
+	}
+	// Idempotent: an artifact already gone is success.
+	if err := deleteArtifact(ctx, repo, older); err != nil {
+		t.Errorf("second delete of the same digest: %v", err)
 	}
 }

@@ -239,6 +239,13 @@ func (r *SwiftSnapshotScheduleReconciler) createScheduledSnapshot(ctx context.Co
 	if l := snap.Spec.Backend.Local; l != nil {
 		l.HostPath = ""
 	}
+	// Likewise an oci template tag: every snapshot would push to it, so the
+	// tag would name only the newest and the rest would be left untagged, which
+	// some registries drop at once, breaking their restores (#705). Without one,
+	// each snapshot gets its own default tag, <namespace>-<name>.
+	if o := snap.Spec.Backend.OCI; o != nil {
+		o.Tag = ""
+	}
 	if err := ctrl.SetControllerReference(sched, snap, r.Scheme); err != nil {
 		return err
 	}

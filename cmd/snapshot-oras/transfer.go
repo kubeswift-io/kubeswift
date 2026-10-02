@@ -13,7 +13,6 @@ import (
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/file"
 	"oras.land/oras-go/v2/errdef"
-	"oras.land/oras-go/v2/registry/remote"
 )
 
 // artifactType tags the snapshot as a KubeSwift VM snapshot so a registry
@@ -134,19 +133,28 @@ func pullAndMaterialize(ctx context.Context, src oras.ReadOnlyTarget, ref, dir s
 	return desc, nil
 }
 
-// deleteArtifact removes the tag's manifest from the registry (idempotent — a
-// missing manifest is success). Blob reclamation is the registry's GC, not
-// ours; KubeSwift is a registry client.
-func deleteArtifact(ctx context.Context, repo *remote.Repository, tag string) error {
-	desc, err := repo.Resolve(ctx, tag)
+// manifestDeleter is the part of a registry repository deleteArtifact uses.
+type manifestDeleter interface {
+	Resolve(ctx context.Context, reference string) (ocispec.Descriptor, error)
+	Delete(ctx context.Context, target ocispec.Descriptor) error
+}
+
+// deleteArtifact removes the manifest with this digest (idempotent — a missing
+// manifest is success). It never resolves a tag: two snapshots given the same
+// tag push to it in turn, so deleting the older one by tag removed the newer
+// one's artifact (#705). A registry untags whatever pointed at the deleted
+// manifest, so a tag that has moved on is left alone. Blob reclamation is the
+// registry's GC, not ours; KubeSwift is a registry client.
+func deleteArtifact(ctx context.Context, repo manifestDeleter, digest string) error {
+	desc, err := repo.Resolve(ctx, digest)
 	if err != nil {
 		if errors.Is(err, errdef.ErrNotFound) {
 			return nil
 		}
-		return fmt.Errorf("resolve %s: %w", tag, err)
+		return fmt.Errorf("resolve %s: %w", digest, err)
 	}
-	if err := repo.Delete(ctx, desc); err != nil {
-		return fmt.Errorf("delete %s: %w", tag, err)
+	if err := repo.Delete(ctx, desc); err != nil && !errors.Is(err, errdef.ErrNotFound) {
+		return fmt.Errorf("delete %s: %w", digest, err)
 	}
 	return nil
 }

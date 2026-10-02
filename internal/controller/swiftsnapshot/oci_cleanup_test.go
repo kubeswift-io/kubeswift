@@ -20,9 +20,12 @@ func ociSnapPushed() *snapshotv1alpha1.SwiftSnapshot {
 	s.UID = "snap-uid"
 	s.Finalizers = []string{OCIArtifactFinalizer}
 	s.Status.OCI = &snapshotv1alpha1.OCISnapshotStatus{
-		Reference: "zot.svc:5000/vm-snapshots:team-a-snap1",
-		Disk:      &snapshotv1alpha1.OCIDiskArtifact{Reference: "zot.svc:5000/vm-snapshots:team-a-snap1-disk"},
-		DataDisks: []snapshotv1alpha1.OCIDataDiskArtifact{{Name: "data", Reference: "zot.svc:5000/vm-snapshots:team-a-snap1-data"}},
+		Reference:      "zot.svc:5000/vm-snapshots:team-a-snap1",
+		ManifestDigest: "sha256:mem",
+		Disk:           &snapshotv1alpha1.OCIDiskArtifact{Reference: "zot.svc:5000/vm-snapshots:team-a-snap1-disk", ManifestDigest: "sha256:disk"},
+		DataDisks: []snapshotv1alpha1.OCIDataDiskArtifact{{
+			Name: "data", Reference: "zot.svc:5000/vm-snapshots:team-a-snap1-data", ManifestDigest: "sha256:data",
+		}},
 	}
 	return s
 }
@@ -44,7 +47,8 @@ func TestEnsureFinalizer_OCIBackend_Adds(t *testing.T) {
 	}
 }
 
-// Every pushed artifact is deleted, each by its own tag.
+// Every pushed artifact is deleted, each by the digest recorded at push time:
+// a tag can name another snapshot's artifact by deletion time (#705).
 func TestHandleOCIDeletion_DeletesEveryPushedArtifact(t *testing.T) {
 	snap := ociSnapPushed()
 	r, c := newReconciler(t, snap)
@@ -57,21 +61,21 @@ func TestHandleOCIDeletion_DeletesEveryPushedArtifact(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKey{Name: ociDeleteJobName(snap), Namespace: snap.Namespace}, &job); err != nil {
 		t.Fatalf("delete Job not created: %v", err)
 	}
-	var tags []string
+	var digests []string
 	for _, ct := range job.Spec.Template.Spec.Containers {
 		args := strings.Join(ct.Args, " ")
 		if !strings.Contains(args, "--mode=delete") || !strings.Contains(args, "--repository=zot.svc:5000/vm-snapshots") {
 			t.Errorf("container %s args = %v", ct.Name, ct.Args)
 		}
 		for _, a := range ct.Args {
-			if tag, ok := strings.CutPrefix(a, "--tag="); ok {
-				tags = append(tags, tag)
+			if d, ok := strings.CutPrefix(a, "--digest="); ok {
+				digests = append(digests, d)
 			}
 		}
 	}
-	want := "team-a-snap1,team-a-snap1-disk,team-a-snap1-data"
-	if strings.Join(tags, ",") != want {
-		t.Errorf("tags deleted = %v, want %s", tags, want)
+	want := "sha256:mem,sha256:disk,sha256:data"
+	if strings.Join(digests, ",") != want {
+		t.Errorf("digests deleted = %v, want %s", digests, want)
 	}
 	if !hasFin(t, c, snap, OCIArtifactFinalizer) {
 		t.Error("finalizer must stay while the delete runs")
@@ -146,8 +150,8 @@ func TestS3Deletion_CleansTheCaptureNodeCopyFirst(t *testing.T) {
 
 func TestSplitOCIReference(t *testing.T) {
 	for ref, want := range map[string]ociArtifact{
-		"zot.svc:5000/vm/snaps:t1": {"zot.svc:5000/vm/snaps", "t1"},
-		"ghcr.io/org/repo:v-2":     {"ghcr.io/org/repo", "v-2"},
+		"zot.svc:5000/vm/snaps:t1": {repository: "zot.svc:5000/vm/snaps", tag: "t1"},
+		"ghcr.io/org/repo:v-2":     {repository: "ghcr.io/org/repo", tag: "v-2"},
 	} {
 		got, ok := splitOCIReference(ref)
 		if !ok || got != want {
@@ -158,5 +162,65 @@ func TestSplitOCIReference(t *testing.T) {
 		if _, ok := splitOCIReference(bad); ok {
 			t.Errorf("%q should not split", bad)
 		}
+	}
+}
+
+// An artifact with no recorded digest (its push report was lost) is left in
+// the registry and named in a Warning event: deleting it by tag could delete
+// another snapshot's artifact (#705). The others are still deleted.
+func TestHandleOCIDeletion_LeavesAnArtifactWithNoDigest(t *testing.T) {
+	snap := ociSnapPushed()
+	snap.Status.OCI.Disk.ManifestDigest = ""
+	r, c, rec := newReconcilerIn(t, nil, snap)
+	r.SnapshotORASImage = "img"
+	if done, err := r.handleOCIDeletion(context.Background(), snap); err != nil || done {
+		t.Fatalf("first pass should create the delete Job; done=%v err=%v", done, err)
+	}
+	var job batchv1.Job
+	if err := c.Get(context.Background(), client.ObjectKey{Name: ociDeleteJobName(snap), Namespace: snap.Namespace}, &job); err != nil {
+		t.Fatalf("delete Job not created: %v", err)
+	}
+	for _, ct := range job.Spec.Template.Spec.Containers {
+		if strings.Contains(strings.Join(ct.Args, " "), "team-a-snap1-disk") {
+			t.Errorf("the artifact with no digest is in the delete Job: %v", ct.Args)
+		}
+	}
+	if n := len(job.Spec.Template.Spec.Containers); n != 2 {
+		t.Errorf("delete Job has %d containers, want 2 (memory and data disk)", n)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, ReasonPurgeIncomplete) || !strings.Contains(ev, "team-a-snap1-disk") {
+			t.Errorf("event = %q, want %s naming the disk artifact", ev, ReasonPurgeIncomplete)
+		}
+	default:
+		t.Error("no Warning event for the artifact left in the registry")
+	}
+}
+
+// With no digest recorded for any artifact, nothing can be deleted safely:
+// no Job, the finalizer is dropped, and the event names what is left.
+func TestHandleOCIDeletion_NoDigestAnywhereReleasesWithoutAJob(t *testing.T) {
+	snap := ociSnapPushed()
+	snap.Status.OCI.ManifestDigest = ""
+	snap.Status.OCI.Disk.ManifestDigest = ""
+	snap.Status.OCI.DataDisks[0].ManifestDigest = ""
+	r, c, rec := newReconcilerIn(t, nil, snap)
+	r.SnapshotORASImage = "img"
+	if done, err := r.handleOCIDeletion(context.Background(), snap); err != nil || !done {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+	var jobs batchv1.JobList
+	if err := c.List(context.Background(), &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("created %d Jobs, want none", len(jobs.Items))
+	}
+	if hasFin(t, c, snap, OCIArtifactFinalizer) {
+		t.Error("finalizer should be removed")
+	}
+	if len(rec.Events) != 1 {
+		t.Errorf("got %d events, want one PurgeIncomplete", len(rec.Events))
 	}
 }
