@@ -68,7 +68,7 @@ var resourceCatalog = []resourceKind{
 	// KubeSwift CRDs without a dedicated view.
 	{key: "swiftimages", displayName: "Images", gvr: gvr("image.kubeswift.io", "v1alpha1", "swiftimages"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
 	{key: "swiftkernels", displayName: "Kernels", gvr: gvr("kernel.kubeswift.io", "v1alpha1", "swiftkernels"), namespaced: true, category: "KubeSwift", columns: []string{"phase"}, project: phaseStatusProject},
-	{key: "swiftguestclasses", displayName: "Guest Classes", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestclasses"), namespaced: true, category: "KubeSwift", columns: nil, project: nilProject},
+	{key: "swiftguestclasses", displayName: "Guest Classes", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestclasses"), namespaced: false, category: "KubeSwift", columns: nil, project: nilProject},
 	{key: "swiftguestpools", displayName: "Guest Pools", gvr: gvr("swift.kubeswift.io", "v1alpha1", "swiftguestpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "replicas"}, project: poolProject},
 	{key: "swiftsandboxes", displayName: "Sandboxes", gvr: gvr("sandbox.kubeswift.io", "v1alpha1", "swiftsandboxes"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "image", "node", "ip"}, project: sandboxProject},
 	{key: "swiftsandboxpools", displayName: "Sandbox Pools", gvr: gvr("sandbox.kubeswift.io", "v1alpha1", "swiftsandboxpools"), namespaced: true, category: "KubeSwift", columns: []string{"phase", "warm", "claimed", "min"}, project: sandboxPoolProject},
