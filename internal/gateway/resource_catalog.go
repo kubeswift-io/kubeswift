@@ -53,6 +53,10 @@ var resourceCatalog = []resourceKind{
 
 	// Storage.
 	{key: "persistentvolumeclaims", displayName: "Persistent Volume Claims", gvr: gvr("", "v1", "persistentvolumeclaims"), namespaced: true, category: "Storage", columns: []string{"status", "capacity", "storageClass", "volumeMode"}, project: pvcProject},
+	// What a csi-volume-snapshot SwiftSnapshot names; the UI's snapshot dialog
+	// picks from it (#712). Absent external-snapshotter, listing it is the
+	// in-band "server could not find the requested resource" error.
+	{key: "volumesnapshotclasses", displayName: "Volume Snapshot Classes", gvr: gvr("snapshot.storage.k8s.io", "v1", "volumesnapshotclasses"), namespaced: false, category: "Storage", columns: []string{"driver", "deletionPolicy", "default"}, project: volumeSnapshotClassProject},
 
 	// Config.
 	{key: "secrets", displayName: "Secrets", gvr: gvr("", "v1", "secrets"), namespaced: true, category: "Config", columns: []string{"type", "keys"}, project: secretProject},
@@ -262,6 +266,25 @@ func storageClassProject(u *unstructured.Unstructured) map[string]string {
 		"provisioner":       nestedStr(u, "provisioner"),
 		"reclaimPolicy":     nestedStr(u, "reclaimPolicy"),
 		"volumeBindingMode": nestedStr(u, "volumeBindingMode"),
+	}
+}
+
+// defaultVolumeSnapshotClassAnnotation marks the class a VolumeSnapshot that
+// names none gets.
+const defaultVolumeSnapshotClassAnnotation = "snapshot.storage.kubernetes.io/is-default-class"
+
+// volumeSnapshotClassProject shows what a snapshot picker needs: the CSI driver
+// (a class snapshots only that driver's volumes), the deletion policy, and
+// whether the class is the cluster default.
+func volumeSnapshotClassProject(u *unstructured.Unstructured) map[string]string {
+	def := "false"
+	if u.GetAnnotations()[defaultVolumeSnapshotClassAnnotation] == "true" {
+		def = "true"
+	}
+	return map[string]string{
+		"driver":         nestedStr(u, "driver"),
+		"deletionPolicy": nestedStr(u, "deletionPolicy"),
+		"default":        def,
 	}
 }
 

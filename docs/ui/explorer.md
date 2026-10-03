@@ -21,7 +21,7 @@ The left nav is grouped by category and driven by a server-owned catalog:
 | Cluster | Nodes, Namespaces, Storage Classes, Persistent Volumes |
 | Workloads | Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, Pods |
 | Networking | Services, Ingresses, Network Attachments, Network Policies |
-| Storage | Persistent Volume Claims |
+| Storage | Persistent Volume Claims, Volume Snapshot Classes |
 | Config | Secrets, Config Maps |
 | Access | Service Accounts, Roles, RoleBindings, ClusterRoles, ClusterRoleBindings |
 | KubeSwift | Images, Kernels, Guest Classes, Guest Pools, Sandboxes, Sandbox Pools, Seed Profiles, Snapshots, Snapshot Schedules, Restores, GPU Profiles, GPU Nodes |
