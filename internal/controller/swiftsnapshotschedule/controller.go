@@ -21,6 +21,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/snapshot/cronspec"
+	"github.com/kubeswift-io/kubeswift/internal/storagelocation"
 )
 
 const (
@@ -115,8 +116,13 @@ func (r *SwiftSnapshotScheduleReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
-	setReady(status, &sched, metav1.ConditionTrue, "Scheduled",
-		fmt.Sprintf("schedule %q is valid; a snapshot is created on each tick", sched.Spec.Schedule))
+	if w := waitingChild(children); w != nil {
+		reason, msg := w.waitingReason()
+		setReady(status, &sched, metav1.ConditionFalse, reason, waitingMessage(&sched, w.Name, msg))
+	} else {
+		setReady(status, &sched, metav1.ConditionTrue, "Scheduled",
+			fmt.Sprintf("schedule %q is valid; a snapshot is created on each tick", sched.Spec.Schedule))
+	}
 
 	if err := r.persistStatus(ctx, &sched, status); err != nil {
 		return ctrl.Result{}, err
@@ -296,6 +302,62 @@ func updateObservedStatus(status *snapshotv1alpha1.SwiftSnapshotScheduleStatus, 
 	if lastSuccess != nil {
 		status.LastSuccessfulTime = lastSuccess
 	}
+}
+
+// locationWaits are the reasons a snapshot waits for a person to act on its
+// storage: a location to create or fix, or a Secret to provide. Anything else
+// a pending snapshot reports is left to the snapshot: it is either transient
+// (the guest is still starting) or about the guest, not the schedule.
+var locationWaits = map[string]bool{
+	storagelocation.ReasonNone:               true,
+	storagelocation.ReasonNotFound:           true,
+	storagelocation.ReasonInvalid:            true,
+	storagelocation.ReasonAmbiguous:          true,
+	storagelocation.ReasonCredentialsMissing: true,
+	storagelocation.ReasonSigningKeyMissing:  true,
+}
+
+type waiting struct {
+	*snapshotv1alpha1.SwiftSnapshot
+}
+
+func (w waiting) waitingReason() (string, string) {
+	c := apimeta.FindStatusCondition(w.Status.Conditions, snapshotv1alpha1.SwiftSnapshotConditionReady)
+	return c.Reason, c.Message
+}
+
+// waitingChild is the oldest of the schedule's snapshots that waits for its
+// storage, if any. With concurrencyPolicy Forbid (the default) every tick is
+// skipped while it waits, so the schedule says why, in its own Ready
+// condition, rather than only on a child.
+func waitingChild(children []snapshotv1alpha1.SwiftSnapshot) *waiting {
+	var oldest *snapshotv1alpha1.SwiftSnapshot
+	for i := range children {
+		c := &children[i]
+		if snapshotTerminal(c.Status.Phase) {
+			continue
+		}
+		cond := apimeta.FindStatusCondition(c.Status.Conditions, snapshotv1alpha1.SwiftSnapshotConditionReady)
+		if cond == nil || !locationWaits[cond.Reason] {
+			continue
+		}
+		if oldest == nil || c.CreationTimestamp.Before(&oldest.CreationTimestamp) ||
+			(c.CreationTimestamp.Equal(&oldest.CreationTimestamp) && c.Name < oldest.Name) {
+			oldest = c
+		}
+	}
+	if oldest == nil {
+		return nil
+	}
+	return &waiting{oldest}
+}
+
+func waitingMessage(sched *snapshotv1alpha1.SwiftSnapshotSchedule, child, msg string) string {
+	then := "with concurrencyPolicy Forbid, no new snapshot is created until it goes on"
+	if sched.Spec.ConcurrencyPolicy == snapshotv1alpha1.ConcurrencyAllow {
+		then = "new snapshots are created on each tick, and wait the same way"
+	}
+	return fmt.Sprintf("SwiftSnapshot %s is waiting: %s; %s", child, msg, then)
 }
 
 func snapshotTerminal(p snapshotv1alpha1.SwiftSnapshotPhase) bool {

@@ -98,16 +98,23 @@ keep-N safety:
   be restored. Deleting a snapshot, by hand or by `keepLast`, deletes only the
   manifest digest it recorded.
 
+  The template can also leave `backend.oci` out, or set only
+  `backend.locationRef`: each snapshot then resolves a storage location when
+  it is created (see [SwiftSnapshot](../crds.md#swiftsnapshot)), so the
+  schedule follows a changed default while the snapshots already taken stay
+  where they are.
+
 ## Status
 
-`kubectl get sss` shows a `Ready` column, taken from the schedule's `Ready`
-condition:
+`kubectl get sss` shows `Ready` and `Reason` columns, taken from the
+schedule's `Ready` condition:
 
 | Ready | Reason | Meaning |
 |---|---|---|
 | `True` | `Scheduled` | `spec.schedule` parses; a snapshot is created on each tick. |
 | `False` | `InvalidSchedule` | `spec.schedule` is unusable — it does not parse, or it names a date that never occurs. The schedule will never fire; `message` carries the reason. |
 | `False` | `Suspended` | `spec.suspend` is set. |
+| `False` | a storage reason, e.g. `RegistryCredentialsMissing` | One of the schedule's snapshots waits for its storage location or a Secret the location names; `message` names the snapshot and what it waits for. With `Forbid`, ticks are skipped until it goes on. The reasons are those a SwiftSnapshot waits with: `NoStorageLocation`, `StorageLocationNotFound`, `StorageLocationInvalid`, `AmbiguousStorageLocation`, `RegistryCredentialsMissing`, `SigningKeyMissing`. |
 
 `InvalidSchedule` is the one to watch for. The admission webhook that rejects a
 bad cron expression is off by default (`webhook.enabled=false`), so a malformed
