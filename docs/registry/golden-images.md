@@ -8,8 +8,9 @@ command produces one.
 
 This is the **golden-image** use of the registry — the immutable, reusable base
 disk. It is distinct from **snapshots** (`SwiftSnapshot backend.type: oci`, a
-VM's captured memory + disk state); see [OCI snapshots](../snapshots/s3-snapshots.md)
-and the [cold-migration runbook](../snapshots/cold-migration.md).
+VM's captured memory + disk state); see the
+[OCI snapshot samples](../../config/samples/oci-snapshots/README.md) and the
+[cold-migration runbook](../snapshots/cold-migration.md).
 
 ## How it is stored (sparse, chunked, deduplicated)
 
@@ -175,4 +176,4 @@ registry.
 ## See also
 
 - [Edge Zot profile](edge-zot.md) — mirroring golden images to edge/air-gapped sites
-- [OCI snapshots](../snapshots/s3-snapshots.md) and [cold migration](../snapshots/cold-migration.md) — the *stateful* registry use
+- [OCI snapshot samples](../../config/samples/oci-snapshots/README.md) and [cold migration](../snapshots/cold-migration.md) — the *stateful* registry use
