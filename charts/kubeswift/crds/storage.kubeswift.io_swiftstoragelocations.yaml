@@ -137,7 +137,7 @@ spec:
                 x-kubernetes-validations:
                 - message: anonymous and credentialsSecretName are mutually exclusive
                   rule: '!(has(self.anonymous) && self.anonymous && has(self.credentialsSecretName)
-                    && self.credentialsSecretName != '''')'
+                    && size(self.credentialsSecretName) > 0)'
             type: object
             x-kubernetes-validations:
             - message: a location sets oci, csi, or both

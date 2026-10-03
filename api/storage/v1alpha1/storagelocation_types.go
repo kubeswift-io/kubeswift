@@ -45,7 +45,7 @@ type StorageLocationSpec struct {
 }
 
 // OCILocation is a registry repository KubeSwift pushes artifacts below.
-// +kubebuilder:validation:XValidation:rule="!(has(self.anonymous) && self.anonymous && has(self.credentialsSecretName) && self.credentialsSecretName != '')",message="anonymous and credentialsSecretName are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.anonymous) && self.anonymous && has(self.credentialsSecretName) && size(self.credentialsSecretName) > 0)",message="anonymous and credentialsSecretName are mutually exclusive"
 type OCILocation struct {
 	// Repository is the repository prefix, without a tag or digest, e.g.
 	// registry.example.com/kubeswift. Artifacts go below it: a cluster

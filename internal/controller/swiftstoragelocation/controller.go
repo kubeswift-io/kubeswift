@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -53,6 +55,50 @@ type ClusterReconciler struct {
 	Scheme *runtime.Scheme
 	// Probe checks a registry; nil means ProbeRegistry.
 	Probe Prober
+	// Now is the clock; nil means time.Now. Replaced in tests.
+	Now func() time.Time
+
+	// probed records, per location, when its registry was last probed and
+	// for which generation. Reconciles come far more often than probes
+	// should: the manager resyncs every object every 30s, and each status
+	// write is an event of its own.
+	mu     sync.Mutex
+	probed map[string]probeRecord
+}
+
+type probeRecord struct {
+	generation int64
+	at         time.Time
+}
+
+// probeDue reports whether the location's registry should be probed now and,
+// if not, how long until it should.
+func (r *ClusterReconciler) probeDue(name string, generation int64, now time.Time) (bool, time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.probed[name]
+	if !ok || rec.generation != generation {
+		return true, 0
+	}
+	if wait := rec.at.Add(reachabilityRefresh).Sub(now); wait > 0 {
+		return false, wait
+	}
+	return true, 0
+}
+
+func (r *ClusterReconciler) recordProbe(name string, generation int64, now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.probed == nil {
+		r.probed = map[string]probeRecord{}
+	}
+	r.probed[name] = probeRecord{generation: generation, at: now}
+}
+
+func (r *ClusterReconciler) forgetProbe(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.probed, name)
 }
 
 // NamespaceReconciler reconciles SwiftStorageLocations. It never probes: the
@@ -65,6 +111,9 @@ type NamespaceReconciler struct {
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var loc storagev1alpha1.SwiftClusterStorageLocation
 	if err := r.Get(ctx, req.NamespacedName, &loc); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.forgetProbe(req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if loc.DeletionTimestamp != nil {
@@ -78,20 +127,29 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	valid := setConditions(&loc.Status, loc.Generation, &loc.Spec, loc.Name, defaults, "SwiftClusterStorageLocation")
 	var requeue time.Duration
 	if loc.Spec.OCI != nil && valid {
-		probe := r.Probe
-		if probe == nil {
-			probe = ProbeRegistry
+		now := time.Now()
+		if r.Now != nil {
+			now = r.Now()
 		}
-		ok, msg := probe(ctx, loc.Spec.OCI)
-		reason, status := ReasonReachable, metav1.ConditionTrue
-		if !ok {
-			reason, status = ReasonUnreachable, metav1.ConditionFalse
+		due, wait := r.probeDue(loc.Name, loc.Generation, now)
+		if due {
+			probe := r.Probe
+			if probe == nil {
+				probe = ProbeRegistry
+			}
+			ok, msg := probe(ctx, loc.Spec.OCI)
+			r.recordProbe(loc.Name, loc.Generation, now)
+			reason, status := ReasonReachable, metav1.ConditionTrue
+			if !ok {
+				reason, status = ReasonUnreachable, metav1.ConditionFalse
+			}
+			meta.SetStatusCondition(&loc.Status.Conditions, metav1.Condition{
+				Type: storagev1alpha1.ConditionReachable, Status: status, Reason: reason,
+				Message: msg, ObservedGeneration: loc.Generation,
+			})
+			wait = reachabilityRefresh
 		}
-		meta.SetStatusCondition(&loc.Status.Conditions, metav1.Condition{
-			Type: storagev1alpha1.ConditionReachable, Status: status, Reason: reason,
-			Message: msg, ObservedGeneration: loc.Generation,
-		})
-		requeue = reachabilityRefresh
+		requeue = wait
 	} else {
 		meta.RemoveStatusCondition(&loc.Status.Conditions, storagev1alpha1.ConditionReachable)
 	}

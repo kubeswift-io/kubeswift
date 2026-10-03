@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -88,6 +89,61 @@ func TestClusterLocation_TwoDefaultsAreBothNotReady(t *testing.T) {
 	}
 	if c := cond(reconcileCluster(t, r, "c").Status.Conditions, storagev1alpha1.ConditionReady); c == nil || c.Status != metav1.ConditionTrue {
 		t.Errorf("a non-default location is unaffected; Ready = %+v", c)
+	}
+}
+
+// The manager resyncs every object every 30s and a status write is an event
+// of its own, so reconciles come far more often than probes should. A
+// registry is probed once per refresh interval, and again at once when the
+// spec changes.
+func TestClusterLocation_ProbesOncePerRefresh(t *testing.T) {
+	probes := 0
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	c := newClient(clusterLoc("main", false, "registry.example.com/kubeswift"))
+	r := &ClusterReconciler{Client: c, Now: func() time.Time { return now },
+		Probe: func(context.Context, *storagev1alpha1.OCILocation) (bool, string) { probes++; return true, "answered" }}
+	reconcile := func() ctrl.Result {
+		t.Helper()
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "main"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	reconcile()
+	for i := 0; i < 5; i++ {
+		now = now.Add(30 * time.Second)
+		res := reconcile()
+		if res.RequeueAfter <= 0 || res.RequeueAfter > reachabilityRefresh {
+			t.Fatalf("RequeueAfter = %v, want the time left until the next probe", res.RequeueAfter)
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("six reconciles within the refresh interval probed %d times, want 1", probes)
+	}
+
+	now = now.Add(reachabilityRefresh)
+	reconcile()
+	if probes != 2 {
+		t.Fatalf("after the refresh interval: %d probes, want 2", probes)
+	}
+
+	var loc storagev1alpha1.SwiftClusterStorageLocation
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "main"}, &loc); err != nil {
+		t.Fatal(err)
+	}
+	loc.Spec.OCI.Insecure = true
+	loc.Generation++
+	if err := c.Update(context.Background(), &loc); err != nil {
+		t.Fatal(err)
+	}
+	reconcile()
+	if probes != 3 {
+		t.Fatalf("after a spec change: %d probes, want 3", probes)
+	}
+	if got := reconcileCluster(t, r, "main"); cond(got.Status.Conditions, storagev1alpha1.ConditionReachable) == nil {
+		t.Error("a reconcile that skips the probe must keep the Reachable condition")
 	}
 }
 
