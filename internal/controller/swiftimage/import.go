@@ -173,17 +173,18 @@ func (r *SwiftImageReconciler) StartImport(ctx context.Context, img *imagev1alph
 }
 
 // importHTTP creates a PVC and Job to fetch the URL.
-func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
-	pvcName := importPVCNamePrefix + img.Name
-	jobName := names.JobName(importJobNamePrefix+img.Name, "")
-
-	// PVC size: from spec.rootDisk.size if set, else default 10Gi
+// ensureImportPVC creates the import PVC, the one holding the prepared raw
+// disk, for every source alike. Its size is spec.rootDisk.size, else 10Gi.
+// importStorageClassName picks its class; empty leaves StorageClassName nil so
+// the cluster default applies, the behaviour every existing SwiftImage relies
+// on. The OCI import used to build its own PVC without the class (#714), which
+// put an OCI image, and the guests cloned from it, on the default class
+// whatever the field said.
+func (r *SwiftImageReconciler) ensureImportPVC(ctx context.Context, img *imagev1alpha1.SwiftImage, pvcName string) error {
 	storageReq := resource.MustParse("10Gi")
 	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
 		storageReq = *img.Spec.RootDisk.Size
 	}
-
-	// Create PVC if not exists
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: img.Namespace},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -193,15 +194,22 @@ func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha
 			},
 		},
 	}
-	// Empty leaves StorageClassName nil so the cluster default applies — the
-	// behaviour every existing SwiftImage relies on.
 	if sc := img.Spec.ImportStorageClassName; sc != "" {
 		pvc.Spec.StorageClassName = &sc
 	}
 	if err := controllerutil.SetControllerReference(img, pvc, r.Scheme); err != nil {
-		return nil, err
+		return err
 	}
 	if err := r.Create(ctx, pvc); err != nil && !errors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func (r *SwiftImageReconciler) importHTTP(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
+	pvcName := importPVCNamePrefix + img.Name
+	jobName := names.JobName(importJobNamePrefix+img.Name, "")
+	if err := r.ensureImportPVC(ctx, img, pvcName); err != nil {
 		return nil, err
 	}
 
@@ -283,24 +291,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	}
 	pvcName := importPVCNamePrefix + img.Name
 	jobName := names.JobName(importJobNamePrefix+img.Name, "")
-
-	storageReq := resource.MustParse("10Gi")
-	if img.Spec.RootDisk != nil && img.Spec.RootDisk.Size != nil && !img.Spec.RootDisk.Size.IsZero() {
-		storageReq = *img.Spec.RootDisk.Size
-	}
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: pvcName, Namespace: img.Namespace},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: storageReq},
-			},
-		},
-	}
-	if err := controllerutil.SetControllerReference(img, pvc, r.Scheme); err != nil {
-		return nil, err
-	}
-	if err := r.Create(ctx, pvc); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.ensureImportPVC(ctx, img, pvcName); err != nil {
 		return nil, err
 	}
 
