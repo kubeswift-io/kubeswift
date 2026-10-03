@@ -3,6 +3,7 @@ package storagelocation
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -172,7 +173,11 @@ func checked(res *Resolved, need Need) (*Resolved, *Wait, error) {
 	return res, nil, nil
 }
 
+// ambiguous names the competing defaults, sorted: the cache lists them in no
+// particular order, and the message should not change between reconciles.
 func ambiguous(kind string, names []string, where string) *Wait {
+	names = append([]string(nil), names...)
+	sort.Strings(names)
 	return &Wait{Reason: ReasonAmbiguous, Message: fmt.Sprintf(
 		"%ss %s are all defaults in %s; unset spec.default on all but one, or name one in locationRef",
 		kind, strings.Join(names, ", "), where)}
