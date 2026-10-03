@@ -272,6 +272,10 @@ func main() {
 	if err = (&swiftkernel.SwiftKernelReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		// Node cleanup pods run here, as the snapshot controller's do: a
+		// kernel's namespace refuses new pods while it is being deleted.
+		ControllerNamespace: os.Getenv(leaderElectionNSEnv),
+		Recorder:            mgr.GetEventRecorderFor("swiftkernel-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		klog.ErrorS(err, "unable to create SwiftKernel controller")
 		os.Exit(1)

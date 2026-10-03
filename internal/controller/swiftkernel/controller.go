@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +26,11 @@ import (
 type SwiftKernelReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// ControllerNamespace is where node cleanup pods run (POD_NAMESPACE): a
+	// kernel's own namespace admits no new pod while it is being deleted.
+	ControllerNamespace string
+	// Recorder reports a node a deletion could not clean.
+	Recorder record.EventRecorder
 }
 
 // Reconcile implements the reconcile loop.
@@ -33,7 +39,23 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	var sk kernelv1alpha1.SwiftKernel
 	if err := r.Get(ctx, req.NamespacedName, &sk); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		// Gone. A cleanup pod has no owner reference, so one left behind
+		// (the finalizer was removed by hand mid-cleanup) is deleted here.
+		return ctrl.Result{}, r.deleteOrphanCleanupPods(ctx, req.Namespace)
+	}
+
+	// Before the Failed and terminating-namespace checks: a failed kernel may
+	// have files on the nodes it did pull to, and a namespace being deleted
+	// deletes its kernels, whose cleanup pods run in the controller's namespace.
+	if sk.DeletionTimestamp != nil {
+		requeue, err := r.handleDeletion(ctx, &sk)
+		return ctrl.Result{RequeueAfter: requeue}, err
+	}
+	if err := r.ensureFinalizer(ctx, &sk); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if sk.Status.Phase == kernelv1alpha1.SwiftKernelPhaseFailed {

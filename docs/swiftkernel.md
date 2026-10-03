@@ -127,6 +127,14 @@ For the example above: `/var/lib/kubeswift/kernels/default/faas-minimal/`. This 
 
 The directory contains the raw OCI artifact layers as pulled by ORAS. For the faas-minimal profile, this means `bzImage` and `rootfs.cpio.gz`.
 
+### Deleting a SwiftKernel
+
+Deleting a SwiftKernel removes its directory from every node it was pulled to, including a node that has since lost the `kubeswift.io/kernel-node` label. The `kubeswift.io/swiftkernel-node-cleanup` finalizer holds the object until then. One short-lived pod per node does the removal, in the controller's namespace, so it also runs when the kernel's namespace is being deleted.
+
+While a running pod still mounts the kernel's directory (a kernel-boot guest's launcher, a sandbox, a warm pool slot), the SwiftKernel stays in deletion and its files stay on the nodes, as a PersistentVolumeClaim in use does: the hypervisor reads the kernel again when the guest reboots. A `KernelInUse` event names the pods. The cleanup runs once the last of them is gone.
+
+A node that is gone has nothing to clean. A node whose cleanup pod fails, or cannot run within five minutes (a node that is down), is given up: the deletion completes and a `NodeCleanupSkipped` Warning event on the SwiftKernel names the node and the directory to remove by hand. When the kernel's namespace is itself being deleted, the API server refuses that event, and the controller's log is the record.
+
 ## Building a kernel profile
 
 Kernel profiles use [Buildroot](https://buildroot.org/) to produce a Linux kernel and initramfs. The faas-minimal profile in `build/kernels/faas-minimal/` is the reference implementation.
