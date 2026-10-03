@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -335,6 +336,64 @@ func TestValidate_LocalBackendSpecImmutable(t *testing.T) {
 	_, err := v.ValidateUpdate(context.Background(), old, new)
 	if err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Errorf("expected immutability rejection on local hostPath change, got: %v", err)
+	}
+}
+
+// Restore and clone read the backend from the spec when they run, so every
+// part of it must stay as captured; only deletionPolicy and ttl may change
+// (#707). The old comparison skipped s3, oci, includeDisk and ttl.
+func TestValidate_SpecImmutableExceptDeletionPolicyAndTTL(t *testing.T) {
+	v := &Validator{}
+	ociSnap := func() *snapshotv1alpha1.SwiftSnapshot {
+		s := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+		s.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/vm-snapshots", Tag: "nightly"}
+		s.Spec.IncludeMemory = true
+		return s
+	}
+	s3Snap := func() *snapshotv1alpha1.SwiftSnapshot {
+		s := makeSnap(snapshotv1alpha1.SnapshotBackendS3)
+		s.Spec.Backend.S3 = &snapshotv1alpha1.S3Backend{Bucket: "backups", Endpoint: "minio:9000",
+			CredentialsSecretRef: &snapshotv1alpha1.SecretObjectReference{Name: "s3"}}
+		return s
+	}
+	refused := map[string]func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot){
+		"oci repository": func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot) {
+			n := ociSnap()
+			n.Spec.Backend.OCI.Repository = "elsewhere.example.com/x"
+			return ociSnap(), n
+		},
+		"oci credentials": func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot) {
+			n := ociSnap()
+			n.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "other"}
+			return ociSnap(), n
+		},
+		"includeDisk": func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot) {
+			n := ociSnap()
+			n.Spec.IncludeDisk = true
+			return ociSnap(), n
+		},
+		"s3 bucket": func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot) {
+			n := s3Snap()
+			n.Spec.Backend.S3.Bucket = "other"
+			return s3Snap(), n
+		},
+		"s3 endpoint": func() (*snapshotv1alpha1.SwiftSnapshot, *snapshotv1alpha1.SwiftSnapshot) {
+			n := s3Snap()
+			n.Spec.Backend.S3.Endpoint = "elsewhere:9000"
+			return s3Snap(), n
+		},
+	}
+	for name, pair := range refused {
+		old, new := pair()
+		if _, err := v.ValidateUpdate(context.Background(), old, new); err == nil || !strings.Contains(err.Error(), "immutable") {
+			t.Errorf("%s change: want an immutability refusal, got %v", name, err)
+		}
+	}
+	old, new := ociSnap(), ociSnap()
+	new.Spec.DeletionPolicy = snapshotv1alpha1.SnapshotDeletionPolicyRetain
+	new.Spec.TTL = &metav1.Duration{Duration: 24 * time.Hour}
+	if _, err := v.ValidateUpdate(context.Background(), old, new); err != nil {
+		t.Errorf("deletionPolicy and ttl may change: %v", err)
 	}
 }
 

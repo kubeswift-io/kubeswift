@@ -98,7 +98,7 @@ The controller copies the source guest's spec to the target, pre-creates the tar
 - **Disk-only, crash-consistent.** Memory state is not captured. Quiesce databases (`fsfreeze`, application-level checkpoints) before snapshotting if you need application consistency.
 - **Source size.** The clone PVC is provisioned at the snapshot's source size and expanded post-bind if the SwiftGuestClass requests more — Longhorn refuses different-size dataSource clones (Phase 0 §5).
 - **Backend allowlist.** Only `csi-volume-snapshot` is implemented; the validation webhook rejects `local` and `s3` backends with a clear "reserved for Phase N" message.
-- **Spec immutability.** Both SwiftSnapshot and SwiftRestore specs are immutable after creation. Re-running with different inputs creates a new resource.
+- **Spec immutability.** Both SwiftSnapshot and SwiftRestore specs are immutable after creation; a SwiftSnapshot's `deletionPolicy` and `ttl` are the exceptions. Re-running with different inputs creates a new resource.
 - **Identity regeneration.** `spec.identity.regenerate` is reserved for Phase 2 (memory-snapshot clones); it must be empty in Phase 1.
 
 ## Cleanup

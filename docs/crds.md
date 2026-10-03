@@ -462,6 +462,8 @@ Captures a VM snapshot: disk-only (CSI VolumeSnapshot) or memory+disk (local hos
 | `deletionPolicy` | enum | `Delete` (default) or `Retain` — whether to purge artifacts on deletion. |
 | `ttl` | Duration | Age-based retention; the snapshot self-deletes after `ttl` unless still referenced. |
 
+The spec is immutable after creation except `deletionPolicy` and `ttl`; the API server refuses other edits even with the webhook off. Create a new SwiftSnapshot to capture differently.
+
 Full reference: [CSI snapshots](snapshots/csi-snapshots.md).
 
 ---

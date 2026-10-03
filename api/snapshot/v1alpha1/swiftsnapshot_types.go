@@ -499,6 +499,13 @@ type SwiftSnapshot struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
+	// Spec is immutable except deletionPolicy and ttl (#707): restore and
+	// clone read the backend from it when they run, so an edit after the
+	// capture would point them at another registry or bucket. The webhook
+	// enforces the same; this rule holds when it is off. It sits on this field,
+	// not on SwiftSnapshotSpec, because a schedule's template is that type too
+	// and stays editable.
+	// +kubebuilder:validation:XValidation:rule="self.guestRef == oldSelf.guestRef && self.backend == oldSelf.backend && (has(self.includeMemory) ? self.includeMemory : true) == (has(oldSelf.includeMemory) ? oldSelf.includeMemory : true) && (has(self.includeDisk) && self.includeDisk) == (has(oldSelf.includeDisk) && oldSelf.includeDisk) && (has(self.resumeAfterSnapshot) ? self.resumeAfterSnapshot : true) == (has(oldSelf.resumeAfterSnapshot) ? oldSelf.resumeAfterSnapshot : true)",message="spec is immutable except deletionPolicy and ttl: create a new SwiftSnapshot to change what it captures or where it is stored"
 	Spec   SwiftSnapshotSpec   `json:"spec,omitempty"`
 	Status SwiftSnapshotStatus `json:"status,omitempty"`
 }
