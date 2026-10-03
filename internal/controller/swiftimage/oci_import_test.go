@@ -202,3 +202,40 @@ func TestStartImport_OCINoImageConfigured_Failed(t *testing.T) {
 		t.Errorf("phase = %s, want Failed when snapshot-oras image is unconfigured", result.Phase)
 	}
 }
+
+// importStorageClassName picks the import PVC's class for every source. The
+// OCI import built its PVC without it (#714), so an image pulled from a
+// registry, and the guests cloned from it, landed on the cluster default.
+// Empty keeps StorageClassName nil (the cluster default), as before.
+func TestStartImport_ImportStorageClassNameForEverySource(t *testing.T) {
+	for name, src := range map[string]imagev1alpha1.ImageSource{
+		"http": {HTTP: &imagev1alpha1.HTTPSource{URL: "https://images.example.com/disk.img"}},
+		"oci":  {OCI: &imagev1alpha1.OCIImageSource{Repository: "zot.svc:5000/golden-ubuntu", Tag: "24.04"}},
+	} {
+		for _, sc := range []string{"fast-block", ""} {
+			scheme := testScheme()
+			c := fake.NewClientBuilder().WithScheme(scheme).Build()
+			r := &SwiftImageReconciler{Client: c, Scheme: scheme, SnapshotORASImage: "ghcr.io/k/snapshot-oras:test"}
+			img := &imagev1alpha1.SwiftImage{
+				ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "default"},
+				Spec: imagev1alpha1.SwiftImageSpec{
+					Format: imagev1alpha1.DiskFormatRaw, Source: src, ImportStorageClassName: sc,
+				},
+			}
+			if _, err := r.StartImport(context.Background(), img); err != nil {
+				t.Fatalf("%s: StartImport: %v", name, err)
+			}
+			var pvc corev1.PersistentVolumeClaim
+			if err := c.Get(context.Background(), types.NamespacedName{Name: importPVCNamePrefix + "gold", Namespace: "default"}, &pvc); err != nil {
+				t.Fatalf("%s: import PVC: %v", name, err)
+			}
+			got := ""
+			if pvc.Spec.StorageClassName != nil {
+				got = *pvc.Spec.StorageClassName
+			}
+			if got != sc || (sc == "" && pvc.Spec.StorageClassName != nil) {
+				t.Errorf("%s source, importStorageClassName %q: PVC class = %v", name, sc, pvc.Spec.StorageClassName)
+			}
+		}
+	}
+}
