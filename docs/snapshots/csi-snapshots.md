@@ -31,7 +31,7 @@ The VM is **not paused** during snapshot. The capture is crash-consistent — eq
 swiftctl snapshot create db-2026-04-25 --guest db --vsclass csi-hostpath-snapclass
 ```
 
-The `--vsclass` flag is optional when the cluster has a default VolumeSnapshotClass (annotation `snapshot.storage.kubernetes.io/is-default-class=true`).
+The `--vsclass` flag is optional. Without it the class comes from a storage location (`--location NAME` or `--location cluster/NAME`, else the namespace's default SwiftStorageLocation, else the cluster's default SwiftClusterStorageLocation, when it sets `csi.volumeSnapshotClassName`), else the cluster's default VolumeSnapshotClass (annotation `snapshot.storage.kubernetes.io/is-default-class=true`). With none of them the snapshot fails at once with `NoVolumeSnapshotClass`.
 
 Equivalent CR:
 

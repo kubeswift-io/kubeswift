@@ -57,6 +57,12 @@ var resourceCatalog = []resourceKind{
 	// picks from it (#712). Absent external-snapshotter, listing it is the
 	// in-band "server could not find the requested resource" error.
 	{key: "volumesnapshotclasses", displayName: "Volume Snapshot Classes", gvr: gvr("snapshot.storage.k8s.io", "v1", "volumesnapshotclasses"), namespaced: false, category: "Storage", columns: []string{"driver", "deletionPolicy", "default"}, project: volumeSnapshotClassProject},
+	// Where KubeSwift keeps what it pushes to a registry (#703): the cluster's
+	// default and each namespace's own. The UI's Settings page reads and
+	// writes them; they hold Secret names, a CA and a public key, never a
+	// secret.
+	{key: "swiftclusterstoragelocations", displayName: "Cluster Storage Locations", gvr: gvr("storage.kubeswift.io", "v1alpha1", "swiftclusterstoragelocations"), namespaced: false, category: "Storage", columns: []string{"default", "repository", "ready", "reachable"}, project: storageLocationProject},
+	{key: "swiftstoragelocations", displayName: "Storage Locations", gvr: gvr("storage.kubeswift.io", "v1alpha1", "swiftstoragelocations"), namespaced: true, category: "Storage", columns: []string{"default", "repository", "ready"}, project: storageLocationProject},
 
 	// Config.
 	{key: "secrets", displayName: "Secrets", gvr: gvr("", "v1", "secrets"), namespaced: true, category: "Config", columns: []string{"type", "keys"}, project: secretProject},
@@ -286,6 +292,43 @@ func volumeSnapshotClassProject(u *unstructured.Unstructured) map[string]string 
 		"deletionPolicy": nestedStr(u, "deletionPolicy"),
 		"default":        def,
 	}
+}
+
+// storageLocationProject reports a storage location's default flag, its
+// registry repository (or the VolumeSnapshotClass of a csi-only location), and
+// its Ready and Reachable conditions (Reachable is set on cluster locations
+// only).
+func storageLocationProject(u *unstructured.Unstructured) map[string]string {
+	def := "false"
+	if b, ok, _ := unstructured.NestedBool(u.Object, "spec", "default"); ok && b {
+		def = "true"
+	}
+	repo := nestedStr(u, "spec", "oci", "repository")
+	if repo == "" {
+		if c := nestedStr(u, "spec", "csi", "volumeSnapshotClassName"); c != "" {
+			repo = "class " + c
+		}
+	}
+	return map[string]string{
+		"default":    def,
+		"repository": repo,
+		"ready":      conditionStatus(u, "Ready"),
+		"reachable":  conditionStatus(u, "Reachable"),
+	}
+}
+
+// conditionStatus is the status ("True", "False", "Unknown") of the named
+// status condition, or "" when it is absent.
+func conditionStatus(u *unstructured.Unstructured, condType string) string {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if ok && m["type"] == condType {
+			s, _ := m["status"].(string)
+			return s
+		}
+	}
+	return ""
 }
 
 // secretProject emits metadata ONLY — type + the data key names — and never

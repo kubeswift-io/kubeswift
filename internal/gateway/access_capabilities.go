@@ -88,6 +88,18 @@ var capabilities = []capability{
 			rule([]string{"seed.kubeswift.io"}, []string{"swiftseedprofiles"}, []string{"get", "list"}),
 			rule([]string{"snapshot.kubeswift.io"}, []string{"swiftsnapshots", "swiftsnapshotschedules", "swiftrestores"}, []string{"get", "list"}),
 			rule([]string{"gpu.kubeswift.io"}, []string{"swiftgpunodes", "swiftgpuprofiles"}, []string{"get", "list"}),
+			rule([]string{"storage.kubeswift.io"}, []string{"swiftclusterstoragelocations", "swiftstoragelocations"}, []string{"get", "list"}),
+		},
+	},
+	{
+		// Both kinds in one capability: granted through a RoleBinding it
+		// covers only the namespace's own SwiftStorageLocations (cluster-scoped
+		// kinds need a ClusterRoleBinding), so a tenant can manage its
+		// namespace's location while the cluster default stays an admin's.
+		key: "manage-storage-locations", displayName: "Manage storage locations",
+		description: "Create and edit where snapshots are stored: a namespace's SwiftStorageLocations, and, when granted cluster-wide, the cluster's SwiftClusterStorageLocations.",
+		rules: []rbacv1.PolicyRule{
+			rule([]string{"storage.kubeswift.io"}, []string{"swiftclusterstoragelocations", "swiftstoragelocations"}, []string{"get", "list", "watch", "create", "update", "patch", "delete"}),
 		},
 	},
 	{
@@ -129,7 +141,7 @@ type predefinedRole struct {
 var predefinedRoles = []predefinedRole{
 	{"kubeswift-viewer", "View-only", []string{"view-vms", "view-resources"}},
 	{"kubeswift-operator", "Operator", []string{"view-vms", "manage-vms", "console", "migrate", "manage-snapshots", "view-resources"}},
-	{"kubeswift-admin", "Admin", []string{"view-vms", "manage-vms", "console", "migrate", "manage-snapshots", "view-resources", "view-secrets", "manage-rbac"}},
+	{"kubeswift-admin", "Admin", []string{"view-vms", "manage-vms", "console", "migrate", "manage-snapshots", "view-resources", "manage-storage-locations", "view-secrets", "manage-rbac"}},
 }
 
 func capabilityByKey(key string) *capability {

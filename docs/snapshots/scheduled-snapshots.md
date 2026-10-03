@@ -29,13 +29,17 @@ owned by the schedule and labelled `snapshot.kubeswift.io/schedule=<name>`.
 
 ```bash
 swiftctl schedule create nightly-db --guest db --schedule "0 2 * * *" --keep-last 7
+swiftctl schedule create nightly-oci --guest db --schedule "0 3 * * *" --keep-last 7 --backend oci
 swiftctl schedule list
 swiftctl schedule describe nightly-db
 swiftctl schedule delete nightly-db          # cascade-deletes the schedule's snapshots
 ```
 
-For the **s3** backend, apply a YAML manifest (it needs bucket/endpoint/
-credentials) — see [`config/samples/snapshot-schedule/02-schedule-s3-ttl.yaml`](../../config/samples/snapshot-schedule/02-schedule-s3-ttl.yaml).
+`--backend oci` stores each snapshot in a storage location: `--location NAME`
+(a SwiftStorageLocation in the namespace) or `--location cluster/NAME`, else
+the defaults. To name a registry directly, apply a manifest with
+`backend.oci`. For the **s3** backend, apply a YAML manifest (it needs
+bucket/endpoint/credentials) — see [`config/samples/snapshot-schedule/02-schedule-s3-ttl.yaml`](../../config/samples/snapshot-schedule/02-schedule-s3-ttl.yaml).
 
 ## Semantics
 
