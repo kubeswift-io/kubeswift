@@ -10,13 +10,15 @@ import (
 // command execution in a root container that mounts /var/lib/kubeswift/kernels
 // from the node.
 func TestPullScript_DoesNotInterpolateImage(t *testing.T) {
-	script := pullScript("/var/lib/kubeswift/kernels/ns-name")
-	for _, p := range []string{"$(", "`", "${IFS}"} {
-		if strings.Contains(script, p) && !strings.Contains(script, `"$`+pullImageEnv+`"`) {
-			t.Fatalf("script may interpolate user input: %s", script)
+	for _, auth := range []bool{false, true} {
+		script := pullScript("/var/lib/kubeswift/kernels/ns-name", auth)
+		for _, p := range []string{"$(", "`", "${IFS}"} {
+			if strings.Contains(script, p) && !strings.Contains(script, `"$`+pullImageEnv+`"`) {
+				t.Fatalf("auth=%v: script may interpolate user input: %s", auth, script)
+			}
 		}
-	}
-	if !strings.Contains(script, `oras pull "$`+pullImageEnv+`"`) {
-		t.Fatalf("script does not dereference $%s: %s", pullImageEnv, script)
+		if !strings.Contains(script, `oras pull`) || !strings.Contains(script, ` "$`+pullImageEnv+`"`+"\n") {
+			t.Fatalf("auth=%v: script does not dereference $%s: %s", auth, pullImageEnv, script)
+		}
 	}
 }

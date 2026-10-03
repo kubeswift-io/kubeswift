@@ -32,7 +32,9 @@ const (
 
 // OCIRef references an OCI artifact containing kernel artifacts.
 type OCIRef struct {
-	Image      string `json:"image"`
+	Image string `json:"image"`
+	// PullSecret names a kubernetes.io/dockerconfigjson Secret, in the
+	// SwiftKernel's namespace, with the credentials for Image's registry.
 	PullSecret string `json:"pullSecret,omitempty"`
 }
 

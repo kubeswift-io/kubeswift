@@ -78,7 +78,7 @@ Removing the label from a node does not delete already-pulled artifacts. It prev
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `ociRef.image` | string | Yes | OCI artifact reference |
-| `ociRef.pullSecret` | string | No | Secret name for registry auth |
+| `ociRef.pullSecret` | string | No | Name of a `kubernetes.io/dockerconfigjson` Secret, in the SwiftKernel's namespace, with credentials for the artifact's registry |
 | `kernelCmdline` | string | No | Default kernel command line |
 | `profile` | string | No | Profile name (informational) |
 
