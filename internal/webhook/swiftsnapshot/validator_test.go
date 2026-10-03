@@ -363,6 +363,11 @@ func newSchemeForMemoryTests(t *testing.T) *runtime.Scheme {
 		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
 	)
 	metav1.AddToGroupVersion(s, gvSwift)
+	// An oci snapshot's create lists the namespace's snapshots for its tag
+	// (#705); the webhook's real scheme has the snapshot types too.
+	gvSnap := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvSnap, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{})
+	metav1.AddToGroupVersion(s, gvSnap)
 	return s
 }
 
@@ -736,9 +741,6 @@ func TestValidateUpdate_SourceGuestChangedSinceCreation(t *testing.T) {
 // is pushed again (#705). A different tag, or the per-snapshot default, is fine.
 func TestValidate_OCITagInUse(t *testing.T) {
 	s := newSchemeForMemoryTests(t)
-	gvSnap := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
-	s.AddKnownTypes(gvSnap, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{})
-	metav1.AddToGroupVersion(s, gvSnap)
 	tagged := func(name, tag string) *snapshotv1alpha1.SwiftSnapshot {
 		snap := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
 		snap.Name = name
