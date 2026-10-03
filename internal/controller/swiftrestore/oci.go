@@ -154,7 +154,11 @@ func (r *SwiftRestoreReconciler) ensureOCIDownloadJob(
 	if r.SnapshotORASImage == "" {
 		return fmt.Errorf("snapshot-oras image not configured (set KUBESWIFT_SNAPSHOT_ORAS_IMAGE)")
 	}
-	job := buildOCIDownloadJob(restore, snap, r.SnapshotORASImage, node)
+	ca, err := clonecommon.TransferCA(ctx, r.Client, snap)
+	if err != nil {
+		return err
+	}
+	job := buildOCIDownloadJob(restore, snap, r.SnapshotORASImage, node, ca)
 	if err := ctrl.SetControllerReference(restore, job, r.Scheme); err != nil {
 		return err
 	}
@@ -168,7 +172,7 @@ func (r *SwiftRestoreReconciler) ensureOCIDownloadJob(
 // resolved restore node). Pulls by digest for the exact captured artifact;
 // credentials, when configured, come from the dockerconfigjson Secret the
 // snapshot recorded, read in the snapshot's namespace.
-func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1alpha1.SwiftSnapshot, image, node string) *batchv1.Job {
+func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1alpha1.SwiftSnapshot, image, node, caBundle string) *batchv1.Job {
 	oci, _ := clonecommon.SnapshotOCI(snap)
 	return clonecommon.BuildOCIDownloadJob(clonecommon.OCIDownloadJobParams{
 		Snapshot:              snap,
@@ -177,6 +181,7 @@ func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv
 		Digest:                snap.Status.OCI.ManifestDigest,
 		Insecure:              oci.Insecure,
 		CredentialsSecretName: oci.CredentialsSecretName,
+		CABundle:              caBundle,
 		Image:                 image,
 		Name:                  ociDownloadJobName(restore),
 		Namespace:             restore.Namespace,

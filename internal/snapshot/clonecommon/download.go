@@ -163,6 +163,8 @@ type OCIDownloadJobParams struct {
 	Insecure   bool
 	// CredentialsSecretName is a dockerconfigjson Secret; "" = anonymous.
 	CredentialsSecretName string
+	// CABundle is PEM CA certificates to trust for the registry (TransferCA).
+	CABundle string
 	// Image is the snapshot-oras uploader/downloader image.
 	Image string
 	// Name / Namespace / Node of the Job; Component is the component label.
@@ -200,7 +202,7 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 		},
 	}}
 	mounts := []corev1.VolumeMount{{Name: "cache", MountPath: DownloadMount}}
-	var env []corev1.EnvVar
+	env := RegistryCAEnvVars(p.CABundle)
 	if p.CredentialsSecretName != "" {
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociDownloadAuthMount})
 		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociDownloadAuthMount, ReadOnly: true})

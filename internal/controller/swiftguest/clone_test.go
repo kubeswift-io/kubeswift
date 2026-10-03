@@ -208,7 +208,7 @@ func ociCloneSnap() *snapshotv1alpha1.SwiftSnapshot {
 // (a location-stored snapshot has no backend.oci), else its spec.
 func TestBuildCloneDownloadJob_OCIReadsRecordedLocation(t *testing.T) {
 	r := &SwiftGuestReconciler{SnapshotORASImage: "img"}
-	job, fail := r.buildCloneDownloadJob(ociCloneSnap(), "worker-1", "dl")
+	job, fail := r.buildCloneDownloadJob(ociCloneSnap(), "worker-1", "dl", "")
 	if fail != "" {
 		t.Fatal(fail)
 	}
@@ -219,7 +219,7 @@ func TestBuildCloneDownloadJob_OCIReadsRecordedLocation(t *testing.T) {
 	located := ociCloneSnap()
 	located.Spec.Backend.OCI = nil
 	located.Status.Location = &snapshotv1alpha1.SnapshotLocation{Source: "SwiftStorageLocation/team", Repository: "registry.example.com/team/snapshots", Tag: "snap-12345678"}
-	job, fail = r.buildCloneDownloadJob(located, "worker-1", "dl")
+	job, fail = r.buildCloneDownloadJob(located, "worker-1", "dl", "")
 	if fail != "" {
 		t.Fatal(fail)
 	}
@@ -229,7 +229,7 @@ func TestBuildCloneDownloadJob_OCIReadsRecordedLocation(t *testing.T) {
 
 	none := ociCloneSnap()
 	none.Spec.Backend.OCI = nil
-	if _, fail := r.buildCloneDownloadJob(none, "worker-1", "dl"); fail == "" {
+	if _, fail := r.buildCloneDownloadJob(none, "worker-1", "dl", ""); fail == "" {
 		t.Error("a snapshot with no registry at all must fail, not build a Job with an empty repository")
 	}
 }

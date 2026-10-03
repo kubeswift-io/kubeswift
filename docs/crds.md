@@ -637,7 +637,7 @@ Where KubeSwift keeps the artifacts it pushes to a registry, set once for the cl
 | `default` | bool | The location used by objects that name none, at this level. A second default at the same level is refused at admission, and otherwise reported as `Ready=False` (`AmbiguousDefault`) on both. |
 | `oci.repository` | string | Repository prefix, without a tag or digest. A cluster location adds `<namespace>/`; both add `snapshots/` or `images/<image>`. |
 | `oci.insecure` | bool | Plaintext (http) registry. UNSAFE; trusted networks only. |
-| `oci.caBundle` | string | PEM CA certificates to trust in addition to the system roots. |
+| `oci.caBundle` | string | PEM CA certificates to trust in addition to the system roots, for a registry behind a private CA. Every Job that pushes, pulls or deletes a snapshot's artifacts trusts the bundle the snapshot recorded; restores, clones and deletions also trust the location's current bundle, so a CA rotated after the push still works. |
 | `oci.credentialsSecretName` | string | Name of the `kubernetes.io/dockerconfigjson` Secret each consuming namespace provides; never read from another namespace. Default `kubeswift-registry`. |
 | `oci.anonymous` | bool | The registry needs no credentials. Excludes `credentialsSecretName`. |
 | `oci.signingKeySecretName` | string | cosign key pair Secret (consumer's namespace) that signs every push. |

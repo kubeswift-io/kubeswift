@@ -241,3 +241,38 @@ func SnapshotRepository(res *Resolved, namespace string) string {
 	}
 	return repo + "/snapshots"
 }
+
+// CurrentCABundle is the oci CA bundle the location a status records as
+// source (<Kind>/<name>) holds now: "" when the source is not a location, or
+// the location is gone. A SwiftStorageLocation is looked up in namespace
+// only.
+func CurrentCABundle(ctx context.Context, c client.Reader, namespace, source string) (string, error) {
+	kind, name, ok := strings.Cut(source, "/")
+	if !ok || name == "" {
+		return "", nil
+	}
+	var spec storagev1alpha1.StorageLocationSpec
+	var err error
+	switch kind {
+	case storagev1alpha1.KindSwiftStorageLocation:
+		var l storagev1alpha1.SwiftStorageLocation
+		err = c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &l)
+		spec = l.Spec
+	case storagev1alpha1.KindSwiftClusterStorageLocation:
+		var l storagev1alpha1.SwiftClusterStorageLocation
+		err = c.Get(ctx, client.ObjectKey{Name: name}, &l)
+		spec = l.Spec
+	default:
+		return "", nil
+	}
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if spec.OCI == nil {
+		return "", nil
+	}
+	return spec.OCI.CABundle, nil
+}

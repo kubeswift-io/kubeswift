@@ -350,6 +350,7 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 		Name:  "chunk",
 		Image: image,
 		Args:  args,
+		Env:   clonecommon.RegistryCAEnvVars(oci.CABundle),
 		// Root to read the raw disk (device or 0644 image); otherwise maximally
 		// constrained — upload-image streams chunks to the registry, no disk temp.
 		SecurityContext: &corev1.SecurityContext{

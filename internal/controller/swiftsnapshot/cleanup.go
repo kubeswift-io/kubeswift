@@ -42,6 +42,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/names"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 )
 
@@ -577,7 +578,11 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 		if len(pinned) == 0 {
 			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
 		}
-		j := buildOCIDeleteJob(snap, r.SnapshotORASImage, pinned)
+		ca, err := clonecommon.TransferCA(ctx, r.Client, snap)
+		if err != nil {
+			return false, err
+		}
+		j := buildOCIDeleteJob(snap, r.SnapshotORASImage, pinned, ca)
 		if err := ctrl.SetControllerReference(snap, j, r.Scheme); err != nil {
 			return false, err
 		}
@@ -708,9 +713,9 @@ func ociDeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // passed only so the Job shows which artifact it is). Registry credentials come
 // from the same dockerconfigjson Secret the push used. Node-agnostic,
 // non-root, no host access.
-func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs []ociArtifact) *batchv1.Job {
+func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs []ociArtifact, caBundle string) *batchv1.Job {
 	oci := ociConn(snap)
-	var env []corev1.EnvVar
+	env := clonecommon.RegistryCAEnvVars(caBundle)
 	var mounts []corev1.VolumeMount
 	var volumes []corev1.Volume
 	if oci.CredentialsSecretName != "" {

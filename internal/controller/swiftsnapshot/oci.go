@@ -248,7 +248,8 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 		MountPath: ociUploadMount,
 		ReadOnly:  true,
 	}}
-	var env []corev1.EnvVar
+	// The bundle recorded at resolution, moments before this push.
+	env := clonecommon.RegistryCAEnvVars(oci.CABundle)
 	if oci.CredentialsSecretName != "" {
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociAuthMount})
 		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociAuthMount, ReadOnly: true})
