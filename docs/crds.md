@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **15 CRDs across 9 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, and fleet CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **17 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -19,6 +19,8 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **15 CRDs across 9 API groups
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandbox) |
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandboxpool) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
+| SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
+| SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
 
 ## Mutual exclusivity rules
 
@@ -614,3 +616,28 @@ A member cluster federated by the kubeswift-gateway hub. The gateway (not the co
 | `insecureSkipTLSVerify` | bool | Disable API server cert verification for this member (UNSAFE; dev only). |
 
 Full reference: [Gateway](ui/gateway.md).
+
+---
+
+## SwiftClusterStorageLocation and SwiftStorageLocation
+
+**Group:** `storage.kubeswift.io/v1alpha1`
+**Scope:** Cluster (`SwiftClusterStorageLocation`, short name `csloc`) and Namespaced (`SwiftStorageLocation`, short name `sloc`)
+**Subresource:** status
+
+Where KubeSwift keeps the artifacts it pushes to a registry, set once for the cluster and overridable per namespace. A cluster location is managed by the cluster admin; a namespace's location by its users, and only that namespace's objects use it. One location at each level may be the default; a namespace's default wins over the cluster's. Snapshots start resolving a location in the next Phase 1 change; images and golden images follow.
+
+| Key field | Type | Description |
+|-----------|------|-------------|
+| `default` | bool | The location used by objects that name none, at this level. A second default at the same level is refused at admission, and otherwise reported as `Ready=False` (`AmbiguousDefault`) on both. |
+| `oci.repository` | string | Repository prefix, without a tag or digest. A cluster location adds `<namespace>/`; both add `snapshots/` or `images/<image>`. |
+| `oci.insecure` | bool | Plaintext (http) registry. UNSAFE; trusted networks only. |
+| `oci.caBundle` | string | PEM CA certificates to trust in addition to the system roots. |
+| `oci.credentialsSecretName` | string | Name of the `kubernetes.io/dockerconfigjson` Secret each consuming namespace provides; never read from another namespace. Default `kubeswift-registry`. |
+| `oci.anonymous` | bool | The registry needs no credentials. Excludes `credentialsSecretName`. |
+| `oci.signingKeySecretName` | string | cosign key pair Secret (consumer's namespace) that signs every push. |
+| `oci.verifyKey` | string | PEM cosign public key that pulled artifacts must be signed with. |
+| `csi.volumeSnapshotClassName` | string | VolumeSnapshotClass for csi-volume-snapshot snapshots that name none. |
+
+Status conditions: `Valid` (the spec is well formed), `Ready` (valid, and not one of several defaults), and, on a cluster location only, `Reachable` (the registry answered `GET /v2/`, probed from the controller's pod every 10 minutes; the controller never probes a host a namespace chose).
+

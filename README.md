@@ -55,8 +55,10 @@ Boot your first VM → [Quickstart](docs/quickstart.md).
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | Ephemeral OCI-rootfs microVM |
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | Warm pool of pre-booted sandboxes for sub-second checkout |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | Member cluster federated by the gateway hub |
+| SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | Registry for pushed artifacts, set once for the cluster |
+| SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | A namespace's own registry, overriding the cluster's |
 
-15 CRDs, all `v1alpha1`.
+17 CRDs, all `v1alpha1`.
 
 ## Documentation
 

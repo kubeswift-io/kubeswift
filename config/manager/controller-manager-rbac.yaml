@@ -133,6 +133,14 @@ rules:
   - apiGroups: ["snapshot.kubeswift.io"]
     resources: ["swiftsnapshotschedules", "swiftsnapshotschedules/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Storage locations: the controller reports their status and, from Phase 1's
+  # resolution on, reads them for snapshots. It never creates or deletes them.
+  - apiGroups: ["storage.kubeswift.io"]
+    resources: ["swiftstoragelocations", "swiftclusterstoragelocations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.kubeswift.io"]
+    resources: ["swiftstoragelocations/status", "swiftclusterstoragelocations/status"]
+    verbs: ["get", "update", "patch"]
   # snapshot.storage.k8s.io VolumeSnapshots — owned by SwiftSnapshot/SwiftImage,
   # read by SwiftRestore. The CSI external-snapshotter owns
   # VolumeSnapshotContent and VolumeSnapshotClass; the controller-manager

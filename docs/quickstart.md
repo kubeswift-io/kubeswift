@@ -57,11 +57,12 @@ Verify CRDs are installed:
 
 ```bash
 kubectl get crd | grep kubeswift.io
-# Expected (15 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
+# Expected (17 CRDs): swiftguests, swiftguestclasses, swiftguestpools,
 #   swiftimages, swiftseedprofiles, swiftkernels,
 #   swiftgpuprofiles, swiftgpunodes,
 #   swiftsnapshots, swiftrestores, swiftsnapshotschedules,
-#   swiftmigrations, swiftsandboxes, swiftsandboxpools, clusters
+#   swiftmigrations, swiftsandboxes, swiftsandboxpools, clusters,
+#   swiftstoragelocations, swiftclusterstoragelocations
 ```
 
 ## Step 2: Boot a disk-boot VM (Ubuntu Noble)
