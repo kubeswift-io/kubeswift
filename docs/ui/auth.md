@@ -164,8 +164,15 @@ user's own `rbac` permissions — i.e. you need the `kubeswift-admin` role, or t
   to a namespace.
 - **Build a custom role** from granular **capabilities** — `view-vms`,
   `manage-vms`, `console`, `migrate`, `manage-snapshots`, `view-resources`,
-  `view-secrets`, `manage-rbac` — each mapping to a fixed set of RBAC rules. The
-  three predefined roles are just capability compositions.
+  `manage-storage-locations`, `view-secrets`, `manage-rbac` — each mapping to a
+  fixed set of RBAC rules. The three predefined roles are just capability
+  compositions. `manage-storage-locations` assigned to a namespace covers only
+  that namespace's SwiftStorageLocations; assigned cluster-wide it also covers
+  the cluster's SwiftClusterStorageLocations.
+- The gateway creates a predefined role's ClusterRole the first time the role
+  is assigned and does not update it afterwards. A ClusterRole created before
+  a release that added rules to its capabilities keeps the old rules; delete
+  it to have the next assignment re-create it.
 - **Review + remove** existing assignments.
 
 Everything the editor does is plain Kubernetes RBAC (labelled

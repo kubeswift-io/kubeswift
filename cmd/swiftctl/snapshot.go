@@ -23,11 +23,12 @@ var (
 	snapshotListAllNS   bool
 	snapshotBackend     string
 	snapshotHostPath    string
+	snapshotLocation    string
 )
 
 var snapshotCmd = &cobra.Command{
 	Use:   "snapshot",
-	Short: "Manage SwiftSnapshot resources (csi-volume-snapshot or local backend)",
+	Short: "Manage SwiftSnapshot resources (csi-volume-snapshot, local or oci backend)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	},
@@ -37,7 +38,7 @@ var snapshotCreateCmd = &cobra.Command{
 	Use:          "create [name]",
 	Short:        "Create a SwiftSnapshot of a SwiftGuest",
 	SilenceUsage: true,
-	Long: `Create a SwiftSnapshot. Two backends are supported:
+	Long: `Create a SwiftSnapshot. Three backends are supported:
 
   csi-volume-snapshot (default): captures the SwiftGuest's per-guest
     root-disk PVC crash-consistently — the VM is not paused. Disk
@@ -47,10 +48,22 @@ var snapshotCreateCmd = &cobra.Command{
     /var/lib/kubeswift/snapshots/<namespace>_<name> on the node where the
     source VM is running. The VM is paused for the duration of the capture
     (~2.8s/GiB on Longhorn). --hostpath may state that directory; any
-    other is rejected.`,
+    other is rejected.
+
+  oci: full VM state captured like local, then pushed to an OCI registry.
+    The registry is a storage location: --location, else the namespace's
+    default SwiftStorageLocation, else the cluster's default
+    SwiftClusterStorageLocation. Before the capture the snapshot records
+    the location it resolved in status.location. (To name a registry
+    directly, set spec.backend.oci in a manifest.)
+
+--location also applies to csi-volume-snapshot, taking the location's
+VolumeSnapshotClass instead of --vsclass.`,
 	Example: `  swiftctl snapshot create db-2026-04-25 --guest db
   swiftctl snapshot create snap1 --guest myvm --vsclass csi-hostpath-snapclass
-  swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local`,
+  swiftctl snapshot create db-mem-2026-04-26 --guest db --backend local
+  swiftctl snapshot create db-oci --guest db --backend oci
+  swiftctl snapshot create db-oci --guest db --backend oci --location cluster/registry`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSnapshotCreate,
 }
@@ -81,8 +94,9 @@ var snapshotDeleteCmd = &cobra.Command{
 
 func init() {
 	snapshotCreateCmd.Flags().StringVar(&snapshotGuestRef, "guest", "", "SwiftGuest to snapshot (required)")
-	snapshotCreateCmd.Flags().StringVar(&snapshotBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot or local")
-	snapshotCreateCmd.Flags().StringVar(&snapshotVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only; default: cluster default)")
+	snapshotCreateCmd.Flags().StringVar(&snapshotBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot, local or oci")
+	snapshotCreateCmd.Flags().StringVar(&snapshotLocation, "location", "", locationFlagHelp)
+	snapshotCreateCmd.Flags().StringVar(&snapshotVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only; default: a storage location's, else the cluster default)")
 	snapshotCreateCmd.Flags().StringVar(&snapshotHostPath, "hostpath", "", "On-node directory for local backend (optional; if set, must be /var/lib/kubeswift/snapshots/<namespace>_<name>)")
 	snapshotCreateCmd.Flags().BoolVar(&snapshotIncludeMem, "include-memory", true, "Backend-determined: local/s3 always capture memory, csi is always disk-only; --include-memory=false is a no-op (use --backend=csi-volume-snapshot for disk-only)")
 	snapshotCreateCmd.Flags().BoolVar(&snapshotResumeAfter, "resume", true, "Resume the source VM after snapshot (no-op on csi-volume-snapshot)")
@@ -111,29 +125,15 @@ func runSnapshotCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	backend, err := parseBackendFlag(snapshotBackend)
+	backend, err := buildSnapshotBackend(snapshotBackend, snapshotLocation, snapshotVSClass, snapshotHostPath, false)
 	if err != nil {
 		return err
 	}
 	spec := snapshotv1alpha1.SwiftSnapshotSpec{
 		GuestRef:            snapshotv1alpha1.SwiftSnapshotGuestRef{Name: snapshotGuestRef},
-		Backend:             snapshotv1alpha1.SwiftSnapshotBackend{Type: backend},
+		Backend:             backend,
 		IncludeMemory:       snapshotIncludeMem,
 		ResumeAfterSnapshot: snapshotResumeAfter,
-	}
-	switch backend {
-	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
-		spec.Backend.CSIVolumeSnapshot = &snapshotv1alpha1.CSIVolumeSnapshotBackend{
-			VolumeSnapshotClassName: snapshotVSClass,
-		}
-		if snapshotHostPath != "" {
-			return fmt.Errorf("--hostpath is only valid for --backend=local")
-		}
-	case snapshotv1alpha1.SnapshotBackendLocal:
-		if snapshotVSClass != "" {
-			return fmt.Errorf("--vsclass is only valid for --backend=csi-volume-snapshot")
-		}
-		spec.Backend.Local = &snapshotv1alpha1.LocalBackend{HostPath: snapshotHostPath}
 	}
 	snap := &snapshotv1alpha1.SwiftSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -142,8 +142,12 @@ func runSnapshotCreate(cmd *cobra.Command, args []string) error {
 	if err := c.Create(context.Background(), snap); err != nil {
 		return fmt.Errorf("create SwiftSnapshot: %w", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Created SwiftSnapshot %s/%s (guest=%s, backend=%s)\n",
-		ns, name, snapshotGuestRef, backend)
+	where := ""
+	if l := describeLocationRef(backend); l != "" {
+		where = ", location=" + l
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Created SwiftSnapshot %s/%s (guest=%s, backend=%s%s)\n",
+		ns, name, snapshotGuestRef, backend.Type, where)
 	return nil
 }
 
@@ -156,8 +160,10 @@ func parseBackendFlag(v string) (snapshotv1alpha1.SnapshotBackendType, error) {
 		return snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot, nil
 	case "local":
 		return snapshotv1alpha1.SnapshotBackendLocal, nil
+	case "oci":
+		return snapshotv1alpha1.SnapshotBackendOCI, nil
 	default:
-		return "", fmt.Errorf("unknown --backend %q (want csi-volume-snapshot or local)", v)
+		return "", fmt.Errorf("unknown --backend %q (want csi-volume-snapshot, local or oci)", v)
 	}
 }
 
@@ -210,6 +216,13 @@ func runSnapshotDescribe(cmd *cobra.Command, args []string) error {
 	}
 	if s.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendLocal {
 		fmt.Fprintf(out, "Directory:   %s\n", clonecommon.NodeDir(&s))
+	}
+	if l := s.Status.Location; l != nil {
+		where := l.VolumeSnapshotClassName
+		if l.Repository != "" {
+			where = l.Repository + ":" + l.Tag
+		}
+		fmt.Fprintf(out, "Location:    %s %s\n", l.Source, where)
 	}
 	fmt.Fprintf(out, "Phase:       %s\n", s.Status.Phase)
 	if s.Status.CapturedAt != nil {
