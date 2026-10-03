@@ -20,7 +20,7 @@ func TestDerivedJobs_AreValidForALongSnapshotName(t *testing.T) {
 
 	jobs := map[string]*batchv1.Job{
 		"oci push":   buildOCIPushJob(snap, "img", "worker-1"),
-		"oci delete": buildOCIDeleteJob(snap, "img", []ociArtifact{{repository: "r", tag: "t"}}),
+		"oci delete": buildOCIDeleteJob(snap, "img", []ociArtifact{{repository: "r", tag: "t"}}, ""),
 		"root chunk": buildChunkJob(snap, "img", "worker-1", diskChunkJobName(snap), "t", "pvc", false),
 		"data chunk": buildChunkJob(snap, "img", "worker-1", dataDiskChunkJobName(snap, strings.Repeat("d", 40)), "t", "pvc", false),
 		"s3 upload":  buildUploadJob(snap, "img", "worker-1"),

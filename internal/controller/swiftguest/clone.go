@@ -411,7 +411,11 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 	var job batchv1.Job
 	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: snap.Namespace}, &job)
 	if apierrors.IsNotFound(err) {
-		j, failReason := r.buildCloneDownloadJob(snap, node, name)
+		ca, cerr := clonecommon.TransferCA(ctx, r.Client, snap)
+		if cerr != nil {
+			return false, "", cerr
+		}
+		j, failReason := r.buildCloneDownloadJob(snap, node, name, ca)
 		if failReason != "" {
 			return false, failReason, nil
 		}
@@ -448,7 +452,7 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 // buildCloneDownloadJob builds the s3 or oci clone download Job for the
 // snapshot's backend. Returns (job, failReason): a non-empty failReason is
 // terminal (the required transfer image is not configured).
-func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.SwiftSnapshot, node, name string) (*batchv1.Job, string) {
+func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.SwiftSnapshot, node, name, caBundle string) (*batchv1.Job, string) {
 	labels := map[string]string{"kubeswift.io/snapshot": names.LabelValue(snap.Name)}
 	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI {
 		if r.SnapshotORASImage == "" {
@@ -465,6 +469,7 @@ func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.Swif
 			Digest:                snap.Status.OCI.ManifestDigest,
 			Insecure:              oci.Insecure,
 			CredentialsSecretName: oci.CredentialsSecretName,
+			CABundle:              caBundle,
 			Image:                 r.SnapshotORASImage,
 			Name:                  name,
 			Namespace:             snap.Namespace,

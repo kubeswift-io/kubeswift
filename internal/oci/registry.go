@@ -8,6 +8,7 @@ package oci
 
 import (
 	"fmt"
+	"net/http"
 
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
@@ -27,12 +28,19 @@ func NewRepository(repoRef string, insecure bool) (*remote.Repository, error) {
 		return nil, fmt.Errorf("repository %q: %w", repoRef, err)
 	}
 	repo.PlainHTTP = insecure
+	httpClient := retry.DefaultClient
+	if tr := configuredTransport(); tr != nil {
+		// A private CA (SetRegistryCA): the system roots plus the bundle.
+		httpClient = &http.Client{Transport: retry.NewTransport(tr)}
+	}
 	if credStore, err := credentials.NewStoreFromDocker(credentials.StoreOptions{}); err == nil {
 		repo.Client = &auth.Client{
-			Client:     retry.DefaultClient,
+			Client:     httpClient,
 			Cache:      auth.NewCache(),
 			Credential: credentials.Credential(credStore),
 		}
+	} else if httpClient != retry.DefaultClient {
+		repo.Client = &auth.Client{Client: httpClient, Cache: auth.NewCache()}
 	}
 	return repo, nil
 }

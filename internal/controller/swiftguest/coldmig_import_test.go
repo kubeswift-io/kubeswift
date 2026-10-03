@@ -12,6 +12,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // fullStateCloneSnap is an oci snapshot carrying status.oci.disk — a full-state
@@ -36,7 +37,7 @@ func fsRG() *resolved.ResolvedGuest {
 
 func TestBuildDiskFromOCIJob_Filesystem(t *testing.T) {
 	guest := cloneGuest()
-	job := buildDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
+	job := buildDiskFromOCIJob(guest, fullStateCloneSnap(), "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false, "")
 	pod := job.Spec.Template.Spec
 	if pod.NodeName != "worker-2" {
 		t.Errorf("download Job must pin to the clone node; got %q", pod.NodeName)
@@ -77,7 +78,7 @@ func TestBuildDiskFromOCIJob_Filesystem(t *testing.T) {
 }
 
 func TestBuildDiskFromOCIJob_Block(t *testing.T) {
-	job := buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "worker-1", "j", "swiftguest-root-clone-a", "sha256:disk123", true)
+	job := buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "worker-1", "j", "swiftguest-root-clone-a", "sha256:disk123", true, "")
 	c := job.Spec.Template.Spec.Containers[0]
 	if !strings.Contains(strings.Join(c.Args, " "), "--file="+DiskRootDevicePath) {
 		t.Errorf("Block root must download to the raw device; got %q", strings.Join(c.Args, " "))
@@ -99,7 +100,7 @@ func TestBuildDiskFromOCIJob_Block(t *testing.T) {
 func TestBuildDiskFromOCIJob_Creds(t *testing.T) {
 	snap := fullStateCloneSnap()
 	snap.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "reg-creds"}
-	job := buildDiskFromOCIJob(cloneGuest(), snap, "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false)
+	job := buildDiskFromOCIJob(cloneGuest(), snap, "oras:img", "worker-2", "j", "swiftguest-root-clone-a", "sha256:disk123", false, "")
 	c := job.Spec.Template.Spec.Containers[0]
 	var dockerCfg bool
 	for _, e := range c.Env {
@@ -290,5 +291,16 @@ func TestMaybeRootDiskFromOCI_MaterializesDataDisks(t *testing.T) {
 	d := rg.DataDisks[0]
 	if d.Name != "scratch" || d.PVCName != dataPVC || !d.Block || !d.Ready {
 		t.Errorf("overridden data disk wrong: %+v (want name=scratch pvc=%s block ready)", d, dataPVC)
+	}
+}
+
+func TestBuildDiskFromOCIJob_PassesTheCABundle(t *testing.T) {
+	const ca = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+	var found bool
+	for _, e := range buildDiskFromOCIJob(cloneGuest(), fullStateCloneSnap(), "oras:img", "worker-1", "j", "pvc", "sha256:disk123", false, ca).Spec.Template.Spec.Containers[0].Env {
+		found = found || (e.Name == clonecommon.RegistryCAEnv && e.Value == ca)
+	}
+	if !found {
+		t.Error("the full-state import Job does not pass the CA bundle")
 	}
 }

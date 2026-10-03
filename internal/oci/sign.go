@@ -15,8 +15,13 @@ import (
 // (the in-cluster Job sets it from the signing-key Secret; a client-side
 // `swiftctl image publish` inherits it from the operator's shell).
 var CosignRun = func(ctx context.Context, args []string) error {
+	env, cleanup, err := cosignEnv()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	cmd := exec.CommandContext(ctx, "cosign", args...)
-	cmd.Env = os.Environ()
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

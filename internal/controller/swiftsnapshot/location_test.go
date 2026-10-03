@@ -17,6 +17,7 @@ import (
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
 	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 	"github.com/kubeswift-io/kubeswift/internal/storagelocation"
 )
 
@@ -292,5 +293,38 @@ func TestLocation_CSIClass(t *testing.T) {
 				t.Errorf("csiClassName = %q, want %q", csiClassName(&got), tc.wantClass)
 			}
 		})
+	}
+}
+
+// A location's CA bundle reaches every Job that talks to the registry: the
+// push and the disk chunking with the bundle recorded at resolution, the
+// deletion with the one it is given (TransferCA).
+func TestLocation_CABundleReachesTheJobs(t *testing.T) {
+	const ca = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+	snap := locSnap()
+	snap.Status.Location = &snapshotv1alpha1.SnapshotLocation{
+		Source: "SwiftClusterStorageLocation/main", Repository: "registry.example.com/k/team-a/snapshots", Tag: "snap1-0f1e2d3c", CABundle: ca,
+	}
+	hasCA := func(env []corev1.EnvVar) bool {
+		for _, e := range env {
+			if e.Name == clonecommon.RegistryCAEnv && e.Value == ca {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasCA(buildOCIPushJob(snap, "img", "node-1").Spec.Template.Spec.Containers[0].Env) {
+		t.Error("push Job")
+	}
+	if !hasCA(buildChunkJob(snap, "img", "node-1", "j", "t-disk", "pvc", false).Spec.Template.Spec.Containers[0].Env) {
+		t.Error("disk chunk Job")
+	}
+	del := buildOCIDeleteJob(snap, "img", []ociArtifact{{repository: "r", tag: "t", digest: "sha256:x"}}, ca)
+	if !hasCA(del.Spec.Template.Spec.Containers[0].Env) {
+		t.Error("delete Job")
+	}
+	snap.Status.Location.CABundle = ""
+	if hasCA(buildOCIPushJob(snap, "img", "node-1").Spec.Template.Spec.Containers[0].Env) {
+		t.Error("no recorded bundle, no variable")
 	}
 }

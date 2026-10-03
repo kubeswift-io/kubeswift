@@ -69,6 +69,13 @@ func main() {
 	format := flag.String("format", "raw", "disk format recorded in the golden-image config (upload-image only)")
 	flag.Parse()
 
+	// A registry behind a private CA: the controller passes the bundle the
+	// snapshot's storage location recorded. It is added to the system roots.
+	if err := oci.SetRegistryCA(os.Getenv(oci.RegistryCAEnv)); err != nil {
+		fmt.Fprintln(os.Stderr, "snapshot-oras:", err)
+		os.Exit(1)
+	}
+
 	if err := run(runArgs{
 		mode: *mode, dir: *dir, repository: *repository, tag: *tag, digest: *digest,
 		insecure: *insecure, snapName: *snapName, includeMemory: *includeMemory, signKey: *signKey,

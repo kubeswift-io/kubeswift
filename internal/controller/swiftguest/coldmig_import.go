@@ -105,7 +105,11 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 	var job batchv1.Job
 	jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 	if apierrors.IsNotFound(jerr) {
-		j := buildDiskFromOCIJob(guest, &snap, r.SnapshotORASImage, node, jobName, cloneName, snap.Status.OCI.Disk.ManifestDigest, block)
+		ca, err := clonecommon.TransferCA(ctx, r.Client, &snap)
+		if err != nil {
+			return true, nil, err
+		}
+		j := buildDiskFromOCIJob(guest, &snap, r.SnapshotORASImage, node, jobName, cloneName, snap.Status.OCI.Disk.ManifestDigest, block, ca)
 		if err := controllerutil.SetControllerReference(guest, j, r.Scheme); err != nil {
 			return true, nil, err
 		}
@@ -148,7 +152,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 // the same in-pod path (DiskRootDevicePath for Block, DisksRootPath/image.raw
 // for Filesystem) serves any disk; only the PVC + digest differ. Node-pinned so
 // the PVC attaches on the clone's node. Runs as root to write the raw disk.
-func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot, image, node, jobName, pvcName, digest string, block bool) *batchv1.Job {
+func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot, image, node, jobName, pvcName, digest string, block bool, caBundle string) *batchv1.Job {
 	oci, _ := clonecommon.SnapshotOCI(snap)
 	diskPath := DisksRootPath + "/image.raw"
 	if block {
@@ -168,6 +172,7 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 		Name:  "download",
 		Image: image,
 		Args:  args,
+		Env:   clonecommon.RegistryCAEnvVars(caBundle),
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
 			RunAsUser:                ptr.To(int64(0)),
@@ -306,7 +311,11 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 		var job batchv1.Job
 		jerr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: guest.Namespace}, &job)
 		if apierrors.IsNotFound(jerr) {
-			j := buildDiskFromOCIJob(guest, snap, r.SnapshotORASImage, node, jobName, pvcName, art.ManifestDigest, cd.Block)
+			ca, err := clonecommon.TransferCA(ctx, r.Client, snap)
+			if err != nil {
+				return err
+			}
+			j := buildDiskFromOCIJob(guest, snap, r.SnapshotORASImage, node, jobName, pvcName, art.ManifestDigest, cd.Block, ca)
 			if err := controllerutil.SetControllerReference(guest, j, r.Scheme); err != nil {
 				return err
 			}

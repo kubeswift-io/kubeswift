@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 func ociSnapForRestore(withCreds bool) *snapshotv1alpha1.SwiftSnapshot {
@@ -47,7 +48,7 @@ func ociRestore() *snapshotv1alpha1.SwiftRestore {
 func TestBuildOCIDownloadJob_ReadsRecordedLocation(t *testing.T) {
 	legacy := ociSnapForRestore(false)
 	legacy.Spec.Backend.OCI.Tag = "prod-9"
-	args := strings.Join(buildOCIDownloadJob(ociRestore(), legacy, "img:tag", "worker-2").Spec.Template.Spec.Containers[0].Args, " ")
+	args := strings.Join(buildOCIDownloadJob(ociRestore(), legacy, "img:tag", "worker-2", "").Spec.Template.Spec.Containers[0].Args, " ")
 	if !strings.Contains(args, "--repository=zot.svc:5000/vm-snapshots") || !strings.Contains(args, "--tag=prod-9") {
 		t.Errorf("legacy snapshot: args = %q, want its spec's repository and tag", args)
 	}
@@ -60,7 +61,7 @@ func TestBuildOCIDownloadJob_ReadsRecordedLocation(t *testing.T) {
 		Tag:                   "snap1-0f1e2d3c",
 		CredentialsSecretName: "kubeswift-registry",
 	}
-	job := buildOCIDownloadJob(ociRestore(), located, "img:tag", "worker-2")
+	job := buildOCIDownloadJob(ociRestore(), located, "img:tag", "worker-2", "")
 	args = strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
 	for _, want := range []string{"--repository=registry.example.com/kubeswift/team-a/snapshots", "--tag=snap1-0f1e2d3c", "--digest=sha256:abc123"} {
 		if !strings.Contains(args, want) {
@@ -80,7 +81,7 @@ func TestBuildOCIDownloadJob_ReadsRecordedLocation(t *testing.T) {
 }
 
 func TestBuildOCIDownloadJob(t *testing.T) {
-	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(true), "img:tag", "worker-2")
+	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(true), "img:tag", "worker-2", "")
 	if job.Name != "r1-oci-download" || job.Namespace != "team-a" {
 		t.Errorf("job meta = %s/%s", job.Namespace, job.Name)
 	}
@@ -121,7 +122,7 @@ func TestBuildOCIDownloadJob(t *testing.T) {
 }
 
 func TestBuildOCIDownloadJob_Anonymous(t *testing.T) {
-	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(false), "img:tag", "worker-2")
+	job := buildOCIDownloadJob(ociRestore(), ociSnapForRestore(false), "img:tag", "worker-2", "")
 	pod := job.Spec.Template.Spec
 	for _, e := range pod.Containers[0].Env {
 		if e.Name == "DOCKER_CONFIG" {
@@ -175,5 +176,16 @@ func TestIsTierBRestore_IncludesOCI(t *testing.T) {
 		if got := IsTierBRestore(snap); got != c.want {
 			t.Errorf("IsTierBRestore(%s) = %v, want %v", c.backend, got, c.want)
 		}
+	}
+}
+
+func TestBuildOCIDownloadJob_PassesTheCABundle(t *testing.T) {
+	const ca = "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"
+	var found bool
+	for _, e := range buildOCIDownloadJob(ociRestore(), ociSnapForRestore(false), "img:tag", "worker-2", ca).Spec.Template.Spec.Containers[0].Env {
+		found = found || (e.Name == clonecommon.RegistryCAEnv && e.Value == ca)
+	}
+	if !found {
+		t.Error("the restore download Job does not pass the CA bundle")
 	}
 }
