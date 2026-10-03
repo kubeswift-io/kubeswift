@@ -95,6 +95,34 @@ webhooks:
         apiGroups: ["snapshot.kubeswift.io"]
         apiVersions: ["v1alpha1"]
         resources: ["swiftsnapshotschedules"]
+  - name: vswiftclusterstoragelocation.storage.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-storage-kubeswift-io-v1alpha1-swiftclusterstoragelocation
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["storage.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftclusterstoragelocations"]
+  - name: vswiftstoragelocation.storage.kubeswift.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        namespace: {{ .Values.namespace }}
+        name: kubeswift-webhook-service
+        path: /validate-storage-kubeswift-io-v1alpha1-swiftstoragelocation
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: ["storage.kubeswift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["swiftstoragelocations"]
   - name: vswiftmigration.migration.kubeswift.io
     admissionReviewVersions: ["v1"]
     sideEffects: None

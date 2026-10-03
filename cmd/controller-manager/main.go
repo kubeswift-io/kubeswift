@@ -26,6 +26,7 @@ import (
 	kernelv1alpha1 "github.com/kubeswift-io/kubeswift/api/kernel/v1alpha1"
 	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/migrationcert"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftdrain"
@@ -39,6 +40,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsandbox"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshot"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftsnapshotschedule"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftstoragelocation"
 	kubeswiftmetrics "github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
 	"github.com/kubeswift-io/kubeswift/internal/version"
@@ -52,6 +54,7 @@ import (
 	swiftseedprofilewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftseedprofile"
 	swiftsnapshotwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshot"
 	swiftsnapshotschedulewebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsnapshotschedule"
+	swiftstoragelocationwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftstoragelocation"
 
 	migrationv1alpha1 "github.com/kubeswift-io/kubeswift/api/migration/v1alpha1"
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -332,6 +335,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&swiftstoragelocation.ClusterReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftClusterStorageLocation controller")
+		os.Exit(1)
+	}
+	if err = (&swiftstoragelocation.NamespaceReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create SwiftStorageLocation controller")
+		os.Exit(1)
+	}
+
 	if err = (&swiftmigration.SwiftMigrationReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -446,6 +464,18 @@ func main() {
 			WithCustomValidator(&swiftsnapshotschedulewebhook.Validator{}).
 			Complete(); err != nil {
 			klog.ErrorS(err, "unable to create SwiftSnapshotSchedule webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &storagev1alpha1.SwiftClusterStorageLocation{}).
+			WithCustomValidator(&swiftstoragelocationwebhook.ClusterValidator{Client: mgr.GetClient()}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftClusterStorageLocation webhook")
+			os.Exit(1)
+		}
+		if err = ctrl.NewWebhookManagedBy(mgr, &storagev1alpha1.SwiftStorageLocation{}).
+			WithCustomValidator(&swiftstoragelocationwebhook.NamespaceValidator{Client: mgr.GetClient()}).
+			Complete(); err != nil {
+			klog.ErrorS(err, "unable to create SwiftStorageLocation webhook")
 			os.Exit(1)
 		}
 		if err = ctrl.NewWebhookManagedBy(mgr, &migrationv1alpha1.SwiftMigration{}).

@@ -10,6 +10,7 @@ import (
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	seedv1alpha1 "github.com/kubeswift-io/kubeswift/api/seed/v1alpha1"
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +50,13 @@ func init() {
 		&sandboxv1alpha1.SwiftSandbox{}, &sandboxv1alpha1.SwiftSandboxList{},
 		&sandboxv1alpha1.SwiftSandboxPool{}, &sandboxv1alpha1.SwiftSandboxPoolList{})
 	metav1.AddToGroupVersion(Scheme, gvSandbox)
+	// storage.kubeswift.io/v1alpha1: where pushed artifacts are kept, set once
+	// for the cluster and overridable per namespace.
+	gvStorage := schema.GroupVersion{Group: "storage.kubeswift.io", Version: "v1alpha1"}
+	Scheme.AddKnownTypes(gvStorage,
+		&storagev1alpha1.SwiftClusterStorageLocation{}, &storagev1alpha1.SwiftClusterStorageLocationList{},
+		&storagev1alpha1.SwiftStorageLocation{}, &storagev1alpha1.SwiftStorageLocationList{})
+	metav1.AddToGroupVersion(Scheme, gvStorage)
 	// fleet.kubeswift.io/v1alpha1 (UI backend): the kubeswift-gateway hub's
 	// registry of federated member clusters. Registered for serialization;
 	// the gateway (not the controller-manager) reconciles Cluster objects.

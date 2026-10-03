@@ -112,7 +112,7 @@ rules:
   - apiGroups: ["swift.kubeswift.io"]
     resources: ["swiftguests"]
     verbs: ["update", "patch"]
-  - apiGroups: ["image.kubeswift.io", "kernel.kubeswift.io", "seed.kubeswift.io", "snapshot.kubeswift.io", "gpu.kubeswift.io"]
+  - apiGroups: ["image.kubeswift.io", "kernel.kubeswift.io", "seed.kubeswift.io", "snapshot.kubeswift.io", "gpu.kubeswift.io", "storage.kubeswift.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   # MicroVM inventory (UI SandboxService, v0.11.0): read plane (list/watch) +

@@ -314,8 +314,9 @@ Key facts:
 | `migration.kubeswift.io/v1alpha1` | SwiftMigration | Offline + live migration between nodes |
 | `sandbox.kubeswift.io/v1alpha1` | SwiftSandbox | Ephemeral OCI-rootfs microVM sandboxes |
 | `fleet.kubeswift.io/v1alpha1` | Cluster | Member cluster federated by the gateway hub |
+| `storage.kubeswift.io/v1alpha1` | SwiftClusterStorageLocation, SwiftStorageLocation | Where pushed artifacts are kept: the cluster's registry and a namespace's own |
 
-15 CRDs across 9 API groups, all `v1alpha1`.
+17 CRDs across 10 API groups, all `v1alpha1`.
 
 ## Design principles
 

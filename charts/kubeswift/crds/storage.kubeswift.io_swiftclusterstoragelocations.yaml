@@ -1,0 +1,224 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: swiftclusterstoragelocations.storage.kubeswift.io
+spec:
+  group: storage.kubeswift.io
+  names:
+    kind: SwiftClusterStorageLocation
+    listKind: SwiftClusterStorageLocationList
+    plural: swiftclusterstoragelocations
+    shortNames:
+    - csloc
+    singular: swiftclusterstoragelocation
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.default
+      name: Default
+      type: boolean
+    - jsonPath: .spec.oci.repository
+      name: Repository
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Reachable")].status
+      name: Reachable
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SwiftClusterStorageLocation is a cluster-wide storage location, managed by
+          the cluster admin. One may be the cluster default.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              StorageLocationSpec is the spec SwiftStorageLocation and
+              SwiftClusterStorageLocation share.
+            properties:
+              csi:
+                description: |-
+                  CSI sets the VolumeSnapshotClass a csi-volume-snapshot SwiftSnapshot
+                  that names none uses, instead of the cluster-wide default class.
+                properties:
+                  volumeSnapshotClassName:
+                    description: |-
+                      VolumeSnapshotClassName is the class a csi-volume-snapshot SwiftSnapshot
+                      that names none uses.
+                    minLength: 1
+                    type: string
+                required:
+                - volumeSnapshotClassName
+                type: object
+              default:
+                description: |-
+                  Default makes this the location used by objects that name none: the
+                  cluster's for a SwiftClusterStorageLocation, the namespace's for a
+                  SwiftStorageLocation (which wins over the cluster's). Two defaults at
+                  the same level are refused, never one picked.
+                type: boolean
+              oci:
+                description: |-
+                  OCI is a registry that snapshots (and later images and golden images)
+                  are pushed to and pulled from.
+                properties:
+                  anonymous:
+                    description: |-
+                      Anonymous says the registry needs no credentials: no Secret is looked
+                      up.
+                    type: boolean
+                  caBundle:
+                    description: |-
+                      CABundle is PEM-encoded CA certificates to trust for this registry, in
+                      addition to the system roots, for a registry behind a private CA.
+                    type: string
+                  credentialsSecretName:
+                    description: |-
+                      CredentialsSecretName names the kubernetes.io/dockerconfigjson Secret
+                      holding this registry's credentials. It is looked up in the namespace
+                      of each object that uses the location, never in another; an object
+                      whose namespace lacks it waits, naming it. Empty means
+                      "kubeswift-registry".
+                    maxLength: 253
+                    type: string
+                  insecure:
+                    description: |-
+                      Insecure allows a plaintext (http) registry. UNSAFE: credentials and
+                      artifacts cross the network unencrypted. For an in-cluster or test
+                      registry on a trusted network only.
+                    type: boolean
+                  repository:
+                    description: |-
+                      Repository is the repository prefix, without a tag or digest, e.g.
+                      registry.example.com/kubeswift. Artifacts go below it: a cluster
+                      location adds <namespace>/, then snapshots/ or images/<image>.
+                    maxLength: 255
+                    minLength: 1
+                    type: string
+                  signingKeySecretName:
+                    description: |-
+                      SigningKeySecretName, when set, signs every artifact pushed through
+                      this location with the cosign key pair in the Secret of that name
+                      (keys cosign.key and cosign.password), looked up in the namespace of
+                      each object that uses the location.
+                    maxLength: 253
+                    type: string
+                  verifyKey:
+                    description: |-
+                      VerifyKey is a PEM-encoded cosign public key. Artifacts pulled through
+                      this location must carry a valid signature for it.
+                    type: string
+                required:
+                - repository
+                type: object
+                x-kubernetes-validations:
+                - message: anonymous and credentialsSecretName are mutually exclusive
+                  rule: '!(has(self.anonymous) && self.anonymous && has(self.credentialsSecretName)
+                    && self.credentialsSecretName != '''')'
+            type: object
+            x-kubernetes-validations:
+            - message: a location sets oci, csi, or both
+              rule: has(self.oci) || has(self.csi)
+          status:
+            description: StorageLocationStatus reports whether a location can be used.
+            properties:
+              conditions:
+                description: |-
+                  Conditions: Valid, Ready, and, for a SwiftClusterStorageLocation,
+                  Reachable.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the conditions
+                  describe.
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
