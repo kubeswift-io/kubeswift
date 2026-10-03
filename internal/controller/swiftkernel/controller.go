@@ -73,13 +73,19 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	status := sk.Status.DeepCopy()
+	// Status is written as a merge patch, not an update: the finalizer patch
+	// above re-queues the kernel, and a pass that reads it from a cache not yet
+	// holding the last status write would otherwise fail on a stale
+	// resourceVersion. This pass computes the whole status, so nothing to merge
+	// with is lost.
+	orig := sk.DeepCopy()
 
 	if len(nodeList.Items) == 0 {
 		SetPhase(status, kernelv1alpha1.SwiftKernelPhasePending)
 		SetNoKernelNodesCondition(status)
 		status.NodeStatuses = nil
 		sk.Status = *status
-		if err := r.Status().Update(ctx, &sk); err != nil {
+		if err := r.Status().Patch(ctx, &sk, client.MergeFrom(orig)); err != nil {
 			return ctrl.Result{}, err
 		}
 		logger.Info("no kernel-capable nodes found, waiting for labeled nodes")
@@ -137,7 +143,7 @@ func (r *SwiftKernelReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	status.NodeStatuses = nodeStatuses
 	sk.Status = *status
-	if err := r.Status().Update(ctx, &sk); err != nil {
+	if err := r.Status().Patch(ctx, &sk, client.MergeFrom(orig)); err != nil {
 		return ctrl.Result{}, err
 	}
 
