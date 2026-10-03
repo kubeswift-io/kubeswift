@@ -16,6 +16,9 @@ const (
 	ReasonRootPVCNotFound    = "RootPVCNotFound"
 	ReasonUnsupportedBackend = "UnsupportedBackend"
 	ReasonSnapshotFailed     = "SnapshotFailed"
+	// ReasonTagInUse: another oci snapshot in the namespace pushes to the same
+	// repository:tag (#705).
+	ReasonTagInUse = "TagInUse"
 )
 
 // setPhase updates status.phase.

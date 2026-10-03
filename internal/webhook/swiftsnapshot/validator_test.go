@@ -363,6 +363,11 @@ func newSchemeForMemoryTests(t *testing.T) *runtime.Scheme {
 		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
 	)
 	metav1.AddToGroupVersion(s, gvSwift)
+	// An oci snapshot's create lists the namespace's snapshots for its tag
+	// (#705); the webhook's real scheme has the snapshot types too.
+	gvSnap := schema.GroupVersion{Group: "snapshot.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvSnap, &snapshotv1alpha1.SwiftSnapshot{}, &snapshotv1alpha1.SwiftSnapshotList{})
+	metav1.AddToGroupVersion(s, gvSnap)
 	return s
 }
 
@@ -728,5 +733,30 @@ func TestValidateUpdate_SourceGuestChangedSinceCreation(t *testing.T) {
 	changed.Spec.GuestRef.Name = "other"
 	if _, err := v.ValidateUpdate(ctx, old, changed); err == nil {
 		t.Error("a spec change must still be rejected")
+	}
+}
+
+// A second snapshot on a repository:tag another one already uses is refused
+// at create: some registries drop the first one's manifest as soon as the tag
+// is pushed again (#705). A different tag, or the per-snapshot default, is fine.
+func TestValidate_OCITagInUse(t *testing.T) {
+	s := newSchemeForMemoryTests(t)
+	tagged := func(name, tag string) *snapshotv1alpha1.SwiftSnapshot {
+		snap := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+		snap.Name = name
+		snap.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{Repository: "zot.svc:5000/vm-snapshots", Tag: tag}
+		return snap
+	}
+	existing := tagged("nightly-1", "nightly")
+	v := &Validator{Client: fake.NewClientBuilder().WithScheme(s).WithObjects(existing).Build()}
+
+	_, err := v.ValidateCreate(context.Background(), tagged("nightly-2", "nightly"))
+	if err == nil || !strings.Contains(err.Error(), "zot.svc:5000/vm-snapshots:nightly is already used by SwiftSnapshot nightly-1") {
+		t.Errorf("second snapshot on the same tag: err = %v", err)
+	}
+	for _, tag := range []string{"weekly", ""} {
+		if _, err := v.ValidateCreate(context.Background(), tagged("nightly-2", tag)); err != nil {
+			t.Errorf("tag %q: %v", tag, err)
+		}
 	}
 }

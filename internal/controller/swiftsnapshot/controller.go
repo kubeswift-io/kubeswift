@@ -250,6 +250,15 @@ func (r *SwiftSnapshotReconciler) handlePending(
 		}
 		// Falls through to the existing csi-volume-snapshot path.
 	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI:
+		// Before the guest is touched: a second snapshot on one repository:tag
+		// can destroy the first one's artifact (#705).
+		if msg, err := r.ociTagConflict(ctx, snap); err != nil {
+			return false, 0, err
+		} else if msg != "" {
+			setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+			setReadyCondition(status, metav1.ConditionFalse, ReasonTagInUse, msg)
+			return true, 0, nil
+		}
 		return r.handlePendingLocal(ctx, snap, status)
 	default:
 		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
