@@ -130,6 +130,15 @@ func (r *SwiftSnapshotReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		logger.Info("rejected snapshot: host path outside the permitted prefix", "error", err.Error())
 		return ctrl.Result{}, nil
 	}
+	if err := checkBackendDestination(&snap); err != nil {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhaseFailed)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonSnapshotFailed, err.Error())
+		if updateErr := r.persist(ctx, &snap, status); updateErr != nil {
+			return ctrl.Result{}, updateErr
+		}
+		logger.Info("rejected snapshot: the backend does not say where to store it", "error", err.Error())
+		return ctrl.Result{}, nil
+	}
 
 	switch phase {
 	case snapshotv1alpha1.SwiftSnapshotPhasePending:

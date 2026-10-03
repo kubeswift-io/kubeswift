@@ -281,15 +281,45 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	return nil
 }
 
+// ValidateBackendDestination checks the part of an s3 or oci backend that says
+// where the snapshot is stored: the backend's own block is present and names
+// its bucket or repository, and an oci tag is a bare tag. The controller
+// enforces it too, before it touches the guest: this webhook is off by default,
+// and the controller reads these fields after the capture, so a snapshot
+// without them used to be captured and then crash the reconcile (#706).
+func ValidateBackendDestination(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendS3:
+		s3 := snap.Spec.Backend.S3
+		if s3 == nil {
+			return fmt.Errorf("spec.backend.s3 is required when spec.backend.type=s3")
+		}
+		if s3.Bucket == "" {
+			return fmt.Errorf("spec.backend.s3.bucket is required")
+		}
+	case snapshotv1alpha1.SnapshotBackendOCI:
+		oci := snap.Spec.Backend.OCI
+		if oci == nil {
+			return fmt.Errorf("spec.backend.oci is required when spec.backend.type=oci")
+		}
+		if oci.Repository == "" {
+			return fmt.Errorf("spec.backend.oci.repository is required (e.g. ghcr.io/org/vm-snapshots)")
+		}
+		// Tag, when set, must be a bare tag — not a ref carrying its own ':tag',
+		// '@digest', or repository path. The controller composes repository:tag.
+		if strings.ContainsAny(oci.Tag, ":@/") {
+			return fmt.Errorf("spec.backend.oci.tag must be a bare tag, not a reference (got %q)", oci.Tag)
+		}
+	}
+	return nil
+}
+
 // validateS3Backend checks the Tier C (Phase 3) object-storage backend config.
 func validateS3Backend(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	if err := ValidateBackendDestination(snap); err != nil {
+		return err
+	}
 	s3 := snap.Spec.Backend.S3
-	if s3 == nil {
-		return fmt.Errorf("spec.backend.s3 is required when spec.backend.type=s3")
-	}
-	if s3.Bucket == "" {
-		return fmt.Errorf("spec.backend.s3.bucket is required")
-	}
 	if s3.CredentialsSecretRef == nil || s3.CredentialsSecretRef.Name == "" {
 		return fmt.Errorf("spec.backend.s3.credentialsSecretRef.name is required (Secret with accessKeyId/secretAccessKey)")
 	}
@@ -305,18 +335,10 @@ func validateS3Backend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 // repository is the one hard requirement. Reference well-formedness beyond this
 // is left to ORAS at push time (fail-loud) rather than re-implemented here.
 func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	if err := ValidateBackendDestination(snap); err != nil {
+		return err
+	}
 	oci := snap.Spec.Backend.OCI
-	if oci == nil {
-		return fmt.Errorf("spec.backend.oci is required when spec.backend.type=oci")
-	}
-	if oci.Repository == "" {
-		return fmt.Errorf("spec.backend.oci.repository is required (e.g. ghcr.io/org/vm-snapshots)")
-	}
-	// Tag, when set, must be a bare tag — not a ref carrying its own ':tag',
-	// '@digest', or repository path. The controller composes repository:tag.
-	if strings.ContainsAny(oci.Tag, ":@/") {
-		return fmt.Errorf("spec.backend.oci.tag must be a bare tag, not a reference (got %q)", oci.Tag)
-	}
 	if oci.SigningKeySecretRef != nil && oci.SigningKeySecretRef.Name == "" {
 		return fmt.Errorf("spec.backend.oci.signingKeySecretRef.name is required when signingKeySecretRef is set")
 	}
