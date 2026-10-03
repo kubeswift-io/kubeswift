@@ -58,10 +58,13 @@ type ClusterReconciler struct {
 	// Now is the clock; nil means time.Now. Replaced in tests.
 	Now func() time.Time
 
-	// probed records, per location, when its registry was last probed and
-	// for which generation. Reconciles come far more often than probes
-	// should: the manager resyncs every object every 30s, and each status
-	// write is an event of its own.
+	// probed records, per location, the last probe: when, for which
+	// generation, and what it found. Reconciles come far more often than
+	// probes should: the manager resyncs every object every 30s, and each
+	// status write is an event of its own. Every reconcile writes Reachable
+	// from this record, probed or not: left to the cached object, a reconcile
+	// reading a copy older than the write that added the condition patched the
+	// condition list without it.
 	mu     sync.Mutex
 	probed map[string]probeRecord
 }
@@ -69,30 +72,33 @@ type ClusterReconciler struct {
 type probeRecord struct {
 	generation int64
 	at         time.Time
+	ok         bool
+	msg        string
 }
 
-// probeDue reports whether the location's registry should be probed now and,
-// if not, how long until it should.
-func (r *ClusterReconciler) probeDue(name string, generation int64, now time.Time) (bool, time.Duration) {
+// lastProbe returns the location's last probe for this generation, if one is
+// still fresh, and how long until the next is due; ok is false when a probe is
+// due now.
+func (r *ClusterReconciler) lastProbe(name string, generation int64, now time.Time) (probeRecord, time.Duration, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rec, ok := r.probed[name]
 	if !ok || rec.generation != generation {
-		return true, 0
+		return probeRecord{}, 0, false
 	}
 	if wait := rec.at.Add(reachabilityRefresh).Sub(now); wait > 0 {
-		return false, wait
+		return rec, wait, true
 	}
-	return true, 0
+	return probeRecord{}, 0, false
 }
 
-func (r *ClusterReconciler) recordProbe(name string, generation int64, now time.Time) {
+func (r *ClusterReconciler) recordProbe(name string, rec probeRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.probed == nil {
 		r.probed = map[string]probeRecord{}
 	}
-	r.probed[name] = probeRecord{generation: generation, at: now}
+	r.probed[name] = rec
 }
 
 func (r *ClusterReconciler) forgetProbe(name string) {
@@ -131,24 +137,25 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if r.Now != nil {
 			now = r.Now()
 		}
-		due, wait := r.probeDue(loc.Name, loc.Generation, now)
-		if due {
+		rec, wait, fresh := r.lastProbe(loc.Name, loc.Generation, now)
+		if !fresh {
 			probe := r.Probe
 			if probe == nil {
 				probe = ProbeRegistry
 			}
 			ok, msg := probe(ctx, loc.Spec.OCI)
-			r.recordProbe(loc.Name, loc.Generation, now)
-			reason, status := ReasonReachable, metav1.ConditionTrue
-			if !ok {
-				reason, status = ReasonUnreachable, metav1.ConditionFalse
-			}
-			meta.SetStatusCondition(&loc.Status.Conditions, metav1.Condition{
-				Type: storagev1alpha1.ConditionReachable, Status: status, Reason: reason,
-				Message: msg, ObservedGeneration: loc.Generation,
-			})
+			rec = probeRecord{generation: loc.Generation, at: now, ok: ok, msg: msg}
+			r.recordProbe(loc.Name, rec)
 			wait = reachabilityRefresh
 		}
+		reason, status := ReasonReachable, metav1.ConditionTrue
+		if !rec.ok {
+			reason, status = ReasonUnreachable, metav1.ConditionFalse
+		}
+		meta.SetStatusCondition(&loc.Status.Conditions, metav1.Condition{
+			Type: storagev1alpha1.ConditionReachable, Status: status, Reason: reason,
+			Message: rec.msg, ObservedGeneration: loc.Generation,
+		})
 		requeue = wait
 	} else {
 		meta.RemoveStatusCondition(&loc.Status.Conditions, storagev1alpha1.ConditionReachable)

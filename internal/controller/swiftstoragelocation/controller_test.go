@@ -225,3 +225,40 @@ func TestProbeRegistry(t *testing.T) {
 		t.Errorf("not a registry: ok=%v msg=%q", ok, msg)
 	}
 }
+
+// A reconcile that skips the probe still writes Reachable, from the last
+// probe's result. Taken from the cached object instead, it was lost whenever
+// that copy predated the write that added it: the merge patch then rewrote the
+// condition list without it, and nothing put it back until the next probe,
+// up to 10 minutes later (seen on a cluster).
+func TestClusterLocation_SkippedProbeKeepsReachable(t *testing.T) {
+	probes := 0
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	c := newClient(clusterLoc("main", false, "registry.example.com/kubeswift"))
+	r := &ClusterReconciler{Client: c, Now: func() time.Time { return now },
+		Probe: func(context.Context, *storagev1alpha1.OCILocation) (bool, string) {
+			probes++
+			return false, "x509: certificate signed by unknown authority"
+		}}
+	reconcileCluster(t, r, "main")
+
+	// What the stale write left: the conditions without Reachable.
+	var loc storagev1alpha1.SwiftClusterStorageLocation
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "main"}, &loc); err != nil {
+		t.Fatal(err)
+	}
+	meta.RemoveStatusCondition(&loc.Status.Conditions, storagev1alpha1.ConditionReachable)
+	if err := c.Status().Update(context.Background(), &loc); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(30 * time.Second)
+	got := reconcileCluster(t, r, "main")
+	c2 := cond(got.Status.Conditions, storagev1alpha1.ConditionReachable)
+	if c2 == nil || c2.Status != metav1.ConditionFalse || !strings.Contains(c2.Message, "x509") {
+		t.Fatalf("Reachable = %+v, want the last probe's result without probing again", c2)
+	}
+	if probes != 1 {
+		t.Errorf("probes = %d, want 1", probes)
+	}
+}
