@@ -32,3 +32,16 @@ func checkLocalHostPath(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	}
 	return swiftsnapshotwebhook.ValidateLocalHostPath(snap.Namespace, snap.Name, snap.Spec.Backend.Local.HostPath)
 }
+
+// checkBackendDestination re-enforces, in the controller, that an s3 or oci
+// snapshot says where it is stored (#706): the backend's block is present and
+// names its bucket or repository. The capture runs first and these fields are
+// read only afterwards, so a snapshot without them was captured -- the guest
+// paused -- and then dereferenced a nil block on every reconcile. Same
+// validator as the webhook, which is off by default.
+//
+// In every non-terminal phase, not only before the capture: a snapshot already
+// past it with no block can only fail later, and failing it now ends the loop.
+func checkBackendDestination(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	return swiftsnapshotwebhook.ValidateBackendDestination(snap)
+}
