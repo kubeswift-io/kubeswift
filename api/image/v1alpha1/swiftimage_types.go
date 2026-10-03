@@ -83,10 +83,13 @@ type SecretObjectReference struct {
 }
 
 // OCIImageSource pulls a golden VM disk artifact from an OCI registry (P3). The
-// artifact is a single raw disk layer (artifactType
-// application/vnd.kubeswift.vmimage.v1, layer title image.raw); the import
-// materializes it into the import PVC and runs the shared resize + sgdisk +
-// GRUB/serial patch tail — identical to the http path minus the download step.
+// artifact (artifactType application/vnd.kubeswift.vmimage.v1) is a raw disk in
+// chunks: one uncompressed layer per non-zero chunk, placed by its
+// kubeswift.io/chunk-offset annotation, and a config blob carrying the disk's
+// total size, so all-zero regions are never stored. `swiftctl image publish`
+// writes it. The import reassembles it into the import PVC and runs the shared
+// resize + sgdisk + GRUB/serial patch tail — identical to the http path minus
+// the download step.
 type OCIImageSource struct {
 	// Repository is the OCI repository WITHOUT a tag
 	// (e.g. ghcr.io/org/golden-ubuntu-noble).

@@ -152,17 +152,18 @@ type OCIBackend struct {
 	// +optional
 	CredentialsSecretRef *SecretObjectReference `json:"credentialsSecretRef,omitempty"`
 
-	// SigningKeySecretRef, when set, makes the push cosign-sign the artifact as
-	// an OCI referrer (discoverable via `oras discover` / `cosign verify`),
-	// extending the supply-chain spine to the disk artifact. The referenced
+	// SigningKeySecretRef, when set, makes the push cosign-sign the pushed
+	// manifest, attaching the signature by cosign's default tag scheme (not as
+	// an OCI 1.1 referrer: cosign verify cannot verify one); check it with
+	// `cosign verify --key cosign.pub <repository>@<digest>`. The referenced
 	// Secret (same namespace) must hold a cosign keypair: keys `cosign.key`
 	// (the encrypted private key) and `cosign.password`. Key-based (not keyless)
 	// — an in-cluster capture has no CI OIDC identity, and a key-based signature
 	// verifies offline for sovereign/air-gapped edge. Signing is strict: if it is
 	// requested and fails, the snapshot Fails (no unsigned artifact is left
-	// behind as if signed). NOTE: cosign verification of a referrer-mode
-	// signature requires a TLS registry; a plaintext (insecure) registry can
-	// carry the referrer but cosign verify against it is unsupported by cosign.
+	// behind as if signed). NOTE: cosign verify needs a TLS registry; a
+	// plaintext (insecure) registry can hold the signature, but cosign cannot
+	// verify it there.
 	// +optional
 	SigningKeySecretRef *SecretObjectReference `json:"signingKeySecretRef,omitempty"`
 }
@@ -214,10 +215,10 @@ type SwiftSnapshotSpec struct {
 	// +optional
 	IncludeDisk bool `json:"includeDisk,omitempty"`
 	// ResumeAfterSnapshot controls whether the source SwiftGuest is resumed
-	// after the snapshot completes (default true). false leaves the VM
-	// stopped/paused for operator inspection. Ignored when the source guest
-	// was already stopped at snapshot time (csi-volume-snapshot backend
-	// stops the VM gracefully and restarts it iff this is true).
+	// after a memory capture (local, s3, oci) completes (default true). false
+	// leaves the VM paused for operator inspection. Ignored when the source
+	// guest was already stopped at snapshot time, and by the
+	// csi-volume-snapshot backend, which never pauses or stops the VM.
 	// +kubebuilder:default=true
 	ResumeAfterSnapshot bool `json:"resumeAfterSnapshot,omitempty"`
 
