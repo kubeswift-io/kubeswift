@@ -58,16 +58,25 @@ func pullJobName(skName, nodeName, destDir string) string {
 // container holding a node hostPath mount.
 const pullImageEnv = "OCI_IMAGE"
 
+// pullAuthDir is where the pull container finds ociRef.pullSecret's Docker
+// config, as config.json; oras reads it through --registry-config.
+const pullAuthDir = "/oras-auth"
+
 // pullScript returns a shell script that pulls OCI artifacts into destDir.
-// destDir is controller-derived (KernelLocalPath), not user input.
-func pullScript(destDir string) string {
+// destDir is controller-derived (KernelLocalPath), not user input. With auth,
+// oras authenticates with the Docker config under pullAuthDir.
+func pullScript(destDir string, auth bool) string {
+	registryConfig := ""
+	if auth {
+		registryConfig = " --registry-config " + pullAuthDir + "/config.json"
+	}
 	return fmt.Sprintf(`set -e
 mkdir -p %q
 cd %q
-oras pull "$%s"
+oras pull%s "$%s"
 echo "Pull complete"
 ls -lh .`,
-		destDir, destDir, pullImageEnv)
+		destDir, destDir, registryConfig, pullImageEnv)
 }
 
 // StartPullOnNode creates the pull Job for the SwiftKernel scheduled on the given node.
@@ -77,7 +86,7 @@ func (r *SwiftKernelReconciler) StartPullOnNode(ctx context.Context, sk *kernelv
 	}
 	destDir := kernelv1alpha1.KernelLocalPath(sk.Namespace, sk.Name)
 	jobName := pullJobName(sk.Name, nodeName, destDir)
-	script := pullScript(destDir)
+	script := pullScript(destDir, sk.Spec.OCIRef.PullSecret != "")
 
 	podSpec := corev1.PodSpec{
 		NodeSelector: map[string]string{
@@ -109,10 +118,22 @@ func (r *SwiftKernelReconciler) StartPullOnNode(ctx context.Context, sk *kernelv
 			},
 		}},
 	}
-	if sk.Spec.OCIRef.PullSecret != "" {
-		podSpec.ImagePullSecrets = []corev1.LocalObjectReference{
-			{Name: sk.Spec.OCIRef.PullSecret},
-		}
+	if s := sk.Spec.OCIRef.PullSecret; s != "" {
+		// The credentials are for the kernel's registry, so the pull itself
+		// must read them: as imagePullSecrets alone they reached only the
+		// kubelet pulling the oras image, and the artifact was pulled
+		// anonymously (#708). Same mount as the image import's.
+		c := &podSpec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "oras-auth", MountPath: pullAuthDir, ReadOnly: true})
+		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+			Name: "oras-auth",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: s,
+				Items:      []corev1.KeyToPath{{Key: corev1.DockerConfigJsonKey, Path: "config.json"}},
+			}},
+		})
+		// Kept for a registry that also serves the oras image.
+		podSpec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: s}}
 	}
 
 	job := &batchv1.Job{

@@ -59,6 +59,9 @@ spec:
                   image:
                     type: string
                   pullSecret:
+                    description: |-
+                      PullSecret names a kubernetes.io/dockerconfigjson Secret, in the
+                      SwiftKernel's namespace, with the credentials for Image's registry.
                     type: string
                 required:
                 - image
