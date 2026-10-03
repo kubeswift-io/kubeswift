@@ -152,6 +152,19 @@ func (v *Validator) validateSwiftSnapshot(ctx context.Context, snap *snapshotv1a
 			return err
 		}
 	}
+	// A second snapshot on one repository:tag can destroy the first one's
+	// artifact (#705). At create the new snapshot is the newest, so any other
+	// holder wins. The controller refuses it too, for the same reason as above,
+	// and also before the memory check, which returns for oci.
+	if snap.Spec.Backend.Type == snapshotv1alpha1.SnapshotBackendOCI && v.Client != nil {
+		holders, err := clonecommon.OCIReferenceHolders(ctx, v.Client, snap)
+		if err != nil {
+			return err
+		}
+		if len(holders) > 0 {
+			return fmt.Errorf("%s", clonecommon.OCITagInUseMessage(clonecommon.OCIReference(snap), holders[0].Name))
+		}
+	}
 	if backendCapturesMemory(snap) && v.Client != nil {
 		return v.validateMemoryCaptureCompat(ctx, snap)
 	}

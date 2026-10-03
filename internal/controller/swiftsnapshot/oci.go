@@ -75,10 +75,7 @@ func ociLocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // ociTag resolves the artifact tag: the operator-supplied tag, or a stable
 // per-snapshot default of "<namespace>-<name>".
 func ociTag(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	if snap.Spec.Backend.OCI != nil && snap.Spec.Backend.OCI.Tag != "" {
-		return snap.Spec.Backend.OCI.Tag
-	}
-	return snap.Namespace + "-" + snap.Name
+	return clonecommon.OCITag(snap)
 }
 
 // ociReference is the "repository:tag" recorded in status.
@@ -343,4 +340,32 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			},
 		},
 	}
+}
+
+// ociTagConflict refuses an oci snapshot whose repository:tag another live
+// snapshot in its namespace already uses (#705). A tag names only what was
+// pushed to it last, and some registries drop the earlier manifest as soon as
+// the tag is pushed again, so the second push can destroy the first snapshot's
+// artifact while it still reads Ready.
+//
+// Exactly one of two such snapshots must proceed. The other one wins if it has
+// started (it may already have pushed) or is older; age ties break on name.
+// The cache cannot hide an older snapshot here, since its creation precedes
+// this one's in the same watch. Two created within the same second can still
+// both proceed: creationTimestamp has one-second resolution.
+func (r *SwiftSnapshotReconciler) ociTagConflict(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot) (string, error) {
+	holders, err := clonecommon.OCIReferenceHolders(ctx, r.Client, snap)
+	if err != nil {
+		return "", err
+	}
+	for i := range holders {
+		h := &holders[i]
+		started := h.Status.Phase != "" && h.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhasePending
+		older := h.CreationTimestamp.Before(&snap.CreationTimestamp) ||
+			(h.CreationTimestamp.Equal(&snap.CreationTimestamp) && h.Name < snap.Name)
+		if started || older {
+			return clonecommon.OCITagInUseMessage(clonecommon.OCIReference(snap), h.Name), nil
+		}
+	}
+	return "", nil
 }

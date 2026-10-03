@@ -24,7 +24,8 @@ spec:
     type: oci
     oci:
       repository: zot.registry.svc:5000/vm-snapshots
-      # tag: empty defaults to "<namespace>-<snapshot>", pinned by digest on restore
+      # tag: empty defaults to "<namespace>-<snapshot>", pinned by digest on restore.
+      #   One tag per snapshot: a tag another snapshot here already uses is refused.
       insecure: true            # plaintext in-cluster/test registry ONLY — drop for TLS
       # credentialsSecretRef:    # kubernetes.io/dockerconfigjson, same namespace
       #   name: regcreds
