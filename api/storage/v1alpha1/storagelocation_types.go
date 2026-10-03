@@ -93,6 +93,29 @@ type OCILocation struct {
 	VerifyKey string `json:"verifyKey,omitempty"`
 }
 
+// Kinds a StorageLocationRef can name.
+const (
+	KindSwiftStorageLocation        = "SwiftStorageLocation"
+	KindSwiftClusterStorageLocation = "SwiftClusterStorageLocation"
+)
+
+// StorageLocationRef names a storage location. A SwiftStorageLocation is
+// looked up in the referencing object's namespace; there is no namespace
+// field.
+type StorageLocationRef struct {
+	// Kind is SwiftStorageLocation (the default) or
+	// SwiftClusterStorageLocation.
+	// +kubebuilder:validation:Enum=SwiftStorageLocation;SwiftClusterStorageLocation
+	// +kubebuilder:default=SwiftStorageLocation
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Name is the location's name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+}
+
 // CSILocation configures csi-volume-snapshot snapshots.
 type CSILocation struct {
 	// VolumeSnapshotClassName is the class a csi-volume-snapshot SwiftSnapshot

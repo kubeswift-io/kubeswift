@@ -26,6 +26,10 @@ spec:
     - jsonPath: .spec.backend.type
       name: Backend
       type: string
+    - jsonPath: .status.location.source
+      name: Location
+      priority: 1
+      type: string
     - jsonPath: .status.totalSizeBytes
       name: Size
       type: integer
@@ -95,8 +99,39 @@ spec:
                           a directory its author chose keeps that directory.
                         type: string
                     type: object
+                  locationRef:
+                    description: |-
+                      LocationRef names the storage location an oci snapshot is pushed to, or
+                      a csi-volume-snapshot snapshot takes its VolumeSnapshotClass from,
+                      instead of the defaults. Not valid with backend.oci or with
+                      csiVolumeSnapshot.volumeSnapshotClassName, which say it themselves. The
+                      location is resolved once, before the capture, and recorded in
+                      status.location: changing or deleting a location never moves a
+                      snapshot already taken.
+                    properties:
+                      kind:
+                        default: SwiftStorageLocation
+                        description: |-
+                          Kind is SwiftStorageLocation (the default) or
+                          SwiftClusterStorageLocation.
+                        enum:
+                        - SwiftStorageLocation
+                        - SwiftClusterStorageLocation
+                        type: string
+                      name:
+                        description: Name is the location's name.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   oci:
-                    description: OCI configures the oci (OCI registry / ORAS) backend.
+                    description: |-
+                      OCI configures the oci (OCI registry / ORAS) backend, used exactly as
+                      written. Omit it to store the snapshot in a storage location instead:
+                      locationRef's, else the namespace's default SwiftStorageLocation, else
+                      the cluster's default SwiftClusterStorageLocation.
                     properties:
                       credentialsSecretRef:
                         description: |-
@@ -497,6 +532,58 @@ spec:
                 type: string
               hypervisorVersion:
                 type: string
+              location:
+                description: |-
+                  Location is where an oci snapshot is stored and how to reach it, or the
+                  VolumeSnapshotClass a csi-volume-snapshot snapshot uses, resolved once
+                  before the capture. The push, restores, clones and the deletion all read
+                  it, never the spec or a storage location again, so changing a default
+                  moves no snapshot already taken. Unset on a snapshot taken before
+                  storage locations existed; those read spec.backend.oci.
+                properties:
+                  caBundle:
+                    description: |-
+                      CABundle is the location's CA bundle at resolution, kept so the
+                      snapshot can still be restored after the location is deleted.
+                    type: string
+                  credentialsSecretName:
+                    description: |-
+                      CredentialsSecretName is the dockerconfigjson Secret, in the snapshot's
+                      namespace, used for every transfer. Empty means anonymous.
+                    type: string
+                  insecure:
+                    description: Insecure is a plaintext (http) registry.
+                    type: boolean
+                  repository:
+                    description: |-
+                      Repository is the full repository the artifacts are pushed to: a
+                      cluster location's repository plus <namespace>/snapshots, or a
+                      namespace location's plus snapshots.
+                    type: string
+                  signingKeySecretName:
+                    description: |-
+                      SigningKeySecretName is the cosign key Secret, in the snapshot's
+                      namespace, the push signs with. Empty means unsigned.
+                    type: string
+                  source:
+                    description: |-
+                      Source is where it came from: SwiftStorageLocation/<name>,
+                      SwiftClusterStorageLocation/<name>, Explicit (the snapshot's own spec),
+                      or DefaultVolumeSnapshotClass.
+                    type: string
+                  tag:
+                    description: |-
+                      Tag is the memory artifact's tag; a full-state snapshot's disks are
+                      tagged <tag>-disk and <tag>-disk-<disk>.
+                    type: string
+                  volumeSnapshotClassName:
+                    description: |-
+                      VolumeSnapshotClassName is the class a csi-volume-snapshot snapshot
+                      uses.
+                    type: string
+                required:
+                - source
+                type: object
               memorySnapshot:
                 description: |-
                   MemorySnapshotRef records the memory portion of a snapshot. Nil when

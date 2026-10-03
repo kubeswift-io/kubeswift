@@ -1,0 +1,34 @@
+# An oci SwiftSnapshot that names no registry: a storage location supplies it.
+#
+# The cluster default below stores every namespace's snapshots under
+# <repository>/<namespace>/snapshots. Each namespace provides its own
+# credentials Secret (default name kubeswift-registry); a snapshot whose
+# namespace lacks it waits, Pending, with RegistryCredentialsMissing.
+# Before the capture the snapshot records where it went in status.location;
+# restores, clones and the deletion read that, so changing the default later
+# moves no snapshot already taken.
+apiVersion: storage.kubeswift.io/v1alpha1
+kind: SwiftClusterStorageLocation
+metadata:
+  name: registry
+spec:
+  default: true
+  oci:
+    repository: zot.registry.svc:5000/kubeswift
+    insecure: true              # plaintext in-cluster/test registry ONLY — drop for TLS
+    anonymous: true             # this test registry needs no credentials; drop to use kubeswift-registry
+---
+apiVersion: snapshot.kubeswift.io/v1alpha1
+kind: SwiftSnapshot
+metadata:
+  name: snapshot-oci-located
+  namespace: default
+spec:
+  guestRef:
+    name: snapshot-oci-source
+  backend:
+    type: oci                   # no oci block: the default location above is used
+    # locationRef:              # or name one: a SwiftStorageLocation in this namespace,
+    #   name: team-registry     # or kind: SwiftClusterStorageLocation
+  includeMemory: true
+  resumeAfterSnapshot: true

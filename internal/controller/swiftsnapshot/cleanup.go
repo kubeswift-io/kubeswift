@@ -709,17 +709,17 @@ func ociDeleteJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
 // from the same dockerconfigjson Secret the push used. Node-agnostic,
 // non-root, no host access.
 func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs []ociArtifact) *batchv1.Job {
-	oci := snap.Spec.Backend.OCI
+	oci := ociConn(snap)
 	var env []corev1.EnvVar
 	var mounts []corev1.VolumeMount
 	var volumes []corev1.Volume
-	if oci != nil && oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+	if oci.CredentialsSecretName != "" {
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociAuthMount})
 		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociAuthMount, ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "oras-auth",
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-				SecretName: oci.CredentialsSecretRef.Name,
+				SecretName: oci.CredentialsSecretName,
 				Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
 			}},
 		})
@@ -727,7 +727,7 @@ func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs 
 	containers := make([]corev1.Container, 0, len(refs))
 	for i, a := range refs {
 		args := []string{"--mode=delete", "--repository=" + a.repository, "--digest=" + a.digest, "--tag=" + a.tag}
-		if oci != nil && oci.Insecure {
+		if oci.Insecure {
 			args = append(args, "--insecure")
 		}
 		containers = append(containers, corev1.Container{

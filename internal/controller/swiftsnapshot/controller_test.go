@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
@@ -42,6 +43,13 @@ func testScheme(t *testing.T) *runtime.Scheme {
 		// class type panics the fake client rather than failing the test.
 		&swiftv1alpha1.SwiftGuestClass{}, &swiftv1alpha1.SwiftGuestClassList{},
 	)
+	// Snapshots resolve storage locations before they capture.
+	gvStorage := schema.GroupVersion{Group: "storage.kubeswift.io", Version: "v1alpha1"}
+	s.AddKnownTypes(gvStorage,
+		&storagev1alpha1.SwiftStorageLocation{}, &storagev1alpha1.SwiftStorageLocationList{},
+		&storagev1alpha1.SwiftClusterStorageLocation{}, &storagev1alpha1.SwiftClusterStorageLocationList{},
+	)
+	metav1.AddToGroupVersion(s, gvStorage)
 	metav1.AddToGroupVersion(s, gvSnap)
 	metav1.AddToGroupVersion(s, gvSwift)
 	return s

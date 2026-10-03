@@ -257,10 +257,18 @@ func (r *SwiftSnapshotReconciler) handlePending(
 				sharedbase.CSISnapshotRefusal(snap.Spec.GuestRef.Name, className))
 			return true, 0, nil
 		}
+		if proceed, advanced, requeue, err := r.recordLocation(ctx, snap, status); !proceed {
+			return advanced, requeue, err
+		}
 		// Falls through to the existing csi-volume-snapshot path.
 	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI:
-		// Before the guest is touched: a second snapshot on one repository:tag
-		// can destroy the first one's artifact (#705).
+		// Before the guest is touched: where an oci snapshot is stored is
+		// resolved and recorded first.
+		if proceed, advanced, requeue, err := r.recordLocation(ctx, snap, status); !proceed {
+			return advanced, requeue, err
+		}
+		// A second snapshot on one repository:tag can destroy the first one's
+		// artifact (#705).
 		if msg, err := r.ociTagConflict(ctx, snap); err != nil {
 			return false, 0, err
 		} else if msg != "" {

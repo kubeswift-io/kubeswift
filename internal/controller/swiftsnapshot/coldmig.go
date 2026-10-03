@@ -42,10 +42,17 @@ func rootDiskPVCName(guestName string) string { return rootDiskPVCPrefix + guest
 
 // ociDiskTag is the disk artifact's tag — the memory tag + "-disk" so both
 // artifacts share the repository but are distinct manifests.
-func ociDiskTag(snap *snapshotv1alpha1.SwiftSnapshot) string { return ociTag(snap) + "-disk" }
+func ociDiskTag(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	return clonecommon.TruncateTag(ociTag(snap) + "-disk")
+}
+
+// ociDataDiskTag is a captured data disk's artifact tag.
+func ociDataDiskTag(snap *snapshotv1alpha1.SwiftSnapshot, disk string) string {
+	return clonecommon.TruncateTag(ociTag(snap) + "-disk-" + disk)
+}
 
 func ociDiskReference(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Spec.Backend.OCI.Repository + ":" + ociDiskTag(snap)
+	return ociConn(snap).Repository + ":" + ociDiskTag(snap)
 }
 
 func diskChunkJobName(snap *snapshotv1alpha1.SwiftSnapshot) string {
@@ -137,7 +144,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 			targets = append(targets, chunkTarget{
 				dataName: dd.Name,
 				jobName:  dataDiskChunkJobName(snap, dd.Name),
-				tag:      ociDiskTag(snap) + "-" + dd.Name,
+				tag:      ociDataDiskTag(snap, dd.Name),
 				pvcName:  dd.PVCName,
 				block:    dd.Block,
 			})
@@ -225,7 +232,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 		rep := reports[t.jobName]
 		status.OCI.DataDisks = append(status.OCI.DataDisks, snapshotv1alpha1.OCIDataDiskArtifact{
 			Name:           t.dataName,
-			Reference:      snap.Spec.Backend.OCI.Repository + ":" + t.tag,
+			Reference:      ociConn(snap).Repository + ":" + t.tag,
 			ManifestDigest: rep.ManifestDigest,
 			PushedBytes:    rep.TotalBytes,
 		})
@@ -322,7 +329,7 @@ func (r *SwiftSnapshotReconciler) stopSourceGuest(ctx context.Context, namespace
 // match). Pinned to the capture node so the RWO PVC re-attaches locally. Runs
 // as root to read the raw disk. The caller sets the ownerRef.
 func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, jobName, tag, pvcName string, block bool) *batchv1.Job {
-	oci := snap.Spec.Backend.OCI
+	oci := ociConn(snap)
 	// Filesystem: the PVC mounts at diskChunkMount, the disk is image.raw.
 	// Block: the raw device attaches at rootDiskDevicePath.
 	diskPath := diskChunkMount + "/image.raw"
@@ -367,14 +374,14 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 	volumes := []corev1.Volume{rootVol}
 
 	// Registry credentials (dockerconfigjson), mirroring buildOCIPushJob.
-	if oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+	if oci.CredentialsSecretName != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociAuthMount})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociAuthMount, ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "oras-auth",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: oci.CredentialsSecretRef.Name,
+					SecretName: oci.CredentialsSecretName,
 					Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
 				},
 			},

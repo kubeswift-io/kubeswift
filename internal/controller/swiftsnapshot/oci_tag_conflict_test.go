@@ -35,6 +35,14 @@ func pendingResult(t *testing.T, snap *snapshotv1alpha1.SwiftSnapshot, others ..
 	if _, _, err := r.handlePending(context.Background(), snap, &status); err != nil {
 		t.Fatalf("handlePending: %v", err)
 	}
+	// The first pass only records status.location, as the controller persists
+	// it before going on; the second is where the capture would start.
+	if status.Location != nil && snap.Status.Location == nil {
+		snap.Status = *status.DeepCopy()
+		if _, _, err := r.handlePending(context.Background(), snap, &status); err != nil {
+			t.Fatalf("handlePending: %v", err)
+		}
+	}
 	return status
 }
 

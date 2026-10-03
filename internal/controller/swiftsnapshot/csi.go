@@ -95,9 +95,7 @@ func (r *SwiftSnapshotReconciler) createVolumeSnapshot(
 			},
 		},
 	}
-	if snap.Spec.Backend.CSIVolumeSnapshot != nil &&
-		snap.Spec.Backend.CSIVolumeSnapshot.VolumeSnapshotClassName != "" {
-		className := snap.Spec.Backend.CSIVolumeSnapshot.VolumeSnapshotClassName
+	if className := csiClassName(snap); className != "" {
 		vs.Spec.VolumeSnapshotClassName = &className
 	}
 	if err := r.Create(ctx, vs); err != nil && !errors.IsAlreadyExists(err) {
@@ -127,4 +125,17 @@ func (r *SwiftSnapshotReconciler) guestRootPVC(ctx context.Context, namespace, g
 		return nil, err
 	}
 	return &pvc, nil
+}
+
+// csiClassName is the VolumeSnapshotClass the snapshot uses: the one recorded
+// in status.location, else (a snapshot taken before storage locations
+// existed) its spec's. Empty leaves the choice to the snapshotter's default.
+func csiClassName(snap *snapshotv1alpha1.SwiftSnapshot) string {
+	if l := snap.Status.Location; l != nil {
+		return l.VolumeSnapshotClassName
+	}
+	if c := snap.Spec.Backend.CSIVolumeSnapshot; c != nil {
+		return c.VolumeSnapshotClassName
+	}
+	return ""
 }

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
 )
 
@@ -270,10 +271,62 @@ func TestValidate_OCIBackend(t *testing.T) {
 		}
 	}
 
-	// type=oci with a nil oci carrier is rejected.
+	// type=oci with no oci carrier is admitted: a storage location supplies
+	// the registry, and the controller waits, saying why, if none does.
 	bare := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
-	if _, err := v.ValidateCreate(context.Background(), bare); err == nil || !strings.Contains(err.Error(), "backend.oci is required") {
-		t.Errorf("nil oci carrier: want 'backend.oci is required'; got %v", err)
+	if _, err := v.ValidateCreate(context.Background(), bare); err != nil {
+		t.Errorf("oci with no carrier (a storage location supplies it): %v", err)
+	}
+}
+
+// locationRef applies to oci and csi-volume-snapshot only, and not alongside
+// the explicit setting it would be ignored for.
+func TestValidate_LocationRef(t *testing.T) {
+	v := &Validator{}
+	ref := &storagev1alpha1.StorageLocationRef{Name: "team"}
+	ok := map[string]*snapshotv1alpha1.SwiftSnapshot{
+		"oci with only a locationRef": func() *snapshotv1alpha1.SwiftSnapshot {
+			s := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+			s.Spec.Backend.LocationRef = ref
+			return s
+		}(),
+		"csi with a locationRef and no class": func() *snapshotv1alpha1.SwiftSnapshot {
+			s := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+			s.Spec.Backend.LocationRef = ref
+			return s
+		}(),
+	}
+	for name, s := range ok {
+		if _, err := v.ValidateCreate(context.Background(), s); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad := map[string]struct {
+		snap *snapshotv1alpha1.SwiftSnapshot
+		want string
+	}{
+		"oci block and a locationRef": {func() *snapshotv1alpha1.SwiftSnapshot {
+			s := makeSnap(snapshotv1alpha1.SnapshotBackendOCI)
+			s.Spec.Backend.OCI = &snapshotv1alpha1.OCIBackend{Repository: "registry.example.com/vm"}
+			s.Spec.Backend.LocationRef = ref
+			return s
+		}(), "mutually exclusive"},
+		"csi class and a locationRef": {func() *snapshotv1alpha1.SwiftSnapshot {
+			s := makeSnap(snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot)
+			s.Spec.Backend.CSIVolumeSnapshot = &snapshotv1alpha1.CSIVolumeSnapshotBackend{VolumeSnapshotClassName: "fast"}
+			s.Spec.Backend.LocationRef = ref
+			return s
+		}(), "mutually exclusive"},
+		"locationRef on local": {func() *snapshotv1alpha1.SwiftSnapshot {
+			s := makeSnap(snapshotv1alpha1.SnapshotBackendLocal)
+			s.Spec.Backend.LocationRef = ref
+			return s
+		}(), "only valid when spec.backend.type is oci or csi-volume-snapshot"},
+	}
+	for name, c := range bad {
+		if _, err := v.ValidateCreate(context.Background(), c.snap); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want it to mention %q", name, err, c.want)
+		}
 	}
 }
 

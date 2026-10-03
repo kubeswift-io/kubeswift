@@ -9,19 +9,26 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	snapshotv1alpha1 "github.com/kubeswift-io/kubeswift/api/snapshot/v1alpha1"
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 )
 
 // An s3 or oci snapshot that does not say where it is stored is admitted when
 // the webhook is off (the default). The capture ran first and the block was
 // read afterwards, so the reconcile dereferenced nil on every pass with the
 // guest already captured (#706). It now fails at once, before the phase
-// machine runs.
+// machine runs. (An oci snapshot without backend.oci at all is valid: a
+// storage location supplies the registry; see location_test.go.)
 func TestReconcile_BackendWithoutDestinationFailsFirst(t *testing.T) {
 	cases := map[string]struct {
 		mut  func(*snapshotv1alpha1.SwiftSnapshot)
 		want string
 	}{
-		"oci without its block":       {func(s *snapshotv1alpha1.SwiftSnapshot) { s.Spec.Backend.OCI = nil }, "spec.backend.oci is required"},
+		"oci block and a locationRef": {func(s *snapshotv1alpha1.SwiftSnapshot) {
+			s.Spec.Backend.LocationRef = &storagev1alpha1.StorageLocationRef{Name: "team"}
+		}, "mutually exclusive"},
+		"locationRef on local": {func(s *snapshotv1alpha1.SwiftSnapshot) {
+			s.Spec.Backend = snapshotv1alpha1.SwiftSnapshotBackend{Type: snapshotv1alpha1.SnapshotBackendLocal, LocationRef: &storagev1alpha1.StorageLocationRef{Name: "team"}}
+		}, "locationRef is only valid"},
 		"oci without a repository":    {func(s *snapshotv1alpha1.SwiftSnapshot) { s.Spec.Backend.OCI.Repository = "" }, "spec.backend.oci.repository is required"},
 		"oci tag that is a reference": {func(s *snapshotv1alpha1.SwiftSnapshot) { s.Spec.Backend.OCI.Tag = "repo:v1" }, "must be a bare tag"},
 		"s3 without its block": {func(s *snapshotv1alpha1.SwiftSnapshot) {
