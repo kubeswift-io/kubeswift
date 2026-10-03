@@ -101,12 +101,14 @@ func (r *SwiftImageReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, err
 		}
 		if result.Error != "" {
+			// The error is the message, never the reason: a condition reason
+			// must be a CamelCase token, so the apiserver refused the whole
+			// status write and the image never reached Failed, looping on
+			// reconciler errors with no status at all.
 			if result.Phase == imagev1alpha1.SwiftImagePhaseFailed {
 				SetPhase(status, imagev1alpha1.SwiftImagePhaseFailed)
-				SetFailedCondition(status, result.Error, result.Error)
-			} else {
-				SetFailedCondition(status, result.Error, result.Error)
 			}
+			SetFailedCondition(status, ReasonImportFailed, result.Error)
 		} else {
 			SetPhase(status, result.Phase)
 		}
