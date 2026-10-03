@@ -29,3 +29,8 @@ kubectl get swiftrestore snapshot-oci-clone -w     # Downloading -> Restoring ->
 `insecure: true` in the sample targets a plaintext in-cluster registry — drop it
 (and supply a `credentialsSecretRef`) for a real TLS registry. Set
 `signingKeySecretRef` to cosign-sign the pushed artifact.
+
+`05-snapshot-from-location.yaml` configures the registry once, as a default
+SwiftClusterStorageLocation, and takes a snapshot that names none. The snapshot
+records the location it resolved in `status.location`
+(`kubectl get swiftsnapshot snapshot-oci-located -o wide` shows its source).

@@ -31,15 +31,6 @@ func ociDownloadJobName(restore *snapshotv1alpha1.SwiftRestore) string {
 	return names.JobName(restore.Name, "-oci-download")
 }
 
-// ociRestoreTag resolves the artifact tag the same way the capture side does:
-// the operator-supplied tag, or the "<namespace>-<name>" default.
-func ociRestoreTag(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	if snap.Spec.Backend.OCI != nil && snap.Spec.Backend.OCI.Tag != "" {
-		return snap.Spec.Backend.OCI.Tag
-	}
-	return snap.Namespace + "-" + snap.Name
-}
-
 // downloadBackendIsOCI reports whether the restore's referenced snapshot uses
 // the oci backend, so the Downloading phase picks the right download handler.
 // Any lookup error returns false; the s3 handler then surfaces the real error.
@@ -62,10 +53,10 @@ func (r *SwiftRestoreReconciler) handlePendingOCI(
 	if r.hypervisorVersionBlocked(restore, snap, status) {
 		return true, 0, nil
 	}
-	if snap.Spec.Backend.OCI == nil {
+	if _, ok := clonecommon.SnapshotOCI(snap); !ok {
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
 		setReadyCondition(status, metav1.ConditionFalse, ReasonRestoreFailed,
-			"SwiftSnapshot "+snap.Name+" has no backend.oci — oci restore requires the registry config")
+			"SwiftSnapshot "+snap.Name+" records no registry (status.location or spec.backend.oci) — oci restore requires one")
 		return true, 0, nil
 	}
 	if snap.Status.OCI == nil || snap.Status.OCI.ManifestDigest == "" {
@@ -175,20 +166,17 @@ func (r *SwiftRestoreReconciler) ensureOCIDownloadJob(
 
 // buildOCIDownloadJob constructs the node-pinned download Job (pinned to the
 // resolved restore node). Pulls by digest for the exact captured artifact;
-// credentials, when configured, come from the snapshot's dockerconfigjson Secret.
+// credentials, when configured, come from the dockerconfigjson Secret the
+// snapshot recorded, read in the snapshot's namespace.
 func buildOCIDownloadJob(restore *snapshotv1alpha1.SwiftRestore, snap *snapshotv1alpha1.SwiftSnapshot, image, node string) *batchv1.Job {
-	oci := snap.Spec.Backend.OCI
-	credName := ""
-	if oci.CredentialsSecretRef != nil {
-		credName = oci.CredentialsSecretRef.Name
-	}
+	oci, _ := clonecommon.SnapshotOCI(snap)
 	return clonecommon.BuildOCIDownloadJob(clonecommon.OCIDownloadJobParams{
 		Snapshot:              snap,
 		Repository:            oci.Repository,
-		Tag:                   ociRestoreTag(snap),
+		Tag:                   oci.Tag,
 		Digest:                snap.Status.OCI.ManifestDigest,
 		Insecure:              oci.Insecure,
-		CredentialsSecretName: credName,
+		CredentialsSecretName: oci.CredentialsSecretName,
 		Image:                 image,
 		Name:                  ociDownloadJobName(restore),
 		Namespace:             restore.Namespace,

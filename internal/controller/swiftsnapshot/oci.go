@@ -72,22 +72,29 @@ func ociLocalDir(snap *snapshotv1alpha1.SwiftSnapshot) string {
 	return clonecommon.NodeDir(snap)
 }
 
-// ociTag resolves the artifact tag: the operator-supplied tag, or a stable
-// per-snapshot default of "<namespace>-<name>".
+// ociConn is the registry the snapshot uses: status.location, recorded before
+// the capture, else spec.backend.oci for a snapshot taken before storage
+// locations existed.
+func ociConn(snap *snapshotv1alpha1.SwiftSnapshot) clonecommon.OCIConnection {
+	c, _ := clonecommon.SnapshotOCI(snap)
+	return c
+}
+
+// ociTag is the memory artifact's tag.
 func ociTag(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return clonecommon.OCITag(snap)
+	return ociConn(snap).Tag
 }
 
 // ociReference is the "repository:tag" recorded in status.
 func ociReference(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	return snap.Spec.Backend.OCI.Repository + ":" + ociTag(snap)
+	c := ociConn(snap)
+	return c.Repository + ":" + c.Tag
 }
 
-// ociSigningRequested reports whether the snapshot opted into cosign provenance
-// signing via a signing-key Secret (P2).
+// ociSigningRequested reports whether the push signs the artifact: the
+// snapshot's signing-key Secret, or its location's.
 func ociSigningRequested(snap *snapshotv1alpha1.SwiftSnapshot) bool {
-	oci := snap.Spec.Backend.OCI
-	return oci != nil && oci.SigningKeySecretRef != nil && oci.SigningKeySecretRef.Name != ""
+	return ociConn(snap).SigningKeySecretName != ""
 }
 
 // ociPushJobName is the deterministic name of the push Job.
@@ -212,12 +219,12 @@ func (r *SwiftSnapshotReconciler) pushedArtifact(ctx context.Context, namespace,
 // Secret mounted at ociAuthMount with DOCKER_CONFIG pointed at it; an empty
 // credentialsSecretRef means anonymous access. The caller sets the ownerRef.
 func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode string) *batchv1.Job {
-	oci := snap.Spec.Backend.OCI
+	oci := ociConn(snap)
 	args := []string{
 		"--mode=upload",
 		"--dir=" + ociUploadMount,
 		"--repository=" + oci.Repository,
-		"--tag=" + ociTag(snap),
+		"--tag=" + oci.Tag,
 		"--snapshot=" + snap.Namespace + "/" + snap.Name,
 	}
 	if oci.Insecure {
@@ -242,14 +249,14 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 		ReadOnly:  true,
 	}}
 	var env []corev1.EnvVar
-	if oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+	if oci.CredentialsSecretName != "" {
 		env = append(env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: ociAuthMount})
 		mounts = append(mounts, corev1.VolumeMount{Name: "oras-auth", MountPath: ociAuthMount, ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "oras-auth",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: oci.CredentialsSecretRef.Name,
+					SecretName: oci.CredentialsSecretName,
 					// A kubernetes.io/dockerconfigjson Secret stores the auth under
 					// .dockerconfigjson; oras-go expects a Docker config.json.
 					Items: []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
@@ -272,7 +279,7 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			// loudly inside cosign (strict) rather than blocking pod creation.
 			corev1.EnvVar{Name: "COSIGN_PASSWORD", ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: oci.SigningKeySecretRef.Name},
+					LocalObjectReference: corev1.LocalObjectReference{Name: oci.SigningKeySecretName},
 					Key:                  "cosign.password",
 					Optional:             ptr.To(true),
 				},
@@ -285,7 +292,7 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 				Name: "oras-signing-key",
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: oci.SigningKeySecretRef.Name,
+						SecretName: oci.SigningKeySecretName,
 						Items:      []corev1.KeyToPath{{Key: "cosign.key", Path: "cosign.key"}},
 					},
 				},

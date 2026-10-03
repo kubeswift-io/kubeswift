@@ -204,9 +204,33 @@ func ociCloneSnap() *snapshotv1alpha1.SwiftSnapshot {
 	}
 }
 
-func TestCloneOCITag(t *testing.T) {
-	if got := cloneOCITag(ociCloneSnap()); got != "ns-snap" {
-		t.Errorf("default oci clone tag = %q, want ns-snap", got)
+// The clone download reads the snapshot's recorded location when it has one
+// (a location-stored snapshot has no backend.oci), else its spec.
+func TestBuildCloneDownloadJob_OCIReadsRecordedLocation(t *testing.T) {
+	r := &SwiftGuestReconciler{SnapshotORASImage: "img"}
+	job, fail := r.buildCloneDownloadJob(ociCloneSnap(), "worker-1", "dl")
+	if fail != "" {
+		t.Fatal(fail)
+	}
+	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--repository=zot.svc:5000/vmsnap") || !strings.Contains(args, "--tag=ns-snap") {
+		t.Errorf("legacy snapshot: args = %q", args)
+	}
+
+	located := ociCloneSnap()
+	located.Spec.Backend.OCI = nil
+	located.Status.Location = &snapshotv1alpha1.SnapshotLocation{Source: "SwiftStorageLocation/team", Repository: "registry.example.com/team/snapshots", Tag: "snap-12345678"}
+	job, fail = r.buildCloneDownloadJob(located, "worker-1", "dl")
+	if fail != "" {
+		t.Fatal(fail)
+	}
+	if args := strings.Join(job.Spec.Template.Spec.Containers[0].Args, " "); !strings.Contains(args, "--repository=registry.example.com/team/snapshots") || !strings.Contains(args, "--tag=snap-12345678") || strings.Contains(args, "--insecure") {
+		t.Errorf("located snapshot: args = %q", args)
+	}
+
+	none := ociCloneSnap()
+	none.Spec.Backend.OCI = nil
+	if _, fail := r.buildCloneDownloadJob(none, "worker-1", "dl"); fail == "" {
+		t.Error("a snapshot with no registry at all must fail, not build a Job with an empty repository")
 	}
 }
 

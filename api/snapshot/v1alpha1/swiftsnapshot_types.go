@@ -2,6 +2,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	storagev1alpha1 "github.com/kubeswift-io/kubeswift/api/storage/v1alpha1"
 )
 
 // SnapshotBackendType selects how the snapshot is captured and stored.
@@ -184,9 +186,21 @@ type SwiftSnapshotBackend struct {
 	// S3 is reserved for Phase 3.
 	// +optional
 	S3 *S3Backend `json:"s3,omitempty"`
-	// OCI configures the oci (OCI registry / ORAS) backend.
+	// OCI configures the oci (OCI registry / ORAS) backend, used exactly as
+	// written. Omit it to store the snapshot in a storage location instead:
+	// locationRef's, else the namespace's default SwiftStorageLocation, else
+	// the cluster's default SwiftClusterStorageLocation.
 	// +optional
 	OCI *OCIBackend `json:"oci,omitempty"`
+	// LocationRef names the storage location an oci snapshot is pushed to, or
+	// a csi-volume-snapshot snapshot takes its VolumeSnapshotClass from,
+	// instead of the defaults. Not valid with backend.oci or with
+	// csiVolumeSnapshot.volumeSnapshotClassName, which say it themselves. The
+	// location is resolved once, before the capture, and recorded in
+	// status.location: changing or deleting a location never moves a
+	// snapshot already taken.
+	// +optional
+	LocationRef *storagev1alpha1.StorageLocationRef `json:"locationRef,omitempty"`
 }
 
 // SwiftSnapshotSpec defines the desired state of a SwiftSnapshot.
@@ -407,6 +421,61 @@ type SwiftSnapshotStatus struct {
 	// Uploading (push) phase completes.
 	// +optional
 	OCI *OCISnapshotStatus `json:"oci,omitempty"`
+
+	// Location is where an oci snapshot is stored and how to reach it, or the
+	// VolumeSnapshotClass a csi-volume-snapshot snapshot uses, resolved once
+	// before the capture. The push, restores, clones and the deletion all read
+	// it, never the spec or a storage location again, so changing a default
+	// moves no snapshot already taken. Unset on a snapshot taken before
+	// storage locations existed; those read spec.backend.oci.
+	// +optional
+	Location *SnapshotLocation `json:"location,omitempty"`
+}
+
+// Values of SnapshotLocation.Source that do not name a storage location.
+const (
+	// SnapshotLocationExplicit: the snapshot's own spec.backend.oci or
+	// csiVolumeSnapshot.volumeSnapshotClassName.
+	SnapshotLocationExplicit = "Explicit"
+	// SnapshotLocationDefaultClass: no location configures a
+	// VolumeSnapshotClass, so the cluster's default class is used.
+	SnapshotLocationDefaultClass = "DefaultVolumeSnapshotClass"
+)
+
+// SnapshotLocation is the storage a snapshot resolved before its capture.
+type SnapshotLocation struct {
+	// Source is where it came from: SwiftStorageLocation/<name>,
+	// SwiftClusterStorageLocation/<name>, Explicit (the snapshot's own spec),
+	// or DefaultVolumeSnapshotClass.
+	Source string `json:"source"`
+	// Repository is the full repository the artifacts are pushed to: a
+	// cluster location's repository plus <namespace>/snapshots, or a
+	// namespace location's plus snapshots.
+	// +optional
+	Repository string `json:"repository,omitempty"`
+	// Tag is the memory artifact's tag; a full-state snapshot's disks are
+	// tagged <tag>-disk and <tag>-disk-<disk>.
+	// +optional
+	Tag string `json:"tag,omitempty"`
+	// Insecure is a plaintext (http) registry.
+	// +optional
+	Insecure bool `json:"insecure,omitempty"`
+	// CABundle is the location's CA bundle at resolution, kept so the
+	// snapshot can still be restored after the location is deleted.
+	// +optional
+	CABundle string `json:"caBundle,omitempty"`
+	// CredentialsSecretName is the dockerconfigjson Secret, in the snapshot's
+	// namespace, used for every transfer. Empty means anonymous.
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
+	// SigningKeySecretName is the cosign key Secret, in the snapshot's
+	// namespace, the push signs with. Empty means unsigned.
+	// +optional
+	SigningKeySecretName string `json:"signingKeySecretName,omitempty"`
+	// VolumeSnapshotClassName is the class a csi-volume-snapshot snapshot
+	// uses.
+	// +optional
+	VolumeSnapshotClassName string `json:"volumeSnapshotClassName,omitempty"`
 }
 
 // S3SnapshotStatus records where an s3-backend snapshot was exported and how to
@@ -494,6 +563,7 @@ type OCIDiskArtifact struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Guest",type=string,JSONPath=`.spec.guestRef.name`
 // +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.spec.backend.type`
+// +kubebuilder:printcolumn:name="Location",type=string,JSONPath=`.status.location.source`,priority=1
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.status.totalSizeBytes`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SwiftSnapshot struct {

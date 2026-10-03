@@ -25,6 +25,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/names"
 	"github.com/kubeswift-io/kubeswift/internal/resolved"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 // maybeRootDiskFromOCI handles the root disk for a FULL-STATE cloneFromSnapshot.
@@ -148,7 +149,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 // for Filesystem) serves any disk; only the PVC + digest differ. Node-pinned so
 // the PVC attaches on the clone's node. Runs as root to write the raw disk.
 func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1.SwiftSnapshot, image, node, jobName, pvcName, digest string, block bool) *batchv1.Job {
-	oci := snap.Spec.Backend.OCI
+	oci, _ := clonecommon.SnapshotOCI(snap)
 	diskPath := DisksRootPath + "/image.raw"
 	if block {
 		diskPath = DiskRootDevicePath
@@ -186,14 +187,14 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 	}
 	volumes := []corev1.Volume{vol}
 
-	if oci.CredentialsSecretRef != nil && oci.CredentialsSecretRef.Name != "" {
+	if oci.CredentialsSecretName != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/oras-auth"})
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: "oras-auth", MountPath: "/oras-auth", ReadOnly: true})
 		volumes = append(volumes, corev1.Volume{
 			Name: "oras-auth",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: oci.CredentialsSecretRef.Name,
+					SecretName: oci.CredentialsSecretName,
 					Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
 				},
 			},

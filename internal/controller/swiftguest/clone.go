@@ -454,18 +454,17 @@ func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.Swif
 		if r.SnapshotORASImage == "" {
 			return nil, "snapshot-oras image not configured (set KUBESWIFT_SNAPSHOT_ORAS_IMAGE)"
 		}
-		oci := snap.Spec.Backend.OCI
-		credName := ""
-		if oci.CredentialsSecretRef != nil {
-			credName = oci.CredentialsSecretRef.Name
+		oci, ok := clonecommon.SnapshotOCI(snap)
+		if !ok {
+			return nil, "SwiftSnapshot " + snap.Name + " records no registry (status.location or spec.backend.oci)"
 		}
 		return clonecommon.BuildOCIDownloadJob(clonecommon.OCIDownloadJobParams{
 			Snapshot:              snap,
 			Repository:            oci.Repository,
-			Tag:                   cloneOCITag(snap),
+			Tag:                   oci.Tag,
 			Digest:                snap.Status.OCI.ManifestDigest,
 			Insecure:              oci.Insecure,
-			CredentialsSecretName: credName,
+			CredentialsSecretName: oci.CredentialsSecretName,
 			Image:                 r.SnapshotORASImage,
 			Name:                  name,
 			Namespace:             snap.Namespace,
@@ -486,15 +485,6 @@ func (r *SwiftGuestReconciler) buildCloneDownloadJob(snap *snapshotv1alpha1.Swif
 		Component:   "snapshot-s3-clone-download",
 		ExtraLabels: labels,
 	}), ""
-}
-
-// cloneOCITag resolves the artifact tag: the operator-supplied tag, or the
-// "<namespace>-<name>" default (matching the capture + restore sides).
-func cloneOCITag(snap *snapshotv1alpha1.SwiftSnapshot) string {
-	if snap.Spec.Backend.OCI != nil && snap.Spec.Backend.OCI.Tag != "" {
-		return snap.Spec.Backend.OCI.Tag
-	}
-	return snap.Namespace + "-" + snap.Name
 }
 
 // maybeRootDiskFromSourceClone materializes the root disk for a MEMORY-ONLY

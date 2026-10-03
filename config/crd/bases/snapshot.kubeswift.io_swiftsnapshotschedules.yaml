@@ -163,9 +163,39 @@ spec:
                                   a directory its author chose keeps that directory.
                                 type: string
                             type: object
+                          locationRef:
+                            description: |-
+                              LocationRef names the storage location an oci snapshot is pushed to, or
+                              a csi-volume-snapshot snapshot takes its VolumeSnapshotClass from,
+                              instead of the defaults. Not valid with backend.oci or with
+                              csiVolumeSnapshot.volumeSnapshotClassName, which say it themselves. The
+                              location is resolved once, before the capture, and recorded in
+                              status.location: changing or deleting a location never moves a
+                              snapshot already taken.
+                            properties:
+                              kind:
+                                default: SwiftStorageLocation
+                                description: |-
+                                  Kind is SwiftStorageLocation (the default) or
+                                  SwiftClusterStorageLocation.
+                                enum:
+                                - SwiftStorageLocation
+                                - SwiftClusterStorageLocation
+                                type: string
+                              name:
+                                description: Name is the location's name.
+                                maxLength: 253
+                                minLength: 1
+                                type: string
+                            required:
+                            - name
+                            type: object
                           oci:
-                            description: OCI configures the oci (OCI registry / ORAS)
-                              backend.
+                            description: |-
+                              OCI configures the oci (OCI registry / ORAS) backend, used exactly as
+                              written. Omit it to store the snapshot in a storage location instead:
+                              locationRef's, else the namespace's default SwiftStorageLocation, else
+                              the cluster's default SwiftClusterStorageLocation.
                             properties:
                               credentialsSecretRef:
                                 description: |-

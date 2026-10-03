@@ -88,3 +88,58 @@ func TestOCIReferenceHolders(t *testing.T) {
 		t.Errorf("holders = %s, want failed-pushed,same", got)
 	}
 }
+
+// Tags stay within the OCI limit of 128, and two long tags that share their
+// first 119 characters still differ.
+func TestTruncateTag(t *testing.T) {
+	if got := TruncateTag("short"); got != "short" {
+		t.Errorf("a short tag changed: %q", got)
+	}
+	a, b := strings.Repeat("a", 200)+"-1", strings.Repeat("a", 200)+"-2"
+	ta, tb := TruncateTag(a), TruncateTag(b)
+	if len(ta) != 128 || len(tb) != 128 || ta == tb {
+		t.Errorf("truncated tags: %d %d equal=%v", len(ta), len(tb), ta == tb)
+	}
+	if TruncateTag(a) != ta {
+		t.Error("truncation must be deterministic")
+	}
+}
+
+func TestLocationOCITag(t *testing.T) {
+	s := ociRefSnap("team-a", "nightly", "", "")
+	s.UID = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+	if got := LocationOCITag(s); got != "nightly-0f1e2d3c" {
+		t.Errorf("LocationOCITag = %q", got)
+	}
+	s.Name = strings.Repeat("n", 253)
+	if got := LocationOCITag(s); len(got) > 128 {
+		t.Errorf("a 253-character name gives a %d-character tag", len(got))
+	}
+	// The explicit default tag is truncated the same way.
+	s.Spec.Backend.OCI.Repository = "reg/vm"
+	if got := ExplicitOCITag(s); len(got) > 128 {
+		t.Errorf("explicit default tag is %d characters", len(got))
+	}
+}
+
+// status.location wins over the spec; a snapshot without one (taken before
+// storage locations) reads its spec; one with neither has no registry.
+func TestSnapshotOCI(t *testing.T) {
+	s := ociRefSnap("team-a", "s1", "zot.svc:5000/vm", "")
+	s.Spec.Backend.OCI.CredentialsSecretRef = &snapshotv1alpha1.SecretObjectReference{Name: "zot-creds"}
+	if c, ok := SnapshotOCI(s); !ok || c.Repository != "zot.svc:5000/vm" || c.Tag != "team-a-s1" || c.CredentialsSecretName != "zot-creds" {
+		t.Errorf("legacy snapshot: %+v ok=%v", c, ok)
+	}
+	s.Status.Location = &snapshotv1alpha1.SnapshotLocation{Source: "SwiftClusterStorageLocation/main", Repository: "registry.example.com/k/team-a/snapshots", Tag: "s1-12345678", CABundle: "pem"}
+	if c, ok := SnapshotOCI(s); !ok || c.Repository != "registry.example.com/k/team-a/snapshots" || c.Tag != "s1-12345678" || c.CredentialsSecretName != "" || c.CABundle != "pem" {
+		t.Errorf("recorded location: %+v ok=%v", c, ok)
+	}
+	if got := OCIReference(s); got != "registry.example.com/k/team-a/snapshots:s1-12345678" {
+		t.Errorf("OCIReference = %q", got)
+	}
+	none := ociRefSnap("team-a", "s1", "", "")
+	none.Spec.Backend.OCI = nil
+	if _, ok := SnapshotOCI(none); ok || OCIReference(none) != "" {
+		t.Error("a snapshot with no registry yet must report none")
+	}
+}

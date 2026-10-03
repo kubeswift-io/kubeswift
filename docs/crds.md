@@ -454,17 +454,22 @@ Full reference: [SwiftGuestPool API](api/swiftguestpool.md) · [SwiftGuestPool g
 **Scope:** Namespaced
 **Subresource:** status
 
-Captures a VM snapshot: disk-only (CSI VolumeSnapshot) or memory+disk (local hostPath or S3 object storage).
+Captures a VM snapshot: disk-only (CSI VolumeSnapshot) or memory+disk (local hostPath, S3 object storage, or an OCI registry).
 
 | Key field | Type | Description |
 |-----------|------|-------------|
 | `guestRef` | SwiftSnapshotGuestRef | The SwiftGuest to snapshot. |
-| `backend` | SwiftSnapshotBackend | `csi-volume-snapshot`, `local`, or `s3` (with backend-specific sub-config). |
+| `backend` | SwiftSnapshotBackend | `csi-volume-snapshot`, `local`, `s3` or `oci` (with backend-specific sub-config). An `oci` snapshot may omit `backend.oci`: a storage location supplies the registry. |
+| `backend.locationRef` | StorageLocationRef | The storage location (`kind`, `name`) an `oci` snapshot is pushed to, or a `csi-volume-snapshot` snapshot takes its VolumeSnapshotClass from, instead of the defaults. Not valid with `backend.oci` or an explicit class. |
 | `includeMemory` | bool | Capture guest RAM (local/S3 backends only; rejected for VFIO guests — CH cannot restore VFIO state). |
 | `deletionPolicy` | enum | `Delete` (default) or `Retain` — whether to purge artifacts on deletion. |
 | `ttl` | Duration | Age-based retention; the snapshot self-deletes after `ttl` unless still referenced. |
 
 The spec is immutable after creation except `deletionPolicy` and `ttl`; the API server refuses other edits even with the webhook off. Create a new SwiftSnapshot to capture differently.
+
+Before the capture, an `oci` or `csi-volume-snapshot` snapshot records in `status.location` where it is stored: the repository, tag, `insecure`, CA bundle, and the credentials and signing-key Secret names, or the VolumeSnapshotClass. The push, restores, clones and the deletion read only that record, so changing or deleting a location never moves a snapshot already taken. An explicit `backend.oci` is recorded as `source: Explicit`.
+
+Without `backend.oci`, the registry comes from `locationRef`, else the namespace's default SwiftStorageLocation, else the cluster's default SwiftClusterStorageLocation. A cluster location stores snapshots under `<repository>/<namespace>/snapshots` and a namespace's under `<repository>/snapshots`, tagged `<name>-<first 8 of the UID>`. A snapshot that cannot resolve one stays `Pending`, guest untouched, with the reason: `NoStorageLocation`, `StorageLocationNotFound`, `StorageLocationInvalid`, `AmbiguousStorageLocation`, `RegistryCredentialsMissing` or `SigningKeyMissing` (the message names the Secret and namespace). A `csi-volume-snapshot` snapshot with no class, none from a location, and no default class in the cluster fails at once (`NoVolumeSnapshotClass`).
 
 Full reference: [CSI snapshots](snapshots/csi-snapshots.md).
 
@@ -625,7 +630,7 @@ Full reference: [Gateway](ui/gateway.md).
 **Scope:** Cluster (`SwiftClusterStorageLocation`, short name `csloc`) and Namespaced (`SwiftStorageLocation`, short name `sloc`)
 **Subresource:** status
 
-Where KubeSwift keeps the artifacts it pushes to a registry, set once for the cluster and overridable per namespace. A cluster location is managed by the cluster admin; a namespace's location by its users, and only that namespace's objects use it. One location at each level may be the default; a namespace's default wins over the cluster's. Snapshots start resolving a location in the next Phase 1 change; images and golden images follow.
+Where KubeSwift keeps the artifacts it pushes to a registry, set once for the cluster and overridable per namespace. A cluster location is managed by the cluster admin; a namespace's location by its users, and only that namespace's objects use it. One location at each level may be the default; a namespace's default wins over the cluster's, for what it configures: a namespace default with only `csi` leaves `oci` snapshots on the cluster default. Snapshots use locations (see [SwiftSnapshot](#swiftsnapshot)); images and golden images follow.
 
 | Key field | Type | Description |
 |-----------|------|-------------|

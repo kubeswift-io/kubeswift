@@ -40,14 +40,42 @@ func ociRestore() *snapshotv1alpha1.SwiftRestore {
 	}
 }
 
-func TestOCIRestoreTag(t *testing.T) {
-	if got := ociRestoreTag(ociSnapForRestore(false)); got != "team-a-snap1" {
-		t.Errorf("default tag = %q, want team-a-snap1", got)
+// A snapshot taken before storage locations existed has no status.location
+// and is restored from its spec; one with status.location is restored from
+// it, whatever its spec says (and a location-stored snapshot has no
+// backend.oci at all).
+func TestBuildOCIDownloadJob_ReadsRecordedLocation(t *testing.T) {
+	legacy := ociSnapForRestore(false)
+	legacy.Spec.Backend.OCI.Tag = "prod-9"
+	args := strings.Join(buildOCIDownloadJob(ociRestore(), legacy, "img:tag", "worker-2").Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "--repository=zot.svc:5000/vm-snapshots") || !strings.Contains(args, "--tag=prod-9") {
+		t.Errorf("legacy snapshot: args = %q, want its spec's repository and tag", args)
 	}
-	s := ociSnapForRestore(false)
-	s.Spec.Backend.OCI.Tag = "prod-9"
-	if got := ociRestoreTag(s); got != "prod-9" {
-		t.Errorf("explicit tag = %q", got)
+
+	located := ociSnapForRestore(false)
+	located.Spec.Backend.OCI = nil
+	located.Status.Location = &snapshotv1alpha1.SnapshotLocation{
+		Source:                "SwiftClusterStorageLocation/main",
+		Repository:            "registry.example.com/kubeswift/team-a/snapshots",
+		Tag:                   "snap1-0f1e2d3c",
+		CredentialsSecretName: "kubeswift-registry",
+	}
+	job := buildOCIDownloadJob(ociRestore(), located, "img:tag", "worker-2")
+	args = strings.Join(job.Spec.Template.Spec.Containers[0].Args, " ")
+	for _, want := range []string{"--repository=registry.example.com/kubeswift/team-a/snapshots", "--tag=snap1-0f1e2d3c", "--digest=sha256:abc123"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("located snapshot: args missing %q; got %q", want, args)
+		}
+	}
+	if strings.Contains(args, "--insecure") {
+		t.Errorf("located snapshot: --insecure set although the location is TLS: %q", args)
+	}
+	var mounted bool
+	for _, v := range job.Spec.Template.Spec.Volumes {
+		mounted = mounted || (v.Name == "oras-auth" && v.Secret != nil && v.Secret.SecretName == "kubeswift-registry")
+	}
+	if !mounted {
+		t.Error("located snapshot: the recorded credentials Secret is not mounted")
 	}
 }
 

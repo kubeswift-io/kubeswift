@@ -250,8 +250,15 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
 		// csi-volume-snapshot: disk-only. volumeSnapshotClassName is optional —
-		// when empty the cluster's default VolumeSnapshotClass is used.
+		// when empty a storage location's class, else the cluster's default
+		// VolumeSnapshotClass, is used.
+		if err := ValidateBackendDestination(snap); err != nil {
+			return err
+		}
 	case snapshotv1alpha1.SnapshotBackendLocal:
+		if err := ValidateBackendDestination(snap); err != nil {
+			return err
+		}
 		if err := validateLocalBackend(snap); err != nil {
 			return err
 		}
@@ -294,15 +301,22 @@ func validateShape(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	return nil
 }
 
-// ValidateBackendDestination checks the part of an s3 or oci backend that says
-// where the snapshot is stored: the backend's own block is present and names
-// its bucket or repository, and an oci tag is a bare tag. The controller
-// enforces it too, before it touches the guest: this webhook is off by default,
-// and the controller reads these fields after the capture, so a snapshot
-// without them used to be captured and then crash the reconcile (#706).
+// ValidateBackendDestination checks the part of a backend that says where the
+// snapshot is stored: an s3 backend's block is present and names its bucket;
+// an oci backend either names its repository in backend.oci, with a bare tag,
+// or leaves it to a storage location; and locationRef is set only where a
+// location applies and the spec does not already say it. The controller
+// enforces it too, before it touches the guest: this webhook is off by
+// default, and the controller reads these fields after the capture, so a
+// snapshot without them used to be captured and then crash the reconcile
+// (#706).
 func ValidateBackendDestination(snap *snapshotv1alpha1.SwiftSnapshot) error {
+	ref := snap.Spec.Backend.LocationRef
 	switch snap.Spec.Backend.Type {
 	case snapshotv1alpha1.SnapshotBackendS3:
+		if ref != nil {
+			return fmt.Errorf("spec.backend.locationRef is only valid when spec.backend.type is oci or csi-volume-snapshot")
+		}
 		s3 := snap.Spec.Backend.S3
 		if s3 == nil {
 			return fmt.Errorf("spec.backend.s3 is required when spec.backend.type=s3")
@@ -310,10 +324,24 @@ func ValidateBackendDestination(snap *snapshotv1alpha1.SwiftSnapshot) error {
 		if s3.Bucket == "" {
 			return fmt.Errorf("spec.backend.s3.bucket is required")
 		}
+	case snapshotv1alpha1.SnapshotBackendLocal:
+		if ref != nil {
+			return fmt.Errorf("spec.backend.locationRef is only valid when spec.backend.type is oci or csi-volume-snapshot")
+		}
+	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
+		if c := snap.Spec.Backend.CSIVolumeSnapshot; ref != nil && c != nil && c.VolumeSnapshotClassName != "" {
+			return fmt.Errorf("spec.backend.locationRef and spec.backend.csiVolumeSnapshot.volumeSnapshotClassName are mutually exclusive: the class is used as written; omit it to take the location's")
+		}
 	case snapshotv1alpha1.SnapshotBackendOCI:
 		oci := snap.Spec.Backend.OCI
 		if oci == nil {
-			return fmt.Errorf("spec.backend.oci is required when spec.backend.type=oci")
+			// A storage location supplies the registry; the controller
+			// resolves it before the capture and waits, saying why, if none
+			// does.
+			return nil
+		}
+		if ref != nil {
+			return fmt.Errorf("spec.backend.oci and spec.backend.locationRef are mutually exclusive: backend.oci is used as written; omit it to store the snapshot in the location")
 		}
 		if oci.Repository == "" {
 			return fmt.Errorf("spec.backend.oci.repository is required (e.g. ghcr.io/org/vm-snapshots)")
@@ -352,6 +380,9 @@ func validateOCIBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 		return err
 	}
 	oci := snap.Spec.Backend.OCI
+	if oci == nil {
+		return nil
+	}
 	if oci.SigningKeySecretRef != nil && oci.SigningKeySecretRef.Name == "" {
 		return fmt.Errorf("spec.backend.oci.signingKeySecretRef.name is required when signingKeySecretRef is set")
 	}
