@@ -19,6 +19,11 @@ func (v *Validator) ValidateCreate(ctx context.Context, obj runtime.Object) (adm
 	if !ok {
 		return nil, fmt.Errorf("expected SwiftImage, got %T", obj)
 	}
+	// Create only: an existing pvcClone image (Failed since its creation) must
+	// stay updatable, or its finalizers could never be removed.
+	if img.Spec.Source.PVCClone != nil {
+		return nil, fmt.Errorf("%s", imagev1alpha1.PVCCloneNotImplemented)
+	}
 	return nil, validateSwiftImage(img)
 }
 
@@ -96,10 +101,10 @@ func validateSwiftImage(img *imagev1alpha1.SwiftImage) error {
 		}
 	}
 	if n == 0 {
-		return fmt.Errorf("spec.source: exactly one of http, pvcClone, upload, or oci must be specified")
+		return fmt.Errorf("spec.source: exactly one of http or oci must be specified")
 	}
 	if n > 1 {
-		return fmt.Errorf("spec.source: only one of http, pvcClone, upload, or oci may be specified")
+		return fmt.Errorf("spec.source: only one of http or oci may be specified")
 	}
 	if img.Spec.Format == "" {
 		return fmt.Errorf("spec.format is required (raw or qcow2)")

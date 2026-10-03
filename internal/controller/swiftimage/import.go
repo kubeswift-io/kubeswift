@@ -429,9 +429,10 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 	}, nil
 }
 
-// importPVCClone creates a Job or uses CSI clone. Stub: returns Failed (not implemented).
+// importPVCClone fails the image: the pvcClone source is not implemented. The
+// webhook refuses it at creation; this is the answer when the webhook is off.
 func (r *SwiftImageReconciler) importPVCClone(ctx context.Context, img *imagev1alpha1.SwiftImage) (*ImportResult, error) {
-	return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: "pvcClone source not yet implemented"}, nil
+	return &ImportResult{Phase: imagev1alpha1.SwiftImagePhaseFailed, Error: imagev1alpha1.PVCCloneNotImplemented}, nil
 }
 
 // CheckImportStatus checks if an in-progress import (Job) has completed.

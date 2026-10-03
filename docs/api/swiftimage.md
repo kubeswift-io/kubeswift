@@ -10,9 +10,10 @@ SwiftImage defines a **disk image source**. The controller downloads or clones i
 |-------|----------|-------------|
 | `format` | Yes | `raw` or `qcow2` — **must match the actual image format** |
 | `source.http` | Yes* | HTTP(S) URL to fetch image |
-| `source.pvcClone` | Yes* | Clone from existing PVC |
+| `source.oci` | Yes* | Pull a golden image from an OCI registry ([golden images](../registry/golden-images.md)) |
+| `source.pvcClone` | — | **Not implemented yet.** Refused at creation; with the admission webhook disabled, the image goes `Failed`. |
 
-*Exactly one source type.
+*Exactly one source type: `http` or `oci`.
 
 ## Source: HTTP
 
@@ -30,16 +31,7 @@ spec:
 
 ## Source: PVC clone
 
-```yaml
-spec:
-  format: raw
-  source:
-    pvcClone:
-      name: my-pvc
-      namespace: default
-```
-
-See `config/samples/swiftimage-pvc-clone.yaml`.
+Not implemented yet. The API carries the field, but no import uses it: a SwiftImage with `source.pvcClone` is refused at creation, or goes `Failed` when the admission webhook is disabled.
 
 ## Status
 
