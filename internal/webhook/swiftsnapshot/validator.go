@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,12 +69,11 @@ func (v *Validator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.O
 	if snap.DeletionTimestamp != nil {
 		return nil, nil
 	}
-	// Spec is immutable after creation: snapshots are point-in-time
-	// captures, mutating them would break the contract callers rely on.
-	// (deletionPolicy is deliberately NOT part of specsEqual — an operator
-	// may flip it before deleting.)
+	// Spec is immutable after creation, except deletionPolicy and ttl:
+	// snapshots are point-in-time captures, and restore reads the backend from
+	// the spec (see specsEqual).
 	if !specsEqual(&oldSnap.Spec, &snap.Spec) {
-		return nil, fmt.Errorf("SwiftSnapshot spec is immutable")
+		return nil, fmt.Errorf("SwiftSnapshot spec is immutable except deletionPolicy and ttl")
 	}
 	// The immutable spec was validated at creation. Re-validating it on every
 	// update re-ran the source-guest checks against the guest as it is NOW
@@ -390,28 +390,16 @@ func validateLocalBackend(snap *snapshotv1alpha1.SwiftSnapshot) error {
 	return ValidateLocalHostPath(snap.Namespace, snap.Name, snap.Spec.Backend.Local.HostPath)
 }
 
+// specsEqual reports whether two specs describe the same capture: the whole
+// spec except deletionPolicy (an operator may flip it before deleting) and ttl
+// (retention is adjustable, as for SwiftSandbox). Restore and clone read the
+// backend's registry or bucket from the spec when they run, so an edit after
+// the capture pointed them at something else (#707). Comparing everything else,
+// rather than a list of fields, keeps a field added later immutable too. The
+// CRD carries the same rule, for when this webhook is off.
 func specsEqual(a, b *snapshotv1alpha1.SwiftSnapshotSpec) bool {
-	if a.GuestRef != b.GuestRef {
-		return false
-	}
-	if a.IncludeMemory != b.IncludeMemory || a.ResumeAfterSnapshot != b.ResumeAfterSnapshot {
-		return false
-	}
-	if a.Backend.Type != b.Backend.Type {
-		return false
-	}
-	if (a.Backend.CSIVolumeSnapshot == nil) != (b.Backend.CSIVolumeSnapshot == nil) {
-		return false
-	}
-	if a.Backend.CSIVolumeSnapshot != nil &&
-		*a.Backend.CSIVolumeSnapshot != *b.Backend.CSIVolumeSnapshot {
-		return false
-	}
-	if (a.Backend.Local == nil) != (b.Backend.Local == nil) {
-		return false
-	}
-	if a.Backend.Local != nil && *a.Backend.Local != *b.Backend.Local {
-		return false
-	}
-	return true
+	x, y := a.DeepCopy(), b.DeepCopy()
+	x.DeletionPolicy, y.DeletionPolicy = "", ""
+	x.TTL, y.TTL = nil, nil
+	return equality.Semantic.DeepEqual(x, y)
 }
