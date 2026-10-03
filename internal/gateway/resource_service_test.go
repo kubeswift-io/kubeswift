@@ -22,6 +22,7 @@ func fakeExplorerDyn(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
 			gvr("", "v1", "nodes"):   "NodeList",
 			gvr("", "v1", "secrets"): "SecretList",
 			gvr("", "v1", "pods"):    "PodList",
+			gvr("snapshot.storage.k8s.io", "v1", "volumesnapshotclasses"): "VolumeSnapshotClassList",
 		}, objs...)
 }
 
@@ -253,5 +254,58 @@ func TestResourceService_ApplyResource_Creates(t *testing.T) {
 	}
 	if !strings.Contains(resp.Msg.Json, "newnode") {
 		t.Errorf("applied node not echoed back: %s", resp.Msg.Json)
+	}
+}
+
+func mkVolumeSnapshotClass(name, driver string, isDefault bool) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion":     "snapshot.storage.k8s.io/v1",
+		"kind":           "VolumeSnapshotClass",
+		"metadata":       map[string]interface{}{"name": name},
+		"driver":         driver,
+		"deletionPolicy": "Delete",
+	}}
+	if isDefault {
+		u.SetAnnotations(map[string]string{defaultVolumeSnapshotClassAnnotation: "true"})
+	}
+	return u
+}
+
+// A csi-volume-snapshot SwiftSnapshot that names no class fails on a cluster
+// with no default class, so the UI needs to offer the classes, and to show
+// which one (if any) is the default (#712). Cluster-scoped: no namespace.
+func TestResourceService_VolumeSnapshotClasses(t *testing.T) {
+	prov := &fakeProvider{clients: map[string]dynamic.Interface{"edge-1": fakeExplorerDyn(
+		mkVolumeSnapshotClass("block-snap", "block.csi.example.com", false),
+		mkVolumeSnapshotClass("fs-snap", "fs.csi.example.com", true),
+	)}}
+	svc := NewResourceService(prov, NewInsecureAuthenticator())
+	kinds, err := svc.ListResourceKinds(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourceKindsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var k *kubeswiftv1.ResourceKind
+	for _, kk := range kinds.Msg.Kinds {
+		if kk.Key == "volumesnapshotclasses" {
+			k = kk
+		}
+	}
+	if k == nil || k.Namespaced || k.Category != "Storage" || k.Group != "snapshot.storage.k8s.io" {
+		t.Fatalf("volumesnapshotclasses should be a cluster-scoped Storage kind, got %+v", k)
+	}
+	// A picker passes the guest's namespace; a cluster-scoped kind ignores it.
+	resp, err := svc.ListResources(context.Background(), connect.NewRequest(&kubeswiftv1.ListResourcesRequest{Cluster: "edge-1", Kind: "volumesnapshotclasses", Namespace: "team-a"}))
+	if err != nil || resp.Msg.GetError() != nil {
+		t.Fatalf("list: err=%v in-band=%v", err, resp.Msg.GetError())
+	}
+	got := map[string]map[string]string{}
+	for _, r := range resp.Msg.Resources {
+		got[r.Ref.GetName()] = r.Columns
+	}
+	if c := got["fs-snap"]; c["driver"] != "fs.csi.example.com" || c["deletionPolicy"] != "Delete" || c["default"] != "true" {
+		t.Errorf("fs-snap columns = %v", c)
+	}
+	if c := got["block-snap"]; c["default"] != "false" {
+		t.Errorf("block-snap columns = %v", c)
 	}
 }
