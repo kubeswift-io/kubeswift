@@ -99,7 +99,11 @@ type SwiftSnapshotScheduleStatus struct {
 	// is live, False with reason InvalidSchedule when it does not parse, and
 	// False with reason Suspended while spec.suspend is set. An unparseable
 	// schedule is otherwise invisible -- nothing else in spec or status changes,
-	// and the schedule simply never fires.
+	// and the schedule simply never fires. While one of its snapshots waits for
+	// its storage (a storage location, or a Secret one names), Ready is False
+	// with that snapshot's reason (for example RegistryCredentialsMissing) and
+	// a message naming it: with concurrencyPolicy Forbid, ticks are skipped
+	// meanwhile.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -111,6 +115,7 @@ type SwiftSnapshotScheduleStatus struct {
 // +kubebuilder:resource:path=swiftsnapshotschedules,scope=Namespaced,shortName=sss
 // +kubebuilder:printcolumn:name="Schedule",type=string,JSONPath=`.spec.schedule`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Suspend",type=boolean,JSONPath=`.spec.suspend`
 // +kubebuilder:printcolumn:name="Guest",type=string,JSONPath=`.spec.template.spec.guestRef.name`
 // +kubebuilder:printcolumn:name="Last-Schedule",type=date,JSONPath=`.status.lastScheduleTime`
