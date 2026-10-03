@@ -192,7 +192,9 @@ spec:
                     - repository
                     type: object
                   pvcClone:
-                    description: PVCCloneSource specifies a source PVC to clone from.
+                    description: |-
+                      PVCClone is not implemented yet: an image with this source is refused
+                      at creation, or, with the admission webhook disabled, goes Failed.
                     properties:
                       name:
                         type: string

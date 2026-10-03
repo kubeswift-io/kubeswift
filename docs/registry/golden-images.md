@@ -109,7 +109,7 @@ runs the same resize + `sgdisk` + GRUB/serial patch tail as an HTTP import. When
 the SwiftImage reaches `Ready`, a `SwiftGuest` boots from it via `imageRef` like
 any other image.
 
-`oci` is mutually exclusive with the other sources (`http` / `upload` / `pvcClone`).
+`oci` and `http` are mutually exclusive.
 
 ## Signing
 

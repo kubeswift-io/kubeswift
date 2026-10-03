@@ -68,6 +68,10 @@ type HTTPSource struct {
 	URL string `json:"url"`
 }
 
+// PVCCloneNotImplemented is why a SwiftImage with source.pvcClone is refused
+// at creation (webhook) or goes Failed (webhook off).
+const PVCCloneNotImplemented = "spec.source.pvcClone is not implemented yet: an image with this source can never be imported; use spec.source.http or spec.source.oci"
+
 // PVCCloneSource specifies a source PVC to clone from.
 type PVCCloneSource struct {
 	Name      string `json:"name"`
@@ -120,7 +124,9 @@ type OCIImageSource struct {
 
 // ImageSource defines the source of an image.
 type ImageSource struct {
-	HTTP     *HTTPSource     `json:"http,omitempty"`
+	HTTP *HTTPSource `json:"http,omitempty"`
+	// PVCClone is not implemented yet: an image with this source is refused
+	// at creation, or, with the admission webhook disabled, goes Failed.
 	PVCClone *PVCCloneSource `json:"pvcClone,omitempty"`
 	// OCI pulls a golden raw disk artifact from an OCI registry (P3).
 	// +optional
