@@ -54,7 +54,11 @@ type SwiftSandboxSpec struct {
 	Args []string `json:"args,omitempty"`
 
 	// Env are extra environment variables for the workload, merged over the image
-	// config Env.
+	// config Env. A value can come from a Secret in the sandbox's namespace
+	// (valueFrom.secretKeyRef): the launcher reads it with its own account and
+	// hands it to the guest without writing it to any object, log or the
+	// node's disk. Other valueFrom sources are refused. A missing Secret or key
+	// keeps the sandbox Pending unless the reference is optional.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 

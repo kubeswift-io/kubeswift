@@ -190,6 +190,11 @@ func mergeEnv(imageEnv []string, specEnv []corev1.EnvVar) []string {
 		val[k] = v
 	}
 	for _, e := range specEnv {
+		// A Secret-backed variable is not a value here: swiftletd reads it and
+		// adds it after these (secretEnvRefs). It used to land as KEY= (empty).
+		if e.ValueFrom != nil {
+			continue
+		}
 		if !seen(e.Name) {
 			order = append(order, e.Name)
 		}

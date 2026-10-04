@@ -575,6 +575,22 @@ pub struct SandboxExec {
     pub env: Vec<String>,
     #[serde(default)]
     pub cwd: String,
+    /// Variables whose values come from Secrets: references only. swiftletd
+    /// reads them (crate::secrets) and appends KEY=VALUE to `env` before the
+    /// config disk is written.
+    #[serde(default)]
+    pub secret_env: Vec<SecretEnvRef>,
+}
+
+/// One Secret key a workload variable is read from.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretEnvRef {
+    pub name: String,
+    pub secret: String,
+    pub key: String,
+    #[serde(default)]
+    pub optional: bool,
 }
 
 const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -906,6 +922,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), "echo hi\nline2".into()],
             env: vec!["PATH=/usr/bin:/bin".into()],
             cwd: "/work".into(),
+            secret_env: vec![],
         };
         let blob = e.to_config_blob();
         assert_eq!(blob.len() % 512, 0, "blob must be sector-padded");

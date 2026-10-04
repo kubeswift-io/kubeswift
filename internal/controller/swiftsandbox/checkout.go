@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
 	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
@@ -100,6 +101,15 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err := sandboxwebhook.ValidateProbes(&sb.Spec); err != nil {
 			return r.fail(ctx, sb, "InvalidProbe", err.Error())
 		}
+		if err := sandboxwebhook.ValidateEnv(sb.Spec.Env); err != nil {
+			return r.fail(ctx, sb, "InvalidEnv", err.Error())
+		}
+		// Missing Secrets: wait without holding a slot.
+		if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
+			return ctrl.Result{}, err
+		} else if reason != "" {
+			return r.waitForReference(ctx, sb, reason, msg)
+		}
 		// A checkout only injects a command: the slot's shape is what the
 		// workload gets. Only a sandbox the slot honors may take one; anything
 		// else boots cold with its own settings, and the Event says why.
@@ -113,14 +123,25 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if slot == nil {
 			return r.coldFallback(ctx, sb, kernelName, "no warm slot available")
 		}
-		// Inject the workload once, on the fresh claim (an adopted slot already has it).
-		if err := r.stampExecAction(ctx, slot, sb, argv, env, cwd); err != nil {
-			return ctrl.Result{}, err
-		}
 		r.Recorder.Eventf(sb, corev1.EventTypeNormal, "CheckedOut",
 			"claimed warm slot %s from pool %s", slot.Name, sb.Spec.PoolRef.Name)
 		if metrics.MarkSandboxCheckoutObserved(string(sb.UID)) {
 			metrics.SandboxCheckoutsTotal.WithLabelValues("hit").Inc()
+		}
+	}
+
+	// Inject the workload unless this sandbox's already is. Checked on an
+	// adopted slot too: a claim whose inject failed used to be adopted on the
+	// next pass as if injected, and the workload never ran. The slot's own
+	// account is granted this sandbox's Secrets first, so swiftletd can read
+	// them the moment it sees the action.
+	if slot.Annotations[annSandboxExecActionID] != string(sb.UID) {
+		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, slot, slot.Name,
+			swiftguest.SandboxLauncher, slotAccount(slot), secretNamesFor(slotAccount(slot), sb, slot.Name)); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.stampExecAction(ctx, slot, sb, argv, env, cwd); err != nil {
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -219,6 +240,11 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		if p.Annotations[SlotProfileAnnotation] != profile {
 			continue
 		}
+		// Secrets are granted only to a launcher's own account; a slot from
+		// before per-pod accounts runs as the shared one.
+		if len(secretEnvRefs(sb)) > 0 && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
+			continue
+		}
 		claimed := p.DeepCopy()
 		if claimed.Labels == nil {
 			claimed.Labels = map[string]string{}
@@ -271,6 +297,10 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 	}
 	if probes := probesIntent(sb); probes != nil {
 		args["probes"] = probes
+	}
+	// References only; swiftletd reads the values and sends them over vsock.
+	if refs := secretEnvRefs(sb); len(refs) > 0 {
+		args["secretEnv"] = refs
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
@@ -344,6 +374,12 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	if msg, failed := livenessFailed(&pod); failed {
 		_ = r.Delete(ctx, &pod)
 		return r.fail(ctx, sb, "LivenessProbeFailed", "liveness probe failed: "+msg)
+	}
+	// The claimed slot's grant is this sandbox's to converge (the pool's pass
+	// leaves claimed slots alone), with this sandbox's Secrets.
+	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, &pod, pod.Name,
+		swiftguest.SandboxLauncher, slotAccount(&pod), secretNamesFor(slotAccount(&pod), sb, pod.Name)); err != nil {
+		return ctrl.Result{}, err
 	}
 	if err := r.syncWorkloadReady(ctx, sb, &pod); err != nil {
 		return ctrl.Result{}, err

@@ -129,7 +129,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 			configDev = sandboxConfigDeviceVirtiofs
 		}
 		cmdline += " kubeswift.config=" + configDev
-		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd}
+		sandboxExec = &runtimeintent.SandboxExecSpec{Argv: exec.Argv, Env: exec.Env, Cwd: exec.Cwd, SecretEnv: secretEnvRefs(sb)}
 	}
 	cpu := int(sb.Spec.CPU)
 	if cpu < 1 {
@@ -591,6 +591,15 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		pod.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: WorkloadReadyGate}}
 	}
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
+	if len(secretEnvRefs(sb)) > 0 {
+		// The config disk carries the resolved secret values: keep it in
+		// memory, never on the node's disk (the run dir is a disk emptyDir).
+		pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{Name: secretRunVolume,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory}}})
+		c := &pod.Spec.Containers[0]
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: secretRunVolume, MountPath: secretRunDir})
+		c.Env = append(c.Env, corev1.EnvVar{Name: "KUBESWIFT_SECRET_RUN_DIR", Value: secretRunDir})
+	}
 	if allowed := egressAllowedJSON(egressAllowed(sb)); allowed != "" && networked(sb) {
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}

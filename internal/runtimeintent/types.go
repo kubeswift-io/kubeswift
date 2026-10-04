@@ -258,6 +258,18 @@ type SandboxExecSpec struct {
 	Argv []string `json:"argv,omitempty"`
 	Env  []string `json:"env,omitempty"`
 	Cwd  string   `json:"cwd,omitempty"`
+	// SecretEnv are the variables whose values come from Secrets. Only the
+	// references travel: swiftletd reads the values with the launcher's own
+	// account and puts them on the config disk, which then lives in memory.
+	SecretEnv []SecretEnvRef `json:"secretEnv,omitempty"`
+}
+
+// SecretEnvRef names one Secret key a workload variable is read from.
+type SecretEnvRef struct {
+	Name     string `json:"name"`
+	Secret   string `json:"secret"`
+	Key      string `json:"key"`
+	Optional bool   `json:"optional,omitempty"`
 }
 
 // SandboxProbesIntent carries a sandbox's workload probes to swiftletd.

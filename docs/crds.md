@@ -559,6 +559,7 @@ and PVC-free.
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
 | `command` / `args` / `env` / `workingDir` | []string / []string / []EnvVar / string | Override or extend the image's entrypoint, environment, and working directory. |
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
+| `env[].valueFrom.secretKeyRef` | object | A variable read from a Secret in the namespace by the launcher's own ServiceAccount; never written to an object, log or the node's disk. Other `valueFrom` sources are refused; a missing Secret or key keeps the sandbox `Pending` unless `optional`. See [Secrets](sandbox/overview.md#secrets). |
 | `network.ports[]` | list | Guest ports exposed on the launcher pod (`name`, `port`; TCP), each forwarded to the same guest port and admitted by the sandbox's NetworkPolicy. Not with `mode: none`. |
 | `network.ingress.from[]` | list | NetworkPolicy peers allowed to reach `network.ports`; any source when unset. |
 | `readinessProbe` / `livenessProbe` | Probe | Run by swiftletd against the guest: `httpGet` (HTTP) or `tcpSocket`, port a number or a `network.ports` name. Readiness sets the `WorkloadReady` condition and the launcher's readiness gate; a liveness failure ends the sandbox `Failed` (`LivenessProbeFailed`). |
