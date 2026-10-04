@@ -74,6 +74,7 @@ Ready-to-edit manifests and notes:
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
 | `network.ports[]` | list | — | Guest ports exposed on the launcher pod: `name` (IANA service name) and `port` (TCP). See [Exposing ports](#exposing-ports). |
 | `network.ingress.from[]` | list | any source | NetworkPolicy peers allowed to reach `network.ports`. |
+| `readinessProbe` / `livenessProbe` | Probe | — | `httpGet` (HTTP) or `tcpSocket` against the guest. See [Workload probes](#workload-probes). |
 | `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
 | `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
@@ -92,7 +93,7 @@ sandbox to change image, resources, command, or network.
 | Field | Type | Description |
 |---|---|---|
 | `phase` | enum | `Pending`, `Materializing`, `Running`, `Completed`, `Failed`. |
-| `conditions[]` | []Condition | `Resolved`, `RootfsReady`, `GuestRunning`, plus `GPUAllocated` (native GPU backend only) and `ScratchDiskReady` (when `spec.scratchDisk` is set). |
+| `conditions[]` | []Condition | `Resolved`, `RootfsReady`, `GuestRunning`, `WorkloadReady` (while running: the readiness probe, or True once the guest runs), plus `GPUAllocated` (native GPU backend only) and `ScratchDiskReady` (when `spec.scratchDisk` is set). |
 | `nodeName` | string | Node running the sandbox. |
 | `podRef` | string | Launcher pod name (the claimed slot's pod name for a pool checkout). |
 | `rootfs.digest` | string | Resolved image digest (`sha256:...`). |
@@ -229,8 +230,43 @@ spec:
   `v1.multus-cni.io/`, `k8s.ovn.org/`). The launcher is privileged: metadata
   that makes another controller mutate it, such as mesh sidecar injection, is
   not supported.
-- Until workload probes exist, the launcher pod is Ready once the microVM runs,
-  not once the workload listens, so a Service may route to it a moment early.
+- A launcher that exposes ports carries a readiness gate: it is Ready, and in a
+  Service's endpoints, only while the workload is (see
+  [Workload probes](#workload-probes)). Without a readiness probe that is as
+  soon as the guest runs.
+
+### Workload probes
+
+`Running` means the microVM booted. A readiness probe says whether the
+workload inside serves; a liveness probe ends a workload that stops answering.
+Both take the familiar probe shape, limited to what can run against the guest:
+
+```yaml
+spec:
+  readinessProbe:
+    httpGet: {path: /healthz, port: http-app}   # or tcpSocket
+    periodSeconds: 5
+  livenessProbe:
+    tcpSocket: {port: 3000}
+    failureThreshold: 3
+```
+
+- swiftletd runs them from inside the launcher against the guest's address, so
+  the port can be a number that is not exposed, or the name of a
+  `network.ports` entry. `httpGet` is plain HTTP (2xx and 3xx pass);
+  `exec`, `grpc`, `host`, HTTPS and `terminationGracePeriodSeconds` are refused.
+  Not valid with `mode: none`.
+- Defaults and thresholds are the kubelet's (period 10s, timeout 1s, success 1,
+  failure 3); `initialDelaySeconds` counts from when the guest has an address.
+- Readiness is the `WorkloadReady` condition, with the probe's last result as
+  its message, and the launcher pod's readiness gate.
+- A liveness failure ends the sandbox `Failed` with reason
+  `LivenessProbeFailed` and deletes its launcher, as `spec.timeout` does.
+  Nothing restarts it; its owner decides.
+- On a warm-pool checkout the probes travel with the workload and start when
+  it does.
+- Probe headers are stored in the spec in plain text; do not put credentials in
+  them.
 
 ## Signed images (verify before boot)
 

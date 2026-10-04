@@ -561,6 +561,7 @@ and PVC-free.
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
 | `network.ports[]` | list | Guest ports exposed on the launcher pod (`name`, `port`; TCP), each forwarded to the same guest port and admitted by the sandbox's NetworkPolicy. Not with `mode: none`. |
 | `network.ingress.from[]` | list | NetworkPolicy peers allowed to reach `network.ports`; any source when unset. |
+| `readinessProbe` / `livenessProbe` | Probe | Run by swiftletd against the guest: `httpGet` (HTTP) or `tcpSocket`, port a number or a `network.ports` name. Readiness sets the `WorkloadReady` condition and the launcher's readiness gate; a liveness failure ends the sandbox `Failed` (`LivenessProbeFailed`). |
 | `podMetadata` | object | `labels` and `annotations` for the launcher pod; `*kubeswift.io` keys and pod-network annotations (`k8s.v1.cni.cncf.io/`, `v1.multus-cni.io/`, `k8s.ovn.org/`) refused. Applied to the claimed slot on a warm-pool checkout. |
 | `network.egress.allow[]` | list | `restricted` only: destinations allowed past the cluster-range block, each `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. `169.254.0.0/16` is never allowed. See [docs/sandbox/overview.md](sandbox/overview.md#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile (or `gpu-sandbox` when a GPU is requested). |

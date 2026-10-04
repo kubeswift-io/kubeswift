@@ -5,6 +5,7 @@ mod kube_client;
 mod launch;
 mod lease;
 mod migconn;
+mod probe;
 mod report;
 mod shutdown;
 
@@ -307,6 +308,19 @@ fn main() {
                     );
                 }
             }
+
+            // Workload probes of a cold sandbox (a warm slot gets its
+            // checkout's probes with the workload, in the action loop).
+            // The guard lives for the process: probing ends with the pod.
+            let _probe_guard = match (intent.sandbox_probes.clone(), &namespace, &name) {
+                (Some(probes), Some(ns), Some(n)) if intent.has_network() => Some(probe::spawn(
+                    probes,
+                    ns.clone(),
+                    n.clone(),
+                    runtime_dir.root().join("dnsmasq.leases"),
+                )),
+                _ => None,
+            };
 
             // Snapshot/restore action handler. Phase 2 commit 5: skeleton
             // only — handlers are no-ops; commits 6 and 7 wire in the

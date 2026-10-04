@@ -135,6 +135,10 @@ spec:
 - `podMetadata` is applied to the slot's pod in the same write that claims
   it, so a Service selecting the sandbox by those labels picks the slot up only
   once it is that sandbox's. Warm slots carry none.
+- Probes are not part of the slot shape: a checkout hands its
+  `readinessProbe`/`livenessProbe` to the slot with the workload, and probing
+  starts when the workload does. A slot of a pool with ports shows as not Ready
+  while warm; its readiness gate is set once a sandbox claims it.
 - The workload **must** have a `command` to check out — with no command the
   image entrypoint has to be resolved, which only the cold path knows, so a
   command-less pooled sandbox cold-falls-back.

@@ -38,6 +38,11 @@ pub struct RuntimeIntent {
     /// /proc/cmdline + the host's ps/logs. None for a SwiftGuest.
     #[serde(default)]
     pub sandbox_exec: Option<SandboxExec>,
+    /// The sandbox's workload probes (spec.readinessProbe / livenessProbe),
+    /// run by swiftletd against the guest. None for a SwiftGuest and for a warm
+    /// slot, whose probes arrive with the checkout's workload instead.
+    #[serde(default)]
+    pub sandbox_probes: Option<SandboxProbes>,
     /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
@@ -522,6 +527,42 @@ pub struct SandboxRootfs {
     /// instead of a block disk. When true, `path` is ignored.
     #[serde(default)]
     pub virtiofs: bool,
+}
+
+/// A sandbox's workload probes, as the controller resolved them.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxProbes {
+    #[serde(default)]
+    pub readiness: Option<SandboxProbe>,
+    #[serde(default)]
+    pub liveness: Option<SandboxProbe>,
+}
+
+/// One probe: an HTTP GET (`kind` "http") or a TCP connect ("tcp") to the
+/// guest, with every Kubernetes default already applied by the controller.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxProbe {
+    pub kind: String,
+    pub port: u16,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub headers: Vec<ProbeHeader>,
+    #[serde(default)]
+    pub initial_delay_seconds: u32,
+    pub period_seconds: u32,
+    pub timeout_seconds: u32,
+    pub success_threshold: u32,
+    pub failure_threshold: u32,
+}
+
+/// One HTTP header an http probe sends.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct ProbeHeader {
+    pub name: String,
+    pub value: String,
 }
 
 /// The mode-3 workload exec: full argv, merged env ("KEY=VAL"), and working dir.

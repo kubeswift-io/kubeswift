@@ -45,7 +45,7 @@ fn read_egress_marker(lease_path: &Path) -> Option<String> {
 
 /// dnsmasq lease file format: timestamp mac ip hostname client_id (space-separated).
 /// Returns the first IP found, or None if no valid lease.
-fn parse_first_lease(contents: &str) -> Option<String> {
+pub(crate) fn parse_first_lease(contents: &str) -> Option<String> {
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {

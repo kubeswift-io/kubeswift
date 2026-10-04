@@ -194,6 +194,10 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		// is host<->guest only (not network-reachable), so it costs nothing to have.
 		Vsock: &runtimeintent.VsockIntent{CID: runtimeintent.DeriveVsockCID(sb.Namespace, sb.Name)},
 	}
+	if !idle {
+		// A warm slot's probes arrive with its checkout's workload instead.
+		ri.SandboxProbes = probesIntent(sb)
+	}
 	if networked(sb) {
 		// spec.network.ports: network-init DNATs each pod port to the same port
 		// on the guest (the shared setup_exposed_ports path, which also pins
@@ -576,11 +580,15 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			}
 		}
 	}
-	if networked(sb) {
+	if networked(sb) && len(sb.Spec.Network.Ports) > 0 {
 		for _, p := range sb.Spec.Network.Ports {
 			pod.Spec.Containers[0].Ports = append(pod.Spec.Containers[0].Ports,
 				corev1.ContainerPort{Name: p.Name, ContainerPort: p.Port, Protocol: corev1.ProtocolTCP})
 		}
+		// The pod is Ready, and so in a Service's endpoints, only while the
+		// workload is (syncReadinessGate): the launcher container is Ready as
+		// soon as the microVM runs.
+		pod.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: WorkloadReadyGate}}
 	}
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	if allowed := egressAllowedJSON(egressAllowed(sb)); allowed != "" && networked(sb) {

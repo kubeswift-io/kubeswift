@@ -940,6 +940,9 @@ struct SandboxExecArgs {
     cwd: String,
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    /// The checked-out sandbox's workload probes, run while the workload does.
+    #[serde(default)]
+    probes: Option<crate::intent::SandboxProbes>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -979,6 +982,22 @@ async fn dispatch_sandbox_exec(
     let timeout =
         std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(SANDBOX_EXEC_TIMEOUT_SECS));
     let req = swift_vsock_client::ExecRequest::new(args.argv, args.env, args.cwd);
+    // Probe the workload while it runs; the guard stops probing when the
+    // exec returns (the workload has exited).
+    let _probe_guard = match (
+        args.probes,
+        std::env::var("POD_NAMESPACE").ok(),
+        std::env::var("POD_NAME").ok(),
+    ) {
+        (Some(probes), Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => Some(
+            crate::probe::spawn(probes, ns, name, run_dir.join("dnsmasq.leases")),
+        ),
+        (Some(_), _, _) => {
+            log::warn!("sandbox_probes_skipped reason=POD_NAMESPACE_or_POD_NAME_unset");
+            None
+        }
+        _ => None,
+    };
     log::info!(
         "dispatch_sandbox_exec id={} socket={}",
         action.id,
@@ -4104,6 +4123,36 @@ mod tests {
         assert_eq!(args.env, vec!["FOO=bar"]);
         assert_eq!(args.cwd, "/tmp");
         assert_eq!(args.timeout_seconds, Some(42));
+    }
+
+    #[test]
+    fn sandbox_exec_args_carry_the_checkouts_probes() {
+        // As the controller writes them (stampExecAction + probesIntent).
+        let args: SandboxExecArgs = serde_json::from_str(
+            r#"{"argv":["/srv"],"probes":{"readiness":{"kind":"http","port":3000,"path":"/healthz",
+                "headers":[{"name":"X-Probe","value":"1"}],"initialDelaySeconds":2,"periodSeconds":5,
+                "timeoutSeconds":1,"successThreshold":1,"failureThreshold":3}}}"#,
+        )
+        .unwrap();
+        let probes = args.probes.expect("probes");
+        let r = probes.readiness.expect("readiness");
+        assert_eq!(
+            (r.kind.as_str(), r.port, r.path.as_str()),
+            ("http", 3000, "/healthz")
+        );
+        assert_eq!(r.headers[0].name, "X-Probe");
+        assert_eq!(
+            (
+                r.initial_delay_seconds,
+                r.period_seconds,
+                r.failure_threshold
+            ),
+            (2, 5, 3)
+        );
+        assert!(probes.liveness.is_none());
+        // Args from before probes existed still parse.
+        let old: SandboxExecArgs = serde_json::from_str(r#"{"argv":["/srv"]}"#).unwrap();
+        assert!(old.probes.is_none());
     }
 
     #[test]
