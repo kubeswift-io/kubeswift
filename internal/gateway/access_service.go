@@ -72,7 +72,9 @@ func (s *AccessService) ListCapabilities(ctx context.Context, req *connect.Reque
 // ListRoles returns the three predefined roles (always, synthesized from the
 // capability model even before they exist on the cluster) plus any custom
 // KubeSwift roles present. A failure to list custom roles surfaces as a
-// ClusterError but never hides the predefined set.
+// ClusterError but never hides the predefined set. A role whose ClusterRole no
+// longer grants what its capabilities grant in this version is marked
+// outdated, with the difference.
 func (s *AccessService) ListRoles(ctx context.Context, req *connect.Request[kubeswiftv1.ListRolesRequest]) (*connect.Response[kubeswiftv1.ListRolesResponse], error) {
 	id, err := s.auth.Authenticate(ctx, req.Header())
 	if err != nil {
@@ -83,9 +85,8 @@ func (s *AccessService) ListRoles(ctx context.Context, req *connect.Request[kube
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cluster is required"))
 	}
 	out := &kubeswiftv1.ListRolesResponse{}
-	for _, p := range predefinedRoles {
-		out.Roles = append(out.Roles, &kubeswiftv1.Role{Name: p.name, DisplayName: p.displayName, Predefined: true, Capabilities: p.caps})
-	}
+	present := map[string]*rbacv1.ClusterRole{}
+	var custom []*kubeswiftv1.Role
 	if rc, err := s.rbacFor(cluster, id); err != nil {
 		out.Error = &kubeswiftv1.ClusterError{Cluster: cluster, Message: err.Error()}
 	} else if list, err := rc.ClusterRoles().List(ctx, metav1.ListOptions{LabelSelector: roleLabel + "=true"}); err != nil {
@@ -93,18 +94,71 @@ func (s *AccessService) ListRoles(ctx context.Context, req *connect.Request[kube
 	} else {
 		for i := range list.Items {
 			cr := &list.Items[i]
+			present[cr.Name] = cr
 			if predefinedByName(cr.Name) != nil {
-				continue // already emitted (canonical synthesized form)
+				continue // emitted below, in its canonical synthesized form
 			}
-			out.Roles = append(out.Roles, &kubeswiftv1.Role{
-				Name:         cr.Name,
-				DisplayName:  cr.Annotations[roleDisplayAnno],
-				Predefined:   false,
-				Capabilities: splitCSV(cr.Annotations[roleCapsAnno]),
+			drift := roleDrift(cr, desiredRole(cr))
+			custom = append(custom, &kubeswiftv1.Role{
+				Name:           cr.Name,
+				DisplayName:    cr.Annotations[roleDisplayAnno],
+				Predefined:     false,
+				Capabilities:   splitCSV(cr.Annotations[roleCapsAnno]),
+				Outdated:       drift != "",
+				OutdatedReason: drift,
 			})
 		}
 	}
+	for _, p := range predefinedRoles {
+		role := &kubeswiftv1.Role{Name: p.name, DisplayName: p.displayName, Predefined: true, Capabilities: p.caps}
+		if cr := present[p.name]; cr != nil {
+			drift := roleDrift(cr, clusterRoleForPredefined(&p))
+			role.Outdated, role.OutdatedReason = drift != "", drift
+		}
+		out.Roles = append(out.Roles, role)
+	}
+	out.Roles = append(out.Roles, custom...)
 	return connect.NewResponse(out), nil
+}
+
+// SyncRole rewrites a KubeSwift role's ClusterRole to what its capabilities
+// grant in this version, as the signed-in user. Kubernetes refuses it unless
+// they hold every rule they would grant.
+func (s *AccessService) SyncRole(ctx context.Context, req *connect.Request[kubeswiftv1.SyncRoleRequest]) (*connect.Response[kubeswiftv1.SyncRoleResponse], error) {
+	id, err := s.auth.Authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+	cluster, name := req.Msg.GetCluster(), req.Msg.GetName()
+	if cluster == "" || name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cluster and name are required"))
+	}
+	rc, err := s.rbacFor(cluster, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+	cr, err := rc.ClusterRoles().Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) && predefinedByName(name) != nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("role %q does not exist on %s yet; a predefined role is created, up to date, when it is first assigned", name, cluster))
+	}
+	if err != nil {
+		return nil, mapAccessErr(err)
+	}
+	if !isKubeSwiftRole(cr) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%q is not a KubeSwift role", name))
+	}
+	desired := desiredRole(cr)
+	if roleDrift(cr, desired) != "" {
+		if cr, err = rc.ClusterRoles().Update(ctx, syncedRole(cr, desired), metav1.UpdateOptions{}); err != nil {
+			return nil, mapAccessErr(err)
+		}
+	}
+	return connect.NewResponse(&kubeswiftv1.SyncRoleResponse{Role: &kubeswiftv1.Role{
+		Name:         cr.Name,
+		DisplayName:  cr.Annotations[roleDisplayAnno],
+		Predefined:   predefinedByName(cr.Name) != nil,
+		Capabilities: splitCSV(cr.Annotations[roleCapsAnno]),
+	}}), nil
 }
 
 func (s *AccessService) CreateRole(ctx context.Context, req *connect.Request[kubeswiftv1.CreateRoleRequest]) (*connect.Response[kubeswiftv1.CreateRoleResponse], error) {
@@ -293,11 +347,26 @@ func (s *AccessService) RemoveAssignment(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(&kubeswiftv1.RemoveAssignmentResponse{}), nil
 }
 
-// ensureRole makes sure the named ClusterRole exists; a predefined role missing
-// from the cluster is created from the capability model. A custom role must
-// already exist.
+// ensureRole makes sure the named ClusterRole exists and grants what its
+// capabilities grant in this version: a predefined role missing from the
+// cluster is created from the capability model, and an outdated role is
+// brought up to date before it is bound, so an assignment never grants rules
+// a capability has since dropped. If the assigner may not update it, the
+// assignment is refused. A custom role must already exist, and a ClusterRole
+// that is not a KubeSwift role is never bound.
 func (s *AccessService) ensureRole(ctx context.Context, rc rbacv1client.RbacV1Interface, name string) error {
-	if _, err := rc.ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil {
+	if cr, err := rc.ClusterRoles().Get(ctx, name, metav1.GetOptions{}); err == nil {
+		if !isKubeSwiftRole(cr) {
+			return fmt.Errorf("ClusterRole %q exists but is not a KubeSwift role; the Access editor does not bind it", name)
+		}
+		desired := desiredRole(cr)
+		drift := roleDrift(cr, desired)
+		if drift == "" {
+			return nil
+		}
+		if _, err := rc.ClusterRoles().Update(ctx, syncedRole(cr, desired), metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("role %q is out of date (%s), and updating it before binding it failed: %w", name, drift, err)
+		}
 		return nil
 	} else if !apierrors.IsNotFound(err) {
 		return err

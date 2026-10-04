@@ -22,6 +22,14 @@ message Role {
   string display_name = 2;
   bool predefined = 3;
   repeated string capabilities = 4; // capability keys this role grants
+  // outdated is true when the role's ClusterRole no longer grants exactly what
+  // its capabilities grant in this KubeSwift version: it was created by an
+  // earlier one, or edited by hand. The gateway creates a role and never
+  // rewrites it on its own; SyncRole, or assigning the role, updates it.
+  bool outdated = 5;
+  // outdated_reason names the difference: rules it grants that its
+  // capabilities no longer include, and rules it lacks.
+  string outdated_reason = 6;
 }
 
 // Subject is who a role is assigned to — an OIDC user or group.
@@ -68,6 +76,17 @@ message DeleteRoleRequest {
 }
 message DeleteRoleResponse {}
 
+// SyncRoleRequest rewrites a KubeSwift role's ClusterRole to what its
+// capabilities grant in this version, as the signed-in user: Kubernetes only
+// lets them grant rules they hold themselves.
+message SyncRoleRequest {
+  string cluster = 1;
+  string name = 2;
+}
+message SyncRoleResponse {
+  Role role = 1;
+}
+
 message ListAssignmentsRequest {
   string cluster = 1;
 }
@@ -105,6 +124,7 @@ service AccessService {
   rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
   rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
   rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  rpc SyncRole(SyncRoleRequest) returns (SyncRoleResponse);
   rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
   rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
   rpc RemoveAssignment(RemoveAssignmentRequest) returns (RemoveAssignmentResponse);

@@ -169,10 +169,18 @@ user's own `rbac` permissions — i.e. you need the `kubeswift-admin` role, or t
   compositions. `manage-storage-locations` assigned to a namespace covers only
   that namespace's SwiftStorageLocations; assigned cluster-wide it also covers
   the cluster's SwiftClusterStorageLocations.
-- The gateway creates a predefined role's ClusterRole the first time the role
-  is assigned and does not update it afterwards. A ClusterRole created before
-  a release that added rules to its capabilities keeps the old rules; delete
-  it to have the next assignment re-create it.
+- **Keeping roles current.** A role is defined by its capabilities, but its
+  ClusterRole holds the rules they granted when it was written. When a release
+  changes a capability (v0.15.0 removed `pods/exec` from `console`; a later
+  one added storage locations to `view-resources`), a role written earlier
+  keeps the old rules. The Access tab marks such a role **out of date** and
+  says how it differs (rules it still grants that its capabilities no longer
+  include, and rules it lacks); **Update** rewrites it. Assigning a role
+  updates it first, and the assignment is refused if you may not. The gateway
+  never rewrites a role by itself: every Access action runs as you, and
+  Kubernetes only lets you grant rules you hold. A predefined role is created
+  the first time it is assigned; a ClusterRole that merely has a predefined
+  role's name, without the `kubeswift.io/role` label, is never bound.
 - **Review + remove** existing assignments.
 
 Everything the editor does is plain Kubernetes RBAC (labelled

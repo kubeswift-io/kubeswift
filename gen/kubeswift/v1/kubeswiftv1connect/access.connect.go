@@ -44,6 +44,8 @@ const (
 	// AccessServiceDeleteRoleProcedure is the fully-qualified name of the AccessService's DeleteRole
 	// RPC.
 	AccessServiceDeleteRoleProcedure = "/kubeswift.v1.AccessService/DeleteRole"
+	// AccessServiceSyncRoleProcedure is the fully-qualified name of the AccessService's SyncRole RPC.
+	AccessServiceSyncRoleProcedure = "/kubeswift.v1.AccessService/SyncRole"
 	// AccessServiceListAssignmentsProcedure is the fully-qualified name of the AccessService's
 	// ListAssignments RPC.
 	AccessServiceListAssignmentsProcedure = "/kubeswift.v1.AccessService/ListAssignments"
@@ -61,6 +63,7 @@ type AccessServiceClient interface {
 	ListRoles(context.Context, *connect.Request[v1.ListRolesRequest]) (*connect.Response[v1.ListRolesResponse], error)
 	CreateRole(context.Context, *connect.Request[v1.CreateRoleRequest]) (*connect.Response[v1.CreateRoleResponse], error)
 	DeleteRole(context.Context, *connect.Request[v1.DeleteRoleRequest]) (*connect.Response[v1.DeleteRoleResponse], error)
+	SyncRole(context.Context, *connect.Request[v1.SyncRoleRequest]) (*connect.Response[v1.SyncRoleResponse], error)
 	ListAssignments(context.Context, *connect.Request[v1.ListAssignmentsRequest]) (*connect.Response[v1.ListAssignmentsResponse], error)
 	AssignRole(context.Context, *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error)
 	RemoveAssignment(context.Context, *connect.Request[v1.RemoveAssignmentRequest]) (*connect.Response[v1.RemoveAssignmentResponse], error)
@@ -101,6 +104,12 @@ func NewAccessServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(accessServiceMethods.ByName("DeleteRole")),
 			connect.WithClientOptions(opts...),
 		),
+		syncRole: connect.NewClient[v1.SyncRoleRequest, v1.SyncRoleResponse](
+			httpClient,
+			baseURL+AccessServiceSyncRoleProcedure,
+			connect.WithSchema(accessServiceMethods.ByName("SyncRole")),
+			connect.WithClientOptions(opts...),
+		),
 		listAssignments: connect.NewClient[v1.ListAssignmentsRequest, v1.ListAssignmentsResponse](
 			httpClient,
 			baseURL+AccessServiceListAssignmentsProcedure,
@@ -128,6 +137,7 @@ type accessServiceClient struct {
 	listRoles        *connect.Client[v1.ListRolesRequest, v1.ListRolesResponse]
 	createRole       *connect.Client[v1.CreateRoleRequest, v1.CreateRoleResponse]
 	deleteRole       *connect.Client[v1.DeleteRoleRequest, v1.DeleteRoleResponse]
+	syncRole         *connect.Client[v1.SyncRoleRequest, v1.SyncRoleResponse]
 	listAssignments  *connect.Client[v1.ListAssignmentsRequest, v1.ListAssignmentsResponse]
 	assignRole       *connect.Client[v1.AssignRoleRequest, v1.AssignRoleResponse]
 	removeAssignment *connect.Client[v1.RemoveAssignmentRequest, v1.RemoveAssignmentResponse]
@@ -153,6 +163,11 @@ func (c *accessServiceClient) DeleteRole(ctx context.Context, req *connect.Reque
 	return c.deleteRole.CallUnary(ctx, req)
 }
 
+// SyncRole calls kubeswift.v1.AccessService.SyncRole.
+func (c *accessServiceClient) SyncRole(ctx context.Context, req *connect.Request[v1.SyncRoleRequest]) (*connect.Response[v1.SyncRoleResponse], error) {
+	return c.syncRole.CallUnary(ctx, req)
+}
+
 // ListAssignments calls kubeswift.v1.AccessService.ListAssignments.
 func (c *accessServiceClient) ListAssignments(ctx context.Context, req *connect.Request[v1.ListAssignmentsRequest]) (*connect.Response[v1.ListAssignmentsResponse], error) {
 	return c.listAssignments.CallUnary(ctx, req)
@@ -174,6 +189,7 @@ type AccessServiceHandler interface {
 	ListRoles(context.Context, *connect.Request[v1.ListRolesRequest]) (*connect.Response[v1.ListRolesResponse], error)
 	CreateRole(context.Context, *connect.Request[v1.CreateRoleRequest]) (*connect.Response[v1.CreateRoleResponse], error)
 	DeleteRole(context.Context, *connect.Request[v1.DeleteRoleRequest]) (*connect.Response[v1.DeleteRoleResponse], error)
+	SyncRole(context.Context, *connect.Request[v1.SyncRoleRequest]) (*connect.Response[v1.SyncRoleResponse], error)
 	ListAssignments(context.Context, *connect.Request[v1.ListAssignmentsRequest]) (*connect.Response[v1.ListAssignmentsResponse], error)
 	AssignRole(context.Context, *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error)
 	RemoveAssignment(context.Context, *connect.Request[v1.RemoveAssignmentRequest]) (*connect.Response[v1.RemoveAssignmentResponse], error)
@@ -210,6 +226,12 @@ func NewAccessServiceHandler(svc AccessServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(accessServiceMethods.ByName("DeleteRole")),
 		connect.WithHandlerOptions(opts...),
 	)
+	accessServiceSyncRoleHandler := connect.NewUnaryHandler(
+		AccessServiceSyncRoleProcedure,
+		svc.SyncRole,
+		connect.WithSchema(accessServiceMethods.ByName("SyncRole")),
+		connect.WithHandlerOptions(opts...),
+	)
 	accessServiceListAssignmentsHandler := connect.NewUnaryHandler(
 		AccessServiceListAssignmentsProcedure,
 		svc.ListAssignments,
@@ -238,6 +260,8 @@ func NewAccessServiceHandler(svc AccessServiceHandler, opts ...connect.HandlerOp
 			accessServiceCreateRoleHandler.ServeHTTP(w, r)
 		case AccessServiceDeleteRoleProcedure:
 			accessServiceDeleteRoleHandler.ServeHTTP(w, r)
+		case AccessServiceSyncRoleProcedure:
+			accessServiceSyncRoleHandler.ServeHTTP(w, r)
 		case AccessServiceListAssignmentsProcedure:
 			accessServiceListAssignmentsHandler.ServeHTTP(w, r)
 		case AccessServiceAssignRoleProcedure:
@@ -267,6 +291,10 @@ func (UnimplementedAccessServiceHandler) CreateRole(context.Context, *connect.Re
 
 func (UnimplementedAccessServiceHandler) DeleteRole(context.Context, *connect.Request[v1.DeleteRoleRequest]) (*connect.Response[v1.DeleteRoleResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.AccessService.DeleteRole is not implemented"))
+}
+
+func (UnimplementedAccessServiceHandler) SyncRole(context.Context, *connect.Request[v1.SyncRoleRequest]) (*connect.Response[v1.SyncRoleResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kubeswift.v1.AccessService.SyncRole is not implemented"))
 }
 
 func (UnimplementedAccessServiceHandler) ListAssignments(context.Context, *connect.Request[v1.ListAssignmentsRequest]) (*connect.Response[v1.ListAssignmentsResponse], error) {
