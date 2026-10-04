@@ -260,6 +260,82 @@ type SandboxNetwork struct {
 	// +kubebuilder:default=restricted
 	// +optional
 	Mode SandboxNetworkMode `json:"mode,omitempty"`
+
+	// Egress lets a restricted sandbox reach destinations the restricted mode
+	// blocks, such as one in-cluster Service, without opening everything.
+	// Only valid with mode restricted.
+	// +optional
+	Egress *SandboxEgress `json:"egress,omitempty"`
+}
+
+// SandboxEgress refines the restricted egress posture.
+type SandboxEgress struct {
+	// Allow lists destinations the guest may reach in addition to DNS and the
+	// public internet. The link-local range 169.254.0.0/16 (the cloud metadata
+	// endpoint) stays blocked whatever is allowed, and IPv6 stays blocked.
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	// +optional
+	Allow []SandboxEgressRule `json:"allow,omitempty"`
+}
+
+// SandboxEgressRule allows one destination: a Service or an IPv4 CIDR,
+// optionally narrowed to ports. Exactly one of service and cidr is set.
+type SandboxEgressRule struct {
+	// Service allows the ClusterIP of a Service. It is resolved when the
+	// sandbox's launcher is created (for a pool, each time the pool reconciles:
+	// warm slots holding an older address are replaced). A Service that is
+	// missing, headless or has no IPv4 ClusterIP keeps the sandbox Pending.
+	// +optional
+	Service *SandboxEgressService `json:"service,omitempty"`
+
+	// CIDR allows an IPv4 range, e.g. 10.20.0.0/24 or 10.20.0.5/32.
+	// +optional
+	CIDR string `json:"cidr,omitempty"`
+
+	// Ports narrows the rule. Empty allows every port: for a Service, every
+	// port the Service declares; for a CIDR, any port and protocol.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	// +optional
+	Ports []SandboxEgressPort `json:"ports,omitempty"`
+}
+
+// SandboxEgressService names a Service whose ClusterIP the sandbox may reach.
+type SandboxEgressService struct {
+	// Name of the Service.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Namespace of the Service; defaults to the sandbox's.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// SandboxEgressPort is one allowed destination port.
+type SandboxEgressPort struct {
+	// Port number. For a Service, a port the Service declares.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+	// Protocol is TCP (default) or UDP.
+	// +kubebuilder:validation:Enum=TCP;UDP
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+}
+
+// SandboxEgressAllowed is one rule the launcher enforces, as resolved.
+type SandboxEgressAllowed struct {
+	// CIDR is the destination, e.g. 10.96.0.12/32 for a Service's ClusterIP.
+	CIDR string `json:"cidr"`
+	// Protocol and Port narrow it; both empty allow every port.
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+	// +optional
+	Port int32 `json:"port,omitempty"`
+	// From is the spec entry this came from: "service <namespace>/<name>"
+	// or "cidr <cidr>".
+	From string `json:"from"`
 }
 
 // SwiftSandboxPhase is the lifecycle phase.
@@ -378,6 +454,10 @@ type SandboxNetworkStatus struct {
 	// primaryIP it is unique in the cluster.
 	// +optional
 	PodIP string `json:"podIP,omitempty"`
+	// EgressAllowed is the egress allowlist the launcher enforces, from
+	// spec.network.egress.allow with every Service resolved to its address.
+	// +optional
+	EgressAllowed []SandboxEgressAllowed `json:"egressAllowed,omitempty"`
 }
 
 // SwiftSandboxStatus is the observed state.

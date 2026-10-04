@@ -559,6 +559,7 @@ and PVC-free.
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
 | `command` / `args` / `env` / `workingDir` | []string / []string / []EnvVar / string | Override or extend the image's entrypoint, environment, and working directory. |
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
+| `network.egress.allow[]` | list | `restricted` only: destinations allowed past the cluster-range block, each `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. `169.254.0.0/16` is never allowed. See [docs/sandbox/overview.md](sandbox/overview.md#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile (or `gpu-sandbox` when a GPU is requested). |
 | `nodeSelector` | map[string]string | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef` | LocalObjectReference | Check out a pre-booted slot from a `SwiftSandboxPool` instead of the cold path; falls back to cold on a miss. Mutually exclusive with either GPU field. |
@@ -593,6 +594,7 @@ subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
 | `imagePullSecret` / `verifyKeySecretRef` / `rootfsMode` | string / SecretObjectReference / enum | Same semantics as `SwiftSandbox`, applied to every slot. |
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`) of each warm slot. |
 | `network.mode` | enum | `restricted` (default), `open`, or `none` — applies to every slot. |
+| `network.egress.allow[]` | list | As on SwiftSandbox; every slot enforces it, and a claiming sandbox must list the same destinations. |
 | `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`, or `gpu-sandbox` when `gpuProfileRef` is set) and extra node constraints. |
 | `gpuProfileRef` | LocalObjectReference | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation, pre-booted. `tier: pcie` only. |
 | `model` | SandboxModel | Preloads a read-only model artifact into every slot. |

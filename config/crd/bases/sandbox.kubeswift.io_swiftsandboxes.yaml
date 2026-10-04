@@ -380,6 +380,77 @@ spec:
               network:
                 description: Network controls sandbox connectivity. Defaults to restricted.
                 properties:
+                  egress:
+                    description: |-
+                      Egress lets a restricted sandbox reach destinations the restricted mode
+                      blocks, such as one in-cluster Service, without opening everything.
+                      Only valid with mode restricted.
+                    properties:
+                      allow:
+                        description: |-
+                          Allow lists destinations the guest may reach in addition to DNS and the
+                          public internet. The link-local range 169.254.0.0/16 (the cloud metadata
+                          endpoint) stays blocked whatever is allowed, and IPv6 stays blocked.
+                        items:
+                          description: |-
+                            SandboxEgressRule allows one destination: a Service or an IPv4 CIDR,
+                            optionally narrowed to ports. Exactly one of service and cidr is set.
+                          properties:
+                            cidr:
+                              description: CIDR allows an IPv4 range, e.g. 10.20.0.0/24
+                                or 10.20.0.5/32.
+                              type: string
+                            ports:
+                              description: |-
+                                Ports narrows the rule. Empty allows every port: for a Service, every
+                                port the Service declares; for a CIDR, any port and protocol.
+                              items:
+                                description: SandboxEgressPort is one allowed destination
+                                  port.
+                                properties:
+                                  port:
+                                    description: Port number. For a Service, a port
+                                      the Service declares.
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
+                                  protocol:
+                                    default: TCP
+                                    description: Protocol is TCP (default) or UDP.
+                                    enum:
+                                    - TCP
+                                    - UDP
+                                    type: string
+                                required:
+                                - port
+                                type: object
+                              maxItems: 16
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            service:
+                              description: |-
+                                Service allows the ClusterIP of a Service. It is resolved when the
+                                sandbox's launcher is created (for a pool, each time the pool reconciles:
+                                warm slots holding an older address are replaced). A Service that is
+                                missing, headless or has no IPv4 ClusterIP keeps the sandbox Pending.
+                              properties:
+                                name:
+                                  description: Name of the Service.
+                                  minLength: 1
+                                  type: string
+                                namespace:
+                                  description: Namespace of the Service; defaults
+                                    to the sandbox's.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                          type: object
+                        maxItems: 32
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
                   mode:
                     default: restricted
                     description: Mode is "restricted" (default), "open", or "none".
@@ -647,6 +718,35 @@ spec:
                   Network is the guest network (primaryIP), reported by the swiftletd lease
                   poller. Absent for network:none sandboxes.
                 properties:
+                  egressAllowed:
+                    description: |-
+                      EgressAllowed is the egress allowlist the launcher enforces, from
+                      spec.network.egress.allow with every Service resolved to its address.
+                    items:
+                      description: SandboxEgressAllowed is one rule the launcher enforces,
+                        as resolved.
+                      properties:
+                        cidr:
+                          description: CIDR is the destination, e.g. 10.96.0.12/32
+                            for a Service's ClusterIP.
+                          type: string
+                        from:
+                          description: |-
+                            From is the spec entry this came from: "service <namespace>/<name>"
+                            or "cidr <cidr>".
+                          type: string
+                        port:
+                          format: int32
+                          type: integer
+                        protocol:
+                          description: Protocol and Port narrow it; both empty allow
+                            every port.
+                          type: string
+                      required:
+                      - cidr
+                      - from
+                      type: object
+                    type: array
                   podIP:
                     description: |-
                       PodIP is the IP of the launcher pod running the sandbox. Unlike

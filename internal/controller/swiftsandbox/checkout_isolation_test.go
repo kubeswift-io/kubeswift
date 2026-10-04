@@ -28,7 +28,7 @@ func TestCheckout_SlotStaysIsolatedAndItsObjectsMoveToTheSandbox(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pool).Build()
 	pr := &SwiftSandboxPoolReconciler{Client: c, Scheme: scheme.Scheme, Recorder: record.NewFakeRecorder(10)}
-	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, ""); err != nil {
+	if err := pr.createWarmSlot(ctx, pool, defaultKernelProfile, resolvedImage{RootfsPath: "/cache/x.ext4"}, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	var pods corev1.PodList

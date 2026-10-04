@@ -134,6 +134,8 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if pool.Spec.Model != nil {
 		sb.Status.Model = &sandboxv1alpha1.SandboxModelStatus{MountPath: pool.Spec.Model.ModelMountPath()}
 	}
+	// The slot's network-init enforces the allowlist it was booted with.
+	setEgressAllowed(sb, parseEgressAllowed(slot.Annotations[EgressAllowedAnnotation]))
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 		Reason:             "CheckedOut",

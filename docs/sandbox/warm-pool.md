@@ -82,6 +82,7 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | `minWarm` | int32 | `1` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
+| `network.egress.allow[]` | list | — | Destinations every slot may reach under `restricted`, as on [SwiftSandbox](overview.md#allowing-specific-destinations-under-restricted). Services are resolved on every pool pass: a warm slot allowing an address its Service no longer has is replaced, and while a Service is missing the pool warms nothing (`Degraded`, reason naming it). |
 | `kernelProfileRef.name` | string | `sandbox` (`gpu-sandbox` when `gpuProfileRef` is set) | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `gpuProfileRef.name` | string | — | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation against this `SwiftGPUProfile`, pre-booted. Trades an idle GPU per slot for latency — size `minWarm` ≤ your free GPU count. `tier: pcie` only; `hgx-shared`/`hgx-full` are rejected. See [GPU sandboxes › Warm GPU pools](gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start). |
@@ -120,7 +121,7 @@ spec:
 
 - A slot is only handed to a sandbox it honors: the slot has already booted,
   and a checkout only injects a command. The sandbox's `image`, `network.mode`,
-  `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
+  `network.egress.allow`, `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
   pool's, and every label in its `nodeSelector` must be one the pool's
   `nodeSelector` requires too. GPU and model belong to the slot: a pooled
   sandbox sets neither and inherits the pool's, including a GPU pool's

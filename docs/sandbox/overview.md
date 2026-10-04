@@ -72,6 +72,7 @@ Ready-to-edit manifests and notes:
 | `ttl` | Duration | none | Once the sandbox has been terminal (`Completed`/`Failed`) for at least `ttl`, the controller deletes it and frees the node's rootfs-cache reference. |
 | `rootfsMode` | enum | `block` | How the OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (the unpacked tree over virtio-fs, tag `sandboxroot` — skips `mkfs.ext4` and the ext4 size floor, shares the host page cache). Same RO-base + writable tmpfs-overlay either way. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
+| `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
 | `poolRef.name` | string | — | Check out a pre-booted slot from this `SwiftSandboxPool` (sub-second) instead of the cold materialize+boot path; falls back to cold on a miss. Same namespace. See [Warm pools](warm-pool.md). |
@@ -99,6 +100,7 @@ sandbox to change image, resources, command, or network.
 | `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. An address on the launcher pod's private nat network, so it repeats across sandboxes. |
 | `network.primaryIPScope` | string | Always `Pod` when `primaryIP` is set: reachable only from inside the launcher pod. |
 | `network.podIP` | string | IP of the launcher pod, unique in the cluster. |
+| `network.egressAllowed[]` | list | The egress allowlist the launcher enforces: `cidr`, `protocol`, `port`, and `from` (the spec entry, e.g. `service inference/llm`). |
 | `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
 | `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
 | `model.digest` / `model.mountPath` / `model.cachePath` | string / string / string | The resolved model artifact once materialized. Absent when `spec.model` is unset. |
@@ -135,6 +137,43 @@ A networked sandbox resolves cluster service names and external names alike
 — the controller injects the namespace's search domains and `ndots:5`.
 `restricted` still blocks *connecting* to cluster IPs; name resolution and
 egress reachability are separate concerns.
+
+### Allowing specific destinations under `restricted`
+
+A sandbox that must reach one in-cluster service (an inference endpoint, a
+collector, a database) does not need `open`. List the destinations under
+`network.egress.allow`, each a Service or an IPv4 CIDR, optionally narrowed to
+ports:
+
+```yaml
+spec:
+  network:
+    mode: restricted
+    egress:
+      allow:
+        - service: {name: llm, namespace: inference}   # namespace defaults to the sandbox's
+          ports: [{port: 8000}]                        # TCP unless protocol: UDP
+        - cidr: 10.20.0.0/24
+          ports: [{port: 5432}]
+```
+
+- A Service is allowed at its IPv4 ClusterIP, on the ports listed (each must be
+  one the Service declares) or, with no ports, on every port it declares. The
+  controller resolves it when the launcher is created and records the result in
+  `status.network.egressAllowed`. A Service that is missing, headless or has no
+  IPv4 ClusterIP keeps the sandbox `Pending` with a reason naming it
+  (`EgressServiceNotFound`, `EgressServiceNoClusterIP`,
+  `EgressServicePortNotFound`). If the Service is later recreated with a new
+  ClusterIP, a running sandbox keeps the old one; recreate the sandbox.
+- A `cidr` with no ports allows any port and protocol in the range.
+- `169.254.0.0/16` stays blocked whatever is allowed: its rule comes first. A
+  CIDR inside it is refused outright. IPv6 stays blocked.
+- `egress` is valid with `restricted` only.
+- On a cluster whose CNI replaces kube-proxy, traffic from the guest to a
+  ClusterIP may not be translated; allow the backing pods' range with a `cidr`
+  instead.
+- The destination's own NetworkPolicies still apply. The guest's traffic leaves
+  as the launcher pod's IP.
 
 ## Signed images (verify before boot)
 
