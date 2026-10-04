@@ -82,6 +82,7 @@ Ready-to-edit manifests: [`config/samples/sandbox/`](../../config/samples/sandbo
 | `minWarm` | int32 | `1` | Warm slots to keep ready — the warm buffer the pool maintains. This is the scale-subresource target (`kubectl scale sboxpool`); see [Scaling](#scaling). |
 | `maxWarm` | int32 | — | Cap on warm slots. The effective cap is `max(maxWarm, minWarm)` — set below `minWarm` and `minWarm` wins. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none` — same semantics as [SwiftSandbox](overview.md#network-modes). Applies to every slot. |
+| `network.ports[]` / `network.ingress` | list / object | — | Ports every slot exposes, as on [SwiftSandbox](overview.md#exposing-ports). |
 | `network.egress.allow[]` | list | — | Destinations every slot may reach under `restricted`, as on [SwiftSandbox](overview.md#allowing-specific-destinations-under-restricted). Services are resolved on every pool pass: a warm slot allowing an address its Service no longer has is replaced, and while a Service is missing the pool warms nothing (`Degraded`, reason naming it). |
 | `kernelProfileRef.name` | string | `sandbox` (`gpu-sandbox` when `gpuProfileRef` is set) | SwiftKernel the slots boot. |
 | `nodeSelector` | map[string]string | — | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -121,7 +122,7 @@ spec:
 
 - A slot is only handed to a sandbox it honors: the slot has already booted,
   and a checkout only injects a command. The sandbox's `image`, `network.mode`,
-  `network.egress.allow`, `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
+  `network.egress.allow`, `network.ports`, `network.ingress`, `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
   pool's, and every label in its `nodeSelector` must be one the pool's
   `nodeSelector` requires too. GPU and model belong to the slot: a pooled
   sandbox sets neither and inherits the pool's, including a GPU pool's
@@ -131,6 +132,9 @@ spec:
   `PoolColdFallback` event names each difference, for example
   `cpu (pool 1, sandbox 2)`. Warm slots booted before a pool edit to any of
   these fields are replaced.
+- `podMetadata` is applied to the slot's pod in the same write that claims
+  it, so a Service selecting the sandbox by those labels picks the slot up only
+  once it is that sandbox's. Warm slots carry none.
 - The workload **must** have a `command` to check out — with no command the
   image entrypoint has to be resolved, which only the cold path knows, so a
   command-less pooled sandbox cold-falls-back.

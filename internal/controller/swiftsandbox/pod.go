@@ -194,6 +194,14 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		// is host<->guest only (not network-reachable), so it costs nothing to have.
 		Vsock: &runtimeintent.VsockIntent{CID: runtimeintent.DeriveVsockCID(sb.Namespace, sb.Name)},
 	}
+	if networked(sb) {
+		// spec.network.ports: network-init DNATs each pod port to the same port
+		// on the guest (the shared setup_exposed_ports path, which also pins
+		// the guest's DHCP address so the DNAT target is right).
+		for _, p := range sb.Spec.Network.Ports {
+			ri.Ports = append(ri.Ports, runtimeintent.PortIntent{Name: p.Name, Port: p.Port, TargetPort: p.Port, Protocol: "tcp"})
+		}
+	}
 	if sb.Spec.GPUResourceClaim != nil {
 		// DRA GPU passthrough. deviceSource=env: swiftletd synthesizes the CH --device
 		// from the CDI-injected GPU_PCI_ADDRESSES (run_ch already applies intent.gpu on
@@ -568,6 +576,13 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			}
 		}
 	}
+	if networked(sb) {
+		for _, p := range sb.Spec.Network.Ports {
+			pod.Spec.Containers[0].Ports = append(pod.Spec.Containers[0].Ports,
+				corev1.ContainerPort{Name: p.Name, ContainerPort: p.Port, Protocol: corev1.ProtocolTCP})
+		}
+	}
+	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	if allowed := egressAllowedJSON(egressAllowed(sb)); allowed != "" && networked(sb) {
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
@@ -617,6 +632,30 @@ func applySandboxDRAClaim(pod *corev1.Pod, rc *swiftv1alpha1.GPUResourceClaimSpe
 			pod.Spec.Containers[i].Resources.Claims = append(pod.Spec.Containers[i].Resources.Claims, ref)
 			pod.Spec.Containers[i].VolumeMounts = append(pod.Spec.Containers[i].VolumeMounts,
 				corev1.VolumeMount{Name: "dev-vfio", MountPath: "/dev/vfio"})
+		}
+	}
+}
+
+// applyPodMetadata adds spec.podMetadata to a launcher pod. KubeSwift's own
+// keys are refused at validation, and are never overwritten here either.
+func applyPodMetadata(pod *corev1.Pod, m *sandboxv1alpha1.SandboxPodMetadata) {
+	if m == nil {
+		return
+	}
+	for k, v := range m.Labels {
+		if _, taken := pod.Labels[k]; !taken {
+			if pod.Labels == nil {
+				pod.Labels = map[string]string{}
+			}
+			pod.Labels[k] = v
+		}
+	}
+	for k, v := range m.Annotations {
+		if _, taken := pod.Annotations[k]; !taken {
+			if pod.Annotations == nil {
+				pod.Annotations = map[string]string{}
+			}
+			pod.Annotations[k] = v
 		}
 	}
 }

@@ -99,7 +99,7 @@ func TestResolveEgress(t *testing.T) {
 		{"a missing Service", "EgressServiceNotFound", false, egressNet(allowSvc("nope", "inference"))},
 		{"a headless Service", "EgressServiceNoClusterIP", false, egressNet(allowSvc("db", ""))},
 		{"a port the Service does not declare", "EgressServicePortNotFound", false, egressNet(allowSvc("llm", "inference", 8080))},
-		{"the metadata address", "InvalidEgress", true, egressNet(sandboxv1alpha1.SandboxEgressRule{CIDR: "169.254.169.254/32"})},
+		{"the metadata address", "InvalidNetwork", true, egressNet(sandboxv1alpha1.SandboxEgressRule{CIDR: "169.254.169.254/32"})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, problem, err := resolveEgress(ctx, c, "default", tc.n)

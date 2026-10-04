@@ -35,6 +35,8 @@ type slotShape struct {
 	Image        string            `json:"image"`
 	Network      string            `json:"network"`
 	Egress       []string          `json:"egress,omitempty"`
+	Ports        []string          `json:"ports,omitempty"`
+	Ingress      string            `json:"ingress,omitempty"`
 	VerifyKey    string            `json:"verifyKey,omitempty"`
 	RootfsMode   string            `json:"rootfsMode"`
 	Kernel       string            `json:"kernel"`
@@ -51,6 +53,8 @@ func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 		Image:      pool.Spec.Image,
 		Network:    networkMode(pool.Spec.Network),
 		Egress:     egressKey(pool.Namespace, pool.Spec.Network),
+		Ports:      portsKey(pool.Spec.Network),
+		Ingress:    ingressKey(pool.Spec.Network),
 		VerifyKey:  secretName(pool.Spec.VerifyKeySecretRef),
 		RootfsMode: rootfsMode(pool.Spec.RootfsMode),
 		// As the pool resolves it for its slots: a GPU pool boots the
@@ -104,6 +108,8 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	differ("image", p.Image, sb.Spec.Image)
 	differ("network mode", p.Network, networkMode(sb.Spec.Network))
 	differ("network egress", strings.Join(p.Egress, "; "), strings.Join(egressKey(sb.Namespace, sb.Spec.Network), "; "))
+	differ("network ports", strings.Join(p.Ports, ", "), strings.Join(portsKey(sb.Spec.Network), ", "))
+	differ("network ingress", p.Ingress, ingressKey(sb.Spec.Network))
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))
 	differ("rootfsMode", p.RootfsMode, rootfsMode(sb.Spec.RootfsMode))
 	differ("kernel", p.Kernel, checkoutKernel(pool, sb))
@@ -220,4 +226,27 @@ func egressKey(ns string, n sandboxv1alpha1.SandboxNetwork) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// portsKey is spec.network.ports as sorted "name:port/tcp", for networked modes.
+func portsKey(n sandboxv1alpha1.SandboxNetwork) []string {
+	var out []string
+	for _, p := range n.Ports {
+		out = append(out, fmt.Sprintf("%s:%d/%s", p.Name, p.Port, strings.ToLower(string(protocol(p.Protocol)))))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ingressKey is spec.network.ingress.from as JSON; "" when any source may
+// connect (no ingress, or an empty from).
+func ingressKey(n sandboxv1alpha1.SandboxNetwork) string {
+	if n.Ingress == nil || len(n.Ingress.From) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(n.Ingress.From)
+	if err != nil {
+		panic(err) // a list of API structs always marshals
+	}
+	return string(b)
 }

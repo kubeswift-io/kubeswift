@@ -559,6 +559,9 @@ and PVC-free.
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`). |
 | `command` / `args` / `env` / `workingDir` | []string / []string / []EnvVar / string | Override or extend the image's entrypoint, environment, and working directory. |
 | `network.mode` | enum | `restricted` (default, deny-ingress + hardened egress), `open` (deny-ingress, allow-all egress), or `none`. |
+| `network.ports[]` | list | Guest ports exposed on the launcher pod (`name`, `port`; TCP), each forwarded to the same guest port and admitted by the sandbox's NetworkPolicy. Not with `mode: none`. |
+| `network.ingress.from[]` | list | NetworkPolicy peers allowed to reach `network.ports`; any source when unset. |
+| `podMetadata` | object | `labels` and `annotations` for the launcher pod; `*kubeswift.io` keys and pod-network annotations (`k8s.v1.cni.cncf.io/`, `v1.multus-cni.io/`, `k8s.ovn.org/`) refused. Applied to the claimed slot on a warm-pool checkout. |
 | `network.egress.allow[]` | list | `restricted` only: destinations allowed past the cluster-range block, each `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. `169.254.0.0/16` is never allowed. See [docs/sandbox/overview.md](sandbox/overview.md#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef` | LocalObjectReference | SwiftKernel to boot; defaults to the well-known `sandbox` profile (or `gpu-sandbox` when a GPU is requested). |
 | `nodeSelector` | map[string]string | Extra node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -595,6 +598,7 @@ subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
 | `cpu` / `memory` | int32 / Quantity | vCPUs (default `1`) and RAM (default `512Mi`) of each warm slot. |
 | `network.mode` | enum | `restricted` (default), `open`, or `none` — applies to every slot. |
 | `network.egress.allow[]` | list | As on SwiftSandbox; every slot enforces it, and a claiming sandbox must list the same destinations. |
+| `network.ports[]` / `network.ingress` | list / object | As on SwiftSandbox; every slot exposes them, and a claiming sandbox must declare the same. |
 | `kernelProfileRef` / `nodeSelector` | LocalObjectReference / map[string]string | SwiftKernel to boot (default `sandbox`, or `gpu-sandbox` when `gpuProfileRef` is set) and extra node constraints. |
 | `gpuProfileRef` | LocalObjectReference | Makes this a **warm GPU pool**: every slot holds a native SwiftGPU allocation, pre-booted. `tier: pcie` only. |
 | `model` | SandboxModel | Preloads a read-only model artifact into every slot. |

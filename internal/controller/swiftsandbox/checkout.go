@@ -21,6 +21,7 @@ import (
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/metrics"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 // sandbox-exec action/status annotation keys — MUST match the swiftletd action loop's
@@ -91,6 +92,10 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if slot == nil {
 		if !poolFound {
 			return r.coldFallback(ctx, sb, kernelName, "pool not found")
+		}
+		// Refused before a slot is claimed: it would land on a privileged pod.
+		if err := sandboxwebhook.ValidatePodMetadata(sb.Spec.PodMetadata); err != nil {
+			return r.fail(ctx, sb, "InvalidPodMetadata", err.Error())
 		}
 		// A checkout only injects a command: the slot's shape is what the
 		// workload gets. Only a sandbox the slot honors may take one; anything
@@ -217,6 +222,9 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		}
 		claimed.Labels[SlotStateLabelKey] = slotStateClaimed
 		claimed.Labels[SandboxLabelKey] = sb.Name
+		// spec.podMetadata, in the same write as the claim: a Service
+		// selecting the sandbox by its labels never sees a half-claimed slot.
+		applyPodMetadata(claimed, sb.Spec.PodMetadata)
 		// Re-parent: drop the pool's controller ownerRef, make this sandbox the owner so
 		// the slot pod GCs with the sandbox (and the pool replenishes the warm count).
 		claimed.OwnerReferences = nonControllerRefs(claimed.OwnerReferences)

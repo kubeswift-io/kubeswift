@@ -27,6 +27,7 @@ import (
 	"github.com/kubeswift-io/kubeswift/internal/namespaces"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 const (
@@ -144,9 +145,16 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return r.waitForReference(ctx, sb, reason, msg)
 	}
 
-	// spec.network.egress.allow. An invalid rule fails the sandbox (the
-	// webhook is off by default, and no launcher exists yet); a Service that
-	// is missing or has no ClusterIP keeps it Pending until it does.
+	// spec.podMetadata lands on a privileged pod; refuse KubeSwift's own keys
+	// here too, since the webhook that also does is off by default.
+	if err := sandboxwebhook.ValidatePodMetadata(sb.Spec.PodMetadata); err != nil {
+		return r.fail(ctx, sb, "InvalidPodMetadata", err.Error())
+	}
+
+	// spec.network (egress allowlist, ports, ingress). An invalid rule fails
+	// the sandbox (the webhook is off by default, and no launcher exists yet);
+	// a Service that is missing or has no ClusterIP keeps it Pending until it
+	// does.
 	allowed, problem, err := resolveEgress(ctx, r.APIReader, sb.Namespace, sb.Spec.Network)
 	if err != nil {
 		return ctrl.Result{}, err

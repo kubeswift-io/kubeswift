@@ -1,8 +1,10 @@
 package swiftsandbox
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 )
@@ -32,10 +34,29 @@ func buildNetworkPolicy(sb *sandboxv1alpha1.SwiftSandbox) *networkingv1.NetworkP
 				networkingv1.PolicyTypeIngress,
 				networkingv1.PolicyTypeEgress,
 			},
-			// No ingress rules -> deny all inbound.
-			Ingress: []networkingv1.NetworkPolicyIngressRule{},
+			// No ingress rules -> deny all inbound, unless the sandbox exposes
+			// ports (ingressRules).
+			Ingress: ingressRules(sb.Spec.Network),
 			// One empty egress rule -> allow all outbound.
 			Egress: []networkingv1.NetworkPolicyEgressRule{{}},
 		},
 	}
+}
+
+// ingressRules admits the sandbox's declared ports, from spec.network.ingress
+// peers when set, else from anywhere; with no ports, nothing.
+func ingressRules(n sandboxv1alpha1.SandboxNetwork) []networkingv1.NetworkPolicyIngressRule {
+	if len(n.Ports) == 0 {
+		return []networkingv1.NetworkPolicyIngressRule{}
+	}
+	rule := networkingv1.NetworkPolicyIngressRule{}
+	tcp := corev1.ProtocolTCP
+	for _, p := range n.Ports {
+		port := intstr.FromInt32(p.Port)
+		rule.Ports = append(rule.Ports, networkingv1.NetworkPolicyPort{Protocol: &tcp, Port: &port})
+	}
+	if n.Ingress != nil {
+		rule.From = n.Ingress.From
+	}
+	return []networkingv1.NetworkPolicyIngressRule{rule}
 }
