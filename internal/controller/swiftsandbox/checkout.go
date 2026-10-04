@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,11 +67,12 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// the injected workload sees the image env too — parity with a cold sandbox, no pull.
 	var imageEnv []string
 	var pool sandboxv1alpha1.SwiftSandboxPool
+	poolFound := true
 	if err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Spec.PoolRef.Name}, &pool); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		// Pool gone — tryClaimWarmSlot finds no slots and cold-falls-back below.
+		poolFound = false
 	} else {
 		imageEnv = pool.Status.ImageEnv
 	}
@@ -78,22 +80,26 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	if len(argv) == 0 {
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
-	// A slot runs the pool's image under the pool's network mode, verified
-	// (or not) with the pool's key: only a sandbox asking for exactly that may
-	// take one. Anything else boots cold with its own settings.
-	if pool.Name != "" && poolSlotProfile(&pool) != sandboxSlotProfile(sb) {
-		return r.coldFallback(ctx, sb, kernelName,
-			"the pool's image, network mode or verification key differs from this sandbox's")
-	}
 
 	// Adopt an already-claimed slot from a partial prior reconcile (the pod claim
 	// succeeded but the status update didn't) before claiming a new one — no double-claim.
+	// It matched when it was claimed; a pool edit since must not strand it.
 	slot, err := r.findClaimedSlot(ctx, sb)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if slot == nil {
-		if slot, err = r.tryClaimWarmSlot(ctx, sb); err != nil {
+		if !poolFound {
+			return r.coldFallback(ctx, sb, kernelName, "pool not found")
+		}
+		// A checkout only injects a command: the slot's shape is what the
+		// workload gets. Only a sandbox the slot honors may take one; anything
+		// else boots cold with its own settings, and the Event says why.
+		if diff := slotMismatches(&pool, sb); len(diff) > 0 {
+			return r.coldFallback(ctx, sb, kernelName,
+				"its slots differ from this sandbox in "+strings.Join(diff, ", "))
+		}
+		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool)); err != nil {
 			return ctrl.Result{}, err
 		}
 		if slot == nil {
@@ -186,7 +192,8 @@ func (r *SwiftSandboxReconciler) findClaimedSlot(ctx context.Context, sb *sandbo
 // the slot's slot-state warm->claimed, labels it for this sandbox, and re-parents its pod
 // from the pool to this SwiftSandbox. A conflicting concurrent claim loses the optimistic
 // Update (409) and the loop tries the next slot. Returns nil when none is claimable.
-func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (*corev1.Pod, error) {
+// profile is the pool's current slot profile; the caller has checked it honors sb.
+func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, profile string) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(sb.Namespace),
 		client.MatchingLabels{PoolLabelKey: sb.Spec.PoolRef.Name, SlotStateLabelKey: slotStateWarm}); err != nil {
@@ -197,9 +204,9 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		if p.DeletionTimestamp != nil || !launcherReady(p) {
 			continue
 		}
-		// Only a slot booted with exactly this sandbox's image, network mode
-		// and verification key (a slot from before a pool edit is not).
-		if p.Annotations[SlotProfileAnnotation] != sandboxSlotProfile(sb) {
+		// Only a slot booted under the pool's current shape (a slot from
+		// before a pool edit is not; the pool recycles it).
+		if p.Annotations[SlotProfileAnnotation] != profile {
 			continue
 		}
 		claimed := p.DeepCopy()

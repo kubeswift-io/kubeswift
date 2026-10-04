@@ -59,12 +59,14 @@ type SwiftSandboxPoolSpec struct {
 	Network SandboxNetwork `json:"network,omitempty"`
 
 	// KernelProfileRef names the SwiftKernel sandbox profile to boot; defaults to the
-	// well-known "sandbox" kernel when unset.
+	// well-known "sandbox" kernel when unset ("gpu-sandbox" for a GPU pool). A
+	// claiming SwiftSandbox must resolve to the same kernel.
 	// +optional
 	KernelProfileRef *corev1.LocalObjectReference `json:"kernelProfileRef,omitempty"`
 
 	// NodeSelector constrains which (kernel) nodes the pool warms slots on, merged with
-	// the required kubeswift.io/kernel-node=true label.
+	// the required kubeswift.io/kernel-node=true label. A claiming SwiftSandbox's
+	// nodeSelector may only require labels this one requires too.
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 

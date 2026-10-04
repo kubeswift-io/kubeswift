@@ -23,7 +23,8 @@ materialize + boot (~15s). This page assumes you've read
   workload never inherits another's slot. On checkout the pool boots a fresh
   warm slot to restore the count.
 - **Cold fallback.** If no warm slot is free (or the sandbox has no `command`,
-  so the image entrypoint must be resolved), the sandbox boots cold
+  so the image entrypoint must be resolved, or asks for a shape the pool's
+  slots don't have — see [Checking out](#checking-out-from-a-pool)), the sandbox boots cold
   automatically. A checkout never *fails* just because the pool is empty; it
   just doesn't get the speedup.
 
@@ -117,11 +118,18 @@ spec:
   args: ["echo hello from a warm slot"]
 ```
 
-- A slot is only handed to a sandbox whose `image`, `network.mode` and
-  `verifyKeySecretRef` match the pool's exactly: the slot has already booted
-  with the pool's, and a checkout only injects a command. A sandbox asking for
-  anything else boots cold with its own settings. Warm slots booted before a
-  pool edit to any of these are replaced.
+- A slot is only handed to a sandbox it honors: the slot has already booted,
+  and a checkout only injects a command. The sandbox's `image`, `network.mode`,
+  `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
+  pool's, and every label in its `nodeSelector` must be one the pool's
+  `nodeSelector` requires too. GPU and model belong to the slot: a pooled
+  sandbox sets neither and inherits the pool's, including a GPU pool's
+  `gpu-sandbox` kernel when it sets no `kernelProfileRef`. A sandbox with its
+  own GPU, a different model or a `scratchDisk` asks for something no slot
+  has. Anything else boots cold with its own settings, and the
+  `PoolColdFallback` event names each difference, for example
+  `cpu (pool 1, sandbox 2)`. Warm slots booted before a pool edit to any of
+  these fields are replaced.
 - The workload **must** have a `command` to check out — with no command the
   image entrypoint has to be resolved, which only the cold path knows, so a
   command-less pooled sandbox cold-falls-back.

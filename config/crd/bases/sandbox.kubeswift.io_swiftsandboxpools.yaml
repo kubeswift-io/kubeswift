@@ -115,7 +115,8 @@ spec:
               kernelProfileRef:
                 description: |-
                   KernelProfileRef names the SwiftKernel sandbox profile to boot; defaults to the
-                  well-known "sandbox" kernel when unset.
+                  well-known "sandbox" kernel when unset ("gpu-sandbox" for a GPU pool). A
+                  claiming SwiftSandbox must resolve to the same kernel.
                 properties:
                   name:
                     default: ""
@@ -201,7 +202,8 @@ spec:
                   type: string
                 description: |-
                   NodeSelector constrains which (kernel) nodes the pool warms slots on, merged with
-                  the required kubeswift.io/kernel-node=true label.
+                  the required kubeswift.io/kernel-node=true label. A claiming SwiftSandbox's
+                  nodeSelector may only require labels this one requires too.
                 type: object
               rootfsMode:
                 allOf:
