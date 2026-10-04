@@ -72,6 +72,9 @@ Ready-to-edit manifests and notes:
 | `ttl` | Duration | none | Once the sandbox has been terminal (`Completed`/`Failed`) for at least `ttl`, the controller deletes it and frees the node's rootfs-cache reference. |
 | `rootfsMode` | enum | `block` | How the OCI rootfs is delivered: `block` (read-only ext4 disk) or `virtiofs` (the unpacked tree over virtio-fs, tag `sandboxroot` — skips `mkfs.ext4` and the ext4 size floor, shares the host page cache). Same RO-base + writable tmpfs-overlay either way. |
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
+| `network.ports[]` | list | — | Guest ports exposed on the launcher pod: `name` (IANA service name) and `port` (TCP). See [Exposing ports](#exposing-ports). |
+| `network.ingress.from[]` | list | any source | NetworkPolicy peers allowed to reach `network.ports`. |
+| `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
 | `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
 | `nodeSelector` | map[string]string | — | Additional node constraints, merged with the required `kubeswift.io/kernel-node=true`. |
@@ -174,6 +177,59 @@ spec:
   instead.
 - The destination's own NetworkPolicies still apply. The guest's traffic leaves
   as the launcher pod's IP.
+
+### Exposing ports
+
+A sandbox that serves requests (an HTTP API, a tool server, a preview
+environment) declares its ports under `network.ports`. Each becomes a named
+`containerPort` on the launcher pod, forwarded to the same port in the guest,
+and the only inbound traffic the sandbox's NetworkPolicy admits. KubeSwift does
+not create a Service: put the sandbox behind your own, selecting it by a label
+from `podMetadata` and targeting the port by name.
+
+```yaml
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftSandbox
+metadata:
+  name: hello
+spec:
+  image: registry.example.com/team/hello-http:1
+  command: ["/hello"]
+  network:
+    mode: restricted
+    ports:
+      - name: http-app        # IANA service name, unique in the sandbox
+        port: 3000            # pod port and guest port; TCP
+    ingress:                  # optional; without it any source may connect
+      from:
+        - namespaceSelector: {matchLabels: {team: a}}
+  podMetadata:
+    labels: {app: hello}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+spec:
+  selector: {app: hello}
+  ports: [{port: 80, targetPort: http-app}]
+```
+
+- Only the declared ports are reachable, and only in a networked mode (`ports`
+  with `mode: none` is refused). Nothing in the launcher itself listens on TCP.
+- `ingress.from` takes NetworkPolicy peers (`podSelector`,
+  `namespaceSelector`, `ipBlock`). The NetworkPolicy is the enforcement, so a
+  CNI without NetworkPolicy support admits every source.
+- `restricted` egress is unchanged; replies to accepted connections are the
+  only new outbound flow.
+- `podMetadata.labels` and `podMetadata.annotations` go on the launcher pod.
+  Keys under `kubeswift.io` or any `*.kubeswift.io` domain are refused, as are
+  the pod-network annotations KubeSwift sets itself (`k8s.v1.cni.cncf.io/`,
+  `v1.multus-cni.io/`, `k8s.ovn.org/`). The launcher is privileged: metadata
+  that makes another controller mutate it, such as mesh sidecar injection, is
+  not supported.
+- Until workload probes exist, the launcher pod is Ready once the microVM runs,
+  not once the workload listens, so a Service may route to it a moment early.
 
 ## Signed images (verify before boot)
 

@@ -35,7 +35,7 @@ type egressProblem struct {
 // ClusterIPs and ports.
 func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1alpha1.SandboxNetwork) ([]sandboxv1alpha1.SandboxEgressAllowed, *egressProblem, error) {
 	if err := sandboxwebhook.ValidateNetwork(n); err != nil {
-		return nil, &egressProblem{Reason: "InvalidEgress", Message: err.Error(), Invalid: true}, nil
+		return nil, &egressProblem{Reason: "InvalidNetwork", Message: err.Error(), Invalid: true}, nil
 	}
 	if n.Egress == nil {
 		return nil, nil, nil
@@ -45,7 +45,7 @@ func resolveEgress(ctx context.Context, c client.Reader, ns string, n sandboxv1a
 		if r.CIDR != "" {
 			cidr, err := sandboxwebhook.EgressCIDR(r.CIDR)
 			if err != nil { // validated above
-				return nil, &egressProblem{Reason: "InvalidEgress", Message: err.Error(), Invalid: true}, nil
+				return nil, &egressProblem{Reason: "InvalidNetwork", Message: err.Error(), Invalid: true}, nil
 			}
 			from := "cidr " + cidr
 			if len(r.Ports) == 0 {

@@ -15,8 +15,15 @@ var linkLocal = &net.IPNet{IP: net.IPv4(169, 254, 0, 0).To4(), Mask: net.CIDRMas
 
 // ValidateNetwork checks spec.network of a SwiftSandbox or SwiftSandboxPool.
 // The controller runs it too: the webhook is off by default, and the launcher
-// renders these rules into iptables.
+// renders these rules into iptables and its NetworkPolicy.
 func ValidateNetwork(n sandboxv1alpha1.SandboxNetwork) error {
+	if err := validateEgress(n); err != nil {
+		return err
+	}
+	return validateExposure(n)
+}
+
+func validateEgress(n sandboxv1alpha1.SandboxNetwork) error {
 	if n.Egress == nil {
 		return nil
 	}

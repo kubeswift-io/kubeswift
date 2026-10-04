@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -152,6 +153,16 @@ type SwiftSandboxSpec struct {
 	// slot carry the model, so a checkout starts inference sub-second.
 	// +optional
 	Model *SandboxModel `json:"model,omitempty"`
+
+	// PodMetadata adds labels and annotations to the launcher pod, for example
+	// so a Service selects the sandbox. Keys under kubeswift.io or any
+	// *.kubeswift.io domain are refused, as are the pod-network annotations
+	// KubeSwift wires itself (k8s.v1.cni.cncf.io/, v1.multus-cni.io/,
+	// k8s.ovn.org/). A warm-pool checkout applies them to the slot it claims.
+	// The launcher pod is privileged: metadata that makes another controller
+	// mutate it (a mesh sidecar, for example) is not supported.
+	// +optional
+	PodMetadata *SandboxPodMetadata `json:"podMetadata,omitempty"`
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -266,6 +277,59 @@ type SandboxNetwork struct {
 	// Only valid with mode restricted.
 	// +optional
 	Egress *SandboxEgress `json:"egress,omitempty"`
+
+	// Ports exposes guest ports. Each is a named containerPort on the launcher
+	// pod, forwarded to the same port in the guest, so a Service can target the
+	// sandbox by port name. They are the only inbound traffic the sandbox's
+	// NetworkPolicy admits. Not valid with mode none.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Ports []SandboxPort `json:"ports,omitempty"`
+
+	// Ingress narrows who may reach Ports. Without it, any source may.
+	// +optional
+	Ingress *SandboxIngress `json:"ingress,omitempty"`
+}
+
+// SandboxPort is one exposed guest port.
+type SandboxPort struct {
+	// Name is an IANA service name (lowercase letters, digits and '-', at most
+	// 15 characters, at least one letter), unique within the sandbox. A Service
+	// targets it with targetPort: <name>.
+	// +kubebuilder:validation:MaxLength=15
+	Name string `json:"name"`
+	// Port is both the launcher pod's containerPort and the guest port it is
+	// forwarded to.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
+	// Protocol is TCP, the only protocol supported.
+	// +kubebuilder:validation:Enum=TCP
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+}
+
+// SandboxIngress limits the sources allowed to reach a sandbox's ports.
+type SandboxIngress struct {
+	// From lists the allowed sources with NetworkPolicy peer semantics
+	// (podSelector, namespaceSelector, ipBlock). Empty allows every source.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	// +optional
+	From []networkingv1.NetworkPolicyPeer `json:"from,omitempty"`
+}
+
+// SandboxPodMetadata is metadata for a sandbox's launcher pod.
+type SandboxPodMetadata struct {
+	// Labels to add to the launcher pod.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+	// Annotations to add to the launcher pod.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // SandboxEgress refines the restricted egress posture.
