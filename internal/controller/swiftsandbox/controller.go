@@ -150,6 +150,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := sandboxwebhook.ValidatePodMetadata(sb.Spec.PodMetadata); err != nil {
 		return r.fail(ctx, sb, "InvalidPodMetadata", err.Error())
 	}
+	if err := sandboxwebhook.ValidateProbes(&sb.Spec); err != nil {
+		return r.fail(ctx, sb, "InvalidProbe", err.Error())
+	}
 
 	// spec.network (egress allowlist, ports, ingress). An invalid rule fails
 	// the sandbox (the webhook is off by default, and no launcher exists yet);
@@ -272,6 +275,14 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 			Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 			Reason: "GuestRunning", Message: guestRunningMessage(sb), ObservedGeneration: sb.Generation,
 		})
+		// A failed liveness probe ends the sandbox, as spec.timeout does.
+		if msg, failed := livenessFailed(pod); failed {
+			_ = r.Delete(ctx, pod)
+			return r.fail(ctx, sb, "LivenessProbeFailed", "liveness probe failed: "+msg)
+		}
+		if err := r.syncWorkloadReady(ctx, sb, pod); err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "guest running")
 	}
 
@@ -298,6 +309,10 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 // the launcher container's exit code.
 func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
 	applyMaterializeResult(sb, pod)
+	// The pod ended after its liveness probe failed: that is why.
+	if msg, failed := livenessFailed(pod); failed {
+		return r.fail(ctx, sb, "LivenessProbeFailed", "liveness probe failed: "+msg)
+	}
 	if code, ok := sandboxWorkloadExitCode(pod); ok {
 		sb.Status.ExitCode = &code
 		if code == 0 {
@@ -336,6 +351,12 @@ func (r *SwiftSandboxReconciler) terminal(ctx context.Context, sb *sandboxv1alph
 		Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionFalse,
 		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
 	})
+	if apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionWorkloadReady) != nil {
+		apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
+			Type: sandboxv1alpha1.SwiftSandboxConditionWorkloadReady, Status: metav1.ConditionFalse,
+			Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
+		})
+	}
 	if err := r.Status().Update(ctx, sb); err != nil {
 		return ctrl.Result{}, err
 	}

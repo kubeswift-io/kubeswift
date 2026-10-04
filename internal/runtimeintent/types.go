@@ -103,6 +103,10 @@ type RuntimeIntent struct {
 	// never reach /proc/cmdline or the host's ps/logs. Set by the SwiftSandbox
 	// controller; nil on the SwiftGuest path.
 	SandboxExec *SandboxExecSpec `json:"sandboxExec,omitempty"`
+	// SandboxProbes, when set, are spec.readinessProbe / spec.livenessProbe for
+	// swiftletd to run against the guest. A warm slot carries none: a checkout
+	// hands them over with its workload (the sandbox-exec action args).
+	SandboxProbes *SandboxProbesIntent `json:"sandboxProbes,omitempty"`
 }
 
 // VsockIntent is the vsock device for the in-guest identity agent.
@@ -254,6 +258,34 @@ type SandboxExecSpec struct {
 	Argv []string `json:"argv,omitempty"`
 	Env  []string `json:"env,omitempty"`
 	Cwd  string   `json:"cwd,omitempty"`
+}
+
+// SandboxProbesIntent carries a sandbox's workload probes to swiftletd.
+type SandboxProbesIntent struct {
+	Readiness *SandboxProbeIntent `json:"readiness,omitempty"`
+	Liveness  *SandboxProbeIntent `json:"liveness,omitempty"`
+}
+
+// SandboxProbeIntent is one probe, as swiftletd runs it against the guest's
+// address: an HTTP GET (any 2xx or 3xx passes) or a TCP connect. The port is
+// resolved and every Kubernetes default applied, so swiftletd reads no defaults.
+type SandboxProbeIntent struct {
+	// Kind is "http" or "tcp".
+	Kind                string        `json:"kind"`
+	Port                int32         `json:"port"`
+	Path                string        `json:"path,omitempty"`
+	Headers             []ProbeHeader `json:"headers,omitempty"`
+	InitialDelaySeconds int32         `json:"initialDelaySeconds"`
+	PeriodSeconds       int32         `json:"periodSeconds"`
+	TimeoutSeconds      int32         `json:"timeoutSeconds"`
+	SuccessThreshold    int32         `json:"successThreshold"`
+	FailureThreshold    int32         `json:"failureThreshold"`
+}
+
+// ProbeHeader is one HTTP header an http probe sends.
+type ProbeHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // DataDiskSpec specifies one secondary VM disk for swiftletd. Path is opaque

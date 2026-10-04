@@ -97,6 +97,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err := sandboxwebhook.ValidatePodMetadata(sb.Spec.PodMetadata); err != nil {
 			return r.fail(ctx, sb, "InvalidPodMetadata", err.Error())
 		}
+		if err := sandboxwebhook.ValidateProbes(&sb.Spec); err != nil {
+			return r.fail(ctx, sb, "InvalidProbe", err.Error())
+		}
 		// A checkout only injects a command: the slot's shape is what the
 		// workload gets. Only a sandbox the slot honors may take one; anything
 		// else boots cold with its own settings, and the Event says why.
@@ -266,6 +269,9 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 	if sb.Spec.Timeout != nil {
 		args["timeoutSeconds"] = int64(sb.Spec.Timeout.Duration.Seconds())
 	}
+	if probes := probesIntent(sb); probes != nil {
+		args["probes"] = probes
+	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return err
@@ -334,6 +340,13 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	// now: the pool releases the GPU of a slot pod that has ended.
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 		return r.fail(ctx, sb, "SlotEnded", claimedSlotEndMessage(&pod))
+	}
+	if msg, failed := livenessFailed(&pod); failed {
+		_ = r.Delete(ctx, &pod)
+		return r.fail(ctx, sb, "LivenessProbeFailed", "liveness probe failed: "+msg)
+	}
+	if err := r.syncWorkloadReady(ctx, sb, &pod); err != nil {
+		return ctrl.Result{}, err
 	}
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
 }

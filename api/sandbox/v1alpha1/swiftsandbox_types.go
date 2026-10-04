@@ -163,6 +163,23 @@ type SwiftSandboxSpec struct {
 	// mutate it (a mesh sidecar, for example) is not supported.
 	// +optional
 	PodMetadata *SandboxPodMetadata `json:"podMetadata,omitempty"`
+
+	// ReadinessProbe checks the workload inside the guest. Its result is the
+	// WorkloadReady condition and, when the sandbox exposes ports, the launcher
+	// pod's readiness, so a Service routes to the sandbox only while it passes.
+	// Only httpGet (scheme HTTP) and tcpSocket are supported; the port is a
+	// number or the name of a spec.network.ports entry, and is probed on the
+	// guest from inside the launcher, so it need not be exposed. Not valid with
+	// network mode none. Without it, the workload counts as ready once the
+	// guest runs.
+	// +optional
+	ReadinessProbe *corev1.Probe `json:"readinessProbe,omitempty"`
+
+	// LivenessProbe checks the workload the same way; after failureThreshold
+	// failures in a row the workload is stopped and the sandbox ends Failed
+	// with reason LivenessProbeFailed. Nothing restarts it.
+	// +optional
+	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -425,6 +442,9 @@ const (
 	SwiftSandboxConditionResolved     = "Resolved"
 	SwiftSandboxConditionRootfsReady  = "RootfsReady"
 	SwiftSandboxConditionGuestRunning = "GuestRunning"
+	// SwiftSandboxConditionWorkloadReady reports spec.readinessProbe: True
+	// while the workload passes it (or, with no probe, once the guest runs).
+	SwiftSandboxConditionWorkloadReady = "WorkloadReady"
 	// SwiftSandboxConditionGPUAllocated is True once the native SwiftGPU backend
 	// (spec.gpuProfileRef) has allocated the device(s) and stamped status.gpu;
 	// False with reason ProfileNotFound / NoCapacity while it cannot. Absent for
