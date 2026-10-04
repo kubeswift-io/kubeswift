@@ -18,6 +18,7 @@ var (
 	scheduleGuestRef    string
 	scheduleCron        string
 	scheduleBackend     string
+	scheduleLocation    string
 	scheduleVSClass     string
 	scheduleHostPath    string
 	scheduleIncludeMem  bool
@@ -40,12 +41,15 @@ var scheduleCreateCmd = &cobra.Command{
 	Long: `Create a SwiftSnapshotSchedule: snapshot a SwiftGuest on a cron schedule,
 keeping only the most recent --keep-last.
 
-Backends mirror 'swiftctl snapshot create' (csi-volume-snapshot default, or
-local). For the s3 backend, apply a YAML manifest (it needs bucket/endpoint/
-credentials). Each scheduled local snapshot is captured into its own
-directory, derived from its name, on the node running the source VM.`,
+Backends mirror 'swiftctl snapshot create' (csi-volume-snapshot default,
+local, or oci). For the s3 backend, apply a YAML manifest (it needs bucket/
+endpoint/credentials). Each scheduled local snapshot is captured into its own
+directory, derived from its name, on the node running the source VM. Each
+scheduled oci snapshot resolves its storage location (--location, else the
+defaults) when it is created, so the schedule follows a changed default.`,
 	Example: `  swiftctl schedule create nightly-db --guest db --schedule "0 2 * * *" --keep-last 7
-  swiftctl schedule create hourly --guest web --schedule "0 * * * *" --keep-last 24 --vsclass csi-hostpath-snapclass`,
+  swiftctl schedule create hourly --guest web --schedule "0 * * * *" --keep-last 24 --vsclass csi-hostpath-snapclass
+  swiftctl schedule create nightly-oci --guest db --schedule "0 3 * * *" --keep-last 7 --backend oci`,
 	Args: cobra.ExactArgs(1),
 	RunE: runScheduleCreate,
 }
@@ -77,7 +81,8 @@ var scheduleDeleteCmd = &cobra.Command{
 func init() {
 	scheduleCreateCmd.Flags().StringVar(&scheduleGuestRef, "guest", "", "SwiftGuest to snapshot (required)")
 	scheduleCreateCmd.Flags().StringVar(&scheduleCron, "schedule", "", "5-field cron expression, UTC (required), e.g. \"0 2 * * *\"")
-	scheduleCreateCmd.Flags().StringVar(&scheduleBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot or local")
+	scheduleCreateCmd.Flags().StringVar(&scheduleBackend, "backend", "csi-volume-snapshot", "Snapshot backend: csi-volume-snapshot, local or oci")
+	scheduleCreateCmd.Flags().StringVar(&scheduleLocation, "location", "", locationFlagHelp)
 	scheduleCreateCmd.Flags().StringVar(&scheduleVSClass, "vsclass", "", "VolumeSnapshotClass name (csi-volume-snapshot only)")
 	scheduleCreateCmd.Flags().StringVar(&scheduleHostPath, "hostpath", "", "No longer accepted: each scheduled local snapshot is captured into a directory derived from its name")
 	scheduleCreateCmd.Flags().BoolVar(&scheduleIncludeMem, "include-memory", true, "Backend-determined (no-op on csi-volume-snapshot, which is disk-only)")
@@ -99,27 +104,14 @@ func runScheduleCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	backend, err := parseBackendFlag(scheduleBackend)
+	backend, err := buildSnapshotBackend(scheduleBackend, scheduleLocation, scheduleVSClass, scheduleHostPath, true)
 	if err != nil {
 		return err
 	}
 	tmpl := snapshotv1alpha1.SwiftSnapshotSpec{
 		GuestRef:      snapshotv1alpha1.SwiftSnapshotGuestRef{Name: scheduleGuestRef},
-		Backend:       snapshotv1alpha1.SwiftSnapshotBackend{Type: backend},
+		Backend:       backend,
 		IncludeMemory: scheduleIncludeMem,
-	}
-	switch backend {
-	case snapshotv1alpha1.SnapshotBackendCSIVolumeSnapshot:
-		tmpl.Backend.CSIVolumeSnapshot = &snapshotv1alpha1.CSIVolumeSnapshotBackend{VolumeSnapshotClassName: scheduleVSClass}
-		if scheduleHostPath != "" {
-			return fmt.Errorf("--hostpath is only valid for --backend=local")
-		}
-	case snapshotv1alpha1.SnapshotBackendLocal:
-		// A template hostPath would name one directory for every snapshot of
-		// the schedule, each capture wiping the last; the webhook rejects it.
-		if scheduleHostPath != "" {
-			return fmt.Errorf("--hostpath is no longer accepted: each scheduled local snapshot is captured into a directory derived from its name")
-		}
 	}
 
 	sched := &snapshotv1alpha1.SwiftSnapshotSchedule{
@@ -201,6 +193,9 @@ func runScheduleDescribe(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(out, "Template Guest:     %s\n", s.Spec.Template.Spec.GuestRef.Name)
 	fmt.Fprintf(out, "Template Backend:   %s\n", s.Spec.Template.Spec.Backend.Type)
+	if l := describeLocationRef(s.Spec.Template.Spec.Backend); l != "" {
+		fmt.Fprintf(out, "Template Location:  %s\n", l)
+	}
 	fmt.Fprintf(out, "Template Memory:    %t\n", s.Spec.Template.Spec.IncludeMemory)
 	if s.Status.LastScheduleTime != nil {
 		fmt.Fprintf(out, "Last Schedule:      %s\n", s.Status.LastScheduleTime.Time.Format("2006-01-02 15:04:05 MST"))
