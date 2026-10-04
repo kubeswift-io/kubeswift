@@ -394,6 +394,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		// The FORWARD chain matches the VM's pre-NAT source (bridge subnet) only.
 		ni := swiftguest.NetworkInitContainer()
 		ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS", Value: string(egressMode(sb))})
+		// spec.network.egress.allow, resolved by the caller (resolveEgress) into
+		// status. network-init renders these after the metadata DROP and before
+		// the cluster-range DROPs, so nothing here can open 169.254/16.
+		if allow := egressAllowEnv(egressAllowed(sb)); allow != "" && egressMode(sb) == sandboxv1alpha1.SandboxNetworkRestricted {
+			ni.Env = append(ni.Env, corev1.EnvVar{Name: "KUBESWIFT_SANDBOX_EGRESS_ALLOW", Value: allow})
+		}
 		initContainers = append([]corev1.Container{ni}, initContainers...)
 	}
 
@@ -561,6 +567,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 					corev1.VolumeMount{Name: "model-cache", MountPath: modelCacheDir, ReadOnly: true})
 			}
 		}
+	}
+	if allowed := egressAllowedJSON(egressAllowed(sb)); allowed != "" && networked(sb) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[EgressAllowedAnnotation] = allowed
 	}
 	return pod
 }

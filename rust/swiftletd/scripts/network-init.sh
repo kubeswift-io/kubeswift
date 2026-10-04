@@ -66,6 +66,21 @@ apply_restricted_egress() {
         iptables -A "$chain" -d "$d" -p tcp --dport 53 -j RETURN
     done
     iptables -A "$chain" -d 169.254.0.0/16 -j DROP
+    # spec.network.egress.allow, resolved by the controller into
+    # "<proto>,<cidr>,<port>" rules (proto tcp, udp or any). AFTER the metadata
+    # DROP, so no rule can open 169.254/16, and BEFORE the cluster-range DROPs
+    # the rules exist to make exceptions to. A malformed rule fails the pod
+    # rather than leave a partial policy.
+    allowed=0
+    for rule in ${KUBESWIFT_SANDBOX_EGRESS_ALLOW:-}; do
+        proto="${rule%%,*}"; rest="${rule#*,}"; cidr="${rest%%,*}"; port="${rest#*,}"
+        case "$proto" in
+            tcp|udp) iptables -A "$chain" -d "$cidr" -p "$proto" --dport "$port" -j RETURN ;;
+            any)     iptables -A "$chain" -d "$cidr" -j RETURN ;;
+            *)       echo "ERROR: malformed egress allow rule '$rule'" >&2; exit 1 ;;
+        esac
+        allowed=$((allowed + 1))
+    done
     iptables -A "$chain" -d 10.0.0.0/8     -j DROP
     iptables -A "$chain" -d 172.16.0.0/12  -j DROP
     iptables -A "$chain" -d 192.168.0.0/16 -j DROP
@@ -93,7 +108,7 @@ apply_restricted_egress() {
         echo "Restricted egress: ip6tables absent; IPv6 unrestricted (kernel likely has no IPv6)"
     fi
 
-    echo "Restricted egress: $guest_if ($src_net) -> DNS + internet;" \
+    echo "Restricted egress: $guest_if ($src_net) -> DNS + internet + $allowed allowed rule(s);" \
          "DROP spoofed sources + 169.254/16 + RFC1918 + 100.64/10 (chain $chain)"
 }
 

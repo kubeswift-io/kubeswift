@@ -153,6 +153,15 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	slotShape := r.slotTemplate(&pool, "")
 	kernelName := resolveKernelProfile(slotShape)
 
+	// The egress allowlist, with each Service resolved now. A warm slot booted
+	// with other addresses (a Service recreated since) is replaced below, and
+	// while a Service is not usable no slot carrying rules is kept or warmed.
+	egress, egressWait, err := resolveEgress(ctx, r.APIReader, pool.Namespace, pool.Spec.Network)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	egressNow := egressAllowedJSON(egress)
+
 	// Census of the pool's live slots.
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(pool.Namespace), client.MatchingLabels{PoolLabelKey: pool.Name}); err != nil {
@@ -193,11 +202,15 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher); err != nil {
 			return ctrl.Result{}, err
 		}
-		if p.Labels[SlotStateLabelKey] == slotStateWarm && p.Annotations[SlotProfileAnnotation] != profile {
-			// Booted under an earlier pool spec (image, network mode or
-			// verification key changed since) -- or before slots recorded
-			// one. It would never be handed to a sandbox asking for the
-			// current settings, so replace it rather than keep it warm.
+		// egressNow is "" while a Service is not usable, so a slot carrying
+		// rules is replaced then too: its addresses can no longer be confirmed.
+		staleEgress := p.Annotations[EgressAllowedAnnotation] != egressNow
+		if p.Labels[SlotStateLabelKey] == slotStateWarm && (p.Annotations[SlotProfileAnnotation] != profile || staleEgress) {
+			// Booted under an earlier pool spec (any slot-shape field changed
+			// since) -- or before slots recorded one -- or allowed egress to
+			// addresses its Services no longer have. It would never be handed
+			// to a sandbox asking for the current settings, so replace it
+			// rather than keep it warm.
 			if err := deleteWarmSlot(ctx, r.Client, p); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -225,6 +238,9 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	want := slotsToCreate(int(pool.Spec.MinWarm), int(pool.Spec.MaxWarm), warmLive)
+	if egressWait != nil && want > 0 {
+		return r.degradedAfter(ctx, &pool, ready, claimed, egressWait.Reason, egressWait.Message, kernelRecheckInterval)
+	}
 	if want > 0 {
 		// A slot whose kernel is missing or not Ready boots on an empty kernel
 		// directory and fails, and the census then replaces it with another
@@ -286,7 +302,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 	for i := 0; i < want; i++ {
-		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri, modelPath); err != nil {
+		if err := r.createWarmSlot(ctx, &pool, kernelName, *ri, modelPath, egress); err != nil {
 			// A GPU pool sized above the free-GPU count stops warming here (holds
 			// what it could) instead of erroring every reconcile — minWarm > GPUs
 			// is an operator sizing choice, surfaced as ready < minWarm.
@@ -394,8 +410,9 @@ func (r *SwiftSandboxPoolReconciler) slotTemplate(pool *sandboxv1alpha1.SwiftSan
 
 // createWarmSlot brings up one warm slot: the intent ConfigMap + launcher pod (+ a
 // deny-ingress NetworkPolicy when networked), all owned by the pool and labeled warm.
-func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string) error {
+func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *sandboxv1alpha1.SwiftSandboxPool, kernelName string, ri resolvedImage, modelPath string, egress []sandboxv1alpha1.SandboxEgressAllowed) error {
 	slot := r.slotTemplate(pool, newSlotName(pool))
+	setEgressAllowed(slot, egress)
 
 	// Warm GPU pool: allocate a GPU for this slot and stamp its spec.gpuProfileRef
 	// + status.GPU so the launch builders produce a GPU-aware slot (node pin,

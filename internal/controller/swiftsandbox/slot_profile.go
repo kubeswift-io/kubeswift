@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	sandboxwebhook "github.com/kubeswift-io/kubeswift/internal/webhook/swiftsandbox"
 )
 
 // SlotNameLabelKey carries a warm slot's own name on its pod. Unlike
@@ -33,6 +34,7 @@ const SlotProfileAnnotation = "sandbox.kubeswift.io/slot-profile"
 type slotShape struct {
 	Image        string            `json:"image"`
 	Network      string            `json:"network"`
+	Egress       []string          `json:"egress,omitempty"`
 	VerifyKey    string            `json:"verifyKey,omitempty"`
 	RootfsMode   string            `json:"rootfsMode"`
 	Kernel       string            `json:"kernel"`
@@ -48,6 +50,7 @@ func poolShape(pool *sandboxv1alpha1.SwiftSandboxPool) slotShape {
 	s := slotShape{
 		Image:      pool.Spec.Image,
 		Network:    networkMode(pool.Spec.Network),
+		Egress:     egressKey(pool.Namespace, pool.Spec.Network),
 		VerifyKey:  secretName(pool.Spec.VerifyKeySecretRef),
 		RootfsMode: rootfsMode(pool.Spec.RootfsMode),
 		// As the pool resolves it for its slots: a GPU pool boots the
@@ -100,6 +103,7 @@ func slotMismatches(pool *sandboxv1alpha1.SwiftSandboxPool, sb *sandboxv1alpha1.
 	}
 	differ("image", p.Image, sb.Spec.Image)
 	differ("network mode", p.Network, networkMode(sb.Spec.Network))
+	differ("network egress", strings.Join(p.Egress, "; "), strings.Join(egressKey(sb.Namespace, sb.Spec.Network), "; "))
 	differ("verifyKeySecretRef", p.VerifyKey, secretName(sb.Spec.VerifyKeySecretRef))
 	differ("rootfsMode", p.RootfsMode, rootfsMode(sb.Spec.RootfsMode))
 	differ("kernel", p.Kernel, checkoutKernel(pool, sb))
@@ -181,4 +185,39 @@ func orNone(s string) string {
 		return "none"
 	}
 	return s
+}
+
+// egressKey is spec.network.egress.allow in a canonical, order-free form:
+// one "service <ns>/<name> <ports>" or "cidr <cidr> <ports>" per entry, with
+// the namespace and protocol defaults applied, sorted. Resolved addresses are
+// not part of the shape; the pool replaces slots whose addresses go stale.
+func egressKey(ns string, n sandboxv1alpha1.SandboxNetwork) []string {
+	if n.Egress == nil {
+		return nil
+	}
+	var out []string
+	for _, r := range n.Egress.Allow {
+		var ports []string
+		for _, p := range r.Ports {
+			ports = append(ports, fmt.Sprintf("%s/%d", strings.ToLower(string(protocol(p.Protocol))), p.Port))
+		}
+		sort.Strings(ports)
+		dest := "cidr " + r.CIDR
+		if c, err := sandboxwebhook.EgressCIDR(r.CIDR); err == nil {
+			dest = "cidr " + c
+		}
+		if r.Service != nil {
+			svcNS := r.Service.Namespace
+			if svcNS == "" {
+				svcNS = ns
+			}
+			dest = "service " + svcNS + "/" + r.Service.Name
+		}
+		if len(ports) == 0 {
+			ports = []string{"all ports"}
+		}
+		out = append(out, dest+" "+strings.Join(ports, ","))
+	}
+	sort.Strings(out)
+	return out
 }

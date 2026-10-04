@@ -141,8 +141,23 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	if reason != "" {
-		return r.waitForKernel(ctx, sb, reason, msg)
+		return r.waitForReference(ctx, sb, reason, msg)
 	}
+
+	// spec.network.egress.allow. An invalid rule fails the sandbox (the
+	// webhook is off by default, and no launcher exists yet); a Service that
+	// is missing or has no ClusterIP keeps it Pending until it does.
+	allowed, problem, err := resolveEgress(ctx, r.APIReader, sb.Namespace, sb.Spec.Network)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if problem != nil {
+		if problem.Invalid {
+			return r.fail(ctx, sb, problem.Reason, problem.Message)
+		}
+		return r.waitForReference(ctx, sb, problem.Reason, problem.Message)
+	}
+	setEgressAllowed(sb, allowed)
 
 	auth, err := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Image)
 	if err != nil {
@@ -319,10 +334,12 @@ func (r *SwiftSandboxReconciler) terminal(ctx context.Context, sb *sandboxv1alph
 	return ctrl.Result{}, nil
 }
 
-// waitForKernel holds the sandbox Pending, with no launcher pod, while its
-// SwiftKernel is missing or not Ready (checkKernel), and says so on
-// Resolved=False. Not terminal: the kernel may still appear or finish pulling.
-func (r *SwiftSandboxReconciler) waitForKernel(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
+// waitForReference holds the sandbox Pending, with no launcher pod, while
+// something it references is not usable yet -- its SwiftKernel is missing or
+// not Ready (checkKernel), or a Service its egress allowlist names is missing
+// or has no ClusterIP (resolveEgress) -- and says so on Resolved=False. Not
+// terminal: the reference may still appear.
+func (r *SwiftSandboxReconciler) waitForReference(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, reason, msg string) (ctrl.Result, error) {
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{
 		Type: sandboxv1alpha1.SwiftSandboxConditionResolved, Status: metav1.ConditionFalse,
 		Reason: reason, Message: msg, ObservedGeneration: sb.Generation,
@@ -501,6 +518,7 @@ func applyGuestAnnotations(sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) {
 			PrimaryIP:      ip,
 			PrimaryIPScope: swiftv1alpha1.PrimaryIPScopePod,
 			PodIP:          pod.Status.PodIP,
+			EgressAllowed:  egressAllowed(sb),
 		}
 	}
 }
