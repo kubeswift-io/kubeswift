@@ -216,7 +216,8 @@ spec:
 ```
 
 - Only the declared ports are reachable, and only in a networked mode (`ports`
-  with `mode: none` is refused). Nothing in the launcher itself listens on TCP.
+  with `mode: none` is refused). The launcher's own listener, the guest's
+  dnsmasq, is bound to the in-pod bridge and loopback, not the pod IP.
 - `ingress.from` takes NetworkPolicy peers (`podSelector`,
   `namespaceSelector`, `ipBlock`). The NetworkPolicy is the enforcement, so a
   CNI without NetworkPolicy support admits every source.
