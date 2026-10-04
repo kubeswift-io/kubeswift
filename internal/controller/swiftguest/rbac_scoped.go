@@ -2,8 +2,13 @@ package swiftguest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -203,6 +208,109 @@ func EnsureScopedLauncherRBAC(
 	return nil
 }
 
+// SandboxLauncherServiceAccountFor is the ServiceAccount a sandbox launcher
+// pod runs as: its own, so its grant reaches that one pod. Under the shared
+// class account RBAC is additive, so every launcher in the namespace held the
+// union of every per-pod grant (see EnsureLauncherIdentity). The name is the
+// shared account's plus the pod's, so the admission gates match both by
+// prefix; one too long for a ServiceAccount (253) keeps a hash of the pod name.
+func SandboxLauncherServiceAccountFor(podName string) string {
+	prefix := SandboxLauncherServiceAccountName + "-"
+	if len(prefix)+len(podName) <= 253 {
+		return prefix + podName
+	}
+	sum := sha256.Sum256([]byte(podName))
+	return prefix + podName[:253-len(prefix)-9] + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
+// perPodServiceAccount reports whether sa is a launcher pod's own account,
+// as opposed to a shared class account.
+func perPodServiceAccount(sa string) bool {
+	return strings.HasPrefix(sa, SandboxLauncherServiceAccountName+"-")
+}
+
+// EnsureLauncherIdentity is EnsureScopedLauncherRBAC for a launcher pod that
+// runs as serviceAccount: the Role/RoleBinding pair binds that account, and a
+// pod's own account (SandboxLauncherServiceAccountFor) is created first, with
+// the same owner and the same two-phase handover for a warm slot.
+//
+// MUST be called before the pod is created: the API server refuses a pod
+// naming a ServiceAccount that does not exist yet.
+//
+// For a pod's own account the grant is ALWAYS load-bearing — nothing else
+// binds that account — so every error is returned, whatever ScopedOnly says.
+// A pod still running as the shared class account (one created before
+// per-pod accounts) is converged with that account as the subject.
+func EnsureLauncherIdentity(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	owner client.Object,
+	podName string,
+	class LauncherClass,
+	serviceAccount string,
+) error {
+	if podName == "" || serviceAccount == "" {
+		return fmt.Errorf("launcher identity: empty pod or ServiceAccount name")
+	}
+	ownAccount := perPodServiceAccount(serviceAccount)
+	if ownAccount {
+		if err := ensureOwnedServiceAccount(ctx, c, scheme, owner, serviceAccount); err != nil {
+			return err
+		}
+	}
+	err := ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, serviceAccount)
+	if err == nil || ScopedOnly || ownAccount {
+		return err
+	}
+	log.FromContext(ctx).Error(err, "could not create the per-pod scoped launcher grant; "+
+		"continuing because the launcher runs as the shared account and scoped-launcher-rbac is OFF.",
+		"pod", podName, "namespace", owner.GetNamespace())
+	return nil
+}
+
+// ErrForeignLauncherAccount is returned when a launcher pod's own
+// ServiceAccount name is taken by an account KubeSwift did not create.
+var ErrForeignLauncherAccount = errors.New("launcher account conflict")
+
+// ensureOwnedServiceAccount creates a launcher pod's own ServiceAccount, or
+// hands its controller reference to owner (the warm-slot phase two). Nothing
+// else on the account is ever touched.
+func ensureOwnedServiceAccount(ctx context.Context, c client.Client, scheme *runtime.Scheme, owner client.Object, name string) error {
+	namespace := owner.GetNamespace()
+	want := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: namespace, Labels: rbacLabels("launcher-rbac"),
+	}}
+	if err := controllerutil.SetControllerReference(owner, want, scheme); err != nil {
+		return fmt.Errorf("own serviceaccount %s/%s: %w", namespace, name, err)
+	}
+	var existing corev1.ServiceAccount
+	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &existing)
+	if apierrors.IsNotFound(err) {
+		if cerr := c.Create(ctx, want); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			return fmt.Errorf("create serviceaccount %s/%s: %w", namespace, name, cerr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get serviceaccount %s/%s: %w", namespace, name, err)
+	}
+	// Ours always carries a controller reference (set at create). One without
+	// was made by someone else, possibly with bindings of their own: never run
+	// a privileged launcher as it.
+	if metav1.GetControllerOf(&existing) == nil {
+		return fmt.Errorf("%w: serviceaccount %s/%s exists and was not created by KubeSwift; "+
+			"delete it so the launcher can have its own", ErrForeignLauncherAccount, namespace, name)
+	}
+	if !adoptControllerRef(&existing, want) {
+		return nil
+	}
+	if err := c.Update(ctx, &existing); err != nil {
+		return fmt.Errorf("update serviceaccount %s/%s owner: %w", namespace, name, err)
+	}
+	return nil
+}
+
 func ensureScopedLauncherRBAC(
 	ctx context.Context,
 	c client.Client,
@@ -211,8 +319,20 @@ func ensureScopedLauncherRBAC(
 	podName string,
 	class LauncherClass,
 ) error {
-	namespace := owner.GetNamespace()
 	saName, _, _ := launcherRBACNames(class)
+	return ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, saName)
+}
+
+func ensureScopedLauncherRBACFor(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	owner client.Object,
+	podName string,
+	class LauncherClass,
+	saName string,
+) error {
+	namespace := owner.GetNamespace()
 	name := ScopedRoleNameFor(podName)
 
 	role := &rbacv1.Role{

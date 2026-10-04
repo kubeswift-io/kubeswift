@@ -640,6 +640,19 @@ A sandbox launcher is granted no `swiftguests/status` at all: it runs untrusted
 code and has no SwiftGuest CR, so the grant would only let an escaped sandbox
 forge guest status on someone else's VM.
 
+**Sandbox launchers run as their own ServiceAccount.** Each sandbox launcher
+pod, cold or warm slot, runs as `kubeswift-sandbox-launcher-<pod>`, created by
+the controller before the pod with the same owner as its scoped grant (a warm
+slot's moves from the pool to the slot pod). Nothing else binds that account,
+so for sandboxes the union problem above is gone, whatever `scopedLauncherRBAC`
+says: a sandbox launcher's token is worth its own pod and nothing more, and a
+per-sandbox grant (such as a Secret it reads) reaches that one pod. All three
+gates reserve every `kubeswift-sandbox-launcher-*` name the way they reserve
+the shared ones, and the controller refuses to run a launcher as an account of
+that name it did not create. Sandbox launchers created before this keep the
+shared account until they end. Guest launchers still share
+`kubeswift-launcher`.
+
 ## Cross-Cutting Observations
 
 ### Trust Boundary Summary

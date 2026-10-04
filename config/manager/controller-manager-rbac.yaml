@@ -210,7 +210,9 @@ rules:
   # (rolebindings) and W8 (storageclasses).
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "list", "watch", "create"]
+    # `update` only hands a warm slot's own launcher account from the pool to
+    # the slot pod (its controller reference), as for its scoped Role.
+    verbs: ["get", "list", "watch", "create", "update"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     # `delete` is for the #515 narrowing only: retiring the shared
