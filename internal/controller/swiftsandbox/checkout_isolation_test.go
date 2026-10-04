@@ -49,7 +49,7 @@ func TestCheckout_SlotStaysIsolatedAndItsObjectsMoveToTheSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
-	claimed, err := r.tryClaimWarmSlot(ctx, sb)
+	claimed, err := r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(pool))
 	if err != nil || claimed == nil {
 		t.Fatalf("claim: slot=%v err=%v", claimed, err)
 	}
