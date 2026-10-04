@@ -87,13 +87,21 @@ func (x *Capability) GetDescription() string {
 // The three predefined roles (Admin/Operator/View-only) and any custom role
 // are both expressed as capability sets.
 type Role struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // the ClusterRole name
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	Predefined    bool                   `protobuf:"varint,3,opt,name=predefined,proto3" json:"predefined,omitempty"`
-	Capabilities  []string               `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"` // capability keys this role grants
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // the ClusterRole name
+	DisplayName  string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Predefined   bool                   `protobuf:"varint,3,opt,name=predefined,proto3" json:"predefined,omitempty"`
+	Capabilities []string               `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"` // capability keys this role grants
+	// outdated is true when the role's ClusterRole no longer grants exactly what
+	// its capabilities grant in this KubeSwift version: it was created by an
+	// earlier one, or edited by hand. The gateway creates a role and never
+	// rewrites it on its own; SyncRole, or assigning the role, updates it.
+	Outdated bool `protobuf:"varint,5,opt,name=outdated,proto3" json:"outdated,omitempty"`
+	// outdated_reason names the difference: rules it grants that its
+	// capabilities no longer include, and rules it lacks.
+	OutdatedReason string `protobuf:"bytes,6,opt,name=outdated_reason,json=outdatedReason,proto3" json:"outdated_reason,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Role) Reset() {
@@ -152,6 +160,20 @@ func (x *Role) GetCapabilities() []string {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *Role) GetOutdated() bool {
+	if x != nil {
+		return x.Outdated
+	}
+	return false
+}
+
+func (x *Role) GetOutdatedReason() string {
+	if x != nil {
+		return x.OutdatedReason
+	}
+	return ""
 }
 
 // Subject is who a role is assigned to — an OIDC user or group.
@@ -660,6 +682,105 @@ func (*DeleteRoleResponse) Descriptor() ([]byte, []int) {
 	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{11}
 }
 
+// SyncRoleRequest rewrites a KubeSwift role's ClusterRole to what its
+// capabilities grant in this version, as the signed-in user: Kubernetes only
+// lets them grant rules they hold themselves.
+type SyncRoleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncRoleRequest) Reset() {
+	*x = SyncRoleRequest{}
+	mi := &file_kubeswift_v1_access_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncRoleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncRoleRequest) ProtoMessage() {}
+
+func (x *SyncRoleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_access_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncRoleRequest.ProtoReflect.Descriptor instead.
+func (*SyncRoleRequest) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SyncRoleRequest) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *SyncRoleRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type SyncRoleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Role          *Role                  `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncRoleResponse) Reset() {
+	*x = SyncRoleResponse{}
+	mi := &file_kubeswift_v1_access_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncRoleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncRoleResponse) ProtoMessage() {}
+
+func (x *SyncRoleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_kubeswift_v1_access_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncRoleResponse.ProtoReflect.Descriptor instead.
+func (*SyncRoleResponse) Descriptor() ([]byte, []int) {
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *SyncRoleResponse) GetRole() *Role {
+	if x != nil {
+		return x.Role
+	}
+	return nil
+}
+
 type ListAssignmentsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Cluster       string                 `protobuf:"bytes,1,opt,name=cluster,proto3" json:"cluster,omitempty"`
@@ -669,7 +790,7 @@ type ListAssignmentsRequest struct {
 
 func (x *ListAssignmentsRequest) Reset() {
 	*x = ListAssignmentsRequest{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[12]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +802,7 @@ func (x *ListAssignmentsRequest) String() string {
 func (*ListAssignmentsRequest) ProtoMessage() {}
 
 func (x *ListAssignmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[12]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +815,7 @@ func (x *ListAssignmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssignmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAssignmentsRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{12}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListAssignmentsRequest) GetCluster() string {
@@ -714,7 +835,7 @@ type ListAssignmentsResponse struct {
 
 func (x *ListAssignmentsResponse) Reset() {
 	*x = ListAssignmentsResponse{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[13]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -726,7 +847,7 @@ func (x *ListAssignmentsResponse) String() string {
 func (*ListAssignmentsResponse) ProtoMessage() {}
 
 func (x *ListAssignmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[13]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -739,7 +860,7 @@ func (x *ListAssignmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssignmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAssignmentsResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{13}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListAssignmentsResponse) GetAssignments() []*Assignment {
@@ -770,7 +891,7 @@ type AssignRoleRequest struct {
 
 func (x *AssignRoleRequest) Reset() {
 	*x = AssignRoleRequest{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[14]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -782,7 +903,7 @@ func (x *AssignRoleRequest) String() string {
 func (*AssignRoleRequest) ProtoMessage() {}
 
 func (x *AssignRoleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[14]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -795,7 +916,7 @@ func (x *AssignRoleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleRequest.ProtoReflect.Descriptor instead.
 func (*AssignRoleRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{14}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AssignRoleRequest) GetCluster() string {
@@ -835,7 +956,7 @@ type AssignRoleResponse struct {
 
 func (x *AssignRoleResponse) Reset() {
 	*x = AssignRoleResponse{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[15]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +968,7 @@ func (x *AssignRoleResponse) String() string {
 func (*AssignRoleResponse) ProtoMessage() {}
 
 func (x *AssignRoleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[15]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +981,7 @@ func (x *AssignRoleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignRoleResponse.ProtoReflect.Descriptor instead.
 func (*AssignRoleResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{15}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AssignRoleResponse) GetAssignment() *Assignment {
@@ -881,7 +1002,7 @@ type RemoveAssignmentRequest struct {
 
 func (x *RemoveAssignmentRequest) Reset() {
 	*x = RemoveAssignmentRequest{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[16]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -893,7 +1014,7 @@ func (x *RemoveAssignmentRequest) String() string {
 func (*RemoveAssignmentRequest) ProtoMessage() {}
 
 func (x *RemoveAssignmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[16]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -906,7 +1027,7 @@ func (x *RemoveAssignmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveAssignmentRequest.ProtoReflect.Descriptor instead.
 func (*RemoveAssignmentRequest) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{16}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RemoveAssignmentRequest) GetCluster() string {
@@ -938,7 +1059,7 @@ type RemoveAssignmentResponse struct {
 
 func (x *RemoveAssignmentResponse) Reset() {
 	*x = RemoveAssignmentResponse{}
-	mi := &file_kubeswift_v1_access_proto_msgTypes[17]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -950,7 +1071,7 @@ func (x *RemoveAssignmentResponse) String() string {
 func (*RemoveAssignmentResponse) ProtoMessage() {}
 
 func (x *RemoveAssignmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kubeswift_v1_access_proto_msgTypes[17]
+	mi := &file_kubeswift_v1_access_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -963,7 +1084,7 @@ func (x *RemoveAssignmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveAssignmentResponse.ProtoReflect.Descriptor instead.
 func (*RemoveAssignmentResponse) Descriptor() ([]byte, []int) {
-	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{17}
+	return file_kubeswift_v1_access_proto_rawDescGZIP(), []int{19}
 }
 
 var File_kubeswift_v1_access_proto protoreflect.FileDescriptor
@@ -975,14 +1096,16 @@ const file_kubeswift_v1_access_proto_rawDesc = "" +
 	"Capability\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\"\x81\x01\n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\"\xc6\x01\n" +
 	"\x04Role\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1e\n" +
 	"\n" +
 	"predefined\x18\x03 \x01(\bR\n" +
 	"predefined\x12\"\n" +
-	"\fcapabilities\x18\x04 \x03(\tR\fcapabilities\"1\n" +
+	"\fcapabilities\x18\x04 \x03(\tR\fcapabilities\x12\x1a\n" +
+	"\boutdated\x18\x05 \x01(\bR\boutdated\x12'\n" +
+	"\x0foutdated_reason\x18\x06 \x01(\tR\x0eoutdatedReason\"1\n" +
 	"\aSubject\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\xa8\x01\n" +
@@ -1011,7 +1134,12 @@ const file_kubeswift_v1_access_proto_rawDesc = "" +
 	"\x11DeleteRoleRequest\x12\x18\n" +
 	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x14\n" +
-	"\x12DeleteRoleResponse\"2\n" +
+	"\x12DeleteRoleResponse\"?\n" +
+	"\x0fSyncRoleRequest\x12\x18\n" +
+	"\acluster\x18\x01 \x01(\tR\acluster\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\":\n" +
+	"\x10SyncRoleResponse\x12&\n" +
+	"\x04role\x18\x01 \x01(\v2\x12.kubeswift.v1.RoleR\x04role\"2\n" +
 	"\x16ListAssignmentsRequest\x12\x18\n" +
 	"\acluster\x18\x01 \x01(\tR\acluster\"\x87\x01\n" +
 	"\x17ListAssignmentsResponse\x12:\n" +
@@ -1030,14 +1158,15 @@ const file_kubeswift_v1_access_proto_rawDesc = "" +
 	"\acluster\x18\x01 \x01(\tR\acluster\x12!\n" +
 	"\fbinding_name\x18\x02 \x01(\tR\vbindingName\x12\x1c\n" +
 	"\tnamespace\x18\x03 \x01(\tR\tnamespace\"\x1a\n" +
-	"\x18RemoveAssignmentResponse2\xf6\x04\n" +
+	"\x18RemoveAssignmentResponse2\xc1\x05\n" +
 	"\rAccessService\x12a\n" +
 	"\x10ListCapabilities\x12%.kubeswift.v1.ListCapabilitiesRequest\x1a&.kubeswift.v1.ListCapabilitiesResponse\x12L\n" +
 	"\tListRoles\x12\x1e.kubeswift.v1.ListRolesRequest\x1a\x1f.kubeswift.v1.ListRolesResponse\x12O\n" +
 	"\n" +
 	"CreateRole\x12\x1f.kubeswift.v1.CreateRoleRequest\x1a .kubeswift.v1.CreateRoleResponse\x12O\n" +
 	"\n" +
-	"DeleteRole\x12\x1f.kubeswift.v1.DeleteRoleRequest\x1a .kubeswift.v1.DeleteRoleResponse\x12^\n" +
+	"DeleteRole\x12\x1f.kubeswift.v1.DeleteRoleRequest\x1a .kubeswift.v1.DeleteRoleResponse\x12I\n" +
+	"\bSyncRole\x12\x1d.kubeswift.v1.SyncRoleRequest\x1a\x1e.kubeswift.v1.SyncRoleResponse\x12^\n" +
 	"\x0fListAssignments\x12$.kubeswift.v1.ListAssignmentsRequest\x1a%.kubeswift.v1.ListAssignmentsResponse\x12O\n" +
 	"\n" +
 	"AssignRole\x12\x1f.kubeswift.v1.AssignRoleRequest\x1a .kubeswift.v1.AssignRoleResponse\x12a\n" +
@@ -1055,7 +1184,7 @@ func file_kubeswift_v1_access_proto_rawDescGZIP() []byte {
 	return file_kubeswift_v1_access_proto_rawDescData
 }
 
-var file_kubeswift_v1_access_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_kubeswift_v1_access_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_kubeswift_v1_access_proto_goTypes = []any{
 	(*Capability)(nil),               // 0: kubeswift.v1.Capability
 	(*Role)(nil),                     // 1: kubeswift.v1.Role
@@ -1069,43 +1198,48 @@ var file_kubeswift_v1_access_proto_goTypes = []any{
 	(*CreateRoleResponse)(nil),       // 9: kubeswift.v1.CreateRoleResponse
 	(*DeleteRoleRequest)(nil),        // 10: kubeswift.v1.DeleteRoleRequest
 	(*DeleteRoleResponse)(nil),       // 11: kubeswift.v1.DeleteRoleResponse
-	(*ListAssignmentsRequest)(nil),   // 12: kubeswift.v1.ListAssignmentsRequest
-	(*ListAssignmentsResponse)(nil),  // 13: kubeswift.v1.ListAssignmentsResponse
-	(*AssignRoleRequest)(nil),        // 14: kubeswift.v1.AssignRoleRequest
-	(*AssignRoleResponse)(nil),       // 15: kubeswift.v1.AssignRoleResponse
-	(*RemoveAssignmentRequest)(nil),  // 16: kubeswift.v1.RemoveAssignmentRequest
-	(*RemoveAssignmentResponse)(nil), // 17: kubeswift.v1.RemoveAssignmentResponse
-	(*ClusterError)(nil),             // 18: kubeswift.v1.ClusterError
+	(*SyncRoleRequest)(nil),          // 12: kubeswift.v1.SyncRoleRequest
+	(*SyncRoleResponse)(nil),         // 13: kubeswift.v1.SyncRoleResponse
+	(*ListAssignmentsRequest)(nil),   // 14: kubeswift.v1.ListAssignmentsRequest
+	(*ListAssignmentsResponse)(nil),  // 15: kubeswift.v1.ListAssignmentsResponse
+	(*AssignRoleRequest)(nil),        // 16: kubeswift.v1.AssignRoleRequest
+	(*AssignRoleResponse)(nil),       // 17: kubeswift.v1.AssignRoleResponse
+	(*RemoveAssignmentRequest)(nil),  // 18: kubeswift.v1.RemoveAssignmentRequest
+	(*RemoveAssignmentResponse)(nil), // 19: kubeswift.v1.RemoveAssignmentResponse
+	(*ClusterError)(nil),             // 20: kubeswift.v1.ClusterError
 }
 var file_kubeswift_v1_access_proto_depIdxs = []int32{
 	2,  // 0: kubeswift.v1.Assignment.subject:type_name -> kubeswift.v1.Subject
 	0,  // 1: kubeswift.v1.ListCapabilitiesResponse.capabilities:type_name -> kubeswift.v1.Capability
 	1,  // 2: kubeswift.v1.ListRolesResponse.roles:type_name -> kubeswift.v1.Role
-	18, // 3: kubeswift.v1.ListRolesResponse.error:type_name -> kubeswift.v1.ClusterError
+	20, // 3: kubeswift.v1.ListRolesResponse.error:type_name -> kubeswift.v1.ClusterError
 	1,  // 4: kubeswift.v1.CreateRoleResponse.role:type_name -> kubeswift.v1.Role
-	3,  // 5: kubeswift.v1.ListAssignmentsResponse.assignments:type_name -> kubeswift.v1.Assignment
-	18, // 6: kubeswift.v1.ListAssignmentsResponse.error:type_name -> kubeswift.v1.ClusterError
-	2,  // 7: kubeswift.v1.AssignRoleRequest.subject:type_name -> kubeswift.v1.Subject
-	3,  // 8: kubeswift.v1.AssignRoleResponse.assignment:type_name -> kubeswift.v1.Assignment
-	4,  // 9: kubeswift.v1.AccessService.ListCapabilities:input_type -> kubeswift.v1.ListCapabilitiesRequest
-	6,  // 10: kubeswift.v1.AccessService.ListRoles:input_type -> kubeswift.v1.ListRolesRequest
-	8,  // 11: kubeswift.v1.AccessService.CreateRole:input_type -> kubeswift.v1.CreateRoleRequest
-	10, // 12: kubeswift.v1.AccessService.DeleteRole:input_type -> kubeswift.v1.DeleteRoleRequest
-	12, // 13: kubeswift.v1.AccessService.ListAssignments:input_type -> kubeswift.v1.ListAssignmentsRequest
-	14, // 14: kubeswift.v1.AccessService.AssignRole:input_type -> kubeswift.v1.AssignRoleRequest
-	16, // 15: kubeswift.v1.AccessService.RemoveAssignment:input_type -> kubeswift.v1.RemoveAssignmentRequest
-	5,  // 16: kubeswift.v1.AccessService.ListCapabilities:output_type -> kubeswift.v1.ListCapabilitiesResponse
-	7,  // 17: kubeswift.v1.AccessService.ListRoles:output_type -> kubeswift.v1.ListRolesResponse
-	9,  // 18: kubeswift.v1.AccessService.CreateRole:output_type -> kubeswift.v1.CreateRoleResponse
-	11, // 19: kubeswift.v1.AccessService.DeleteRole:output_type -> kubeswift.v1.DeleteRoleResponse
-	13, // 20: kubeswift.v1.AccessService.ListAssignments:output_type -> kubeswift.v1.ListAssignmentsResponse
-	15, // 21: kubeswift.v1.AccessService.AssignRole:output_type -> kubeswift.v1.AssignRoleResponse
-	17, // 22: kubeswift.v1.AccessService.RemoveAssignment:output_type -> kubeswift.v1.RemoveAssignmentResponse
-	16, // [16:23] is the sub-list for method output_type
-	9,  // [9:16] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	1,  // 5: kubeswift.v1.SyncRoleResponse.role:type_name -> kubeswift.v1.Role
+	3,  // 6: kubeswift.v1.ListAssignmentsResponse.assignments:type_name -> kubeswift.v1.Assignment
+	20, // 7: kubeswift.v1.ListAssignmentsResponse.error:type_name -> kubeswift.v1.ClusterError
+	2,  // 8: kubeswift.v1.AssignRoleRequest.subject:type_name -> kubeswift.v1.Subject
+	3,  // 9: kubeswift.v1.AssignRoleResponse.assignment:type_name -> kubeswift.v1.Assignment
+	4,  // 10: kubeswift.v1.AccessService.ListCapabilities:input_type -> kubeswift.v1.ListCapabilitiesRequest
+	6,  // 11: kubeswift.v1.AccessService.ListRoles:input_type -> kubeswift.v1.ListRolesRequest
+	8,  // 12: kubeswift.v1.AccessService.CreateRole:input_type -> kubeswift.v1.CreateRoleRequest
+	10, // 13: kubeswift.v1.AccessService.DeleteRole:input_type -> kubeswift.v1.DeleteRoleRequest
+	12, // 14: kubeswift.v1.AccessService.SyncRole:input_type -> kubeswift.v1.SyncRoleRequest
+	14, // 15: kubeswift.v1.AccessService.ListAssignments:input_type -> kubeswift.v1.ListAssignmentsRequest
+	16, // 16: kubeswift.v1.AccessService.AssignRole:input_type -> kubeswift.v1.AssignRoleRequest
+	18, // 17: kubeswift.v1.AccessService.RemoveAssignment:input_type -> kubeswift.v1.RemoveAssignmentRequest
+	5,  // 18: kubeswift.v1.AccessService.ListCapabilities:output_type -> kubeswift.v1.ListCapabilitiesResponse
+	7,  // 19: kubeswift.v1.AccessService.ListRoles:output_type -> kubeswift.v1.ListRolesResponse
+	9,  // 20: kubeswift.v1.AccessService.CreateRole:output_type -> kubeswift.v1.CreateRoleResponse
+	11, // 21: kubeswift.v1.AccessService.DeleteRole:output_type -> kubeswift.v1.DeleteRoleResponse
+	13, // 22: kubeswift.v1.AccessService.SyncRole:output_type -> kubeswift.v1.SyncRoleResponse
+	15, // 23: kubeswift.v1.AccessService.ListAssignments:output_type -> kubeswift.v1.ListAssignmentsResponse
+	17, // 24: kubeswift.v1.AccessService.AssignRole:output_type -> kubeswift.v1.AssignRoleResponse
+	19, // 25: kubeswift.v1.AccessService.RemoveAssignment:output_type -> kubeswift.v1.RemoveAssignmentResponse
+	18, // [18:26] is the sub-list for method output_type
+	10, // [10:18] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kubeswift_v1_access_proto_init() }
@@ -1120,7 +1254,7 @@ func file_kubeswift_v1_access_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kubeswift_v1_access_proto_rawDesc), len(file_kubeswift_v1_access_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
