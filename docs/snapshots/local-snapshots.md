@@ -137,6 +137,14 @@ The admission webhook **rejects** SwiftSnapshots with:
 - `kubeswift.io/hypervisor-override=qemu` on the source guest.
   Phase 2 ships memory snapshots on Cloud Hypervisor only.
 
+## One capture at a time per guest
+
+A guest's launcher runs one action at a time. A memory snapshot (`local`,
+`s3` or `oci`) created while another memory snapshot of the same guest is
+`Capturing`, or while a restore's resume is still running on its launcher,
+waits in `Pending` with `Ready=False reason=CaptureInProgress`, naming what it
+waits for. Its capture deadline starts when its own capture is sent.
+
 ## Pause window
 
 Capturing memory pauses the source VM until the entire RAM image is
