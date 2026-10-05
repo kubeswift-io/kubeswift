@@ -55,12 +55,18 @@ spec:
   variables:
     - name: launcherSAs
       expression: "['{{ .Values.launcherSAGate.guestServiceAccountName }}', '{{ .Values.launcherSAGate.sandboxServiceAccountName }}']"
+    # A sandbox launcher pod runs as its own ServiceAccount,
+    # <sandboxServiceAccountName>-<pod>, so its grants reach that one pod; every
+    # such name is as reserved as the shared ones.
+    - name: sandboxPrefix
+      expression: "'{{ .Values.launcherSAGate.sandboxServiceAccountName }}-'"
     - name: controllerUser
       expression: "'system:serviceaccount:{{ .Values.namespace }}:controller-manager'"
   validations:
     - expression: >-
         !(has(object.spec.serviceAccountName) &&
-          object.spec.serviceAccountName in variables.launcherSAs) ||
+          (object.spec.serviceAccountName in variables.launcherSAs ||
+           object.spec.serviceAccountName.startsWith(variables.sandboxPrefix))) ||
         request.userInfo.username == variables.controllerUser
       message: >-
         this ServiceAccount is reserved for KubeSwift VM launcher pods, which run
@@ -115,6 +121,11 @@ spec:
   variables:
     - name: launcherSAs
       expression: "['{{ .Values.launcherSAGate.guestServiceAccountName }}', '{{ .Values.launcherSAGate.sandboxServiceAccountName }}']"
+    # A sandbox launcher pod runs as its own ServiceAccount,
+    # <sandboxServiceAccountName>-<pod>, so its grants reach that one pod; every
+    # such name is as reserved as the shared ones.
+    - name: sandboxPrefix
+      expression: "'{{ .Values.launcherSAGate.sandboxServiceAccountName }}-'"
     - name: controllerUser
       expression: "'system:serviceaccount:{{ .Values.namespace }}:controller-manager'"
     - name: tokenFor
@@ -125,7 +136,8 @@ spec:
         ? object.metadata.annotations['kubernetes.io/service-account.name'] : ''
   validations:
     - expression: >-
-        !(variables.tokenFor in variables.launcherSAs) ||
+        !(variables.tokenFor in variables.launcherSAs ||
+          variables.tokenFor.startsWith(variables.sandboxPrefix)) ||
         request.userInfo.username == variables.controllerUser
       message: >-
         service-account token Secrets for the KubeSwift launcher ServiceAccounts
@@ -176,11 +188,17 @@ spec:
   variables:
     - name: launcherSAs
       expression: "['{{ .Values.launcherSAGate.guestServiceAccountName }}', '{{ .Values.launcherSAGate.sandboxServiceAccountName }}']"
+    # A sandbox launcher pod runs as its own ServiceAccount,
+    # <sandboxServiceAccountName>-<pod>, so its grants reach that one pod; every
+    # such name is as reserved as the shared ones.
+    - name: sandboxPrefix
+      expression: "'{{ .Values.launcherSAGate.sandboxServiceAccountName }}-'"
     - name: controllerUser
       expression: "'system:serviceaccount:{{ .Values.namespace }}:controller-manager'"
   validations:
     - expression: >-
-        !(request.name in variables.launcherSAs) ||
+        !(request.name in variables.launcherSAs ||
+          request.name.startsWith(variables.sandboxPrefix)) ||
         request.userInfo.username == variables.controllerUser ||
         (has(request.userInfo.groups) && 'system:nodes' in request.userInfo.groups)
       message: >-

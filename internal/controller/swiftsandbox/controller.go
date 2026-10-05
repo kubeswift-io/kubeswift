@@ -3,6 +3,7 @@ package swiftsandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -90,7 +91,14 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// unconditionally, which is what actually guarantees grant-before-pod on a
 	// first-reconcile cold-fallback; this call converges drift thereafter.
 	if sb.Spec.PoolRef == nil || sb.Status.PodRef == sb.Name {
-		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, &sb, sb.Name, swiftguest.SandboxLauncher); err != nil {
+		sa, err := r.coldLauncherAccount(ctx, &sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, &sb, sb.Name, swiftguest.SandboxLauncher, sa); err != nil {
+			if errors.Is(err, swiftguest.ErrForeignLauncherAccount) {
+				return r.waitForReference(ctx, &sb, "LauncherAccountConflict", err.Error())
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -214,7 +222,10 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	// Reconcile only mints it for a sandbox already known to be cold; a pool miss
 	// reaches here on the SAME reconcile that discovered it, so this is the call
 	// that actually orders the two for a cold-fallback.
-	if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, sb, pod.Name, swiftguest.SandboxLauncher); err != nil {
+	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, sb, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName); err != nil {
+		if errors.Is(err, swiftguest.ErrForeignLauncherAccount) {
+			return r.waitForReference(ctx, sb, "LauncherAccountConflict", err.Error())
+		}
 		return ctrl.Result{}, err
 	}
 	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
@@ -573,4 +584,22 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// coldLauncherAccount is the ServiceAccount sb's cold launcher runs as: the
+// one an existing pod already names (a pod created before launchers had their
+// own keeps the shared account), else the pod's own.
+func (r *SwiftSandboxReconciler) coldLauncherAccount(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (string, error) {
+	var pod corev1.Pod
+	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: sb.Name}, &pod)
+	if apierrors.IsNotFound(err) {
+		return swiftguest.SandboxLauncherServiceAccountFor(sb.Name), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if pod.Spec.ServiceAccountName == "" {
+		return swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher), nil
+	}
+	return pod.Spec.ServiceAccountName, nil
 }

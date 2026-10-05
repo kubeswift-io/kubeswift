@@ -199,7 +199,7 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// binding under them would 403 every annotation write on a running slot.
 		// Also the self-heal for a create that crashed between the two phases —
 		// owner is the pod, so this adopts a still-pool-owned grant.
-		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher); err != nil {
+		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher, slotAccount(p)); err != nil {
 			return ctrl.Result{}, err
 		}
 		// egressNow is "" while a Service is not usable, so a slot carrying
@@ -308,6 +308,11 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// is an operator sizing choice, surfaced as ready < minWarm.
 			if pool.Spec.GPUProfileRef != nil && errors.Is(err, swiftgpu.ErrNoCapacity) {
 				break
+			}
+			// A slot name whose launcher account someone else created: say so;
+			// the next pass picks a new random name.
+			if errors.Is(err, swiftguest.ErrForeignLauncherAccount) {
+				return r.degraded(ctx, &pool, ready, claimed, "LauncherAccountConflict", err.Error())
 			}
 			return ctrl.Result{}, err
 		}
@@ -463,7 +468,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	// it onto the pod. Pool ownership is the fail-safe: a crash between the two
 	// leaves a grant that still GCs with the pool, and the census in Reconcile
 	// re-parents it on the next pass.
-	if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher); err != nil {
+	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName); err != nil {
 		return err
 	}
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -474,7 +479,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	// matches the grant's in both states. Skipped on AlreadyExists (no UID to bind
 	// to); the census picks that up.
 	if pod.UID != "" {
-		if err := swiftguest.EnsureScopedLauncherRBAC(ctx, r.Client, r.Scheme, pod, pod.Name, swiftguest.SandboxLauncher); err != nil {
+		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pod, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName); err != nil {
 			return err
 		}
 	}
@@ -576,4 +581,13 @@ func (r *SwiftSandboxPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Complete(r)
+}
+
+// slotAccount is the ServiceAccount a live slot runs as: its own, or, for a
+// slot created before launchers had their own, the shared class account.
+func slotAccount(p *corev1.Pod) string {
+	if p.Spec.ServiceAccountName == "" {
+		return swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher)
+	}
+	return p.Spec.ServiceAccountName
 }

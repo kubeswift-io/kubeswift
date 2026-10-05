@@ -496,7 +496,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			// that runs untrusted code — forge GuestRunning/Failed on any
 			// SwiftGuest in the namespace. Also covers warm-pool slots, which are
 			// built by this same function (#443).
-			ServiceAccountName: swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher),
+			ServiceAccountName: swiftguest.SandboxLauncherServiceAccountFor(sb.Name),
 			ImagePullSecrets:   swiftguest.LauncherImagePullSecrets(),
 			RestartPolicy:      corev1.RestartPolicyNever,
 			NodeSelector:       nodeSelector,

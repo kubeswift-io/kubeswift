@@ -200,7 +200,7 @@ point `ui.gateway.url` at an externally reachable gateway).
 | `swiftGuest.sharedBaseDisk.poolSize` | Size of the thin pool a node creates for shared-base root disks (`SwiftGuestClass.sharedBaseDisk: true`). Preallocated, and only on nodes labelled `kubeswift.io/basedisk-node=true`; sizes a pool at creation only | `40Gi` |
 | `launcherSAGate.enabled` | Refuse any Pod, legacy token Secret or TokenRequest for a launcher ServiceAccount unless the KubeSwift controller (or, for a TokenRequest, the kubelet) makes it. **Closes a privilege escalation — see below before disabling** | `true` |
 | `launcherSAGate.guestServiceAccountName` | Guest launcher SA the gate protects. Must match what the controller stamps | `kubeswift-launcher` |
-| `launcherSAGate.sandboxServiceAccountName` | Sandbox launcher SA the gate protects | `kubeswift-sandbox-launcher` |
+| `launcherSAGate.sandboxServiceAccountName` | Sandbox launcher SA the gate protects, and the prefix of every sandbox launcher pod's own SA (`<name>-<pod>`), which the gate protects too | `kubeswift-sandbox-launcher` |
 
 **Why `launcherSAGate` is on by default.** Launcher pods run privileged and are a
 node-level trust boundary. swiftletd needs `pods: patch` to report status, so the
