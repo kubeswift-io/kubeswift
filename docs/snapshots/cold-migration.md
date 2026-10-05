@@ -249,6 +249,7 @@ kubectl delete swiftsnapshot db-export  # optional; oci objects are purged if
 | Export rejected: image-backed data disk | Full-state export carries `blank`/`attachAsDisk` data disks (v1.1) but rejects an **image-backed** data disk (legacy `dataDiskRef` / `dataDiskRefs[].imageRef`) — that PVC belongs to the SwiftImage. Re-export without it. |
 | Import `Failed: ... pre-v1.1 root-disk-only snapshot` | The snapshot was captured by a controller predating v1.1 and recorded data disks without registry artifacts. Re-export from a current release, or keep the live source guest. |
 | Two copies running | Pre-fix behaviour; on current releases the source is stopped during export. If you manually restarted the source, stop it again. |
+| In-place SwiftRestore of the export `Failed: DiskDiverged` | An in-place restore reopens the source guest's live disk, not the exported one, and the guest was started again after the export, so its disk has moved on. Import into a new guest (`spec.cloneFromSnapshot`) to resume with the exported disk. |
 
 ## See also
 
