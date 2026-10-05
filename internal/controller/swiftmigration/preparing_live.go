@@ -279,7 +279,9 @@ func (r *SwiftMigrationReconciler) handlePreparingLive(
 		if r.Recorder != nil {
 			r.Recorder.Event(mig, corev1.EventTypeWarning, eventReasonDestinationPodNeverReady, msg)
 		}
-		return phaseFailure(msg, migrationv1alpha1.FailureReasonDstNeverReady)
+		res := phaseFailure(msg, migrationv1alpha1.FailureReasonDstNeverReady)
+		res.Reported = true
+		return res
 	}
 
 	// Within budget; surface waiting state and requeue.
