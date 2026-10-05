@@ -213,27 +213,31 @@ func IsInPlaceRestore(snap *snapshotv1alpha1.SwiftSnapshot, restore *snapshotv1a
 // snapshot's RAM against a disk that no longer matches it, or returns "" when
 // nothing says it would (or the operator accepted it).
 //
-// A local/s3/oci memory snapshot captures RAM and device state, not the disk:
-// the restored VM reopens the guest's live disk. If anything ran on that disk
-// after the capture, the restored kernel's page cache, filesystem metadata and
-// journal state are older than the blocks underneath them, and it writes that
-// stale state back -- silent filesystem corruption. Two things say something
-// ran: the captured VM itself was resumed (resumeAfterSnapshot, the default),
-// or the guest's current launcher was started after the capture (a normal boot
-// from disk, e.g. the guest controller replacing a killed launcher). A
-// full-state OCI capture (includeDisk) terminates the guest at the snapshot
-// instant and carries the disk, so it does not diverge.
+// An in-place restore reopens the guest's live disk. If anything ran on that
+// disk after the capture, the restored kernel's page cache, filesystem
+// metadata and journal state are older than the blocks underneath them, and it
+// writes that stale state back -- silent filesystem corruption. Two things say
+// something ran: the captured VM itself was resumed (resumeAfterSnapshot, the
+// default), or the guest's current launcher was started after the capture (a
+// normal boot from disk, e.g. the guest controller replacing a killed
+// launcher).
+//
+// A full-state OCI capture (includeDisk) carries its disk, but an in-place
+// restore does not use it: only a cloneFromSnapshot guest materializes it. It
+// never resumes the guest (the capture pauses it and the export terminates
+// it), so only the second check applies: a guest started again after the
+// export has a disk that moved on (#710).
 func (r *SwiftRestoreReconciler) diskDivergence(
 	ctx context.Context,
 	snap *snapshotv1alpha1.SwiftSnapshot,
 	restore *snapshotv1alpha1.SwiftRestore,
 	guest *swiftv1alpha1.SwiftGuest,
 ) (string, error) {
-	if snap.Spec.IncludeDisk || restore.Annotations[snapshotv1alpha1.AnnotationAcceptDiskDivergence] == "true" {
+	if restore.Annotations[snapshotv1alpha1.AnnotationAcceptDiskDivergence] == "true" {
 		return "", nil
 	}
 	why := ""
-	if snap.Spec.ResumeAfterSnapshot {
+	if snap.Spec.ResumeAfterSnapshot && !snap.Spec.IncludeDisk {
 		why = "the guest was resumed after the capture (resumeAfterSnapshot=true)"
 	} else if snap.Status.CapturedAt != nil {
 		pod, err := r.findLauncherPod(ctx, guest.Namespace, guest.Name)
@@ -250,11 +254,17 @@ func (r *SwiftRestoreReconciler) diskDivergence(
 	if why == "" {
 		return "", nil
 	}
-	return "refusing in-place restore of " + guest.Name + ": SwiftSnapshot " + snap.Name +
-		" holds memory only, and " + why + ", so the disk has moved on since; resuming the old memory over " +
-		"the newer disk can corrupt the guest's filesystems. Use a csi-volume-snapshot for a disk-consistent " +
-		"restore, or set annotation " + snapshotv1alpha1.AnnotationAcceptDiskDivergence +
-		"=\"true\" on the SwiftRestore to accept the risk", nil
+	holds := "holds memory only"
+	instead := "A disk-consistent copy can only go to a new SwiftGuest: restore a csi-volume-snapshot of " +
+		guest.Name + " under a new name, while " + guest.Name + " still exists"
+	if snap.Spec.IncludeDisk {
+		holds = "carries the disk it was captured with, but an in-place restore reopens the guest's live disk"
+		instead = "To resume it with the disk it was captured with, clone it into a new SwiftGuest (spec.cloneFromSnapshot)"
+	}
+	return "refusing in-place restore of " + guest.Name + ": SwiftSnapshot " + snap.Name + " " + holds +
+		", and " + why + ", so the disk has moved on since; resuming the old memory over the newer disk can " +
+		"corrupt the guest's filesystems. " + instead + ". Or set annotation " +
+		snapshotv1alpha1.AnnotationAcceptDiskDivergence + "=\"true\" on the SwiftRestore to accept the risk", nil
 }
 
 // CurrentClusterHypervisorVersion is the CH version the cluster is

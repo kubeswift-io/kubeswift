@@ -275,6 +275,20 @@ func (r *SwiftRestoreReconciler) handlePending(
 	// is not a conflict.
 	if getErr == nil && existingTarget.Labels[swiftRestoreOwnerLabel] != names.LabelValue(restore.Name) {
 		setPhase(status, snapshotv1alpha1.SwiftRestorePhaseFailed)
+		// The snapshot's own guest cannot be the target at all: the restore
+		// creates a new guest from that one's spec, so deleting it first does
+		// not help either (#711).
+		if restore.Spec.TargetGuest.Name == snap.Spec.GuestRef.Name {
+			reason := ReasonTargetConflict
+			if restore.Spec.TargetGuest.OverwriteExisting {
+				reason = ReasonOverwriteUnsupported
+			}
+			setReadyCondition(status, metav1.ConditionFalse, reason,
+				"the csi-volume-snapshot backend cannot restore SwiftGuest "+snap.Spec.GuestRef.Name+" in place: "+
+					"it creates a new SwiftGuest from "+snap.Spec.GuestRef.Name+"'s spec and the snapshot's disk, "+
+					"so restore to a new name while "+snap.Spec.GuestRef.Name+" still exists")
+			return true, 0, nil
+		}
 		if !restore.Spec.TargetGuest.OverwriteExisting {
 			setReadyCondition(status, metav1.ConditionFalse, ReasonTargetConflict,
 				"SwiftGuest "+restore.Spec.TargetGuest.Name+" already exists; set targetGuest.overwriteExisting=true to replace")
