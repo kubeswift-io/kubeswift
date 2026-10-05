@@ -128,6 +128,27 @@ func TestHandleS3Deletion_JobFailed_RetainsFinalizer(t *testing.T) {
 	}
 }
 
+// A failed purge used to keep the finalizer and say nothing anywhere. It now
+// warns, with the Job's own error and how to retry (#737).
+func TestHandleS3Deletion_JobFailed_WarnsWithTheError(t *testing.T) {
+	snap := s3SnapReady("snap1", "team-a")
+	job := deleteJobWith(snap, batchv1.JobFailed)
+	job.UID = "delete-uid"
+	r, _, rec := newReconcilerIn(t, nil, snap, job, failedTransferPod(job, "snapshot-s3: delete: AccessDenied: Access Denied"))
+	r.SnapshotS3Image = "img"
+	if done, err := r.handleS3Deletion(context.Background(), snap); err != nil || done {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.HasPrefix(ev, corev1.EventTypeWarning+" "+ReasonPurgeFailed) || !strings.Contains(ev, "AccessDenied") || !strings.Contains(ev, job.Name) {
+			t.Errorf("event = %q; want a %s warning with the error and the Job to delete", ev, ReasonPurgeFailed)
+		}
+	default:
+		t.Error("no warning event for a failed purge")
+	}
+}
+
 func TestHandleS3Deletion_NothingToPurge_DropsFinalizer(t *testing.T) {
 	// status.S3 nil (never uploaded) -> drop finalizer, no Job.
 	snap := s3Snap("snap1", "team-a", nil)

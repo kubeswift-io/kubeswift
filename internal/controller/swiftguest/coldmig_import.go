@@ -140,7 +140,7 @@ func (r *SwiftGuestReconciler) maybeRootDiskFromOCI(
 			return true, &RootDiskCloneResult{PVCName: cloneName, NeedsGrowInit: false}, nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return true, nil, rootDiskFailed("full-state clone disk download failed: %s", c.Message)
+			return true, nil, rootDiskFailed("full-state clone disk download failed: %s", clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message))
 		}
 	}
 	return true, nil, fmt.Errorf("full-state clone disk download in progress")
@@ -169,10 +169,11 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 	}
 
 	container := corev1.Container{
-		Name:  "download",
-		Image: image,
-		Args:  args,
-		Env:   clonecommon.RegistryCAEnvVars(caBundle),
+		Name:                     "download",
+		Image:                    image,
+		TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+		Args:                     args,
+		Env:                      clonecommon.RegistryCAEnvVars(caBundle),
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
 			RunAsUser:                ptr.To(int64(0)),
@@ -221,7 +222,7 @@ func buildDiskFromOCIJob(guest *swiftv1alpha1.SwiftGuest, snap *snapshotv1alpha1
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     node,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers:                   []corev1.Container{container},
 					Volumes:                      volumes,
@@ -350,7 +351,7 @@ func (r *SwiftGuestReconciler) ensureCloneDataDisks(
 		done := false
 		for _, c := range job.Status.Conditions {
 			if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-				return rootDiskFailed("clone data-disk %s download failed: %s", art.Name, c.Message)
+				return rootDiskFailed("clone data-disk %s download failed: %s", art.Name, clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message))
 			}
 			if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
 				done = true

@@ -180,7 +180,7 @@ func (r *SwiftSnapshotReconciler) handleUploadingOCI(ctx context.Context, snap *
 			return true, "", nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return false, "OCI push Job failed: " + c.Message, nil
+			return false, "OCI push Job failed: " + clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), nil
 		}
 	}
 	return false, "", nil // still pushing
@@ -320,14 +320,15 @@ func buildOCIPushJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode st
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     captureNode,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
-						Name:         "push",
-						Image:        image,
-						Args:         args,
-						Env:          env,
-						VolumeMounts: mounts,
+						Name:                     "push",
+						Image:                    image,
+						TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+						Args:                     args,
+						Env:                      env,
+						VolumeMounts:             mounts,
 						// Runs as root: the capture writes the artifacts (config.json,
 						// state.json, memory-ranges) as root mode 0600 (serialized
 						// guest RAM), so a non-root container cannot read them even via

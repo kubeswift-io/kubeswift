@@ -107,6 +107,10 @@ const ReasonPurgeSkipped = "PurgeSkipped"
 // artifact it leaves in the registry because no digest was recorded for it.
 const ReasonPurgeIncomplete = "PurgeIncomplete"
 
+// ReasonPurgeFailed is the Warning event a deletion emits when its purge Job
+// fails, naming the Job's own error.
+const ReasonPurgeFailed = "PurgeFailed"
+
 const (
 	cleanupPodPrefix = "swift-snap-cleanup-"
 	// maxCleanupPodName keeps the name a DNS label: a pod's hostname is its
@@ -531,8 +535,10 @@ func (r *SwiftSnapshotReconciler) handleS3Deletion(
 			return r.removeNamedFinalizer(ctx, snap, S3ObjectFinalizer)
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			// Leave the finalizer so the failure is visible; operator can
-			// `kubectl delete job` to retry, or delete the finalizer by hand.
+			// Keep the finalizer: the objects are still there. The operator
+			// deletes the Job to retry, or removes the finalizer by hand.
+			r.warnPurgeFailed(ctx, snap, fmt.Sprintf("could not delete the objects under %s: %s. Delete Job %s to retry, or remove finalizer %s to leave them",
+				s3Location(snap), clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), job.Name, S3ObjectFinalizer))
 			return false, nil
 		}
 	}
@@ -606,8 +612,8 @@ func (r *SwiftSnapshotReconciler) handleOCIDeletion(ctx context.Context, snap *s
 			_ = r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
 		case batchv1.JobFailed:
-			logger.Info("could not delete the OCI artifact (the registry may not support deletes); dropping the cleanup finalizer and leaving it in place",
-				"snapshot", snap.Name, "artifacts", refs, "reason", c.Message)
+			r.warnPurgeFailed(ctx, snap, fmt.Sprintf("could not delete %s (the registry may not support deletes), so it is left in place: %s",
+				ociRefList(refs), clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message)))
 			_ = r.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			return r.removeNamedFinalizer(ctx, snap, OCIArtifactFinalizer)
 		}
@@ -657,6 +663,16 @@ func (r *SwiftSnapshotReconciler) warnUnpinned(ctx context.Context, snap *snapsh
 	log.FromContext(ctx).Info(msg, "snapshot", snap.Namespace+"/"+snap.Name)
 	if r.Recorder != nil {
 		r.Recorder.Event(snap, corev1.EventTypeWarning, ReasonPurgeIncomplete, msg)
+	}
+}
+
+// warnPurgeFailed reports a purge Job that failed, in the log and as a Warning
+// event. An S3 purge keeps its finalizer and reports again each pass; the
+// event recorder folds the repeats into one event's count.
+func (r *SwiftSnapshotReconciler) warnPurgeFailed(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, msg string) {
+	log.FromContext(ctx).Info(msg, "snapshot", snap.Namespace+"/"+snap.Name)
+	if r.Recorder != nil {
+		r.Recorder.Event(snap, corev1.EventTypeWarning, ReasonPurgeFailed, msg)
 	}
 }
 
@@ -736,11 +752,12 @@ func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs 
 			args = append(args, "--insecure")
 		}
 		containers = append(containers, corev1.Container{
-			Name:         fmt.Sprintf("delete-%d", i),
-			Image:        image,
-			Args:         args,
-			Env:          env,
-			VolumeMounts: mounts,
+			Name:                     fmt.Sprintf("delete-%d", i),
+			Image:                    image,
+			TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+			Args:                     args,
+			Env:                      env,
+			VolumeMounts:             mounts,
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
 				RunAsNonRoot:             ptr.To(true),
@@ -764,7 +781,7 @@ func buildOCIDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string, refs 
 			BackoffLimit: ptr.To(s3UploadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers:                   containers,
 					Volumes:                      volumes,

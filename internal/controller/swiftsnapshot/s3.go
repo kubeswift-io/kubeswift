@@ -100,7 +100,7 @@ func (r *SwiftSnapshotReconciler) handleUploading(ctx context.Context, snap *sna
 			return true, "", nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return false, "S3 upload Job failed: " + c.Message, nil
+			return false, "S3 upload Job failed: " + clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), nil
 		}
 	}
 	return false, "", nil // still uploading
@@ -225,12 +225,13 @@ func buildDeleteJob(snap *snapshotv1alpha1.SwiftSnapshot, image string) *batchv1
 			BackoffLimit: ptr.To(s3UploadBackoffLimit),
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
-						Name:  "delete",
-						Image: image,
-						Args:  s3JobArgs(snap, "delete"),
+						Name:                     "delete",
+						Image:                    image,
+						TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+						Args:                     s3JobArgs(snap, "delete"),
 						Env: []corev1.EnvVar{
 							secretEnv("AWS_ACCESS_KEY_ID", "accessKeyId", false),
 							secretEnv("AWS_SECRET_ACCESS_KEY", "secretAccessKey", false),
@@ -316,12 +317,13 @@ func buildUploadJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode str
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     captureNode,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
-						Name:  "upload",
-						Image: image,
-						Args:  args,
+						Name:                     "upload",
+						Image:                    image,
+						TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+						Args:                     args,
 						Env: []corev1.EnvVar{
 							secretEnv("AWS_ACCESS_KEY_ID", "accessKeyId", false),
 							secretEnv("AWS_SECRET_ACCESS_KEY", "secretAccessKey", false),

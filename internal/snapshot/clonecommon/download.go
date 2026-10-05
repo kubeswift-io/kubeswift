@@ -107,12 +107,13 @@ func BuildDownloadJob(p DownloadJobParams) *batchv1.Job {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     p.Node,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
-						Name:  "download",
-						Image: p.Image,
-						Args:  args,
+						Name:                     "download",
+						Image:                    p.Image,
+						TerminationMessagePolicy: TransferTerminationPolicy,
+						Args:                     args,
 						Env: []corev1.EnvVar{
 							secretEnv("AWS_ACCESS_KEY_ID", "accessKeyId", false),
 							secretEnv("AWS_SECRET_ACCESS_KEY", "secretAccessKey", false),
@@ -232,14 +233,15 @@ func BuildOCIDownloadJob(p OCIDownloadJobParams) *batchv1.Job {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     p.Node,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers: []corev1.Container{{
-						Name:         "download",
-						Image:        p.Image,
-						Args:         args,
-						Env:          env,
-						VolumeMounts: mounts,
+						Name:                     "download",
+						Image:                    p.Image,
+						TerminationMessagePolicy: TransferTerminationPolicy,
+						Args:                     args,
+						Env:                      env,
+						VolumeMounts:             mounts,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptr.To(false),
 							RunAsUser:                ptr.To(int64(0)),

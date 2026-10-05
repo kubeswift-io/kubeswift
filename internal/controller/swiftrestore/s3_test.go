@@ -115,8 +115,9 @@ func TestBuildDownloadJob(t *testing.T) {
 	if pod.NodeName != "worker-1" {
 		t.Errorf("download Job must pin to the resolved node; got %q", pod.NodeName)
 	}
-	if pod.RestartPolicy != corev1.RestartPolicyOnFailure {
-		t.Errorf("restartPolicy = %q, want OnFailure", pod.RestartPolicy)
+	if pod.RestartPolicy != corev1.RestartPolicyNever || pod.Containers[0].TerminationMessagePolicy != corev1.TerminationMessageFallbackToLogsOnError {
+		t.Errorf("restartPolicy = %q, termination = %q; want Never and FallbackToLogsOnError, so a failed attempt keeps its error",
+			pod.RestartPolicy, pod.Containers[0].TerminationMessagePolicy)
 	}
 	c := pod.Containers[0]
 
@@ -227,6 +228,16 @@ func TestHandleDownloading(t *testing.T) {
 		}
 	})
 
+	t.Run("failed -> errMsg carries the transfer's own error", func(t *testing.T) {
+		job := downloadJobWith(restore, batchv1.JobFailed)
+		job.UID = "download-uid"
+		r, _ := newReconciler(t, snap, job, failedTransferPod(job, "snapshot-s3: get manifest.json: NoSuchKey: The specified key does not exist."))
+		_, _, errMsg, _ := r.handleDownloading(context.Background(), restore, &snapshotv1alpha1.SwiftRestoreStatus{})
+		if !strings.Contains(errMsg, "NoSuchKey") || !strings.Contains(errMsg, "(boom)") {
+			t.Errorf("errMsg = %q, want the pod's error and the Job's condition", errMsg)
+		}
+	})
+
 	t.Run("running -> requeue", func(t *testing.T) {
 		r, _ := newReconciler(t, snap, downloadJobWith(restore, ""))
 		advanced, requeue, errMsg, err := r.handleDownloading(context.Background(), restore, &snapshotv1alpha1.SwiftRestoreStatus{})
@@ -247,4 +258,18 @@ func TestHandleDownloading(t *testing.T) {
 			t.Fatalf("download Job not recreated: %v", err)
 		}
 	})
+}
+
+// failedTransferPod is a failed pod of job whose container left msg as its
+// termination message, as FallbackToLogsOnError does with the log tail.
+func failedTransferPod(job *batchv1.Job, msg string) *corev1.Pod {
+	isController := true
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: job.Name + "-abcde", Namespace: job.Namespace, Labels: map[string]string{"job-name": job.Name},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &isController}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{Name: "transfer",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: msg}}}}},
+	}
 }
