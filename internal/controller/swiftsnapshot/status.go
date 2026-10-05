@@ -19,6 +19,10 @@ const (
 	// ReasonTagInUse: another oci snapshot in the namespace pushes to the same
 	// repository:tag (#705).
 	ReasonTagInUse = "TagInUse"
+
+	// ReasonCaptureInProgress: the capture waits for the launcher's action
+	// slot, which another snapshot's capture or another action holds.
+	ReasonCaptureInProgress = "CaptureInProgress"
 )
 
 // setPhase updates status.phase.

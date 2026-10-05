@@ -153,6 +153,18 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 		return false, 5 * time.Second, nil
 	}
 
+	// The launcher has one action slot. A capture written while another
+	// action was in it replaced that action, and the replaced snapshot
+	// waited for a reply that never came until its deadline (#735). Wait
+	// for the slot, before anything about this capture is recorded.
+	if waitFor, err := r.actionSlotBusy(ctx, snap, pod); err != nil {
+		return false, 0, err
+	} else if waitFor != "" {
+		setPhase(status, snapshotv1alpha1.SwiftSnapshotPhasePending)
+		setReadyCondition(status, metav1.ConditionFalse, ReasonCaptureInProgress, waitFor)
+		return false, 5 * time.Second, nil
+	}
+
 	// Capture the source guest spec, hypervisor, and node before we
 	// write the action — these become part of the snapshot's identity
 	// and are needed by SwiftRestore. For a full-state (includeDisk oci)
@@ -237,8 +249,14 @@ func (r *SwiftSnapshotReconciler) handlePendingLocal(
 		return false, 0, fmt.Errorf("marshal capture args: %w", err)
 	}
 
-	// Patch the launcher pod's annotations to drive the action handler.
-	if err := r.patchPodActionAnnotations(ctx, pod, verbCapture, actionID, string(argsJSON)); err != nil {
+	// Patch the launcher pod's annotations to drive the action handler,
+	// against the pod as read above: if anything wrote the pod since (such
+	// as another capture whose write the cache has not shown yet), the
+	// patch conflicts and the slot is looked at again.
+	if err := r.patchPodActionAnnotationsAt(ctx, pod, pod.ResourceVersion, verbCapture, actionID, string(argsJSON)); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, time.Second, nil
+		}
 		return false, 0, fmt.Errorf("patch action annotation: %w", err)
 	}
 	if status.CaptureStartedAt == nil {
@@ -398,20 +416,83 @@ func (r *SwiftSnapshotReconciler) patchPodActionAnnotations(
 	pod *corev1.Pod,
 	verb, actionID, argsJSON string,
 ) error {
-	patch := map[string]any{
-		"metadata": map[string]any{
-			"annotations": map[string]any{
-				annoAction:     verb,
-				annoActionID:   actionID,
-				annoActionArgs: argsJSON,
-			},
+	return r.patchPodActionAnnotationsAt(ctx, pod, "", verb, actionID, argsJSON)
+}
+
+// patchPodActionAnnotationsAt is patchPodActionAnnotations with an optimistic
+// lock: a non-empty resourceVersion makes the patch fail with a Conflict when
+// the pod has changed since it was read at that version.
+func (r *SwiftSnapshotReconciler) patchPodActionAnnotationsAt(
+	ctx context.Context,
+	pod *corev1.Pod,
+	resourceVersion, verb, actionID, argsJSON string,
+) error {
+	meta := map[string]any{
+		"annotations": map[string]any{
+			annoAction:     verb,
+			annoActionID:   actionID,
+			annoActionArgs: argsJSON,
 		},
 	}
+	if resourceVersion != "" {
+		meta["resourceVersion"] = resourceVersion
+	}
+	patch := map[string]any{"metadata": meta}
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err
 	}
 	return r.Patch(ctx, pod, client.RawPatch(types.MergePatchType, data))
+}
+
+// actionSlotBusy names what a capture of snap must wait for before it may
+// write the launcher's action slot, or returns "" when the slot is free:
+//   - another memory snapshot of the same guest that is Capturing. It holds
+//     the slot until it has read its own result, and the status of the next
+//     action the launcher runs replaces that result;
+//   - an action in the slot the launcher has not finished, such as a
+//     restore's resume, or a capture written moments ago. The launcher
+//     rejects a new action while one is running, and its rejection replaces
+//     the running action's status.
+//
+// This snapshot's own action in the slot (sent before a status write that did
+// not land) is not a reason to wait: sending it again is a no-op.
+func (r *SwiftSnapshotReconciler) actionSlotBusy(ctx context.Context, snap *snapshotv1alpha1.SwiftSnapshot, pod *corev1.Pod) (string, error) {
+	var snaps snapshotv1alpha1.SwiftSnapshotList
+	if err := r.List(ctx, &snaps, client.InNamespace(snap.Namespace)); err != nil {
+		return "", err
+	}
+	for i := range snaps.Items {
+		o := &snaps.Items[i]
+		if o.UID == snap.UID || o.Spec.GuestRef.Name != snap.Spec.GuestRef.Name ||
+			o.Status.Phase != snapshotv1alpha1.SwiftSnapshotPhaseCapturing || !capturesMemory(o) {
+			continue
+		}
+		return fmt.Sprintf("waiting for SwiftSnapshot %s to finish capturing SwiftGuest %s: the launcher runs one capture at a time",
+			o.Name, snap.Spec.GuestRef.Name), nil
+	}
+	a := pod.Annotations
+	id := a[annoActionID]
+	if id == "" || id == capturingActionID(snap) {
+		return "", nil
+	}
+	if a[annoStatusID] == id {
+		switch a[annoStatus] {
+		case "ready", "failed", "rejected":
+			return "", nil
+		}
+	}
+	return fmt.Sprintf("waiting for action %s on launcher pod %s to finish: the launcher runs one action at a time", id, pod.Name), nil
+}
+
+// capturesMemory reports whether the snapshot's backend captures through the
+// launcher (local, s3, oci), as opposed to a CSI VolumeSnapshot.
+func capturesMemory(snap *snapshotv1alpha1.SwiftSnapshot) bool {
+	switch snap.Spec.Backend.Type {
+	case snapshotv1alpha1.SnapshotBackendLocal, snapshotv1alpha1.SnapshotBackendS3, snapshotv1alpha1.SnapshotBackendOCI:
+		return true
+	}
+	return false
 }
 
 // reservedReferences keeps verbPrepare reachable so the constant doesn't
