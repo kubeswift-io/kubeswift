@@ -943,6 +943,10 @@ struct SandboxExecArgs {
     /// The checked-out sandbox's workload probes, run while the workload does.
     #[serde(default)]
     probes: Option<crate::intent::SandboxProbes>,
+    /// Secret-backed variables: references, read here with this launcher's
+    /// own account and sent to the guest over vsock with the rest of env.
+    #[serde(default)]
+    secret_env: Vec<crate::intent::SecretEnvRef>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -981,7 +985,20 @@ async fn dispatch_sandbox_exec(
     let vsock_socket = run_dir.join("vsock.sock");
     let timeout =
         std::time::Duration::from_secs(args.timeout_seconds.unwrap_or(SANDBOX_EXEC_TIMEOUT_SECS));
-    let req = swift_vsock_client::ExecRequest::new(args.argv, args.env, args.cwd);
+    let mut env = args.env;
+    if !args.secret_env.is_empty() {
+        let ns = std::env::var("POD_NAMESPACE")
+            .map_err(|_| "SecretUnavailable: POD_NAMESPACE unset".to_string())?;
+        let client = crate::kube_client::create_client()
+            .await
+            .map_err(|e| format!("SecretUnavailable: kube client: {}", e))?;
+        let vars = crate::secrets::resolve(&client, &ns, &args.secret_env)
+            .await
+            .map_err(|e| format!("SecretUnavailable: {}", e))?;
+        log::info!("secret_env_resolved id={} count={}", action.id, vars.len());
+        env.extend(vars);
+    }
+    let req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
     // Probe the workload while it runs; the guard stops probing when the
     // exec returns (the workload has exited).
     let _probe_guard = match (

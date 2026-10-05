@@ -395,7 +395,20 @@ where
     // a write failure we leave it unset — the bridge finds no config device and falls
     // back to /sbin/init -> /bin/sh (a loud degrade, not a crash).
     let sandbox_config_path = intent.sandbox_exec().and_then(|e| {
-        let path = runtime_dir.root().join("exec.config");
+        // With secret env the disk holds Secret values: the controller then
+        // mounts a memory-backed volume at KUBESWIFT_SECRET_RUN_DIR, and the
+        // disk goes there, never to the run dir on the node's disk.
+        let dir = match std::env::var("KUBESWIFT_SECRET_RUN_DIR") {
+            Ok(d) if !d.is_empty() => std::path::PathBuf::from(d),
+            _ if !e.secret_env.is_empty() => {
+                log::error!(
+                    "sandbox exec config not written: secret env needs KUBESWIFT_SECRET_RUN_DIR"
+                );
+                return None;
+            }
+            _ => runtime_dir.root().to_path_buf(),
+        };
+        let path = dir.join("exec.config");
         match std::fs::write(&path, e.to_config_blob()) {
             Ok(()) => Some(path.to_string_lossy().to_string()),
             Err(err) => {

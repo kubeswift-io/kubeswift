@@ -47,7 +47,7 @@ func TestEnsureLauncherIdentity_OwnAccountIsTheOnlySubject(t *testing.T) {
 	sb := identityTestSandbox("sb1")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sb).Build()
 	sa := SandboxLauncherServiceAccountFor("sb1")
-	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "sb1", SandboxLauncher, sa); err != nil {
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "sb1", SandboxLauncher, sa, nil); err != nil {
 		t.Fatal(err)
 	}
 	var acct corev1.ServiceAccount
@@ -72,7 +72,7 @@ func TestEnsureLauncherIdentity_ExistingSharedAccountPod(t *testing.T) {
 	ctx := context.Background()
 	sb := identityTestSandbox("old")
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sb).Build()
-	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "old", SandboxLauncher, SandboxLauncherServiceAccountName); err != nil {
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "old", SandboxLauncher, SandboxLauncherServiceAccountName, nil); err != nil {
 		t.Fatal(err)
 	}
 	var rb rbacv1.RoleBinding
@@ -97,10 +97,10 @@ func TestEnsureLauncherIdentity_SlotAccountHandover(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pool, slot).Build()
 	sa := SandboxLauncherServiceAccountFor(slot.Name)
 
-	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, pool, slot.Name, SandboxLauncher, sa); err != nil {
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, pool, slot.Name, SandboxLauncher, sa, nil); err != nil {
 		t.Fatalf("phase one: %v", err)
 	}
-	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, slot, slot.Name, SandboxLauncher, sa); err != nil {
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, slot, slot.Name, SandboxLauncher, sa, nil); err != nil {
 		t.Fatalf("phase two: %v", err)
 	}
 	var acct corev1.ServiceAccount
@@ -118,7 +118,7 @@ func TestEnsureLauncherIdentity_RefusesAForeignAccount(t *testing.T) {
 	sa := SandboxLauncherServiceAccountFor("sb2")
 	planted := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: sa, Namespace: "ns"}}
 	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sb, planted).Build()
-	err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb2", SandboxLauncher, sa)
+	err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb2", SandboxLauncher, sa, nil)
 	if err == nil || !strings.Contains(err.Error(), "not created by KubeSwift") {
 		t.Errorf("err = %v, want a refusal", err)
 	}
@@ -138,10 +138,36 @@ func TestEnsureLauncherIdentity_OwnAccountGrantIsAlwaysFatal(t *testing.T) {
 			}
 			return cl.Create(ctx, obj, opts...)
 		}}).Build()
-	if err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb3", SandboxLauncher, SandboxLauncherServiceAccountFor("sb3")); err == nil {
+	if err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb3", SandboxLauncher, SandboxLauncherServiceAccountFor("sb3"), nil); err == nil {
 		t.Error("the grant is the only access of a pod's own account; failing it must stop the pod")
 	}
-	if err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb3", SandboxLauncher, SandboxLauncherServiceAccountName); err != nil {
+	if err := EnsureLauncherIdentity(context.Background(), c, scheme.Scheme, sb, "sb3", SandboxLauncher, SandboxLauncherServiceAccountName, nil); err != nil {
 		t.Errorf("under the shared account with the gate off the shared binding still covers it; got %v", err)
+	}
+}
+
+// A Secret is granted only to a pod's own account, and to exactly the names
+// asked for; on the shared account the grant would reach every launcher in
+// the namespace, so asking is an error.
+func TestEnsureLauncherIdentity_SecretsOnlyForOwnAccount(t *testing.T) {
+	ctx := context.Background()
+	sb := identityTestSandbox("sb4")
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(sb).Build()
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "sb4", SandboxLauncher,
+		SandboxLauncherServiceAccountName, []string{"db"}); err == nil {
+		t.Error("granting a Secret to the shared launcher account must be refused")
+	}
+	if err := EnsureLauncherIdentity(ctx, c, scheme.Scheme, sb, "sb4", SandboxLauncher,
+		SandboxLauncherServiceAccountFor("sb4"), []string{"db", "api", "db"}); err != nil {
+		t.Fatal(err)
+	}
+	var role rbacv1.Role
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: ScopedRoleNameFor("sb4")}, &role); err != nil {
+		t.Fatal(err)
+	}
+	last := role.Rules[len(role.Rules)-1]
+	if last.Resources[0] != "secrets" || len(last.Verbs) != 1 || last.Verbs[0] != "get" ||
+		strings.Join(last.ResourceNames, ",") != "api,db" {
+		t.Errorf("secrets rule = %+v, want get on exactly [api db]", last)
 	}
 }

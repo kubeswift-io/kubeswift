@@ -374,3 +374,17 @@ mod tests {
         assert_eq!(conds[1]["lastTransitionTime"], "NOW");
     }
 }
+
+/// Tells the controller swiftletd could not read a secret workload variable:
+/// the message names the variable, Secret and key, never a value.
+pub async fn report_secret_error(namespace: &str, name: &str, msg: &str) -> Result<(), String> {
+    let client = crate::kube_client::create_client()
+        .await
+        .map_err(|e| e.to_string())?;
+    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, namespace);
+    let patch = json!({"metadata": {"annotations": {"kubeswift.io/sandbox-secret-error": msg}}});
+    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}

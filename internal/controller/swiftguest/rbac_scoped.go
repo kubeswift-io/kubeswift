@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -241,6 +243,11 @@ func perPodServiceAccount(sa string) bool {
 // binds that account — so every error is returned, whatever ScopedOnly says.
 // A pod still running as the shared class account (one created before
 // per-pod accounts) is converged with that account as the subject.
+//
+// secrets adds `get` on exactly those Secrets (a sandbox's secret env), and
+// only ever to a pod's own account: on the shared account the grant would
+// reach every launcher in the namespace. Every call for a pod must pass the
+// same list; the Role is converged to what the call asks for.
 func EnsureLauncherIdentity(
 	ctx context.Context,
 	c client.Client,
@@ -249,17 +256,21 @@ func EnsureLauncherIdentity(
 	podName string,
 	class LauncherClass,
 	serviceAccount string,
+	secrets []string,
 ) error {
 	if podName == "" || serviceAccount == "" {
 		return fmt.Errorf("launcher identity: empty pod or ServiceAccount name")
 	}
 	ownAccount := perPodServiceAccount(serviceAccount)
+	if len(secrets) > 0 && !ownAccount {
+		return fmt.Errorf("launcher identity: pod %s runs as the shared account %s, which must never be granted Secrets", podName, serviceAccount)
+	}
 	if ownAccount {
 		if err := ensureOwnedServiceAccount(ctx, c, scheme, owner, serviceAccount); err != nil {
 			return err
 		}
 	}
-	err := ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, serviceAccount)
+	err := ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, serviceAccount, secrets)
 	if err == nil || ScopedOnly || ownAccount {
 		return err
 	}
@@ -320,7 +331,7 @@ func ensureScopedLauncherRBAC(
 	class LauncherClass,
 ) error {
 	saName, _, _ := launcherRBACNames(class)
-	return ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, saName)
+	return ensureScopedLauncherRBACFor(ctx, c, scheme, owner, podName, class, saName, nil)
 }
 
 func ensureScopedLauncherRBACFor(
@@ -331,6 +342,7 @@ func ensureScopedLauncherRBACFor(
 	podName string,
 	class LauncherClass,
 	saName string,
+	secrets []string,
 ) error {
 	namespace := owner.GetNamespace()
 	name := ScopedRoleNameFor(podName)
@@ -341,7 +353,7 @@ func ensureScopedLauncherRBACFor(
 			Namespace: namespace,
 			Labels:    rbacLabels("swiftletd-rbac"),
 		},
-		Rules: scopedRulesFor(class, podName),
+		Rules: withSecrets(scopedRulesFor(class, podName), secrets),
 	}
 	if err := controllerutil.SetControllerReference(owner, role, scheme); err != nil {
 		return fmt.Errorf("own scoped role %s/%s: %w", namespace, name, err)
@@ -488,4 +500,21 @@ func stringsEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// withSecrets adds `get` on exactly the named Secrets, sorted and without
+// duplicates so the converged Role is stable.
+func withSecrets(rules []rbacv1.PolicyRule, secrets []string) []rbacv1.PolicyRule {
+	if len(secrets) == 0 {
+		return rules
+	}
+	names := append([]string(nil), secrets...)
+	sort.Strings(names)
+	names = slices.Compact(names)
+	return append(rules, rbacv1.PolicyRule{
+		APIGroups:     []string{""},
+		Resources:     []string{"secrets"},
+		Verbs:         []string{"get"},
+		ResourceNames: names,
+	})
 }

@@ -116,7 +116,7 @@ func TestPoolReconcile_HandsTheSlotAccountToThePod(t *testing.T) {
 		Spec: corev1.PodSpec{ServiceAccountName: acct},
 	}
 	r, c := poolReconciler(pool, slot)
-	if err := swiftguest.EnsureLauncherIdentity(ctx, c, r.Scheme, pool, name, swiftguest.SandboxLauncher, acct); err != nil {
+	if err := swiftguest.EnsureLauncherIdentity(ctx, c, r.Scheme, pool, name, swiftguest.SandboxLauncher, acct, nil); err != nil {
 		t.Fatal(err)
 	}
 	reconcilePool(t, r, "p")

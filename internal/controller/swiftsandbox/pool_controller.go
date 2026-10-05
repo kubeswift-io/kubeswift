@@ -199,8 +199,13 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// binding under them would 403 every annotation write on a running slot.
 		// Also the self-heal for a create that crashed between the two phases —
 		// owner is the pod, so this adopts a still-pool-owned grant.
-		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher, slotAccount(p)); err != nil {
-			return ctrl.Result{}, err
+		// Warm slots only: a claimed slot's grant is its sandbox's to converge
+		// (reconcileClaimedSlot), with that sandbox's Secrets; converging it
+		// here would strip them.
+		if p.Labels[SlotStateLabelKey] == slotStateWarm {
+			if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, p, p.Name, swiftguest.SandboxLauncher, slotAccount(p), nil); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		// egressNow is "" while a Service is not usable, so a slot carrying
 		// rules is replaced then too: its addresses can no longer be confirmed.
@@ -468,7 +473,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	// it onto the pod. Pool ownership is the fail-safe: a crash between the two
 	// leaves a grant that still GCs with the pool, and the census in Reconcile
 	// re-parents it on the next pass.
-	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName); err != nil {
+	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName, nil); err != nil {
 		return err
 	}
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -479,7 +484,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	// matches the grant's in both states. Skipped on AlreadyExists (no UID to bind
 	// to); the census picks that up.
 	if pod.UID != "" {
-		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pod, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName); err != nil {
+		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pod, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName, nil); err != nil {
 			return err
 		}
 	}

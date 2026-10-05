@@ -7,6 +7,7 @@ mod lease;
 mod migconn;
 mod probe;
 mod report;
+mod secrets;
 mod shutdown;
 
 use std::env;
@@ -213,6 +214,37 @@ fn main() {
             );
 
             let (namespace, name) = (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok());
+
+            // Secret-backed workload variables: read them now, before the
+            // config disk is written (launch). A failure ends the launcher
+            // before the VM boots; the annotation tells the controller why,
+            // naming the Secret and key, never a value.
+            if let Some(exec) = intent.sandbox_exec.as_mut() {
+                if !exec.secret_env.is_empty() {
+                    let resolved = match (&namespace, &name) {
+                        (Some(ns), Some(_)) => rt.block_on(async {
+                            let client = kube_client::create_client()
+                                .await
+                                .map_err(|e| format!("secret env: kube client: {}", e))?;
+                            secrets::resolve(&client, ns, &exec.secret_env).await
+                        }),
+                        _ => Err("secret env: POD_NAMESPACE/POD_NAME unset".to_string()),
+                    };
+                    match resolved {
+                        Ok(vars) => {
+                            log::info!("secret_env_resolved count={}", vars.len());
+                            exec.env.extend(vars);
+                        }
+                        Err(msg) => {
+                            log::error!("{}", msg);
+                            if let (Some(ns), Some(n)) = (&namespace, &name) {
+                                let _ = rt.block_on(report::report_secret_error(ns, n, &msg));
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
             // GuestRunning reports go to the SwiftGuest, which is not always
             // named like this pod (a migration's destination pod is
             // <guest>-mig-<uid>); pod annotations keep using `name`.

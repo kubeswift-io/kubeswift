@@ -268,6 +268,37 @@ spec:
 - Probe headers are stored in the spec in plain text; do not put credentials in
   them.
 
+## Secrets
+
+A workload variable can take its value from a Secret in the sandbox's
+namespace:
+
+```yaml
+spec:
+  env:
+    - name: DATABASE_URL
+      valueFrom:
+        secretKeyRef: {name: db, key: url}   # optional: true to leave it unset when missing
+```
+
+- The value never passes through the controller's objects. The controller
+  checks the Secret and key exist and grants the sandbox's launcher, which runs
+  as its own ServiceAccount (`kubeswift-sandbox-launcher-<pod>`), `get` on
+  exactly the referenced Secrets. swiftletd reads them and gives them to the
+  guest: on a cold boot on the config disk, which then lives in a memory-backed
+  volume; on a warm-pool checkout over vsock with the rest of the workload's
+  environment. No value is written to the intent ConfigMap, the SwiftSandbox,
+  annotations, events or logs.
+- A missing Secret or key keeps the sandbox `Pending` with reason
+  `SecretNotFound` or `SecretKeyNotFound`, naming them. If the launcher then
+  cannot read it, the sandbox fails with `SecretUnavailable`.
+- Values are read when the workload starts. A rotated Secret reaches a new
+  sandbox, not a running one.
+- Anyone who can create a SwiftSandbox that names a Secret can read it from
+  inside the guest: the same trust as a Pod's Secret references.
+- Only `secretKeyRef` is supported; `fieldRef`, `resourceFieldRef` and
+  `configMapKeyRef` are refused. Secret files are not supported yet.
+
 ## Signed images (verify before boot)
 
 Set `spec.verifyKeySecretRef.name` to a Secret holding a cosign public key
