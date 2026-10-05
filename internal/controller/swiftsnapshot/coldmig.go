@@ -181,7 +181,7 @@ func (r *SwiftSnapshotReconciler) handleFullStateDiskCapture(ctx context.Context
 				if t.dataName != "" {
 					disk = "data disk " + t.dataName
 				}
-				return false, "OCI chunk Job for the " + disk + " failed: " + c.Message, nil
+				return false, "OCI chunk Job for the " + disk + " failed: " + clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), nil
 			}
 		}
 		if !complete {
@@ -347,10 +347,11 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 	}
 
 	container := corev1.Container{
-		Name:  "chunk",
-		Image: image,
-		Args:  args,
-		Env:   clonecommon.RegistryCAEnvVars(oci.CABundle),
+		Name:                     "chunk",
+		Image:                    image,
+		TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+		Args:                     args,
+		Env:                      clonecommon.RegistryCAEnvVars(oci.CABundle),
 		// Root to read the raw disk (device or 0644 image); otherwise maximally
 		// constrained — upload-image streams chunks to the registry, no disk temp.
 		SecurityContext: &corev1.SecurityContext{
@@ -404,7 +405,7 @@ func buildChunkJob(snap *snapshotv1alpha1.SwiftSnapshot, image, captureNode, job
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					NodeName:                     captureNode,
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					Containers:                   []corev1.Container{container},
 					Volumes:                      volumes,

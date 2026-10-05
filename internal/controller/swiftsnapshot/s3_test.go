@@ -67,8 +67,11 @@ func TestBuildUploadJob_Pinning_Mount_Creds(t *testing.T) {
 	if pod.NodeName != "worker-1" {
 		t.Errorf("job must pin to the capture node; got %q", pod.NodeName)
 	}
-	if pod.RestartPolicy != corev1.RestartPolicyOnFailure {
-		t.Errorf("restartPolicy = %q, want OnFailure (idempotent resume)", pod.RestartPolicy)
+	// Never: each attempt keeps its pod, and with it the error (#737). The
+	// upload stays resumable: it skips objects already in the bucket.
+	if pod.RestartPolicy != corev1.RestartPolicyNever || pod.Containers[0].TerminationMessagePolicy != corev1.TerminationMessageFallbackToLogsOnError {
+		t.Errorf("restartPolicy = %q, termination = %q; want Never and FallbackToLogsOnError",
+			pod.RestartPolicy, pod.Containers[0].TerminationMessagePolicy)
 	}
 	c := pod.Containers[0]
 
@@ -168,6 +171,21 @@ func TestHandleUploading(t *testing.T) {
 		}
 	})
 
+	// The Job's condition only says the backoff limit was reached; the pod
+	// it kept says why (#737).
+	t.Run("failed -> errMsg carries the transfer's own error", func(t *testing.T) {
+		snap := base.DeepCopy()
+		job := uploadJobWith(snap, batchv1.JobFailed)
+		job.UID = "upload-uid"
+		r, _ := newReconciler(t, snap, job, failedTransferPod(job,
+			"2026/10/05 08:00:00 snapshot-s3 upload: 3 artifact(s)\nsnapshot-s3: put memory-ranges: AccessDenied: Access Denied"))
+		_, errMsg, _ := r.handleUploading(context.Background(), snap, snap.Status.DeepCopy())
+		want := "S3 upload Job failed: snapshot-s3: put memory-ranges: AccessDenied: Access Denied (boom)"
+		if errMsg != want {
+			t.Errorf("errMsg = %q\nwant      %q", errMsg, want)
+		}
+	})
+
 	t.Run("running -> requeue", func(t *testing.T) {
 		snap := base.DeepCopy()
 		r, _ := newReconciler(t, snap, uploadJobWith(snap, ""))
@@ -186,5 +204,19 @@ func TestSnapshotS3Image_Resolver(t *testing.T) {
 	t.Setenv(SnapshotS3ImageEnv, "ghcr.io/x/snapshot-s3:pinned")
 	if got := SnapshotS3Image(); got != "ghcr.io/x/snapshot-s3:pinned" {
 		t.Errorf("set env: got %q", got)
+	}
+}
+
+// failedTransferPod is a failed pod of job whose container left msg as its
+// termination message, as FallbackToLogsOnError does with the log tail.
+func failedTransferPod(job *batchv1.Job, msg string) *corev1.Pod {
+	isController := true
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: job.Name + "-abcde", Namespace: job.Namespace, Labels: map[string]string{"job-name": job.Name},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID, Controller: &isController}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{Name: "transfer",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: msg}}}}},
 	}
 }

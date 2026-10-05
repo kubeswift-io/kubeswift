@@ -242,7 +242,7 @@ func (r *SwiftRestoreReconciler) handleDownloading(
 			return advanced, requeue, "", merr
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return false, 0, "S3 download Job failed: " + c.Message, nil
+			return false, 0, "S3 download Job failed: " + clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), nil
 		}
 	}
 	return false, 5 * time.Second, "", nil // still downloading

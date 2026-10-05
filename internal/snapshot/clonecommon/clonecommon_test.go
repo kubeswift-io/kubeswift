@@ -81,8 +81,11 @@ func TestBuildDownloadJob(t *testing.T) {
 		Component: "snapshot-s3-download", ExtraLabels: map[string]string{"owner": "x"},
 	})
 	pod := job.Spec.Template.Spec
-	if pod.NodeName != "worker-1" || pod.RestartPolicy != corev1.RestartPolicyOnFailure {
+	if pod.NodeName != "worker-1" || pod.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("node/restart wrong: %q %q", pod.NodeName, pod.RestartPolicy)
+	}
+	if pod.Containers[0].TerminationMessagePolicy != corev1.TerminationMessageFallbackToLogsOnError {
+		t.Errorf("a failed download must leave its log tail: %q", pod.Containers[0].TerminationMessagePolicy)
 	}
 	if job.Labels["owner"] != "x" || job.Labels["app.kubernetes.io/component"] != "snapshot-s3-download" {
 		t.Errorf("labels = %+v", job.Labels)

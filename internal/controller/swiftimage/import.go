@@ -16,6 +16,7 @@ import (
 	imagev1alpha1 "github.com/kubeswift-io/kubeswift/api/image/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/names"
+	"github.com/kubeswift-io/kubeswift/internal/snapshot/clonecommon"
 )
 
 const (
@@ -370,7 +371,7 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
+					RestartPolicy:                clonecommon.TransferRestartPolicy,
 					AutomountServiceAccountToken: ptr.To(false),
 					SecurityContext: &corev1.PodSecurityContext{
 						// Root: both containers write into the (root-owned) PVC
@@ -379,11 +380,12 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 					},
 					ImagePullSecrets: swiftguest.LauncherImagePullSecrets(),
 					InitContainers: []corev1.Container{{
-						Name:         "pull",
-						Image:        r.SnapshotORASImage,
-						Args:         pullArgs,
-						Env:          pullEnv,
-						VolumeMounts: pullMounts,
+						Name:                     "pull",
+						Image:                    r.SnapshotORASImage,
+						TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+						Args:                     pullArgs,
+						Env:                      pullEnv,
+						VolumeMounts:             pullMounts,
 						// Minimal: writes only to the mounted PVC; no disk temp
 						// (oras streams chunks into the sparse file).
 						SecurityContext: &corev1.SecurityContext{
@@ -396,8 +398,9 @@ func (r *SwiftImageReconciler) importOCI(ctx context.Context, img *imagev1alpha1
 						Name: "import",
 						// The launcher image (qemu-img, util-linux); see the http
 						// import Job.
-						Image:   swiftguest.CloneJobImage(),
-						Command: []string{"sh", "-c", script},
+						Image:                    swiftguest.CloneJobImage(),
+						TerminationMessagePolicy: clonecommon.TransferTerminationPolicy,
+						Command:                  []string{"sh", "-c", script},
 						SecurityContext: &corev1.SecurityContext{
 							Privileged: ptr.To(privileged),
 						},
@@ -445,6 +448,7 @@ func (r *SwiftImageReconciler) CheckImportStatus(ctx context.Context, img *image
 		return imagev1alpha1.SwiftImagePhaseValidating, pvcRef, "", nil
 	}
 	if msg, failed := jobFailed(&job); failed {
+		msg = clonecommon.JobFailureMessage(ctx, r.Client, &job, msg)
 		if msg == "" {
 			msg = "import job failed"
 		}

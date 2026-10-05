@@ -443,7 +443,7 @@ func (r *SwiftGuestReconciler) ensureCloneDownloadJob(
 			return true, "", nil
 		}
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return false, "snapshot download Job failed: " + c.Message, nil
+			return false, "snapshot download Job failed: " + clonecommon.JobFailureMessage(ctx, r.Client, &job, c.Message), nil
 		}
 	}
 	return false, "", nil
