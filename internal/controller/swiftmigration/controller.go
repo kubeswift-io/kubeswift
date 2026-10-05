@@ -165,6 +165,10 @@ type phaseResult struct {
 	// non-failure paths. See api/migration/v1alpha1's
 	// FailureReason* constants.
 	FailureReason migrationv1alpha1.FailureReasonCode
+	// Reported is set by a handler that has already recorded a Warning
+	// event carrying FailureMsg, so dispatchResult does not record the
+	// failure a second time.
+	Reported bool
 }
 
 // phaseAdvance returns a phaseResult that signals "phase advanced;
@@ -374,7 +378,11 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 		if cleanupErr := r.onTerminalPhase(ctx, mig, status); cleanupErr != nil {
 			return ctrl.Result{}, fmt.Errorf("terminal-phase cleanup: %w", cleanupErr)
 		}
-		return ctrl.Result{}, r.persist(ctx, mig, status)
+		if err := r.persist(ctx, mig, status); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.recordFailed(mig, result)
+		return ctrl.Result{}, nil
 	}
 	if result.Advanced {
 		// Phase advanced; persist and requeue immediately to start the
@@ -385,6 +393,22 @@ func (r *SwiftMigrationReconciler) dispatchResult(
 	// observed conditions) and requeue after the handler-specified
 	// interval.
 	return ctrl.Result{RequeueAfter: result.Requeue}, r.persist(ctx, mig, status)
+}
+
+// recordFailed records a Warning event for a migration that has just gone
+// Failed, so `kubectl get events` and event-based alerting see every failure,
+// including those refused at validation, which used to record none (#694).
+// It runs once, on the transition: dispatchResult serves non-terminal phases
+// only. A handler that already recorded the failure sets Reported.
+func (r *SwiftMigrationReconciler) recordFailed(mig *migrationv1alpha1.SwiftMigration, result *phaseResult) {
+	if r.Recorder == nil || result.Reported {
+		return
+	}
+	msg := result.FailureMsg
+	if result.FailureReason != "" {
+		msg = string(result.FailureReason) + ": " + msg
+	}
+	r.Recorder.Event(mig, corev1.EventTypeWarning, ReasonMigrationFailed, msg)
 }
 
 // handleCancellation is implemented in failure.go.

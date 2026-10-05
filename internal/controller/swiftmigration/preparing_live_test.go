@@ -247,6 +247,9 @@ func TestPreparingLive_BudgetExceeded_MessageNamesAttachFailure(t *testing.T) {
 	if !recordedEvent(rec, "Warning "+eventReasonDestinationPodNeverReady+" "+want) {
 		t.Errorf("no %s Warning event carrying the failure message", eventReasonDestinationPodNeverReady)
 	}
+	if !res.Reported {
+		t.Error("the failure is already recorded; dispatchResult must not record it again")
+	}
 }
 
 // An unschedulable destination pod: the scheduler's message names why.
@@ -513,6 +516,9 @@ func TestPreparingLive_BudgetExceeded_MessageNamesVolumeNotAttached(t *testing.T
 	}
 	if !recordedEvent(rec, "Warning "+eventReasonDestinationPodNeverReady+" "+want) {
 		t.Errorf("no %s Warning event carrying the failure message", eventReasonDestinationPodNeverReady)
+	}
+	if !res.Reported {
+		t.Error("the failure is already recorded; dispatchResult must not record it again")
 	}
 }
 
