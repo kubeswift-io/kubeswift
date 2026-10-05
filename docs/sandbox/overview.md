@@ -34,7 +34,7 @@ For bursts of same-image sandboxes where the ~15s cold boot dominates, a
 
 - A node labeled `kubeswift.io/kernel-node=true`
 - A `Ready` `SwiftKernel` named `sandbox` (OCI artifact
-  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13`, pulled per node)
+  `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14`, pulled per node)
 
 The sandbox kernel is not a plain `kernelRef` SwiftGuest kernel — its
 bridge-initramfs needs the OCI rootfs disk that the SwiftSandbox controller
@@ -297,7 +297,37 @@ spec:
 - Anyone who can create a SwiftSandbox that names a Secret can read it from
   inside the guest: the same trust as a Pod's Secret references.
 - Only `secretKeyRef` is supported; `fieldRef`, `resourceFieldRef` and
-  `configMapKeyRef` are refused. Secret files are not supported yet.
+  `configMapKeyRef` are refused.
+
+### Secret files
+
+Structured credentials (a registry config, TLS keys, a cloud credentials file)
+go in as files instead:
+
+```yaml
+spec:
+  secretFiles:
+    - secretName: registry-auth
+      mode: 0400                       # default; an item may set its own
+      items:
+        - key: config.json
+          path: /run/secrets/registry/config.json
+```
+
+- They travel like secret env: the launcher's own account reads them, and they
+  reach the guest on the in-memory config disk (cold boot) or over vsock
+  (warm-pool checkout). The guest writes them into its writable layer, which
+  is in memory. A missing Secret or key keeps the sandbox `Pending` unless the
+  entry sets `optional: true`.
+- A path must be absolute and clean, unique, and not under `/proc`, `/sys`,
+  `/dev` or the model mount. All of a sandbox's secret files together may be
+  at most 2 MiB.
+- **Needs a newer sandbox kernel**: `kernels/sandbox:6.6.14` or
+  `kernels/gpu-sandbox:6.6.3` and later, whose bridge writes the files. On an
+  older kernel the sandbox fails with reason `KernelUnsupported` before it
+  boots, instead of running without them. Changing an existing SwiftKernel's
+  tag pulls nothing by itself; delete its pull Jobs afterwards
+  (`kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>`).
 
 ## Signed images (verify before boot)
 

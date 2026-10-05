@@ -49,26 +49,55 @@ linux-reconfigure` re-applies it unconditionally.
 
 ## Publish (SwiftKernel OCI artifact)
 
-The artifact carries the same two blobs a SwiftKernel expects (`bzImage` +
-`rootfs.cpio.gz`), pulled per node via the ORAS Job to
-`/var/lib/kubeswift/kernels/<ns>-<name>/`:
+The artifact carries the blobs a SwiftKernel expects, pulled per node via the
+ORAS Job to `/var/lib/kubeswift/kernels/<ns>-<name>/`: `bzImage`,
+`rootfs.cpio.gz`, and `bridge-features`, the list of what this bridge
+understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14 \
   bzImage:application/vnd.kubeswift.kernel.binary \
-  rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.2 bzImage:... rootfs.cpio.gz:...
+  rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
+  bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.3 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
 `swiftkernel-gpu-sandbox.yaml`) on a cluster with a `kubeswift.io/kernel-node=true`
 node.
 
-## Boot contract (cmdline)
+## Boot contract
 
 The SwiftSandbox controller appends to the kernel cmdline:
 
 - `kubeswift.rootfs=block` — mount `/dev/vda` (the OCI ext4) RO as the overlay lower.
 - `kubeswift.rootfs=virtiofs` — mount the `sandboxroot` virtio-fs tag as the lower.
-- `kubeswift.entrypoint=<path>` — exec this after `switch_root` (default `/sbin/init`, then `/bin/sh`).
+- `kubeswift.config=/dev/vdX` — the config disk carrying the workload (below).
+- `kubeswift.entrypoint=<path>` — legacy single entrypoint when there is no config disk.
+- `kubeswift.dns-search=<a,b,...>` — search domains for the guest resolver.
+- `kubeswift.idle=1` — a warm-pool keeper: no workload, idle until a checkout
+  injects one over vsock.
+- `kubeswift.model=virtiofs`, `kubeswift.modelpath=<path>` — mount the
+  `sandboxmodel` virtio-fs tag read-only (spec.model).
+- `kubeswift.mounts=<tag>:<path>[,...]` — mount each virtio-fs tag read-only at
+  its path (spec.artifacts). Feature `mounts`.
+
+The config disk is a raw blob: `KUBESWIFT-EXEC-V1`, then one TAB-separated line
+per item, then `KUBESWIFT-EXEC-END`, NUL-padded. Values are base64.
+
+- `ARGV <b64>`, `ENV <b64 KEY=VALUE>`, `CWD <b64>`.
+- `FILE <b64 path> <octal mode> <b64 content>` — written into the writable
+  layer (tmpfs) before the workload runs (spec.secretFiles). Feature `files`.
+
+The bridge reads up to 4 MiB of it. A path must be absolute with no `.` or
+`..` component. Any bridge failure prints `KUBESWIFT-EXIT-CODE=125` before it
+powers off, so it reads as a failed sandbox rather than a completed one.
+
+The guest agent's single-shot `exec` request takes the same files as
+`files: [{path, mode, data}]` (data base64) for a warm-pool checkout.
+
+**Features.** A bridge ignores what it does not know, so an older one would run
+the workload without its files or mounts. swiftletd therefore reads
+`bridge-features` next to the kernel before asking for either, and fails the
+sandbox if the feature is missing: point the SwiftKernel at a newer artifact.

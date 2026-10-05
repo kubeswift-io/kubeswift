@@ -12,7 +12,7 @@
 #
 # The pull Job is named for the kernel, the node and the directory it pulls
 # into, so re-pull is keyed on (name, node) and NOT on spec.ociRef.image.
-# Editing the tag below to `sandbox:6.6.14` and committing will update this
+# Editing the tag below to `sandbox:6.6.15` and committing will update this
 # object and download nothing: the Job already exists on every node, so the
 # reconciler reports success while the kernel on disk stays exactly as it was.
 #
@@ -28,5 +28,5 @@ spec:
     # Digest-pinnable like any OCI reference, and worth doing for the same
     # reason as the golden disk. Kept as a tag here because this artifact is
     # published by the KubeSwift project rather than by you.
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14
   profile: sandbox

@@ -164,6 +164,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := sandboxwebhook.ValidateEnv(sb.Spec.Env); err != nil {
 		return r.fail(ctx, sb, "InvalidEnv", err.Error())
 	}
+	if err := sandboxwebhook.ValidateSecretFiles(&sb.Spec); err != nil {
+		return r.fail(ctx, sb, "InvalidSecretFiles", err.Error())
+	}
 	// A referenced Secret or key that does not exist (yet) keeps the sandbox
 	// Pending, named, before any launcher exists.
 	if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
@@ -296,6 +299,11 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 			Type: sandboxv1alpha1.SwiftSandboxConditionGuestRunning, Status: metav1.ConditionTrue,
 			Reason: "GuestRunning", Message: guestRunningMessage(sb), ObservedGeneration: sb.Generation,
 		})
+		// The kernel's bridge cannot deliver what the sandbox needs.
+		if msg, failed := kernelError(pod); failed {
+			_ = r.Delete(ctx, pod)
+			return r.fail(ctx, sb, "KernelUnsupported", msg)
+		}
 		// swiftletd could not read a secret variable: the workload never ran.
 		if msg, failed := secretError(pod); failed {
 			_ = r.Delete(ctx, pod)
@@ -335,6 +343,9 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 // the launcher container's exit code.
 func (r *SwiftSandboxReconciler) finishTerminal(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) (ctrl.Result, error) {
 	applyMaterializeResult(sb, pod)
+	if msg, failed := kernelError(pod); failed {
+		return r.fail(ctx, sb, "KernelUnsupported", msg)
+	}
 	// swiftletd could not read a secret variable and ended the launcher.
 	if msg, failed := secretError(pod); failed {
 		return r.fail(ctx, sb, "SecretUnavailable", msg)

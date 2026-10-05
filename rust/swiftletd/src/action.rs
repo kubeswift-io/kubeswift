@@ -947,6 +947,10 @@ struct SandboxExecArgs {
     /// own account and sent to the guest over vsock with the rest of env.
     #[serde(default)]
     secret_env: Vec<crate::intent::SecretEnvRef>,
+    /// Secret files: references, read here and written by the guest agent
+    /// into the sandbox root before the workload runs.
+    #[serde(default)]
+    secret_files: Vec<crate::intent::SecretFileRef>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -998,7 +1002,36 @@ async fn dispatch_sandbox_exec(
         log::info!("secret_env_resolved id={} count={}", action.id, vars.len());
         env.extend(vars);
     }
-    let req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
+    let mut files = vec![];
+    if !args.secret_files.is_empty() {
+        // The slot's kernel decides whether its agent can write them; an
+        // older agent would run the workload without the files.
+        crate::bridge::require("files", "secret files")
+            .map_err(|e| format!("KernelUnsupported: {}", e))?;
+        let ns = std::env::var("POD_NAMESPACE")
+            .map_err(|_| "SecretUnavailable: POD_NAMESPACE unset".to_string())?;
+        let client = crate::kube_client::create_client()
+            .await
+            .map_err(|e| format!("SecretUnavailable: kube client: {}", e))?;
+        let resolved = crate::secrets::resolve_files(&client, &ns, &args.secret_files)
+            .await
+            .map_err(|e| format!("SecretUnavailable: {}", e))?;
+        log::info!(
+            "secret_files_resolved id={} count={}",
+            action.id,
+            resolved.len()
+        );
+        files = resolved
+            .into_iter()
+            .map(|f| swift_vsock_client::ExecFile {
+                path: f.path,
+                mode: f.mode,
+                data: crate::intent::base64_encode(&f.data),
+            })
+            .collect();
+    }
+    let mut req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
+    req.files = files;
     // Probe the workload while it runs; the guard stops probing when the
     // exec returns (the workload has exited).
     let _probe_guard = match (

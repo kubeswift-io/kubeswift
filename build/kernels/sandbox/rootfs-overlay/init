@@ -36,6 +36,9 @@ IDLE=""
 # over the "sandboxmodel" virtio-fs tag at kubeswift.modelpath (default /model).
 MODEL_KIND=""
 MODEL_PATH="/model"
+# kubeswift.mounts=<tag>:<path>[,<tag>:<path>...] mounts more read-only virtio-fs
+# shares (spec.artifacts) at those paths inside the new root.
+MOUNTS=""
 # WORKDIR is only assigned from the config-disk CWD line (spec.workingDir). Init it
 # here so the `set -u` reference below is safe when no workingDir is set — the
 # common case (a missing init was a regression that panicked PID 1: "WORKDIR:
@@ -50,13 +53,38 @@ for arg in $(cat /proc/cmdline); do
 		kubeswift.idle=*)       IDLE="${arg#kubeswift.idle=}" ;;
 		kubeswift.model=*)      MODEL_KIND="${arg#kubeswift.model=}" ;;
 		kubeswift.modelpath=*)  MODEL_PATH="${arg#kubeswift.modelpath=}" ;;
+		kubeswift.mounts=*)     MOUNTS="${arg#kubeswift.mounts=}" ;;
 	esac
 done
 
+# What this bridge understands beyond argv/env/cwd. The kernel build writes the
+# same list to the artifact's bridge-features file, which swiftletd checks
+# before it asks for any of them: an older bridge ignores what it does not
+# know, and would run the workload without its files or mounts.
+BRIDGE_FEATURES="files mounts"
+echo "sandbox-bridge: features: $BRIDGE_FEATURES"
+
+# fail ends the sandbox. It reports an exit code first (125), as a workload
+# exit does: without one, swiftletd finds no exit marker and a bridge failure
+# reads as a sandbox that completed.
 fail() {
 	echo "sandbox-bridge: FATAL: $1" >&2
+	printf 'KUBESWIFT-EXIT-CODE=%s\n' 125 >/dev/console 2>/dev/null
+	sleep 1
 	echo o >/proc/sysrq-trigger 2>/dev/null
 	exec /bin/sh
+}
+
+# safe_path accepts an absolute path with no '..' component.
+safe_path() {
+	case "$1" in
+		/*) ;;
+		*) return 1 ;;
+	esac
+	case "/$1/" in
+		*/../*|*/./*) return 1 ;;
+	esac
+	return 0
 }
 
 mkdir -p /lower /over /newroot
@@ -108,6 +136,28 @@ if [ "$MODEL_KIND" = virtiofs ]; then
 	echo "sandbox-bridge: model mounted read-only at ${MODEL_PATH}"
 fi
 
+# --- optional read-only shares (kubeswift.mounts, spec.artifacts) ---
+# Each tag mounted READ-ONLY at its path, like the model share above and for
+# the same reason: the node-cached tree is shared by every sandbox on the node.
+if [ -n "$MOUNTS" ]; then
+	oldifs=$IFS
+	IFS=','
+	for m in $MOUNTS; do
+		tag=${m%%:*}
+		mp=${m#*:}
+		safe_path "$mp" || fail "kubeswift.mounts: '$mp' is not a clean absolute path"
+		mkdir -p "/newroot${mp}"
+		n=0
+		until mount -t virtiofs -o ro "$tag" "/newroot${mp}" 2>/dev/null; do
+			n=$((n + 1))
+			[ "$n" -ge 30 ] && fail "cannot mount virtio-fs tag '$tag' at ${mp} after ${n}s"
+			sleep 1
+		done
+		echo "sandbox-bridge: $tag mounted read-only at ${mp}"
+	done
+	IFS=$oldifs
+fi
+
 # The config disk (/dev/vdX) and /proc/net/pnp are read HERE, after the overlay is
 # mounted (so writes into /newroot land) and while the bridge still owns /dev + /proc.
 
@@ -147,7 +197,8 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 	# Slurp the whole config disk (a small raw blob padded with NULs) in ONE read and
 	# strip the padding, then parse the lines. Reading a block device line-by-line
 	# with `read` hangs (device EOF/size semantics differ from a regular file).
-	blob=$(dd if="$CONFIG_DEV" bs=65536 count=1 2>/dev/null | tr -d '\000')
+	# Up to 4 MiB: FILE entries (secret files) can be far larger than argv/env.
+	blob=$(dd if="$CONFIG_DEV" bs=65536 count=64 2>/dev/null | tr -d '\000')
 	oldifs=$IFS
 	IFS='
 '
@@ -159,6 +210,19 @@ if [ -n "$CONFIG_DEV" ] && [ -r "$CONFIG_DEV" ]; then
 			ARGV) set -- "$@" "$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
 			ENV)  export "$(printf '%s' "$val" | base64 -d 2>/dev/null)" 2>/dev/null || true ;;
 			CWD)  WORKDIR="$(printf '%s' "$val" | base64 -d 2>/dev/null)" ;;
+			# FILE <b64 path> <octal mode> <b64 content>: a secret file, written
+			# into the writable layer (tmpfs), so it lives in guest memory only.
+			# The name is never printed with its content.
+			FILE)
+				p64=${val%%	*}; rest=${val#*	}
+				fmode=${rest%%	*}; c64=${rest#*	}
+				fpath=$(printf '%s' "$p64" | base64 -d 2>/dev/null)
+				safe_path "$fpath" || fail "secret file path '$fpath' is not a clean absolute path"
+				mkdir -p "$(dirname "/newroot${fpath}")" || fail "cannot create the directory of secret file ${fpath}"
+				( umask 077; printf '%s' "$c64" | base64 -d > "/newroot${fpath}" ) 2>/dev/null \
+					|| fail "cannot write secret file ${fpath}"
+				chmod "$fmode" "/newroot${fpath}" || fail "cannot set mode ${fmode} on secret file ${fpath}"
+				echo "sandbox-bridge: wrote secret file ${fpath} (mode ${fmode})" ;;
 		esac
 	done
 	IFS=$oldifs

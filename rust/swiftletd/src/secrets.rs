@@ -11,7 +11,7 @@ use k8s_openapi::api::core::v1::Secret;
 use kube::api::Api;
 use kube::Client;
 
-use crate::intent::SecretEnvRef;
+use crate::intent::{GuestFile, SecretEnvRef, SecretFileRef};
 
 /// Reads each referenced key and returns `NAME=VALUE`, in order. An optional
 /// reference to a missing Secret or key is skipped (the variable stays unset,
@@ -44,6 +44,78 @@ pub async fn resolve(
         }
     }
     Ok(out)
+}
+
+/// Reads each referenced key into a guest file, in order. An optional entry
+/// whose Secret or key is missing is skipped. Errors name the path, Secret and
+/// key, never content.
+pub async fn resolve_files(
+    client: &Client,
+    namespace: &str,
+    refs: &[SecretFileRef],
+) -> Result<Vec<GuestFile>, String> {
+    let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let mut out = Vec::with_capacity(refs.len());
+    let mut total = 0usize;
+    for r in refs {
+        let secret = api.get_opt(&r.secret).await.map_err(|e| {
+            format!(
+                "secret file {}: cannot read Secret {}: {}",
+                r.path, r.secret, e
+            )
+        })?;
+        let bytes = secret.as_ref().and_then(|s| bytes_of(s, &r.key));
+        let Some(data) = bytes else {
+            if r.optional {
+                log::info!(
+                    "secret_file_skipped path={} secret={} key={} reason=optional_and_missing",
+                    r.path,
+                    r.secret,
+                    r.key
+                );
+                continue;
+            }
+            return Err(match secret {
+                None => format!("secret file {}: Secret {} not found", r.path, r.secret),
+                Some(_) => format!(
+                    "secret file {}: Secret {} has no key {}",
+                    r.path, r.secret, r.key
+                ),
+            });
+        };
+        total += data.len();
+        if total > MAX_SECRET_FILE_BYTES {
+            return Err(format!(
+                "secret files total more than {} bytes (at {}): too large for the config disk",
+                MAX_SECRET_FILE_BYTES, r.path
+            ));
+        }
+        out.push(GuestFile {
+            path: r.path.clone(),
+            mode: r.mode,
+            data,
+        });
+    }
+    Ok(out)
+}
+
+/// Total size of a sandbox's secret files. Base64 on the config disk makes it
+/// ~2.7 MiB, under the 4 MiB the bridge reads.
+const MAX_SECRET_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+fn bytes_of(secret: &Secret, key: &str) -> Option<Vec<u8>> {
+    secret
+        .data
+        .as_ref()
+        .and_then(|d| d.get(key))
+        .map(|b| b.0.clone())
+        .or_else(|| {
+            secret
+                .string_data
+                .as_ref()
+                .and_then(|d| d.get(key))
+                .map(|s| s.as_bytes().to_vec())
+        })
 }
 
 /// The value of r's key in secret, None when it is missing and optional.
@@ -131,6 +203,24 @@ mod tests {
             .unwrap_err()
             .contains("not found"));
         assert_eq!(value_of(None, &r("X", "url", true)).unwrap(), None);
+    }
+
+    #[test]
+    fn bytes_of_reads_data_and_string_data() {
+        let s = secret("bin", &[0, 1, 2, 255]);
+        assert_eq!(
+            bytes_of(&s, "bin"),
+            Some(vec![0, 1, 2, 255]),
+            "binary content is kept as is"
+        );
+        let mut sd = BTreeMap::new();
+        sd.insert("txt".to_string(), "hi".to_string());
+        let s2 = Secret {
+            string_data: Some(sd),
+            ..Default::default()
+        };
+        assert_eq!(bytes_of(&s2, "txt"), Some(b"hi".to_vec()));
+        assert_eq!(bytes_of(&s2, "none"), None);
     }
 
     #[test]
