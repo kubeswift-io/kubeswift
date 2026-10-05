@@ -262,6 +262,19 @@ type SandboxExecSpec struct {
 	// references travel: swiftletd reads the values with the launcher's own
 	// account and puts them on the config disk, which then lives in memory.
 	SecretEnv []SecretEnvRef `json:"secretEnv,omitempty"`
+	// SecretFiles are Secret keys swiftletd writes into the guest as files
+	// (references only, like SecretEnv). Needs the kernel's bridge feature
+	// "files".
+	SecretFiles []SecretFileRef `json:"secretFiles,omitempty"`
+}
+
+// SecretFileRef is one Secret key written to one file in the guest.
+type SecretFileRef struct {
+	Secret   string `json:"secret"`
+	Key      string `json:"key"`
+	Path     string `json:"path"`
+	Mode     int32  `json:"mode"`
+	Optional bool   `json:"optional,omitempty"`
 }
 
 // SecretEnvRef names one Secret key a workload variable is read from.

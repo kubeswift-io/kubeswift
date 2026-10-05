@@ -82,6 +82,18 @@ type Request struct {
 	TTY    bool     `json:"tty,omitempty"`    // allocate a PTY (interactive attach); implies stdin
 	Rows   uint16   `json:"rows,omitempty"`   // initial TTY rows (tty only)
 	Cols   uint16   `json:"cols,omitempty"`   // initial TTY cols (tty only)
+	// Files are written into the exec root before the command runs (single-shot
+	// exec only): a checked-out sandbox's secret files.
+	Files []ExecFile `json:"files,omitempty"`
+}
+
+// ExecFile is one file the exec op writes into the exec root: a path inside it,
+// a permission mode (0400 when zero), and the content (base64 in JSON). The
+// root's writable layer is tmpfs, so the content stays in guest memory.
+type ExecFile struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode,omitempty"`
+	Data []byte `json:"data"`
 }
 
 // Response is the guest->host reply.
@@ -488,6 +500,9 @@ func (h *handler) exec(req Request) Response {
 	if err != nil {
 		return Response{OK: false, Error: err.Error()}
 	}
+	if err := writeExecFiles(h.execRoot, req.Files); err != nil {
+		return Response{OK: false, Error: err.Error()}
+	}
 	stdout := &capBuffer{max: execOutputCap}
 	stderr := &capBuffer{max: execOutputCap}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -501,6 +516,31 @@ func (h *handler) exec(req Request) Response {
 		}
 	}
 	return Response{OK: true, Stdout: stdout.buf.String(), Stderr: stderr.buf.String(), ExitCode: &code}
+}
+
+// writeExecFiles writes files under root, creating their directories. A path
+// must be absolute and clean; an error names the path, never the content.
+func writeExecFiles(root string, files []ExecFile) error {
+	for _, f := range files {
+		if !filepath.IsAbs(f.Path) || filepath.Clean(f.Path) != f.Path {
+			return fmt.Errorf("exec: file %q is not a clean absolute path", f.Path)
+		}
+		mode := os.FileMode(f.Mode) & 0o7777
+		if mode == 0 {
+			mode = 0o400
+		}
+		full := filepath.Join(root, f.Path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("exec: file %s: %w", f.Path, err)
+		}
+		if err := os.WriteFile(full, f.Data, mode); err != nil {
+			return fmt.Errorf("exec: file %s: %w", f.Path, err)
+		}
+		if err := os.Chmod(full, mode); err != nil { // WriteFile's perm is masked by the umask
+			return fmt.Errorf("exec: file %s: %w", f.Path, err)
+		}
+	}
+	return nil
 }
 
 func execEnv(reqEnv []string) []string {

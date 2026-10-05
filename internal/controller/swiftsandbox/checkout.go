@@ -104,6 +104,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err := sandboxwebhook.ValidateEnv(sb.Spec.Env); err != nil {
 			return r.fail(ctx, sb, "InvalidEnv", err.Error())
 		}
+		if err := sandboxwebhook.ValidateSecretFiles(&sb.Spec); err != nil {
+			return r.fail(ctx, sb, "InvalidSecretFiles", err.Error())
+		}
 		// Missing Secrets: wait without holding a slot.
 		if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
 			return ctrl.Result{}, err
@@ -242,7 +245,7 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		}
 		// Secrets are granted only to a launcher's own account; a slot from
 		// before per-pod accounts runs as the shared one.
-		if len(secretEnvRefs(sb)) > 0 && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
+		if usesSecrets(sb) && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
 			continue
 		}
 		claimed := p.DeepCopy()
@@ -302,6 +305,9 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 	if refs := secretEnvRefs(sb); len(refs) > 0 {
 		args["secretEnv"] = refs
 	}
+	if refs := secretFileRefs(sb); len(refs) > 0 {
+		args["secretFiles"] = refs
+	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return err
@@ -357,8 +363,8 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 				fmt.Sprintf("workload exited %d", code))
 		case "failed":
 			_ = r.Delete(ctx, &pod)
-			return r.fail(ctx, sb, "ExecFailed",
-				"checkout exec failed: "+pod.Annotations[annSandboxExecStatusDetail])
+			reason, msg := checkoutFailure(pod.Annotations[annSandboxExecStatusDetail])
+			return r.fail(ctx, sb, reason, msg)
 		}
 	}
 
@@ -425,4 +431,16 @@ func (r *SwiftSandboxReconciler) adoptSlotObjects(ctx context.Context, sb *sandb
 		}
 	}
 	return nil
+}
+
+// checkoutFailure is the reason and message for a checkout swiftletd refused.
+// It names a refusal it shares with a cold launch ("KernelUnsupported: ...",
+// "SecretUnavailable: ...") by the same reason the cold path uses.
+func checkoutFailure(detail string) (reason, msg string) {
+	for _, known := range []string{"KernelUnsupported", "SecretUnavailable"} {
+		if rest, ok := strings.CutPrefix(detail, known+": "); ok {
+			return known, rest
+		}
+	}
+	return "ExecFailed", "checkout exec failed: " + detail
 }

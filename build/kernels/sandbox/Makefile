@@ -19,6 +19,8 @@
 
 PROFILE           ?= sandbox
 BUILDROOT_VERSION := 2024.02.6
+# Features of the bridge in rootfs-overlay/init (its BRIDGE_FEATURES).
+BRIDGE_FEATURES   := files mounts
 BUILDROOT_DIR     := $(CURDIR)/buildroot
 OUTPUT_DIR        ?= $(CURDIR)/output$(if $(filter-out sandbox,$(PROFILE)),-$(PROFILE))
 EXTERNAL          := $(CURDIR)
@@ -79,10 +81,15 @@ build: setup agent
 		BR2_EXTERNAL=$(EXTERNAL) \
 		O=$(OUTPUT_DIR) \
 		-j$(shell nproc)
+	@# What the bridge-initramfs understands beyond argv/env/cwd. Pushed with
+	@# the kernel; swiftletd reads it before asking for files or mounts. Keep in
+	@# step with BRIDGE_FEATURES in rootfs-overlay/init.
+	@echo "$(BRIDGE_FEATURES)" > $(OUTPUT_DIR)/images/bridge-features
 	@echo ""
 	@echo "Build complete ($(PROFILE)):"
 	@echo "  bzImage:           $(OUTPUT_DIR)/images/bzImage"
 	@echo "  rootfs.cpio.gz:    $(OUTPUT_DIR)/images/rootfs.cpio.gz  (bridge-initramfs)"
+	@echo "  bridge-features:   $(OUTPUT_DIR)/images/bridge-features  ($(BRIDGE_FEATURES))"
 	@echo "  CONFIG_MODULES:    $$(grep -E '^CONFIG_MODULES=|^# CONFIG_MODULES is not set' \
 		$(OUTPUT_DIR)/build/linux-*/.config 2>/dev/null | head -1)"
 

@@ -273,3 +273,19 @@ func TestReconcileClaimedSlot_FinalStatusWinsOverAnEndedPod(t *testing.T) {
 		})
 	}
 }
+
+// A checkout swiftletd refused for a reason a cold launch also reports carries
+// that reason, so the two paths name the same failure alike.
+func TestCheckoutFailure(t *testing.T) {
+	cases := []struct{ detail, reason, msg string }{
+		{"KernelUnsupported: the sandbox kernel's bridge does not support secret files", "KernelUnsupported", "the sandbox kernel's bridge does not support secret files"},
+		{"SecretUnavailable: secret db: forbidden", "SecretUnavailable", "secret db: forbidden"},
+		{"vsock connect: timed out", "ExecFailed", "checkout exec failed: vsock connect: timed out"},
+	}
+	for _, c := range cases {
+		reason, msg := checkoutFailure(c.detail)
+		if reason != c.reason || msg != c.msg {
+			t.Errorf("checkoutFailure(%q) = %q, %q; want %q, %q", c.detail, reason, msg, c.reason, c.msg)
+		}
+	}
+}

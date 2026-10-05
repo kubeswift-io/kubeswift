@@ -28,8 +28,8 @@ as-is:
 | Artifact | Use |
 |---|---|
 | `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3` | kernel-boot guests (the `faas-minimal` profile) |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.13` | SwiftSandbox |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.2` | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y`) |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14` | SwiftSandbox |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.3` | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y`) |
 
 They are pushed manually with ORAS and are **not** built by CI, so a new tag
 appears only when someone builds and pushes it.

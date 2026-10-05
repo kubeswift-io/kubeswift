@@ -1,4 +1,5 @@
 mod action;
+mod bridge;
 mod cpuset;
 mod intent;
 mod kube_client;
@@ -215,6 +216,11 @@ fn main() {
 
             let (namespace, name) = (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok());
 
+            // What this kernel's bridge can be asked for (files, mounts).
+            if let Some(kb) = intent.kernel_boot.as_ref() {
+                bridge::load(&kb.kernel_path);
+            }
+
             // Secret-backed workload variables: read them now, before the
             // config disk is written (launch). A failure ends the launcher
             // before the VM boots; the annotation tells the controller why,
@@ -234,6 +240,41 @@ fn main() {
                         Ok(vars) => {
                             log::info!("secret_env_resolved count={}", vars.len());
                             exec.env.extend(vars);
+                        }
+                        Err(msg) => {
+                            log::error!("{}", msg);
+                            if let (Some(ns), Some(n)) = (&namespace, &name) {
+                                let _ = rt.block_on(report::report_secret_error(ns, n, &msg));
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            // Secret files: the bridge writes them (feature "files"); an older
+            // bridge would boot without them, so refuse before the VM starts.
+            if let Some(exec) = intent.sandbox_exec.as_mut() {
+                if !exec.secret_files.is_empty() {
+                    if let Err(msg) = bridge::require("files", "secret files") {
+                        log::error!("{}", msg);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                        }
+                        std::process::exit(1);
+                    }
+                    let resolved = match (&namespace, &name) {
+                        (Some(ns), Some(_)) => rt.block_on(async {
+                            let client = kube_client::create_client()
+                                .await
+                                .map_err(|e| format!("secret files: kube client: {}", e))?;
+                            secrets::resolve_files(&client, ns, &exec.secret_files).await
+                        }),
+                        _ => Err("secret files: POD_NAMESPACE/POD_NAME unset".to_string()),
+                    };
+                    match resolved {
+                        Ok(files) => {
+                            log::info!("secret_files_resolved count={}", files.len());
+                            exec.files = files;
                         }
                         Err(msg) => {
                             log::error!("{}", msg);

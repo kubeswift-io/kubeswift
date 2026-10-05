@@ -28,7 +28,36 @@ const (
 	// annSecretError is swiftletd's report that it could not read a secret
 	// variable (the message names the Secret and key, never a value).
 	annSecretError = "kubeswift.io/sandbox-secret-error"
+	// annKernelError is swiftletd's report that the kernel's bridge lacks a
+	// feature the sandbox needs (bridge-features next to the kernel).
+	annKernelError = "kubeswift.io/sandbox-kernel-error"
 )
+
+// secretFileRefs lists spec.secretFiles item by item, with each file's mode
+// resolved (item, else entry, else 0400).
+func secretFileRefs(sb *sandboxv1alpha1.SwiftSandbox) []runtimeintent.SecretFileRef {
+	var out []runtimeintent.SecretFileRef
+	for _, f := range sb.Spec.SecretFiles {
+		for _, it := range f.Items {
+			mode := int32(0o400)
+			if f.Mode != nil {
+				mode = *f.Mode
+			}
+			if it.Mode != nil {
+				mode = *it.Mode
+			}
+			out = append(out, runtimeintent.SecretFileRef{
+				Secret: f.SecretName, Key: it.Key, Path: it.Path, Mode: mode, Optional: f.Optional,
+			})
+		}
+	}
+	return out
+}
+
+// usesSecrets reports whether sb reads any Secret (env or files).
+func usesSecrets(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return len(secretEnvRefs(sb)) > 0 || len(sb.Spec.SecretFiles) > 0
+}
 
 // secretEnvRefs lists the variables whose values come from Secrets.
 func secretEnvRefs(sb *sandboxv1alpha1.SwiftSandbox) []runtimeintent.SecretEnvRef {
@@ -45,11 +74,14 @@ func secretEnvRefs(sb *sandboxv1alpha1.SwiftSandbox) []runtimeintent.SecretEnvRe
 	return out
 }
 
-// secretNames are the Secrets sb's launcher may read.
+// secretNames are the Secrets sb's launcher may read (env and files).
 func secretNames(sb *sandboxv1alpha1.SwiftSandbox) []string {
 	var out []string
 	for _, r := range secretEnvRefs(sb) {
 		out = append(out, r.Secret)
+	}
+	for _, f := range sb.Spec.SecretFiles {
+		out = append(out, f.SecretName)
 	}
 	return out
 }
@@ -88,7 +120,31 @@ func checkSecretEnv(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.Sw
 			}
 		}
 	}
+	for _, r := range secretFileRefs(sb) {
+		if r.Optional {
+			continue
+		}
+		var s corev1.Secret
+		err := c.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: r.Secret}, &s)
+		if apierrors.IsNotFound(err) {
+			return "SecretNotFound", fmt.Sprintf("secret file %s: Secret %s not found", r.Path, r.Secret), nil
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if _, ok := s.Data[r.Key]; !ok {
+			if _, ok := s.StringData[r.Key]; !ok {
+				return "SecretKeyNotFound", fmt.Sprintf("secret file %s: Secret %s has no key %s", r.Path, r.Secret, r.Key), nil
+			}
+		}
+	}
 	return "", "", nil
+}
+
+// kernelError is swiftletd's report that the kernel's bridge lacks a feature.
+func kernelError(pod *corev1.Pod) (string, bool) {
+	msg, ok := pod.Annotations[annKernelError]
+	return msg, ok
 }
 
 // secretError is swiftletd's report that a secret variable could not be read.

@@ -375,3 +375,35 @@ func TestRunOneShot_ErrorPaths(t *testing.T) {
 		t.Errorf("empty argv: code = %d, want 127", code)
 	}
 }
+
+// A checkout's secret files land under the exec root with their modes; a path
+// that is not clean and absolute is refused, and an error never carries the
+// content.
+func TestWriteExecFiles(t *testing.T) {
+	root := t.TempDir()
+	err := writeExecFiles(root, []ExecFile{
+		{Path: "/run/secrets/registry/config.json", Mode: 0o440, Data: []byte(`{"auths":{}}`)},
+		{Path: "/etc/app/token", Data: []byte("t0ken")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{"/run/secrets/registry/config.json": 0o440, "/etc/app/token": 0o400} {
+		fi, err := os.Stat(root + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s mode = %o, want %o", path, fi.Mode().Perm(), want)
+		}
+	}
+	if b, _ := os.ReadFile(root + "/etc/app/token"); string(b) != "t0ken" {
+		t.Errorf("content = %q", b)
+	}
+	for _, bad := range []string{"relative/path", "/a/../../etc/passwd", "/a/./b"} {
+		err := writeExecFiles(root, []ExecFile{{Path: bad, Data: []byte("s3cr3t")}})
+		if err == nil || strings.Contains(err.Error(), "s3cr3t") {
+			t.Errorf("%q: err = %v, want a refusal without the content", bad, err)
+		}
+	}
+}

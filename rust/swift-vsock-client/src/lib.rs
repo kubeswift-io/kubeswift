@@ -205,6 +205,37 @@ pub struct ExecRequest {
     pub env: Vec<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cwd: String,
+    /// Files the agent writes into the sandbox root before running argv (a
+    /// checked-out sandbox's secret files). Needs an agent that knows `files`:
+    /// an older one ignores the field, so the caller checks the kernel's
+    /// bridge-features first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<ExecFile>,
+}
+
+/// One file for the agent to write: an absolute path inside the sandbox root,
+/// a permission mode (0400 when zero), and the content, base64-encoded.
+#[derive(Clone, serde::Serialize, Default, PartialEq)]
+pub struct ExecFile {
+    pub path: String,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mode: u32,
+    pub data: String,
+}
+
+impl std::fmt::Debug for ExecFile {
+    // Never print the content: it is a secret.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ExecFile {{ path: {:?}, mode: {:o} }}",
+            self.path, self.mode
+        )
+    }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 impl ExecRequest {
@@ -216,6 +247,7 @@ impl ExecRequest {
             argv,
             env,
             cwd,
+            files: vec![],
         }
     }
 }

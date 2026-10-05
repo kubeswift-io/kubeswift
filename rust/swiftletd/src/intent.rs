@@ -580,6 +580,47 @@ pub struct SandboxExec {
     /// config disk is written.
     #[serde(default)]
     pub secret_env: Vec<SecretEnvRef>,
+    /// Secret keys to write into the guest as files: references only.
+    /// swiftletd reads them into `files` before the config disk is written.
+    #[serde(default)]
+    pub secret_files: Vec<SecretFileRef>,
+    /// Resolved files for the config disk (FILE lines). Never serialized:
+    /// the values exist in swiftletd's memory and on the in-memory disk only.
+    #[serde(skip)]
+    pub files: Vec<GuestFile>,
+}
+
+/// One Secret key written to one file in the guest.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretFileRef {
+    pub secret: String,
+    pub key: String,
+    pub path: String,
+    pub mode: u32,
+    #[serde(default)]
+    pub optional: bool,
+}
+
+/// A file for the guest: an absolute path, a permission mode, the content.
+#[derive(Clone, Default, PartialEq)]
+pub struct GuestFile {
+    pub path: String,
+    pub mode: u32,
+    pub data: Vec<u8>,
+}
+
+impl std::fmt::Debug for GuestFile {
+    // Never print the content.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "GuestFile {{ path: {:?}, mode: {:o}, len: {} }}",
+            self.path,
+            self.mode,
+            self.data.len()
+        )
+    }
 }
 
 /// One Secret key a workload variable is read from.
@@ -598,7 +639,7 @@ const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 // Standard base64 (with '=' padding). Values are base64-encoded on the config disk
 // so argv/env may contain spaces, tabs, or newlines (e.g. a multi-line `sh -c`
 // script) without breaking the line-based blob; the bridge decodes with `base64 -d`.
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0];
@@ -635,6 +676,16 @@ impl SandboxExec {
         }
         for e in &self.env {
             s.push_str(&format!("ENV\t{}\n", base64_encode(e.as_bytes())));
+        }
+        // FILE <b64 path> <octal mode> <b64 content>: written by the bridge
+        // (feature "files") into the guest's in-memory writable layer.
+        for f in &self.files {
+            s.push_str(&format!(
+                "FILE\t{}\t{:04o}\t{}\n",
+                base64_encode(f.path.as_bytes()),
+                f.mode,
+                base64_encode(&f.data)
+            ));
         }
         s.push_str("KUBESWIFT-EXEC-END\n");
         let mut b = s.into_bytes();
@@ -915,6 +966,40 @@ mod tests {
     }
 
     #[test]
+    fn test_sandbox_exec_config_blob_carries_files() {
+        let e = SandboxExec {
+            argv: vec!["/app".into()],
+            env: vec![],
+            cwd: String::new(),
+            secret_env: vec![],
+            secret_files: vec![],
+            files: vec![GuestFile {
+                path: "/run/secrets/registry/config.json".into(),
+                mode: 0o400,
+                data: b"{\"auths\":{}}".to_vec(),
+            }],
+        };
+        let blob = String::from_utf8(e.to_config_blob()).unwrap();
+        let line = blob
+            .lines()
+            .find(|l| l.starts_with("FILE\t"))
+            .expect("a FILE line");
+        let parts: Vec<&str> = line.split('\t').collect();
+        assert_eq!(parts.len(), 4, "{}", line);
+        assert_eq!(
+            parts[1],
+            base64_encode(b"/run/secrets/registry/config.json")
+        );
+        assert_eq!(parts[2], "0400");
+        assert_eq!(parts[3], base64_encode(b"{\"auths\":{}}"));
+        assert!(blob.find("FILE\t").unwrap() < blob.find("KUBESWIFT-EXEC-END").unwrap());
+        assert!(
+            !format!("{:?}", e.files).contains("auths"),
+            "Debug must not print content"
+        );
+    }
+
+    #[test]
     fn test_sandbox_exec_config_blob() {
         let e = SandboxExec {
             // A multi-line arg (a `sh -c` script) must survive — that's why values
@@ -923,6 +1008,8 @@ mod tests {
             env: vec!["PATH=/usr/bin:/bin".into()],
             cwd: "/work".into(),
             secret_env: vec![],
+            secret_files: vec![],
+            files: vec![],
         };
         let blob = e.to_config_blob();
         assert_eq!(blob.len() % 512, 0, "blob must be sector-padded");

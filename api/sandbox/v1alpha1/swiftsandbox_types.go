@@ -62,6 +62,19 @@ type SwiftSandboxSpec struct {
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
+	// SecretFiles writes keys of Secrets in the sandbox's namespace into the
+	// guest as files, before the workload starts: structured credentials such
+	// as a registry config or TLS keys. As for secret env, the launcher reads
+	// them with its own account; the files live in the guest's in-memory
+	// writable layer and on no host disk. Needs a sandbox kernel whose bridge
+	// supports files (kernels/sandbox 6.6.14 or later); an older one fails the
+	// sandbox rather than run without them. A missing Secret or key keeps the
+	// sandbox Pending unless the entry is optional.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	// +optional
+	SecretFiles []SandboxSecretFile `json:"secretFiles,omitempty"`
+
 	// WorkingDir overrides the image config working directory.
 	// +optional
 	WorkingDir string `json:"workingDir,omitempty"`
@@ -341,6 +354,44 @@ type SandboxIngress struct {
 	// +listType=atomic
 	// +optional
 	From []networkingv1.NetworkPolicyPeer `json:"from,omitempty"`
+}
+
+// SandboxSecretFile is a Secret whose keys become files in the guest.
+type SandboxSecretFile struct {
+	// SecretName names a Secret in the sandbox's namespace.
+	// +kubebuilder:validation:MinLength=1
+	SecretName string `json:"secretName"`
+	// Items maps the Secret's keys to file paths.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	Items []SandboxSecretFileItem `json:"items"`
+	// Mode is the permission of each file unless the item sets its own;
+	// 0400 when unset.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=511
+	// +optional
+	Mode *int32 `json:"mode,omitempty"`
+	// Optional leaves out the files of a Secret or key that does not exist,
+	// instead of holding the sandbox Pending.
+	// +optional
+	Optional bool `json:"optional,omitempty"`
+}
+
+// SandboxSecretFileItem is one key written to one path.
+type SandboxSecretFileItem struct {
+	// Key in the Secret.
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+	// Path is the file's absolute path in the guest, with no "." or ".."
+	// component, and not under /proc, /sys or /dev.
+	// +kubebuilder:validation:MinLength=2
+	Path string `json:"path"`
+	// Mode overrides the entry's mode for this file.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=511
+	// +optional
+	Mode *int32 `json:"mode,omitempty"`
 }
 
 // SandboxPodMetadata is metadata for a sandbox's launcher pod.

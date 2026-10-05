@@ -400,7 +400,7 @@ where
         // disk goes there, never to the run dir on the node's disk.
         let dir = match std::env::var("KUBESWIFT_SECRET_RUN_DIR") {
             Ok(d) if !d.is_empty() => std::path::PathBuf::from(d),
-            _ if !e.secret_env.is_empty() => {
+            _ if !e.secret_env.is_empty() || !e.secret_files.is_empty() => {
                 log::error!(
                     "sandbox exec config not written: secret env needs KUBESWIFT_SECRET_RUN_DIR"
                 );

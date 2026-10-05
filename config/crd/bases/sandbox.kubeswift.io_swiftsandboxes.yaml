@@ -1109,6 +1109,75 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+              secretFiles:
+                description: |-
+                  SecretFiles writes keys of Secrets in the sandbox's namespace into the
+                  guest as files, before the workload starts: structured credentials such
+                  as a registry config or TLS keys. As for secret env, the launcher reads
+                  them with its own account; the files live in the guest's in-memory
+                  writable layer and on no host disk. Needs a sandbox kernel whose bridge
+                  supports files (kernels/sandbox 6.6.14 or later); an older one fails the
+                  sandbox rather than run without them. A missing Secret or key keeps the
+                  sandbox Pending unless the entry is optional.
+                items:
+                  description: SandboxSecretFile is a Secret whose keys become files
+                    in the guest.
+                  properties:
+                    items:
+                      description: Items maps the Secret's keys to file paths.
+                      items:
+                        description: SandboxSecretFileItem is one key written to one
+                          path.
+                        properties:
+                          key:
+                            description: Key in the Secret.
+                            minLength: 1
+                            type: string
+                          mode:
+                            description: Mode overrides the entry's mode for this
+                              file.
+                            format: int32
+                            maximum: 511
+                            minimum: 0
+                            type: integer
+                          path:
+                            description: |-
+                              Path is the file's absolute path in the guest, with no "." or ".."
+                              component, and not under /proc, /sys or /dev.
+                            minLength: 2
+                            type: string
+                        required:
+                        - key
+                        - path
+                        type: object
+                      maxItems: 32
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    mode:
+                      description: |-
+                        Mode is the permission of each file unless the item sets its own;
+                        0400 when unset.
+                      format: int32
+                      maximum: 511
+                      minimum: 0
+                      type: integer
+                    optional:
+                      description: |-
+                        Optional leaves out the files of a Secret or key that does not exist,
+                        instead of holding the sandbox Pending.
+                      type: boolean
+                    secretName:
+                      description: SecretName names a Secret in the sandbox's namespace.
+                      minLength: 1
+                      type: string
+                  required:
+                  - items
+                  - secretName
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-type: atomic
               timeout:
                 description: |-
                   Timeout is the wall-clock run cap. Past startedAt+timeout the controller
