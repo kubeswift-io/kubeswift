@@ -264,6 +264,12 @@ terminal phase (Completed / Failed / Cancelled).
       minutes the migration fails with the usual `insufficient
       CPU/memory headroom` message, and at once if the target would
       not fit even without those pods)
+    - `waiting for the guest's volumes to detach from another node`
+      (live only: a volume of the guest is still attached to a node
+      other than the source's, such as a failed attempt's target.
+      `Compatible` is `Unknown` with reason `AwaitingVolumeDetach`
+      meanwhile. After 5 minutes the migration fails, naming the
+      VolumeAttachment)
 - `Preparing` — destination pod created and waited until
   Ready.
 - `StopAndCopy` — memory transfer in progress. `phaseDetail`

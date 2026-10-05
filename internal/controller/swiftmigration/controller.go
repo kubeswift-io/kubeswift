@@ -80,6 +80,11 @@ const (
 	// (status Unknown) while Validating waits for pods being deleted on the
 	// target node to release the resources the destination needs.
 	ReasonAwaitingTerminatingPods = "AwaitingTerminatingPods"
+
+	// ReasonAwaitingVolumeDetach is the Compatible condition's reason
+	// (status Unknown) while live Validating waits for the guest's volumes
+	// to detach from a node other than the source's.
+	ReasonAwaitingVolumeDetach = "AwaitingVolumeDetach"
 )
 
 // SwiftMigrationReconciler reconciles SwiftMigration resources.

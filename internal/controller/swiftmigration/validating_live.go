@@ -127,6 +127,14 @@ func (r *SwiftMigrationReconciler) handleValidatingLive(
 	// drift mid-migration.
 	status.SourcePodRef = &migrationv1alpha1.SwiftMigrationPodRef{Name: srcPod.Name}
 
+	// A volume still attached to another node (the target of a failed
+	// earlier attempt, or the source of a migration that has just
+	// completed and is still detaching) would stall the attach to the
+	// target (#692). Wait for it to go.
+	if res := r.awaitVolumeDetach(ctx, status, &srcPod); res != nil {
+		return res
+	}
+
 	// LBA-1 defensive image-tag-match trip-wire.
 	//
 	// newDstPod (dst_pod.go) constructs the destination pod via
