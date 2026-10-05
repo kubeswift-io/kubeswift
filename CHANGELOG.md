@@ -4,6 +4,327 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.16.0] — 2026-10-05
+
+Storage locations, and SwiftSandbox for real workloads.
+
+**Storage locations** (#703). A cluster default, and per-namespace overrides,
+for where snapshots go. A SwiftClusterStorageLocation (cluster-scoped, for the
+admin) or a SwiftStorageLocation (namespaced, for the tenant) names an OCI
+registry and a default VolumeSnapshotClass. The registry entry carries its
+CA bundle, the name of the credentials Secret each namespace provides, and a
+signing key. An `oci` SwiftSnapshot may now leave out `backend.oci` and take
+the location. What it resolved is recorded in its status, so changing or
+deleting a location never moves a snapshot already taken. The UI's new
+Settings page (kubeswift-ui v0.13.0) manages them.
+
+**SwiftSandbox** gains what a server, or a job that talks to an authenticated
+service, needs (#729 to #733):
+- named destinations under restricted egress;
+- guest ports, ingress peers and labels for the launcher pod, so a Service can
+  front a sandbox;
+- readiness and liveness probes;
+- Secrets as environment variables and as files, read by the launcher's own
+  ServiceAccount and never written into a KubeSwift object;
+- OCI artifacts (bundles, plugins, datasets, WebAssembly applications) pulled,
+  verified and cached by the node, and mounted read-only;
+- a warm-pool checkout that honours the whole sandbox, not just its image.
+
+Secret files and artifacts need new sandbox kernels:
+`kernels/sandbox:6.6.14` and `kernels/gpu-sandbox:6.6.3`, already published.
+
+**Also fixed:**
+- **Snapshots:**
+  - an OCI artifact is deleted by its recorded digest, never by a tag that
+    may name another snapshot's;
+  - two snapshots on one tag are refused;
+  - a snapshot's spec is immutable;
+  - a failed transfer says why;
+  - two snapshots of one guest no longer lose a capture.
+- **Restores:** a full-state snapshot's disk is checked too, and the refusals
+  give advice that works.
+- **Migrations:**
+  - every failure is a Warning event;
+  - a live migration waits for a volume still attached to another node.
+- **Kernels:** a kernel pulls from a private registry, and a deleted kernel's
+  files leave its nodes.
+- **Images:** an image pulled from a registry honours
+  `importStorageClassName`.
+- **Gateway and UI:** guest classes can be created from the UI, and roles
+  written by an earlier release are reported and updated.
+
+**CRDs changed this release:**
+- **Two new kinds** in a new group, `storage.kubeswift.io`:
+  `swiftclusterstoragelocations` and `swiftstoragelocations`.
+- **Changed:**
+  - `swiftsnapshots`: `backend.locationRef`, `status.location`, a spec
+    immutability rule, and descriptions;
+  - `swiftsnapshotschedules`: the template's `locationRef` and a `Reason`
+    column;
+  - `swiftsandboxes`: `network.egress.allow`, `network.ports`,
+    `network.ingress`, `podMetadata`, the two probes, `secretFiles`,
+    `artifacts`, and their status fields;
+  - `swiftsandboxpools`: the network fields;
+  - `swiftkernels` and `swiftimages`: descriptions only.
+
+**Apply them before upgrading. The controller watches the two new kinds and
+does not start without them.**
+
+### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.16.0 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+The chart's values are unchanged. Its templates add RBAC for the new kinds,
+their validating webhooks, and the launcher ServiceAccount gate's new prefix
+(below).
+
+These may need action:
+
+**Apply the CRDs first.** `helm upgrade` does not touch `crds/`. Without the two
+storage-location kinds the controller cannot start its watches and exits.
+
+**The UI moves to kubeswift-ui v0.13.0**, the chart's new `ui.image.tag`
+default. Its Settings page and the Access tab's role updates need this
+release's gateway. A values file that pins `ui.image.tag` keeps what it pins:
+raise it to `v0.13.0` to get them.
+
+**Every warm pool recycles its warm slots once.** A slot's profile now records
+the slot's whole shape (cpu, memory, kernel, node selector, network, GPU, model
+and the rest), not just its image, network and verification key. A slot made by
+an earlier release carries the old profile, so the pool replaces it with a
+fresh one, as it does after a pool edit. A pool with many warm GPU slots
+releases and re-takes their GPUs.
+
+**Sandbox launchers run as their own ServiceAccounts** (#746). Each sandbox
+launcher pod, cold or warm slot, runs as `kubeswift-sandbox-launcher-<pod>`,
+which the controller creates and owns. Before, every launcher in a namespace
+shared one account.
+- **Before upgrading:**
+  - **RBAC.** The controller's ClusterRole gains `update` on `serviceaccounts`.
+    The chart and the kustomize manifests carry it.
+  - **The admission gate.** `launcherSAGate` refuses pods, token Secrets and
+    TokenRequests for every name under that prefix, as for the shared names.
+- **Running launchers** keep the shared account until they end. Guest
+  launchers are unchanged.
+- **Your own RBAC or audit rules:** anything matching on
+  `kubeswift-sandbox-launcher` should expect the per-pod names.
+- **A planted account blocks its sandbox.** An account of that form that
+  KubeSwift did not create keeps its sandbox `Pending` (reason
+  `LauncherAccountConflict`), and a pool `Degraded`.
+
+**Secret files and OCI artifacts need the new sandbox kernels.**
+- **Which:** `kernels/sandbox:6.6.14` and `kernels/gpu-sandbox:6.6.3`.
+- **On an older kernel**, a sandbox asking for either fails as
+  `KernelUnsupported` before it boots, instead of running without them.
+  Everything else keeps working on the older kernels.
+- **Changing an existing SwiftKernel's tag pulls nothing by itself.** Delete
+  its pull Jobs afterwards:
+
+  ```bash
+  kubectl -n <namespace> delete job -l kubeswift.io/swiftkernel=<name>
+  ```
+
+Behaviour changes visible after the upgrade:
+
+- **A SwiftSnapshot's spec is immutable** except `deletionPolicy` and `ttl`, and
+  the CRD enforces it with the webhook off (#707). An edit to any other field
+  of an existing snapshot is refused. Restore and clone read the backend from
+  it, so an edit used to point them somewhere else.
+- **Two `oci` SwiftSnapshots may not share a `repository:tag`** (#705). The
+  second fails with `TagInUse`, naming the first.
+  - **Schedules:** a template's `oci.tag` is dropped, each scheduled snapshot
+    gets its own `<namespace>-<name>` tag, and the webhook refuses a template
+    that sets one.
+  - **Deletion** is by the digest recorded at push time. An artifact with no
+    recorded digest is left in the registry and named in a `PurgeIncomplete`
+    event, rather than deleted by a tag that may name another snapshot's.
+- **Transfer Jobs keep each failed attempt's pod** (#752). Every snapshot-s3 and
+  snapshot-oras Job runs with `restartPolicy: Never`, so a failing transfer
+  shows one failed pod per attempt until the Job goes with its owner.
+- **A failed S3 purge emits a `PurgeFailed` Warning event**, and keeps the
+  snapshot's finalizer as before.
+- **An in-place restore of a full-state (`includeDisk`) snapshot is refused**
+  (`DiskDiverged`) when the guest was started again after the export (#755).
+  Clone it into a new guest instead (`spec.cloneFromSnapshot`).
+- **A second memory snapshot of a guest waits** (`Pending`, `CaptureInProgress`)
+  while another is capturing (#754).
+- **A live migration waits in `Validating`** (`AwaitingVolumeDetach`, up to
+  5 minutes) while a volume of the guest is still attached to another node
+  (#756).
+- **Deleting a SwiftKernel removes its files from the nodes it was pulled to**
+  (#722). The deletion waits while a running pod uses the kernel
+  (`KernelInUse`).
+- **SwiftImage `source.pvcClone` is refused** (#715). It was never implemented:
+  every such image went `Failed`.
+- **A sandbox's `env` refuses `valueFrom` sources other than `secretKeyRef`**
+  (`InvalidEnv`). They used to be dropped, leaving the variable empty.
+
+### Security
+
+- **A Secret a sandbox reads reaches that sandbox's launcher only** (#746,
+  #747, #750). RBAC is additive, so a grant on the shared launcher account was
+  held by every launcher in the namespace.
+  - Each launcher runs as its own ServiceAccount, and only that account is
+    granted `get` on exactly the Secrets its sandbox references.
+  - The values go from the API server to swiftletd to the guest, and never into
+    the RuntimeIntent, an annotation, the sandbox's status or a log.
+  - On a cold boot they sit on a memory-backed volume.
+- **Roles written by an earlier release are brought up to date** (#741). v0.15.0
+  removed `pods/exec` from the console capability (G9), but a role created
+  before it kept granting exec into privileged launchers.
+  - The gateway now reports such a role as outdated, naming the rules it
+    grants and should not, or lacks.
+  - `SyncRole` rewrites it.
+  - Assigning a role updates it first and refuses if that fails.
+  - All of it runs as the signed-in user: the gateway holds no RBAC-writing
+    credential.
+- **A restricted sandbox's allowlist cannot open the metadata endpoint** (#743).
+  The allow rules come after the 169.254/16 DROP, and a CIDR inside it is
+  refused.
+
+### Added
+
+- **Storage locations** (#703; #728, #734, #736, #738, #739, #740).
+  `SwiftClusterStorageLocation` and `SwiftStorageLocation` share one spec:
+  `default`, an `oci` registry (repository prefix, `insecure`, `caBundle`, the
+  credentials Secret name or `anonymous`, a signing key, a cosign verify key)
+  and an optional `csi` VolumeSnapshotClass.
+  - **Status:** the controller sets `Valid` and `Ready` (`AmbiguousDefault`
+    when a level has two defaults). It probes a cluster location's registry
+    every 10 minutes (`Reachable`); a namespace's location is never probed.
+  - **Resolution, once, before the guest is touched:** an `oci` snapshot
+    without `backend.oci` resolves its registry from `backend.locationRef`,
+    else the namespace's default, else the cluster's. A `csi-volume-snapshot`
+    with no class resolves a class the same way.
+  - **Where snapshots go:** under `<repository>/<namespace>/snapshots` for a
+    cluster location and `<repository>/snapshots` for a namespace's, tagged
+    `<name>-<uid8>`.
+  - **What is recorded:** repository, tag, CA bundle and Secret names, in
+    `status.location`, which every later step reads.
+  - **Waiting:** a snapshot waits, `Pending`, with `NoStorageLocation`,
+    `StorageLocationNotFound`, `StorageLocationInvalid`,
+    `AmbiguousStorageLocation`, `RegistryCredentialsMissing` or
+    `SigningKeyMissing`. Secrets are read only in the snapshot's own namespace.
+    A schedule reports its waiting snapshot's reason in its own `Ready`
+    condition and a new `Reason` column.
+  - **CA bundles:** transfer Jobs trust the recorded bundle, plus the
+    location's current one when they differ, so a CA rotated after the push
+    still works.
+  - **Gateway and CLI:** the gateway catalog lists both kinds. A new
+    `manage-storage-locations` capability (in the predefined Admin role)
+    writes them. `swiftctl snapshot create` and `schedule create` take
+    `--backend oci --location NAME | cluster/NAME`.
+- **SwiftSandbox egress allowlist** (#732, #743). Under restricted egress,
+  `spec.network.egress.allow[]` adds Services (any namespace) or IPv4 CIDRs,
+  optionally narrowed to TCP/UDP ports.
+  - The controller resolves Services to their ClusterIPs when it creates the
+    launcher. A missing, headless or IPv6-only one waits, naming it.
+  - `status.network.egressAllowed` records what is enforced.
+  - Pools re-resolve every pass, and replace a slot that allows an address a
+    Service no longer has.
+- **SwiftSandbox ports and pod metadata** (#729, #744).
+  - `spec.network.ports` exposes named guest TCP ports on the launcher pod, and
+    the sandbox's NetworkPolicy admits them from `spec.network.ingress.from`,
+    or from anywhere.
+  - `spec.podMetadata` adds labels and annotations, so a Service of yours
+    selects the sandbox. KubeSwift's own keys and the pod-network annotations
+    are refused.
+- **SwiftSandbox probes** (#729, #745).
+  - **Shape:** `spec.readinessProbe` and `spec.livenessProbe` are `httpGet` or
+    `tcpSocket`, with the kubelet's thresholds and defaults.
+  - **Where they run:** in swiftletd, against the guest's address.
+  - **What they report:** a `WorkloadReady` condition, and a readiness gate on
+    a launcher that exposes ports, so Service endpoints follow the workload.
+  - **Liveness:** a failure fails the sandbox (`LivenessProbeFailed`).
+- **SwiftSandbox Secrets** (#730; #747, #750).
+  - `spec.env[].valueFrom.secretKeyRef`.
+  - `spec.secretFiles` writes Secret keys into the guest as files (mode per
+    item, entry, or 0400; 2 MiB in all), before the workload starts.
+  - **A missing Secret or key** keeps the sandbox `Pending`
+    (`SecretNotFound`, `SecretKeyNotFound`) unless the reference is optional.
+  - **Both paths:** a cold boot and a warm-pool checkout.
+- **SwiftSandbox OCI artifacts** (#731, #751). `spec.artifacts[]` pulls any OCI
+  artifact on the node, by digest (`status.artifacts`), cosign-verified when a
+  key is given.
+  - **Cache:** `/var/lib/kubeswift/sandbox-artifacts`, shared by the node's
+    sandboxes.
+  - **In the guest:** mounted read-only over virtio-fs.
+  - **Layouts:** `oci` (default) keeps the manifest exactly as pushed, as an
+    OCI image layout; `unpacked` extracts its layers.
+  - **Credentials:** the pull Secret never enters the guest, and
+    `network: none` works.
+  - **Warm pools:** a sandbox with artifacts boots cold.
+- **Sandbox kernels 6.6.14 and gpu-sandbox 6.6.3.**
+  - **What is new:** the bridge writes files and mounts artifact shares, and
+    reports a failure with exit code 125.
+  - **How swiftletd checks:** a `bridge-features` file beside the kernel lists
+    what it supports, and swiftletd refuses a feature the kernel does not list.
+- **The gateway catalog lists VolumeSnapshotClasses** (#712, #724), so the UI
+  offers them in the snapshot dialog.
+- **`SyncRole`**, and `outdated` / `outdated_reason` on `ListRoles` (#741).
+
+### Fixed
+
+- **Deleting an `oci` snapshot could delete another snapshot's artifact**
+  (#705, #717, #718). It resolved the tag at deletion time. It now deletes by
+  the recorded digest, and a second snapshot on a tag in use is refused.
+- **An `s3` or `oci` snapshot with no destination** captured the guest and then
+  failed on every reconcile (#706, #719). It now fails before capturing.
+- **A SwiftSnapshot's backend could be edited after the capture** (#707, #720),
+  pointing restores and clones at another registry or turning off the
+  divergence check.
+- **A SwiftKernel in a private registry could not be pulled** (#708, #721).
+  `ociRef.pullSecret` reached only the oras image's pull, not the artifact's.
+- **A deleted SwiftKernel left its files on every node** (#722, #723), and a
+  later kernel of the same name found them.
+- **An image pulled from a registry ignored `importStorageClassName`** (#714,
+  #725), pinning its guests to the default StorageClass.
+- **A failed SwiftImage import start looped on status errors** (#715, #726). Its
+  condition reason carried the error text.
+- **Creating or editing a SwiftGuestClass from the UI failed with NotFound**
+  (#704, #716). The catalog called it namespaced.
+- **A storage location could lose its `Reachable` condition** for up to
+  10 minutes (#738).
+- **A warm-pool checkout ran in a slot smaller than the sandbox asked for**
+  (#733, #742), or on another node or kernel. Checkout now compares the whole
+  shape and names every difference in its `PoolColdFallback` event.
+- **A checkout whose inject failed after its claim never ran** (#747).
+- **A failed transfer Job said only "backoff limit"** (#737, #752). The error
+  is now in the snapshot's, restore's, clone's or image's message, for example
+  an untrusted registry certificate.
+- **A migration refused at validation recorded no event** (#694, #753).
+- **Two memory snapshots of one guest started together lost a capture** (#735,
+  #754). One failed at its deadline, after 10 minutes.
+- **An in-place restore of a full-state snapshot skipped the divergence check**
+  (#710, #755).
+- **The `DiskDiverged` and CSI refusals recommended restores that cannot work**
+  (#711, #755). The in-place disk rollback #711 asks for is still open.
+- **A live migration right after a failed one could stall on the volume's
+  attachment** (#692, #756).
+
+### Changed
+
+- `sigs.k8s.io/controller-runtime` 0.25.2 and Go minor/patch updates (#748,
+  #749).
+- Transfer Jobs run with `restartPolicy: Never` and
+  `terminationMessagePolicy: FallbackToLogsOnError` (#752).
+
+### Docs
+
+- Four snapshot and image API descriptions corrected (#709, #713, #727).
+- `docs/sandbox/overview.md` covers allowlists, ports, probes, Secrets, secret
+  files and artifacts. `docs/sandbox/warm-pool.md` covers which fields a warm
+  slot honours.
+- The CSI snapshot troubleshooting rows, the full-state export rows, and the
+  migration troubleshooting table cover the new waits and refusals.
+- The SwiftKernel samples and docs point at the new sandbox kernels.
+
+---
+
 ## [v0.15.1] — 2026-10-01
 
 A patch release: four fixes found by a regression run of v0.15.0 on the three
