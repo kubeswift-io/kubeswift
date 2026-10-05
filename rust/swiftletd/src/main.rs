@@ -219,6 +219,20 @@ fn main() {
             // What this kernel's bridge can be asked for (files, mounts).
             if let Some(kb) = intent.kernel_boot.as_ref() {
                 bridge::load(&kb.kernel_path);
+                // Artifact mounts: an older bridge would boot without them.
+                if kb
+                    .cmdline
+                    .split_whitespace()
+                    .any(|a| a.starts_with("kubeswift.mounts="))
+                {
+                    if let Err(msg) = bridge::require("mounts", "artifact mounts") {
+                        log::error!("{}", msg);
+                        if let (Some(ns), Some(n)) = (&namespace, &name) {
+                            let _ = rt.block_on(report::report_kernel_error(ns, n, &msg));
+                        }
+                        std::process::exit(1);
+                    }
+                }
             }
 
             // Secret-backed workload variables: read them now, before the

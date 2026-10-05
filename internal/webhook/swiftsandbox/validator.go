@@ -83,6 +83,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if err := ValidateSecretFiles(s); err != nil {
 		return err
 	}
+	if err := ValidateArtifacts(s); err != nil {
+		return err
+	}
 	// Exactly one GPU backend: gpuProfileRef (native) XOR gpuResourceClaim (DRA).
 	if s.GPUProfileRef != nil && s.GPUResourceClaim != nil {
 		return fmt.Errorf("spec.gpuProfileRef and spec.gpuResourceClaim are mutually exclusive: choose the native (gpuProfileRef) or DRA (gpuResourceClaim) GPU backend")

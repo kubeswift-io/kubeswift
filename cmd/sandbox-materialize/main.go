@@ -24,7 +24,7 @@ func main() {
 	var (
 		image      = flag.String("image", "", "OCI image reference (a digest ref is strongly preferred)")
 		cacheDir   = flag.String("cache-dir", "/var/lib/kubeswift/sandbox-rootfs", "node-local rootfs cache root")
-		mode       = flag.String("mode", "block", "rootfs form: block (ext4) or tree (virtio-fs)")
+		mode       = flag.String("mode", "block", "form: block (ext4 rootfs), tree (unpacked layers) or oci (an OCI image layout of the manifest as pushed)")
 		pullSecret = flag.String("pull-secret", "", "path to a docker config.json for private registries")
 		insecure   = flag.Bool("insecure", false, "allow a plain-HTTP registry (trusted in-cluster stores only)")
 		verifyKey  = flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify image@digest BEFORE materializing (requires a TLS registry)")
@@ -59,7 +59,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "sandbox-materialize: --verify-key requires a TLS registry (incompatible with --insecure)")
 			os.Exit(1)
 		}
-		repo, digest, rerr := materialize.Resolve(opts)
+		resolve := materialize.Resolve
+		if opts.Mode == materialize.ModeLayout {
+			// An artifact is verified at the digest of the manifest it names
+			// (an index's own, not a platform image's).
+			resolve = materialize.ResolveDescriptor
+		}
+		repo, digest, rerr := resolve(opts)
 		if rerr != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: resolve for verify: %v\n", rerr)
 			os.Exit(1)
@@ -77,7 +83,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
 	}
 
-	res, err := materialize.Materialize(opts, nil)
+	var res *materialize.Result
+	var err error
+	if opts.Mode == materialize.ModeLayout {
+		res, err = materialize.MaterializeLayout(opts)
+	} else {
+		res, err = materialize.Materialize(opts, nil)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
 		os.Exit(1)

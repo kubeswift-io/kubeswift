@@ -171,6 +171,20 @@ type SwiftSandboxSpec struct {
 	// +optional
 	Model *SandboxModel `json:"model,omitempty"`
 
+	// Artifacts mounts OCI artifacts read-only into the guest: application
+	// bundles, plugins, datasets, policy bundles, WebAssembly applications.
+	// Each is pulled on the node (with its pull Secret, which never enters the
+	// guest), cosign-verified when a key is given, cached by digest and shared
+	// with every sandbox on the node, so a sandbox with network mode none can
+	// read it too. Needs a sandbox kernel whose bridge supports mounts
+	// (kernels/sandbox 6.6.14 or later). A sandbox with artifacts does not
+	// check out a warm slot: it boots cold.
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Artifacts []SandboxArtifact `json:"artifacts,omitempty"`
+
 	// PodMetadata adds labels and annotations to the launcher pod, for example
 	// so a Service selects the sandbox. Keys under kubeswift.io or any
 	// *.kubeswift.io domain are refused, as are the pod-network annotations
@@ -354,6 +368,56 @@ type SandboxIngress struct {
 	// +listType=atomic
 	// +optional
 	From []networkingv1.NetworkPolicyPeer `json:"from,omitempty"`
+}
+
+// SandboxArtifact is one OCI artifact mounted read-only in the guest.
+type SandboxArtifact struct {
+	// Name identifies the artifact: a DNS label of at most 40 characters,
+	// unique within the sandbox.
+	// +kubebuilder:validation:MaxLength=40
+	Name string `json:"name"`
+	// Ref is the artifact's reference. A digest (repo@sha256:...) pins it; a
+	// tag is resolved to a digest when the sandbox starts, recorded in
+	// status.artifacts.
+	// +kubebuilder:validation:MinLength=1
+	Ref string `json:"ref"`
+	// MountPath is where it is mounted, read-only, in the guest: an absolute
+	// path, not /, /proc, /sys or /dev, and not inside another mount.
+	// +kubebuilder:validation:MinLength=2
+	MountPath string `json:"mountPath"`
+	// Layout is oci (default): an OCI image layout (oci-layout, index.json,
+	// blobs/) of the manifest as pushed, image, index or any artifact, which
+	// an OCI-aware tool reads offline; or unpacked: the image's filesystem
+	// layers extracted into a tree, as for spec.model (layers must be tar).
+	// +kubebuilder:validation:Enum=oci;unpacked
+	// +kubebuilder:default=oci
+	// +optional
+	Layout string `json:"layout,omitempty"`
+	// PullSecretRef names a docker-registry Secret in the sandbox's namespace
+	// for this artifact's registry; spec.imagePullSecret when unset.
+	// +optional
+	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
+	// VerifyKeySecretRef names a Secret holding a cosign public key
+	// (cosign.pub). The artifact is verified at its digest before it is
+	// mounted; a missing or invalid signature fails the sandbox. Needs a TLS
+	// registry.
+	// +optional
+	VerifyKeySecretRef *SecretObjectReference `json:"verifyKeySecretRef,omitempty"`
+}
+
+// ArtifactLayout returns the artifact's layout, oci when unset.
+func (a *SandboxArtifact) ArtifactLayout() string {
+	if a.Layout == "" {
+		return "oci"
+	}
+	return a.Layout
+}
+
+// SandboxArtifactStatus is a mounted artifact as resolved.
+type SandboxArtifactStatus struct {
+	Name      string `json:"name"`
+	Digest    string `json:"digest"`
+	MountPath string `json:"mountPath"`
 }
 
 // SandboxSecretFile is a Secret whose keys become files in the guest.
@@ -635,6 +699,10 @@ type SwiftSandboxStatus struct {
 	// spec.model is unset.
 	// +optional
 	Model *SandboxModelStatus `json:"model,omitempty"`
+	// Artifacts reports each spec.artifacts entry as resolved: the digest
+	// mounted and where.
+	// +optional
+	Artifacts []SandboxArtifactStatus `json:"artifacts,omitempty"`
 	// StartedAt is when the guest began running.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

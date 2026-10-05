@@ -71,6 +71,89 @@ spec:
                 items:
                   type: string
                 type: array
+              artifacts:
+                description: |-
+                  Artifacts mounts OCI artifacts read-only into the guest: application
+                  bundles, plugins, datasets, policy bundles, WebAssembly applications.
+                  Each is pulled on the node (with its pull Secret, which never enters the
+                  guest), cosign-verified when a key is given, cached by digest and shared
+                  with every sandbox on the node, so a sandbox with network mode none can
+                  read it too. Needs a sandbox kernel whose bridge supports mounts
+                  (kernels/sandbox 6.6.14 or later). A sandbox with artifacts does not
+                  check out a warm slot: it boots cold.
+                items:
+                  description: SandboxArtifact is one OCI artifact mounted read-only
+                    in the guest.
+                  properties:
+                    layout:
+                      default: oci
+                      description: |-
+                        Layout is oci (default): an OCI image layout (oci-layout, index.json,
+                        blobs/) of the manifest as pushed, image, index or any artifact, which
+                        an OCI-aware tool reads offline; or unpacked: the image's filesystem
+                        layers extracted into a tree, as for spec.model (layers must be tar).
+                      enum:
+                      - oci
+                      - unpacked
+                      type: string
+                    mountPath:
+                      description: |-
+                        MountPath is where it is mounted, read-only, in the guest: an absolute
+                        path, not /, /proc, /sys or /dev, and not inside another mount.
+                      minLength: 2
+                      type: string
+                    name:
+                      description: |-
+                        Name identifies the artifact: a DNS label of at most 40 characters,
+                        unique within the sandbox.
+                      maxLength: 40
+                      type: string
+                    pullSecretRef:
+                      description: |-
+                        PullSecretRef names a docker-registry Secret in the sandbox's namespace
+                        for this artifact's registry; spec.imagePullSecret when unset.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    ref:
+                      description: |-
+                        Ref is the artifact's reference. A digest (repo@sha256:...) pins it; a
+                        tag is resolved to a digest when the sandbox starts, recorded in
+                        status.artifacts.
+                      minLength: 1
+                      type: string
+                    verifyKeySecretRef:
+                      description: |-
+                        VerifyKeySecretRef names a Secret holding a cosign public key
+                        (cosign.pub). The artifact is verified at its digest before it is
+                        mounted; a missing or invalid signature fails the sandbox. Needs a TLS
+                        registry.
+                      properties:
+                        name:
+                          description: Name of the Secret.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - mountPath
+                  - name
+                  - ref
+                  type: object
+                maxItems: 8
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               command:
                 description: |-
                   Command overrides the image's entrypoint. When empty, the image config
@@ -1214,6 +1297,25 @@ spec:
           status:
             description: SwiftSandboxStatus is the observed state.
             properties:
+              artifacts:
+                description: |-
+                  Artifacts reports each spec.artifacts entry as resolved: the digest
+                  mounted and where.
+                items:
+                  description: SandboxArtifactStatus is a mounted artifact as resolved.
+                  properties:
+                    digest:
+                      type: string
+                    mountPath:
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - digest
+                  - mountPath
+                  - name
+                  type: object
+                type: array
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

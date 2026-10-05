@@ -74,6 +74,8 @@ Ready-to-edit manifests and notes:
 | `network.mode` | enum | `restricted` | `restricted`, `open`, or `none`. See [Network modes](#network-modes). |
 | `network.ports[]` | list | — | Guest ports exposed on the launcher pod: `name` (IANA service name) and `port` (TCP). See [Exposing ports](#exposing-ports). |
 | `network.ingress.from[]` | list | any source | NetworkPolicy peers allowed to reach `network.ports`. |
+| `artifacts[]` | list | — | OCI artifacts mounted read-only from the node cache. See [OCI artifacts](#oci-artifacts). |
+| `secretFiles[]` | list | — | Secret keys written into the guest as files. See [Secret files](#secret-files). |
 | `readinessProbe` / `livenessProbe` | Probe | — | `httpGet` (HTTP) or `tcpSocket` against the guest. See [Workload probes](#workload-probes). |
 | `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
 | `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
@@ -104,6 +106,7 @@ sandbox to change image, resources, command, or network.
 | `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. An address on the launcher pod's private nat network, so it repeats across sandboxes. |
 | `network.primaryIPScope` | string | Always `Pod` when `primaryIP` is set: reachable only from inside the launcher pod. |
 | `network.podIP` | string | IP of the launcher pod, unique in the cluster. |
+| `artifacts[]` | list | Each `spec.artifacts` entry as mounted: `name`, `digest`, `mountPath`. |
 | `network.egressAllowed[]` | list | The egress allowlist the launcher enforces: `cidr`, `protocol`, `port`, and `from` (the spec entry, e.g. `service inference/llm`). |
 | `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
 | `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
@@ -320,14 +323,52 @@ spec:
   is in memory. A missing Secret or key keeps the sandbox `Pending` unless the
   entry sets `optional: true`.
 - A path must be absolute and clean, unique, and not under `/proc`, `/sys`,
-  `/dev` or the model mount. All of a sandbox's secret files together may be
-  at most 2 MiB.
+  `/dev`, the model mount or an artifact mount. All of a sandbox's secret
+  files together may be at most 2 MiB.
 - **Needs a newer sandbox kernel**: `kernels/sandbox:6.6.14` or
   `kernels/gpu-sandbox:6.6.3` and later, whose bridge writes the files. On an
   older kernel the sandbox fails with reason `KernelUnsupported` before it
   boots, instead of running without them. Changing an existing SwiftKernel's
   tag pulls nothing by itself; delete its pull Jobs afterwards
   (`kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>`).
+
+## OCI artifacts
+
+Content that is not part of the root filesystem (an application bundle,
+plugins, a dataset, a policy bundle, a WebAssembly application) can be mounted
+read-only from any OCI registry:
+
+```yaml
+spec:
+  artifacts:
+    - name: app
+      ref: registry.example.com/team/hello-http@sha256:...   # a tag is resolved to a digest
+      mountPath: /run/artifacts/app
+      layout: oci                     # default; or unpacked
+      pullSecretRef: {name: team-registry}    # optional; spec.imagePullSecret when unset
+      verifyKeySecretRef: {name: team-cosign} # optional cosign public key (cosign.pub)
+```
+
+- `layout: oci` mounts an OCI image layout (`oci-layout`, `index.json`,
+  `blobs/sha256/...`) of the manifest exactly as pushed, image, index or any
+  artifact type, which a tool in the guest reads offline. `layout: unpacked`
+  mounts the image's filesystem layers extracted into a tree, as `spec.model`
+  does; its layers must be tar.
+- The node pulls it, with its pull Secret (which never enters the guest),
+  verifies it at its digest when a key is set, and caches it by digest: every
+  sandbox on the node mounting the same digest shares one copy. A sandbox with
+  `network.mode: none` can read it.
+- `status.artifacts` records the digest mounted. A ref that cannot be resolved
+  fails the sandbox with `ArtifactResolveFailed`; a failed pull or signature
+  check with `ArtifactMaterializeFailed`, naming the artifact.
+- Mounts are read-only, at clean absolute paths that do not overlap each other,
+  the model mount, `/proc`, `/sys` or `/dev`.
+- A sandbox with artifacts does not check out a warm-pool slot: it boots cold.
+- **Needs a newer sandbox kernel**: `kernels/sandbox:6.6.14` or
+  `kernels/gpu-sandbox:6.6.3` and later, whose bridge mounts the shares. On an
+  older kernel the sandbox fails with `KernelUnsupported` before it boots.
+  Changing an existing SwiftKernel's tag pulls nothing by itself; delete its
+  pull Jobs afterwards (`kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>`).
 
 ## Signed images (verify before boot)
 

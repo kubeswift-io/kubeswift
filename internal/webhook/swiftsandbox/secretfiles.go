@@ -23,6 +23,7 @@ func ValidateSecretFiles(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if s.Model != nil {
 		readOnly = append(readOnly, s.Model.ModelMountPath())
 	}
+	readOnly = append(readOnly, artifactMountPaths(s)...)
 	seen := map[string]bool{}
 	for i, f := range s.SecretFiles {
 		at := fmt.Sprintf("spec.secretFiles[%d]", i)

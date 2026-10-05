@@ -163,8 +163,11 @@ type Puller func(opts Options) (v1.Image, string, error)
 // "sha256:abc" is not filename-safe, so it is rendered "sha256-abc".
 func CachePathFor(cacheDir, digest string, mode Mode) string {
 	name := strings.ReplaceAll(digest, ":", "-")
-	if mode == ModeTree {
+	switch mode {
+	case ModeTree:
 		return filepath.Join(cacheDir, name)
+	case ModeLayout:
+		return filepath.Join(cacheDir, name+".oci")
 	}
 	return filepath.Join(cacheDir, name+".ext4")
 }

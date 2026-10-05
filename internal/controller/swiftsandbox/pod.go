@@ -170,6 +170,13 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		})
 		cmdline += " kubeswift.model=virtiofs kubeswift.modelpath=" + sb.Spec.Model.ModelMountPath()
 	}
+	// spec.artifacts: read-only shares the bridge mounts (feature "mounts";
+	// swiftletd refuses an older bridge before boot). No virtio-blk device,
+	// so the config disk stays where it is.
+	if artFS, mounts := artifactShares(sb); mounts != "" {
+		filesystems = append(filesystems, artFS...)
+		cmdline += " kubeswift.mounts=" + mounts
+	}
 
 	ri := &runtimeintent.RuntimeIntent{
 		KernelBoot: &runtimeintent.KernelBootSpec{
@@ -396,6 +403,10 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			VolumeMounts:    modelMounts,
 		})
 	}
+	// spec.artifacts: one materialize init per resolved artifact (after the
+	// rootfs and model, before gpu-init), into the node artifact cache.
+	artInits, artVolumes := artifactInits(sb)
+	initContainers = append(initContainers, artInits...)
 	if networked(sb) {
 		// network-init (br0/tap0/dnsmasq) runs first; it mounts the same
 		// runtime-intent + run volumes the launcher uses. KUBESWIFT_SANDBOX_EGRESS
@@ -432,6 +443,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		// (populated by the model-materialize init container above).
 		volumes = append(volumes, corev1.Volume{Name: "model-cache", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: modelCacheDir, Type: &dirCreate}}})
 	}
+	volumes = append(volumes, artVolumes...)
 
 	if sb.Spec.GPUResourceClaim != nil {
 		// gpu-init binds the requested GPU to vfio-pci (two-pass unbind/bind; idempotent
@@ -580,6 +592,13 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 					corev1.VolumeMount{Name: "model-cache", MountPath: modelCacheDir, ReadOnly: true})
 			}
 		}
+	}
+	if len(resolvedArtifacts(sb)) > 0 {
+		// The launcher's virtiofsd shares each artifact from the node cache,
+		// read-only here and in the guest (bridge), like the model: one
+		// sandbox must not change what every other on the node mounts.
+		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: artifactCacheVolume, MountPath: artifactCacheDir, ReadOnly: true})
 	}
 	if networked(sb) && len(sb.Spec.Network.Ports) > 0 {
 		for _, p := range sb.Spec.Network.Ports {
