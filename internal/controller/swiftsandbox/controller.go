@@ -167,6 +167,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := sandboxwebhook.ValidateSecretFiles(&sb.Spec); err != nil {
 		return r.fail(ctx, sb, "InvalidSecretFiles", err.Error())
 	}
+	if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
+		return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
+	}
 	// A referenced Secret or key that does not exist (yet) keeps the sandbox
 	// Pending, named, before any launcher exists.
 	if reason, msg, err := checkSecretEnv(ctx, r.APIReader, sb); err != nil {
@@ -216,6 +219,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		sb.Status.Model = &sandboxv1alpha1.SandboxModelStatus{
 			Digest: rm.Digest, MountPath: sb.Spec.Model.ModelMountPath(), CachePath: rm.TreePath,
 		}
+	}
+	if len(sb.Spec.Artifacts) > 0 {
+		arts, err := resolveArtifacts(ctx, r.APIReader, sb)
+		if err != nil {
+			return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+		}
+		sb.Status.Artifacts = arts
 	}
 	intent := buildIntent(sb, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
 	intentJSON, err := runtimeintent.Serialize(intent)
@@ -284,6 +294,9 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		if cs.Name == materializeInitName && cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
 			return r.fail(ctx, sb, "RootfsMaterializeFailed", firstNonEmpty(cs.State.Terminated.Message, "sandbox-materialize failed"))
 		}
+	}
+	if msg, failed := artifactInitFailure(pod); failed {
+		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
 	}
 
 	if launcherReady(pod) {

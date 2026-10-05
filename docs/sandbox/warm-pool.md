@@ -127,8 +127,8 @@ spec:
   `nodeSelector` requires too. GPU and model belong to the slot: a pooled
   sandbox sets neither and inherits the pool's, including a GPU pool's
   `gpu-sandbox` kernel when it sets no `kernelProfileRef`. A sandbox with its
-  own GPU, a different model or a `scratchDisk` asks for something no slot
-  has. Anything else boots cold with its own settings, and the
+  own GPU, a different model, a `scratchDisk` or `artifacts` asks for
+  something no slot has. Anything else boots cold with its own settings, and the
   `PoolColdFallback` event names each difference, for example
   `cpu (pool 1, sandbox 2)`. Warm slots booted before a pool edit to any of
   these fields are replaced.
