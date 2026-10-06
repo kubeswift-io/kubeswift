@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 chrono = "0.4"
 env_logger = "0.11"
+# Stream helpers for the pod watch (already in the tree through kube).
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await-macro"] }
 libc = "0.2"
 log = "0.4"
 tokio = { version = "1", features = ["rt", "macros", "sync", "signal"] }
@@ -29,8 +31,9 @@ swift-qemu-client = { path = "../swift-qemu-client" }
 swift-vsock-client = { path = "../swift-vsock-client" }
 
 [dev-dependencies]
+futures-channel = "0.3"
 tempfile = "3"
-tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "test-util"] }
 
 [[bin]]
 name = "swiftletd"

@@ -172,8 +172,9 @@ The W12 (action-loop blocking) and W20 (fallback fires
 because D1 doesn't dispatch in time) limitations were expected
 to resolve with an async `swift-ch-client`. They were resolved
 instead by running each dispatch on a thread of its own: the
-action loop keeps polling while a receive runs, D1 is dispatched
-within a poll interval (2s) of the cancel annotation, and
+action loop keeps watching the pod while a receive runs, D1 is
+dispatched as soon as the watch delivers the cancel annotation
+(within 2s when the loop has to poll), and
 `spec.cancelRequested` lands in the few-seconds range. The 30s
 force-delete remains the backstop for an unreachable swiftletd.
 The 30s run from the cancel, which the controller records on the

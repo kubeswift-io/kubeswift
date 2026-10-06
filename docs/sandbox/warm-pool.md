@@ -2,8 +2,9 @@
 
 A `SwiftSandboxPool` keeps N pre-booted, workload-less microVMs ready for one
 image. A `SwiftSandbox` that points at the pool (`spec.poolRef`) then **checks
-out** a ready slot in sub-second time instead of paying the cold
-materialize + boot (~15s). This page assumes you've read
+out** a ready slot instead of paying the cold materialize + boot (~15s); see
+[How checkout works](#how-checkout-works) for measured times. This page assumes
+you've read
 [Running sandboxes](overview.md).
 
 > **Status: cluster-validated (2026-07-12).** Checkout claims a warm slot and
@@ -19,6 +20,16 @@ materialize + boot (~15s). This page assumes you've read
 - A `SwiftSandbox` with `spec.poolRef` **claims** one warm slot and injects its
   `command`/`args`/`env` into the already-booted VM over vsock. The VM is
   running, so the workload starts immediately.
+- **Dispatch.** The controller writes the workload onto the claimed slot's pod,
+  and swiftletd in the slot watches its own pod, so it starts the workload as
+  soon as the API server delivers that write. Measured on a three-node lab
+  cluster over 50 checkouts (1 vCPU, 256Mi slots, a no-op command), from the
+  slot being claimed: the workload dispatched at p50 49 ms and p95 78 ms, and
+  completed at p50 74 ms and p95 108 ms. Earlier releases read the pod every
+  2 s instead, which added 0 to 2 s to every checkout (dispatch at p50 903 ms
+  and p95 1911 ms on the same cluster). If swiftletd cannot watch its pod (for
+  example a launcher Role created by an older controller), it reads the pod
+  every 2 s as before; its log then shows `action_loop_watch_unavailable`.
 - **Consume-and-replenish.** A claimed slot is never returned to the pool — one
   workload never inherits another's slot. On checkout the pool boots a fresh
   warm slot to restore the count.

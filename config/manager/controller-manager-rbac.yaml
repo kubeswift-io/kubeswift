@@ -226,7 +226,7 @@ rules:
   # grants more than the creator holds, and the security review removed
   # `escalate` from this ClusterRole on purpose. That constraint is satisfied
   # WITHOUT it because the controller already holds everything the scoped Role
-  # grants — pods get/patch and swiftguests/status get/patch, both above. If a
+  # grants: pods get/patch/watch and swiftguests/status get/patch, both above. If a
   # future rule widens the scoped Role beyond what the controller itself holds,
   # Role creation will start failing with a 403 rather than silently escalating,
   # and that is the correct outcome.

@@ -45,6 +45,25 @@ func TestScopedRules_NameExactlyTheOwnPod(t *testing.T) {
 	}
 }
 
+// swiftletd watches its own pod: the pod rule adds watch, still scoped to the
+// one pod, and nothing else gains it. list is never granted: a list (or a
+// watch) of pods is namespace-wide unless a name selector narrows it.
+func TestScopedRules_WatchIsOnTheOwnPodOnly(t *testing.T) {
+	for _, class := range []LauncherClass{GuestLauncher, SandboxLauncher} {
+		for _, r := range scopedRulesFor(class, "p") {
+			isPods := len(r.Resources) == 1 && r.Resources[0] == "pods"
+			if isPods && !stringsEqual(r.Verbs, []string{"get", "patch", "watch"}) {
+				t.Errorf("%v pod rule verbs = %v, want get, patch, watch", class, r.Verbs)
+			}
+			for _, v := range r.Verbs {
+				if v == "list" || (v == "watch" && !isPods) {
+					t.Errorf("%v rule %v grants %s", class, r.Resources, v)
+				}
+			}
+		}
+	}
+}
+
 // A sandbox runs untrusted code and has no SwiftGuest CR (#519). Granting it
 // swiftguests/status would let an escaped sandbox forge guest status.
 func TestScopedRules_SandboxGetsNoGuestStatus(t *testing.T) {

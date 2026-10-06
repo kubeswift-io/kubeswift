@@ -48,18 +48,20 @@
 //! second is rejected (status: `rejected`) without disturbing the
 //! first.
 //!
-//! # Why polling instead of watcher
+//! # Watching the pod
 //!
-//! kube-rs offers a watcher stream that emits resource changes. We
-//! poll via `Api::get()` instead because:
+//! The loop reads its pod through [`crate::podwatch::PodFeed`]: a GET first,
+//! then a watch on the pod's metadata that delivers each change as soon as
+//! the API server has it, in resourceVersion order. The watch is replaced
+//! about every 30 s and after each finished dispatch, and the loop polls every
+//! 2 s, as it used to, while the watch does not work. Each snapshot runs the
+//! same pass as a poll did: the decisions below are made from the whole
+//! current state and are idempotent by action id, so the watch only makes the
+//! loop look sooner; it is not what makes it correct. A pass whose rejection
+//! could not be written is made again after 2 s.
 //!
-//!   1. Action annotations change a handful of times per snapshot
-//!      operation, not per second; polling at 2s cadence is plenty.
-//!   2. The polling loop is straightforward to reason about and the
-//!      annotation-decision logic stays a pure function (`decide`),
-//!      keeping the test surface tight.
-//!   3. RBAC narrows naturally to `pods/get` on the pod's name, the
-//!      same scope as a watch + field selector.
+//! The watch is narrowed to the pod's name, which is what the launcher's
+//! per-pod Role grants (`get`, `patch` and `watch` on that one pod).
 //!
 //! Important: we read annotations from the apiserver, not from the
 //! pod's downward-API mount. Kubelet's downward-API sync interval is
@@ -196,6 +198,7 @@ use kube::Client;
 use serde_json::json;
 
 use crate::kube_client;
+use crate::podwatch::{KubePodSource, PodFeed, PodSource};
 
 // Annotation keys — snapshot namespace.
 //
@@ -516,11 +519,6 @@ fn parse_sandbox_verb(verb: &str) -> ActionKind {
 /// at the Phase 0 ~2.8s/GiB curve with margin; the controller passes
 /// a tighter, size-derived value in practice.
 pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 600;
-
-/// Polling cadence for the action loop. 2s matches the lease poller
-/// and is well below any plausible action latency (CH pause is ms;
-/// snapshot+memory write is seconds).
-pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Action verbs the controller (or operator, in Phase 2 manual demo)
 /// can ask for. Each variant belongs to one namespace (snapshot or
@@ -2563,70 +2561,117 @@ async fn action_loop(namespace: String, pod_name: String, api_socket: PathBuf) {
             return;
         }
     };
-    let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), &namespace);
-    let mut state = ActionState::default();
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+    let feed = PodFeed::new(KubePodSource::new(client.clone(), &namespace, &pod_name));
+    let (done_tx, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let dispatcher = Dispatch {
         done: done_tx,
         run: dispatch_on_own_runtime,
     };
     log::info!("action_loop_started pod={}/{}", namespace, pod_name);
+    let end = run_action_loop(
+        feed,
+        &client,
+        &namespace,
+        &pod_name,
+        &api_socket,
+        &dispatcher,
+        done_rx,
+        writer_for,
+        std::future::pending::<()>(),
+    )
+    .await;
+    if end == LoopEnd::Replaced {
+        std::process::exit(0);
+    }
+}
+
+/// Why [`run_action_loop`] returned.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LoopEnd {
+    /// This launcher's pod was replaced by another under its name.
+    Replaced,
+    /// `stop` completed.
+    Stopped,
+}
+
+/// The action loop: reconcile every snapshot of the pod the feed hands out,
+/// and settle every dispatch that finishes. Returns when `stop` completes or
+/// the pod is replaced.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_action_loop<S: PodSource>(
+    mut feed: PodFeed<S>,
+    client: &Client,
+    namespace: &str,
+    pod_name: &str,
+    api_socket: &Path,
+    dispatcher: &Dispatch,
+    mut done_rx: tokio::sync::mpsc::UnboundedReceiver<Completion>,
+    writers: fn(Ns) -> StatusWriter,
+    stop: impl std::future::Future<Output = ()>,
+) -> LoopEnd {
+    let mut state = ActionState::default();
     let mut own_uid: Option<String> = None;
+    // A pass whose rejection could not be written is made again after a
+    // poll interval, as the 2 s poll used to.
+    let mut retry_at: Option<tokio::time::Instant> = None;
+    tokio::pin!(stop);
     loop {
         // Dispatches run on their own threads (Dispatch::start), so the loop
-        // keeps polling while one runs: a cancel reaches the receive it
-        // cancels, and a long action in one namespace does not hold up the
+        // keeps reading the pod while one runs: a cancel reaches the receive
+        // it cancels, and a long action in one namespace does not hold up the
         // others. Their terminal statuses are written here, in completion
         // order.
-        while let Ok(done) = done_rx.try_recv() {
-            finish(&client, &namespace, &pod_name, &mut state, done, writer_for).await;
-        }
-        match api.get(&pod_name).await {
-            Ok(pod) => {
-                if is_successor(&mut own_uid, pod.metadata.uid.as_deref()) {
-                    // This launcher's pod was deleted and another created under
-                    // its name: an in-place restore force-deletes the launcher
-                    // and starts a restore-receive pod, and this process lives
-                    // on until the kubelet kills it. The successor's actions
-                    // are not ours. Acting on them resumed this, the replaced,
-                    // VM and reported it done on the successor, which then
-                    // booted cold.
-                    log::error!(
-                        "pod_replaced pod={}/{} uid={} successor_uid={}: exiting",
-                        namespace,
-                        pod_name,
-                        own_uid.as_deref().unwrap_or(""),
-                        pod.metadata.uid.as_deref().unwrap_or("")
-                    );
-                    std::process::exit(0);
-                }
-                let annotations = pod.metadata.annotations.clone().unwrap_or_default();
-                let annotations: BTreeMap<String, String> = annotations.into_iter().collect();
-                handle_pod_state(
-                    &client,
-                    &namespace,
-                    &pod_name,
-                    &api_socket,
-                    &mut state,
-                    &annotations,
-                    &dispatcher,
-                    writer_for,
-                )
-                .await;
-            }
-            Err(e) => {
-                log::warn!("action_loop_get_pod_err: {}", e);
-            }
-        }
-        // Wake early for a finished dispatch, so a terminal status (the
-        // migration send's in particular: main.rs waits for it before
-        // exiting) is not held back by the poll interval.
-        tokio::select! {
-            _ = tokio::time::sleep(POLL_INTERVAL) => {}
+        let snapshot = tokio::select! {
+            biased;
+            _ = &mut stop => return LoopEnd::Stopped,
             Some(done) = done_rx.recv() => {
-                finish(&client, &namespace, &pod_name, &mut state, done, writer_for).await;
+                finish(client, namespace, pod_name, &mut state, done, writers).await;
+                // Decide again from the pod as it is now, so an action
+                // waiting for this dispatch starts at once, not at the next
+                // change.
+                feed.refresh();
+                continue;
             }
+            _ = async {
+                match retry_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                retry_at = None;
+                feed.refresh();
+                continue;
+            }
+            snapshot = feed.next() => snapshot,
+        };
+        if is_successor(&mut own_uid, snapshot.uid.as_deref()) {
+            // This launcher's pod was deleted and another created under its
+            // name: an in-place restore force-deletes the launcher and starts
+            // a restore-receive pod, and this process lives on until the
+            // kubelet kills it. The successor's actions are not ours. Acting
+            // on them resumed this, the replaced, VM and reported it done on
+            // the successor, which then booted cold.
+            log::error!(
+                "pod_replaced pod={}/{} uid={} successor_uid={}: exiting",
+                namespace,
+                pod_name,
+                own_uid.as_deref().unwrap_or(""),
+                snapshot.uid.as_deref().unwrap_or("")
+            );
+            return LoopEnd::Replaced;
         }
+        let retry = handle_pod_state(
+            client,
+            namespace,
+            pod_name,
+            api_socket,
+            &mut state,
+            &snapshot.annotations,
+            dispatcher,
+            writers,
+        )
+        .await;
+        retry_at = retry.then(|| tokio::time::Instant::now() + crate::podwatch::POLL_INTERVAL);
     }
 }
 
@@ -2933,7 +2978,29 @@ fn namespace_action_id<'a>(
     }
 }
 
+/// Whether the pod already carries `status` (and `detail`) for action `id`.
+/// A rejection is decided again on every pass while its cause lasts. Each
+/// write is a change of the pod that the watch delivers as a new pass, so an
+/// unconditional write would feed itself; one that changes nothing is skipped.
+fn status_written(
+    annotations: &BTreeMap<String, String>,
+    keys: &KeySet,
+    id: &str,
+    status: StatusKind,
+    detail: Option<&str>,
+) -> bool {
+    annotations.get(keys.status_id_key).map(String::as_str) == Some(id)
+        && annotations.get(keys.status_key).map(String::as_str) == Some(status.as_str())
+        && annotations
+            .get(keys.status_detail_key)
+            .map(String::as_str)
+            .unwrap_or("")
+            == detail.unwrap_or("")
+}
+
 #[allow(clippy::too_many_arguments)]
+/// Returns whether a rejection could not be written: the pass must be made
+/// again later, since the pod may not change to bring another.
 async fn handle_pod_state(
     client: &Client,
     namespace: &str,
@@ -2943,7 +3010,8 @@ async fn handle_pod_state(
     annotations: &BTreeMap<String, String>,
     dispatcher: &Dispatch,
     writers: fn(Ns) -> StatusWriter,
-) {
+) -> bool {
+    let mut retry = false;
     let snap_active = is_namespace_active(annotations, &SNAPSHOT_KEYS);
     let mig_active = is_namespace_active(annotations, &MIGRATION_KEYS);
 
@@ -2961,7 +3029,18 @@ async fn handle_pod_state(
         && state.snapshot.in_flight.is_none()
         && state.migration.in_flight.is_none()
     {
-        if let Some(id) = namespace_action_id(annotations, &SNAPSHOT_KEYS) {
+        let mig_keys = migration_keys();
+        const SNAP_DETAIL: &str = "concurrent action with migration rejected";
+        const MIG_DETAIL: &str = "concurrent action with snapshot rejected";
+        if let Some(id) = namespace_action_id(annotations, &SNAPSHOT_KEYS).filter(|id| {
+            !status_written(
+                annotations,
+                &SNAPSHOT_KEYS,
+                id,
+                StatusKind::Rejected,
+                Some(SNAP_DETAIL),
+            )
+        }) {
             log::warn!("action_reject_concurrent namespace=snapshot id={}", id);
             if let Err(e) = (writers(Ns::Snapshot))(
                 client,
@@ -2969,15 +3048,24 @@ async fn handle_pod_state(
                 pod_name,
                 id,
                 StatusKind::Rejected,
-                Some("concurrent action with migration rejected"),
+                Some(SNAP_DETAIL),
                 None,
             )
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                retry = true;
             }
         }
-        if let Some(id) = namespace_action_id(annotations, &MIGRATION_KEYS) {
+        if let Some(id) = namespace_action_id(annotations, &MIGRATION_KEYS).filter(|id| {
+            !status_written(
+                annotations,
+                &mig_keys,
+                id,
+                StatusKind::Rejected,
+                Some(MIG_DETAIL),
+            )
+        }) {
             log::warn!("action_reject_concurrent namespace=migration id={}", id);
             if let Err(e) = (writers(Ns::Migration))(
                 client,
@@ -2985,15 +3073,16 @@ async fn handle_pod_state(
                 pod_name,
                 id,
                 StatusKind::Rejected,
-                Some("concurrent action with snapshot rejected"),
+                Some(MIG_DETAIL),
                 None,
             )
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                retry = true;
             }
         }
-        return;
+        return retry;
     }
 
     // Per-namespace processing. Each namespace's state is its own, and
@@ -3021,7 +3110,7 @@ async fn handle_pod_state(
         (Ns::Sandbox, &SANDBOX_KEYS),
     ] {
         let blocking = state.blocking(ns);
-        handle_namespace(
+        retry |= handle_namespace(
             client,
             namespace,
             pod_name,
@@ -3036,6 +3125,7 @@ async fn handle_pod_state(
         )
         .await;
     }
+    retry
 }
 
 /// Type alias for the namespace-specific status writer used by
@@ -3178,7 +3268,7 @@ async fn handle_namespace(
     write: StatusWriter,
     blocking: Option<&str>,
     dispatcher: &Dispatch,
-) {
+) -> bool {
     // Once a cancel is accepted for the running action the annotations carry
     // its id: count it as done, or it would be dispatched again every tick.
     let last = state
@@ -3215,6 +3305,14 @@ async fn handle_namespace(
                 current_id
             );
         }
+        ActionDecision::RejectAckMissing { incoming_id, .. }
+            if status_written(
+                annotations,
+                keys,
+                &incoming_id,
+                StatusKind::Rejected,
+                Some("phase2_plaintext_ack_missing"),
+            ) => {}
         ActionDecision::RejectAckMissing {
             incoming_id,
             ack_key,
@@ -3242,6 +3340,7 @@ async fn handle_namespace(
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                return true;
             }
         }
         ActionDecision::Accept(pending) => {
@@ -3260,7 +3359,7 @@ async fn handle_namespace(
                             pending.id,
                             running.id
                         );
-                        return;
+                        return false;
                     }
                     slot = Slot::Cancel;
                 }
@@ -3271,7 +3370,7 @@ async fn handle_namespace(
                     pending.id,
                     other
                 );
-                return;
+                return false;
             }
             log::info!(
                 "action_accept namespace={} kind={:?} id={} slot={:?}",
@@ -3303,6 +3402,7 @@ async fn handle_namespace(
             dispatcher.start(ns, slot, pending, api_socket);
         }
     }
+    false
 }
 
 #[cfg(test)]
@@ -5154,6 +5254,8 @@ mod loop_tests {
 
     thread_local! {
         static WRITES: RefCell<Vec<(String, &'static str, Option<String>)>> = const { RefCell::new(Vec::new()) };
+        /// The next this many status writes fail, unrecorded.
+        static FAIL_WRITES: RefCell<usize> = const { RefCell::new(0) };
     }
 
     fn record<'a>(
@@ -5166,6 +5268,15 @@ mod loop_tests {
         _: Option<u64>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>>
     {
+        let fail = FAIL_WRITES.with(|f| {
+            let mut f = f.borrow_mut();
+            let fail = *f > 0;
+            *f = f.saturating_sub(1);
+            fail
+        });
+        if fail {
+            return Box::pin(async { Err(kube::Error::Service("scripted write failure".into())) });
+        }
         WRITES.with(|w| {
             w.borrow_mut()
                 .push((id.to_string(), status.as_str(), detail.map(String::from)))
@@ -5425,5 +5536,491 @@ mod loop_tests {
             "the capture runs once the receive is done"
         );
         rig.settle().await;
+    }
+
+    // ---- The action loop driven by a watched pod (crate::podwatch) ----
+
+    use crate::podwatch::tests::{
+        change, error_event, exact_feed, pod, send, watchdog, Script, WatchFailure,
+    };
+    use crate::podwatch::{MIN_STREAM_LIFETIME, POLL_INTERVAL, RESYNC_INTERVAL};
+    use kube::api::WatchEvent;
+    use tokio::time::Instant;
+
+    fn sandbox_action(id: &str) -> [(&'static str, String); 2] {
+        [
+            (SANDBOX_KEYS.action_key, "run".to_string()),
+            (SANDBOX_KEYS.action_id_key, id.to_string()),
+        ]
+    }
+
+    fn annotated(
+        uid: &str,
+        kv: &[(&'static str, String)],
+    ) -> kube::core::PartialObjectMeta<k8s_openapi::api::core::v1::Pod> {
+        let pairs: Vec<(&str, &str)> = kv.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        pod(uid, &pairs)
+    }
+
+    fn statuses(id: &str) -> Vec<&'static str> {
+        writes()
+            .into_iter()
+            .filter(|w| w.0 == id)
+            .map(|w| w.1)
+            .collect()
+    }
+
+    /// Wait, without letting the paused clock advance, until `cond` holds.
+    /// Dispatches run on real threads, so this also gives them real time.
+    async fn until(cond: impl Fn() -> bool) {
+        for _ in 0..5000 {
+            if cond() {
+                return;
+            }
+            tokio::task::yield_now().await;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!("condition not reached");
+    }
+
+    struct LoopRig {
+        client: Client,
+        dispatcher: Dispatch,
+        done: Option<tokio::sync::mpsc::UnboundedReceiver<Completion>>,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        stop_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    }
+
+    impl LoopRig {
+        fn new() -> Self {
+            WRITES.with(|w| w.borrow_mut().clear());
+            FAIL_WRITES.with(|f| *f.borrow_mut() = 0);
+            let config = kube::Config::new("http://127.0.0.1:1".parse().unwrap());
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let (stop, stop_rx) = tokio::sync::oneshot::channel();
+            LoopRig {
+                client: Client::try_from(config).unwrap(),
+                dispatcher: Dispatch {
+                    done: tx,
+                    run: fake_dispatch,
+                },
+                done: Some(rx),
+                stop: Some(stop),
+                stop_rx: Some(stop_rx),
+            }
+        }
+
+        /// Run the loop on `script` while `drive` runs, then stop it.
+        async fn run<F: std::future::Future<Output = ()>>(
+            &mut self,
+            script: &Script,
+            drive: F,
+        ) -> LoopEnd {
+            let stop_rx = self.stop_rx.take().unwrap();
+            let stop = self.stop.take().unwrap();
+            let socket = PathBuf::from("/nonexistent/ch.sock");
+            let looped = run_action_loop(
+                exact_feed(script),
+                &self.client,
+                "ns",
+                "pod",
+                &socket,
+                &self.dispatcher,
+                self.done.take().unwrap(),
+                recorder,
+                async {
+                    let _ = stop_rx.await;
+                },
+            );
+            let driven = async {
+                drive.await;
+                let _ = stop.send(());
+            };
+            // A loop that never ends fails the test instead of hanging it.
+            let (end, ()) = tokio::time::timeout(Duration::from_secs(600), async {
+                tokio::join!(looped, driven)
+            })
+            .await
+            .expect("the loop did not stop");
+            end
+        }
+    }
+
+    // Phase 6: an assignment delivered by the watch is dispatched at once:
+    // no time passes between the event and the dispatch's `running` write,
+    // and the terminal status follows when the workload ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_watched_assignment_dispatches_without_waiting() {
+        let _w = watchdog("a_watched_assignment_dispatches_without_waiting");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let end = rig
+            .run(&script, async {
+                let t0 = Instant::now();
+                change(&script, annotated("u1", &sandbox_action("sb-1"))).await;
+                until(|| statuses("sb-1").contains(&"running")).await;
+                assert_eq!(Instant::now(), t0, "dispatched without a poll interval");
+                until(|| statuses("sb-1").contains(&"ready")).await;
+            })
+            .await;
+        assert_eq!(end, LoopEnd::Stopped);
+        assert_eq!(
+            statuses("sb-1"),
+            vec!["running", "ready"],
+            "accepted, then acknowledged"
+        );
+        assert_eq!(
+            script.gets(),
+            1,
+            "the first state only: no GET while the watch works"
+        );
+    }
+
+    // The same assignment seen again, and the loop's own status writes coming
+    // back as events, never run the workload twice.
+    #[tokio::test(start_paused = true)]
+    async fn a_repeated_assignment_runs_once() {
+        let _w = watchdog("a_repeated_assignment_runs_once");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-2");
+        rig.run(&script, async {
+            let assigned = || annotated("u1", &sandbox_action("sb-2"));
+            change(&script, assigned()).await;
+            change(&script, assigned()).await;
+            until(|| statuses("sb-2") == vec!["running"]).await;
+            let mut echoed = sandbox_action("sb-2").to_vec();
+            echoed.push((SANDBOX_KEYS.status_key, "running".to_string()));
+            echoed.push((SANDBOX_KEYS.status_id_key, "sb-2".to_string()));
+            change(&script, annotated("u1", &echoed)).await;
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-2").contains(&"ready")).await;
+            echoed.push((SANDBOX_KEYS.status_key, "ready".to_string()));
+            change(&script, annotated("u1", &echoed)).await;
+            change(&script, assigned()).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(statuses("sb-2"), vec!["running", "ready"]);
+    }
+
+    // Restart: an assignment already on the pod when swiftletd starts is
+    // found by its first read and dispatched without waiting for a change.
+    #[tokio::test(start_paused = true)]
+    async fn an_assignment_present_at_start_dispatches() {
+        let _w = watchdog("an_assignment_present_at_start_dispatches");
+        let script = Script::with(annotated("u1", &sandbox_action("sb-3")));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            let t0 = Instant::now();
+            until(|| statuses("sb-3").contains(&"ready")).await;
+            assert_eq!(Instant::now(), t0);
+        })
+        .await;
+        assert_eq!(statuses("sb-3"), vec!["running", "ready"]);
+        // The first read, and one for the refresh after the dispatch if it
+        // finished before the watch opened.
+        assert!(script.gets() <= 2, "gets: {}", script.gets());
+    }
+
+    // The server ends the watch: a new one starts from the current state,
+    // which carries an assignment the old watch never delivered.
+    #[tokio::test(start_paused = true)]
+    async fn a_reopened_watch_delivers_what_the_old_one_missed() {
+        let _w = watchdog("a_reopened_watch_delivers_what_the_old_one_missed");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            until(|| script.watch_count() == 1).await;
+            tokio::time::sleep(MIN_STREAM_LIFETIME).await;
+            script.set(annotated("u1", &sandbox_action("sb-4")));
+            let t0 = Instant::now();
+            script.end_watch();
+            until(|| statuses("sb-4").contains(&"running")).await;
+            assert_eq!(Instant::now(), t0, "reopened at once");
+            until(|| statuses("sb-4").contains(&"ready")).await;
+        })
+        .await;
+        assert_eq!(script.gets(), 1, "no GET after the first");
+    }
+
+    // A watch that breaks with an error event (410 Gone) is replaced, and
+    // the loop acts on the current state the new one starts with.
+    #[tokio::test(start_paused = true)]
+    async fn a_broken_watch_reopens_and_acts_on_the_current_state() {
+        let _w = watchdog("a_broken_watch_reopens_and_acts_on_the_current_state");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            until(|| script.watch_count() == 1).await;
+            tokio::time::sleep(MIN_STREAM_LIFETIME).await;
+            script.set(annotated("u1", &sandbox_action("sb-5")));
+            send(&script, error_event(410)).await;
+            until(|| statuses("sb-5").contains(&"ready")).await;
+        })
+        .await;
+        assert_eq!(script.gets(), 1);
+    }
+
+    // Rapid changes: a newer assignment waits for the running one and starts
+    // the moment it ends; the older one is not run again.
+    #[tokio::test(start_paused = true)]
+    async fn a_newer_assignment_waits_for_the_running_one() {
+        let _w = watchdog("a_newer_assignment_waits_for_the_running_one");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-6a");
+        rig.run(&script, async {
+            change(&script, annotated("u1", &sandbox_action("sb-6a"))).await;
+            until(|| statuses("sb-6a") == vec!["running"]).await;
+            change(&script, annotated("u1", &sandbox_action("sb-6b"))).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert!(statuses("sb-6b").is_empty(), "waits while sb-6a runs");
+            let t0 = Instant::now();
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-6b").contains(&"ready")).await;
+            assert_eq!(Instant::now(), t0, "starts when the running one ends");
+        })
+        .await;
+        assert_eq!(statuses("sb-6a"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-6b"), vec!["running", "ready"]);
+    }
+
+    // A finished dispatch is settled against the pod as it is after it, not
+    // against a snapshot read before: an assignment withdrawn while the
+    // previous one ran is not started.
+    #[tokio::test(start_paused = true)]
+    async fn a_withdrawn_assignment_is_not_started_after_a_dispatch() {
+        let _w = watchdog("a_withdrawn_assignment_is_not_started_after_a_dispatch");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-10a");
+        rig.run(&script, async {
+            change(&script, annotated("u1", &sandbox_action("sb-10a"))).await;
+            until(|| statuses("sb-10a") == vec!["running"]).await;
+            change(&script, annotated("u1", &sandbox_action("sb-10b"))).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            // Withdrawn, and the change's event lost.
+            script.set(pod("u1", &[]));
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-10a").contains(&"ready")).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(statuses("sb-10b").is_empty());
+    }
+
+    // A watch cache can lag: after a dispatch finishes, the new watch may
+    // start with a state older than one already acted on, here one that
+    // still carries an earlier, finished assignment. It is not run again.
+    #[tokio::test(start_paused = true)]
+    async fn a_lagging_watch_does_not_rerun_a_finished_assignment() {
+        let _w = watchdog("a_lagging_watch_does_not_rerun_a_finished_assignment");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-11b");
+        rig.run(&script, async {
+            let first = change(&script, annotated("u1", &sandbox_action("sb-11a"))).await;
+            until(|| statuses("sb-11a").contains(&"ready")).await;
+            change(&script, annotated("u1", &sandbox_action("sb-11b"))).await;
+            until(|| statuses("sb-11b") == vec!["running"]).await;
+            script.lag_next_watch(first);
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-11b").contains(&"ready")).await;
+            until(|| script.watch_count() == 3).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            // The lagging cache catches up.
+            let current = script.current_watch().unwrap();
+            let now = script.set(annotated("u1", &sandbox_action("sb-11b")));
+            current
+                .unbounded_send(Ok(WatchEvent::Modified(now)))
+                .unwrap();
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(statuses("sb-11a"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-11b"), vec!["running", "ready"]);
+    }
+
+    // A resync replaces the watch: an older event left in the old stream
+    // never runs after the newer state the new watch starts with.
+    #[tokio::test(start_paused = true)]
+    async fn a_stale_event_does_not_override_a_newer_snapshot() {
+        let _w = watchdog("a_stale_event_does_not_override_a_newer_snapshot");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            until(|| script.watch_count() == 1).await;
+            let old = script.current_watch().unwrap();
+            script.set(annotated("u1", &sandbox_action("sb-7new")));
+            tokio::time::sleep(RESYNC_INTERVAL).await;
+            until(|| statuses("sb-7new").contains(&"ready")).await;
+            let stale = old.unbounded_send(Ok(WatchEvent::Modified(annotated(
+                "u1",
+                &sandbox_action("sb-7old"),
+            ))));
+            assert!(stale.is_err(), "the old stream was dropped");
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(statuses("sb-7old").is_empty());
+    }
+
+    // Without a watch (a Role from before swiftletd watched its pod: kube-rs
+    // reports the 403 as the stream's first item), the loop polls every
+    // POLL_INTERVAL, as it always did.
+    #[tokio::test(start_paused = true)]
+    async fn without_a_watch_the_loop_polls() {
+        let _w = watchdog("without_a_watch_the_loop_polls");
+        let script = Script::with(pod("u1", &[]));
+        script.fail_every_watch(WatchFailure::Refused(403));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            let t0 = Instant::now();
+            script.set(annotated("u1", &sandbox_action("sb-8")));
+            tokio::time::sleep(POLL_INTERVAL).await;
+            until(|| statuses("sb-8").contains(&"ready")).await;
+            assert!(Instant::now() - t0 <= POLL_INTERVAL);
+        })
+        .await;
+        assert_eq!(script.watch_count(), 0);
+        assert!(script.opens() >= 1);
+    }
+
+    // Shutdown ends the loop and drops the watch's stream.
+    #[tokio::test(start_paused = true)]
+    async fn stop_ends_the_loop_and_its_watch() {
+        let _w = watchdog("stop_ends_the_loop_and_its_watch");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let end = rig
+            .run(&script, async {
+                until(|| script.watch_count() == 1).await;
+            })
+            .await;
+        assert_eq!(end, LoopEnd::Stopped);
+        assert!(
+            script.current_watch().unwrap().is_closed(),
+            "the stream is dropped"
+        );
+    }
+
+    // Another pod under the launcher's name ends the loop.
+    #[tokio::test(start_paused = true)]
+    async fn a_successor_pod_ends_the_loop() {
+        let _w = watchdog("a_successor_pod_ends_the_loop");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let stop_rx = rig.stop_rx.take().unwrap();
+        let socket = PathBuf::from("/nonexistent/ch.sock");
+        let looped = run_action_loop(
+            exact_feed(&script),
+            &rig.client,
+            "ns",
+            "pod",
+            &socket,
+            &rig.dispatcher,
+            rig.done.take().unwrap(),
+            recorder,
+            async {
+                let _ = stop_rx.await;
+            },
+        );
+        let (end, ()) = tokio::time::timeout(Duration::from_secs(600), async {
+            tokio::join!(looped, async {
+                let successor = script.set(annotated("u2", &sandbox_action("sb-9")));
+                send(&script, WatchEvent::Added(successor)).await;
+            })
+        })
+        .await
+        .expect("a successor must end the loop");
+        assert_eq!(end, LoopEnd::Replaced);
+        assert!(
+            statuses("sb-9").is_empty(),
+            "the successor's action is not ours"
+        );
+    }
+
+    // A rejection that could not be written is written by a later pass, as
+    // the 2 s poll did, although the pod does not change to bring one.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_rejection_write_is_retried() {
+        let _w = watchdog("a_failed_rejection_write_is_retried");
+        let mig = migration_keys();
+        assert!(mig.ack_key.is_some(), "plaintext migration needs the ack");
+        let unacked = [
+            (MIGRATION_KEYS.action_key, "send".to_string()),
+            (MIGRATION_KEYS.action_id_key, "mig-3".to_string()),
+        ];
+        let script = Script::with(annotated("u1", &unacked));
+        let mut rig = LoopRig::new();
+        FAIL_WRITES.with(|f| *f.borrow_mut() = 1);
+        rig.run(&script, async {
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert!(statuses("mig-3").is_empty(), "the write failed");
+            tokio::time::sleep(POLL_INTERVAL).await;
+            until(|| !statuses("mig-3").is_empty()).await;
+        })
+        .await;
+        assert_eq!(statuses("mig-3"), vec!["rejected"]);
+        assert_eq!(script.gets(), 1, "retried from the watch, no GET");
+    }
+
+    // A rejection decided on every pass is written once: the watch delivers
+    // the write itself as a new pass, which must not write again.
+    #[tokio::test(start_paused = true)]
+    async fn a_rejection_is_not_rewritten_by_its_own_event() {
+        let _w = watchdog("a_rejection_is_not_rewritten_by_its_own_event");
+        let both = [
+            (SNAPSHOT_KEYS.action_key, "capture".to_string()),
+            (SNAPSHOT_KEYS.action_id_key, "snap-1".to_string()),
+            (MIGRATION_KEYS.action_key, "send".to_string()),
+            (MIGRATION_KEYS.action_id_key, "mig-1".to_string()),
+        ];
+        let script = Script::with(annotated("u1", &both));
+        let mut rig = LoopRig::new();
+        rig.run(&script, async {
+            until(|| {
+                statuses("snap-1") == vec!["rejected"] && statuses("mig-1") == vec!["rejected"]
+            })
+            .await;
+            let mut echoed = both.to_vec();
+            echoed.push((SNAPSHOT_KEYS.status_key, "rejected".to_string()));
+            echoed.push((SNAPSHOT_KEYS.status_id_key, "snap-1".to_string()));
+            echoed.push((
+                SNAPSHOT_KEYS.status_detail_key,
+                "concurrent action with migration rejected".to_string(),
+            ));
+            let mig = migration_keys();
+            echoed.push((mig.status_key, "rejected".to_string()));
+            echoed.push((mig.status_id_key, "mig-1".to_string()));
+            echoed.push((
+                mig.status_detail_key,
+                "concurrent action with snapshot rejected".to_string(),
+            ));
+            change(&script, annotated("u1", &echoed)).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(statuses("snap-1"), vec!["rejected"]);
+        assert_eq!(statuses("mig-1"), vec!["rejected"]);
     }
 }

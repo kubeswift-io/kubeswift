@@ -148,10 +148,14 @@ func NarrowToScopedRBAC(ctx context.Context, c client.Client, namespace string, 
 // CR for a sandbox to report to (#519). Adding it here would hand an escaped
 // sandbox the ability to forge guest status.
 func scopedRulesFor(class LauncherClass, podName string) []rbacv1.PolicyRule {
+	// watch: swiftletd watches its own pod for the actions the controller
+	// writes on it (a warm slot's workload among them) instead of polling.
+	// With resourceNames a watch is allowed only with the matching
+	// metadata.name field selector, so it reaches this pod alone, as get does.
 	rules := []rbacv1.PolicyRule{{
 		APIGroups:     []string{""},
 		Resources:     []string{"pods"},
-		Verbs:         []string{"get", "patch"},
+		Verbs:         []string{"get", "patch", "watch"},
 		ResourceNames: []string{podName},
 	}}
 	if class == SandboxLauncher {
