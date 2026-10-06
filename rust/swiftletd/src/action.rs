@@ -5506,8 +5506,10 @@ mod loop_tests {
 
     // ---- The action loop driven by a watched pod (crate::podwatch) ----
 
-    use crate::podwatch::tests::{change, error_event, pod, send, watchdog, Script, WatchFailure};
-    use crate::podwatch::{PodFeed, MIN_STREAM_LIFETIME, POLL_INTERVAL, RESYNC_INTERVAL};
+    use crate::podwatch::tests::{
+        change, error_event, exact_feed, pod, send, watchdog, Script, WatchFailure,
+    };
+    use crate::podwatch::{MIN_STREAM_LIFETIME, POLL_INTERVAL, RESYNC_INTERVAL};
     use kube::api::WatchEvent;
     use tokio::time::Instant;
 
@@ -5583,7 +5585,7 @@ mod loop_tests {
             let stop = self.stop.take().unwrap();
             let socket = PathBuf::from("/nonexistent/ch.sock");
             let looped = run_action_loop(
-                PodFeed::new(script.clone()),
+                exact_feed(script),
                 &self.client,
                 "ns",
                 "pod",
@@ -5632,7 +5634,11 @@ mod loop_tests {
             vec!["running", "ready"],
             "accepted, then acknowledged"
         );
-        assert_eq!(script.gets(), 0, "no GET while the watch works");
+        assert_eq!(
+            script.gets(),
+            1,
+            "the first state only: no GET while the watch works"
+        );
     }
 
     // The same assignment seen again, and the loop's own status writes coming
@@ -5665,8 +5671,8 @@ mod loop_tests {
         assert_eq!(statuses("sb-2"), vec!["running", "ready"]);
     }
 
-    // Restart: an assignment already on the pod when swiftletd starts is in
-    // the watch's first event and is dispatched without waiting for a change.
+    // Restart: an assignment already on the pod when swiftletd starts is
+    // found by its first read and dispatched without waiting for a change.
     #[tokio::test(start_paused = true)]
     async fn an_assignment_present_at_start_dispatches() {
         let _w = watchdog("an_assignment_present_at_start_dispatches");
@@ -5679,7 +5685,7 @@ mod loop_tests {
         })
         .await;
         assert_eq!(statuses("sb-3"), vec!["running", "ready"]);
-        assert_eq!(script.gets(), 0);
+        assert_eq!(script.gets(), 1);
     }
 
     // The server ends the watch: a new one starts from the current state,
@@ -5700,7 +5706,7 @@ mod loop_tests {
             until(|| statuses("sb-4").contains(&"ready")).await;
         })
         .await;
-        assert_eq!(script.gets(), 0, "no GET was needed");
+        assert_eq!(script.gets(), 1, "no GET after the first");
     }
 
     // A watch that breaks with an error event (410 Gone) is replaced, and
@@ -5718,7 +5724,7 @@ mod loop_tests {
             until(|| statuses("sb-5").contains(&"ready")).await;
         })
         .await;
-        assert_eq!(script.gets(), 0);
+        assert_eq!(script.gets(), 1);
     }
 
     // Rapid changes: a newer assignment waits for the running one and starts
@@ -5773,6 +5779,42 @@ mod loop_tests {
         })
         .await;
         assert!(statuses("sb-10b").is_empty());
+    }
+
+    // A watch cache can lag: after a dispatch finishes, the new watch may
+    // start with a state older than one already acted on, here one that
+    // still carries an earlier, finished assignment. It is not run again.
+    #[tokio::test(start_paused = true)]
+    async fn a_lagging_watch_does_not_rerun_a_finished_assignment() {
+        let _w = watchdog("a_lagging_watch_does_not_rerun_a_finished_assignment");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-11b");
+        rig.run(&script, async {
+            let first = change(&script, annotated("u1", &sandbox_action("sb-11a"))).await;
+            until(|| statuses("sb-11a").contains(&"ready")).await;
+            change(&script, annotated("u1", &sandbox_action("sb-11b"))).await;
+            until(|| statuses("sb-11b") == vec!["running"]).await;
+            script.lag_next_watch(first);
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-11b").contains(&"ready")).await;
+            until(|| script.watch_count() == 3).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            // The lagging cache catches up.
+            let current = script.current_watch().unwrap();
+            let now = script.set(annotated("u1", &sandbox_action("sb-11b")));
+            current
+                .unbounded_send(Ok(WatchEvent::Modified(now)))
+                .unwrap();
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert_eq!(statuses("sb-11a"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-11b"), vec!["running", "ready"]);
     }
 
     // A resync replaces the watch: an older event left in the old stream
@@ -5849,7 +5891,7 @@ mod loop_tests {
         let stop_rx = rig.stop_rx.take().unwrap();
         let socket = PathBuf::from("/nonexistent/ch.sock");
         let looped = run_action_loop(
-            PodFeed::new(script.clone()),
+            exact_feed(&script),
             &rig.client,
             "ns",
             "pod",
@@ -5861,11 +5903,10 @@ mod loop_tests {
                 let _ = stop_rx.await;
             },
         );
-        let successor = annotated("u2", &sandbox_action("sb-9"));
         let (end, ()) = tokio::time::timeout(Duration::from_secs(600), async {
             tokio::join!(looped, async {
-                script.set(successor.clone());
-                send(&script, WatchEvent::Added(successor.clone())).await;
+                let successor = script.set(annotated("u2", &sandbox_action("sb-9")));
+                send(&script, WatchEvent::Added(successor)).await;
             })
         })
         .await
