@@ -51,12 +51,13 @@
 //! # Watching the pod
 //!
 //! The loop reads its pod through [`crate::podwatch::PodFeed`]: a watch on
-//! the pod's metadata delivers a change as soon as the API server has it, a
-//! GET gives the state at start and every 30 s, and the loop polls every 2 s,
-//! as it used to, while the watch cannot be opened. Each snapshot runs the
-//! same pass as a poll did: the decisions below are made from the whole
-//! current state and are idempotent by action id, so the watch only makes the
-//! loop look sooner; it is not what makes it correct.
+//! the pod's metadata starts with the pod's current state and delivers each
+//! change as soon as the API server has it. It is replaced by a new one every
+//! 30 s and after each finished dispatch, and the loop polls every 2 s, as it
+//! used to, while the watch does not work. Each snapshot runs the same pass as
+//! a poll did: the decisions below are made from the whole current state and
+//! are idempotent by action id, so the watch only makes the loop look sooner;
+//! it is not what makes it correct.
 //!
 //! The watch is narrowed to the pod's name, which is what the launcher's
 //! per-pod Role grants (`get`, `patch` and `watch` on that one pod).
@@ -196,7 +197,7 @@ use kube::Client;
 use serde_json::json;
 
 use crate::kube_client;
-use crate::podwatch::{KubePodSource, PodFeed, PodSnapshot, PodSource};
+use crate::podwatch::{KubePodSource, PodFeed, PodSource};
 
 // Annotation keys — snapshot namespace.
 //
@@ -2609,9 +2610,6 @@ pub(crate) async fn run_action_loop<S: PodSource>(
 ) -> LoopEnd {
     let mut state = ActionState::default();
     let mut own_uid: Option<String> = None;
-    // The latest snapshot: a finished dispatch is settled against it, so an
-    // action waiting for that dispatch starts at once, not at the next change.
-    let mut last: Option<PodSnapshot> = None;
     tokio::pin!(stop);
     loop {
         // Dispatches run on their own threads (Dispatch::start), so the loop
@@ -2624,15 +2622,13 @@ pub(crate) async fn run_action_loop<S: PodSource>(
             _ = &mut stop => return LoopEnd::Stopped,
             Some(done) = done_rx.recv() => {
                 finish(client, namespace, pod_name, &mut state, done, writers).await;
-                match last.clone() {
-                    Some(snapshot) => snapshot,
-                    None => continue,
-                }
+                // Decide again from the pod as it is now, so an action
+                // waiting for this dispatch starts at once, not at the next
+                // change.
+                feed.refresh();
+                continue;
             }
-            snapshot = feed.next() => {
-                last = Some(snapshot.clone());
-                snapshot
-            }
+            snapshot = feed.next() => snapshot,
         };
         if is_successor(&mut own_uid, snapshot.uid.as_deref()) {
             // This launcher's pod was deleted and another created under its
@@ -5510,8 +5506,8 @@ mod loop_tests {
 
     // ---- The action loop driven by a watched pod (crate::podwatch) ----
 
-    use crate::podwatch::tests::{gone, pod, push_when_open, Script};
-    use crate::podwatch::{PodFeed, POLL_INTERVAL, RESYNC_INTERVAL};
+    use crate::podwatch::tests::{change, error_event, pod, send, watchdog, Script, WatchFailure};
+    use crate::podwatch::{PodFeed, MIN_STREAM_LIFETIME, POLL_INTERVAL, RESYNC_INTERVAL};
     use kube::api::WatchEvent;
     use tokio::time::Instant;
 
@@ -5524,11 +5520,10 @@ mod loop_tests {
 
     fn annotated(
         uid: &str,
-        rv: &str,
         kv: &[(&'static str, String)],
     ) -> kube::core::PartialObjectMeta<k8s_openapi::api::core::v1::Pod> {
         let pairs: Vec<(&str, &str)> = kv.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        pod(uid, rv, &pairs)
+        pod(uid, &pairs)
     }
 
     fn statuses(id: &str) -> Vec<&'static str> {
@@ -5619,17 +5614,13 @@ mod loop_tests {
     // and the terminal status follows when the workload ends.
     #[tokio::test(start_paused = true)]
     async fn a_watched_assignment_dispatches_without_waiting() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("a_watched_assignment_dispatches_without_waiting");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         let end = rig
             .run(&script, async {
                 let t0 = Instant::now();
-                push_when_open(
-                    &script,
-                    WatchEvent::Modified(annotated("u1", "11", &sandbox_action("sb-1"))),
-                )
-                .await;
+                change(&script, annotated("u1", &sandbox_action("sb-1"))).await;
                 until(|| statuses("sb-1").contains(&"running")).await;
                 assert_eq!(Instant::now(), t0, "dispatched without a poll interval");
                 until(|| statuses("sb-1").contains(&"ready")).await;
@@ -5641,42 +5632,31 @@ mod loop_tests {
             vec!["running", "ready"],
             "accepted, then acknowledged"
         );
+        assert_eq!(script.gets(), 0, "no GET while the watch works");
     }
 
     // The same assignment seen again, and the loop's own status writes coming
     // back as events, never run the workload twice.
     #[tokio::test(start_paused = true)]
     async fn a_repeated_assignment_runs_once() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("a_repeated_assignment_runs_once");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         let release = gate("sb-2");
         rig.run(&script, async {
-            let ev = || WatchEvent::Modified(annotated("u1", "11", &sandbox_action("sb-2")));
-            push_when_open(&script, ev()).await;
-            push_when_open(&script, ev()).await;
+            let assigned = || annotated("u1", &sandbox_action("sb-2"));
+            change(&script, assigned()).await;
+            change(&script, assigned()).await;
             until(|| statuses("sb-2") == vec!["running"]).await;
             let mut echoed = sandbox_action("sb-2").to_vec();
             echoed.push((SANDBOX_KEYS.status_key, "running".to_string()));
             echoed.push((SANDBOX_KEYS.status_id_key, "sb-2".to_string()));
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "12", &echoed)),
-            )
-            .await;
+            change(&script, annotated("u1", &echoed)).await;
             release.send(Ok(ActionOutcome::detail("done"))).unwrap();
             until(|| statuses("sb-2").contains(&"ready")).await;
             echoed.push((SANDBOX_KEYS.status_key, "ready".to_string()));
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "13", &echoed)),
-            )
-            .await;
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "14", &sandbox_action("sb-2"))),
-            )
-            .await;
+            change(&script, annotated("u1", &echoed)).await;
+            change(&script, assigned()).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
@@ -5685,12 +5665,12 @@ mod loop_tests {
         assert_eq!(statuses("sb-2"), vec!["running", "ready"]);
     }
 
-    // Restart: an assignment already on the pod when swiftletd starts is
-    // found by the first GET and dispatched without waiting for a change.
+    // Restart: an assignment already on the pod when swiftletd starts is in
+    // the watch's first event and is dispatched without waiting for a change.
     #[tokio::test(start_paused = true)]
     async fn an_assignment_present_at_start_dispatches() {
-        let script = Script::default();
-        script.get(annotated("u1", "10", &sandbox_action("sb-3")));
+        let _w = watchdog("an_assignment_present_at_start_dispatches");
+        let script = Script::with(annotated("u1", &sandbox_action("sb-3")));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
             let t0 = Instant::now();
@@ -5699,73 +5679,60 @@ mod loop_tests {
         })
         .await;
         assert_eq!(statuses("sb-3"), vec!["running", "ready"]);
-        assert_eq!(script.watch_count(), 1, "and then it watches");
+        assert_eq!(script.gets(), 0);
     }
 
-    // The server ends the watch: it is reopened from the last
-    // resourceVersion, and the next assignment is dispatched from it.
+    // The server ends the watch: a new one starts from the current state,
+    // which carries an assignment the old watch never delivered.
     #[tokio::test(start_paused = true)]
-    async fn a_reopened_watch_delivers_the_next_assignment() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+    async fn a_reopened_watch_delivers_what_the_old_one_missed() {
+        let _w = watchdog("a_reopened_watch_delivers_what_the_old_one_missed");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
-            push_when_open(
-                &script,
-                WatchEvent::Modified(pod("u1", "11", &[("other", "x")])),
-            )
-            .await;
             until(|| script.watch_count() == 1).await;
-            script.watches.borrow_mut().clear(); // ends the stream
-            until(|| script.watch_count() == 1).await; // reopened
-            assert_eq!(script.current_watch().unwrap().0, "11");
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "12", &sandbox_action("sb-4"))),
-            )
-            .await;
+            tokio::time::sleep(MIN_STREAM_LIFETIME).await;
+            script.set(annotated("u1", &sandbox_action("sb-4")));
+            let t0 = Instant::now();
+            script.end_watch();
+            until(|| statuses("sb-4").contains(&"running")).await;
+            assert_eq!(Instant::now(), t0, "reopened at once");
             until(|| statuses("sb-4").contains(&"ready")).await;
         })
         .await;
-        assert_eq!(script.gets(), 1, "no GET was needed");
+        assert_eq!(script.gets(), 0, "no GET was needed");
     }
 
-    // 410 Gone: the loop relists with a GET and acts on what it finds.
+    // A watch that breaks with an error event (410 Gone) is replaced, and
+    // the loop acts on the current state the new one starts with.
     #[tokio::test(start_paused = true)]
-    async fn an_expired_watch_relists_and_acts_on_the_current_state() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+    async fn a_broken_watch_reopens_and_acts_on_the_current_state() {
+        let _w = watchdog("a_broken_watch_reopens_and_acts_on_the_current_state");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
             until(|| script.watch_count() == 1).await;
-            script.get(annotated("u1", "90", &sandbox_action("sb-5")));
-            push_when_open(&script, gone()).await;
+            tokio::time::sleep(MIN_STREAM_LIFETIME).await;
+            script.set(annotated("u1", &sandbox_action("sb-5")));
+            send(&script, error_event(410)).await;
             until(|| statuses("sb-5").contains(&"ready")).await;
         })
         .await;
-        assert_eq!(script.gets(), 2);
+        assert_eq!(script.gets(), 0);
     }
 
     // Rapid changes: a newer assignment waits for the running one and starts
     // the moment it ends; the older one is not run again.
     #[tokio::test(start_paused = true)]
     async fn a_newer_assignment_waits_for_the_running_one() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("a_newer_assignment_waits_for_the_running_one");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         let release = gate("sb-6a");
         rig.run(&script, async {
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "11", &sandbox_action("sb-6a"))),
-            )
-            .await;
+            change(&script, annotated("u1", &sandbox_action("sb-6a"))).await;
             until(|| statuses("sb-6a") == vec!["running"]).await;
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "12", &sandbox_action("sb-6b"))),
-            )
-            .await;
+            change(&script, annotated("u1", &sandbox_action("sb-6b"))).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
@@ -5780,22 +5747,49 @@ mod loop_tests {
         assert_eq!(statuses("sb-6b"), vec!["running", "ready"]);
     }
 
-    // A resync replaces the stream: an older event left in the old stream
-    // never runs after the newer state the GET found.
+    // A finished dispatch is settled against the pod as it is after it, not
+    // against a snapshot read before: an assignment withdrawn while the
+    // previous one ran is not started.
+    #[tokio::test(start_paused = true)]
+    async fn a_withdrawn_assignment_is_not_started_after_a_dispatch() {
+        let _w = watchdog("a_withdrawn_assignment_is_not_started_after_a_dispatch");
+        let script = Script::with(pod("u1", &[]));
+        let mut rig = LoopRig::new();
+        let release = gate("sb-10a");
+        rig.run(&script, async {
+            change(&script, annotated("u1", &sandbox_action("sb-10a"))).await;
+            until(|| statuses("sb-10a") == vec!["running"]).await;
+            change(&script, annotated("u1", &sandbox_action("sb-10b"))).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            // Withdrawn, and the change's event lost.
+            script.set(pod("u1", &[]));
+            release.send(Ok(ActionOutcome::detail("done"))).unwrap();
+            until(|| statuses("sb-10a").contains(&"ready")).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(statuses("sb-10b").is_empty());
+    }
+
+    // A resync replaces the watch: an older event left in the old stream
+    // never runs after the newer state the new watch starts with.
     #[tokio::test(start_paused = true)]
     async fn a_stale_event_does_not_override_a_newer_snapshot() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("a_stale_event_does_not_override_a_newer_snapshot");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
             until(|| script.watch_count() == 1).await;
-            let (_, old) = script.current_watch().unwrap();
-            script.get(annotated("u1", "60", &sandbox_action("sb-7new")));
+            let old = script.current_watch().unwrap();
+            script.set(annotated("u1", &sandbox_action("sb-7new")));
             tokio::time::sleep(RESYNC_INTERVAL).await;
             until(|| statuses("sb-7new").contains(&"ready")).await;
             let stale = old.unbounded_send(Ok(WatchEvent::Modified(annotated(
                 "u1",
-                "20",
                 &sandbox_action("sb-7old"),
             ))));
             assert!(stale.is_err(), "the old stream was dropped");
@@ -5807,32 +5801,32 @@ mod loop_tests {
         assert!(statuses("sb-7old").is_empty());
     }
 
-    // Without a watch (a Role from before swiftletd watched its pod), the
-    // loop polls every POLL_INTERVAL, as it always did.
+    // Without a watch (a Role from before swiftletd watched its pod: kube-rs
+    // reports the 403 as the stream's first item), the loop polls every
+    // POLL_INTERVAL, as it always did.
     #[tokio::test(start_paused = true)]
     async fn without_a_watch_the_loop_polls() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
-        for _ in 0..10 {
-            script.watch_fails(403);
-        }
+        let _w = watchdog("without_a_watch_the_loop_polls");
+        let script = Script::with(pod("u1", &[]));
+        script.fail_every_watch(WatchFailure::Refused(403));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
             let t0 = Instant::now();
-            script.get(annotated("u1", "11", &sandbox_action("sb-8")));
+            script.set(annotated("u1", &sandbox_action("sb-8")));
             tokio::time::sleep(POLL_INTERVAL).await;
             until(|| statuses("sb-8").contains(&"ready")).await;
             assert!(Instant::now() - t0 <= POLL_INTERVAL);
         })
         .await;
         assert_eq!(script.watch_count(), 0);
+        assert!(script.opens() >= 1);
     }
 
     // Shutdown ends the loop and drops the watch's stream.
     #[tokio::test(start_paused = true)]
     async fn stop_ends_the_loop_and_its_watch() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("stop_ends_the_loop_and_its_watch");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         let end = rig
             .run(&script, async {
@@ -5841,7 +5835,7 @@ mod loop_tests {
             .await;
         assert_eq!(end, LoopEnd::Stopped);
         assert!(
-            script.current_watch().unwrap().1.is_closed(),
+            script.current_watch().unwrap().is_closed(),
             "the stream is dropped"
         );
     }
@@ -5849,8 +5843,8 @@ mod loop_tests {
     // Another pod under the launcher's name ends the loop.
     #[tokio::test(start_paused = true)]
     async fn a_successor_pod_ends_the_loop() {
-        let script = Script::default();
-        script.get(pod("u1", "10", &[]));
+        let _w = watchdog("a_successor_pod_ends_the_loop");
+        let script = Script::with(pod("u1", &[]));
         let mut rig = LoopRig::new();
         let stop_rx = rig.stop_rx.take().unwrap();
         let socket = PathBuf::from("/nonexistent/ch.sock");
@@ -5867,14 +5861,12 @@ mod loop_tests {
                 let _ = stop_rx.await;
             },
         );
+        let successor = annotated("u2", &sandbox_action("sb-9"));
         let (end, ()) = tokio::time::timeout(Duration::from_secs(600), async {
-            tokio::join!(
-                looped,
-                push_when_open(
-                    &script,
-                    WatchEvent::Added(annotated("u2", "30", &sandbox_action("sb-9")))
-                )
-            )
+            tokio::join!(looped, async {
+                script.set(successor.clone());
+                send(&script, WatchEvent::Added(successor.clone())).await;
+            })
         })
         .await
         .expect("a successor must end the loop");
@@ -5889,14 +5881,14 @@ mod loop_tests {
     // the write itself as a new pass, which must not write again.
     #[tokio::test(start_paused = true)]
     async fn a_rejection_is_not_rewritten_by_its_own_event() {
-        let script = Script::default();
+        let _w = watchdog("a_rejection_is_not_rewritten_by_its_own_event");
         let both = [
             (SNAPSHOT_KEYS.action_key, "capture".to_string()),
             (SNAPSHOT_KEYS.action_id_key, "snap-1".to_string()),
             (MIGRATION_KEYS.action_key, "send".to_string()),
             (MIGRATION_KEYS.action_id_key, "mig-1".to_string()),
         ];
-        script.get(annotated("u1", "10", &both));
+        let script = Script::with(annotated("u1", &both));
         let mut rig = LoopRig::new();
         rig.run(&script, async {
             until(|| {
@@ -5917,11 +5909,7 @@ mod loop_tests {
                 mig.status_detail_key,
                 "concurrent action with snapshot rejected".to_string(),
             ));
-            push_when_open(
-                &script,
-                WatchEvent::Modified(annotated("u1", "11", &echoed)),
-            )
-            .await;
+            change(&script, annotated("u1", &echoed)).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
             }
