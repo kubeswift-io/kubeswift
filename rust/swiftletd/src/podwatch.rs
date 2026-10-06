@@ -7,9 +7,10 @@
 //!
 //! The feed starts with a GET, which reads the pod from etcd: the first
 //! snapshot, and with it the launcher's own UID, is the pod's current state.
-//! Every watch then opens without a resourceVersion: the API server starts it
-//! with the pod as its watch cache has it (an `Added`), then sends each change.
-//! Nothing is kept that can expire (410 Gone).
+//! No watch is opened before a GET succeeded. Every watch opens without a
+//! resourceVersion: the API server starts it with the pod as its watch cache
+//! has it (an `Added`), then sends each change. Nothing is kept that can expire
+//! (410 Gone).
 //!
 //! Snapshots are handed out in resourceVersion order. A watch cache can lag
 //! etcd, and with more than one API server a new watch can land on another
@@ -32,15 +33,16 @@
 //!     without the watch reporting it;
 //!   - on [`PodFeed::refresh`], after the loop changed state of its own.
 //!
-//! A watch works once it delivers an event. One that cannot be opened (a
-//! launcher Role from before swiftletd watched its pod grants no `watch`), is
-//! refused (kube-rs reports a refused watch as the stream's first item), sends
-//! nothing within [`FIRST_EVENT_TIMEOUT`], ends before it delivers, or ends
-//! within [`MIN_STREAM_LIFETIME`] is a failure: the feed polls every
-//! [`POLL_INTERVAL`], as swiftletd always did, and opens the watch again after
-//! a backoff of up to [`WATCH_RETRY_MAX`]. The resync interval and the backoff
-//! are shortened by a random 0 to 20%, so that launchers whose watches ended
-//! together (an API server restart) do not stay in step.
+//! A watch works once it brings the newest state, or a later one. One that
+//! cannot be opened (a launcher Role from before swiftletd watched its pod
+//! grants no `watch`), is refused (kube-rs reports a refused watch as the
+//! stream's first item), does not catch up within [`FIRST_EVENT_TIMEOUT`],
+//! ends before it does, or ends within [`MIN_STREAM_LIFETIME`] is a failure:
+//! the feed polls every [`POLL_INTERVAL`], as swiftletd always did, and opens
+//! the watch again after a backoff of up to [`WATCH_RETRY_MAX`]. The poll and
+//! resync intervals and the backoff are shortened by a random 0 to 20%, so
+//! that launchers whose watches ended together (an API server restart) do not
+//! stay in step.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -68,12 +70,17 @@ pub const WATCH_RETRY_MAX: Duration = Duration::from_secs(60);
 /// bound.
 pub const MIN_STREAM_LIFETIME: Duration = Duration::from_secs(5);
 
-/// A watch that sends nothing for this long after it opened is a failure.
-/// The API server starts every watch with the pod's state at once.
+/// A watch that has not brought the newest state this long after it opened
+/// is a failure. The API server starts every watch with the pod's state at
+/// once.
 pub const FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Longest wait for a GET, or for a watch to open.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest wait for a watch to open.
+pub const WATCH_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Longest wait for a GET. Longer than a watch open: a slow GET still brings
+/// the pod's state, where giving up would bring nothing.
+pub const GET_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Server-side timeout of one watch request.
 const WATCH_TIMEOUT_SECS: u32 = 290;
@@ -150,7 +157,7 @@ impl PodSource for KubePodSource {
 struct Open {
     stream: MetaStream,
     opened_at: Instant,
-    /// It delivered an event: the server accepted it.
+    /// It brought the newest state, or a later one: it works and is current.
     delivered: bool,
 }
 
@@ -170,9 +177,11 @@ pub struct PodFeed<S: PodSource> {
     watch_failures: u32,
     /// Next GET while no watch works.
     next_poll: Instant,
-    /// A GET is due now: at start, and on [`PodFeed::refresh`] while no watch
-    /// is open.
+    /// A GET is due now: [`PodFeed::refresh`] while no watch is open.
     get_now: bool,
+    /// A GET succeeded. Until then the feed polls and opens no watch, so the
+    /// first snapshot is read from etcd.
+    primed: bool,
     /// When the open watch is replaced.
     next_resync: Instant,
     /// The resourceVersion of the newest snapshot handed out.
@@ -195,7 +204,8 @@ impl<S: PodSource> PodFeed<S> {
             watch_retry_at: now,
             watch_failures: 0,
             next_poll: now,
-            get_now: true,
+            get_now: false,
+            primed: false,
             next_resync: now + RESYNC_INTERVAL,
             newest: None,
             want_pass: false,
@@ -240,13 +250,14 @@ impl<S: PodSource> PodFeed<S> {
         loop {
             if self.watch.is_none() {
                 let now = Instant::now();
-                let polling = !self.ordered || now < self.watch_retry_at;
+                let polling = !self.primed || !self.ordered || now < self.watch_retry_at;
                 if self.get_now || (polling && now >= self.next_poll) {
-                    let got = tokio::time::timeout(REQUEST_TIMEOUT, self.source.get()).await;
+                    let got = tokio::time::timeout(GET_TIMEOUT, self.source.get()).await;
                     self.get_now = false;
-                    self.next_poll = Instant::now() + POLL_INTERVAL;
+                    self.next_poll = Instant::now() + self.jittered(POLL_INTERVAL);
                     match got {
                         Ok(Ok(meta)) => {
+                            self.primed = true;
                             if let Some(snapshot) = self.offer(&meta, true) {
                                 return snapshot;
                             }
@@ -254,13 +265,13 @@ impl<S: PodSource> PodFeed<S> {
                         Ok(Err(e)) => log::warn!("action_loop_get_pod_err: {}", e),
                         Err(_) => log::warn!(
                             "action_loop_get_pod_err: no response within {:?}",
-                            REQUEST_TIMEOUT
+                            GET_TIMEOUT
                         ),
                     }
                     continue;
                 }
                 if !polling {
-                    match tokio::time::timeout(REQUEST_TIMEOUT, self.source.watch()).await {
+                    match tokio::time::timeout(WATCH_OPEN_TIMEOUT, self.source.watch()).await {
                         Ok(Ok(stream)) => {
                             let now = Instant::now();
                             log::debug!("action_loop_watch_opened");
@@ -272,9 +283,8 @@ impl<S: PodSource> PodFeed<S> {
                             self.next_resync = now + self.jittered(RESYNC_INTERVAL);
                         }
                         Ok(Err(e)) => self.watch_failed(&e.to_string()),
-                        Err(_) => {
-                            self.watch_failed(&format!("no response within {:?}", REQUEST_TIMEOUT))
-                        }
+                        Err(_) => self
+                            .watch_failed(&format!("no response within {:?}", WATCH_OPEN_TIMEOUT)),
                     }
                     continue;
                 }
@@ -288,7 +298,6 @@ impl<S: PodSource> PodFeed<S> {
                 tokio::select! {
                     item = open.stream.next() => match item {
                         Some(Ok(WatchEvent::Added(meta))) | Some(Ok(WatchEvent::Modified(meta))) => {
-                            self.delivered();
                             if let Some(snapshot) = self.offer(&meta, false) {
                                 return snapshot;
                             }
@@ -312,13 +321,13 @@ impl<S: PodSource> PodFeed<S> {
                             log::debug!("action_loop_resync");
                             self.drop_watch();
                         } else {
-                            self.watch_failed(&format!("no event within {:?}", FIRST_EVENT_TIMEOUT));
+                            self.watch_failed(&format!("not caught up within {:?}", FIRST_EVENT_TIMEOUT));
                         }
                     }
                 }
                 continue;
             }
-            let wake = if self.ordered {
+            let wake = if self.primed && self.ordered {
                 self.next_poll.min(self.watch_retry_at)
             } else {
                 self.next_poll
@@ -328,7 +337,8 @@ impl<S: PodSource> PodFeed<S> {
     }
 
     /// The snapshot of `meta`, unless it is older than the newest one handed
-    /// out, or equal to it with no pass wanted (see the module doc).
+    /// out, or equal to it with no pass wanted (see the module doc). A watch
+    /// event that is not older shows the watch has caught up.
     fn offer(&mut self, meta: &PartialObjectMeta<Pod>, from_get: bool) -> Option<PodSnapshot> {
         let Some(rv) = meta
             .metadata
@@ -363,9 +373,17 @@ impl<S: PodSource> PodFeed<S> {
                     );
                     return None;
                 }
-                Ordering::Equal if !self.want_pass => return None,
+                Ordering::Equal if !self.want_pass => {
+                    if !from_get {
+                        self.delivered();
+                    }
+                    return None;
+                }
                 _ => {}
             }
+        }
+        if !from_get {
+            self.delivered();
         }
         self.newest = Some(rv.to_string());
         self.want_pass = false;
@@ -908,7 +926,7 @@ pub(crate) mod tests {
         script.fail_every_watch(WatchFailure::Hangs);
         let mut feed = exact_feed(&script);
         run_for(&mut feed, Duration::from_secs(30)).await;
-        // Opened at 0, 6, 13 and 22 s, each given up after REQUEST_TIMEOUT.
+        // Opened at 0, 6, 13 and 22 s, each given up after WATCH_OPEN_TIMEOUT.
         assert_eq!(script.opens(), 4);
         assert!(script.gets() >= 6, "polled meanwhile: {}", script.gets());
     }
@@ -1019,6 +1037,40 @@ pub(crate) mod tests {
         // The lagging cache catches up.
         send(&script, WatchEvent::Modified(newer)).await;
         assert_eq!(a(&feed.next().await), Some("2"));
+    }
+
+    // A watch that stays behind the newest state is a failure: the feed
+    // reads the pod with a GET instead of waiting for the resync.
+    #[tokio::test(start_paused = true)]
+    async fn a_watch_that_stays_behind_is_a_failure() {
+        let _w = watchdog("a_watch_that_stays_behind_is_a_failure");
+        let script = Script::with(pod("u1", &[]));
+        let mut feed = exact_feed(&script);
+        feed.next().await;
+        let (_, older) = tokio::join!(feed.next(), change(&script, pod("u1", &[("a", "1")])));
+        let (_, _) = tokio::join!(feed.next(), change(&script, pod("u1", &[("a", "2")])));
+        script.lag_next_watch(older);
+        feed.refresh();
+        let t0 = Instant::now();
+        assert_eq!(a(&feed.next().await), Some("2"));
+        assert_eq!(Instant::now() - t0, FIRST_EVENT_TIMEOUT);
+        assert_eq!((script.gets(), script.opens()), (2, 2));
+    }
+
+    // No watch is opened before a GET succeeded: the first snapshot, and the
+    // launcher's own UID with it, is read from etcd, never from a watch cache
+    // that may still hold a pod this one replaced.
+    #[tokio::test(start_paused = true)]
+    async fn no_watch_before_a_get_succeeded() {
+        let _w = watchdog("no_watch_before_a_get_succeeded");
+        let script = Script::with(pod("u1", &[]));
+        script.fail_gets(2);
+        script.lag_next_watch(pod("u0", &[]));
+        let mut feed = exact_feed(&script);
+        let t0 = Instant::now();
+        assert_eq!(feed.next().await.uid.as_deref(), Some("u1"));
+        assert_eq!(Instant::now() - t0, 2 * POLL_INTERVAL);
+        assert_eq!((script.gets(), script.opens()), (3, 0));
     }
 
     // A resourceVersion that is not an integer cannot be ordered: the feed

@@ -2610,6 +2610,9 @@ pub(crate) async fn run_action_loop<S: PodSource>(
 ) -> LoopEnd {
     let mut state = ActionState::default();
     let mut own_uid: Option<String> = None;
+    // A pass whose rejection could not be written is made again after a
+    // poll interval, as the 2 s poll used to.
+    let mut retry_at: Option<tokio::time::Instant> = None;
     tokio::pin!(stop);
     loop {
         // Dispatches run on their own threads (Dispatch::start), so the loop
@@ -2625,6 +2628,16 @@ pub(crate) async fn run_action_loop<S: PodSource>(
                 // Decide again from the pod as it is now, so an action
                 // waiting for this dispatch starts at once, not at the next
                 // change.
+                feed.refresh();
+                continue;
+            }
+            _ = async {
+                match retry_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                retry_at = None;
                 feed.refresh();
                 continue;
             }
@@ -2646,7 +2659,7 @@ pub(crate) async fn run_action_loop<S: PodSource>(
             );
             return LoopEnd::Replaced;
         }
-        handle_pod_state(
+        let retry = handle_pod_state(
             client,
             namespace,
             pod_name,
@@ -2657,6 +2670,7 @@ pub(crate) async fn run_action_loop<S: PodSource>(
             writers,
         )
         .await;
+        retry_at = retry.then(|| tokio::time::Instant::now() + crate::podwatch::POLL_INTERVAL);
     }
 }
 
@@ -2984,6 +2998,8 @@ fn status_written(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Returns whether a rejection could not be written: the pass must be made
+/// again later, since the pod may not change to bring another.
 async fn handle_pod_state(
     client: &Client,
     namespace: &str,
@@ -2993,7 +3009,8 @@ async fn handle_pod_state(
     annotations: &BTreeMap<String, String>,
     dispatcher: &Dispatch,
     writers: fn(Ns) -> StatusWriter,
-) {
+) -> bool {
+    let mut retry = false;
     let snap_active = is_namespace_active(annotations, &SNAPSHOT_KEYS);
     let mig_active = is_namespace_active(annotations, &MIGRATION_KEYS);
 
@@ -3036,6 +3053,7 @@ async fn handle_pod_state(
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                retry = true;
             }
         }
         if let Some(id) = namespace_action_id(annotations, &MIGRATION_KEYS).filter(|id| {
@@ -3060,9 +3078,10 @@ async fn handle_pod_state(
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                retry = true;
             }
         }
-        return;
+        return retry;
     }
 
     // Per-namespace processing. Each namespace's state is its own, and
@@ -3090,7 +3109,7 @@ async fn handle_pod_state(
         (Ns::Sandbox, &SANDBOX_KEYS),
     ] {
         let blocking = state.blocking(ns);
-        handle_namespace(
+        retry |= handle_namespace(
             client,
             namespace,
             pod_name,
@@ -3105,6 +3124,7 @@ async fn handle_pod_state(
         )
         .await;
     }
+    retry
 }
 
 /// Type alias for the namespace-specific status writer used by
@@ -3247,7 +3267,7 @@ async fn handle_namespace(
     write: StatusWriter,
     blocking: Option<&str>,
     dispatcher: &Dispatch,
-) {
+) -> bool {
     // Once a cancel is accepted for the running action the annotations carry
     // its id: count it as done, or it would be dispatched again every tick.
     let last = state
@@ -3319,6 +3339,7 @@ async fn handle_namespace(
             .await
             {
                 log::error!("action_status_write_failed: {}", e);
+                return true;
             }
         }
         ActionDecision::Accept(pending) => {
@@ -3337,7 +3358,7 @@ async fn handle_namespace(
                             pending.id,
                             running.id
                         );
-                        return;
+                        return false;
                     }
                     slot = Slot::Cancel;
                 }
@@ -3348,7 +3369,7 @@ async fn handle_namespace(
                     pending.id,
                     other
                 );
-                return;
+                return false;
             }
             log::info!(
                 "action_accept namespace={} kind={:?} id={} slot={:?}",
@@ -3380,6 +3401,7 @@ async fn handle_namespace(
             dispatcher.start(ns, slot, pending, api_socket);
         }
     }
+    false
 }
 
 #[cfg(test)]
@@ -5231,6 +5253,8 @@ mod loop_tests {
 
     thread_local! {
         static WRITES: RefCell<Vec<(String, &'static str, Option<String>)>> = const { RefCell::new(Vec::new()) };
+        /// The next this many status writes fail, unrecorded.
+        static FAIL_WRITES: RefCell<usize> = const { RefCell::new(0) };
     }
 
     fn record<'a>(
@@ -5243,6 +5267,15 @@ mod loop_tests {
         _: Option<u64>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), kube::Error>> + Send + 'a>>
     {
+        let fail = FAIL_WRITES.with(|f| {
+            let mut f = f.borrow_mut();
+            let fail = *f > 0;
+            *f = f.saturating_sub(1);
+            fail
+        });
+        if fail {
+            return Box::pin(async { Err(kube::Error::Service("scripted write failure".into())) });
+        }
         WRITES.with(|w| {
             w.borrow_mut()
                 .push((id.to_string(), status.as_str(), detail.map(String::from)))
@@ -5560,6 +5593,7 @@ mod loop_tests {
     impl LoopRig {
         fn new() -> Self {
             WRITES.with(|w| w.borrow_mut().clear());
+            FAIL_WRITES.with(|f| *f.borrow_mut() = 0);
             let config = kube::Config::new("http://127.0.0.1:1".parse().unwrap());
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             let (stop, stop_rx) = tokio::sync::oneshot::channel();
@@ -5916,6 +5950,33 @@ mod loop_tests {
             statuses("sb-9").is_empty(),
             "the successor's action is not ours"
         );
+    }
+
+    // A rejection that could not be written is written by a later pass, as
+    // the 2 s poll did, although the pod does not change to bring one.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_rejection_write_is_retried() {
+        let _w = watchdog("a_failed_rejection_write_is_retried");
+        let mig = migration_keys();
+        assert!(mig.ack_key.is_some(), "plaintext migration needs the ack");
+        let unacked = [
+            (MIGRATION_KEYS.action_key, "send".to_string()),
+            (MIGRATION_KEYS.action_id_key, "mig-3".to_string()),
+        ];
+        let script = Script::with(annotated("u1", &unacked));
+        let mut rig = LoopRig::new();
+        FAIL_WRITES.with(|f| *f.borrow_mut() = 1);
+        rig.run(&script, async {
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert!(statuses("mig-3").is_empty(), "the write failed");
+            tokio::time::sleep(POLL_INTERVAL).await;
+            until(|| !statuses("mig-3").is_empty()).await;
+        })
+        .await;
+        assert_eq!(statuses("mig-3"), vec!["rejected"]);
+        assert_eq!(script.gets(), 1, "retried from the watch, no GET");
     }
 
     // A rejection decided on every pass is written once: the watch delivers
