@@ -50,14 +50,15 @@
 //!
 //! # Watching the pod
 //!
-//! The loop reads its pod through [`crate::podwatch::PodFeed`]: a watch on
-//! the pod's metadata starts with the pod's current state and delivers each
-//! change as soon as the API server has it. It is replaced by a new one every
-//! 30 s and after each finished dispatch, and the loop polls every 2 s, as it
-//! used to, while the watch does not work. Each snapshot runs the same pass as
-//! a poll did: the decisions below are made from the whole current state and
-//! are idempotent by action id, so the watch only makes the loop look sooner;
-//! it is not what makes it correct.
+//! The loop reads its pod through [`crate::podwatch::PodFeed`]: a GET first,
+//! then a watch on the pod's metadata that delivers each change as soon as
+//! the API server has it, in resourceVersion order. The watch is replaced
+//! about every 30 s and after each finished dispatch, and the loop polls every
+//! 2 s, as it used to, while the watch does not work. Each snapshot runs the
+//! same pass as a poll did: the decisions below are made from the whole
+//! current state and are idempotent by action id, so the watch only makes the
+//! loop look sooner; it is not what makes it correct. A pass whose rejection
+//! could not be written is made again after 2 s.
 //!
 //! The watch is narrowed to the pod's name, which is what the launcher's
 //! per-pod Role grants (`get`, `patch` and `watch` on that one pod).
