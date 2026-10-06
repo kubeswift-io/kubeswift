@@ -6,6 +6,7 @@ mod kube_client;
 mod launch;
 mod lease;
 mod migconn;
+mod podwatch;
 mod probe;
 mod report;
 mod secrets;
