@@ -5719,7 +5719,9 @@ mod loop_tests {
         })
         .await;
         assert_eq!(statuses("sb-3"), vec!["running", "ready"]);
-        assert_eq!(script.gets(), 1);
+        // The first read, and one for the refresh after the dispatch if it
+        // finished before the watch opened.
+        assert!(script.gets() <= 2, "gets: {}", script.gets());
     }
 
     // The server ends the watch: a new one starts from the current state,

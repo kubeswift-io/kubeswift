@@ -39,10 +39,10 @@
 //! stream's first item), does not catch up within [`FIRST_EVENT_TIMEOUT`],
 //! ends before it does, or ends within [`MIN_STREAM_LIFETIME`] is a failure:
 //! the feed polls every [`POLL_INTERVAL`], as swiftletd always did, and opens
-//! the watch again after a backoff of up to [`WATCH_RETRY_MAX`]. The poll and
-//! resync intervals and the backoff are shortened by a random 0 to 20%, so
-//! that launchers whose watches ended together (an API server restart) do not
-//! stay in step.
+//! the watch again after a backoff of up to [`WATCH_RETRY_MAX`]. The resync
+//! interval and the backoff are shortened by a random 0 to 20%, and each poll
+//! interval is within 10% of [`POLL_INTERVAL`] either way, so that launchers
+//! whose watches ended together (an API server restart) do not stay in step.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -254,7 +254,7 @@ impl<S: PodSource> PodFeed<S> {
                 if self.get_now || (polling && now >= self.next_poll) {
                     let got = tokio::time::timeout(GET_TIMEOUT, self.source.get()).await;
                     self.get_now = false;
-                    self.next_poll = Instant::now() + self.jittered(POLL_INTERVAL);
+                    self.next_poll = Instant::now() + self.spread(POLL_INTERVAL);
                     match got {
                         Ok(Ok(meta)) => {
                             self.primed = true;
@@ -302,13 +302,15 @@ impl<S: PodSource> PodFeed<S> {
                                 return snapshot;
                             }
                         }
-                        Some(Ok(WatchEvent::Deleted(_))) => {
+                        Some(Ok(WatchEvent::Deleted(meta))) => {
                             // The kubelet ends this process with its pod. A pod
                             // created under the same name later arrives as Added.
-                            self.delivered();
+                            self.progress(meta.metadata.resource_version.as_deref());
                             log::debug!("action_loop_pod_deleted");
                         }
-                        Some(Ok(WatchEvent::Bookmark(_))) => self.delivered(),
+                        Some(Ok(WatchEvent::Bookmark(bookmark))) => {
+                            self.progress(Some(&bookmark.metadata.resource_version));
+                        }
                         Some(Ok(WatchEvent::Error(status))) => {
                             self.watch_ended(&format!("watch error {}: {}", status.code, status.message));
                         }
@@ -390,6 +392,19 @@ impl<S: PodSource> PodFeed<S> {
         Some(PodSnapshot::of(meta))
     }
 
+    /// A watch event that carries no snapshot shows the watch has caught up
+    /// if it is not older than the newest snapshot handed out.
+    fn progress(&mut self, rv: Option<&str>) {
+        let current = rv.filter(|rv| is_resource_version(rv)).is_some_and(|rv| {
+            self.newest
+                .as_deref()
+                .is_none_or(|newest| compare_resource_versions(rv, newest) != Ordering::Less)
+        });
+        if current {
+            self.delivered();
+        }
+    }
+
     fn delivered(&mut self) {
         if let Some(open) = self.watch.as_mut() {
             open.delivered = true;
@@ -450,18 +465,34 @@ impl<S: PodSource> PodFeed<S> {
         }
     }
 
-    /// `d` shortened by a random 0 to 20%.
+    /// `d` shortened by a random 0 to 20%: never longer than documented.
     fn jittered(&mut self, d: Duration) -> Duration {
+        match self.random() {
+            Some(u) => d.mul_f64(1.0 - 0.2 * u),
+            None => d,
+        }
+    }
+
+    /// `d` within 10% either way: the same on average, so polling costs what
+    /// it always did.
+    fn spread(&mut self, d: Duration) -> Duration {
+        match self.random() {
+            Some(u) => d.mul_f64(0.9 + 0.2 * u),
+            None => d,
+        }
+    }
+
+    /// A uniform number in [0, 1), or None with jitter off.
+    fn random(&mut self) -> Option<f64> {
         if self.rng == 0 {
-            return d;
+            return None;
         }
         let mut x = self.rng;
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
         self.rng = x;
-        let unit = (x >> 11) as f64 / (1u64 << 53) as f64;
-        d.mul_f64(1.0 - 0.2 * unit)
+        Some((x >> 11) as f64 / (1u64 << 53) as f64)
     }
 }
 
@@ -1049,10 +1080,12 @@ pub(crate) mod tests {
         feed.next().await;
         let (_, older) = tokio::join!(feed.next(), change(&script, pod("u1", &[("a", "1")])));
         let (_, _) = tokio::join!(feed.next(), change(&script, pod("u1", &[("a", "2")])));
-        script.lag_next_watch(older);
+        script.lag_next_watch(older.clone());
         feed.refresh();
         let t0 = Instant::now();
-        assert_eq!(a(&feed.next().await), Some("2"));
+        // Older events that carry no snapshot do not count either.
+        let (snap, _) = tokio::join!(feed.next(), send(&script, WatchEvent::Deleted(older)));
+        assert_eq!(a(&snap), Some("2"));
         assert_eq!(Instant::now() - t0, FIRST_EVENT_TIMEOUT);
         assert_eq!((script.gets(), script.opens()), (2, 2));
     }
@@ -1131,8 +1164,23 @@ pub(crate) mod tests {
             seen.insert(d.as_millis());
         }
         assert!(seen.len() > 100, "spread: {}", seen.len());
+        let mut total = Duration::ZERO;
+        for _ in 0..1000 {
+            let d = feed.spread(POLL_INTERVAL);
+            assert!(
+                d >= POLL_INTERVAL.mul_f64(0.9) && d <= POLL_INTERVAL.mul_f64(1.1),
+                "{d:?}"
+            );
+            total += d;
+        }
+        let mean = total / 1000;
+        assert!(
+            mean > POLL_INTERVAL.mul_f64(0.98) && mean < POLL_INTERVAL.mul_f64(1.02),
+            "polling costs what it did: mean {mean:?}"
+        );
         let mut fixed = PodFeed::new(Script::default()).without_jitter();
         assert_eq!(fixed.jittered(RESYNC_INTERVAL), RESYNC_INTERVAL);
+        assert_eq!(fixed.spread(POLL_INTERVAL), POLL_INTERVAL);
     }
 
     #[test]
