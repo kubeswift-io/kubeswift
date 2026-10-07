@@ -4,6 +4,81 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.16.1] — 2026-10-07
+
+A patch release: faster warm-pool checkout. No API, CRD or chart value
+changes.
+
+- **swiftletd watches its own launcher pod instead of reading it every 2 s**
+  (#759). An action the controller writes on the pod (a warm-pool checkout's
+  workload, a snapshot, a migration, an identity regeneration) starts as soon
+  as the API server delivers it. Warm checkout, slot claimed to workload
+  dispatched, on a three-node lab cluster over 50 runs: p50 903 → 49 ms, p95
+  1911 → 78 ms.
+
+**CRDs changed this release:** none. Applying `crds/` is harmless but not
+needed.
+
+### Upgrade
+
+```bash
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.16.1 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+If your values pin `*.image.tag` (`controllerManager`, `swiftletd` and the
+rest), move the pins to `v0.16.1`; otherwise the upgrade keeps the v0.16.0
+images.
+
+- **From v0.16.0:** nothing else needs action. The chart's values and
+  ClusterRoles are unchanged (one comment in each changed).
+- **The per-pod launcher Role gains `watch` on the launcher's own pod.** The
+  controller writes that Role, not the chart, and it already holds `watch` on
+  pods, so it needs no new permission. It updates the Roles of existing
+  launchers on their next reconcile.
+- **Running launchers are not restarted** and keep v0.16.0's swiftletd, which
+  reads its pod every 2 s. That includes warm slots booted before the upgrade:
+  a pool's speedup arrives as those slots are checked out and replaced.
+- **Version skew is safe both ways.** A v0.16.1 swiftletd whose Role lacks
+  `watch` reads its pod every 2 s, as before, and logs
+  `action_loop_watch_unavailable`.
+- **From v0.15.x or earlier:** read v0.16.0's Upgrade section first.
+
+### Changed
+
+- **swiftletd's action loop watches its launcher pod** (#760).
+  - It starts from a GET, which reads etcd, then opens a watch without a
+    resourceVersion, so no resourceVersion can expire (410 Gone).
+  - Snapshots are handed on in resourceVersion order. A watch is served from
+    the API server's watch cache, which can lag etcd, so a reopened watch
+    could otherwise hand back an older state and re-run a finished action.
+  - The watch is replaced every 24 to 30 s as a resync, and after each
+    finished action.
+  - A watch counts as working only once it has delivered an event and stayed
+    open for 5 s. A refused, failing, empty, silent or unreachable watch falls
+    back to reading the pod every 2 s and retries the watch with a backoff of
+    1 to 60 s.
+  - Request rate per launcher: about one watch open per 24 to 30 s when
+    healthy, down from one GET every 2 s.
+- **The decision logic is unchanged.** It still decides from the whole
+  current state, idempotent by action id. The mutual-rejection write
+  (snapshot and migration both requested) is skipped when already present,
+  and retried after 2 s when it fails.
+
+### Security
+
+- The new `watch` is on the launcher's own pod only (`resourceNames`), which
+  Kubernetes allows only with the matching `metadata.name` field selector. No
+  `list`.
+
+### Docs
+
+- `docs/sandbox/warm-pool.md` describes dispatch and the measurements.
+- `docs/migration/phase-3a.md`: a migration cancel is dispatched when the
+  watch delivers it, not within a 2 s poll.
+
+---
+
 ## [v0.16.0] — 2026-10-05
 
 Storage locations, and SwiftSandbox for real workloads.
