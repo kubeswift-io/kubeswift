@@ -20,7 +20,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/controller/swiftgpu"
@@ -59,6 +62,25 @@ type SwiftSandboxPoolReconciler struct {
 	// by pool NamespacedName; cleared on the first success. In memory on purpose:
 	// it is a retry rhythm, not state worth a status field or an API round trip.
 	resolveFailures sync.Map
+
+	// resolver and resolved: as on SwiftSandboxReconciler.
+	resolver *registryResolver
+	resolved chan event.GenericEvent
+}
+
+// lookup asks the registry resolver on pool's behalf.
+func (r *SwiftSandboxPoolReconciler) lookup(pool *sandboxv1alpha1.SwiftSandboxPool) lookupFunc {
+	res := r.resolver
+	if res == nil {
+		res = sharedResolver
+	}
+	w := waiter{obj: &sandboxv1alpha1.SwiftSandboxPool{ObjectMeta: metav1.ObjectMeta{Namespace: pool.Namespace, Name: pool.Name}}}
+	if r.resolved != nil {
+		w.ch = r.resolved
+	} else {
+		w.obj = nil
+	}
+	return func(req resolveRequest) (resolveResult, bool) { return res.get(req, w) }
 }
 
 const (
@@ -274,7 +296,22 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err != nil {
 			return r.degraded(ctx, &pool, ready, claimed, "ImagePullSecretInvalid", err.Error())
 		}
-		resolved, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth)
+		// Image and model resolve at once, off this worker (resolver.go).
+		lookup := r.lookup(&pool)
+		resolved, imageReady, err := resolveImage(r.slotTemplate(&pool, "resolve"), auth, lookup)
+		var rm resolvedModel
+		modelReady := true
+		var merr error
+		if pool.Spec.Model != nil {
+			// Resolve the pool-shared model once (every warm slot shares the same
+			// node-cached tree). Its own registry entry (same imagePullSecret) so a
+			// model on a different registry than the rootfs still authenticates.
+			modelAuth, aerr := pullSecretAuth(ctx, r.APIReader, pool.Namespace, pool.Spec.ImagePullSecret, pool.Spec.Model.ImageRef)
+			if aerr != nil {
+				return r.degraded(ctx, &pool, ready, claimed, "ImagePullSecretInvalid", aerr.Error())
+			}
+			rm, modelReady, merr = resolveModel(pool.Spec.Model, modelAuth, lookup)
+		}
 		if err != nil {
 			// Back off. resolveImage issues a manifest GET -- the request a
 			// registry counts as a pull -- and the old flat 10s requeue meant a
@@ -285,24 +322,20 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return r.degradedAfter(ctx, &pool, ready, claimed, "ImageResolveFailed",
 				fmt.Sprintf("%s (next attempt in %s)", err.Error(), wait), wait)
 		}
+		if merr != nil {
+			// Same reasoning as the rootfs resolve above: this talks to a
+			// registry, so it must not retry at the poll rate.
+			wait := r.nextResolveBackoff(req.NamespacedName)
+			return r.degradedAfter(ctx, &pool, ready, claimed, "ModelResolveFailed",
+				fmt.Sprintf("%s (next attempt in %s)", merr.Error(), wait), wait)
+		}
+		if !imageReady || !modelReady {
+			// Enqueued again when the requests finish.
+			return ctrl.Result{RequeueAfter: registryPendingRecheck}, nil
+		}
 		r.clearResolveBackoff(req.NamespacedName)
 		ri = &resolved
-		// Resolve the pool-shared model once (every warm slot shares the same
-		// node-cached tree). Its own registry entry (same imagePullSecret) so a
-		// model on a different registry than the rootfs still authenticates.
 		if pool.Spec.Model != nil {
-			modelAuth, merr := pullSecretAuth(ctx, r.APIReader, pool.Namespace, pool.Spec.ImagePullSecret, pool.Spec.Model.ImageRef)
-			if merr != nil {
-				return r.degraded(ctx, &pool, ready, claimed, "ImagePullSecretInvalid", merr.Error())
-			}
-			rm, merr := resolveModel(pool.Spec.Model, modelAuth)
-			if merr != nil {
-				// Same reasoning as the rootfs resolve above: this talks to a
-				// registry, so it must not retry at the poll rate.
-				wait := r.nextResolveBackoff(req.NamespacedName)
-				return r.degradedAfter(ctx, &pool, ready, claimed, "ModelResolveFailed",
-					fmt.Sprintf("%s (next attempt in %s)", merr.Error(), wait), wait)
-			}
 			modelPath = rm.TreePath
 		}
 	}
@@ -580,11 +613,13 @@ func (r *SwiftSandboxPoolReconciler) degraded(ctx context.Context, pool *sandbox
 }
 
 func (r *SwiftSandboxPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.resolved = make(chan event.GenericEvent, resolvedEventBuffer)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sandboxv1alpha1.SwiftSandboxPool{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		WatchesRawSource(source.Channel(r.resolved, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
 

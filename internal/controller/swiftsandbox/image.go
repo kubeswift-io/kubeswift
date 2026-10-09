@@ -83,32 +83,31 @@ func pullSecretAuth(ctx context.Context, reader client.Reader, namespace, secret
 	return materialize.AuthFromDockerConfigJSON(dcj, imageRef)
 }
 
+// lookupFunc asks the registry resolver for a request (resolver.go). ok=false
+// means it is still running; the asking object is enqueued when it finishes.
+type lookupFunc func(req resolveRequest) (res resolveResult, ok bool)
+
 // resolveImage does a cheap registry resolve (manifest + config, no layers) so
 // the controller learns the digest -> deterministic cache path and the image
 // entrypoint, and can build the launch intent before the materialize init runs.
 // The init container independently resolves the same digest, so they agree.
 // auth (from pullSecretAuth) authenticates a private image; nil = anonymous.
-func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator) (resolvedImage, error) {
+func resolveImage(sb *sandboxv1alpha1.SwiftSandbox, auth authn.Authenticator, lookup lookupFunc) (resolvedImage, bool, error) {
 	virtiofs := sb.Spec.RootfsMode == sandboxv1alpha1.SandboxRootfsVirtiofs
 	mode := materialize.ModeBlock
 	if virtiofs {
 		mode = materialize.ModeTree
 	}
-	opts := materialize.Options{ImageRef: sb.Spec.Image, CacheDir: rootfsCacheDir, Mode: mode, Auth: auth}
-	img, digest, err := materialize.RemotePull(opts)
-	if err != nil {
-		return resolvedImage{}, err
-	}
-	cfg, err := materialize.ConfigFromImage(img)
-	if err != nil {
-		return resolvedImage{}, err
+	res, ok := lookup(newResolveRequest(resolveImageKind, sb.Spec.Image, mode, rootfsCacheDir, auth))
+	if !ok || res.err != nil {
+		return resolvedImage{}, ok, res.err
 	}
 	return resolvedImage{
-		Digest:     digest,
-		RootfsPath: materialize.CachePathFor(rootfsCacheDir, digest, mode),
+		Digest:     res.digest,
+		RootfsPath: materialize.CachePathFor(rootfsCacheDir, res.digest, mode),
 		Virtiofs:   virtiofs,
-		Exec:       resolveExec(sb, cfg),
-	}, nil
+		Exec:       resolveExec(sb, res.config),
+	}, true, nil
 }
 
 // resolvedModel is the controller's upfront resolve of spec.model.
@@ -123,16 +122,15 @@ type resolvedModel struct {
 // init runs (which independently resolves the same digest, so they agree). A
 // model is always a tree (virtio-fs). auth (from pullSecretAuth) authenticates a
 // private model image; nil = anonymous.
-func resolveModel(model *sandboxv1alpha1.SandboxModel, auth authn.Authenticator) (resolvedModel, error) {
-	opts := materialize.Options{ImageRef: model.ImageRef, CacheDir: modelCacheDir, Mode: materialize.ModeTree, Auth: auth}
-	_, digest, err := materialize.RemotePull(opts)
-	if err != nil {
-		return resolvedModel{}, err
+func resolveModel(model *sandboxv1alpha1.SandboxModel, auth authn.Authenticator, lookup lookupFunc) (resolvedModel, bool, error) {
+	res, ok := lookup(newResolveRequest(resolveDigestKind, model.ImageRef, materialize.ModeTree, modelCacheDir, auth))
+	if !ok || res.err != nil {
+		return resolvedModel{}, ok, res.err
 	}
 	return resolvedModel{
-		Digest:   digest,
-		TreePath: materialize.CachePathFor(modelCacheDir, digest, materialize.ModeTree),
-	}, nil
+		Digest:   res.digest,
+		TreePath: materialize.CachePathFor(modelCacheDir, res.digest, materialize.ModeTree),
+	}, true, nil
 }
 
 // sandboxRootfsMode returns the materialize --mode string for the sandbox's

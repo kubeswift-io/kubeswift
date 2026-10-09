@@ -11,6 +11,7 @@
 package materialize
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -85,6 +86,11 @@ type Options struct {
 	// published without them. A ModeLayout entry is always normalized. Never
 	// set for a rootfs: an image's own modes are part of the image.
 	ReadOnlyArtifact bool
+	// Context bounds and cancels every registry request made for these
+	// options, including the lazy ones an image makes later (config, layers).
+	// Nil means context.Background(); see transport.go for the per-request
+	// bounds that apply either way.
+	Context context.Context
 }
 
 // authOption resolves the go-containerregistry auth for a pull: an explicit
@@ -245,7 +251,7 @@ func RemotePull(opts Options) (v1.Image, string, error) {
 	if opts.PullSecret != "" {
 		os.Setenv("DOCKER_CONFIG", filepath.Dir(opts.PullSecret))
 	}
-	img, err := remote.Image(ref, opts.authOption())
+	img, err := remote.Image(ref, opts.remoteOptions()...)
 	if err != nil {
 		return nil, "", fmt.Errorf("pull %q: %w", opts.ImageRef, err)
 	}
@@ -272,7 +278,7 @@ func Resolve(opts Options) (repository, digest string, err error) {
 	if opts.PullSecret != "" {
 		os.Setenv("DOCKER_CONFIG", filepath.Dir(opts.PullSecret))
 	}
-	img, err := remote.Image(ref, opts.authOption())
+	img, err := remote.Image(ref, opts.remoteOptions()...)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve %q: %w", opts.ImageRef, err)
 	}

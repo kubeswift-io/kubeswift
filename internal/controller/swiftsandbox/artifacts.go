@@ -40,9 +40,12 @@ func artifactMode(a *sandboxv1alpha1.SandboxArtifact) materialize.Mode {
 func artifactTag(i int) string { return fmt.Sprintf("sbxart%d", i) }
 
 // resolveArtifacts resolves each artifact to the digest the node will mount,
-// with its pull Secret (the artifact's own, else spec.imagePullSecret).
-func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox) ([]sandboxv1alpha1.SandboxArtifactStatus, error) {
-	var out []sandboxv1alpha1.SandboxArtifactStatus
+// with its pull Secret (the artifact's own, else spec.imagePullSecret). Every
+// request starts at once; ok=false while any is still running.
+func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
+	out := make([]sandboxv1alpha1.SandboxArtifactStatus, 0, len(sb.Spec.Artifacts))
+	ready := true
+	var firstErr error
 	for i := range sb.Spec.Artifacts {
 		a := &sb.Spec.Artifacts[i]
 		secret := sb.Spec.ImagePullSecret
@@ -51,20 +54,28 @@ func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 		}
 		auth, err := pullSecretAuth(ctx, c, sb.Namespace, secret, a.Ref)
 		if err != nil {
-			return nil, fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)
+			return nil, true, refusedError{fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)}
 		}
-		opts := materialize.Options{ImageRef: a.Ref, CacheDir: artifactCacheDir, Mode: artifactMode(a), Auth: auth}
-		resolve := materialize.Resolve
+		kind := resolveDigestKind
 		if artifactMode(a) == materialize.ModeLayout {
-			resolve = materialize.ResolveDescriptor
+			kind = resolveDescriptorKind
 		}
-		_, digest, err := resolve(opts)
-		if err != nil {
-			return nil, fmt.Errorf("artifact %s: %w", a.Name, err)
+		res, ok := lookup(newResolveRequest(kind, a.Ref, artifactMode(a), artifactCacheDir, auth))
+		switch {
+		case !ok:
+			ready = false
+		case res.err != nil:
+			if firstErr == nil {
+				firstErr = fmt.Errorf("artifact %s: %w", a.Name, res.err)
+			}
+		default:
+			out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: res.digest, MountPath: a.MountPath})
 		}
-		out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: digest, MountPath: a.MountPath})
 	}
-	return out, nil
+	if firstErr != nil {
+		return nil, true, firstErr
+	}
+	return out, ready, nil
 }
 
 // resolvedArtifact pairs an artifact with its resolved digest from status.

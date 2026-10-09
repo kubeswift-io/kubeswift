@@ -26,7 +26,7 @@ func ResolveDescriptor(opts Options) (repository, digest string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	desc, err := remote.Get(ref, opts.authOption())
+	desc, err := remote.Get(ref, opts.remoteOptions()...)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve %q: %w", opts.ImageRef, err)
 	}
@@ -41,7 +41,7 @@ func MaterializeLayout(opts Options) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	desc, err := remote.Get(ref, opts.authOption())
+	desc, err := remote.Get(ref, opts.remoteOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("pull %q: %w", opts.ImageRef, err)
 	}
