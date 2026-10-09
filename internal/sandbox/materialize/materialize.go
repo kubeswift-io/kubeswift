@@ -80,6 +80,11 @@ type Options struct {
 	// set the process-global DOCKER_CONFIG env safely under concurrent reconciles.
 	Auth     authn.Authenticator
 	Insecure bool // allow a plain-HTTP registry (trusted in-cluster stores only)
+	// ReadOnlyArtifact normalizes a ModeTree entry to the read-only artifact
+	// modes (see perms.go) before it is published, and repairs an entry
+	// published without them. A ModeLayout entry is always normalized. Never
+	// set for a rootfs: an image's own modes are part of the image.
+	ReadOnlyArtifact bool
 }
 
 // authOption resolves the go-containerregistry auth for a pull: an explicit
@@ -308,9 +313,11 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 		Config:     cfg,
 	}
 
+	normalize := opts.Mode == ModeTree && opts.ReadOnlyArtifact
+
 	// Fast path — cache hit without locking: the digest is immutable, so an
 	// existing artifact is authoritative and the common case pays no lock cost.
-	if fi, err := os.Stat(rootfsPath); err == nil {
+	if fi, err := os.Stat(rootfsPath); err == nil && !(normalize && needsReadOnlyRepair(rootfsPath)) {
 		res.CacheHit = true
 		res.SizeBytes = artifactSize(rootfsPath, fi)
 		return res, nil
@@ -332,6 +339,11 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 		defer unlock()
 		// Re-check under the lock: another process may have finished while we waited.
 		if fi, err := os.Stat(rootfsPath); err == nil {
+			if normalize && needsReadOnlyRepair(rootfsPath) {
+				if err := repairReadOnly(rootfsPath, true); err != nil {
+					return nil, err
+				}
+			}
 			res.CacheHit = true
 			res.SizeBytes = artifactSize(rootfsPath, fi)
 			return res, nil
@@ -358,8 +370,22 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 
 	switch opts.Mode {
 	case ModeTree:
+		if normalize {
+			removed, err := normalizeReadOnly(treeDir, true)
+			if err != nil {
+				return nil, fmt.Errorf("normalize modes: %w", err)
+			}
+			if removed > 0 {
+				fmt.Fprintf(os.Stderr, "materialize: removed %d device, FIFO or socket entries from read-only artifact %s\n", removed, digest)
+			}
+		}
 		if err := os.Rename(treeDir, rootfsPath); err != nil {
 			return nil, fmt.Errorf("publish tree: %w", err)
+		}
+		if normalize {
+			if err := sealReadOnly(rootfsPath); err != nil {
+				return nil, err
+			}
 		}
 		res.SizeBytes = treeBytes
 	default: // ModeBlock

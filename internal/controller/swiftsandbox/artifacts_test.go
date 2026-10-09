@@ -158,6 +158,13 @@ func TestArtifactInits_SecretsAndKey(t *testing.T) {
 	if b := strings.Join(inits[1].Args, " "); !strings.Contains(b, "--pull-secret=/artifact-pull-1/config.json") || strings.Contains(b, "verify-key") {
 		t.Errorf("init b = %s (falls back to imagePullSecret, no key)", b)
 	}
+	// Every artifact is cached with read-only modes an unprivileged guest
+	// process can read.
+	for _, c := range inits {
+		if !strings.Contains(strings.Join(c.Args, " "), "--read-only-artifact") {
+			t.Errorf("init %s lacks --read-only-artifact: %v", c.Name, c.Args)
+		}
+	}
 	secrets := map[string]string{}
 	for _, v := range vols {
 		if v.Secret != nil {

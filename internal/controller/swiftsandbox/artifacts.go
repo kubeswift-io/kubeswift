@@ -130,7 +130,7 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox) ([]corev1.Container, []core
 	cosignHome := false
 	for i, r := range arts {
 		mode := artifactMode(r.spec)
-		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--result-file", "/dev/termination-log"}
+		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--read-only-artifact", "--result-file", "/dev/termination-log"}
 		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}}
 		var env []corev1.EnvVar
 		secret := sb.Spec.ImagePullSecret
