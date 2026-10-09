@@ -44,13 +44,19 @@ fn spawn_virtiofsd(
         .map_err(|e| format!("spawn virtiofsd ({}) for {}: {}", binary, fs.name, e))
 }
 
-/// Flags beyond the socket, directory and sandbox mode.
+/// Flags beyond the socket, directory and sandbox mode. A warm slot's
+/// staging share holds bind mounts from another filesystem than its own
+/// directory: virtiofsd announces them as submounts, so inode numbers from
+/// the two never collide in the guest.
 fn virtiofsd_extra_args(fs: &FilesystemIntent) -> Vec<&'static str> {
+    let mut args = vec![];
     if fs.read_only {
-        vec!["--readonly"]
-    } else {
-        vec![]
+        args.push("--readonly");
     }
+    if fs.tag == crate::warm_artifacts::STAGE_TAG {
+        args.push("--announce-submounts");
+    }
+    args
 }
 
 /// Kills the virtiofsd backends on drop so a backend never outlives its VM.

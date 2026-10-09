@@ -68,7 +68,13 @@ func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
 func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var sb sandboxv1alpha1.SwiftSandbox
 	if err := r.Get(ctx, req.NamespacedName, &sb); err != nil {
+		if apierrors.IsNotFound(err) {
+			r.registryFailures.Delete(req.NamespacedName) // a new one by this name starts afresh
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if sb.DeletionTimestamp != nil || isTerminal(sb.Status.Phase) {
+		r.registryFailures.Delete(req.NamespacedName)
 	}
 	if sb.DeletionTimestamp != nil {
 		// The launcher pod + intent ConfigMap are owned by the SwiftSandbox and GC
@@ -692,7 +698,10 @@ func (r *SwiftSandboxReconciler) lookup(sb *sandboxv1alpha1.SwiftSandbox) lookup
 	} else {
 		w.obj = nil // no channel (a test): the periodic recheck reads the result
 	}
-	return func(req resolveRequest) (resolveResult, bool) { return res.get(req, w) }
+	return func(req resolveRequest) (resolveResult, bool) {
+		req.namespace = sb.Namespace
+		return res.get(req, w)
+	}
 }
 
 // waitForRegistry keeps sb Pending while its registry requests run. The

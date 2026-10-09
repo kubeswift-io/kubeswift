@@ -3,9 +3,11 @@
 //! A warm slot boots with an empty, read-only virtio-fs staging share. When a
 //! sandbox with `spec.artifacts` checks the slot out, the controller lists each
 //! artifact's digest in the exec action. Here each one is checked against the
-//! node's artifact cache (present, sealed read-only by the materializer, and
-//! verified with the sandbox's key when it has one) and bound read-only into
-//! the staging directory under the artifact's name. The guest agent then binds
+//! node's artifact cache: sealed by the materializer, its content read from
+//! the sandbox's own repository (an origin marker: a copy of the manifest
+//! hosted elsewhere does not unlock it), and verified with the sandbox's key
+//! when it has one. Ready, it is bound read-only into the staging directory
+//! under the artifact's name. The guest agent then binds
 //! those directories at their paths in the sandbox root.
 //!
 //! Nothing is fetched here: the launcher mounts the cache read-only and has no
@@ -28,10 +30,6 @@ pub const STAGE_TAG: &str = "sbxstage";
 /// mounts here on every warm slot (the controller's `warmStageDir`).
 pub const STAGE_DIR: &str = "/var/lib/kubeswift/sandbox-stage";
 
-/// The mode the materializer gives an entry's top directory last, after it is
-/// complete: an entry without it is not ready for a checkout.
-const SEALED_MODE: u32 = 0o555;
-
 /// One artifact in a sandbox-exec action.
 #[derive(Debug, Clone, Default, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +44,10 @@ pub struct WarmArtifact {
     /// must carry the materializer's verified marker for exactly this key.
     #[serde(default)]
     pub key_fingerprint: String,
+    /// sha256 of the repository the sandbox resolved the artifact from: the
+    /// entry's content must have been read from exactly that repository.
+    #[serde(default)]
+    pub repository_fingerprint: String,
 }
 
 fn is_hex64(s: &str) -> bool {
@@ -114,13 +116,29 @@ impl WarmArtifact {
             .join(&self.key_fingerprint)
     }
 
-    /// Ready to project: present, sealed, and verified for its key.
+    /// The materializer's marker that this digest's content was read from
+    /// this repository.
+    fn origin_marker(&self, cache: &Path) -> PathBuf {
+        cache
+            .join(".origin")
+            .join(self.digest.replace(':', "-"))
+            .join(&self.repository_fingerprint)
+    }
+
+    /// The materializer's marker that the entry is complete.
+    fn sealed_marker(&self, cache: &Path) -> PathBuf {
+        let entry = self.entry(cache);
+        cache
+            .join(".sealed")
+            .join(entry.file_name().unwrap_or_default())
+    }
+
+    /// Ready to project: sealed, from this repository, and verified for its key.
     fn ready(&self, cache: &Path) -> bool {
-        use std::os::unix::fs::PermissionsExt;
-        let sealed = std::fs::metadata(self.entry(cache))
-            .map(|m| m.is_dir() && m.permissions().mode() & 0o7777 == SEALED_MODE)
-            .unwrap_or(false);
-        sealed && (self.key_fingerprint.is_empty() || self.verified_marker(cache).is_file())
+        self.entry(cache).is_dir()
+            && self.sealed_marker(cache).is_file()
+            && self.origin_marker(cache).is_file()
+            && (self.key_fingerprint.is_empty() || self.verified_marker(cache).is_file())
     }
 }
 
@@ -226,7 +244,6 @@ pub fn project(
 mod tests {
     use super::*;
     use std::cell::RefCell;
-    use std::os::unix::fs::PermissionsExt;
 
     #[derive(Default)]
     struct Recorder(RefCell<Vec<(PathBuf, PathBuf)>>);
@@ -243,6 +260,7 @@ mod tests {
     const D1: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     const D2: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
     const FP: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const REPO: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!(
@@ -254,10 +272,9 @@ mod tests {
         d
     }
 
-    fn entry(cache: &Path, name: &str, mode: u32) {
-        let p = cache.join(name);
-        std::fs::create_dir_all(&p).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    fn touch(p: PathBuf) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"").unwrap();
     }
 
     fn art(name: &str, digest: &str, layout: &str, fp: &str) -> WarmArtifact {
@@ -267,69 +284,94 @@ mod tests {
             layout: layout.into(),
             mount_path: format!("/run/{}", name),
             key_fingerprint: fp.into(),
+            repository_fingerprint: REPO.into(),
         }
     }
 
+    /// What the materializer leaves for a complete entry read from REPO.
+    fn cached(cache: &Path, a: &WarmArtifact) {
+        std::fs::create_dir_all(a.entry(cache)).unwrap();
+        touch(a.sealed_marker(cache));
+        touch(a.origin_marker(cache));
+    }
+
     #[test]
-    fn projects_sealed_entries_under_their_names() {
+    fn projects_ready_entries_under_their_names() {
         let (cache, stage) = (tmp(), tmp());
-        entry(&cache, &format!("{}.oci", D1.replace(':', "-")), 0o555);
-        entry(&cache, &D2.replace(':', "-"), 0o555);
-        let b = Recorder::default();
         let arts = [art("app", D1, "oci", ""), art("data", D2, "unpacked", "")];
+        arts.iter().for_each(|a| cached(&cache, a));
+        let b = Recorder::default();
         let m = project(&arts, &cache, &stage, &b).unwrap();
         assert_eq!(m.len(), 2);
         assert_eq!(m[0].name, "app");
         assert_eq!(m[0].path, "/run/app");
-        let binds = b.0.borrow();
-        assert_eq!(
-            binds[0].0,
-            cache.join(format!("{}.oci", D1.replace(':', "-")))
-        );
-        assert_eq!(binds[0].1, stage.join("app"));
-        assert_eq!(binds[1].0, cache.join(D2.replace(':', "-")));
+        {
+            let binds = b.0.borrow();
+            assert_eq!(
+                binds[0].0,
+                cache.join(format!("{}.oci", D1.replace(':', "-")))
+            );
+            assert_eq!(binds[0].1, stage.join("app"));
+            assert_eq!(binds[1].0, cache.join(D2.replace(':', "-")));
+        }
         // A repeated dispatch binds nothing twice.
-        drop(binds);
         project(&arts, &cache, &stage, &b).unwrap();
         assert_eq!(b.0.borrow().len(), 2);
-        // Leave the dirs removable.
-        for d in [
-            cache.join(format!("{}.oci", D1.replace(':', "-"))),
-            cache.join(D2.replace(':', "-")),
-        ] {
-            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
     }
 
     #[test]
-    fn missing_unsealed_or_unverified_mounts_nothing() {
-        let (cache, stage) = (tmp(), tmp());
-        // app: present and sealed but needs a key marker that is absent.
-        entry(&cache, &format!("{}.oci", D1.replace(':', "-")), 0o555);
-        // data: present but not sealed (an older release, or mid-publish).
-        entry(&cache, &format!("{}.oci", D2.replace(':', "-")), 0o755);
-        let b = Recorder::default();
-        let arts = [
-            art("app", D1, "oci", FP),
-            art("data", D2, "oci", ""),
-            art("gone", &D1.replace('1', "3"), "oci", ""),
+    fn anything_not_ready_mounts_nothing() {
+        let cache = tmp();
+        let stage = tmp();
+        let ok = art("ok", D2, "oci", "");
+        cached(&cache, &ok);
+        let cases: Vec<(&str, WarmArtifact, Box<dyn Fn(&Path, &WarmArtifact)>)> = vec![
+            (
+                "absent",
+                art("app", &D1.replace('1', "3"), "oci", ""),
+                Box::new(|_, _| {}),
+            ),
+            (
+                "not sealed",
+                art("app", D1, "oci", ""),
+                Box::new(|c, a| {
+                    std::fs::create_dir_all(a.entry(c)).unwrap();
+                    touch(a.origin_marker(c));
+                }),
+            ),
+            (
+                "from another repository",
+                art("app", &D1.replace('1', "5"), "unpacked", ""),
+                Box::new(|c, a| {
+                    std::fs::create_dir_all(a.entry(c)).unwrap();
+                    touch(a.sealed_marker(c));
+                    let mut other = a.clone();
+                    other.repository_fingerprint = REPO.replace('a', "b");
+                    touch(other.origin_marker(c));
+                }),
+            ),
+            (
+                "unverified for this key",
+                art("app", &D1.replace('1', "4"), "oci", FP),
+                Box::new(|c, a| {
+                    cached(c, a);
+                    let mut other = a.clone();
+                    other.key_fingerprint = FP.replace('f', "e");
+                    touch(other.verified_marker(c));
+                }),
+            ),
         ];
-        let err = project(&arts, &cache, &stage, &b).unwrap_err();
-        assert_eq!(err, "ArtifactMissing: app,data,gone");
-        assert!(b.0.borrow().is_empty());
-        // With the marker for this key, app is ready.
-        let marker = cache.join(".verified").join(D1.replace(':', "-"));
-        std::fs::create_dir_all(&marker).unwrap();
-        std::fs::write(marker.join(FP), b"").unwrap();
-        project(&arts[..1], &cache, &stage, &b).unwrap();
-        // A marker for another key does not count.
-        let other = art("app", D1, "oci", &FP.replace('f', "e"));
-        assert!(project(&[other], &cache, &stage, &Recorder::default()).is_err());
-        std::fs::set_permissions(
-            cache.join(format!("{}.oci", D1.replace(':', "-"))),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+        for (what, a, setup) in cases {
+            setup(&cache, &a);
+            let b = Recorder::default();
+            let err = project(&[ok.clone(), a.clone()], &cache, &stage, &b).unwrap_err();
+            assert_eq!(err, "ArtifactMissing: app", "{}", what);
+            assert!(b.0.borrow().is_empty(), "{}: mounted before refusing", what);
+        }
+        // With the marker for its key, the signed one is ready.
+        let signed = art("app", &D1.replace('1', "4"), "oci", FP);
+        touch(signed.verified_marker(&cache));
+        project(&[signed], &cache, &stage, &Recorder::default()).unwrap();
     }
 
     #[test]
@@ -343,6 +385,14 @@ mod tests {
             art("app", D1, "ext4", ""),
             art("app", D1, "oci", "../../x"),
             art("-app", D1, "oci", ""),
+            WarmArtifact {
+                repository_fingerprint: "../../x".into(),
+                ..art("app", D1, "oci", "")
+            },
+            WarmArtifact {
+                repository_fingerprint: String::new(),
+                ..art("app", D1, "oci", "")
+            },
             WarmArtifact {
                 mount_path: "relative".into(),
                 ..art("app", D1, "oci", "")

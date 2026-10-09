@@ -2,10 +2,14 @@ package swiftsandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,6 +105,10 @@ type warmArtifactArg struct {
 	Layout         string `json:"layout"`
 	MountPath      string `json:"mountPath"`
 	KeyFingerprint string `json:"keyFingerprint,omitempty"`
+	// RepositoryFingerprint names the repository the sandbox resolved the
+	// artifact from: the node's entry must have been read from it
+	// (materialize/origin.go).
+	RepositoryFingerprint string `json:"repositoryFingerprint"`
 }
 
 // warmArtifactArgs lists sb's resolved artifacts for the exec action, with
@@ -109,7 +117,12 @@ type warmArtifactArg struct {
 func warmArtifactArgs(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox) ([]warmArtifactArg, error) {
 	var out []warmArtifactArg
 	for _, r := range resolvedArtifacts(sb) {
-		a := warmArtifactArg{Name: r.spec.Name, Digest: r.digest, Layout: r.spec.ArtifactLayout(), MountPath: r.spec.MountPath}
+		ref, err := name.ParseReference(r.spec.Ref)
+		if err != nil {
+			return nil, refusedError{fmt.Errorf("artifact %s: %w", r.spec.Name, err)}
+		}
+		a := warmArtifactArg{Name: r.spec.Name, Digest: r.digest, Layout: r.spec.ArtifactLayout(), MountPath: r.spec.MountPath,
+			RepositoryFingerprint: materialize.RepositoryFingerprint(ref.Context().Name())}
 		if k := r.spec.VerifyKeySecretRef; k != nil && k.Name != "" {
 			var sec corev1.Secret
 			if err := c.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: k.Name}, &sec); err != nil {
@@ -136,14 +149,26 @@ func artifactMissing(detail string) ([]string, bool) {
 }
 
 // artifactFetchPod builds the pod that materializes sb's missing artifacts on
-// node: one container per artifact, exactly a cold sandbox's init containers
-// (pull Secret, cosign key, read-only modes, verified marker).
+// the slot's node: one container per artifact, exactly a cold sandbox's init
+// containers (pull Secret, cosign key, read-only modes, markers), at the
+// digests the slot was asked for (from its action), not a fresh resolve: a
+// tag may have moved since.
 func artifactFetchPod(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missing []string) *corev1.Pod {
-	only := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: sb.ObjectMeta, Spec: sb.Spec, Status: sb.Status}
+	asked := map[string]string{}
+	var args struct {
+		Artifacts []warmArtifactArg `json:"artifacts"`
+	}
+	if err := json.Unmarshal([]byte(slot.Annotations[annSandboxExecActionArgs]), &args); err == nil {
+		for _, a := range args.Artifacts {
+			asked[a.Name] = a.Digest
+		}
+	}
+	only := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: sb.ObjectMeta, Spec: sb.Spec}
 	only.Spec.Artifacts = nil
 	for _, a := range sb.Spec.Artifacts {
-		if slices.Contains(missing, a.Name) {
+		if d := asked[a.Name]; d != "" && slices.Contains(missing, a.Name) {
 			only.Spec.Artifacts = append(only.Spec.Artifacts, a)
+			only.Status.Artifacts = append(only.Status.Artifacts, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: d, MountPath: a.MountPath})
 		}
 	}
 	containers, volumes := artifactInits(only)
@@ -165,12 +190,16 @@ func artifactFetchPod(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missin
 	}
 }
 
+// artifactFetchPodName is unique to the sandbox (a hash of its UID), so two
+// sandboxes whose names share a long prefix never share a fetch pod.
 func artifactFetchPodName(sb *sandboxv1alpha1.SwiftSandbox) string {
-	name := sb.Name + artifactFetchSuffix
-	if len(name) > 63 {
-		name = name[:63]
+	sum := sha256.Sum256([]byte(sb.UID))
+	suffix := artifactFetchSuffix + "-" + hex.EncodeToString(sum[:])[:10]
+	base := sb.Name
+	if max := 63 - len(suffix); len(base) > max {
+		base = strings.TrimRight(base[:max], "-.")
 	}
-	return strings.TrimRight(name, "-.")
+	return base + suffix
 }
 
 // fetchState is how a sandbox's artifact fetch stands.
@@ -204,6 +233,11 @@ func (r *SwiftSandboxReconciler) ensureArtifactFetch(ctx context.Context, sb *sa
 		return fetchRunning, "", nil
 	case err != nil:
 		return fetchRunning, "", err
+	}
+	// Only a pod this sandbox created decides: another one by that name (a
+	// user's) is not trusted for its phase or its message.
+	if !metav1.IsControlledBy(&pod, sb) {
+		return fetchFailed, fmt.Sprintf("pod %s exists and was not created for this sandbox", pod.Name), nil
 	}
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:

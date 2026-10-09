@@ -3,6 +3,7 @@ package materialize
 import (
 	"archive/tar"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,5 +81,41 @@ func TestMaterialize_TreeSizeCap(t *testing.T) {
 	// The rootfs is never capped.
 	if _, err := Materialize(Options{ImageRef: "reg/x", CacheDir: writableCache(t), Mode: ModeTree, MaxBytes: 1 << 20}, stubPull(img, digest)); err != nil {
 		t.Errorf("rootfs tree capped: %v", err)
+	}
+}
+
+// Exactly the cap is allowed; one byte more is not.
+func TestCappedReader_ExactlyTheCap(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		fail bool
+	}{{100, false}, {101, true}, {0, false}} {
+		r := &cappedReader{r: strings.NewReader(strings.Repeat("x", c.n)), left: 100}
+		_, err := io.ReadAll(r)
+		if (err != nil) != c.fail || r.exceeded != c.fail {
+			t.Errorf("%d bytes under a 100 cap: err %v exceeded %v", c.n, err, r.exceeded)
+		}
+	}
+}
+
+// An unpacked artifact of many empty files is stopped at the entry cap,
+// however few bytes it is.
+func TestMaterialize_TreeEntryCap(t *testing.T) {
+	if _, err := exec.LookPath("tar"); err != nil {
+		t.Skip("tar not available")
+	}
+	var hdrs []*tar.Header
+	for i := 0; i < 50; i++ {
+		hdrs = append(hdrs, &tar.Header{Name: "f" + strings.Repeat("x", i), Mode: 0o644, Typeflag: tar.TypeReg})
+	}
+	img, digest := treeImage(t, hdrs)
+	opts := Options{ImageRef: "reg/x", Mode: ModeTree, ReadOnlyArtifact: true, MaxEntries: 20}
+	opts.CacheDir = writableCache(t)
+	if _, err := Materialize(opts, stubPull(img, digest)); !errors.Is(err, ErrTooManyEntries) {
+		t.Fatalf("err = %v, want ErrTooManyEntries", err)
+	}
+	opts.CacheDir, opts.MaxEntries = writableCache(t), 50
+	if _, err := Materialize(opts, stubPull(img, digest)); err != nil {
+		t.Errorf("at the cap: %v", err)
 	}
 }

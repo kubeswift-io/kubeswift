@@ -44,6 +44,13 @@ const (
 	resolveInlineWait     = 250 * time.Millisecond
 	resolveRequestTimeout = 30 * time.Second
 	resolvePerRegistry    = 4
+	// Requests running or queued at once, in all and per namespace. Past
+	// either, a new request is refused at once as transient (the object
+	// backs off), so one namespace's references, or a flood of distinct
+	// hosts, cannot grow the controller's goroutines and connections without
+	// bound or take every slot from other namespaces.
+	resolveGlobalLimit    = 256
+	resolveNamespaceLimit = 32
 	// A finished result is kept this long, for the objects it notified to
 	// read and for others asking at the same moment. An error is kept for
 	// less than the shortest retry backoff, so a retry makes a new request.
@@ -80,6 +87,8 @@ type resolveKey struct {
 type resolveRequest struct {
 	key  resolveKey
 	opts materialize.Options
+	// namespace is whose request this is, for the per-namespace limit.
+	namespace string
 }
 
 type resolveResult struct {
@@ -111,7 +120,13 @@ type resolveEntry struct {
 type registryResolver struct {
 	mu      sync.Mutex
 	entries map[resolveKey]*resolveEntry
-	hosts   map[string]chan struct{}
+	hosts   map[string]*hostSlots
+	// running counts requests not yet finished, in all and per namespace.
+	running   int
+	runningNS map[string]int
+
+	globalLimit int
+	nsLimit     int
 
 	inlineWait time.Duration
 	timeout    time.Duration
@@ -123,13 +138,16 @@ type registryResolver struct {
 
 func newRegistryResolver() *registryResolver {
 	return &registryResolver{
-		entries:    map[resolveKey]*resolveEntry{},
-		hosts:      map[string]chan struct{}{},
-		inlineWait: resolveInlineWait,
-		timeout:    resolveRequestTimeout,
-		perHost:    resolvePerRegistry,
-		now:        time.Now,
-		fetch:      fetchRegistry,
+		entries:     map[resolveKey]*resolveEntry{},
+		hosts:       map[string]*hostSlots{},
+		runningNS:   map[string]int{},
+		globalLimit: resolveGlobalLimit,
+		nsLimit:     resolveNamespaceLimit,
+		inlineWait:  resolveInlineWait,
+		timeout:     resolveRequestTimeout,
+		perHost:     resolvePerRegistry,
+		now:         time.Now,
+		fetch:       fetchRegistry,
 	}
 }
 
@@ -162,6 +180,14 @@ func (r *registryResolver) get(req resolveRequest, w waiter) (resolveResult, boo
 	r.pruneLocked()
 	e, ok := r.entries[req.key]
 	if !ok {
+		if r.running >= r.globalLimit || r.runningNS[req.namespace] >= r.nsLimit {
+			err := fmt.Errorf("too many registry requests in flight (namespace %q: %d, all: %d); retrying later",
+				req.namespace, r.runningNS[req.namespace], r.running)
+			r.mu.Unlock()
+			return resolveResult{err: err}, true
+		}
+		r.running++
+		r.runningNS[req.namespace]++
 		e = &resolveEntry{done: make(chan struct{}), waiters: map[waiterKey]waiter{}}
 		r.entries[req.key] = e
 		go r.run(req, e)
@@ -199,6 +225,10 @@ func (r *registryResolver) run(req resolveRequest, e *resolveEntry) {
 	}
 
 	r.mu.Lock()
+	r.running--
+	if r.runningNS[req.namespace]--; r.runningNS[req.namespace] <= 0 {
+		delete(r.runningNS, req.namespace)
+	}
 	e.result = res
 	e.finished = r.now()
 	waiters := e.waiters
@@ -214,19 +244,35 @@ func (r *registryResolver) run(req resolveRequest, e *resolveEntry) {
 	}
 }
 
+// hostSlots bounds the requests against one registry host. users counts the
+// requests holding or waiting for a slot, so an idle host is forgotten.
+type hostSlots struct {
+	sem   chan struct{}
+	users int
+}
+
 // acquire takes one of host's request slots, or fails when ctx ends first.
 func (r *registryResolver) acquire(ctx context.Context, host string) (func(), error) {
 	r.mu.Lock()
-	sem, ok := r.hosts[host]
+	h, ok := r.hosts[host]
 	if !ok {
-		sem = make(chan struct{}, r.perHost)
-		r.hosts[host] = sem
+		h = &hostSlots{sem: make(chan struct{}, r.perHost)}
+		r.hosts[host] = h
 	}
+	h.users++
 	r.mu.Unlock()
+	done := func() {
+		r.mu.Lock()
+		if h.users--; h.users == 0 {
+			delete(r.hosts, host)
+		}
+		r.mu.Unlock()
+	}
 	select {
-	case sem <- struct{}{}:
-		return func() { <-sem }, nil
+	case h.sem <- struct{}{}:
+		return func() { <-h.sem; done() }, nil
 	case <-ctx.Done():
+		done()
 		return nil, fmt.Errorf("registry %s: %d requests already waiting on it: %w", host, r.perHost, ctx.Err())
 	}
 }

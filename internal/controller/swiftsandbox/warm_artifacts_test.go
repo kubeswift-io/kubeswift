@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -59,7 +60,7 @@ func actionArtifacts(t *testing.T, p *corev1.Pod) []warmArtifactArg {
 // sandbox records what it mounts.
 func TestCheckout_ArtifactsTakeAWarmSlot(t *testing.T) {
 	ctx := context.Background()
-	pool, slot, sb, _, digest := warmSetup(t)
+	pool, slot, sb, ref, digest := warmSetup(t)
 	r, c := sandboxReconciler(pool, slot, sb, keySecret("app-key"))
 	reconcileSB(t, r, "sb")
 
@@ -73,7 +74,9 @@ func TestCheckout_ArtifactsTakeAWarmSlot(t *testing.T) {
 	var p corev1.Pod
 	_ = c.Get(ctx, client.ObjectKeyFromObject(slot), &p)
 	arts := actionArtifacts(t, &p)
-	want := warmArtifactArg{Name: "app", Digest: digest, Layout: "oci", MountPath: "/run/app", KeyFingerprint: materialize.KeyFingerprint(testKey)}
+	repo, _ := name.ParseReference(ref)
+	want := warmArtifactArg{Name: "app", Digest: digest, Layout: "oci", MountPath: "/run/app", KeyFingerprint: materialize.KeyFingerprint(testKey),
+		RepositoryFingerprint: materialize.RepositoryFingerprint(repo.Context().Name())}
 	if len(arts) != 1 || arts[0] != want {
 		t.Errorf("action artifacts = %+v, want %+v", arts, want)
 	}
@@ -108,7 +111,7 @@ func claimedWith(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, digest, act
 	slot.Labels[SlotStateLabelKey] = slotStateClaimed
 	slot.Annotations[annSandboxExecAction] = "run"
 	slot.Annotations[annSandboxExecActionID] = actionID
-	slot.Annotations[annSandboxExecActionArgs] = `{"argv":["/bin/true"]}`
+	slot.Annotations[annSandboxExecActionArgs] = `{"argv":["/bin/true"],"artifacts":[{"name":"app","digest":"` + digest + `","layout":"oci","mountPath":"/run/app"}]}`
 	slot.Annotations[annSandboxExecStatusID] = actionID
 	slot.Annotations[annSandboxExecStatus] = status
 	slot.Annotations[annSandboxExecStatusDetail] = detail
@@ -126,7 +129,7 @@ func TestClaimedSlot_ArtifactMissingFetchesThenDispatchesAgain(t *testing.T) {
 	reconcileSB(t, r, "sb")
 
 	var fetch corev1.Pod
-	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-artifacts"}, &fetch); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: artifactFetchPodName(sb)}, &fetch); err != nil {
 		t.Fatalf("no fetch pod: %v (%s)", err, getSandbox(t, c, "sb").Status.Message)
 	}
 	if fetch.Spec.NodeName != "node-a" || len(fetch.Spec.Containers) != 1 || !metav1.IsControlledBy(&fetch, sb) {
@@ -180,7 +183,7 @@ func TestClaimedSlot_ArtifactFetchFailureFails(t *testing.T) {
 	r, c := sandboxReconciler(slot, sb, keySecret("app-key"))
 	reconcileSB(t, r, "sb")
 	var fetch corev1.Pod
-	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: "sb-artifacts"}, &fetch); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "default", Name: artifactFetchPodName(sb)}, &fetch); err != nil {
 		t.Fatal(err)
 	}
 	fetch.Status = corev1.PodStatus{Phase: corev1.PodFailed, ContainerStatuses: []corev1.ContainerStatus{{Name: "artifact-app",
@@ -306,5 +309,74 @@ func TestWarmSlot_HasAStagingShare(t *testing.T) {
 	}
 	if m, ok := mounts[artifactCacheVolume]; !ok || !m.ReadOnly {
 		t.Errorf("cache mount = %+v, want read-only", m)
+	}
+}
+
+// The fetch pulls the digest the slot was asked for, even if the tag has
+// moved since; a pod by its name that this sandbox did not create decides
+// nothing; two sandboxes sharing a long name prefix get different pods.
+func TestArtifactFetch_PinnedOwnedAndUnique(t *testing.T) {
+	ctx := context.Background()
+	_, slot, sb, _, digest := warmSetup(t)
+	claimedWith(sb, slot, digest, string(sb.UID), "failed", "ArtifactMissing: app")
+	moved := "sha256:" + strings.Repeat("9", 64)
+	sb.Status.Artifacts[0].Digest = moved // a later resolve of a moved tag
+	fp := artifactFetchPod(sb, slot, []string{"app"})
+	if args := strings.Join(fp.Spec.Containers[0].Args, " "); !strings.Contains(args, "@"+digest) || strings.Contains(args, moved) {
+		t.Errorf("fetch args %s, want the action's digest", args)
+	}
+
+	long := strings.Repeat("a", 60)
+	x := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: long + "x", UID: "u1"}}
+	y := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: long + "y", UID: "u2"}}
+	if a, b := artifactFetchPodName(x), artifactFetchPodName(y); a == b || len(a) > 63 {
+		t.Errorf("names %q %q", a, b)
+	}
+
+	squatter := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: artifactFetchPodName(sb), Namespace: "default"},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	r, c := sandboxReconciler(slot, sb, squatter)
+	reconcileSB(t, r, "sb")
+	var p corev1.Pod
+	_ = c.Get(ctx, client.ObjectKeyFromObject(slot), &p)
+	if p.Annotations[annSandboxExecActionID] == string(sb.UID)+fetchedActionSuffix {
+		t.Error("a pod this sandbox did not create unlocked the second dispatch")
+	}
+	if got := getSandbox(t, c, "sb"); got.Status.Phase != sandboxv1alpha1.SwiftSandboxFailed ||
+		!strings.Contains(got.Status.Message, "not created for this sandbox") {
+		t.Errorf("got %s %q", got.Status.Phase, got.Status.Message)
+	}
+}
+
+// Requests past the global or per-namespace limit are refused at once, as
+// transient, and start nothing; an idle host's slots are forgotten.
+func TestResolver_LimitsAndIdleHosts(t *testing.T) {
+	r := stubResolver(hang)
+	r.globalLimit, r.nsLimit = 3, 2
+	r.inlineWait = time.Millisecond
+	ask := func(ns, ref string) resolveResult {
+		q := req(ref, nil)
+		q.namespace = ns
+		res, _ := r.get(q, waiter{})
+		return res
+	}
+	ask("a", "h1.example/x:1")
+	ask("a", "h2.example/x:1")
+	if res := ask("a", "h3.example/x:1"); res.err == nil || !strings.Contains(res.err.Error(), "too many registry requests") || registryRefused(res.err) {
+		t.Errorf("namespace a past its limit: %v", res.err)
+	}
+	ask("b", "h4.example/x:1")
+	if res := ask("c", "h5.example/x:1"); res.err == nil {
+		t.Error("past the global limit")
+	}
+	time.Sleep(r.timeout + 200*time.Millisecond)
+	r.mu.Lock()
+	hosts, running := len(r.hosts), r.running
+	r.mu.Unlock()
+	if hosts != 0 || running != 0 {
+		t.Errorf("after the requests ended: %d hosts, %d running", hosts, running)
+	}
+	if res := ask("a", "h6.example/x:1"); res.err != nil && strings.Contains(res.err.Error(), "too many") {
+		t.Error("limit not released")
 	}
 }

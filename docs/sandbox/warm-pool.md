@@ -186,10 +186,11 @@ artifacts, and the sandbox boots cold (the `PoolColdFallback` event says so).
 4. The guest agent binds each artifact read-only at its `mountPath` in the
    sandbox root, then starts the workload. One request, no polling.
 
-**Cache.** The node cache (`/var/lib/kubeswift/sandbox-artifacts`) is shared
-by every sandbox on the node and keyed by digest. Entries are written only by
-the materializer (a privileged init container, or a fetch pod), published by
-an atomic rename, and readable by every guest user but writable by none
+**Cache.** The node cache (`/var/lib/kubeswift/sandbox-artifacts`, mode 0700:
+no local user on the node can read it) is shared by every sandbox on the node
+and keyed by digest. Entries are written only by the materializer (a
+privileged init container, or a fetch pod), published by an atomic rename and
+then marked sealed, and are readable by every guest user but writable by none
 (directories 0555, files 0444). Launchers mount the cache read-only.
 
 **A cache miss.** When a digest is not on the slot's node, or not yet verified
@@ -210,7 +211,14 @@ start.
 
 **Authorization.** Every checkout is authorized with the checking-out
 sandbox's own credentials; that an entry is already on the node grants
-nothing. The controller keeps a successful answer for a digest reference
+nothing. A registry authorizes per repository and a manifest names its blobs
+only by digest, so resolving a digest proves the manifest is readable, not
+its content: anyone could host a copy of a manifest in a repository of their
+own. An entry is therefore used for a repository only after its blobs were
+read from that repository, digests checked (an origin record next to the
+entry, written when the entry is pulled, or by the fetch pod reading every
+blob again for a new repository). A copied manifest without its blobs fails
+the fetch. The controller keeps a successful answer for a digest reference
 (`repo@sha256:...`) for 5 minutes, per set of credentials, so a checkout
 within that time asks no registry. A tag is re-resolved after 30 seconds: it
 can move. Revoking credentials at the registry takes up to 5 minutes to stop
@@ -232,8 +240,15 @@ sandbox root only its own artifacts. Everything is read-only three times:
 the cache mount, the bind into the staging share, and the guest's bind
 (also `nosuid`, `nodev`); virtiofsd serves the share with `--readonly`.
 Registry credentials reach only the controller and the fetch pod, never the
-slot or the guest. An unpacked artifact is capped at 10 GiB extracted, an OCI
-layout at 10 GiB of blobs (`sandbox-materialize --max-bytes`).
+slot or the guest. An unpacked artifact is capped at 10 GiB extracted and
+1,048,576 entries, an OCI layout at 10 GiB of blobs (`sandbox-materialize
+--max-bytes`, `--max-entries`). The controller runs at most 256 registry
+requests at once, 32 per namespace and 4 per registry host; past a limit a
+request waits and retries (`RegistryUnavailable`).
+
+Not limited: the total size of the node cache. Nothing removes entries; a
+namespace that may create sandboxes can fill the node's disk with distinct
+artifacts, as it could before with cold sandboxes.
 
 ## Node placement
 

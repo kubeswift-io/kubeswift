@@ -103,13 +103,16 @@ func TestMaterializeLayout_RepairsOldEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Make it look like an old entry.
+	// Make it look like an old entry: its own modes, and no seal marker.
 	_ = filepath.WalkDir(res.RootfsPath, func(p string, d fs.DirEntry, _ error) error {
 		if d.IsDir() {
 			return os.Chmod(p, 0o755)
 		}
 		return os.Chmod(p, 0o600)
 	})
+	if err := os.Remove(SealedMarkerPath(res.RootfsPath)); err != nil {
+		t.Fatal(err)
+	}
 	again, err := MaterializeLayout(Options{ImageRef: ref.String(), CacheDir: cache})
 	if err != nil || !again.CacheHit {
 		t.Fatalf("second materialize: %+v, %v; want a cache hit", again, err)
