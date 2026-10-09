@@ -56,11 +56,11 @@ understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.15 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.3 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.4 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or
@@ -82,6 +82,8 @@ The SwiftSandbox controller appends to the kernel cmdline:
   `sandboxmodel` virtio-fs tag read-only (spec.model).
 - `kubeswift.mounts=<tag>:<path>[,...]` — mount each virtio-fs tag read-only at
   its path (spec.artifacts). Feature `mounts`.
+- `kubeswift.stage=<tag>` (warm-pool slots): mount the tag read-only, nosuid,
+  nodev at `/run/kubeswift-stage`, outside the new root. Feature `warm-mounts`.
 
 The config disk is a raw blob: `KUBESWIFT-EXEC-V1`, then one TAB-separated line
 per item, then `KUBESWIFT-EXEC-END`, NUL-padded. Values are base64.
@@ -95,7 +97,10 @@ The bridge reads up to 4 MiB of it. A path must be absolute with no `.` or
 powers off, so it reads as a failed sandbox rather than a completed one.
 
 The guest agent's single-shot `exec` request takes the same files as
-`files: [{path, mode, data}]` (data base64) for a warm-pool checkout.
+`files: [{path, mode, data}]` (data base64) for a warm-pool checkout. It also takes
+`mounts: [{name, path}]` (feature `warm-mounts`): each staged directory
+`/run/kubeswift-stage/<name>` is bound read-only (nosuid, nodev) at `path` in
+the new root before the files and the command.
 
 **Features.** A bridge ignores what it does not know, so an older one would run
 the workload without its files or mounts. swiftletd therefore reads

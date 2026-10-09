@@ -66,6 +66,15 @@ func MaterializeLayout(opts Options) (*Result, error) {
 		}
 	}
 
+	if opts.MaxBytes > 0 {
+		size, err := layoutSize(desc)
+		if err != nil {
+			return res, fmt.Errorf("size of %s: %w", digest, err)
+		}
+		if size > opts.MaxBytes {
+			return res, fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrTooLarge, digest, size, opts.MaxBytes)
+		}
+	}
 	tmp, err := os.MkdirTemp(opts.CacheDir, ".materialize-*")
 	if err != nil {
 		return res, fmt.Errorf("temp dir: %w", err)

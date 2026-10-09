@@ -127,8 +127,8 @@ type FilesystemIntent struct {
 	// SourcePath is the in-pod directory virtiofsd shares (--shared-dir).
 	// swiftletd derives the unix socket from the runtime dir.
 	SourcePath string `json:"sourcePath"`
-	// ReadOnly is informational; the pod builder mounts the source read-only
-	// when set (that is the enforcement).
+	// ReadOnly makes the share read-only: the pod builder mounts the source
+	// read-only and swiftletd runs virtiofsd with --readonly.
 	ReadOnly bool `json:"readOnly,omitempty"`
 }
 

@@ -48,7 +48,14 @@ const (
 	// read and for others asking at the same moment. An error is kept for
 	// less than the shortest retry backoff, so a retry makes a new request.
 	resolveSuccessTTL = 30 * time.Second
-	resolveErrorTTL   = 5 * time.Second
+	resolveErrorTTL   = 4 * time.Second
+	// resolveDigestAuthTTL keeps a success for a digest reference longer: the
+	// content cannot change, so what the cached answer stands for is that the
+	// registry let these credentials read this digest. A warm-pool checkout
+	// within it asks no registry. Revoking the credentials at the registry
+	// takes up to this long to apply to new sandboxes. A tag is never kept
+	// past resolveSuccessTTL: it can move.
+	resolveDigestAuthTTL = 5 * time.Minute
 )
 
 // resolveKind is what a request fetches.
@@ -233,13 +240,26 @@ func (r *registryResolver) pruneLocked() {
 			continue
 		}
 		ttl := resolveSuccessTTL
-		if e.result.err != nil {
+		switch {
+		case e.result.err != nil:
 			ttl = resolveErrorTTL
+		case isDigestRef(k.ref):
+			ttl = resolveDigestAuthTTL
 		}
 		if now.Sub(e.finished) >= ttl {
 			delete(r.entries, k)
 		}
 	}
+}
+
+// isDigestRef reports whether ref pins a digest (repo@sha256:...).
+func isDigestRef(ref string) bool {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return false
+	}
+	_, ok := r.(name.Digest)
+	return ok
 }
 
 func registryHost(ref string) string {

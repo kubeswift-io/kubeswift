@@ -85,6 +85,9 @@ type Request struct {
 	// Files are written into the exec root before the command runs (single-shot
 	// exec only): a checked-out sandbox's secret files.
 	Files []ExecFile `json:"files,omitempty"`
+	// Mounts are staged artifacts bound read-only into the exec root before
+	// the files and the command (single-shot exec only, mounts.go).
+	Mounts []ExecMount `json:"mounts,omitempty"`
 }
 
 // ExecFile is one file the exec op writes into the exec root: a path inside it,
@@ -139,6 +142,8 @@ type handler struct {
 	// SwiftSandbox passes /newroot (the OCI overlay) so exec runs in the workload's
 	// filesystem; identity guests leave it empty.
 	execRoot string
+	// stageDir is where the bridge mounted the warm-slot staging share.
+	stageDir string
 }
 
 // handle parses one request, dispatches it, and returns the JSON response bytes.
@@ -499,6 +504,18 @@ func (h *handler) exec(req Request) Response {
 	cmd, err := h.buildExecCmd(req)
 	if err != nil {
 		return Response{OK: false, Error: err.Error()}
+	}
+	if len(req.Mounts) > 0 {
+		if h.execRoot == "" || h.execRoot == "/" {
+			return Response{OK: false, Error: "exec: mounts need an exec root"}
+		}
+		stage := h.stageDir
+		if stage == "" {
+			stage = DefaultStageDir
+		}
+		if err := mountExecMounts(h.execRoot, stage, req.Mounts); err != nil {
+			return Response{OK: false, Error: err.Error()}
+		}
 	}
 	if err := writeExecFiles(h.execRoot, req.Files); err != nil {
 		return Response{OK: false, Error: err.Error()}

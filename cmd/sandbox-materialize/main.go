@@ -30,6 +30,7 @@ func main() {
 		insecure   = flag.Bool("insecure", false, "allow a plain-HTTP registry (trusted in-cluster stores only)")
 		verifyKey  = flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify image@digest BEFORE materializing (requires a TLS registry)")
 		readOnly   = flag.Bool("read-only-artifact", false, "normalize a tree to read-only artifact modes (dirs 0555, files 0444, executables 0555) so an unprivileged guest can read it; never for a rootfs. An oci layout always is")
+		maxBytes   = flag.Int64("max-bytes", materialize.DefaultArtifactMaxBytes, "size cap for a read-only artifact (an oci layout, or a tree with --read-only-artifact); 0 is none. Never applies to a rootfs")
 		timeout    = flag.Duration("timeout", 30*time.Minute, "bound on the whole run (resolve, verify, pull); a registry that stops answering fails the init container instead of holding it forever")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
@@ -57,6 +58,12 @@ func main() {
 		Insecure:   *insecure,
 
 		ReadOnlyArtifact: *readOnly,
+	}
+	// An artifact (never a rootfs) is capped, and its verification recorded
+	// for warm-pool checkouts (materialize/verified.go).
+	artifact := opts.Mode == materialize.ModeLayout || *readOnly
+	if artifact {
+		opts.MaxBytes = *maxBytes
 	}
 
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
@@ -90,6 +97,12 @@ func main() {
 		// sibling snapshot-oras download-image path pins the same way.
 		opts.ImageRef = repo + "@" + digest
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
+		if artifact {
+			if err := materialize.RecordVerified(opts.CacheDir, digest, *verifyKey); err != nil {
+				fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	var res *materialize.Result

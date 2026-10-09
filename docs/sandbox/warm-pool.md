@@ -138,8 +138,9 @@ spec:
   `nodeSelector` requires too. GPU and model belong to the slot: a pooled
   sandbox sets neither and inherits the pool's, including a GPU pool's
   `gpu-sandbox` kernel when it sets no `kernelProfileRef`. A sandbox with its
-  own GPU, a different model, a `scratchDisk` or `artifacts` asks for
-  something no slot has. Anything else boots cold with its own settings, and the
+  own GPU, a different model or a `scratchDisk` asks for something no slot
+  has. `artifacts` are not part of the shape: see
+  [Artifacts on checkout](#artifacts-on-checkout). Anything else boots cold with its own settings, and the
   `PoolColdFallback` event names each difference, for example
   `cpu (pool 1, sandbox 2)`. Warm slots booted before a pool edit to any of
   these fields are replaced.
@@ -162,6 +163,77 @@ spec:
   exit code just like a cold sandbox.
 - `swiftctl sandbox logs`/`exec`/`attach <name>` work on a checked-out sandbox
   — they target the claimed slot transparently (via `status.podRef`).
+
+## Artifacts on checkout
+
+A sandbox with `spec.artifacts` takes a warm slot like any other: pools stay
+generic, a slot carries no artifact, and the VM is not rebooted. Needs a slot
+kernel whose bridge has the `warm-mounts` feature (`kernels/sandbox:6.6.15`,
+`kernels/gpu-sandbox:6.6.4` or later); a slot without it is not claimed for
+artifacts, and the sandbox boots cold (the `PoolColdFallback` event says so).
+
+**Lifecycle.**
+
+1. Before claiming a slot, the controller resolves each `ref` to a digest
+   with the sandbox's own pull Secret (`pullSecretRef`, else
+   `imagePullSecret`). That request is the authorization check; no slot is
+   held while it runs. `status.artifacts` records the digests.
+2. The controller claims a slot and writes the workload with each artifact's
+   digest, layout, mount path, and the SHA-256 fingerprint of its cosign key.
+3. swiftletd, in the slot, finds each digest in the node's artifact cache and
+   binds it read-only into the slot's staging share, a read-only virtio-fs
+   share every warm slot boots with, empty.
+4. The guest agent binds each artifact read-only at its `mountPath` in the
+   sandbox root, then starts the workload. One request, no polling.
+
+**Cache.** The node cache (`/var/lib/kubeswift/sandbox-artifacts`) is shared
+by every sandbox on the node and keyed by digest. Entries are written only by
+the materializer (a privileged init container, or a fetch pod), published by
+an atomic rename, and readable by every guest user but writable by none
+(directories 0555, files 0444). Launchers mount the cache read-only.
+
+**A cache miss.** When a digest is not on the slot's node, or not yet verified
+with the sandbox's key there, swiftletd reports `ArtifactMissing`. The
+controller runs one fetch pod on that node, `<sandbox>-artifacts`: the same
+materializer, pull Secret and key as a cold sandbox's init containers. It
+then dispatches the workload again. The slot stays booted throughout. A miss
+costs a pod start and the pull; a hit costs no pod.
+
+**Verification.** With `verifyKeySecretRef`, the materializer cosign-checks
+the digest with that key before caching it, and records the check next to
+the entry, named by the SHA-256 of the key bytes it used. A signature over an
+immutable digest with a given key is a fixed fact, so a checkout needs that
+record for exactly its own key and runs no cosign. An entry another tenant
+verified with another key does not count: it is a miss, and the fetch pod
+verifies with this sandbox's key. A cold sandbox still verifies on every
+start.
+
+**Authorization.** Every checkout is authorized with the checking-out
+sandbox's own credentials; that an entry is already on the node grants
+nothing. The controller keeps a successful answer for a digest reference
+(`repo@sha256:...`) for 5 minutes, per set of credentials, so a checkout
+within that time asks no registry. A tag is re-resolved after 30 seconds: it
+can move. Revoking credentials at the registry takes up to 5 minutes to stop
+new sandboxes from checking out a digest those credentials could read. The
+cache is in memory: a controller restart asks the registry again.
+
+**Failure conditions.**
+
+| Event | Result |
+|---|---|
+| Registry refuses the ref (400, 401, 403, 404) or the pull Secret is missing | `Failed`, `ArtifactResolveFailed`; no slot claimed |
+| Registry unreachable or timing out | `Pending`, `RegistryUnavailable`, retried with backoff; no slot claimed |
+| Fetch fails (pull, signature, size limit) | `Failed`, `ArtifactMaterializeFailed`, with the materializer's message |
+| Missing again after a fetch | `Failed`, `ArtifactMissing` |
+| The slot's kernel lacks `warm-mounts` (found at dispatch) | `Failed`, `KernelUnsupported` |
+
+**Security boundary.** The guest sees only the staging share, and in its
+sandbox root only its own artifacts. Everything is read-only three times:
+the cache mount, the bind into the staging share, and the guest's bind
+(also `nosuid`, `nodev`); virtiofsd serves the share with `--readonly`.
+Registry credentials reach only the controller and the fetch pod, never the
+slot or the guest. An unpacked artifact is capped at 10 GiB extracted, an OCI
+layout at 10 GiB of blobs (`sandbox-materialize --max-bytes`).
 
 ## Node placement
 

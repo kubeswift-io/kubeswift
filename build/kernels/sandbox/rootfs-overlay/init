@@ -39,6 +39,10 @@ MODEL_PATH="/model"
 # kubeswift.mounts=<tag>:<path>[,<tag>:<path>...] mounts more read-only virtio-fs
 # shares (spec.artifacts) at those paths inside the new root.
 MOUNTS=""
+# kubeswift.stage=<tag> (warm-pool slots): a read-only virtio-fs share, empty at
+# boot, where the host projects a checkout's artifacts. Mounted outside the new
+# root; the guest agent binds each artifact into it on the checkout's exec.
+STAGE=""
 # WORKDIR is only assigned from the config-disk CWD line (spec.workingDir). Init it
 # here so the `set -u` reference below is safe when no workingDir is set — the
 # common case (a missing init was a regression that panicked PID 1: "WORKDIR:
@@ -54,6 +58,7 @@ for arg in $(cat /proc/cmdline); do
 		kubeswift.model=*)      MODEL_KIND="${arg#kubeswift.model=}" ;;
 		kubeswift.modelpath=*)  MODEL_PATH="${arg#kubeswift.modelpath=}" ;;
 		kubeswift.mounts=*)     MOUNTS="${arg#kubeswift.mounts=}" ;;
+		kubeswift.stage=*)      STAGE="${arg#kubeswift.stage=}" ;;
 	esac
 done
 
@@ -61,7 +66,7 @@ done
 # same list to the artifact's bridge-features file, which swiftletd checks
 # before it asks for any of them: an older bridge ignores what it does not
 # know, and would run the workload without its files or mounts.
-BRIDGE_FEATURES="files mounts"
+BRIDGE_FEATURES="files mounts warm-mounts"
 echo "sandbox-bridge: features: $BRIDGE_FEATURES"
 
 # fail ends the sandbox. It reports an exit code first (125), as a workload
@@ -156,6 +161,24 @@ if [ -n "$MOUNTS" ]; then
 		echo "sandbox-bridge: $tag mounted read-only at ${mp}"
 	done
 	IFS=$oldifs
+fi
+
+# --- warm-slot staging share (kubeswift.stage, feature warm-mounts) ---
+# Mounted at /run/kubeswift-stage, outside /newroot, so a workload never sees
+# it whole: on a checkout the guest agent binds only that checkout's artifacts,
+# read-only, at their paths in the new root.
+if [ -n "$STAGE" ]; then
+	case "$STAGE" in
+		*[!a-z0-9]*) fail "kubeswift.stage: '$STAGE' is not a plain tag" ;;
+	esac
+	mkdir -p /run/kubeswift-stage
+	n=0
+	until mount -t virtiofs -o ro,nosuid,nodev "$STAGE" /run/kubeswift-stage 2>/dev/null; do
+		n=$((n + 1))
+		[ "$n" -ge 30 ] && fail "cannot mount virtio-fs tag '$STAGE' at /run/kubeswift-stage after ${n}s"
+		sleep 1
+	done
+	echo "sandbox-bridge: staging share $STAGE mounted read-only"
 fi
 
 # The config disk (/dev/vdX) and /proc/net/pnp are read HERE, after the overlay is

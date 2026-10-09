@@ -177,6 +177,13 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		filesystems = append(filesystems, artFS...)
 		cmdline += " kubeswift.mounts=" + mounts
 	}
+	// A warm slot's staging share, empty at boot: a checkout's artifacts are
+	// projected into it (warm_artifacts.go). A bridge without warm-mounts
+	// ignores kubeswift.stage, and swiftletd then does not advertise it.
+	if idle {
+		filesystems = append(filesystems, warmStageIntent())
+		cmdline += " kubeswift.stage=" + warmStageTag
+	}
 
 	ri := &runtimeintent.RuntimeIntent{
 		KernelBoot: &runtimeintent.KernelBootSpec{

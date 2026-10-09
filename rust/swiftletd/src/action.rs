@@ -949,6 +949,10 @@ struct SandboxExecArgs {
     /// into the sandbox root before the workload runs.
     #[serde(default)]
     secret_files: Vec<crate::intent::SecretFileRef>,
+    /// Artifacts to project from the node cache into the slot's staging share
+    /// and mount in the guest (warm_artifacts.rs).
+    #[serde(default)]
+    artifacts: Vec<crate::warm_artifacts::WarmArtifact>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -1028,8 +1032,28 @@ async fn dispatch_sandbox_exec(
             })
             .collect();
     }
+    let mut mounts = vec![];
+    if !args.artifacts.is_empty() {
+        // An older agent would ignore the mounts and run without them.
+        crate::bridge::require("warm-mounts", "artifacts on a warm slot")
+            .map_err(|e| format!("KernelUnsupported: {}", e))?;
+        let started = std::time::Instant::now();
+        mounts = crate::warm_artifacts::project(
+            &args.artifacts,
+            Path::new(crate::warm_artifacts::CACHE_DIR),
+            Path::new(crate::warm_artifacts::STAGE_DIR),
+            &crate::warm_artifacts::MountBinder,
+        )?;
+        log::info!(
+            "warm_artifacts_projected id={} count={} ms={}",
+            action.id,
+            mounts.len(),
+            started.elapsed().as_millis()
+        );
+    }
     let mut req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
     req.files = files;
+    req.mounts = mounts;
     // Probe the workload while it runs; the guard stops probing when the
     // exec returns (the workload has exited).
     let _probe_guard = match (

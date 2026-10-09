@@ -365,7 +365,15 @@ spec:
   reached keeps it `Pending` and retries (see Troubleshooting).
 - Mounts are read-only, at clean absolute paths that do not overlap each other,
   the model mount, `/proc`, `/sys` or `/dev`.
-- A sandbox with artifacts does not check out a warm-pool slot: it boots cold.
+- With `poolRef`, a sandbox with artifacts takes a warm slot and gets its
+  artifacts at checkout, without a reboot, on a slot kernel with the
+  `warm-mounts` feature (`kernels/sandbox:6.6.15`, `kernels/gpu-sandbox:6.6.4`
+  or later); otherwise it boots cold. See
+  [Artifacts on checkout](warm-pool.md#artifacts-on-checkout).
+- Every cached file is readable by any guest user and writable by none
+  (files 0444, executables in an unpacked tree 0555, directories 0555).
+- An artifact is capped at 10 GiB (an unpacked tree extracted, an OCI layout's
+  blobs); a larger one fails with `ArtifactMaterializeFailed`.
 - **Needs a newer sandbox kernel**: `kernels/sandbox:6.6.14` or
   `kernels/gpu-sandbox:6.6.3` and later, whose bridge mounts the shares. On an
   older kernel the sandbox fails with `KernelUnsupported` before it boots.

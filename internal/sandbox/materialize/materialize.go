@@ -86,6 +86,9 @@ type Options struct {
 	// published without them. A ModeLayout entry is always normalized. Never
 	// set for a rootfs: an image's own modes are part of the image.
 	ReadOnlyArtifact bool
+	// MaxBytes caps a read-only artifact (limit.go): an OCI layout's blobs,
+	// or an unpacked tree's extracted bytes. 0 is no cap. Never for a rootfs.
+	MaxBytes int64
 	// Context bounds and cancels every registry request made for these
 	// options, including the lazy ones an image makes later (config, layers).
 	// Nil means context.Background(); see transport.go for the per-request
@@ -369,7 +372,11 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 	if err := os.MkdirAll(treeDir, 0o755); err != nil {
 		return nil, err
 	}
-	treeBytes, err := extractToTree(img, treeDir)
+	var maxBytes int64
+	if normalize {
+		maxBytes = opts.MaxBytes
+	}
+	treeBytes, err := extractToTree(img, treeDir, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("extract image: %w", err)
 	}
@@ -412,15 +419,27 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 // faithfully reconstructs ownership, mode, setuid, symlinks, hardlinks and device
 // nodes when run as root — reimplementing that in Go is a footgun). Returns the
 // on-disk tree size in bytes.
-func extractToTree(img v1.Image, destDir string) (int64, error) {
+func extractToTree(img v1.Image, destDir string, maxBytes int64) (int64, error) {
 	rc := mutate.Extract(img) // flattened rootfs tar, whiteouts already applied
 	defer rc.Close()
 
 	cmd := exec.Command("tar", "-C", destDir, "-xf", "-")
-	cmd.Stdin = rc
+	var capped *cappedReader
+	if maxBytes > 0 {
+		capped = &cappedReader{r: rc, left: maxBytes}
+		cmd.Stdin = capped
+	} else {
+		cmd.Stdin = rc
+	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		if capped != nil && capped.exceeded {
+			return 0, fmt.Errorf("%w: more than %d bytes unpacked", ErrTooLarge, maxBytes)
+		}
 		return 0, fmt.Errorf("tar extract: %w", err)
+	}
+	if capped != nil && capped.exceeded {
+		return 0, fmt.Errorf("%w: more than %d bytes unpacked", ErrTooLarge, maxBytes)
 	}
 	return dirSize(destDir)
 }
