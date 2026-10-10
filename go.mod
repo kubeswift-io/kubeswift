@@ -1,6 +1,6 @@
 module github.com/kubeswift-io/kubeswift
 
-go 1.26.6
+go 1.26.9
 
 require (
 	connectrpc.com/connect v1.21.0
@@ -18,7 +18,7 @@ require (
 	github.com/prometheus/client_model v0.6.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	google.golang.org/protobuf v1.36.12
