@@ -48,17 +48,32 @@ func MaterializeLayout(opts Options) (*Result, error) {
 	digest := desc.Digest.String()
 	res := &Result{ImageRef: opts.ImageRef, Digest: digest, Mode: ModeLayout,
 		RootfsPath: CachePathFor(opts.CacheDir, digest, ModeLayout)}
-	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
-		return res, fmt.Errorf("create cache dir: %w", err)
+	if err := prepareArtifactCache(opts.CacheDir); err != nil {
+		return res, err
 	}
-	if _, err := os.Stat(res.RootfsPath); err == nil && !needsReadOnlyRepair(res.RootfsPath) {
+	repo := ref.Context().Name()
+	// A hit needs the entry sealed and its content read from this repository
+	// (origin.go).
+	if exists(res.RootfsPath) && !needsReadOnlyRepair(res.RootfsPath) && exists(OriginMarkerPath(opts.CacheDir, digest, repo)) {
 		res.CacheHit = true
 		return res, nil
 	}
+	if opts.MaxBytes > 0 {
+		size, err := layoutSize(desc)
+		if err != nil {
+			return res, fmt.Errorf("size of %s: %w", digest, err)
+		}
+		if size > opts.MaxBytes {
+			return res, fmt.Errorf("%w: %s is %d bytes, the limit is %d", ErrTooLarge, digest, size, opts.MaxBytes)
+		}
+	}
 	if unlock, lerr := lockDigest(opts.CacheDir, digest); lerr == nil {
 		defer unlock()
-		if _, err := os.Stat(res.RootfsPath); err == nil {
+		if exists(res.RootfsPath) {
 			if err := repairReadOnly(res.RootfsPath, false); err != nil {
+				return res, err
+			}
+			if err := useFromRepository(opts.CacheDir, digest, repo, func() error { return checkLayoutBlobs(desc) }); err != nil {
 				return res, err
 			}
 			res.CacheHit = true
@@ -111,6 +126,9 @@ func MaterializeLayout(opts Options) (*Result, error) {
 		return res, fmt.Errorf("publish layout: %w", err)
 	}
 	if err := sealReadOnly(res.RootfsPath); err != nil {
+		return res, err
+	}
+	if err := recordOrigin(opts.CacheDir, digest, repo); err != nil {
 		return res, err
 	}
 	return res, nil

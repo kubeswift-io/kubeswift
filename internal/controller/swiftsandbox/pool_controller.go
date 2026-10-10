@@ -80,7 +80,10 @@ func (r *SwiftSandboxPoolReconciler) lookup(pool *sandboxv1alpha1.SwiftSandboxPo
 	} else {
 		w.obj = nil
 	}
-	return func(req resolveRequest) (resolveResult, bool) { return res.get(req, w) }
+	return func(req resolveRequest) (resolveResult, bool) {
+		req.namespace = pool.Namespace
+		return res.get(req, w)
+	}
 }
 
 const (
@@ -486,6 +489,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	}
 
 	pod := buildPod(slot, kernelName)
+	addWarmStage(pod)
 	pod.Labels[PoolLabelKey] = pool.Name
 	pod.Labels[SlotStateLabelKey] = slotStateWarm
 	pod.Labels[SlotNameLabelKey] = slot.Name

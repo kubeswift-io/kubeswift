@@ -211,6 +211,19 @@ pub struct ExecRequest {
     /// bridge-features first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<ExecFile>,
+    /// Staged artifacts the agent binds read-only into the sandbox root before
+    /// the files and argv (bridge feature `warm-mounts`; an older agent ignores
+    /// the field, so the caller checks the kernel's bridge-features first).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<ExecMount>,
+}
+
+/// One staged artifact: its directory name in the slot's staging share and the
+/// absolute path to bind it at inside the sandbox root.
+#[derive(Debug, Clone, serde::Serialize, Default, PartialEq)]
+pub struct ExecMount {
+    pub name: String,
+    pub path: String,
 }
 
 /// One file for the agent to write: an absolute path inside the sandbox root,
@@ -248,6 +261,7 @@ impl ExecRequest {
             env,
             cwd,
             files: vec![],
+            mounts: vec![],
         }
     }
 }

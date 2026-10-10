@@ -368,8 +368,8 @@ pub struct FilesystemIntent {
     /// from the runtime dir (`<run>/<name>.fs.sock`), like the serial/api
     /// sockets — the controller doesn't need to know the run-dir layout.
     pub source_path: String,
-    /// Informational: the source volume is mounted read-only by the pod builder
-    /// when set (that is the enforcement); swiftletd just logs it.
+    /// Read-only share: the pod builder mounts the source read-only and
+    /// virtiofsd runs with `--readonly`.
     #[serde(default)]
     pub read_only: bool,
 }

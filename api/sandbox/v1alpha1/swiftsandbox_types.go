@@ -177,8 +177,9 @@ type SwiftSandboxSpec struct {
 	// guest), cosign-verified when a key is given, cached by digest and shared
 	// with every sandbox on the node, so a sandbox with network mode none can
 	// read it too. Needs a sandbox kernel whose bridge supports mounts
-	// (kernels/sandbox 6.6.14 or later). A sandbox with artifacts does not
-	// check out a warm slot: it boots cold.
+	// (kernels/sandbox 6.6.14 or later). With poolRef, a warm slot whose
+	// kernel supports checkout mounts (kernels/sandbox 6.6.15 or later) takes
+	// the artifacts at checkout without rebooting; otherwise it boots cold.
 	// +kubebuilder:validation:MaxItems=8
 	// +listType=map
 	// +listMapKey=name

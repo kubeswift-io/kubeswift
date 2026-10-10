@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -86,6 +87,11 @@ type Options struct {
 	// published without them. A ModeLayout entry is always normalized. Never
 	// set for a rootfs: an image's own modes are part of the image.
 	ReadOnlyArtifact bool
+	// MaxBytes caps a read-only artifact (limit.go): an OCI layout's blobs,
+	// or an unpacked tree's extracted bytes. 0 is no cap. Never for a rootfs.
+	MaxBytes int64
+	// MaxEntries caps an unpacked read-only artifact's entries. 0 is no cap.
+	MaxEntries int
 	// Context bounds and cancels every registry request made for these
 	// options, including the lazy ones an image makes later (config, layers).
 	// Nil means context.Background(); see transport.go for the per-request
@@ -320,16 +326,31 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 	}
 
 	normalize := opts.Mode == ModeTree && opts.ReadOnlyArtifact
+	// A read-only artifact is used for a repository only once its content
+	// was read from it (origin.go). A rootfs is not an artifact.
+	var repo string
+	if normalize {
+		ref, err := parseRef(opts)
+		if err != nil {
+			return nil, err
+		}
+		repo = ref.Context().Name()
+	}
 
 	// Fast path — cache hit without locking: the digest is immutable, so an
 	// existing artifact is authoritative and the common case pays no lock cost.
-	if fi, err := os.Stat(rootfsPath); err == nil && !(normalize && needsReadOnlyRepair(rootfsPath)) {
+	if fi, err := os.Stat(rootfsPath); err == nil &&
+		!(normalize && (needsReadOnlyRepair(rootfsPath) || !exists(OriginMarkerPath(opts.CacheDir, digest, repo)))) {
 		res.CacheHit = true
 		res.SizeBytes = artifactSize(rootfsPath, fi)
 		return res, nil
 	}
 
-	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
+	if normalize {
+		if err := prepareArtifactCache(opts.CacheDir); err != nil {
+			return nil, err
+		}
+	} else if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 
@@ -345,8 +366,11 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 		defer unlock()
 		// Re-check under the lock: another process may have finished while we waited.
 		if fi, err := os.Stat(rootfsPath); err == nil {
-			if normalize && needsReadOnlyRepair(rootfsPath) {
+			if normalize {
 				if err := repairReadOnly(rootfsPath, true); err != nil {
+					return nil, err
+				}
+				if err := useFromRepository(opts.CacheDir, digest, repo, func() error { return checkImageBlobs(img) }); err != nil {
 					return nil, err
 				}
 			}
@@ -369,7 +393,12 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 	if err := os.MkdirAll(treeDir, 0o755); err != nil {
 		return nil, err
 	}
-	treeBytes, err := extractToTree(img, treeDir)
+	var maxBytes int64
+	var maxEntries int
+	if normalize {
+		maxBytes, maxEntries = opts.MaxBytes, opts.MaxEntries
+	}
+	treeBytes, err := extractToTree(img, treeDir, maxBytes, maxEntries)
 	if err != nil {
 		return nil, fmt.Errorf("extract image: %w", err)
 	}
@@ -392,6 +421,9 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 			if err := sealReadOnly(rootfsPath); err != nil {
 				return nil, err
 			}
+			if err := recordOrigin(opts.CacheDir, digest, repo); err != nil {
+				return nil, err
+			}
 		}
 		res.SizeBytes = treeBytes
 	default: // ModeBlock
@@ -412,14 +444,31 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 // faithfully reconstructs ownership, mode, setuid, symlinks, hardlinks and device
 // nodes when run as root — reimplementing that in Go is a footgun). Returns the
 // on-disk tree size in bytes.
-func extractToTree(img v1.Image, destDir string) (int64, error) {
+func extractToTree(img v1.Image, destDir string, maxBytes int64, maxEntries int) (int64, error) {
 	rc := mutate.Extract(img) // flattened rootfs tar, whiteouts already applied
 	defer rc.Close()
 
 	cmd := exec.Command("tar", "-C", destDir, "-xf", "-")
-	cmd.Stdin = rc
+	var src io.Reader = rc
+	var capped *cappedReader
+	if maxBytes > 0 {
+		capped = &cappedReader{r: src, left: maxBytes}
+		src = capped
+	}
+	var counted *entryLimiter
+	if maxEntries > 0 {
+		counted = newEntryLimiter(src, maxEntries)
+		src = counted
+	}
+	cmd.Stdin = src
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	switch {
+	case capped != nil && capped.exceeded:
+		return 0, fmt.Errorf("%w: more than %d bytes unpacked", ErrTooLarge, maxBytes)
+	case counted != nil && counted.exceeded.Load():
+		return 0, fmt.Errorf("%w: more than %d", ErrTooManyEntries, maxEntries)
+	case err != nil:
 		return 0, fmt.Errorf("tar extract: %w", err)
 	}
 	return dirSize(destDir)

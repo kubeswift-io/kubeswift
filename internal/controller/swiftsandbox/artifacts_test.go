@@ -176,11 +176,12 @@ func TestArtifactInits_SecretsAndKey(t *testing.T) {
 	}
 }
 
-// A sandbox with artifacts never takes a warm slot.
-func TestSlotMismatches_Artifacts(t *testing.T) {
+// Artifacts are not part of a slot's shape: any pool's slot can take them at
+// checkout, so pools stay generic.
+func TestSlotMismatches_ArtifactsAreNotShape(t *testing.T) {
 	sb := matchingSandbox()
 	sb.Spec.Artifacts = []sandboxv1alpha1.SandboxArtifact{{Name: "a", Ref: "r/a:1", MountPath: "/a"}}
-	if got := slotMismatches(shapedPool(), sb); len(got) != 1 || got[0] != "artifacts (warm slots have none)" {
+	if got := slotMismatches(shapedPool(), sb); len(got) != 0 {
 		t.Errorf("mismatches = %q", got)
 	}
 }

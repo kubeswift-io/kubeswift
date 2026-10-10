@@ -92,22 +92,25 @@ func normalizeReadOnly(root string, keepExec bool) (removed int, err error) {
 	return removed, nil
 }
 
-// sealReadOnly sets root's own mode, last. Until it runs, needsReadOnlyRepair
-// reports the entry, so a crash between publishing and sealing is repaired by
-// the next cache hit.
+// sealReadOnly sets root's own mode and then writes its sealed marker
+// (origin.go), last. Until the marker exists needsReadOnlyRepair reports the
+// entry, so a crash between publishing and sealing is repaired by the next
+// cache hit. A marker, not root's mode, decides: an older unpacked entry
+// whose top directory happened to be 0555 is still repaired.
 func sealReadOnly(root string) error {
 	if err := os.Chmod(root, roDirMode); err != nil {
 		return fmt.Errorf("chmod %s: %w", root, err)
 	}
+	if err := writeMarker(SealedMarkerPath(root)); err != nil {
+		return fmt.Errorf("seal %s: %w", root, err)
+	}
 	return nil
 }
 
-// needsReadOnlyRepair reports whether a published entry predates
-// normalization. An entry is normalized as a whole before it is published, so
-// its top directory's mode is a sufficient marker.
+// needsReadOnlyRepair reports whether a published entry is not sealed.
 func needsReadOnlyRepair(root string) bool {
 	fi, err := os.Stat(root)
-	return err == nil && fi.IsDir() && fi.Mode().Perm() != roDirMode
+	return err == nil && fi.IsDir() && !exists(SealedMarkerPath(root))
 }
 
 // repairReadOnly normalizes an entry published before normalization existed.

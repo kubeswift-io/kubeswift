@@ -32,11 +32,38 @@ pub fn require(feature: &str, what: &str) -> Result<(), String> {
     if has {
         return Ok(());
     }
+    let (sandbox, gpu) = minimum_kernels(feature);
     Err(format!(
         "the sandbox kernel's bridge does not support {} (feature '{}'); \
-         point the SwiftKernel at kernels/sandbox 6.6.14 or kernels/gpu-sandbox 6.6.3 or newer",
-        what, feature
+         point the SwiftKernel at kernels/sandbox {} or kernels/gpu-sandbox {} or newer",
+        what, feature, sandbox, gpu
     ))
+}
+
+/// The first sandbox and gpu-sandbox kernels whose bridge has `feature`.
+fn minimum_kernels(feature: &str) -> (&'static str, &'static str) {
+    match feature {
+        "warm-mounts" => ("6.6.15", "6.6.4"),
+        _ => ("6.6.14", "6.6.3"),
+    }
+}
+
+/// The features to advertise on the pod: the bridge's, less `warm-mounts`
+/// when this launcher has no staging share to project artifacts into.
+pub fn advertised(has_stage: bool) -> String {
+    FEATURES
+        .get()
+        .map(|f| advertise(f, has_stage))
+        .unwrap_or_default()
+}
+
+fn advertise(features: &BTreeSet<String>, has_stage: bool) -> String {
+    features
+        .iter()
+        .filter(|x| has_stage || x.as_str() != "warm-mounts")
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -48,5 +75,19 @@ mod tests {
         let f = parse("files mounts\n");
         assert!(f.contains("files") && f.contains("mounts") && f.len() == 2);
         assert!(parse("").is_empty());
+    }
+
+    #[test]
+    fn advertises_warm_mounts_only_with_a_staging_share() {
+        let f = parse("files mounts warm-mounts\n");
+        assert_eq!(advertise(&f, true), "files mounts warm-mounts");
+        assert_eq!(advertise(&f, false), "files mounts");
+        assert_eq!(advertise(&parse("files mounts"), true), "files mounts");
+    }
+
+    #[test]
+    fn names_the_kernels_that_have_a_feature() {
+        assert_eq!(minimum_kernels("warm-mounts"), ("6.6.15", "6.6.4"));
+        assert_eq!(minimum_kernels("files"), ("6.6.14", "6.6.3"));
     }
 }

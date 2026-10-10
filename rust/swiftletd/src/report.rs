@@ -129,6 +129,10 @@ pub fn guest_name(env_guest: Option<String>, pod_name: Option<String>) -> Option
     env_guest.filter(|g| !g.is_empty()).or(pod_name)
 }
 
+/// The sandbox bridge features a checkout may use, space-separated (the
+/// controller's `bridgeFeaturesAnnotation`).
+pub const BRIDGE_FEATURES_ANNOTATION: &str = "kubeswift.io/bridge-features";
+
 /// Reports runtime and console to the launcher pod annotations.
 /// The controller maps these annotations to SwiftGuest status.
 pub async fn report_guest_runtime(
@@ -138,9 +142,17 @@ pub async fn report_guest_runtime(
     pid: u32,
     serial_socket: &str,
     hypervisor: &str,
+    bridge_features: &str,
 ) -> Result<(), kube::Error> {
     let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client.clone(), namespace);
     let mut annotations = std::collections::BTreeMap::new();
+    if !bridge_features.is_empty() {
+        // A warm slot's controller reads it before a checkout asks for one.
+        annotations.insert(
+            BRIDGE_FEATURES_ANNOTATION.to_string(),
+            bridge_features.to_string(),
+        );
+    }
     annotations.insert(
         "kubeswift.io/guest-runtime-pid".to_string(),
         pid.to_string(),

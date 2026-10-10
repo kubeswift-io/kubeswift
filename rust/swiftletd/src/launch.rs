@@ -21,9 +21,10 @@ const DEFAULT_VIRTIOFSD_BINARY: &str = "/usr/libexec/virtiofsd";
 /// Spawn a virtiofsd backend for one virtiofs share. Uses `--sandbox none`:
 /// the launcher pod IS the security boundary (the default `namespace` sandbox
 /// needs CAP_SYS_ADMIN, which KubeSwift containers do not have), and the
-/// `--shared-dir` mount bounds what the guest can reach. Read-only enforcement
-/// is at the source volumeMount (the pod builder sets it readOnly), so no
-/// virtiofsd readonly flag is needed.
+/// `--shared-dir` mount bounds what the guest can reach. A read-only share is
+/// read-only twice: the pod builder mounts its source readOnly, and virtiofsd
+/// refuses writes (`--readonly`). The second matters for a warm slot's staging
+/// share, whose source the launcher itself writes (artifact bind mounts).
 fn spawn_virtiofsd(
     fs: &FilesystemIntent,
     socket_path: &str,
@@ -38,8 +39,24 @@ fn spawn_virtiofsd(
         .arg(format!("--shared-dir={}", fs.source_path))
         .arg("--sandbox")
         .arg("none")
+        .args(virtiofsd_extra_args(fs))
         .spawn()
         .map_err(|e| format!("spawn virtiofsd ({}) for {}: {}", binary, fs.name, e))
+}
+
+/// Flags beyond the socket, directory and sandbox mode. A warm slot's
+/// staging share holds bind mounts from another filesystem than its own
+/// directory: virtiofsd announces them as submounts, so inode numbers from
+/// the two never collide in the guest.
+fn virtiofsd_extra_args(fs: &FilesystemIntent) -> Vec<&'static str> {
+    let mut args = vec![];
+    if fs.read_only {
+        args.push("--readonly");
+    }
+    if fs.tag == crate::warm_artifacts::STAGE_TAG {
+        args.push("--announce-submounts");
+    }
+    args
 }
 
 /// Kills the virtiofsd backends on drop so a backend never outlives its VM.

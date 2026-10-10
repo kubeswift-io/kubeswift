@@ -83,6 +83,29 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		return r.coldFallback(ctx, sb, kernelName, "no command to inject (needs image entrypoint)")
 	}
 
+	// Artifacts are resolved and authorized with this sandbox's credentials
+	// before a slot is claimed, so no slot is held while the registry is asked
+	// (cached for a digest reference, resolver.go). Also on an adopted slot,
+	// whose status may not have been written.
+	if len(sb.Spec.Artifacts) > 0 {
+		if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
+			return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
+		}
+		arts, ready, err := resolveArtifacts(ctx, r.APIReader, sb, r.lookup(sb))
+		if err != nil {
+			if registryRefused(err) {
+				r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+				return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+			}
+			return r.registryUnavailable(ctx, sb, err)
+		}
+		if !ready {
+			return r.waitForRegistry(ctx, sb)
+		}
+		r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+		sb.Status.Artifacts = arts
+	}
+
 	// Adopt an already-claimed slot from a partial prior reconcile (the pod claim
 	// succeeded but the status update didn't) before claiming a new one — no double-claim.
 	// It matched when it was claimed; a pool edit since must not strand it.
@@ -127,6 +150,10 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			return ctrl.Result{}, err
 		}
 		if slot == nil {
+			if len(sb.Spec.Artifacts) > 0 {
+				return r.coldFallback(ctx, sb, kernelName,
+					"no warm slot that can take artifacts is available (a slot needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)")
+			}
 			return r.coldFallback(ctx, sb, kernelName, "no warm slot available")
 		}
 		r.Recorder.Eventf(sb, corev1.EventTypeNormal, "CheckedOut",
@@ -141,12 +168,17 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 	// next pass as if injected, and the workload never ran. The slot's own
 	// account is granted this sandbox's Secrets first, so swiftletd can read
 	// them the moment it sees the action.
-	if slot.Annotations[annSandboxExecActionID] != string(sb.UID) {
+	if !ownExecAction(slot, sb) {
 		if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, slot, slot.Name,
 			swiftguest.SandboxLauncher, slotAccount(slot), secretNamesFor(slotAccount(slot), sb, slot.Name)); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.stampExecAction(ctx, slot, sb, argv, env, cwd); err != nil {
+		arts, err := warmArtifactArgs(ctx, r.APIReader, sb)
+		if err != nil {
+			_ = r.Delete(ctx, slot)
+			return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+		}
+		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), argv, env, cwd, arts); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -251,6 +283,10 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		if usesSecrets(sb) && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
 			continue
 		}
+		// Artifacts need a slot whose bridge and launcher can project them.
+		if len(sb.Spec.Artifacts) > 0 && !slotSupportsWarmMounts(p) {
+			continue
+		}
 		claimed := p.DeepCopy()
 		if claimed.Labels == nil {
 			claimed.Labels = map[string]string{}
@@ -290,8 +326,11 @@ func nonControllerRefs(refs []metav1.OwnerReference) []metav1.OwnerReference {
 // stampExecAction writes the sandbox-exec action annotations on the claimed slot pod so
 // swiftletd runs the workload over vsock (SANDBOX_KEYS). The action-id is the sandbox UID
 // (idempotent + correlatable with the status swiftletd writes back).
-func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, argv, env []string, cwd string) error {
+func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, actionID string, argv, env []string, cwd string, arts []warmArtifactArg) error {
 	args := map[string]interface{}{"argv": argv}
+	if len(arts) > 0 {
+		args["artifacts"] = arts
+	}
 	if len(env) > 0 {
 		args["env"] = env
 	}
@@ -320,7 +359,7 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 		slot.Annotations = map[string]string{}
 	}
 	slot.Annotations[annSandboxExecAction] = "run"
-	slot.Annotations[annSandboxExecActionID] = string(sb.UID)
+	slot.Annotations[annSandboxExecActionID] = actionID
 	slot.Annotations[annSandboxExecActionArgs] = string(argsJSON)
 	return r.Patch(ctx, slot, patch)
 }
@@ -350,7 +389,15 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	// Trust the exec status only once it mirrors OUR action-id. A final status
 	// decides the outcome even if the pod has ended since: swiftletd writes it
 	// before its launcher stops.
-	if pod.Annotations[annSandboxExecStatusID] == string(sb.UID) {
+	// The status must answer the action now on the slot: after an artifact
+	// fetch that is the second dispatch, and the first one's ArtifactMissing
+	// no longer counts.
+	actionID := pod.Annotations[annSandboxExecActionID]
+	if actionID == "" {
+		actionID = string(sb.UID)
+	}
+	if (actionID == string(sb.UID) || actionID == string(sb.UID)+fetchedActionSuffix) &&
+		pod.Annotations[annSandboxExecStatusID] == actionID {
 		switch pod.Annotations[annSandboxExecStatus] {
 		case "complete":
 			code := int32(0)
@@ -365,8 +412,14 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 			return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxFailed, "WorkloadFailed",
 				fmt.Sprintf("workload exited %d", code))
 		case "failed":
+			detail := pod.Annotations[annSandboxExecStatusDetail]
+			// The first dispatch found artifacts missing on the node: fetch
+			// them there and dispatch again, once. The VM stays booted.
+			if missing, ok := artifactMissing(detail); ok && actionID == string(sb.UID) {
+				return r.fetchMissingArtifacts(ctx, sb, &pod, missing)
+			}
 			_ = r.Delete(ctx, &pod)
-			reason, msg := checkoutFailure(pod.Annotations[annSandboxExecStatusDetail])
+			reason, msg := checkoutFailure(detail)
 			return r.fail(ctx, sb, reason, msg)
 		}
 	}
@@ -440,10 +493,40 @@ func (r *SwiftSandboxReconciler) adoptSlotObjects(ctx context.Context, sb *sandb
 // It names a refusal it shares with a cold launch ("KernelUnsupported: ...",
 // "SecretUnavailable: ...") by the same reason the cold path uses.
 func checkoutFailure(detail string) (reason, msg string) {
-	for _, known := range []string{"KernelUnsupported", "SecretUnavailable"} {
+	for _, known := range []string{"KernelUnsupported", "SecretUnavailable", "ArtifactMissing"} {
 		if rest, ok := strings.CutPrefix(detail, known+": "); ok {
 			return known, rest
 		}
 	}
 	return "ExecFailed", "checkout exec failed: " + detail
+}
+
+// ownExecAction reports whether the slot carries this sandbox's exec action:
+// the first dispatch, or the second after an artifact fetch.
+func ownExecAction(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) bool {
+	id := slot.Annotations[annSandboxExecActionID]
+	return id != "" && (id == string(sb.UID) || id == string(sb.UID)+fetchedActionSuffix)
+}
+
+// fetchMissingArtifacts runs the artifact fetch on the slot's node and, when
+// it succeeds, dispatches the same exec action again under a new id.
+func (r *SwiftSandboxReconciler) fetchMissingArtifacts(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missing []string) (ctrl.Result, error) {
+	state, msg, err := r.ensureArtifactFetch(ctx, sb, slot, missing)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	switch state {
+	case fetchFailed:
+		_ = r.Delete(ctx, slot)
+		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
+	case fetchDone:
+		patch := client.MergeFrom(slot.DeepCopy())
+		slot.Annotations[annSandboxExecActionID] = string(sb.UID) + fetchedActionSuffix
+		if err := r.Patch(ctx, slot, patch); err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out, artifacts fetched)")
+	}
+	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning,
+		"fetching artifacts "+strings.Join(missing, ", ")+" for warm slot "+slot.Name)
 }

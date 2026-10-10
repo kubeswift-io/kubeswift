@@ -11,6 +11,7 @@ mod probe;
 mod report;
 mod secrets;
 mod shutdown;
+mod warm_artifacts;
 
 use std::env;
 use std::path::Path;
@@ -444,6 +445,17 @@ fn main() {
                     let name = name.clone().unwrap();
                     let guest = guest_name.clone().unwrap_or_else(|| name.clone());
                     let rt_clone = Arc::clone(&rt);
+                    // What a checkout may ask of this sandbox's bridge (empty for
+                    // a guest, which has none).
+                    let has_stage = intent
+                        .filesystems
+                        .as_ref()
+                        .is_some_and(|f| f.iter().any(|fs| fs.tag == warm_artifacts::STAGE_TAG));
+                    let features = if intent.kernel_boot.is_some() {
+                        bridge::advertised(has_stage)
+                    } else {
+                        String::new()
+                    };
                     move |pid: u32, serial_socket_path: String, hypervisor: String| {
                         log::info!(
                             "socket_ready pid={} serial={} hypervisor={}",
@@ -476,6 +488,7 @@ fn main() {
                                 pid,
                                 serial_socket_path.as_str(),
                                 hypervisor.as_str(),
+                                features.as_str(),
                             )
                             .await
                             {
