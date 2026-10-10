@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/controller/swiftguest"
 	"github.com/kubeswift-io/kubeswift/internal/runtimeintent"
 )
 
@@ -25,6 +26,7 @@ import (
 // on it; its intent tells swiftletd which condition to write. A pod without
 // ports gets neither.
 func TestBuild_LauncherReportsTheGate(t *testing.T) {
+	t.Setenv(swiftguest.LauncherStatusGateEnv, "true")
 	sb := probedSandbox()
 	pod := buildPod(sb, "sandbox")
 	if !launcherReportsGate(pod) {
@@ -37,6 +39,14 @@ func TestBuild_LauncherReportsTheGate(t *testing.T) {
 	plain := plainSandbox("busybox:1")
 	if p := buildPod(plain, "sandbox"); launcherReportsGate(p) || p.Annotations[annReadinessReport] != "" {
 		t.Errorf("a pod exposing no ports is not marked: %v", p.Annotations)
+	}
+	// Without the launcher status policy the pod keeps the annotation path.
+	t.Setenv(swiftguest.LauncherStatusGateEnv, "")
+	if p := buildPod(sb, "sandbox"); launcherReportsGate(p) {
+		t.Errorf("no policy, no gate reporting: %v", p.Annotations)
+	}
+	if ri := buildIntent(sb, "sandbox", "/r.ext4", "", execSpec{Argv: []string{"/srv"}}, false); ri.SandboxProbes.ReadinessGate != "" {
+		t.Errorf("no policy: intent gate = %q", ri.SandboxProbes.ReadinessGate)
 	}
 }
 
@@ -66,6 +76,10 @@ func TestProbesIntent_ReadinessStartup(t *testing.T) {
 // with the gate condition set as swiftletd would.
 func gatedLauncher(sb *sandboxv1alpha1.SwiftSandbox, actionID string, gate *corev1.PodCondition) *corev1.Pod {
 	pod := buildPod(sb, "sandbox")
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[annReadinessReport] = readinessReportPodCondition
 	if actionID != "" {
 		pod.Annotations[annSandboxExecActionID] = actionID
 	}

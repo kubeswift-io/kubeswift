@@ -266,7 +266,13 @@ spec:
         object.status.?podIPs == oldObject.status.?podIPs &&
         object.status.?containerStatuses == oldObject.status.?containerStatuses &&
         object.status.?initContainerStatuses == oldObject.status.?initContainerStatuses &&
-        object.status.?ephemeralContainerStatuses == oldObject.status.?ephemeralContainerStatuses
+        object.status.?ephemeralContainerStatuses == oldObject.status.?ephemeralContainerStatuses &&
+        object.status.?hostIPs == oldObject.status.?hostIPs &&
+        object.status.?startTime == oldObject.status.?startTime &&
+        object.status.?nominatedNodeName == oldObject.status.?nominatedNodeName &&
+        object.status.?qosClass == oldObject.status.?qosClass &&
+        object.status.?resize == oldObject.status.?resize &&
+        object.status.?resourceClaimStatuses == oldObject.status.?resourceClaimStatuses
       message: >-
         a sandbox launcher may change only the sandbox.kubeswift.io/workload-ready
         condition of its own pod's status

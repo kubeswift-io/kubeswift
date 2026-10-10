@@ -16,6 +16,19 @@ func LauncherImage() string {
 	return LauncherImageDefault
 }
 
+// LauncherStatusGateEnv is set to "true" by the chart when it installs the
+// admission policy that limits a sandbox launcher's pods/status writes to the
+// workload readiness condition (kubeswift-sandbox-launcher-status-gate).
+const LauncherStatusGateEnv = "KUBESWIFT_LAUNCHER_STATUS_GATE"
+
+// LauncherReportsReadiness is whether sandbox launchers report readiness on
+// their pod's readiness gate themselves. It needs the admission policy: RBAC
+// cannot narrow a pods/status patch to one condition. Without it launchers
+// keep reporting by annotation and the controller writes the gate.
+func LauncherReportsReadiness() bool {
+	return os.Getenv(LauncherStatusGateEnv) == "true"
+}
+
 // PodAnnotationGuestIP is the annotation key for the guest's primary IP (set by swiftletd when discovered).
 const PodAnnotationGuestIP = "kubeswift.io/guest-ip"
 

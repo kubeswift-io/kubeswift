@@ -216,6 +216,8 @@ struct Scheduled {
     /// count against failureThreshold.
     fast_until: Option<Instant>,
     fast_interval: Duration,
+    /// The probe has passed once; the fast start never comes back.
+    passed: bool,
 }
 
 impl Scheduled {
@@ -240,13 +242,14 @@ impl Scheduled {
             next,
             fast_until,
             fast_interval,
+            passed: false,
         }
     }
 
     /// Whether `now` is in the fast start: before the window ends and before
     /// the first pass.
     fn fast(&self, now: Instant) -> bool {
-        self.tracker.state != Some(true) && self.fast_until.is_some_and(|u| now < u)
+        !self.passed && self.fast_until.is_some_and(|u| now < u)
     }
 
     /// Records one attempt made at `now` and schedules the next. Returns the
@@ -258,6 +261,9 @@ impl Scheduled {
         } else {
             self.tracker.observe(ok)
         };
+        if change == Some(true) {
+            self.passed = true;
+        }
         let period = Duration::from_secs(u64::from(self.probe.period_seconds.max(1)));
         self.next = if fast && change != Some(true) {
             now + self.fast_interval
@@ -384,9 +390,16 @@ fn run(
         std::thread::sleep(wait);
     }
     // The workload has ended: a pod condition it set must not outlive it.
+    // A few prompt attempts; the pod itself ends soon after.
     if reported_ready && reporter.gated() {
         reporter.queue_ready(false, "the workload has ended".to_string());
-        reporter.flush(&rt);
+        for _ in 0..5 {
+            reporter.flush_now(&rt);
+            if reporter.is_idle() {
+                break;
+            }
+            std::thread::sleep(RETRY);
+        }
     }
 }
 
@@ -402,7 +415,10 @@ struct Reporter {
     annotations: std::collections::BTreeMap<String, String>,
     condition: Option<(bool, String)>,
     client: Option<kube::Client>,
-    next_attempt: Instant,
+    // Each kind of write retries on its own: a refused status write must not
+    // hold back a liveness annotation, nor the other way round.
+    next_condition: Instant,
+    next_annotations: Instant,
 }
 
 impl Reporter {
@@ -415,7 +431,8 @@ impl Reporter {
             annotations: Default::default(),
             condition: None,
             client: None,
-            next_attempt: Instant::now(),
+            next_condition: Instant::now(),
+            next_annotations: Instant::now(),
         }
     }
 
@@ -454,44 +471,63 @@ impl Reporter {
     }
 
     fn flush(&mut self, rt: &tokio::runtime::Runtime) {
-        if self.is_idle() || Instant::now() < self.next_attempt {
+        self.flush_at(rt, Instant::now());
+    }
+
+    /// Flushes regardless of the retry times.
+    fn flush_now(&mut self, rt: &tokio::runtime::Runtime) {
+        self.next_condition = Instant::now();
+        self.next_annotations = Instant::now();
+        self.flush_at(rt, Instant::now());
+    }
+
+    fn flush_at(&mut self, rt: &tokio::runtime::Runtime, now: Instant) {
+        let due_condition = self.condition.is_some() && now >= self.next_condition;
+        let due_annotations = !self.annotations.is_empty() && now >= self.next_annotations;
+        if !due_condition && !due_annotations {
             return;
         }
         self.connect(rt);
         let Some(client) = self.client.clone() else {
-            self.next_attempt = Instant::now() + RETRY;
+            self.next_condition = now + RETRY;
+            self.next_annotations = now + RETRY;
             return;
         };
         let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &self.namespace);
-        if let Some((ready, msg)) = self.condition.clone() {
-            let body = gate_patch(
-                &self.gate,
-                ready,
-                &self.workload,
-                &msg,
-                &chrono::Utc::now().to_rfc3339(),
-            );
-            match rt.block_on(api.patch_status(
-                &self.pod,
-                &PatchParams::default(),
-                &Patch::Strategic(&body),
-            )) {
-                Ok(_) => self.condition = None,
-                Err(e) => {
-                    log::warn!("probe_report_failed (will retry): {}", e);
-                    self.next_attempt = Instant::now() + RETRY;
-                    return;
+        if due_condition {
+            if let Some((ready, msg)) = self.condition.clone() {
+                let body = gate_patch(
+                    &self.gate,
+                    ready,
+                    &self.workload,
+                    &msg,
+                    &chrono::Utc::now().to_rfc3339(),
+                );
+                match rt.block_on(api.patch_status(
+                    &self.pod,
+                    &PatchParams::default(),
+                    &Patch::Strategic(&body),
+                )) {
+                    // A newer verdict queued meanwhile is written next time.
+                    Ok(_) if self.condition.as_ref() == Some(&(ready, msg)) => {
+                        self.condition = None
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("probe_report_failed (will retry): {}", e);
+                        self.next_condition = Instant::now() + RETRY;
+                    }
                 }
             }
         }
-        if !self.annotations.is_empty() {
+        if due_annotations {
             let patch = json!({"metadata": {"annotations": &self.annotations}});
             match rt.block_on(api.patch(&self.pod, &PatchParams::default(), &Patch::Merge(&patch)))
             {
                 Ok(_) => self.annotations.clear(),
                 Err(e) => {
                     log::warn!("probe_report_failed (will retry): {}", e);
-                    self.next_attempt = Instant::now() + RETRY;
+                    self.next_annotations = Instant::now() + RETRY;
                 }
             }
         }
@@ -592,6 +628,26 @@ mod tests {
         assert_eq!(s.record(false, now), None);
         assert_eq!(s.record(false, now), None);
         assert_eq!(s.record(false, now), Some(false), "failureThreshold 3");
+    }
+
+    // Once the probe has passed, the fast start is over for good: a later
+    // failure inside the window counts and waits periodSeconds.
+    #[test]
+    fn startup_does_not_come_back_after_a_pass() {
+        let p = probe("tcp", 1);
+        let t0 = Instant::now();
+        let mut s = Scheduled::new(p, t0, Some(&startup(100, 30_000)));
+        assert_eq!(s.record(true, t0), Some(true));
+        for _ in 0..2 {
+            assert_eq!(s.record(false, t0), None);
+            assert_eq!(s.next, t0 + Duration::from_secs(10));
+        }
+        assert_eq!(
+            s.record(false, t0),
+            Some(false),
+            "counted toward failureThreshold"
+        );
+        assert!(!s.fast(t0));
     }
 
     // A workload that never becomes ready is probed fast only for the window,

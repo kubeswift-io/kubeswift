@@ -76,30 +76,29 @@ func TestScopedRules_SandboxGetsNoGuestStatus(t *testing.T) {
 	}
 }
 
-// A sandbox launcher may patch its own pod's status (the workload readiness
-// gate) and no other pod's; a guest launcher gets no pods/status at all.
+// A sandbox launcher on its own account may patch its own pod's status (the
+// workload readiness gate) only where the launcher status policy is installed;
+// a guest launcher never gets pods/status.
 func TestScopedRules_SandboxPatchesItsOwnPodStatus(t *testing.T) {
-	found := false
-	for _, r := range scopedRulesFor(SandboxLauncher, "sbx") {
-		for _, res := range r.Resources {
-			if res != "pods/status" {
-				continue
-			}
-			found = true
-			if len(r.ResourceNames) != 1 || r.ResourceNames[0] != "sbx" || len(r.Verbs) != 1 || r.Verbs[0] != "patch" {
-				t.Errorf("pods/status rule = %+v, want patch on sbx only", r)
+	podStatus := func(rules []rbacv1.PolicyRule) *rbacv1.PolicyRule {
+		for i := range rules {
+			for _, res := range rules[i].Resources {
+				if res == "pods/status" {
+					return &rules[i]
+				}
 			}
 		}
+		return nil
 	}
-	if !found {
-		t.Error("a sandbox launcher needs pods/status patch on its own pod")
+	if r := podStatus(scopedRules(SandboxLauncher, "sbx", true)); r == nil ||
+		len(r.ResourceNames) != 1 || r.ResourceNames[0] != "sbx" || len(r.Verbs) != 1 || r.Verbs[0] != "patch" {
+		t.Errorf("pods/status rule = %+v, want patch on sbx only", r)
 	}
-	for _, r := range scopedRulesFor(GuestLauncher, "g") {
-		for _, res := range r.Resources {
-			if res == "pods/status" {
-				t.Errorf("a guest launcher must not get pods/status: %+v", r)
-			}
-		}
+	if r := podStatus(scopedRulesFor(SandboxLauncher, "sbx")); r != nil {
+		t.Errorf("without the policy a sandbox launcher gets no pods/status: %+v", r)
+	}
+	if r := podStatus(scopedRules(GuestLauncher, "g", true)); r != nil {
+		t.Errorf("a guest launcher must not get pods/status: %+v", r)
 	}
 }
 

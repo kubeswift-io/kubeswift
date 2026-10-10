@@ -55,15 +55,9 @@ func TestPoolReconcile_GrantsExistingSlotsOnUpgrade(t *testing.T) {
 	if err := c.Get(ctx, key, &role); err != nil {
 		t.Fatalf("pre-existing slot got no scoped grant: %v", err)
 	}
-	// pods, and pods/status for the workload readiness gate: both on the
-	// slot pod alone.
-	if len(role.Rules) != 2 {
-		t.Errorf("grant rules = %v", role.Rules)
-	}
-	for _, rule := range role.Rules {
-		if len(rule.ResourceNames) != 1 || rule.ResourceNames[0] != slot.Name {
-			t.Errorf("grant must name exactly the slot pod; got %v", role.Rules)
-		}
+	if len(role.Rules) != 1 || len(role.Rules[0].ResourceNames) != 1 ||
+		role.Rules[0].ResourceNames[0] != slot.Name {
+		t.Errorf("grant must name exactly the slot pod; got %v", role.Rules)
 	}
 	// Owned by the POD, not the pool: the checkout re-parents the pod to a
 	// SwiftSandbox, and only pod ownership survives that with exact GC.

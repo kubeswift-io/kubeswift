@@ -77,6 +77,7 @@ Ready-to-edit manifests and notes:
 | `artifacts[]` | list | — | OCI artifacts mounted read-only from the node cache. See [OCI artifacts](#oci-artifacts). |
 | `secretFiles[]` | list | — | Secret keys written into the guest as files. See [Secret files](#secret-files). |
 | `readinessProbe` / `livenessProbe` | Probe | — | `httpGet` (HTTP) or `tcpSocket` against the guest. See [Workload probes](#workload-probes). |
+| `readinessStartup` | object | — | `interval` (default 100ms), `window` (default 30s): retry the readiness probe quickly until it first passes. See [Fast first readiness](#fast-first-readiness). |
 | `podMetadata.labels` / `podMetadata.annotations` | map | — | Added to the launcher pod; `*kubeswift.io` keys and pod-network annotations refused. |
 | `network.egress.allow[]` | list | — | Destinations a `restricted` sandbox may reach: `service: {name, namespace}` or `cidr`, with optional `ports: [{port, protocol}]`. See [Allowing specific destinations](#allowing-specific-destinations-under-restricted). |
 | `kernelProfileRef.name` | string | `sandbox` | SwiftKernel to boot. |
@@ -268,6 +269,36 @@ spec:
   Nothing restarts it; its owner decides.
 - On a warm-pool checkout the probes travel with the workload and start when
   it does.
+- swiftletd writes the readiness verdict to the launcher pod's readiness gate
+  itself, as a pod status condition that names the workload it belongs to. A
+  verdict for another workload never counts.
+
+#### Fast first readiness
+
+Probe times are whole seconds, so a workload that answers 300 ms after it
+starts is found ready at the first probe, a second or more later.
+`readinessStartup` probes it quickly until it first passes:
+
+```yaml
+spec:
+  readinessProbe:
+    httpGet: {path: /healthz, port: http-app}
+    periodSeconds: 10
+  readinessStartup:
+    interval: 100ms   # default; 10ms to 1s
+    window: 30s       # default; 1s to 10m
+```
+
+- The probe starts with the workload (`initialDelaySeconds` does not apply)
+  and is retried every `interval`. Failures before the first pass do not count
+  toward `failureThreshold` and report nothing; `successThreshold` still
+  applies.
+- After the first pass, or once `window` has passed without one, the probe
+  runs every `periodSeconds` with the usual thresholds.
+- Attempts never overlap: one that hangs waits for `timeoutSeconds`.
+- Pod readiness then follows in tens of milliseconds. A Service routes to the
+  pod once kube-proxy has synced, which on a stock kube-proxy can take up to
+  its `minSyncPeriod` (1 s) longer.
 - Probe headers are stored in the spec in plain text; do not put credentials in
   them.
 
