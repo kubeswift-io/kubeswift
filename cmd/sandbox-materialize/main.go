@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/kubeswift-io/kubeswift/internal/oci"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
@@ -29,6 +30,7 @@ func main() {
 		insecure   = flag.Bool("insecure", false, "allow a plain-HTTP registry (trusted in-cluster stores only)")
 		verifyKey  = flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify image@digest BEFORE materializing (requires a TLS registry)")
 		readOnly   = flag.Bool("read-only-artifact", false, "normalize a tree to read-only artifact modes (dirs 0555, files 0444, executables 0555) so an unprivileged guest can read it; never for a rootfs. An oci layout always is")
+		timeout    = flag.Duration("timeout", 30*time.Minute, "bound on the whole run (resolve, verify, pull); a registry that stops answering fails the init container instead of holding it forever")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -43,7 +45,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+
 	opts := materialize.Options{
+		Context:    ctx,
 		ImageRef:   *image,
 		CacheDir:   *cacheDir,
 		Mode:       materialize.Mode(*mode),
@@ -73,7 +79,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: resolve for verify: %v\n", rerr)
 			os.Exit(1)
 		}
-		if verr := oci.Verify(context.Background(), repo, digest, *verifyKey); verr != nil {
+		if verr := oci.Verify(ctx, repo, digest, *verifyKey); verr != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", verr)
 			os.Exit(1)
 		}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -19,7 +20,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	swiftv1alpha1 "github.com/kubeswift-io/kubeswift/api/swift/v1alpha1"
@@ -47,6 +51,14 @@ type SwiftSandboxReconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Recorder  record.EventRecorder
+
+	// resolver runs registry requests off the worker (resolver.go); the
+	// shared one when nil. resolved enqueues a sandbox whose request finished.
+	resolver *registryResolver
+	resolved chan event.GenericEvent
+	// registryFailures counts a sandbox's consecutive transient registry
+	// failures, for its retry backoff. In memory: a retry rhythm.
+	registryFailures sync.Map
 }
 
 func isTerminal(p sandboxv1alpha1.SwiftSandboxPhase) bool {
@@ -198,11 +210,12 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
 	}
-	ri, err := resolveImage(sb, auth)
-	if err != nil {
-		return r.fail(ctx, sb, "ImageResolveFailed", err.Error())
-	}
-	var modelPath string
+	// Every registry request starts at once, off this worker (resolver.go).
+	lookup := r.lookup(sb)
+	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
+	var rm resolvedModel
+	modelReady, artifactsReady := true, true
+	var modelErr, artifactsErr error
 	if sb.Spec.Model != nil {
 		// Resolve the model against its OWN registry entry (same imagePullSecret,
 		// which may carry auth for more than one registry) so a model on a different
@@ -211,20 +224,37 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		if merr != nil {
 			return r.fail(ctx, sb, "ImagePullSecretInvalid", merr.Error())
 		}
-		rm, merr := resolveModel(sb.Spec.Model, modelAuth)
-		if merr != nil {
-			return r.fail(ctx, sb, "ModelResolveFailed", merr.Error())
+		rm, modelReady, modelErr = resolveModel(sb.Spec.Model, modelAuth, lookup)
+	}
+	var arts []sandboxv1alpha1.SandboxArtifactStatus
+	if len(sb.Spec.Artifacts) > 0 {
+		arts, artifactsReady, artifactsErr = resolveArtifacts(ctx, r.APIReader, sb, lookup)
+	}
+	for _, f := range []struct {
+		reason string
+		err    error
+	}{{"ImageResolveFailed", imageErr}, {"ModelResolveFailed", modelErr}, {"ArtifactResolveFailed", artifactsErr}} {
+		if f.err == nil {
+			continue
 		}
+		if registryRefused(f.err) {
+			r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+			return r.fail(ctx, sb, f.reason, f.err.Error())
+		}
+		return r.registryUnavailable(ctx, sb, f.err)
+	}
+	if !imageReady || !modelReady || !artifactsReady {
+		return r.waitForRegistry(ctx, sb)
+	}
+	r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+	var modelPath string
+	if sb.Spec.Model != nil {
 		modelPath = rm.TreePath
 		sb.Status.Model = &sandboxv1alpha1.SandboxModelStatus{
 			Digest: rm.Digest, MountPath: sb.Spec.Model.ModelMountPath(), CachePath: rm.TreePath,
 		}
 	}
 	if len(sb.Spec.Artifacts) > 0 {
-		arts, err := resolveArtifacts(ctx, r.APIReader, sb)
-		if err != nil {
-			return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
-		}
 		sb.Status.Artifacts = arts
 	}
 	intent := buildIntent(sb, kernelName, ri.RootfsPath, modelPath, ri.Exec, false)
@@ -465,11 +495,13 @@ func (r *SwiftSandboxReconciler) handleRetention(ctx context.Context, sb *sandbo
 }
 
 func (r *SwiftSandboxReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.resolved = make(chan event.GenericEvent, resolvedEventBuffer)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&sandboxv1alpha1.SwiftSandbox{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		WatchesRawSource(source.Channel(r.resolved, &handler.EnqueueRequestForObject{})).
 		Complete(r)
 }
 
@@ -645,4 +677,45 @@ func (r *SwiftSandboxReconciler) coldLauncherAccount(ctx context.Context, sb *sa
 		return swiftguest.LauncherServiceAccountFor(swiftguest.SandboxLauncher), nil
 	}
 	return pod.Spec.ServiceAccountName, nil
+}
+
+// lookup asks the registry resolver on sb's behalf; sb is enqueued when a
+// request it waits for finishes.
+func (r *SwiftSandboxReconciler) lookup(sb *sandboxv1alpha1.SwiftSandbox) lookupFunc {
+	res := r.resolver
+	if res == nil {
+		res = sharedResolver
+	}
+	w := waiter{obj: &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Namespace: sb.Namespace, Name: sb.Name}}}
+	if r.resolved != nil {
+		w.ch = r.resolved
+	} else {
+		w.obj = nil // no channel (a test): the periodic recheck reads the result
+	}
+	return func(req resolveRequest) (resolveResult, bool) { return res.get(req, w) }
+}
+
+// waitForRegistry keeps sb Pending while its registry requests run. The
+// condition is written once, not on every pass.
+func (r *SwiftSandboxReconciler) waitForRegistry(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
+	const reason, msg = "Resolving", "waiting for the registry to answer"
+	if c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionResolved); c == nil ||
+		c.Reason != reason || sb.Status.Phase != sandboxv1alpha1.SwiftSandboxPending {
+		if _, err := r.waitForReference(ctx, sb, reason, msg); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: registryPendingRecheck}, nil
+}
+
+// registryUnavailable keeps sb Pending after a transient registry failure
+// (unreachable, timed out, overloaded) and retries with backoff. It used to
+// fail the sandbox for good.
+func (r *SwiftSandboxReconciler) registryUnavailable(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, cause error) (ctrl.Result, error) {
+	wait := registryBackoff(&r.registryFailures, client.ObjectKeyFromObject(sb))
+	msg := fmt.Sprintf("%v (next attempt in %s)", cause, wait)
+	if _, err := r.waitForReference(ctx, sb, "RegistryUnavailable", msg); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: wait}, nil
 }

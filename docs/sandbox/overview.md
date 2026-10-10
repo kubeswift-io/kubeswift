@@ -358,9 +358,11 @@ spec:
   verifies it at its digest when a key is set, and caches it by digest: every
   sandbox on the node mounting the same digest shares one copy. A sandbox with
   `network.mode: none` can read it.
-- `status.artifacts` records the digest mounted. A ref that cannot be resolved
-  fails the sandbox with `ArtifactResolveFailed`; a failed pull or signature
-  check with `ArtifactMaterializeFailed`, naming the artifact.
+- `status.artifacts` records the digest mounted. A ref the registry refuses
+  (malformed, not found, not readable with the pull Secret) fails the sandbox
+  with `ArtifactResolveFailed`; a failed pull or signature check with
+  `ArtifactMaterializeFailed`, naming the artifact. A registry that cannot be
+  reached keeps it `Pending` and retries (see Troubleshooting).
 - Mounts are read-only, at clean absolute paths that do not overlap each other,
   the model mount, `/proc`, `/sys` or `/dev`.
 - A sandbox with artifacts does not check out a warm-pool slot: it boots cold.
@@ -436,6 +438,15 @@ you're done inspecting it.
 - **Stuck `Pending`** — `Resolved=False` with `KernelNotFound` or
   `KernelNotReady`: create the SwiftKernel in the sandbox's namespace, or wait
   until `kubectl get swiftkernel sandbox` reads `Ready`.
+- **`Pending` with `Resolving` or `RegistryUnavailable`**: the controller is
+  waiting for the registry that serves `spec.image`, `spec.model` or an
+  artifact. `RegistryUnavailable` means a request failed without an answer
+  (unreachable, timed out, overloaded, a 5xx or 429); its message carries the
+  error and when the next attempt is, 5 s doubling to 5 min. Each request is
+  bounded (30 s), runs outside the reconcile loop, and at most four run
+  against one registry at a time, so a stalled registry holds only the
+  sandboxes and pools that use it. A refusal (malformed ref, not found, not
+  authorized) fails the sandbox instead: retrying would not change it.
 - **Stuck `Materializing`** — check `kubectl describe pod <name>`. Unscheduled
   usually means no node carries `kubeswift.io/kernel-node=true`. A failing
   `sandbox-materialize` init container usually means the image pull failed —
