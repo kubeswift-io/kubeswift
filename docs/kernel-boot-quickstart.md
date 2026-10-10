@@ -115,7 +115,7 @@ You should see the faas-minimal init output:
 
 ```
 KubeSwift faas-minimal ready
-kernel: 6.6.44
+kernel: 6.6.158
 / #
 ```
 

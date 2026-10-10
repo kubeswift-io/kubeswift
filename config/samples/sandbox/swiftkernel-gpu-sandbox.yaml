@@ -9,7 +9,8 @@
 # uses it by default; set kernelProfileRef only to override.
 # Prereq: a node labeled kubeswift.io/kernel-node=true (the per-node ORAS pull).
 # The NVIDIA driver rides the guest OCI image, NOT this kernel — build a CUDA
-# image whose driver version targets Linux 6.6.x (see docs/sandbox/gpu-sandboxes.md).
+# image whose driver modules are built for this kernel's Linux version (artifact
+# 6.6.5 carries Linux 6.6.158; see docs/sandbox/gpu-sandboxes.md).
 apiVersion: kernel.kubeswift.io/v1alpha1
 kind: SwiftKernel
 metadata:
@@ -17,6 +18,6 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.3
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.5
   kernelCmdline: "console=ttyS0"
   profile: gpu-sandbox
