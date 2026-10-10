@@ -1061,9 +1061,15 @@ async fn dispatch_sandbox_exec(
         std::env::var("POD_NAMESPACE").ok(),
         std::env::var("POD_NAME").ok(),
     ) {
-        (Some(probes), Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => Some(
-            crate::probe::spawn(probes, ns, name, run_dir.join("dnsmasq.leases")),
-        ),
+        (Some(probes), Some(ns), Some(name)) if !ns.is_empty() && !name.is_empty() => {
+            Some(crate::probe::spawn(
+                probes,
+                ns,
+                name,
+                action.id.clone(),
+                run_dir.join("dnsmasq.leases"),
+            ))
+        }
         (Some(_), _, _) => {
             log::warn!("sandbox_probes_skipped reason=POD_NAMESPACE_or_POD_NAME_unset");
             None
@@ -3246,11 +3252,18 @@ fn write_sandbox_status_fn<'a>(
 ///
 /// Commit D extended the match with
 /// `MigrationSend => Custom("sending")` per design doc §5.2.
-fn pre_dispatch_status(kind: &ActionKind) -> StatusKind {
+///
+/// A sandbox workload (`SandboxExec`) gets none: the controller acts only on
+/// its final status, and on a warm slot this write would be a second pod
+/// change right after the claim. The kubelet then waits for its next PLEG
+/// relist before it applies the workload's readiness gate, which delays the
+/// pod's Ready by up to a second. The workload starts without it.
+fn pre_dispatch_status(kind: &ActionKind) -> Option<StatusKind> {
     match kind {
-        ActionKind::MigrationReceive => StatusKind::Custom("receive-ready"),
-        ActionKind::MigrationSend => StatusKind::Custom("sending"),
-        _ => StatusKind::Running,
+        ActionKind::MigrationReceive => Some(StatusKind::Custom("receive-ready")),
+        ActionKind::MigrationSend => Some(StatusKind::Custom("sending")),
+        ActionKind::SandboxExec => None,
+        _ => Some(StatusKind::Running),
     }
 }
 
@@ -3410,18 +3423,12 @@ async fn handle_namespace(
                     state.cancel_running = true;
                 }
             }
-            if let Err(e) = write(
-                client,
-                namespace,
-                pod_name,
-                &pending.id,
-                pre_dispatch_status(&pending.kind),
-                None,
-                None,
-            )
-            .await
-            {
-                log::error!("action_status_write_failed: {}", e);
+            if let Some(status) = pre_dispatch_status(&pending.kind) {
+                if let Err(e) =
+                    write(client, namespace, pod_name, &pending.id, status, None, None).await
+                {
+                    log::error!("action_status_write_failed: {}", e);
+                }
             }
             dispatcher.start(ns, slot, pending, api_socket);
         }
@@ -3612,7 +3619,9 @@ mod tests {
     #[test]
     fn pre_dispatch_status_receive_emits_receive_ready() {
         assert_eq!(
-            pre_dispatch_status(&ActionKind::MigrationReceive).as_str(),
+            pre_dispatch_status(&ActionKind::MigrationReceive)
+                .unwrap()
+                .as_str(),
             "receive-ready"
         );
     }
@@ -3624,7 +3633,9 @@ mod tests {
         // phase gate-observes this annotation as the substateSrcSending
         // entry signal.
         assert_eq!(
-            pre_dispatch_status(&ActionKind::MigrationSend).as_str(),
+            pre_dispatch_status(&ActionKind::MigrationSend)
+                .unwrap()
+                .as_str(),
             "sending"
         );
     }
@@ -3635,21 +3646,37 @@ mod tests {
         // pre-Phase-3b semantics; only the receive + send verbs get
         // specialized pre-dispatch annotations.
         assert_eq!(
-            pre_dispatch_status(&ActionKind::SnapshotCapture).as_str(),
+            pre_dispatch_status(&ActionKind::SnapshotCapture)
+                .unwrap()
+                .as_str(),
             "running"
         );
         assert_eq!(
-            pre_dispatch_status(&ActionKind::SnapshotResume).as_str(),
+            pre_dispatch_status(&ActionKind::SnapshotResume)
+                .unwrap()
+                .as_str(),
             "running"
         );
         assert_eq!(
-            pre_dispatch_status(&ActionKind::RestorePrepare).as_str(),
+            pre_dispatch_status(&ActionKind::RestorePrepare)
+                .unwrap()
+                .as_str(),
             "running"
         );
         assert_eq!(
-            pre_dispatch_status(&ActionKind::MigrationCancel).as_str(),
+            pre_dispatch_status(&ActionKind::MigrationCancel)
+                .unwrap()
+                .as_str(),
             "running"
         );
+    }
+
+    #[test]
+    fn pre_dispatch_status_none_for_a_sandbox_workload() {
+        // A second pod write after a warm slot's claim would make the
+        // kubelet wait for a PLEG relist before it applies the workload's
+        // readiness gate.
+        assert!(pre_dispatch_status(&ActionKind::SandboxExec).is_none());
     }
 
     // Phase 3b PR 1 Commit D — progress-estimate computation per
@@ -5266,7 +5293,25 @@ mod loop_tests {
         tx
     }
 
+    /// Every action the fake dispatcher started, in order. Dispatches run on
+    /// their own threads, so this is a process-wide list; test ids are unique.
+    fn started() -> &'static Mutex<Vec<String>> {
+        static STARTED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+        STARTED.get_or_init(Default::default)
+    }
+
+    /// How many times the action `id` was dispatched.
+    fn dispatched(id: &str) -> usize {
+        started()
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| *s == id)
+            .count()
+    }
+
     fn fake_dispatch(p: &PendingAction, _: &Path) -> Result<ActionOutcome, String> {
+        started().lock().unwrap().push(p.id.clone());
         let rx = gates().lock().unwrap().remove(&p.id);
         match rx {
             Some(rx) => rx
@@ -5682,7 +5727,7 @@ mod loop_tests {
             .run(&script, async {
                 let t0 = Instant::now();
                 change(&script, annotated("u1", &sandbox_action("sb-1"))).await;
-                until(|| statuses("sb-1").contains(&"running")).await;
+                until(|| dispatched("sb-1") > 0).await;
                 assert_eq!(Instant::now(), t0, "dispatched without a poll interval");
                 until(|| statuses("sb-1").contains(&"ready")).await;
             })
@@ -5690,8 +5735,8 @@ mod loop_tests {
         assert_eq!(end, LoopEnd::Stopped);
         assert_eq!(
             statuses("sb-1"),
-            vec!["running", "ready"],
-            "accepted, then acknowledged"
+            vec!["ready"],
+            "acknowledged once, with no write at the dispatch"
         );
         assert_eq!(
             script.gets(),
@@ -5712,11 +5757,9 @@ mod loop_tests {
             let assigned = || annotated("u1", &sandbox_action("sb-2"));
             change(&script, assigned()).await;
             change(&script, assigned()).await;
-            until(|| statuses("sb-2") == vec!["running"]).await;
+            until(|| dispatched("sb-2") == 1).await;
             let mut echoed = sandbox_action("sb-2").to_vec();
-            echoed.push((SANDBOX_KEYS.status_key, "running".to_string()));
             echoed.push((SANDBOX_KEYS.status_id_key, "sb-2".to_string()));
-            change(&script, annotated("u1", &echoed)).await;
             release.send(Ok(ActionOutcome::detail("done"))).unwrap();
             until(|| statuses("sb-2").contains(&"ready")).await;
             echoed.push((SANDBOX_KEYS.status_key, "ready".to_string()));
@@ -5727,7 +5770,8 @@ mod loop_tests {
             }
         })
         .await;
-        assert_eq!(statuses("sb-2"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-2"), vec!["ready"]);
+        assert_eq!(dispatched("sb-2"), 1, "run once");
     }
 
     // Restart: an assignment already on the pod when swiftletd starts is
@@ -5743,7 +5787,7 @@ mod loop_tests {
             assert_eq!(Instant::now(), t0);
         })
         .await;
-        assert_eq!(statuses("sb-3"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-3"), vec!["ready"]);
         // The first read, and one for the refresh after the dispatch if it
         // finished before the watch opened.
         assert!(script.gets() <= 2, "gets: {}", script.gets());
@@ -5762,7 +5806,7 @@ mod loop_tests {
             script.set(annotated("u1", &sandbox_action("sb-4")));
             let t0 = Instant::now();
             script.end_watch();
-            until(|| statuses("sb-4").contains(&"running")).await;
+            until(|| dispatched("sb-4") > 0).await;
             assert_eq!(Instant::now(), t0, "reopened at once");
             until(|| statuses("sb-4").contains(&"ready")).await;
         })
@@ -5798,7 +5842,7 @@ mod loop_tests {
         let release = gate("sb-6a");
         rig.run(&script, async {
             change(&script, annotated("u1", &sandbox_action("sb-6a"))).await;
-            until(|| statuses("sb-6a") == vec!["running"]).await;
+            until(|| dispatched("sb-6a") == 1).await;
             change(&script, annotated("u1", &sandbox_action("sb-6b"))).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -5810,8 +5854,8 @@ mod loop_tests {
             assert_eq!(Instant::now(), t0, "starts when the running one ends");
         })
         .await;
-        assert_eq!(statuses("sb-6a"), vec!["running", "ready"]);
-        assert_eq!(statuses("sb-6b"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-6a"), vec!["ready"]);
+        assert_eq!(statuses("sb-6b"), vec!["ready"]);
     }
 
     // A finished dispatch is settled against the pod as it is after it, not
@@ -5825,7 +5869,7 @@ mod loop_tests {
         let release = gate("sb-10a");
         rig.run(&script, async {
             change(&script, annotated("u1", &sandbox_action("sb-10a"))).await;
-            until(|| statuses("sb-10a") == vec!["running"]).await;
+            until(|| dispatched("sb-10a") == 1).await;
             change(&script, annotated("u1", &sandbox_action("sb-10b"))).await;
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -5855,7 +5899,7 @@ mod loop_tests {
             let first = change(&script, annotated("u1", &sandbox_action("sb-11a"))).await;
             until(|| statuses("sb-11a").contains(&"ready")).await;
             change(&script, annotated("u1", &sandbox_action("sb-11b"))).await;
-            until(|| statuses("sb-11b") == vec!["running"]).await;
+            until(|| dispatched("sb-11b") == 1).await;
             script.lag_next_watch(first);
             release.send(Ok(ActionOutcome::detail("done"))).unwrap();
             until(|| statuses("sb-11b").contains(&"ready")).await;
@@ -5874,8 +5918,8 @@ mod loop_tests {
             }
         })
         .await;
-        assert_eq!(statuses("sb-11a"), vec!["running", "ready"]);
-        assert_eq!(statuses("sb-11b"), vec!["running", "ready"]);
+        assert_eq!(statuses("sb-11a"), vec!["ready"]);
+        assert_eq!(statuses("sb-11b"), vec!["ready"]);
     }
 
     // A resync replaces the watch: an older event left in the old stream

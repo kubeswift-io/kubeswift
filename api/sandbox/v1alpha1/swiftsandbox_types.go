@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -212,6 +214,17 @@ type SwiftSandboxSpec struct {
 	// with reason LivenessProbeFailed. Nothing restarts it.
 	// +optional
 	LivenessProbe *corev1.Probe `json:"livenessProbe,omitempty"`
+
+	// ReadinessStartup runs spec.readinessProbe quickly until it first
+	// passes, so a workload that is ready in a fraction of a second is
+	// reported ready about then rather than at a whole-second probe time.
+	// The probe starts with the workload (initialDelaySeconds does not
+	// apply), is retried every interval, and failures before the first pass
+	// do not count toward failureThreshold. After the first pass, or once the
+	// window has passed, the probe runs every periodSeconds as usual.
+	// Requires spec.readinessProbe.
+	// +optional
+	ReadinessStartup *SandboxReadinessStartup `json:"readinessStartup,omitempty"`
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -312,6 +325,31 @@ const (
 	SandboxNetworkOpen SandboxNetworkMode = "open"
 	// SandboxNetworkNone attaches no network (detonation / pure compute).
 	SandboxNetworkNone SandboxNetworkMode = "none"
+)
+
+// SandboxReadinessStartup is the fast start of the readiness probe.
+type SandboxReadinessStartup struct {
+	// Interval between readiness probe attempts until the first pass.
+	// Between 10ms and 1s; default 100ms. An attempt that hangs still waits
+	// for the probe's timeoutSeconds, so attempts never overlap.
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
+
+	// Window is how long, from the workload's start, attempts are made at
+	// Interval. A workload not ready by then is probed every periodSeconds,
+	// and its failures count. Between 1s and 10m; default 30s.
+	// +optional
+	Window *metav1.Duration `json:"window,omitempty"`
+}
+
+// Defaults and bounds of SandboxReadinessStartup.
+const (
+	ReadinessStartupDefaultInterval = 100 * time.Millisecond
+	ReadinessStartupMinInterval     = 10 * time.Millisecond
+	ReadinessStartupMaxInterval     = time.Second
+	ReadinessStartupDefaultWindow   = 30 * time.Second
+	ReadinessStartupMinWindow       = time.Second
+	ReadinessStartupMaxWindow       = 10 * time.Minute
 )
 
 // SandboxNetwork is the sandbox networking policy.
@@ -741,4 +779,20 @@ type SwiftSandboxList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []SwiftSandbox `json:"items"`
+}
+
+// IntervalOrDefault is spec.readinessStartup.interval, or its default.
+func (s *SandboxReadinessStartup) IntervalOrDefault() time.Duration {
+	if s.Interval == nil {
+		return ReadinessStartupDefaultInterval
+	}
+	return s.Interval.Duration
+}
+
+// WindowOrDefault is spec.readinessStartup.window, or its default.
+func (s *SandboxReadinessStartup) WindowOrDefault() time.Duration {
+	if s.Window == nil {
+		return ReadinessStartupDefaultWindow
+	}
+	return s.Window.Duration
 }

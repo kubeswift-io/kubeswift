@@ -5,9 +5,15 @@
 //! runs them instead, from inside the launcher, against the guest's address:
 //! an HTTP GET (any 2xx or 3xx passes, as for the kubelet) or a TCP connect.
 //!
-//! Results go to the pod as annotations, written only when a result changes:
-//! - `kubeswift.io/sandbox-workload-ready` = "true" / "false", with the probe's
-//!   last message in `kubeswift.io/sandbox-workload-ready-detail`;
+//! Results are written only when they change:
+//! - readiness, on a pod with the workload readiness gate, to that pod
+//!   condition through pods/status: True or False, the message prefixed with
+//!   the workload it belongs to. It is the only pod write between a warm
+//!   slot's claim and the workload being ready: every other pod write in that
+//!   window makes the kubelet wait for its next PLEG relist (up to 1 s) before
+//!   it recomputes the pod's Ready condition. A pod without the gate gets
+//!   `kubeswift.io/sandbox-workload-ready` = "true" / "false" and the message
+//!   in `kubeswift.io/sandbox-workload-ready-detail`, as before;
 //! - `kubeswift.io/sandbox-liveness-failed` = the failing probe's message, once
 //!   liveness reaches its failure threshold. Probing then stops; the controller
 //!   fails the sandbox (LivenessProbeFailed) and deletes the pod, as it does
@@ -16,7 +22,10 @@
 //! The thresholds follow the kubelet: successThreshold passes in a row make
 //! the workload ready, failureThreshold failures in a row make it not ready
 //! (or, for liveness, failed). initialDelaySeconds counts from the moment the
-//! guest has an address.
+//! guest has an address. With readinessStartup, the readiness probe instead
+//! starts at once and is retried every interval until it first passes, for at
+//! most the window; failures in that phase do not count, and afterwards the
+//! probe runs every periodSeconds.
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
@@ -28,7 +37,7 @@ use std::time::{Duration, Instant};
 use kube::api::{Api, Patch, PatchParams};
 use serde_json::json;
 
-use crate::intent::{SandboxProbe, SandboxProbes};
+use crate::intent::{ReadinessStartup, SandboxProbe, SandboxProbes};
 
 pub const ANN_WORKLOAD_READY: &str = "kubeswift.io/sandbox-workload-ready";
 pub const ANN_WORKLOAD_READY_DETAIL: &str = "kubeswift.io/sandbox-workload-ready-detail";
@@ -58,6 +67,17 @@ impl Tracker {
             failures: 0,
             state: None,
         }
+    }
+
+    /// Records one result of a readiness probe's fast start: passes count
+    /// toward successThreshold, failures only break the streak. The workload
+    /// is not ready yet either way, so a failure reports nothing.
+    pub fn observe_startup(&mut self, ok: bool) -> Option<bool> {
+        if !ok {
+            self.successes = 0;
+            return None;
+        }
+        self.observe(true)
     }
 
     /// Records one result. Returns the new state when it changes: true after
@@ -191,21 +211,79 @@ struct Scheduled {
     probe: SandboxProbe,
     tracker: Tracker,
     next: Instant,
+    /// readinessStartup: until this instant, and until the probe first
+    /// passes, a failed attempt is retried after `fast_interval` and does not
+    /// count against failureThreshold.
+    fast_until: Option<Instant>,
+    fast_interval: Duration,
+}
+
+impl Scheduled {
+    fn new(probe: SandboxProbe, start: Instant, startup: Option<&ReadinessStartup>) -> Self {
+        let (next, fast_until, fast_interval) = match startup {
+            // The fast start replaces initialDelaySeconds: attempts begin when
+            // the workload does, and an early failure costs nothing.
+            Some(s) => (
+                start,
+                Some(start + Duration::from_millis(s.window_ms)),
+                Duration::from_millis(s.interval_ms.max(1)),
+            ),
+            None => (
+                start + Duration::from_secs(u64::from(probe.initial_delay_seconds)),
+                None,
+                Duration::ZERO,
+            ),
+        };
+        Scheduled {
+            tracker: Tracker::new(&probe),
+            probe,
+            next,
+            fast_until,
+            fast_interval,
+        }
+    }
+
+    /// Whether `now` is in the fast start: before the window ends and before
+    /// the first pass.
+    fn fast(&self, now: Instant) -> bool {
+        self.tracker.state != Some(true) && self.fast_until.is_some_and(|u| now < u)
+    }
+
+    /// Records one attempt made at `now` and schedules the next. Returns the
+    /// new state when it changes, as `Tracker::observe` does.
+    fn record(&mut self, ok: bool, now: Instant) -> Option<bool> {
+        let fast = self.fast(now);
+        let change = if fast {
+            self.tracker.observe_startup(ok)
+        } else {
+            self.tracker.observe(ok)
+        };
+        let period = Duration::from_secs(u64::from(self.probe.period_seconds.max(1)));
+        self.next = if fast && change != Some(true) {
+            now + self.fast_interval
+        } else {
+            now + period
+        };
+        change
+    }
 }
 
 /// Starts probing on its own thread and returns a guard that stops it. The
-/// guest's address is read from the dnsmasq lease file.
+/// guest's address is read from the dnsmasq lease file. `workload` names the
+/// workload the probes belong to (a warm slot's action id; empty for a cold
+/// sandbox, whose pod runs one workload); it goes into every readiness report.
 pub fn spawn(
     probes: SandboxProbes,
     namespace: String,
     pod: String,
+    workload: String,
     lease_path: PathBuf,
 ) -> ProbeGuard {
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
     std::thread::Builder::new()
         .name("swiftletd-probe".to_string())
-        .spawn(move || run(probes, namespace, pod, lease_path, stop))
+        .spawn(move || run(probes, namespace, pod, workload, lease_path, stop))
         .map_err(|e| log::error!("probe_runner_not_started: {}", e))
         .ok();
     ProbeGuard { cancel }
@@ -215,6 +293,7 @@ fn run(
     probes: SandboxProbes,
     namespace: String,
     pod: String,
+    workload: String,
     lease_path: PathBuf,
     stop: Arc<AtomicBool>,
 ) {
@@ -228,6 +307,10 @@ fn run(
             return;
         }
     };
+    let mut reporter = Reporter::new(namespace, pod, workload, probes.readiness_gate.clone());
+    // Connect now, not at the first result: the first report is the one a
+    // Service waits for.
+    reporter.connect(&rt);
 
     // Wait for the guest's address.
     let ip = loop {
@@ -241,48 +324,44 @@ fn run(
         {
             break ip;
         }
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(100));
     };
     log::info!(
-        "probe_runner_started guest={} readiness={} liveness={}",
+        "probe_runner_started guest={} readiness={} liveness={} startup={:?} gate={:?}",
         ip,
         probes.readiness.is_some(),
-        probes.liveness.is_some()
+        probes.liveness.is_some(),
+        probes.readiness_startup,
+        probes.readiness_gate
     );
 
     let start = Instant::now();
-    let schedule = |p: SandboxProbe| Scheduled {
-        tracker: Tracker::new(&p),
-        next: start + Duration::from_secs(u64::from(p.initial_delay_seconds)),
-        probe: p,
-    };
-    let mut readiness = probes.readiness.map(schedule);
-    let mut liveness = probes.liveness.map(schedule);
-    let mut reporter = Reporter::new(namespace, pod);
+    let startup = probes.readiness_startup.clone();
+    let mut readiness = probes
+        .readiness
+        .map(|p| Scheduled::new(p, start, startup.as_ref()));
+    let mut liveness = probes.liveness.map(|p| Scheduled::new(p, start, None));
+    let mut reported_ready = false;
 
     while !stop.load(Ordering::SeqCst) {
         let now = Instant::now();
         if let Some(r) = readiness.as_mut().filter(|r| r.next <= now) {
             let result = probe_once(&r.probe, ip);
             log::debug!("readiness_probe {:?}", result);
-            r.next = now + Duration::from_secs(u64::from(r.probe.period_seconds.max(1)));
-            if let Some(ready) = r.tracker.observe(result.is_ok()) {
+            if let Some(ready) = r.record(result.is_ok(), Instant::now()) {
                 let msg = result.unwrap_or_else(|e| e);
                 log::info!("workload_ready={} {}", ready, msg);
-                reporter.queue(&[
-                    (ANN_WORKLOAD_READY, ready.to_string()),
-                    (ANN_WORKLOAD_READY_DETAIL, msg),
-                ]);
+                reporter.queue_ready(ready, msg);
+                reported_ready = ready;
             }
         }
         if let Some(l) = liveness.as_mut().filter(|l| l.next <= now) {
             let result = probe_once(&l.probe, ip);
             log::debug!("liveness_probe {:?}", result);
-            l.next = now + Duration::from_secs(u64::from(l.probe.period_seconds.max(1)));
-            if l.tracker.observe(result.is_ok()) == Some(false) {
+            if l.record(result.is_ok(), Instant::now()) == Some(false) {
                 let msg = result.err().unwrap_or_default();
                 log::warn!("liveness_failed {}", msg);
-                reporter.queue(&[(ANN_LIVENESS_FAILED, msg)]);
+                reporter.queue_annotations(&[(ANN_LIVENESS_FAILED, msg)]);
                 // The controller ends the sandbox; nothing more to probe.
                 readiness = None;
                 liveness = None;
@@ -292,68 +371,167 @@ fn run(
         if readiness.is_none() && liveness.is_none() && reporter.is_idle() {
             return;
         }
-        std::thread::sleep(TICK);
+        // Sleep until the next probe is due, at most TICK.
+        let due = [readiness.as_ref(), liveness.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(|s| s.next)
+            .min();
+        let wait = due
+            .map(|d| d.saturating_duration_since(Instant::now()))
+            .unwrap_or(TICK)
+            .clamp(Duration::from_millis(1), TICK);
+        std::thread::sleep(wait);
+    }
+    // The workload has ended: a pod condition it set must not outlive it.
+    if reported_ready && reporter.gated() {
+        reporter.queue_ready(false, "the workload has ended".to_string());
+        reporter.flush(&rt);
     }
 }
 
-/// Writes queued annotations, retrying on the next tick when a write fails so
-/// a transient API error never loses a result.
+/// Writes queued results, retrying on the next tick when a write fails so a
+/// transient API error never loses a result. Readiness goes to the pod's
+/// readiness-gate condition when the pod has one (`gate`), else to
+/// annotations; liveness always goes to an annotation.
 struct Reporter {
     namespace: String,
     pod: String,
-    pending: std::collections::BTreeMap<String, String>,
+    workload: String,
+    gate: String,
+    annotations: std::collections::BTreeMap<String, String>,
+    condition: Option<(bool, String)>,
     client: Option<kube::Client>,
     next_attempt: Instant,
 }
 
 impl Reporter {
-    fn new(namespace: String, pod: String) -> Self {
+    fn new(namespace: String, pod: String, workload: String, gate: String) -> Self {
         Reporter {
             namespace,
             pod,
-            pending: Default::default(),
+            workload,
+            gate,
+            annotations: Default::default(),
+            condition: None,
             client: None,
             next_attempt: Instant::now(),
         }
     }
 
-    fn queue(&mut self, kv: &[(&str, String)]) {
+    fn gated(&self) -> bool {
+        !self.gate.is_empty()
+    }
+
+    fn connect(&mut self, rt: &tokio::runtime::Runtime) {
+        if self.client.is_none() {
+            match rt.block_on(crate::kube_client::create_client()) {
+                Ok(c) => self.client = Some(c),
+                Err(e) => log::warn!("probe_report_client (will retry): {}", e),
+            }
+        }
+    }
+
+    fn queue_ready(&mut self, ready: bool, msg: String) {
+        if self.gated() {
+            self.condition = Some((ready, msg));
+        } else {
+            self.queue_annotations(&[
+                (ANN_WORKLOAD_READY, ready.to_string()),
+                (ANN_WORKLOAD_READY_DETAIL, msg),
+            ]);
+        }
+    }
+
+    fn queue_annotations(&mut self, kv: &[(&str, String)]) {
         for (k, v) in kv {
-            self.pending.insert((*k).to_string(), v.clone());
+            self.annotations.insert((*k).to_string(), v.clone());
         }
     }
 
     fn is_idle(&self) -> bool {
-        self.pending.is_empty()
+        self.annotations.is_empty() && self.condition.is_none()
     }
 
     fn flush(&mut self, rt: &tokio::runtime::Runtime) {
-        if self.pending.is_empty() || Instant::now() < self.next_attempt {
+        if self.is_idle() || Instant::now() < self.next_attempt {
             return;
         }
-        let patch = json!({"metadata": {"annotations": &self.pending}});
-        let result: Result<(), String> = rt.block_on(async {
-            if self.client.is_none() {
-                self.client = Some(
-                    crate::kube_client::create_client()
-                        .await
-                        .map_err(|e| format!("kube client: {}", e))?,
-                );
-            }
-            let api: Api<k8s_openapi::api::core::v1::Pod> =
-                Api::namespaced(self.client.clone().unwrap(), &self.namespace);
-            api.patch(&self.pod, &PatchParams::default(), &Patch::Merge(&patch))
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        });
-        match result {
-            Ok(()) => self.pending.clear(),
-            Err(e) => {
-                log::warn!("probe_report_failed (will retry): {}", e);
-                self.next_attempt = Instant::now() + Duration::from_secs(2);
+        self.connect(rt);
+        let Some(client) = self.client.clone() else {
+            self.next_attempt = Instant::now() + RETRY;
+            return;
+        };
+        let api: Api<k8s_openapi::api::core::v1::Pod> = Api::namespaced(client, &self.namespace);
+        if let Some((ready, msg)) = self.condition.clone() {
+            let body = gate_patch(
+                &self.gate,
+                ready,
+                &self.workload,
+                &msg,
+                &chrono::Utc::now().to_rfc3339(),
+            );
+            match rt.block_on(api.patch_status(
+                &self.pod,
+                &PatchParams::default(),
+                &Patch::Strategic(&body),
+            )) {
+                Ok(_) => self.condition = None,
+                Err(e) => {
+                    log::warn!("probe_report_failed (will retry): {}", e);
+                    self.next_attempt = Instant::now() + RETRY;
+                    return;
+                }
             }
         }
+        if !self.annotations.is_empty() {
+            let patch = json!({"metadata": {"annotations": &self.annotations}});
+            match rt.block_on(api.patch(&self.pod, &PatchParams::default(), &Patch::Merge(&patch)))
+            {
+                Ok(_) => self.annotations.clear(),
+                Err(e) => {
+                    log::warn!("probe_report_failed (will retry): {}", e);
+                    self.next_attempt = Instant::now() + RETRY;
+                }
+            }
+        }
+    }
+}
+
+/// How long a failed report waits before it is tried again.
+const RETRY: Duration = Duration::from_millis(250);
+
+/// The pods/status strategic merge patch that sets the readiness-gate
+/// condition (merge key: type), leaving every other condition to the kubelet.
+/// The message starts with the workload it belongs to, so the controller can
+/// tell a report for this workload from any other.
+pub fn gate_patch(
+    gate: &str,
+    ready: bool,
+    workload: &str,
+    msg: &str,
+    now: &str,
+) -> serde_json::Value {
+    let (status, reason) = if ready {
+        ("True", "ProbeSucceeded")
+    } else {
+        ("False", "ProbeFailed")
+    };
+    json!({"status": {"conditions": [{
+        "type": gate,
+        "status": status,
+        "reason": reason,
+        "message": format!("{}{}", workload_prefix(workload), msg),
+        "lastTransitionTime": now,
+    }]}})
+}
+
+/// "workload <id>: " for a warm slot's workload; nothing for a cold sandbox.
+pub fn workload_prefix(workload: &str) -> String {
+    if workload.is_empty() {
+        String::new()
+    } else {
+        format!("workload {}: ", workload)
     }
 }
 
@@ -375,6 +553,132 @@ mod tests {
             success_threshold: 1,
             failure_threshold: 3,
         }
+    }
+
+    fn startup(interval_ms: u64, window_ms: u64) -> ReadinessStartup {
+        ReadinessStartup {
+            interval_ms,
+            window_ms,
+        }
+    }
+
+    // readinessStartup: attempts start at once, a failure is retried after the
+    // interval and reports nothing, and the first pass ends the fast start.
+    #[test]
+    fn startup_retries_fast_until_the_first_pass() {
+        let mut p = probe("tcp", 1);
+        p.initial_delay_seconds = 5;
+        p.period_seconds = 10;
+        let t0 = Instant::now();
+        let mut s = Scheduled::new(p, t0, Some(&startup(100, 30_000)));
+        assert_eq!(s.next, t0, "initialDelaySeconds does not apply");
+        for i in 0..5 {
+            let now = t0 + Duration::from_millis(100 * i);
+            assert_eq!(
+                s.record(false, now),
+                None,
+                "a fast-start failure reports nothing"
+            );
+            assert_eq!(s.next, now + Duration::from_millis(100));
+        }
+        let now = t0 + Duration::from_millis(500);
+        assert_eq!(s.record(true, now), Some(true));
+        assert_eq!(
+            s.next,
+            now + Duration::from_secs(10),
+            "then every periodSeconds"
+        );
+        // Ready now: the kubelet's thresholds apply again.
+        assert_eq!(s.record(false, now), None);
+        assert_eq!(s.record(false, now), None);
+        assert_eq!(s.record(false, now), Some(false), "failureThreshold 3");
+    }
+
+    // A workload that never becomes ready is probed fast only for the window,
+    // then at periodSeconds, and its failures count from then on.
+    #[test]
+    fn startup_ends_with_the_window() {
+        let p = probe("tcp", 1);
+        let t0 = Instant::now();
+        let mut s = Scheduled::new(p, t0, Some(&startup(200, 1_000)));
+        let mut now = t0;
+        let mut attempts = 0;
+        while s.fast(now) {
+            assert_eq!(s.record(false, now), None);
+            attempts += 1;
+            now = s.next;
+        }
+        assert_eq!(attempts, 5, "1 s at 200 ms");
+        assert_eq!(s.record(false, now), None);
+        assert_eq!(s.next, now + Duration::from_secs(10));
+        assert_eq!(s.record(false, now), None);
+        assert_eq!(
+            s.record(false, now),
+            Some(false),
+            "three failures after the window"
+        );
+    }
+
+    // successThreshold still holds during the fast start, and a failure
+    // breaks the streak.
+    #[test]
+    fn startup_keeps_the_success_threshold() {
+        let mut p = probe("tcp", 1);
+        p.success_threshold = 2;
+        let t0 = Instant::now();
+        let mut s = Scheduled::new(p, t0, Some(&startup(50, 10_000)));
+        assert_eq!(s.record(true, t0), None);
+        assert_eq!(
+            s.next,
+            t0 + Duration::from_millis(50),
+            "still fast before the threshold"
+        );
+        assert_eq!(s.record(false, t0), None);
+        assert_eq!(s.record(true, t0), None);
+        assert_eq!(s.record(true, t0), Some(true));
+    }
+
+    // Without readinessStartup nothing changes: initialDelaySeconds, then
+    // periodSeconds, failures counted from the first attempt.
+    #[test]
+    fn without_startup_the_kubelet_schedule_holds() {
+        let mut p = probe("tcp", 1);
+        p.initial_delay_seconds = 1;
+        p.period_seconds = 2;
+        let t0 = Instant::now();
+        let mut s = Scheduled::new(p, t0, None);
+        assert_eq!(s.next, t0 + Duration::from_secs(1));
+        assert_eq!(s.record(false, s.next), None);
+        assert_eq!(s.next, t0 + Duration::from_secs(3));
+    }
+
+    // The readiness report is one condition, keyed by type for a strategic
+    // merge, and names the workload it belongs to.
+    #[test]
+    fn gate_patch_sets_only_the_gate_condition() {
+        let body = gate_patch(
+            "sandbox.kubeswift.io/workload-ready",
+            true,
+            "uid-1",
+            "http GET 10.0.0.2:80/healthz: 200",
+            "2026-10-10T00:00:00Z",
+        );
+        assert_eq!(
+            body,
+            json!({"status": {"conditions": [{
+                "type": "sandbox.kubeswift.io/workload-ready",
+                "status": "True",
+                "reason": "ProbeSucceeded",
+                "message": "workload uid-1: http GET 10.0.0.2:80/healthz: 200",
+                "lastTransitionTime": "2026-10-10T00:00:00Z",
+            }]}})
+        );
+        let off = gate_patch("g", false, "", "the workload has ended", "t");
+        assert_eq!(off["status"]["conditions"][0]["status"], "False");
+        assert_eq!(
+            off["status"]["conditions"][0]["message"],
+            "the workload has ended"
+        );
     }
 
     #[test]

@@ -91,12 +91,12 @@ func TestTryClaimWarmSlot_ArtifactsNeedWarmMounts(t *testing.T) {
 	pool, slot, sb, _, _ := warmSetup(t)
 	slot.Annotations[bridgeFeaturesAnnotation] = "files mounts"
 	r, _ := sandboxReconciler(pool, slot, sb)
-	got, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool))
+	got, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool), nil)
 	if err != nil || got != nil {
 		t.Errorf("claimed %v (err %v) without warm-mounts", got, err)
 	}
 	sb.Spec.Artifacts = nil
-	if got, _ := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool)); got == nil {
+	if got, _ := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool), nil); got == nil {
 		t.Error("a sandbox without artifacts must still take that slot")
 	}
 }

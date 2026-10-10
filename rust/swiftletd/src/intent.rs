@@ -537,6 +537,23 @@ pub struct SandboxProbes {
     pub readiness: Option<SandboxProbe>,
     #[serde(default)]
     pub liveness: Option<SandboxProbe>,
+    /// spec.readinessStartup: attempt the readiness probe every interval until
+    /// it first passes, for at most window, then fall back to periodSeconds.
+    #[serde(default)]
+    pub readiness_startup: Option<ReadinessStartup>,
+    /// The readiness-gate condition type the launcher pod carries. When set,
+    /// readiness goes to that pod condition (pods/status) instead of to
+    /// annotations, so the kubelet sees one write.
+    #[serde(default)]
+    pub readiness_gate: String,
+}
+
+/// The fast start of a readiness probe, in milliseconds.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessStartup {
+    pub interval_ms: u64,
+    pub window_ms: u64,
 }
 
 /// One probe: an HTTP GET (`kind` "http") or a TCP connect ("tcp") to the

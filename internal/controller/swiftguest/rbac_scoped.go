@@ -159,7 +159,16 @@ func scopedRulesFor(class LauncherClass, podName string) []rbacv1.PolicyRule {
 		ResourceNames: []string{podName},
 	}}
 	if class == SandboxLauncher {
-		return rules
+		// patch on its own pods/status: swiftletd writes the workload's
+		// readiness verdict to the pod's readiness gate condition, the one
+		// pod write a Service then waits on. The launcher-status admission
+		// policy lets it change that condition and nothing else.
+		return append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{""},
+			Resources:     []string{"pods/status"},
+			Verbs:         []string{"patch"},
+			ResourceNames: []string{podName},
+		})
 	}
 	// A guest launcher reports GuestRunning on its own SwiftGuest. The CR and
 	// the launcher pod share a name, so one resourceNames value covers both.

@@ -3,8 +3,10 @@ package swiftsandbox
 import (
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -79,6 +81,45 @@ func TestValidateProbes(t *testing.T) {
 		err := ValidateProbes(tc.s)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// spec.readinessStartup needs a readiness probe, and its interval and window
+// stay within bounds.
+func TestValidateProbes_ReadinessStartup(t *testing.T) {
+	d := func(s string) *metav1.Duration {
+		v, err := time.ParseDuration(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &metav1.Duration{Duration: v}
+	}
+	for _, tc := range []struct {
+		name     string
+		startup  *sandboxv1alpha1.SandboxReadinessStartup
+		probe    bool
+		errorHas string
+	}{
+		{"defaults", &sandboxv1alpha1.SandboxReadinessStartup{}, true, ""},
+		{"50ms for 10s", &sandboxv1alpha1.SandboxReadinessStartup{Interval: d("50ms"), Window: d("10s")}, true, ""},
+		{"no readiness probe", &sandboxv1alpha1.SandboxReadinessStartup{}, false, "needs spec.readinessProbe"},
+		{"interval too short", &sandboxv1alpha1.SandboxReadinessStartup{Interval: d("5ms")}, true, "interval"},
+		{"interval too long", &sandboxv1alpha1.SandboxReadinessStartup{Interval: d("2s")}, true, "interval"},
+		{"window too short", &sandboxv1alpha1.SandboxReadinessStartup{Window: d("500ms")}, true, "window"},
+		{"window too long", &sandboxv1alpha1.SandboxReadinessStartup{Window: d("1h")}, true, "window"},
+	} {
+		s := probedSpec(nil, nil)
+		if tc.probe {
+			s.ReadinessProbe = httpProbe(intstr.FromString("http-app"))
+		}
+		s.ReadinessStartup = tc.startup
+		err := ValidateProbes(s)
+		switch {
+		case tc.errorHas == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case tc.errorHas != "" && (err == nil || !strings.Contains(err.Error(), tc.errorHas)):
+			t.Errorf("%s: error %v, want one about %q", tc.name, err, tc.errorHas)
 		}
 	}
 }

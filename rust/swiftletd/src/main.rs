@@ -406,6 +406,7 @@ fn main() {
                     probes,
                     ns.clone(),
                     n.clone(),
+                    String::new(),
                     runtime_dir.root().join("dnsmasq.leases"),
                 )),
                 _ => None,

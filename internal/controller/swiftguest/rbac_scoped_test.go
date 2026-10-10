@@ -76,6 +76,33 @@ func TestScopedRules_SandboxGetsNoGuestStatus(t *testing.T) {
 	}
 }
 
+// A sandbox launcher may patch its own pod's status (the workload readiness
+// gate) and no other pod's; a guest launcher gets no pods/status at all.
+func TestScopedRules_SandboxPatchesItsOwnPodStatus(t *testing.T) {
+	found := false
+	for _, r := range scopedRulesFor(SandboxLauncher, "sbx") {
+		for _, res := range r.Resources {
+			if res != "pods/status" {
+				continue
+			}
+			found = true
+			if len(r.ResourceNames) != 1 || r.ResourceNames[0] != "sbx" || len(r.Verbs) != 1 || r.Verbs[0] != "patch" {
+				t.Errorf("pods/status rule = %+v, want patch on sbx only", r)
+			}
+		}
+	}
+	if !found {
+		t.Error("a sandbox launcher needs pods/status patch on its own pod")
+	}
+	for _, r := range scopedRulesFor(GuestLauncher, "g") {
+		for _, res := range r.Resources {
+			if res == "pods/status" {
+				t.Errorf("a guest launcher must not get pods/status: %+v", r)
+			}
+		}
+	}
+}
+
 func TestEnsureScopedLauncherRBAC_CreatesOwnedPair(t *testing.T) {
 	sch := scheme.Scheme
 	guest := scopedTestGuest("g1")
