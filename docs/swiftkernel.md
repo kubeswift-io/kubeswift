@@ -25,11 +25,17 @@ When to use disk boot:
 All three kernels below are published by the project and can be referenced
 as-is:
 
-| Artifact | Use |
-|---|---|
-| `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3` | kernel-boot guests (the `faas-minimal` profile) |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.14` | SwiftSandbox |
-| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.3` | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y`) |
+| Artifact | Linux | Use |
+|---|---|---|
+| `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4` | 6.6.158 | kernel-boot guests (the `faas-minimal` profile) |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16` | 6.6.158 | SwiftSandbox |
+| `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.5` | 6.6.158 | SwiftSandbox with a GPU (adds `CONFIG_MODULES=y`) |
+
+The tag is the version of the KubeSwift artifact, not of Linux: `kernels/sandbox:6.6.16`
+carries Linux 6.6.158, which is what `uname -r` reports in the guest. Earlier artifacts (`faas` up to 6.6.3, `sandbox` up to
+6.6.15, `gpu-sandbox` up to 6.6.4) carry Linux 6.6.44, whose virtio-net driver
+drops valid packets and stalls TCP into the guest (#766). Use these artifacts or
+later.
 
 They are pushed manually with ORAS and are **not** built by CI, so a new tag
 appears only when someone builds and pushes it.
@@ -110,7 +116,7 @@ metadata:
   namespace: default
 spec:
   ociRef:
-    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.3
+    image: ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4
   kernelCmdline: "console=ttyS0 root=/dev/ram0 rdinit=/init"
   profile: faas-minimal
 ```
@@ -134,6 +140,28 @@ Deleting a SwiftKernel removes its directory from every node it was pulled to, i
 While a running pod still mounts the kernel's directory (a kernel-boot guest's launcher, a sandbox, a warm pool slot), the SwiftKernel stays in deletion and its files stay on the nodes, as a PersistentVolumeClaim in use does: the hypervisor reads the kernel again when the guest reboots. A `KernelInUse` event names the pods. The cleanup runs once the last of them is gone.
 
 A node that is gone has nothing to clean. A node whose cleanup pod fails, or cannot run within five minutes (a node that is down), is given up: the deletion completes and a `NodeCleanupSkipped` Warning event on the SwiftKernel names the node and the directory to remove by hand. When the kernel's namespace is itself being deleted, the API server refuses that event, and the controller's log is the record.
+
+### Moving to a new kernel artifact
+
+A guest or sandbox keeps the kernel it booted with. Updating a SwiftKernel does
+not change a running sandbox, a warm pool slot that is already up, or a running
+kernel-boot guest: each runs its old kernel until it is recreated.
+
+Changing `spec.ociRef.image` on an existing SwiftKernel also downloads nothing,
+because the per-node pull Job already exists. Either:
+
+- create a SwiftKernel under a new name with the new artifact and point the
+  sandboxes and pools at it (`kernelProfileRef`), or
+- keep the name and force a fresh pull:
+  `kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>`.
+
+Then recreate what should run the new kernel. Delete and recreate SwiftSandboxes.
+For a warm pool, delete its warm slot pods and the pool refills them on the new
+kernel:
+`kubectl -n <ns> delete pod -l sandbox.kubeswift.io/pool=<pool>,sandbox.kubeswift.io/slot-state=warm`.
+Restart kernel-boot SwiftGuests.
+
+Check the result inside the guest with `uname -r`.
 
 ## Building a kernel profile
 

@@ -73,7 +73,9 @@ A GPU sandbox image must ship the NVIDIA driver built for the `gpu-sandbox` kern
   6.6.x. **Pascal (GTX 10-series) and older need the proprietary driver**; Turing
   and newer can use `nvidia-open`. Build it against the kernel source tree with the
   buildroot toolchain (see `build/kernels/sandbox` — the module vermagic must match
-  the shipped `gpu-sandbox` kernel).
+  the shipped `gpu-sandbox` kernel). `kernels/gpu-sandbox:6.6.5` carries Linux
+  6.6.158; earlier artifacts carried 6.6.44. A driver built for 6.6.44 does not
+  load on 6.6.5: rebuild it against the 6.6.158 tree before moving to it.
 - **Userspace** — `nvidia-smi` + `libnvidia-ml`, plus your framework (vLLM / TGI /
   PyTorch).
 - **Entrypoint** — `insmod` the modules, create the `/dev/nvidia*` nodes (read the
