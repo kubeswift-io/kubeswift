@@ -18,6 +18,11 @@
 # they don't clobber each other; override OUTPUT_DIR to reuse a built toolchain.
 
 PROFILE           ?= sandbox
+# The kernel stamps whoever built it into its version string (uname -v, the
+# boot log). Pinned as in faas-minimal so a published artifact carries nothing
+# about the machine that built it.
+export KBUILD_BUILD_USER := kubeswift
+export KBUILD_BUILD_HOST := kubeswift
 BUILDROOT_VERSION := 2024.02.6
 # Features of the bridge in rootfs-overlay/init (its BRIDGE_FEATURES).
 BRIDGE_FEATURES   := files mounts warm-mounts

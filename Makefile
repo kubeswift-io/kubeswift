@@ -48,7 +48,7 @@ BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 .PHONY: build build-go build-rust build-images build-controller-image build-swiftletd-image \
 	build-gpu-discovery-image build-migration-stunnel-image build-snapshot-s3-image build-snapshot-oras-image build-dra-driver-image build-gateway-image build-sandbox-materialize-image generate deploy deploy-with-webhook deploy-with-mtls deploy-with-webhook-and-mtls undeploy load-images smoke-test smoke-test-cleanup \
 	clonestrategy-test snapshot-test local-roundtrip-test local-clone-identity-test \
-	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup e2e-tests \
+	b0-cross-node-tcp-test b0-cross-node-tcp-test-cleanup sandbox-tcp-receive-test sandbox-tcp-receive-test-cleanup e2e-tests \
 	verify-e2e-scripts verify-kustomize-sync verify-base-image-pins \
 	preflight help push-images package-chart push-chart release-dev release-rc release-stable print-version
 
@@ -85,6 +85,7 @@ help:
 	@echo "  local-roundtrip-test  Run Tier B (local hostPath) memory snapshot+in-place restore e2e"
 	@echo "  local-clone-identity-test  Run Tier B clone-identity-collision e2e"
 	@echo "  b0-cross-node-tcp-test     Run B0 cross-node TCP regression test (requires 2+ kernel-nodes)"
+	@echo "  sandbox-tcp-receive-test   Run sandbox TCP receive test, zero dropped guest frames (#766; requires a KVM kernel-node)"
 	@echo "  b0-cross-node-tcp-test-cleanup  Tear down b0-cross-node SwiftGuest + probe pod"
 	@echo "  e2e-tests             Run every cluster-side e2e in sequence"
 	@echo "  verify-e2e-scripts    Static check (bash -n) of every e2e script (fast, no cluster)"
@@ -397,9 +398,17 @@ b0-cross-node-tcp-test:
 b0-cross-node-tcp-test-cleanup:
 	@test/networking/b0-cross-node-tcp.sh cleanup
 
+# Repeated downloads into a SwiftSandbox lose no frame in the guest (#766).
+# Needs a KVM node: the failure is in the guest's virtio-net receive path.
+sandbox-tcp-receive-test:
+	@test/networking/sandbox-tcp-receive.sh validate
+
+sandbox-tcp-receive-test-cleanup:
+	@test/networking/sandbox-tcp-receive.sh cleanup
+
 # Every cluster-side e2e in sequence. Each script accepts --no-cleanup;
 # this target opts out so the cluster is clean between scripts.
-e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test
+e2e-tests: smoke-test snapshot-test clonestrategy-test local-roundtrip-test local-clone-identity-test b0-cross-node-tcp-test sandbox-tcp-receive-test
 
 # Fast static check: every e2e script parses (bash -n). Catches
 # typos / unclosed quotes without needing a cluster. Designed to run
@@ -424,9 +433,11 @@ verify-dashboards:
 # whole kernel config and runs `make olddefconfig`, which SILENTLY drops a driver
 # whose Kconfig dependency is unmet (e.g. VIRTIO_PCI without PCI -> no virtio at all).
 # That shipped once and only surfaced on a live cluster; this catches it per-PR
-# without a full kernel build. Run in CI.
+# without a full kernel build. Also checks that each sandbox defconfig pins its
+# Linux version with a hash and avoids a known-bad one (#766). Run in CI.
 verify-sandbox-config:
 	@./build/kernels/sandbox/verify-config.sh
+	@./build/kernels/sandbox/verify-kernel-version.sh
 
 # Every Containerfile base image pinned as <image>:<tag>@sha256:<digest>, so a
 # build uses the base that was reviewed; Dependabot proposes new digests. Run
