@@ -289,6 +289,18 @@ type SecretEnvRef struct {
 type SandboxProbesIntent struct {
 	Readiness *SandboxProbeIntent `json:"readiness,omitempty"`
 	Liveness  *SandboxProbeIntent `json:"liveness,omitempty"`
+	// ReadinessStartup is spec.readinessStartup with its defaults applied.
+	ReadinessStartup *ReadinessStartupIntent `json:"readinessStartup,omitempty"`
+	// ReadinessGate is the readiness-gate condition type on the launcher pod.
+	// When set, swiftletd writes readiness to that pod condition (pods/status)
+	// rather than to annotations, so the kubelet sees one pod write.
+	ReadinessGate string `json:"readinessGate,omitempty"`
+}
+
+// ReadinessStartupIntent is the readiness probe's fast start, in milliseconds.
+type ReadinessStartupIntent struct {
+	IntervalMs int64 `json:"intervalMs"`
+	WindowMs   int64 `json:"windowMs"`
 }
 
 // SandboxProbeIntent is one probe, as swiftletd runs it against the guest's

@@ -67,6 +67,12 @@ func networked(sb *sandboxv1alpha1.SwiftSandbox) bool {
 	return sb.Spec.Network.Mode != sandboxv1alpha1.SandboxNetworkNone
 }
 
+// workloadGated is whether the sandbox's launcher pod carries the workload
+// readiness gate: it exposes ports, so a Service may route to it.
+func workloadGated(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	return networked(sb) && len(sb.Spec.Network.Ports) > 0
+}
+
 // egressMode is the effective egress posture for a networked sandbox. The CRD
 // default is restricted; the fallthrough also covers a pre-admission empty value.
 func egressMode(sb *sandboxv1alpha1.SwiftSandbox) sandboxv1alpha1.SandboxNetworkMode {
@@ -211,7 +217,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 	}
 	if !idle {
 		// A warm slot's probes arrive with its checkout's workload instead.
-		ri.SandboxProbes = probesIntent(sb)
+		ri.SandboxProbes = probesIntent(sb, workloadGated(sb) && swiftguest.LauncherReportsReadiness())
 	}
 	if networked(sb) {
 		// spec.network.ports: network-init DNATs each pod port to the same port
@@ -607,7 +613,7 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts,
 			corev1.VolumeMount{Name: artifactCacheVolume, MountPath: artifactCacheDir, ReadOnly: true})
 	}
-	if networked(sb) && len(sb.Spec.Network.Ports) > 0 {
+	if workloadGated(sb) {
 		for _, p := range sb.Spec.Network.Ports {
 			pod.Spec.Containers[0].Ports = append(pod.Spec.Containers[0].Ports,
 				corev1.ContainerPort{Name: p.Name, ContainerPort: p.Port, Protocol: corev1.ProtocolTCP})
@@ -616,6 +622,15 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 		// workload is (syncReadinessGate): the launcher container is Ready as
 		// soon as the microVM runs.
 		pod.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: WorkloadReadyGate}}
+		// swiftletd reports the readiness probe's verdict on the gate itself
+		// (one pod write; see annReadinessReport), where the admission
+		// policy that limits that write is installed.
+		if swiftguest.LauncherReportsReadiness() {
+			if pod.Annotations == nil {
+				pod.Annotations = map[string]string{}
+			}
+			pod.Annotations[annReadinessReport] = readinessReportPodCondition
+		}
 	}
 	applyPodMetadata(pod, sb.Spec.PodMetadata)
 	if usesSecrets(sb) {

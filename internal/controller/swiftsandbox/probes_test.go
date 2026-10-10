@@ -29,7 +29,7 @@ func probedSandbox() *sandboxv1alpha1.SwiftSandbox {
 
 // The intent swiftletd reads has the port resolved and every default applied.
 func TestProbesIntent_ResolvesPortsAndAppliesDefaults(t *testing.T) {
-	got := probesIntent(probedSandbox())
+	got := probesIntent(probedSandbox(), false)
 	want := &runtimeintent.SandboxProbesIntent{
 		Readiness: &runtimeintent.SandboxProbeIntent{Kind: "http", Port: 3000, Path: "/",
 			Headers:       []runtimeintent.ProbeHeader{{Name: "X-Probe", Value: "1"}},
@@ -41,7 +41,7 @@ func TestProbesIntent_ResolvesPortsAndAppliesDefaults(t *testing.T) {
 		gj, _ := json.Marshal(got)
 		t.Errorf("probesIntent = %s", gj)
 	}
-	if probesIntent(plainSandbox("busybox:1")) != nil {
+	if probesIntent(plainSandbox("busybox:1"), false) != nil {
 		t.Error("no probes, no intent")
 	}
 }

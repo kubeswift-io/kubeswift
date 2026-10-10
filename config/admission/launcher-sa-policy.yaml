@@ -217,3 +217,74 @@ metadata:
 spec:
   policyName: kubeswift-launcher-sa-tokenrequest-gate
   validationActions: [Deny]
+---
+# swiftletd writes a sandbox workload's readiness verdict to its launcher pod's
+# readiness gate through pods/status, so the gate is the only pod write a
+# Service waits on. RBAC cannot narrow a status patch to one condition; this
+# does. A sandbox launcher account may change the
+# sandbox.kubeswift.io/workload-ready condition and nothing else of the pod's
+# status: not Ready, not the container statuses, not the phase.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kubeswift-sandbox-launcher-status-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods/status"]
+  # Only a sandbox launcher's own requests are evaluated; the kubelet's status
+  # updates and everyone else's never reach the expression.
+  matchConditions:
+    - name: sandbox-launcher
+      expression: >-
+        request.userInfo.username.startsWith('system:serviceaccount:') &&
+        request.userInfo.username.split(':').size() == 4 &&
+        (request.userInfo.username.split(':')[3] == 'kubeswift-sandbox-launcher' ||
+         request.userInfo.username.split(':')[3].startsWith('kubeswift-sandbox-launcher-'))
+  variables:
+    - name: gate
+      expression: "'sandbox.kubeswift.io/workload-ready'"
+    - name: others
+      expression: "has(object.status.conditions) ? object.status.conditions.filter(c, c.type != variables.gate) : []"
+    - name: oldOthers
+      expression: "has(oldObject.status.conditions) ? oldObject.status.conditions.filter(c, c.type != variables.gate) : []"
+  validations:
+    - expression: >-
+        variables.others == variables.oldOthers &&
+        object.status.?phase == oldObject.status.?phase &&
+        object.status.?message == oldObject.status.?message &&
+        object.status.?reason == oldObject.status.?reason &&
+        object.status.?hostIP == oldObject.status.?hostIP &&
+        object.status.?podIP == oldObject.status.?podIP &&
+        object.status.?podIPs == oldObject.status.?podIPs &&
+        object.status.?containerStatuses == oldObject.status.?containerStatuses &&
+        object.status.?initContainerStatuses == oldObject.status.?initContainerStatuses &&
+        object.status.?ephemeralContainerStatuses == oldObject.status.?ephemeralContainerStatuses &&
+        object.status.?hostIPs == oldObject.status.?hostIPs &&
+        object.status.?startTime == oldObject.status.?startTime &&
+        object.status.?nominatedNodeName == oldObject.status.?nominatedNodeName &&
+        object.status.?qosClass == oldObject.status.?qosClass &&
+        object.status.?resize == oldObject.status.?resize &&
+        object.status.?resourceClaimStatuses == oldObject.status.?resourceClaimStatuses
+      message: >-
+        a sandbox launcher may change only the sandbox.kubeswift.io/workload-ready
+        condition of its own pod's status
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kubeswift-sandbox-launcher-status-gate
+  labels:
+    app.kubernetes.io/name: kubeswift
+    app.kubernetes.io/component: admission-policy
+spec:
+  policyName: kubeswift-sandbox-launcher-status-gate
+  validationActions: [Deny]

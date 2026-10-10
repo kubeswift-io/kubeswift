@@ -148,6 +148,14 @@ func NarrowToScopedRBAC(ctx context.Context, c client.Client, namespace string, 
 // CR for a sandbox to report to (#519). Adding it here would hand an escaped
 // sandbox the ability to forge guest status.
 func scopedRulesFor(class LauncherClass, podName string) []rbacv1.PolicyRule {
+	return scopedRules(class, podName, false)
+}
+
+// scopedRules is scopedRulesFor, with patch on the pod's own pods/status when
+// podStatus: a sandbox launcher on its own account, on a cluster where the
+// launcher status admission policy limits that patch to the workload
+// readiness condition (LauncherReportsReadiness).
+func scopedRules(class LauncherClass, podName string, podStatus bool) []rbacv1.PolicyRule {
 	// watch: swiftletd watches its own pod for the actions the controller
 	// writes on it (a warm slot's workload among them) instead of polling.
 	// With resourceNames a watch is allowed only with the matching
@@ -159,7 +167,19 @@ func scopedRulesFor(class LauncherClass, podName string) []rbacv1.PolicyRule {
 		ResourceNames: []string{podName},
 	}}
 	if class == SandboxLauncher {
-		return rules
+		if !podStatus {
+			return rules
+		}
+		// patch on its own pods/status: swiftletd writes the workload's
+		// readiness verdict to the pod's readiness gate condition, the one
+		// pod write a Service then waits on. The launcher-status admission
+		// policy lets it change that condition and nothing else.
+		return append(rules, rbacv1.PolicyRule{
+			APIGroups:     []string{""},
+			Resources:     []string{"pods/status"},
+			Verbs:         []string{"patch"},
+			ResourceNames: []string{podName},
+		})
 	}
 	// A guest launcher reports GuestRunning on its own SwiftGuest. The CR and
 	// the launcher pod share a name, so one resourceNames value covers both.
@@ -357,7 +377,7 @@ func ensureScopedLauncherRBACFor(
 			Namespace: namespace,
 			Labels:    rbacLabels("swiftletd-rbac"),
 		},
-		Rules: withSecrets(scopedRulesFor(class, podName), secrets),
+		Rules: withSecrets(scopedRules(class, podName, perPodServiceAccount(saName) && LauncherReportsReadiness()), secrets),
 	}
 	if err := controllerutil.SetControllerReference(owner, role, scheme); err != nil {
 		return fmt.Errorf("own scoped role %s/%s: %w", namespace, name, err)

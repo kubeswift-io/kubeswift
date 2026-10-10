@@ -1114,6 +1114,30 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              readinessStartup:
+                description: |-
+                  ReadinessStartup runs spec.readinessProbe quickly until it first
+                  passes, so a workload that is ready in a fraction of a second is
+                  reported ready about then rather than at a whole-second probe time.
+                  The probe starts with the workload (initialDelaySeconds does not
+                  apply), is retried every interval, and failures before the first pass
+                  do not count toward failureThreshold. After the first pass, or once the
+                  window has passed, the probe runs every periodSeconds as usual.
+                  Requires spec.readinessProbe.
+                properties:
+                  interval:
+                    description: |-
+                      Interval between readiness probe attempts until the first pass.
+                      Between 10ms and 1s; default 100ms. An attempt that hangs still waits
+                      for the probe's timeoutSeconds, so attempts never overlap.
+                    type: string
+                  window:
+                    description: |-
+                      Window is how long, from the workload's start, attempts are made at
+                      Interval. A workload not ready by then is probed every periodSeconds,
+                      and its failures count. Between 1s and 10m; default 30s.
+                    type: string
+                type: object
               rootfsMode:
                 allOf:
                 - enum:

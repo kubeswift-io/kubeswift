@@ -28,6 +28,28 @@ func ValidateProbes(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 			return fmt.Errorf("%s: %w", pr.field, err)
 		}
 	}
+	return validateReadinessStartup(s)
+}
+
+// validateReadinessStartup bounds spec.readinessStartup: it needs a readiness
+// probe, and its interval and window stay within limits that keep a workload
+// that never becomes ready from being probed without end.
+func validateReadinessStartup(s *sandboxv1alpha1.SwiftSandboxSpec) error {
+	st := s.ReadinessStartup
+	if st == nil {
+		return nil
+	}
+	if s.ReadinessProbe == nil {
+		return fmt.Errorf("spec.readinessStartup needs spec.readinessProbe")
+	}
+	if i := st.IntervalOrDefault(); i < sandboxv1alpha1.ReadinessStartupMinInterval || i > sandboxv1alpha1.ReadinessStartupMaxInterval {
+		return fmt.Errorf("spec.readinessStartup.interval %s must be between %s and %s",
+			i, sandboxv1alpha1.ReadinessStartupMinInterval, sandboxv1alpha1.ReadinessStartupMaxInterval)
+	}
+	if w := st.WindowOrDefault(); w < sandboxv1alpha1.ReadinessStartupMinWindow || w > sandboxv1alpha1.ReadinessStartupMaxWindow {
+		return fmt.Errorf("spec.readinessStartup.window %s must be between %s and %s",
+			w, sandboxv1alpha1.ReadinessStartupMinWindow, sandboxv1alpha1.ReadinessStartupMaxWindow)
+	}
 	return nil
 }
 

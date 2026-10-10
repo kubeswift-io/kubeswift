@@ -146,7 +146,20 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			return r.coldFallback(ctx, sb, kernelName,
 				"its slots differ from this sandbox in "+strings.Join(diff, ", "))
 		}
-		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool)); err != nil {
+		// The workload goes in the claim itself when nothing must be granted
+		// to the slot first: every pod write after the claim makes the
+		// kubelet wait for a PLEG relist before it applies the next, the
+		// workload's readiness gate. A sandbox with Secrets is injected after
+		// the claim, once the slot's own account may read them.
+		var inject *execInject
+		if !usesSecrets(sb) {
+			arts, err := warmArtifactArgs(ctx, r.APIReader, sb)
+			if err != nil {
+				return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+			}
+			inject = &execInject{argv: argv, env: env, cwd: cwd, arts: arts}
+		}
+		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool), inject); err != nil {
 			return ctrl.Result{}, err
 		}
 		if slot == nil {
@@ -178,7 +191,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 			_ = r.Delete(ctx, slot)
 			return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
 		}
-		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), argv, env, cwd, arts); err != nil {
+		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts}); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -262,7 +275,7 @@ func (r *SwiftSandboxReconciler) findClaimedSlot(ctx context.Context, sb *sandbo
 // from the pool to this SwiftSandbox. A conflicting concurrent claim loses the optimistic
 // Update (409) and the loop tries the next slot. Returns nil when none is claimable.
 // profile is the pool's current slot profile; the caller has checked it honors sb.
-func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, profile string) (*corev1.Pod, error) {
+func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, profile string, inject *execInject) (*corev1.Pod, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(sb.Namespace),
 		client.MatchingLabels{PoolLabelKey: sb.Spec.PoolRef.Name, SlotStateLabelKey: slotStateWarm}); err != nil {
@@ -302,6 +315,18 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		if err := controllerutil.SetControllerReference(sb, claimed, r.Scheme); err != nil {
 			return nil, err
 		}
+		if inject != nil {
+			ann, err := execActionAnnotations(claimed, sb, string(sb.UID), *inject)
+			if err != nil {
+				return nil, err
+			}
+			if claimed.Annotations == nil {
+				claimed.Annotations = map[string]string{}
+			}
+			for k, v := range ann {
+				claimed.Annotations[k] = v
+			}
+		}
 		if err := r.Update(ctx, claimed); err != nil {
 			if apierrors.IsConflict(err) {
 				continue // another claim won this slot; try the next
@@ -323,24 +348,32 @@ func nonControllerRefs(refs []metav1.OwnerReference) []metav1.OwnerReference {
 	return out
 }
 
-// stampExecAction writes the sandbox-exec action annotations on the claimed slot pod so
-// swiftletd runs the workload over vsock (SANDBOX_KEYS). The action-id is the sandbox UID
-// (idempotent + correlatable with the status swiftletd writes back).
-func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, actionID string, argv, env []string, cwd string, arts []warmArtifactArg) error {
-	args := map[string]interface{}{"argv": argv}
-	if len(arts) > 0 {
-		args["artifacts"] = arts
+// execInject is the workload a checkout injects into its slot.
+type execInject struct {
+	argv, env []string
+	cwd       string
+	arts      []warmArtifactArg
+}
+
+// execActionAnnotations are the sandbox-exec action annotations that make
+// swiftletd on slot run the workload over vsock (SANDBOX_KEYS). The action-id
+// is the sandbox UID (idempotent + correlatable with the status swiftletd
+// writes back).
+func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, actionID string, w execInject) (map[string]string, error) {
+	args := map[string]interface{}{"argv": w.argv}
+	if len(w.arts) > 0 {
+		args["artifacts"] = w.arts
 	}
-	if len(env) > 0 {
-		args["env"] = env
+	if len(w.env) > 0 {
+		args["env"] = w.env
 	}
-	if cwd != "" {
-		args["cwd"] = cwd
+	if w.cwd != "" {
+		args["cwd"] = w.cwd
 	}
 	if sb.Spec.Timeout != nil {
 		args["timeoutSeconds"] = int64(sb.Spec.Timeout.Duration.Seconds())
 	}
-	if probes := probesIntent(sb); probes != nil {
+	if probes := probesIntent(sb, launcherReportsGate(slot)); probes != nil {
 		args["probes"] = probes
 	}
 	// References only; swiftletd reads the values and sends them over vsock.
@@ -352,15 +385,29 @@ func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *core
 	}
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		annSandboxExecAction:     "run",
+		annSandboxExecActionID:   actionID,
+		annSandboxExecActionArgs: string(argsJSON),
+	}, nil
+}
+
+// stampExecAction writes the sandbox-exec action annotations on the claimed
+// slot pod, for a checkout that could not inject its workload with the claim.
+func (r *SwiftSandboxReconciler) stampExecAction(ctx context.Context, slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, actionID string, w execInject) error {
+	ann, err := execActionAnnotations(slot, sb, actionID, w)
+	if err != nil {
 		return err
 	}
 	patch := client.MergeFrom(slot.DeepCopy())
 	if slot.Annotations == nil {
 		slot.Annotations = map[string]string{}
 	}
-	slot.Annotations[annSandboxExecAction] = "run"
-	slot.Annotations[annSandboxExecActionID] = actionID
-	slot.Annotations[annSandboxExecActionArgs] = string(argsJSON)
+	for k, v := range ann {
+		slot.Annotations[k] = v
+	}
 	return r.Patch(ctx, slot, patch)
 }
 

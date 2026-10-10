@@ -78,7 +78,7 @@ func TestTryClaimWarmSlot_OnlyASlotOfThePoolsCurrentShape(t *testing.T) {
 		WithObjects(sb, readySlot("p-slot-open1", poolSlotProfile(wasOpen)), readySlot("p-slot-small", poolSlotProfile(wasSmaller))).Build()
 	r := &SwiftSandboxReconciler{Client: c, Scheme: scheme.Scheme}
 
-	slot, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool))
+	slot, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestTryClaimWarmSlot_OnlyASlotOfThePoolsCurrentShape(t *testing.T) {
 	if err := c.Create(context.Background(), readySlot("p-slot-match", poolSlotProfile(pool))); err != nil {
 		t.Fatal(err)
 	}
-	slot, err = r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool))
+	slot, err = r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool), nil)
 	if err != nil || slot == nil || slot.Name != "p-slot-match" {
 		t.Fatalf("want the current-shape slot claimed, got slot=%v err=%v", slot, err)
 	}

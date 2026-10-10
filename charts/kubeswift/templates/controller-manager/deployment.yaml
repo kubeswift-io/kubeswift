@@ -44,6 +44,14 @@ spec:
             - name: KUBESWIFT_LAUNCHER_IMAGE_PULL_SECRETS
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- if and .Values.launcherSAGate.enabled (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+            # The launcher status admission policy is installed: sandbox
+            # launchers write their workload's readiness to the pod's
+            # readiness gate themselves (pods/status, limited to that
+            # condition by kubeswift-sandbox-launcher-status-gate).
+            - name: KUBESWIFT_LAUNCHER_STATUS_GATE
+              value: "true"
+            {{- end }}
             # Sizes a node's shared-base thin pool when it first creates one.
             # Nodes take a pool only when labelled kubeswift.io/basedisk-node=true.
             - name: KUBESWIFT_BASEDISK_POOL_SIZE

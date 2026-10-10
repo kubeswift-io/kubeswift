@@ -227,7 +227,7 @@ func TestTryClaimWarmSlot_SecretEnvSkipsSharedAccountSlots(t *testing.T) {
 	sb := matchingSandbox()
 	sb.Spec.Env = []corev1.EnvVar{fromSecret("X", "db", "url", false)}
 	r, _ := sandboxReconciler(slot, sb)
-	got, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool))
+	got, err := r.tryClaimWarmSlot(context.Background(), sb, poolSlotProfile(pool), nil)
 	if err != nil || got != nil {
 		t.Errorf("claimed %v (err %v); a shared-account slot must not get Secrets", got, err)
 	}
