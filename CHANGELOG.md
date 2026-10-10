@@ -89,6 +89,10 @@ If your values pin `*.image.tag`, move the pins to `v0.16.2`.
   run stalls their readiness: the older controller does not know the new
   reporting and sets their gate False. Recreate those sandboxes after a
   downgrade.
+- **Turning `launcherSAGate` off** (or losing the ValidatingAdmissionPolicy
+  API) after sandboxes were launched with it removes those launchers'
+  `pods/status` grant, so their readiness stops updating. Recreate those
+  sandboxes after turning the gate off.
 - **kube-proxy is unchanged and needs no change.** kube-proxy's
   `minSyncPeriod` (default 1 s) spaces its syncs, so a workload that is ready
   within a second of its Service being created can wait up to that interval
@@ -178,6 +182,11 @@ If your values pin `*.image.tag`, move the pins to `v0.16.2`.
   release).
 - A native-GPU SwiftSandbox without `spec.network` never starts (#768); set
   `network.mode` explicitly.
+- Readiness reporting follow-ups (not regressions): after a liveness failure
+  the readiness gate keeps its last value until the controller deletes the
+  launcher; swiftletd's status writes have no request timeout of their own;
+  the launcher status policy does not yet compare `status.observedGeneration`
+  and `extendedResourceClaimStatus`.
 
 ---
 
