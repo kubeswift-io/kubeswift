@@ -4,6 +4,183 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.16.2] — 2026-10-10
+
+A patch release: guest kernels that no longer drop network packets, a
+SwiftSandbox readiness path that reaches the pod in one write with an
+optional fast first probe, and warm-pool checkouts that take OCI artifacts.
+
+- **Guest kernels move to Linux 6.6.158** (#766, #767). Every published
+  sandbox, gpu-sandbox and faas kernel so far carried Linux 6.6.44. Its
+  virtio-net driver drops valid large (GSO) packets as "bad gso", and each
+  drop stalls TCP into the guest by a retransmission timeout (about 200 ms).
+  New artifacts, built from #767:
+
+  | Artifact | Linux | Digest |
+  |---|---|---|
+  | `ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16` | 6.6.158 | `sha256:4305c3b3ba46c1a3a1c751a6976cbb7c9f0af443879a628d7fb55518ae93d633` |
+  | `ghcr.io/kubeswift-io/kubeswift/kernels/gpu-sandbox:6.6.5` | 6.6.158 | `sha256:bb23afe7cb43cd0abe8d90733d7cfff6f9113e45758cdaccf893247409af1cb5` |
+  | `ghcr.io/kubeswift-io/kubeswift/kernels/faas:6.6.4` | 6.6.158 | `sha256:27e88761b65c48af2c65423f4ef0bab323ad172470168c2a866f7be56e304a06` |
+
+  The tag is the version of the KubeSwift artifact, not of Linux:
+  `kernels/sandbox:6.6.16` carries Linux 6.6.158 (`uname -r` in the guest).
+  In 600 test downloads into a sandbox on the new kernel, the guest dropped
+  no frame; on 6.6.44 it dropped 98 in 240.
+- **A SwiftSandbox's readiness reaches its launcher pod in one write** (#770).
+  swiftletd writes the readiness probe's verdict to the pod's readiness gate
+  itself, and a warm checkout makes no other pod write before it. Before,
+  the claim, the workload, a "running" status, a readiness annotation and the
+  controller's copy of it to the gate were separate pod writes. After each
+  one the kubelet waits for its next relist (up to 1 s) before it recomputes
+  `Ready` for the next, so the pod turned Ready 1 to 2 s after the workload.
+  The readiness gate now reaches `Ready` in tens of milliseconds, with an
+  occasional wait for one kubelet relist.
+- **`spec.readinessStartup`** (new, opt-in): the readiness probe starts with
+  the workload and is retried every `interval` until it first passes, so a
+  workload ready in a fraction of a second is found ready then rather than
+  at a whole-second probe time.
+- **Warm-pool checkouts take `spec.artifacts`** (#765). A sandbox with OCI
+  artifacts can claim an already-booted slot. The slot needs a kernel whose
+  bridge has the `warm-mounts` feature: `kernels/sandbox:6.6.15` and
+  `kernels/gpu-sandbox:6.6.4` or later, which includes the new 6.6.16 and
+  6.6.5.
+
+As evidence, not a guarantee: on a three-node lab cluster, a fast warm
+workload (a Spin app answering about 400 ms after creation) was ready, with
+its pod Ready, in under a second; how soon a Service routes to it also
+depends on the workload's own start and on kube-proxy (see Upgrade).
+
+**CRDs changed this release:** `swiftsandboxes.sandbox.kubeswift.io` gains
+`spec.readinessStartup`. Apply `crds/` before upgrading the chart.
+
+### Upgrade
+
+```bash
+kubectl apply -f charts/kubeswift/crds/        # from the v0.16.2 chart
+helm upgrade kubeswift oci://ghcr.io/kubeswift-io/charts/kubeswift --version 0.16.2 \
+  -n kubeswift-system -f <(helm get values kubeswift -n kubeswift-system -o yaml)
+```
+
+If your values pin `*.image.tag`, move the pins to `v0.16.2`.
+
+- **Kernels are not upgraded by the chart.** Point your SwiftKernels at the
+  new artifacts. Changing `spec.ociRef.image` on an existing SwiftKernel
+  pulls nothing by itself: delete its pull Jobs
+  (`kubectl -n <ns> delete job -l kubeswift.io/swiftkernel=<name>`), or create
+  a SwiftKernel under a new name. See "Moving to a new kernel artifact" in
+  `docs/swiftkernel.md`.
+- **Running sandboxes and warm slots keep the kernel they booted with**, and
+  stay exposed to the packet drops until they are recreated. Recreate
+  sandboxes; delete a pool's warm slot pods and it refills them on the new
+  kernel.
+- **GPU guest images:** NVIDIA kernel modules built for Linux 6.6.44 (the
+  earlier gpu-sandbox artifacts) do not load on `gpu-sandbox:6.6.5`. Build
+  them against the 6.6.158 kernel tree before moving GPU sandboxes.
+- **New ValidatingAdmissionPolicy** `kubeswift-sandbox-launcher-status-gate`,
+  rendered with the existing `launcherSAGate` (Kubernetes 1.30 or later).
+  With it, sandbox launcher pods built by this release report readiness on
+  their pod's readiness gate; each launcher's own Role gains `patch` on its
+  own `pods/status`, which the policy limits to that one condition. Without
+  the policy (gate off, or no VAP API), launchers keep reporting through
+  annotations and nothing else changes.
+- **Pods from before the upgrade keep the annotation path** until they are
+  replaced; mixed pods are handled.
+- **Downgrading the controller** while launcher pods built by this release
+  run stalls their readiness: the older controller does not know the new
+  reporting and sets their gate False. Recreate those sandboxes after a
+  downgrade.
+- **kube-proxy is unchanged and needs no change.** kube-proxy's
+  `minSyncPeriod` (default 1 s) spaces its syncs, so a workload that is ready
+  within a second of its Service being created can wait up to that interval
+  for routing. Lowering it is an operator tuning decision; KubeSwift does not
+  require it and does not change it.
+- **A registry that fails transiently no longer fails a sandbox** (#763): the
+  sandbox stays `Pending` with reason `RegistryUnavailable` and retries; only
+  a refusal fails it.
+- **Artifact cache entries** published by an earlier release are repaired to
+  read-only modes on their next use (#762), and each is re-read once to record
+  its repository (#765).
+- **From v0.16.0 or earlier:** read v0.16.1's Upgrade section first.
+
+### Fixed
+
+- **Sandbox guests dropped valid network packets** ("bad gso") on Linux
+  6.6.44, stalling TCP receive (#766, #767). The kernels are pinned to Linux
+  6.6.158 with a checked tarball hash; CI refuses Buildroot's frozen "latest
+  LTS" and the affected 6.6.44/6.6.45. The published kernels no longer carry
+  the builder's login and hostname.
+- **A Service routed to a ready sandbox 1 to 2 s late** (#770), from the
+  sequence of pod writes above.
+- **One unresponsive registry could stop every SwiftSandbox from
+  reconciling** (#763). Registry requests are bounded (dial 5 s, TLS 10 s,
+  response headers 20 s) and run off the reconcile workers.
+- **An unprivileged guest workload could not read a cached OCI-layout
+  artifact** (#762): layer blobs were `0600 root`. Cached artifacts are now
+  read-only for everyone.
+
+### Added
+
+- `spec.readinessStartup` on SwiftSandbox:
+  - `interval`: default `100ms`, from `10ms` to `1s`.
+  - `window`: default `30s`, from `1s` to `10m`.
+  - Requires `spec.readinessProbe`.
+  - The probe starts when the workload starts (`initialDelaySeconds` does not
+    apply) and is retried every `interval`. Attempts never overlap, and one
+    that hangs waits for `timeoutSeconds`.
+  - Failures before the first pass are not reported and do not count toward
+    `failureThreshold`. `successThreshold` still applies.
+  - After the first pass, or once `window` has passed without one, the probe
+    runs every `periodSeconds` with the usual thresholds, and the fast start
+    never resumes.
+  - Unset, nothing changes.
+- Warm-pool checkout of `spec.artifacts` (#765), described above.
+- `make sandbox-tcp-receive-test`: downloads into a SwiftSandbox from the same
+  node and another node, and fails on any dropped guest frame (needs a KVM
+  kernel node).
+
+### Security
+
+- The readiness verdict is written by swiftletd, never by the guest: the
+  guest has no Kubernetes credentials and can only make the probe pass or
+  fail.
+- The verdict names the workload it belongs to (`workload <action id>:`); the
+  controller counts it only for the sandbox the slot runs and clears a True
+  that names another workload. Warm slots are single-use.
+- `pods/status` patch is granted only to a launcher's own ServiceAccount, on
+  its own pod, and only where the admission policy is installed. The policy
+  denies any change to another condition (`Ready`, `ContainersReady`), the
+  phase, container statuses, pod or host IPs, start time, QoS class, resize
+  or resource claim statuses.
+
+### Changed
+
+- swiftletd no longer writes `exec-status=running` before a sandbox workload;
+  only the final status is written (the controller never read the other).
+- A warm checkout without Secrets puts the workload in the claim's own write.
+- Go 1.26.9, `golang.org/x/net` v0.60.0, golang 1.27.2 base images (#764).
+
+### Docs
+
+- `docs/swiftkernel.md`: the Linux version next to each artifact tag, and
+  how to move to a new kernel artifact.
+- `docs/sandbox/overview.md`: `readinessStartup`, readiness reporting, and
+  how kube-proxy affects Service routing.
+- `docs/sandbox/gpu-sandboxes.md`: NVIDIA modules must match the kernel's
+  Linux version.
+
+### Known issues
+
+- Recreating a cold SwiftSandbox under the same name while its previous
+  launcher pod is still terminating may report the old pod's exit (observed
+  once in testing, not yet reproduced).
+- The gpu-sandbox kernel builds the virtio RNG driver as a module that is not
+  shipped, so GPU sandboxes have no virtio-rng device (since its first
+  release).
+- A native-GPU SwiftSandbox without `spec.network` never starts (#768); set
+  `network.mode` explicitly.
+
+---
+
 ## [v0.16.1] — 2026-10-07
 
 A patch release: faster warm-pool checkout. No API, CRD or chart value

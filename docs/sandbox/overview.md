@@ -296,9 +296,28 @@ spec:
 - After the first pass, or once `window` has passed without one, the probe
   runs every `periodSeconds` with the usual thresholds.
 - Attempts never overlap: one that hangs waits for `timeoutSeconds`.
-- Pod readiness then follows in tens of milliseconds. A Service routes to the
-  pod once kube-proxy has synced, which on a stock kube-proxy can take up to
-  its `minSyncPeriod` (1 s) longer.
+- On a launcher that reports readiness itself (see below), the pod's `Ready`
+  usually follows the verdict within tens of milliseconds; a verdict that
+  lands less than a second after another change to the pod can wait up to a
+  second for the kubelet's next refresh.
+
+#### Readiness reporting and Service routing
+
+- swiftletd writes the verdict straight to the launcher pod's readiness gate,
+  one `pods/status` write, when the chart installs the admission policy
+  `kubeswift-sandbox-launcher-status-gate` (on by default with
+  `launcherSAGate.enabled`, Kubernetes 1.30 or later). The policy lets the
+  launcher's own account change that one condition and nothing else in the
+  pod's status. Without it, launchers report through annotations and the
+  controller writes the gate.
+- A Service routes to the pod once kube-proxy has programmed the endpoint.
+  kube-proxy's `minSyncPeriod` (default 1 s in iptables and nftables mode)
+  spaces its syncs, so for a workload that is ready within a second of its
+  Service being created, routing can wait for that interval. This is
+  ordinary Kubernetes behavior: the default is supported and KubeSwift does
+  not require changing it. Lowering `minSyncPeriod` is an operator tuning
+  decision that trades kube-proxy CPU for latency, and KubeSwift does not
+  change it on install.
 - Probe headers are stored in the spec in plain text; do not put credentials in
   them.
 
