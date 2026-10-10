@@ -51,13 +51,16 @@ func MaterializeLayout(opts Options) (*Result, error) {
 	if err := os.MkdirAll(opts.CacheDir, 0o755); err != nil {
 		return res, fmt.Errorf("create cache dir: %w", err)
 	}
-	if _, err := os.Stat(res.RootfsPath); err == nil {
+	if _, err := os.Stat(res.RootfsPath); err == nil && !needsReadOnlyRepair(res.RootfsPath) {
 		res.CacheHit = true
 		return res, nil
 	}
 	if unlock, lerr := lockDigest(opts.CacheDir, digest); lerr == nil {
 		defer unlock()
 		if _, err := os.Stat(res.RootfsPath); err == nil {
+			if err := repairReadOnly(res.RootfsPath, false); err != nil {
+				return res, err
+			}
 			res.CacheHit = true
 			return res, nil
 		}
@@ -96,12 +99,19 @@ func MaterializeLayout(opts Options) (*Result, error) {
 	if n, err := dirSize(dir); err == nil {
 		res.SizeBytes = n
 	}
+	// Readable by an unprivileged guest workload, writable by no one (perms.go).
+	if _, err := normalizeReadOnly(dir, false); err != nil {
+		return res, fmt.Errorf("normalize modes: %w", err)
+	}
 	if err := os.Rename(dir, res.RootfsPath); err != nil {
 		if _, serr := os.Stat(res.RootfsPath); serr == nil {
 			res.CacheHit = true // another writer won the race
 			return res, nil
 		}
 		return res, fmt.Errorf("publish layout: %w", err)
+	}
+	if err := sealReadOnly(res.RootfsPath); err != nil {
+		return res, err
 	}
 	return res, nil
 }

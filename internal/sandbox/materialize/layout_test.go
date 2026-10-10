@@ -53,7 +53,7 @@ func TestMaterializeLayout_ArtifactAsPushed(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := art.Digest()
-	cache := t.TempDir()
+	cache := writableCache(t)
 
 	_, digest, err := ResolveDescriptor(Options{ImageRef: ref.String()})
 	if err != nil || digest != want.String() {
@@ -106,7 +106,7 @@ func TestMaterializeLayout_IndexIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := idx.Digest()
-	res, err := MaterializeLayout(Options{ImageRef: ref.String(), CacheDir: t.TempDir()})
+	res, err := MaterializeLayout(Options{ImageRef: ref.String(), CacheDir: writableCache(t)})
 	if err != nil || res.Digest != want.String() {
 		t.Fatalf("got %+v, %v; want the index digest %s", res, err, want)
 	}

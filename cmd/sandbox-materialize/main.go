@@ -28,6 +28,7 @@ func main() {
 		pullSecret = flag.String("pull-secret", "", "path to a docker config.json for private registries")
 		insecure   = flag.Bool("insecure", false, "allow a plain-HTTP registry (trusted in-cluster stores only)")
 		verifyKey  = flag.String("verify-key", "", "path to a cosign public key; when set, cosign-verify image@digest BEFORE materializing (requires a TLS registry)")
+		readOnly   = flag.Bool("read-only-artifact", false, "normalize a tree to read-only artifact modes (dirs 0555, files 0444, executables 0555) so an unprivileged guest can read it; never for a rootfs. An oci layout always is")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -48,6 +49,8 @@ func main() {
 		Mode:       materialize.Mode(*mode),
 		PullSecret: *pullSecret,
 		Insecure:   *insecure,
+
+		ReadOnlyArtifact: *readOnly,
 	}
 
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
