@@ -26,6 +26,20 @@ kernel delta a GPU sandbox needs is being able to load it (the base kernel is
 monolithic). Proven by the GPU-sandbox Phase-0 spike (a GTX 1080 proprietary
 driver built against this kernel → `nvidia-smi` over firmware-less mode-3 VFIO).
 
+## Linux version
+
+The defconfigs pin the Linux release (`BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE`)
+and its tarball hash ([`patches/linux/linux.hash`](patches/linux/linux.hash));
+Buildroot refuses a tarball that does not match. Do not go back to
+`BR2_LINUX_KERNEL_LATEST_LTS_VERSION`: it is whatever the vendored Buildroot
+shipped with, frozen, and in 2024.02.6 that was 6.6.44, whose virtio-net driver
+drops valid GSO packets as "bad gso" and stalls TCP into the guest (#766).
+`make verify-sandbox-config` (CI) checks the pin, the hash and a list of known-bad
+versions. To move to a newer 6.6 release, change the version in both defconfigs
+and in `faas-minimal`, and add its line from
+`https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc` to each
+`linux.hash`.
+
 ## Build
 
 ```
@@ -56,11 +70,11 @@ understands beyond argv/env/cwd (`make build` writes it from `BRIDGE_FEATURES`).
 
 ```
 cd output/images                # or output-gpu-sandbox/images for the gpu profile
-oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.15 \
+oras push ghcr.io/kubeswift-io/kubeswift/kernels/sandbox:6.6.16 \
   bzImage:application/vnd.kubeswift.kernel.binary \
   rootfs.cpio.gz:application/vnd.kubeswift.initramfs.binary \
   bridge-features:text/plain
-# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.4 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
+# gpu-sandbox: oras push .../kernels/gpu-sandbox:6.6.5 bzImage:... rootfs.cpio.gz:... bridge-features:text/plain
 ```
 
 Then `kubectl apply -f config/samples/sandbox/swiftkernel-sandbox.yaml` (or

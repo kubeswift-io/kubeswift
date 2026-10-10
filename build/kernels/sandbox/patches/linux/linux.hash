@@ -1,0 +1,5 @@
+# The sandbox kernel version is pinned, not Buildroot's "latest LTS" (which
+# froze at 6.6.44 in the vendored Buildroot, a release whose virtio-net
+# receive path drops valid GSO packets as "bad gso"). From
+# https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
+sha256  9eb33173b0e04e898d431587c78c47ee6e19e3fdf2ea007323de82af14bb2a4f  linux-6.6.158.tar.xz
