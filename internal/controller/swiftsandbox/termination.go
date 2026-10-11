@@ -160,7 +160,11 @@ func (r *SwiftSandboxReconciler) setTerminating(ctx context.Context, sb *sandbox
 
 // withdrawReadiness sets the launcher pod's workload readiness gate False
 // before the pod is deleted, so the pod is not Ready and its endpoint is not
-// serving, whoever wrote the gate. swiftletd writes it False on SIGTERM too.
+// serving, whoever wrote the gate; kube-proxy otherwise keeps sending new
+// connections to a serving terminating endpoint when no other is ready. It
+// must come first: the kubelet does not recompute Ready for a pod that is
+// already terminating. The price is that the kubelet's SIGTERM, and so the
+// drain, can wait for its next relist (up to 1 s) after this write.
 func (r *SwiftSandboxReconciler) withdrawReadiness(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, pod *corev1.Pod) error {
 	if !hasWorkloadGate(pod) {
 		return nil
