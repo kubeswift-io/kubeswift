@@ -602,8 +602,16 @@ spec:
                   the pool; it selects the warm-slot pods (sandbox.kubeswift.io/pool=<name>).
                 type: string
               warmReplicas:
-                description: WarmReplicas is the number of Ready, pre-booted, unclaimed
-                  slots.
+                description: |-
+                  WarmReplicas is the number of unclaimed slots ready for a checkout:
+                  booted, with the guest agent answering. Only these are handed out.
+                format: int32
+                type: integer
+              warmingReplicas:
+                description: |-
+                  WarmingReplicas is the number of unclaimed slots not ready yet (being
+                  scheduled, materialized or booted). A checkout never takes one; with no
+                  ready slot it boots cold.
                 format: int32
                 type: integer
             type: object

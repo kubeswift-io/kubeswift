@@ -193,6 +193,28 @@ pub fn regenerate_identity(
         .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
 }
 
+/// Reply to a `ping`. Unknown fields are ignored and missing ones default.
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct PingResponse {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(rename = "agentVersion", default)]
+    pub agent_version: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Ask the guest agent whether it is up. An error means nothing answered on
+/// [`AGENT_PORT`] (no socket yet, the guest still booting, or no agent).
+pub fn ping(socket_path: &Path, timeout: Duration) -> Result<PingResponse, VsockError> {
+    let line = serde_json::to_vec(&serde_json::json!({"v": PROTOCOL_VERSION, "op": "ping"}))
+        .map_err(|e| VsockError::Decode(e.to_string()))?;
+    let raw = request_line(socket_path, AGENT_PORT, &line, timeout)?;
+    let trimmed = trim_trailing_newline(&raw);
+    serde_json::from_slice(trimmed)
+        .map_err(|e| VsockError::Decode(format!("{}: {}", e, String::from_utf8_lossy(trimmed))))
+}
+
 /// Single-shot `exec` request sent to the guest agent (the streaming variant is
 /// swiftctl-only). Field names match the agent's `Request`. Used by swiftletd to run a
 /// checked-out warm-slot's workload over vsock (SwiftSandboxPool checkout).
@@ -390,6 +412,44 @@ mod tests {
         assert!(matches!(err, VsockError::Handshake(_)), "got {:?}", err);
         h.join().unwrap();
         let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn ping_sends_ping_and_parses_the_reply() {
+        let dir = std::env::temp_dir().join(format!("vsock-test-p-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sock = dir.join("vsock.sock");
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        let h = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut w = stream.try_clone().unwrap();
+            let mut r = BufReader::new(stream);
+            let mut connect = String::new();
+            r.read_line(&mut connect).unwrap();
+            assert_eq!(connect, format!("CONNECT {}\n", AGENT_PORT));
+            w.write_all(b"OK 1024\n").unwrap();
+            let mut req = String::new();
+            r.read_line(&mut req).unwrap();
+            w.write_all(b"{\"v\":1,\"ok\":true,\"op\":\"ping\",\"agentVersion\":\"t\"}\n")
+                .unwrap();
+            req
+        });
+        let resp = ping(&sock, Duration::from_secs(5)).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.agent_version.as_deref(), Some("t"));
+        let sent = h.join().unwrap();
+        assert!(sent.contains("\"op\":\"ping\""), "sent={}", sent);
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn ping_without_a_socket_is_an_io_error() {
+        let sock =
+            std::env::temp_dir().join(format!("vsock-test-none-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&sock);
+        let err = ping(&sock, Duration::from_millis(200)).unwrap_err();
+        assert!(matches!(err, VsockError::Io(_)), "got {:?}", err);
     }
 
     // Accepts one connection, completes the handshake, reads the request, then

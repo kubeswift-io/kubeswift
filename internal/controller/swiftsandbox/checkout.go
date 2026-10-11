@@ -273,10 +273,11 @@ func (r *SwiftSandboxReconciler) findClaimedSlot(ctx context.Context, sb *sandbo
 	return nil, nil
 }
 
-// tryClaimWarmSlot atomically claims a Ready warm slot of the sandbox's pool: it flips
+// tryClaimWarmSlot atomically claims a ready (slotReady) warm slot of the sandbox's pool: it flips
 // the slot's slot-state warm->claimed, labels it for this sandbox, and re-parents its pod
-// from the pool to this SwiftSandbox. A conflicting concurrent claim loses the optimistic
-// Update (409) and the loop tries the next slot. Returns nil when none is claimable.
+// from the pool to this SwiftSandbox. A claim that conflicts (409) re-reads the slot: one
+// another checkout took is skipped, one whose launcher wrote meanwhile is retried. Returns
+// nil when none is claimable.
 // profile is the pool's current slot profile; the caller has checked it honors sb.
 func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, profile string, inject *execInject) (*corev1.Pod, error) {
 	var pods corev1.PodList
@@ -284,61 +285,112 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 		client.MatchingLabels{PoolLabelKey: sb.Spec.PoolRef.Name, SlotStateLabelKey: slotStateWarm}); err != nil {
 		return nil, err
 	}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.DeletionTimestamp != nil || !launcherReady(p) {
-			continue
+	// eligible: a slot this sandbox may take, as last read.
+	eligible := func(p *corev1.Pod) bool {
+		// Only a slot whose guest agent answers: an exec sent to a slot
+		// still booting fails the checkout, where a miss boots cold.
+		if p.Labels[SlotStateLabelKey] != slotStateWarm || !slotReady(p) {
+			return false
 		}
 		// Only a slot booted under the pool's current shape (a slot from
 		// before a pool edit is not; the pool recycles it).
 		if p.Annotations[SlotProfileAnnotation] != profile {
-			continue
+			return false
 		}
 		// Secrets are granted only to a launcher's own account; a slot from
 		// before per-pod accounts runs as the shared one.
 		if usesSecrets(sb) && slotAccount(p) != swiftguest.SandboxLauncherServiceAccountFor(p.Name) {
-			continue
+			return false
 		}
 		// Artifacts need a slot whose bridge and launcher can project them.
 		if len(sb.Spec.Artifacts) > 0 && !slotSupportsWarmMounts(p) {
-			continue
+			return false
 		}
-		claimed := p.DeepCopy()
-		if claimed.Labels == nil {
-			claimed.Labels = map[string]string{}
-		}
-		claimed.Labels[SlotStateLabelKey] = slotStateClaimed
-		claimed.Labels[SandboxLabelKey] = sb.Name
-		// spec.podMetadata, in the same write as the claim: a Service
-		// selecting the sandbox by its labels never sees a half-claimed slot.
-		applyPodMetadata(claimed, sb.Spec.PodMetadata)
-		// Re-parent: drop the pool's controller ownerRef, make this sandbox the owner so
-		// the slot pod GCs with the sandbox (and the pool replenishes the warm count).
-		claimed.OwnerReferences = nonControllerRefs(claimed.OwnerReferences)
-		if err := controllerutil.SetControllerReference(sb, claimed, r.Scheme); err != nil {
-			return nil, err
-		}
-		if inject != nil {
-			ann, err := execActionAnnotations(claimed, sb, string(sb.UID), *inject)
-			if err != nil {
+		return true
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		for attempt := 0; attempt < claimAttempts && eligible(p); attempt++ {
+			claimed, err := r.claimSlot(ctx, sb, p, inject)
+			if err == nil {
+				return claimed, nil
+			}
+			if !apierrors.IsConflict(err) {
 				return nil, err
 			}
-			if claimed.Annotations == nil {
-				claimed.Annotations = map[string]string{}
+			// The slot changed since it was read: another checkout took it,
+			// or its launcher reported something (the guest IP lands after
+			// the slot is ready). Read it again and retry while it is still
+			// free, rather than miss a ready slot over an annotation.
+			if p, err = r.rereadSlot(ctx, p); err != nil {
+				return nil, err
 			}
-			for k, v := range ann {
-				claimed.Annotations[k] = v
+			if p == nil {
+				break
 			}
 		}
-		if err := r.Update(ctx, claimed); err != nil {
-			if apierrors.IsConflict(err) {
-				continue // another claim won this slot; try the next
-			}
-			return nil, err
-		}
-		return claimed, nil
 	}
 	return nil, nil
+}
+
+// claimAttempts bounds the retries of one slot whose claim conflicted.
+const claimAttempts = 3
+
+// claimSlot writes the claim of slot p for sb: slot-state claimed, the
+// sandbox's labels and owner, and the workload when inject is set. Fails with
+// a Conflict when p is not the slot's current version.
+func (r *SwiftSandboxReconciler) claimSlot(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, p *corev1.Pod, inject *execInject) (*corev1.Pod, error) {
+	claimed := p.DeepCopy()
+	if claimed.Labels == nil {
+		claimed.Labels = map[string]string{}
+	}
+	claimed.Labels[SlotStateLabelKey] = slotStateClaimed
+	claimed.Labels[SandboxLabelKey] = sb.Name
+	// spec.podMetadata, in the same write as the claim: a Service
+	// selecting the sandbox by its labels never sees a half-claimed slot.
+	applyPodMetadata(claimed, sb.Spec.PodMetadata)
+	// Re-parent: drop the pool's controller ownerRef, make this sandbox the owner so
+	// the slot pod GCs with the sandbox (and the pool replenishes the warm count).
+	claimed.OwnerReferences = nonControllerRefs(claimed.OwnerReferences)
+	if err := controllerutil.SetControllerReference(sb, claimed, r.Scheme); err != nil {
+		return nil, err
+	}
+	if inject != nil {
+		ann, err := execActionAnnotations(claimed, sb, string(sb.UID), *inject)
+		if err != nil {
+			return nil, err
+		}
+		if claimed.Annotations == nil {
+			claimed.Annotations = map[string]string{}
+		}
+		for k, v := range ann {
+			claimed.Annotations[k] = v
+		}
+	}
+	if err := r.Update(ctx, claimed); err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// rereadSlot reads slot p again, past the cache that served the version
+// that conflicted. nil when it is gone.
+func (r *SwiftSandboxReconciler) rereadSlot(ctx context.Context, p *corev1.Pod) (*corev1.Pod, error) {
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	var fresh corev1.Pod
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(p), &fresh); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if fresh.DeletionTimestamp != nil {
+		return nil, nil
+	}
+	return &fresh, nil
 }
 
 func nonControllerRefs(refs []metav1.OwnerReference) []metav1.OwnerReference {

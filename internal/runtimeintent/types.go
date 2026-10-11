@@ -111,6 +111,12 @@ type RuntimeIntent struct {
 	// SandboxTermination is spec.termination of a cold sandbox (a warm slot
 	// gets its checkout's with the workload). Unset means no drain.
 	SandboxTermination *SandboxTerminationIntent `json:"sandboxTermination,omitempty"`
+
+	// SandboxWarmSlot marks a warm-pool slot (booted idle, no workload).
+	// swiftletd then reports when the guest agent first answers
+	// (kubeswift.io/guest-agent-ready): until then a checkout's exec would
+	// find nothing listening, so the controller hands the slot to none.
+	SandboxWarmSlot bool `json:"sandboxWarmSlot,omitempty"`
 }
 
 // VsockIntent is the vsock device for the in-guest identity agent.
