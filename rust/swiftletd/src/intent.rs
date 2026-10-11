@@ -43,6 +43,11 @@ pub struct RuntimeIntent {
     /// slot, whose probes arrive with the checkout's workload instead.
     #[serde(default)]
     pub sandbox_probes: Option<SandboxProbes>,
+    /// spec.termination of a cold sandbox: how long the workload keeps
+    /// running after SIGTERM before the microVM is stopped. None means no
+    /// drain; a warm slot's arrives with its checkout's workload.
+    #[serde(default)]
+    pub sandbox_termination: Option<SandboxTermination>,
     /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
@@ -546,6 +551,16 @@ pub struct SandboxProbes {
     /// annotations, so the kubelet sees one write.
     #[serde(default)]
     pub readiness_gate: String,
+}
+
+/// How a sandbox workload ends on SIGTERM (shutdown.rs).
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxTermination {
+    /// How long the workload keeps running, out of Service endpoints, before
+    /// the microVM is stopped.
+    #[serde(default)]
+    pub drain_ms: u64,
 }
 
 /// The fast start of a readiness probe, in milliseconds.

@@ -513,6 +513,25 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 	if err := swiftguest.EnsureLauncherIdentity(ctx, r.Client, r.Scheme, pool, pod.Name, swiftguest.SandboxLauncher, pod.Spec.ServiceAccountName, nil); err != nil {
 		return err
 	}
+	// The NetworkPolicy before the pod: the slot is never reachable without it.
+	if networked(slot) {
+		np := buildNetworkPolicy(slot)
+		np.Spec.PodSelector = metav1.LabelSelector{MatchLabels: map[string]string{SlotNameLabelKey: slot.Name}}
+		if np.Labels == nil {
+			np.Labels = map[string]string{}
+		}
+		np.Labels[PoolLabelKey] = pool.Name
+		if err := controllerutil.SetControllerReference(pool, np, r.Scheme); err != nil {
+			return err
+		}
+		ok, msg, err := ensureLauncherPolicy(ctx, r.Client, pool, np)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("warm slot %s: %s", slot.Name, msg)
+		}
+	}
 	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
@@ -526,20 +545,6 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 		}
 	}
 
-	if networked(slot) {
-		np := buildNetworkPolicy(slot)
-		np.Spec.PodSelector = metav1.LabelSelector{MatchLabels: map[string]string{SlotNameLabelKey: slot.Name}}
-		if np.Labels == nil {
-			np.Labels = map[string]string{}
-		}
-		np.Labels[PoolLabelKey] = pool.Name
-		if err := controllerutil.SetControllerReference(pool, np, r.Scheme); err != nil {
-			return err
-		}
-		if err := r.Create(ctx, np); err != nil && !apierrors.IsAlreadyExists(err) {
-			return err
-		}
-	}
 	return nil
 }
 

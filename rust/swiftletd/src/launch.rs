@@ -553,6 +553,7 @@ where
     let mut child =
         spawn_ch(&config).map_err(|e| format!("failed to spawn cloud-hypervisor: {}", e))?;
     let pid = child.id();
+    crate::shutdown::set_vmm_pid(pid);
 
     // Wait for CH to create the API socket (signals VM is initialising)
     wait_for_socket(&runtime_dir.api_socket(), Duration::from_secs(30))?;

@@ -349,7 +349,14 @@ fn run(
     let mut liveness = probes.liveness.map(|p| Scheduled::new(p, start, None));
     let mut reported_ready = false;
 
+    let mut terminating = false;
     while !stop.load(Ordering::SeqCst) {
+        // SIGTERM: the sandbox is being deleted. Not ready from now on,
+        // whatever the probe says; the drain runs out of Service endpoints.
+        if crate::shutdown::terminating() {
+            terminating = true;
+            break;
+        }
         let now = Instant::now();
         if let Some(r) = readiness.as_mut().filter(|r| r.next <= now) {
             let result = probe_once(&r.probe, ip);
@@ -389,10 +396,17 @@ fn run(
             .clamp(Duration::from_millis(1), TICK);
         std::thread::sleep(wait);
     }
-    // The workload has ended: a pod condition it set must not outlive it.
-    // A few prompt attempts; the pod itself ends soon after.
-    if reported_ready && reporter.gated() {
-        reporter.queue_ready(false, "the workload has ended".to_string());
+    // The workload has ended, or the sandbox is terminating: a pod condition
+    // it set must not outlive it. A few prompt attempts; the pod itself ends
+    // soon after. On termination the annotation is cleared too.
+    if reported_ready && (reporter.gated() || terminating) {
+        let why = if terminating {
+            "the sandbox is terminating"
+        } else {
+            "the workload has ended"
+        };
+        log::info!("workload_ready=false {}", why);
+        reporter.queue_ready(false, why.to_string());
         for _ in 0..5 {
             reporter.flush_now(&rt);
             if reporter.is_idle() {

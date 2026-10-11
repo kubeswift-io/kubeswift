@@ -107,6 +107,10 @@ type RuntimeIntent struct {
 	// swiftletd to run against the guest. A warm slot carries none: a checkout
 	// hands them over with its workload (the sandbox-exec action args).
 	SandboxProbes *SandboxProbesIntent `json:"sandboxProbes,omitempty"`
+
+	// SandboxTermination is spec.termination of a cold sandbox (a warm slot
+	// gets its checkout's with the workload). Unset means no drain.
+	SandboxTermination *SandboxTerminationIntent `json:"sandboxTermination,omitempty"`
 }
 
 // VsockIntent is the vsock device for the in-guest identity agent.
@@ -295,6 +299,13 @@ type SandboxProbesIntent struct {
 	// When set, swiftletd writes readiness to that pod condition (pods/status)
 	// rather than to annotations, so the kubelet sees one pod write.
 	ReadinessGate string `json:"readinessGate,omitempty"`
+}
+
+// SandboxTerminationIntent is how swiftletd ends a running workload on
+// SIGTERM: it reports the workload not ready, waits DrainMs (less if the
+// workload exits first), then stops the microVM.
+type SandboxTerminationIntent struct {
+	DrainMs int64 `json:"drainMs"`
 }
 
 // ReadinessStartupIntent is the readiness probe's fast start, in milliseconds.

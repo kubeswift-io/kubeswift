@@ -6,6 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Upgrade
+
+- Rootfs and model entries cached before this release have no record of the
+  repository they came from. The first sandbox per repository and cached image
+  reads that image's layers from its registry once (a download, no
+  unpacking); later ones use the cache as before. Expect the first start of
+  each image on each node to take about as long as a pull.
+- Deleting a running sandbox no longer leaves its workload running for the
+  launcher pod's 30 s grace period, which ended `Failed`. A sandbox that
+  exposes `network.ports` now drains for 5 s (`spec.termination.drainPeriod`)
+  and one that does not stops at once; the launcher pod ends `Succeeded`.
+- The controller adds two finalizers: `kubeswift.io/sandbox-termination` on
+  every SwiftSandbox and `kubeswift.io/launcher-isolation` on every sandbox
+  launcher NetworkPolicy, including those that exist at upgrade. An older
+  controller does not remove them. Before downgrading, remove them, or
+  deleting those objects (and their namespaces) waits forever:
+  `kubectl patch <object> --type=json -p '[{"op":"remove","path":"/metadata/finalizers"}]'`.
+- CRD changed: `swiftsandboxes` (`spec.termination`). Apply `crds/`.
+
 ### Security
 
 - **A sandbox could boot, or mount as its model, a cached image its own
@@ -19,14 +38,21 @@ All notable changes to KubeSwift are documented here.
   once that repository has served its content, as artifacts already were
   (#765). A repository that does not serve the layers fails the sandbox
   (`RootfsMaterializeFailed`, or the model init container).
+- A deleted sandbox's NetworkPolicy is kept until its launcher pod has
+  stopped. It used to be deleted together with the sandbox while the launcher
+  pod was still within its grace period.
 
-### Upgrade
+### Added
 
-- Rootfs and model entries cached before this release have no record of the
-  repository they came from. The first sandbox per repository and cached image
-  reads that image's layers from its registry once (a download, no
-  unpacking); later ones use the cache as before. Expect the first start of
-  each image on each node to take about as long as a pull.
+- **`spec.termination.drainPeriod`** on SwiftSandbox: deleting a sandbox
+  takes it out of Service endpoints, keeps the workload running for the
+  drain, then stops the microVM. The `Terminating` condition reports each
+  step (`Draining`, `Stopping`). Works for cold sandboxes and warm-pool
+  checkouts alike.
+
+### Changed
+
+- A sandbox launcher's NetworkPolicy is created before its pod.
 
 ---
 

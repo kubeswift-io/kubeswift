@@ -376,6 +376,9 @@ func execActionAnnotations(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox, a
 	if probes := probesIntent(sb, launcherReportsGate(slot)); probes != nil {
 		args["probes"] = probes
 	}
+	if t := terminationIntent(sb); t != nil {
+		args["termination"] = t
+	}
 	// References only; swiftletd reads the values and sends them over vsock.
 	if refs := secretEnvRefs(sb); len(refs) > 0 {
 		args["secretEnv"] = refs
