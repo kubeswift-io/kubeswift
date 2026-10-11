@@ -75,7 +75,7 @@ func TestProbesIntent_ReadinessStartup(t *testing.T) {
 // gatedLauncher is sb's launcher pod, marked for swiftletd to report the gate,
 // with the gate condition set as swiftletd would.
 func gatedLauncher(sb *sandboxv1alpha1.SwiftSandbox, actionID string, gate *corev1.PodCondition) *corev1.Pod {
-	pod := buildPod(sb, "sandbox")
+	pod := ownLauncher(sb, buildPod(sb, "sandbox"))
 	if pod.Annotations == nil {
 		pod.Annotations = map[string]string{}
 	}

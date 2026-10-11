@@ -43,6 +43,15 @@ All notable changes to KubeSwift are documented here.
   stopped (#774). It used to be deleted together with the sandbox while the launcher
   pod was still within its grace period.
 
+### Fixed
+
+- A SwiftSandbox re-created under the name of one whose launcher pod had not
+  gone yet took that pod over: it reported the old workload's state, then
+  failed or completed with it, and never started its own (#772). A sandbox
+  now uses only a launcher pod it controls; it waits for a previous one to go
+  (`Resolved=False`, `PreviousLauncherStopping`) and does not adopt a live pod
+  that is not its own (`LauncherPodConflict`) (#775).
+
 ### Added
 
 - **`spec.termination.drainPeriod`** on SwiftSandbox (#774): deleting a sandbox

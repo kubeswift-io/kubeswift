@@ -105,6 +105,18 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	// A cold launcher is found by name: before its grant or anything else is
+	// touched, the pod by that name must be this sandbox's, or none (#772).
+	if sb.Spec.PoolRef == nil || sb.Status.PodRef == sb.Name {
+		reason, msg, err := r.foreignColdLauncher(ctx, &sb)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if reason != "" {
+			return r.waitForReference(ctx, &sb, reason, msg)
+		}
+	}
+
 	// Per-pod scoped grant (#515) for the COLD pod, which is named sb.Name.
 	//
 	// A pooled sandbox that claims a warm slot runs under the SLOT's pod, whose
@@ -160,6 +172,9 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	case err != nil:
 		return ctrl.Result{}, err
 	}
+	if reason, msg, _ := foreignPodReason(&sb, &pod); reason != "" {
+		return r.waitForReference(ctx, &sb, reason, msg)
+	}
 	return r.reconcilePodState(ctx, &sb, &pod)
 }
 
@@ -173,6 +188,13 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		return ctrl.Result{}, err
 	}
 	if reason != "" {
+		return r.waitForReference(ctx, sb, reason, msg)
+	}
+	// A pool miss reaches here without the check in Reconcile (#772).
+	if reason, msg, err := r.foreignColdLauncher(ctx, sb); err != nil || reason != "" {
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 		return r.waitForReference(ctx, sb, reason, msg)
 	}
 
@@ -310,7 +332,16 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 			return r.waitForReference(ctx, sb, "PreviousLauncherStopping", msg)
 		}
 	}
-	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, pod); apierrors.IsAlreadyExists(err) {
+		// Ours from an earlier pass, or a pod that appeared since the check
+		// above: only ours may go on (#772).
+		if reason, msg, err := r.foreignColdLauncher(ctx, sb); err != nil || reason != "" {
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			return r.waitForReference(ctx, sb, reason, msg)
+		}
+	} else if err != nil {
 		return ctrl.Result{}, err
 	}
 	sb.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
