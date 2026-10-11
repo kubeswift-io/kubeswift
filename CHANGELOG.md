@@ -16,7 +16,8 @@ All notable changes to KubeSwift are documented here.
 - Deleting a running sandbox no longer leaves its workload running for the
   launcher pod's 30 s grace period, which ended `Failed`. A sandbox that
   exposes `network.ports` now drains for 5 s (`spec.termination.drainPeriod`)
-  and one that does not stops at once; the launcher pod ends `Succeeded`.
+  and one that does not stops at once; the launcher pod ends `Succeeded`
+  (#774).
 - The controller adds two finalizers: `kubeswift.io/sandbox-termination` on
   every SwiftSandbox and `kubeswift.io/launcher-isolation` on every sandbox
   launcher NetworkPolicy, including those that exist at upgrade. An older
@@ -39,12 +40,12 @@ All notable changes to KubeSwift are documented here.
   (#765). A repository that does not serve the layers fails the sandbox
   (`RootfsMaterializeFailed`, or the model init container).
 - A deleted sandbox's NetworkPolicy is kept until its launcher pod has
-  stopped. It used to be deleted together with the sandbox while the launcher
+  stopped (#774). It used to be deleted together with the sandbox while the launcher
   pod was still within its grace period.
 
 ### Added
 
-- **`spec.termination.drainPeriod`** on SwiftSandbox: deleting a sandbox
+- **`spec.termination.drainPeriod`** on SwiftSandbox (#774): deleting a sandbox
   takes it out of Service endpoints, keeps the workload running for the
   drain, then stops the microVM. The `Terminating` condition reports each
   step (`Draining`, `Stopping`). Works for cold sandboxes and warm-pool
