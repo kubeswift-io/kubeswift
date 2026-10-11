@@ -77,6 +77,8 @@ type deleteCall struct {
 	name  string
 	grace *int64
 	uid   *types.UID
+	// gate is the pod's workload gate when the delete was made.
+	gate corev1.ConditionStatus
 }
 
 func terminationClient(deletes *[]deleteCall, objs ...client.Object) client.Client {
@@ -90,6 +92,14 @@ func terminationClient(deletes *[]deleteCall, objs ...client.Object) client.Clie
 				call := deleteCall{name: obj.GetName(), grace: o.GracePeriodSeconds}
 				if o.Preconditions != nil {
 					call.uid = o.Preconditions.UID
+				}
+				var pod corev1.Pod
+				if c.Get(ctx, client.ObjectKeyFromObject(obj), &pod) == nil {
+					for _, cond := range pod.Status.Conditions {
+						if cond.Type == WorkloadReadyGate {
+							call.gate = cond.Status
+						}
+					}
 				}
 				*deletes = append(*deletes, call)
 				return c.Delete(ctx, obj, opts...)
@@ -156,6 +166,11 @@ func TestTermination_RunningWorkloadDrainsThenGoes(t *testing.T) {
 	}
 	if g := deletes[0].grace; g == nil || *g != 20 {
 		t.Errorf("grace = %v, want 20 (5s drain + 15s to stop)", g)
+	}
+	// The kubelet does not recompute Ready for a terminating pod: the gate
+	// must be False before the delete, or the endpoint stays serving.
+	if deletes[0].gate != corev1.ConditionFalse {
+		t.Errorf("gate %q at the delete, want False before it", deletes[0].gate)
 	}
 	if u := deletes[0].uid; u == nil || *u != pod.UID {
 		t.Errorf("delete precondition uid = %v, want %s", u, pod.UID)
