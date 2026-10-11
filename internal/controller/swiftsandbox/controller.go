@@ -95,6 +95,11 @@ func (r *SwiftSandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if terminating, err := namespaces.Terminating(ctx, r.Client, sb.Namespace); err != nil || terminating {
 		return ctrl.Result{}, err
 	}
+	// Before any launcher exists: deleting the sandbox then stops it through
+	// handleDeletion (drain, then the microVM), not through garbage collection.
+	if err := r.ensureTerminationFinalizer(ctx, &sb); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	if err := swiftguest.EnsureLauncherRBAC(ctx, r.Client, sb.Namespace, swiftguest.SandboxLauncher); err != nil {
 		return ctrl.Result{}, err
@@ -290,17 +295,23 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err := controllerutil.SetControllerReference(sb, pod, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		return ctrl.Result{}, err
-	}
+	// The NetworkPolicy before the pod: the launcher is never reachable
+	// without it.
 	if networked(sb) {
 		np := buildNetworkPolicy(sb)
 		if err := controllerutil.SetControllerReference(sb, np, r.Scheme); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.Create(ctx, np); err != nil && !apierrors.IsAlreadyExists(err) {
+		ok, msg, err := ensureLauncherPolicy(ctx, r.Client, sb, np)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if !ok {
+			return r.waitForReference(ctx, sb, "PreviousLauncherStopping", msg)
+		}
+	}
+	if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
+		return ctrl.Result{}, err
 	}
 	sb.Status.Rootfs = &sandboxv1alpha1.SandboxRootfsStatus{Digest: ri.Digest, CachePath: ri.RootfsPath}
 	apimeta.SetStatusCondition(&sb.Status.Conditions, metav1.Condition{

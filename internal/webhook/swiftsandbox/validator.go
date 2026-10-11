@@ -86,6 +86,9 @@ func validateSpec(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 	if err := ValidateArtifacts(s); err != nil {
 		return err
 	}
+	if err := ValidateTermination(s.Termination); err != nil {
+		return err
+	}
 	// Exactly one GPU backend: gpuProfileRef (native) XOR gpuResourceClaim (DRA).
 	if s.GPUProfileRef != nil && s.GPUResourceClaim != nil {
 		return fmt.Errorf("spec.gpuProfileRef and spec.gpuResourceClaim are mutually exclusive: choose the native (gpuProfileRef) or DRA (gpuResourceClaim) GPU backend")
@@ -151,4 +154,15 @@ func launchSpecChanged(oldS, newS *sandboxv1alpha1.SwiftSandboxSpec) bool {
 	n := newS.DeepCopy()
 	o.TTL, n.TTL = nil, nil
 	return !apiequality.Semantic.DeepEqual(o, n)
+}
+
+// ValidateTermination bounds spec.termination.drainPeriod.
+func ValidateTermination(t *sandboxv1alpha1.SandboxTermination) error {
+	if t == nil || t.DrainPeriod == nil {
+		return nil
+	}
+	if d := t.DrainPeriod.Duration; d < 0 || d > sandboxv1alpha1.TerminationMaxDrainPeriod {
+		return fmt.Errorf("spec.termination.drainPeriod %s must be between 0s and %s", d, sandboxv1alpha1.TerminationMaxDrainPeriod)
+	}
+	return nil
 }

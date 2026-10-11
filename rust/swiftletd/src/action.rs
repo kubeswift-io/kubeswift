@@ -953,6 +953,9 @@ struct SandboxExecArgs {
     /// and mount in the guest (warm_artifacts.rs).
     #[serde(default)]
     artifacts: Vec<crate::warm_artifacts::WarmArtifact>,
+    /// The checked-out sandbox's spec.termination (its drain on SIGTERM).
+    #[serde(default)]
+    termination: Option<crate::intent::SandboxTermination>,
 }
 
 /// Default sandbox-exec timeout. The single-shot exec's connection is idle while
@@ -1054,6 +1057,9 @@ async fn dispatch_sandbox_exec(
     let mut req = swift_vsock_client::ExecRequest::new(args.argv, env, args.cwd);
     req.files = files;
     req.mounts = mounts;
+    if let Some(t) = &args.termination {
+        crate::shutdown::set_drain(Duration::from_millis(t.drain_ms));
+    }
     // Probe the workload while it runs; the guard stops probing when the
     // exec returns (the workload has exited).
     let _probe_guard = match (
@@ -1083,9 +1089,12 @@ async fn dispatch_sandbox_exec(
     );
     let resp =
         tokio::task::spawn_blocking(move || swift_vsock_client::exec(&vsock_socket, &req, timeout))
-            .await
-            .map_err(|e| format!("sandbox-exec task join: {}", e))?
-            .map_err(|e| format!("GuestAgentUnreachable: {}", e))?;
+            .await;
+    // The workload is over, however the exec ended: a drain in progress ends.
+    crate::shutdown::workload_ended();
+    let resp = resp
+        .map_err(|e| format!("sandbox-exec task join: {}", e))?
+        .map_err(|e| format!("GuestAgentUnreachable: {}", e))?;
 
     if !resp.ok {
         return Err(format!(
@@ -4351,6 +4360,10 @@ mod tests {
             (2, 5, 3)
         );
         assert!(probes.liveness.is_none());
+        assert!(args.termination.is_none());
+        let with_drain: SandboxExecArgs =
+            serde_json::from_str(r#"{"argv":["/srv"],"termination":{"drainMs":5000}}"#).unwrap();
+        assert_eq!(with_drain.termination.map(|t| t.drain_ms), Some(5000));
         // Args from before probes existed still parse.
         let old: SandboxExecArgs = serde_json::from_str(r#"{"argv":["/srv"]}"#).unwrap();
         assert!(old.probes.is_none());

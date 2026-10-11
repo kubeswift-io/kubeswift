@@ -218,6 +218,7 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 	if !idle {
 		// A warm slot's probes arrive with its checkout's workload instead.
 		ri.SandboxProbes = probesIntent(sb, workloadGated(sb) && swiftguest.LauncherReportsReadiness())
+		ri.SandboxTermination = terminationIntent(sb)
 	}
 	if networked(sb) {
 		// spec.network.ports: network-init DNATs each pod port to the same port
@@ -525,8 +526,12 @@ func buildPod(sb *sandboxv1alpha1.SwiftSandbox, kernelName string) *corev1.Pod {
 			ServiceAccountName: swiftguest.SandboxLauncherServiceAccountFor(sb.Name),
 			ImagePullSecrets:   swiftguest.LauncherImagePullSecrets(),
 			RestartPolicy:      corev1.RestartPolicyNever,
-			NodeSelector:       nodeSelector,
-			InitContainers:     initContainers,
+			// Drain, then the stop of the microVM, for any deletion of the
+			// pod; deleting the sandbox passes the same value explicitly,
+			// which a warm slot (built before its workload) needs.
+			TerminationGracePeriodSeconds: ptr.To(launcherGracePeriodSeconds(sb)),
+			NodeSelector:                  nodeSelector,
+			InitContainers:                initContainers,
 			Containers: []corev1.Container{{
 				Name:            launcherName,
 				Image:           swiftguest.LauncherImage(),

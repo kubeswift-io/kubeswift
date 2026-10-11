@@ -1286,6 +1286,27 @@ spec:
                 maxItems: 16
                 type: array
                 x-kubernetes-list-type: atomic
+              termination:
+                description: |-
+                  Termination controls how a running workload ends when the sandbox is
+                  deleted. Deletion first takes the sandbox out of Service endpoints,
+                  keeps the workload running for termination.drainPeriod (default 5s
+                  when it exposes ports), then stops the microVM. The sandbox's
+                  NetworkPolicy stays in place until the launcher pod is gone.
+                properties:
+                  drainPeriod:
+                    description: |-
+                      DrainPeriod is how long the workload keeps running after deletion has
+                      taken the sandbox out of Service endpoints and before the microVM is
+                      stopped. Connections already open keep working; new Service
+                      connections go to other endpoints. It must cover the time your cluster
+                      takes to stop routing to a removed endpoint (kube-proxy syncs at most
+                      once per minSyncPeriod, 1s by default) plus the longest request you
+                      want to complete. It ends early when the workload exits. Between 0s and
+                      10m; default 5s for a sandbox that exposes ports (spec.network.ports),
+                      else 0s.
+                    type: string
+                type: object
               timeout:
                 description: |-
                   Timeout is the wall-clock run cap. Past startedAt+timeout the controller

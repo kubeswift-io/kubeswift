@@ -511,11 +511,22 @@ fn main() {
             // Graceful shutdown: handle SIGTERM (swiftletd is PID 1, so without a
             // handler the kernel drops it and the kubelet SIGKILLs the hypervisor at
             // the end of the grace period). Installed before launch::run blocks.
-            shutdown::spawn_sigterm_handler(shutdown::PowerTarget::for_hypervisor(
-                intent.hypervisor(),
-                runtime_dir.api_socket(),
-                runtime_dir.root().join("qmp.sock"),
-            ));
+            // A sandbox drains and then stops its microVM instead.
+            if let Some(t) = &intent.sandbox_termination {
+                shutdown::set_drain(std::time::Duration::from_millis(t.drain_ms));
+            }
+            shutdown::spawn_sigterm_handler(
+                shutdown::PowerTarget::for_hypervisor(
+                    intent.hypervisor(),
+                    runtime_dir.api_socket(),
+                    runtime_dir.root().join("qmp.sock"),
+                ),
+                if intent.is_sandbox() {
+                    shutdown::Mode::Sandbox
+                } else {
+                    shutdown::Mode::Guest
+                },
+            );
             let result = launch::run(&intent, &runtime_dir, on_socket_ready);
             let abnormal_exit_detail: Option<String> = match &result {
                 Ok((exit_status, _, _)) if !exit_status.success() => {
@@ -641,6 +652,12 @@ fn main() {
                             log::info!("vm_stopped_gracefully");
                             report_running(false, Some("VmStopped"));
                         }
+                    } else if shutdown::vm_stopped_by_termination() {
+                        // The sandbox was deleted and its drain is over: a
+                        // stop, not a failure, so the launcher pod ends
+                        // Succeeded.
+                        log::info!("vm_stopped_by_termination");
+                        report_running(false, Some("VmStopped"));
                     } else {
                         log::warn!("vm_exited_nonzero code={:?}", exit_status.code());
                         report_running(false, Some("VmFailed"));

@@ -378,6 +378,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Holds each sandbox launcher's NetworkPolicy until the pods it protects
+	// can no longer run.
+	if err = (&swiftsandbox.IsolationReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		klog.ErrorS(err, "unable to create sandbox isolation controller")
+		os.Exit(1)
+	}
+
 	if err = (&swiftsandbox.SwiftSandboxPoolReconciler{
 		Client:    mgr.GetClient(),
 		APIReader: mgr.GetAPIReader(),

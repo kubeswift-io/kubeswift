@@ -225,6 +225,14 @@ type SwiftSandboxSpec struct {
 	// Requires spec.readinessProbe.
 	// +optional
 	ReadinessStartup *SandboxReadinessStartup `json:"readinessStartup,omitempty"`
+
+	// Termination controls how a running workload ends when the sandbox is
+	// deleted. Deletion first takes the sandbox out of Service endpoints,
+	// keeps the workload running for termination.drainPeriod (default 5s
+	// when it exposes ports), then stops the microVM. The sandbox's
+	// NetworkPolicy stays in place until the launcher pod is gone.
+	// +optional
+	Termination *SandboxTermination `json:"termination,omitempty"`
 }
 
 // SandboxScratchDisk describes the sandbox's secondary block disk. Exactly one
@@ -350,6 +358,35 @@ const (
 	ReadinessStartupDefaultWindow   = 30 * time.Second
 	ReadinessStartupMinWindow       = time.Second
 	ReadinessStartupMaxWindow       = 10 * time.Minute
+)
+
+// SandboxTermination is how a running sandbox ends when it is deleted.
+type SandboxTermination struct {
+	// DrainPeriod is how long the workload keeps running after deletion has
+	// taken the sandbox out of Service endpoints and before the microVM is
+	// stopped. Connections already open keep working; new Service
+	// connections go to other endpoints. It must cover the time your cluster
+	// takes to stop routing to a removed endpoint (kube-proxy syncs at most
+	// once per minSyncPeriod, 1s by default) plus the longest request you
+	// want to complete. It ends early when the workload exits. Between 0s and
+	// 10m; default 5s for a sandbox that exposes ports (spec.network.ports),
+	// else 0s.
+	// +optional
+	DrainPeriod *metav1.Duration `json:"drainPeriod,omitempty"`
+}
+
+// Defaults and bounds of SandboxTermination.
+const (
+	// TerminationDefaultDrainPeriod is the drain of a sandbox that exposes
+	// ports. One that exposes none receives no Service traffic and has no
+	// drain by default.
+	TerminationDefaultDrainPeriod = 5 * time.Second
+	TerminationMaxDrainPeriod     = 10 * time.Minute
+	// TerminationStopAllowance is the time the launcher has, after the
+	// drain, to stop the microVM and report. The launcher pod's grace period
+	// is the drain plus this, so the kubelet only kills a launcher that
+	// failed to stop the microVM itself.
+	TerminationStopAllowance = 15 * time.Second
 )
 
 // SandboxNetwork is the sandbox networking policy.
@@ -612,6 +649,11 @@ const (
 	// is Bound and attachable; False while provisioning/binding. Absent when no
 	// scratchDisk is requested.
 	SwiftSandboxConditionScratchDiskReady = "ScratchDiskReady"
+	// SwiftSandboxConditionTerminating is set once the sandbox is deleted:
+	// reason Draining while the workload still runs out of Service
+	// endpoints, Stopping once the drain is over and the microVM is being
+	// stopped, LauncherGone when the launcher pod no longer exists.
+	SwiftSandboxConditionTerminating = "Terminating"
 )
 
 // Resolved=False reasons, on a SwiftSandbox or a SwiftSandboxPool, while the
@@ -787,6 +829,24 @@ func (s *SandboxReadinessStartup) IntervalOrDefault() time.Duration {
 		return ReadinessStartupDefaultInterval
 	}
 	return s.Interval.Duration
+}
+
+// DrainPeriod is spec.termination.drainPeriod, or its default:
+// TerminationDefaultDrainPeriod for a sandbox that exposes ports, else none.
+func (s *SwiftSandboxSpec) DrainPeriod() time.Duration {
+	if t := s.Termination; t != nil && t.DrainPeriod != nil {
+		return t.DrainPeriod.Duration
+	}
+	if len(s.Network.Ports) > 0 {
+		return TerminationDefaultDrainPeriod
+	}
+	return 0
+}
+
+// TerminationGracePeriod is the launcher pod's termination grace period: the
+// drain, then the time swiftletd has to stop the microVM.
+func (s *SwiftSandboxSpec) TerminationGracePeriod() time.Duration {
+	return s.DrainPeriod() + TerminationStopAllowance
 }
 
 // WindowOrDefault is spec.readinessStartup.window, or its default.

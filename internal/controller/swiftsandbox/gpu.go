@@ -196,7 +196,16 @@ func (r *SwiftSandboxReconciler) releaseGPUWhenDone(ctx context.Context, sb *san
 // It is owned by the sandbox, but background GC removes it only after the
 // sandbox is gone -- i.e. after this finalizer -- so releasing straight away
 // freed a GPU whose VFIO group the still-running launcher held.
+//
+// A sandbox with sandboxTerminationFinalizer first stops its launcher
+// (terminateLauncher): readiness withdrawn, drain, then the microVM.
 func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox) (ctrl.Result, error) {
+	if controllerutil.ContainsFinalizer(sb, sandboxTerminationFinalizer) {
+		done, res, err := r.terminateLauncher(ctx, sb)
+		if err != nil || !done {
+			return res, err
+		}
+	}
 	if controllerutil.ContainsFinalizer(sb, sandboxGPUFinalizer) {
 		held, pod, err := r.launcherMayHoldGPU(ctx, sb)
 		if err != nil {
@@ -214,6 +223,12 @@ func (r *SwiftSandboxReconciler) handleDeletion(ctx context.Context, sb *sandbox
 			return ctrl.Result{}, err
 		}
 		controllerutil.RemoveFinalizer(sb, sandboxGPUFinalizer)
+		if err := r.Update(ctx, sb); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if controllerutil.ContainsFinalizer(sb, sandboxTerminationFinalizer) {
+		controllerutil.RemoveFinalizer(sb, sandboxTerminationFinalizer)
 		if err := r.Update(ctx, sb); err != nil {
 			return ctrl.Result{}, err
 		}

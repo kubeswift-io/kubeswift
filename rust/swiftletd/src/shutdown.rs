@@ -1,4 +1,4 @@
-//! Graceful guest shutdown on SIGTERM.
+//! Guest shutdown on SIGTERM.
 //!
 //! swiftletd is PID 1 in the launcher container (the entrypoint `exec`s it),
 //! and the kernel drops a signal sent to a PID-namespace init that has no
@@ -9,14 +9,124 @@
 //! its dirty page cache, and came back needing journal replay or with a damaged
 //! filesystem.
 //!
-//! This installs a SIGTERM handler that presses the guest's ACPI power button.
-//! The guest OS then shuts down cleanly, the hypervisor exits, `launch::run`
-//! returns on the main thread, and swiftletd reports `VmStopped` and exits
-//! normally. If the guest ignores ACPI (a minimal initramfs, a hung OS) nothing
-//! changes from before: the kubelet SIGKILLs at the end of the grace period.
+//! A SwiftGuest ([`Mode::Guest`]): SIGTERM presses the guest's ACPI power
+//! button. The guest OS then shuts down cleanly, the hypervisor exits,
+//! `launch::run` returns on the main thread, and swiftletd reports `VmStopped`
+//! and exits normally. If the guest ignores ACPI (a hung OS) the kubelet
+//! SIGKILLs at the end of the grace period.
+//!
+//! A sandbox ([`Mode::Sandbox`]): the bridge init has no power-button handler,
+//! so ACPI would change nothing and the workload kept serving until the
+//! kubelet's SIGKILL. Instead SIGTERM marks the sandbox terminating (the probe
+//! runner reports the workload not ready and stops), keeps the workload
+//! running for its drain (spec.termination.drainPeriod; less if it exits
+//! first), then kills the hypervisor. The pod's grace period is the drain plus
+//! a stop allowance, so the kubelet's SIGKILL is only the backstop.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+/// What SIGTERM does to the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Press the ACPI power button; the guest OS shuts itself down.
+    Guest,
+    /// Withdraw readiness, drain, then stop the microVM.
+    Sandbox,
+}
+
+static TERMINATING: AtomicBool = AtomicBool::new(false);
+static WORKLOAD_ENDED: AtomicBool = AtomicBool::new(false);
+static DRAIN_MS: AtomicU64 = AtomicU64::new(0);
+static VMM_PID: AtomicU32 = AtomicU32::new(0);
+static VM_STOPPED: AtomicBool = AtomicBool::new(false);
+
+/// How often the drain checks whether the workload has ended.
+const DRAIN_POLL: Duration = Duration::from_millis(50);
+
+/// Whether the sandbox is terminating: SIGTERM has arrived. Probe runners stop
+/// and report the workload not ready.
+pub fn terminating() -> bool {
+    TERMINATING.load(Ordering::SeqCst)
+}
+
+/// Sets the drain of the workload that runs now (a cold sandbox's from its
+/// intent, a warm slot's from its checkout).
+pub fn set_drain(drain: Duration) {
+    DRAIN_MS.store(drain.as_millis() as u64, Ordering::SeqCst);
+}
+
+/// Records that the workload has exited: a drain in progress ends now.
+pub fn workload_ended() {
+    WORKLOAD_ENDED.store(true, Ordering::SeqCst);
+}
+
+/// Records the hypervisor's process, the one a sandbox termination stops.
+pub fn set_vmm_pid(pid: u32) {
+    VMM_PID.store(pid, Ordering::SeqCst);
+}
+
+/// Whether the termination stopped the microVM: its exit is then the end
+/// the sandbox asked for, not a failure.
+pub fn vm_stopped_by_termination() -> bool {
+    VM_STOPPED.load(Ordering::SeqCst)
+}
+
+/// Waits up to `drain`, or until `ended` is set. Returns whether the workload
+/// ended first.
+fn wait_drain(drain: Duration, ended: &AtomicBool) -> bool {
+    let until = Instant::now() + drain;
+    loop {
+        if ended.load(Ordering::SeqCst) {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= until {
+            return false;
+        }
+        std::thread::sleep(DRAIN_POLL.min(until - now));
+    }
+}
+
+/// The sandbox termination sequence after SIGTERM: drain, then `stop`.
+fn terminate_sandbox(
+    drain: Duration,
+    ended: &AtomicBool,
+    stop: impl FnOnce() -> Result<(), String>,
+) {
+    log::info!(
+        "termination_started drain_ms={}; the workload is out of Service endpoints",
+        drain.as_millis()
+    );
+    let started = Instant::now();
+    let ended_early = wait_drain(drain, ended);
+    log::info!(
+        "termination_drain_complete elapsed_ms={} workload_ended={}",
+        started.elapsed().as_millis(),
+        ended_early
+    );
+    match stop() {
+        Ok(()) => log::info!("termination_vm_stop_requested"),
+        Err(e) => log::warn!(
+            "termination_vm_stop_failed: {} (the kubelet will SIGKILL at the end of the grace period)",
+            e
+        ),
+    }
+}
+
+/// Kills the hypervisor process. A sandbox's microVM has nothing to flush: its
+/// root is read-only and its writes are in guest memory.
+fn kill_vmm(pid: u32) -> Result<(), String> {
+    if pid == 0 {
+        return Err("no hypervisor process".to_string());
+    }
+    // SAFETY: kill(2) with a plain pid and signal has no memory effects.
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+        return Err(format!("kill {}: {}", pid, std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
 
 /// How to reach the hypervisor to request a power-off.
 pub enum PowerTarget {
@@ -48,9 +158,11 @@ impl PowerTarget {
 }
 
 /// Install the SIGTERM handler on its own thread. Must be called before the
-/// main thread blocks on the hypervisor. A repeated SIGTERM presses the button
-/// again (harmless; a guest that missed the first press gets another chance).
-pub fn spawn_sigterm_handler(target: PowerTarget) {
+/// main thread blocks on the hypervisor. For a guest, a repeated SIGTERM
+/// presses the button again (harmless; a guest that missed the first press gets
+/// another chance). For a sandbox, the first SIGTERM starts the termination and
+/// later ones change nothing.
+pub fn spawn_sigterm_handler(target: PowerTarget, mode: Mode) {
     let spawned = std::thread::Builder::new()
         .name("sigterm".into())
         .spawn(move || {
@@ -74,6 +186,21 @@ pub fn spawn_sigterm_handler(target: PowerTarget) {
                     }
                 };
                 while term.recv().await.is_some() {
+                    if mode == Mode::Sandbox {
+                        if TERMINATING.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        log::info!("sigterm_received; terminating the sandbox");
+                        terminate_sandbox(
+                            Duration::from_millis(DRAIN_MS.load(Ordering::SeqCst)),
+                            &WORKLOAD_ENDED,
+                            || {
+                                VM_STOPPED.store(true, Ordering::SeqCst);
+                                kill_vmm(VMM_PID.load(Ordering::SeqCst))
+                            },
+                        );
+                        continue;
+                    }
                     log::info!("sigterm_received; requesting guest ACPI power-off");
                     match target.request_poweroff() {
                         Ok(()) => log::info!("guest_poweroff_requested"),
@@ -131,6 +258,78 @@ mod tests {
             req.starts_with("PUT /api/v1/vm.power-button "),
             "unexpected request: {req}"
         );
+    }
+
+    // The drain lasts its full length while the workload runs, then the stop
+    // follows.
+    #[test]
+    fn sandbox_termination_drains_then_stops() {
+        let ended = AtomicBool::new(false);
+        let started = Instant::now();
+        let stopped_at = std::cell::Cell::new(None);
+        terminate_sandbox(Duration::from_millis(300), &ended, || {
+            stopped_at.set(Some(started.elapsed()));
+            Ok(())
+        });
+        let at = stopped_at.get().expect("stop was not requested");
+        assert!(at >= Duration::from_millis(300), "stopped after {at:?}");
+        assert!(at < Duration::from_millis(1000), "stopped after {at:?}");
+    }
+
+    // A workload that exits during the drain ends it.
+    #[test]
+    fn sandbox_termination_ends_the_drain_when_the_workload_exits() {
+        let ended = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = ended.clone();
+        let setter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let mut stopped = false;
+        terminate_sandbox(Duration::from_secs(30), &ended, || {
+            stopped = true;
+            Ok(())
+        });
+        setter.join().unwrap();
+        assert!(stopped);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    // No drain: the microVM stops at once.
+    #[test]
+    fn sandbox_termination_without_a_drain_stops_at_once() {
+        let ended = AtomicBool::new(false);
+        let started = Instant::now();
+        let mut stopped = false;
+        terminate_sandbox(Duration::ZERO, &ended, || {
+            stopped = true;
+            Ok(())
+        });
+        assert!(stopped);
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    // A failed stop is logged, not a panic (the kubelet's SIGKILL follows).
+    #[test]
+    fn sandbox_termination_survives_a_failed_stop() {
+        terminate_sandbox(Duration::ZERO, &AtomicBool::new(false), || {
+            Err("no hypervisor process".to_string())
+        });
+    }
+
+    // The stop kills the hypervisor process, however it handles signals.
+    #[test]
+    fn kill_vmm_kills_the_process() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM INT; sleep 30"])
+            .spawn()
+            .unwrap();
+        kill_vmm(child.id()).unwrap();
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        assert!(kill_vmm(0).is_err());
     }
 
     // No hypervisor listening (e.g. a migration receiver with no VM yet): the

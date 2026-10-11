@@ -123,3 +123,28 @@ func TestValidateProbes_ReadinessStartup(t *testing.T) {
 		}
 	}
 }
+
+// spec.termination.drainPeriod stays between 0s and 10m.
+func TestValidateTermination(t *testing.T) {
+	d := func(v time.Duration) *sandboxv1alpha1.SandboxTermination {
+		return &sandboxv1alpha1.SandboxTermination{DrainPeriod: &metav1.Duration{Duration: v}}
+	}
+	for _, tc := range []struct {
+		name string
+		t    *sandboxv1alpha1.SandboxTermination
+		ok   bool
+	}{
+		{"unset", nil, true},
+		{"empty", &sandboxv1alpha1.SandboxTermination{}, true},
+		{"zero", d(0), true},
+		{"five seconds", d(5 * time.Second), true},
+		{"the maximum", d(10 * time.Minute), true},
+		{"negative", d(-time.Second), false},
+		{"too long", d(11 * time.Minute), false},
+	} {
+		err := ValidateTermination(tc.t)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: error %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
