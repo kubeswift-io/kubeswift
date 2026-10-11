@@ -126,7 +126,7 @@ func TestReconcile_ArtifactResolveFailure(t *testing.T) {
 func TestReconcile_ArtifactInitFailure(t *testing.T) {
 	sb := plainSandbox("busybox:1")
 	sb.Spec.Artifacts = []sandboxv1alpha1.SandboxArtifact{{Name: "app", Ref: "r.example/a@sha256:" + strings.Repeat("b", 64), MountPath: "/a"}}
-	pod := buildPod(sb, "sandbox")
+	pod := ownLauncher(sb, buildPod(sb, "sandbox"))
 	pod.Status = corev1.PodStatus{Phase: corev1.PodPending, InitContainerStatuses: []corev1.ContainerStatus{
 		{Name: "artifact-app", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "sandbox-materialize: cosign verify: no matching signatures"}}}}}
 	r, c := sandboxReconciler(sb, pod)

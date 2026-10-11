@@ -59,7 +59,7 @@ func TestReconcile_ColdLauncherRunsAsItsOwnAccount(t *testing.T) {
 // grant's subject: re-pointing it would cut the running pod off.
 func TestReconcile_ExistingSharedAccountLauncherKeepsItsSubject(t *testing.T) {
 	sb := plainSandbox("busybox:1")
-	pod := buildPod(sb, "sandbox")
+	pod := ownLauncher(sb, buildPod(sb, "sandbox"))
 	pod.Spec.ServiceAccountName = swiftguest.SandboxLauncherServiceAccountName
 	pod.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: launcherName, Ready: true}}}
 	r, c := sandboxReconciler(sb, pod)

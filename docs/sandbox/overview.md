@@ -564,6 +564,11 @@ the NetworkPolicy stays until the pod is gone.
   against one registry at a time, so a stalled registry holds only the
   sandboxes and pools that use it. A refusal (malformed ref, not found, not
   authorized) fails the sandbox instead: retrying would not change it.
+- **`Pending` with `PreviousLauncherStopping`**: a sandbox by this name was
+  deleted and its launcher pod (also named after the sandbox) has not gone
+  yet. The new sandbox creates its own launcher once it has.
+  `LauncherPodConflict` means a running pod by that name is not this
+  sandbox's: delete it, or use another name.
 - **Stuck `Materializing`** — check `kubectl describe pod <name>`. Unscheduled
   usually means no node carries `kubeswift.io/kernel-node=true`. A failing
   `sandbox-materialize` init container usually means the image pull failed —

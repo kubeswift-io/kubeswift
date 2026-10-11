@@ -59,6 +59,9 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if reason, msg, _ := foreignPodReason(sb, &pod); reason != "" {
+			return r.waitForReference(ctx, sb, reason, msg)
+		}
 		return r.reconcilePodState(ctx, sb, &pod)
 	}
 

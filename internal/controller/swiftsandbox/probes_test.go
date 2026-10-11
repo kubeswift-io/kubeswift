@@ -67,7 +67,7 @@ func TestBuild_ProbesAndReadinessGate(t *testing.T) {
 
 // runningLauncher is sb's launcher pod, running, as the kubelet reports it.
 func runningLauncher(sb *sandboxv1alpha1.SwiftSandbox, ann map[string]string) *corev1.Pod {
-	pod := buildPod(sb, "sandbox")
+	pod := ownLauncher(sb, buildPod(sb, "sandbox"))
 	pod.Annotations = ann
 	pod.Status = corev1.PodStatus{
 		Phase:             corev1.PodRunning,
