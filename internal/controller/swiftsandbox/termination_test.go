@@ -331,6 +331,20 @@ func TestLauncherGracePeriodSeconds(t *testing.T) {
 			t.Errorf("drain %v: pod grace %d, want %d", tc.drain, got, tc.want)
 		}
 	}
+	// A sandbox that exposes ports drains 5s by default; an explicit 0s
+	// turns that off.
+	exposed := deletedSandbox(nil)
+	exposed.Spec.Network.Ports = []sandboxv1alpha1.SandboxPort{{Name: "http", Port: 8080}}
+	if got := launcherGracePeriodSeconds(exposed); got != 20 {
+		t.Errorf("exposed, default drain: grace %d, want 20", got)
+	}
+	if ti := terminationIntent(exposed); ti == nil || ti.DrainMs != 5000 {
+		t.Errorf("exposed, default drain: intent %+v, want drainMs 5000", ti)
+	}
+	exposed.Spec.Termination = &sandboxv1alpha1.SandboxTermination{DrainPeriod: &metav1.Duration{}}
+	if got := launcherGracePeriodSeconds(exposed); got != 15 || terminationIntent(exposed) != nil {
+		t.Errorf("exposed, drain 0s: grace %d intent %+v, want 15 and none", got, terminationIntent(exposed))
+	}
 	if terminationIntent(deletedSandbox(nil)) != nil {
 		t.Error("no drain should send no termination intent")
 	}

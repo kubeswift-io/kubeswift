@@ -87,7 +87,7 @@ Ready-to-edit manifests and notes:
 | `gpuProfileRef.name` | string | — | Pass a GPU through via the **native SwiftGPU** backend: the SwiftGPU controller allocates at controller time against this `SwiftGPUProfile` and pins the sandbox to the allocated node. Mutually exclusive with `gpuResourceClaim` and with `poolRef`. `tier: pcie` only. See [GPU sandboxes](gpu-sandboxes.md). |
 | `scratchDisk` | SandboxScratchDisk | — | Attaches one secondary raw block disk (`blank`, sandbox-owned, or `pvcRef`, an existing PVC) for build caches, datasets, or checkpoints. See [Scratch / persistent disks](scratch-disks.md). |
 | `model.imageRef` / `model.mountPath` | string / string (default `/model`) | — | Mounts a read-only, node-shared model artifact (an OCI image whose filesystem holds the weights) over virtio-fs. See [GPU sandboxes › Model preload](gpu-sandboxes.md#model-preload). |
-| `termination.drainPeriod` | duration | `0s` | How long a running workload keeps going after deletion has taken it out of Service endpoints, before the microVM stops (0s to 10m). See [Deleting a sandbox](#deleting-a-sandbox). |
+| `termination.drainPeriod` | duration | `5s` with `network.ports`, else `0s` | How long a running workload keeps going after deletion has taken it out of Service endpoints, before the microVM stops (0s to 10m). See [Deleting a sandbox](#deleting-a-sandbox). |
 
 Everything in `spec` except `ttl` is immutable after create — recreate the
 sandbox to change image, resources, command, or network.
@@ -514,8 +514,9 @@ Deleting a sandbox whose workload still runs stops it in this order:
    `WorkloadReady` turns False. The launcher pod's readiness gate is set
    False and the pod is deleted, so its Service endpoints stop taking new
    connections.
-2. The workload keeps running for `spec.termination.drainPeriod` (default
-   `0s`), or until it exits. Connections already open keep working.
+2. The workload keeps running for `spec.termination.drainPeriod`, or until
+   it exits. Connections already open keep working. The default is `5s` for
+   a sandbox that exposes `network.ports` and `0s` for one that does not.
 3. swiftletd stops the microVM (`Terminating` reason `Stopping`). The
    launcher pod's grace period is the drain plus 15 s, so the kubelet only
    kills a launcher that failed to stop the microVM itself.
@@ -528,11 +529,13 @@ spec:
     drainPeriod: 5s
 ```
 
-Behind a Service, set `drainPeriod` to at least the time your cluster takes
-to stop routing to a removed endpoint, plus your longest request. kube-proxy
-applies endpoint changes at most once per `minSyncPeriod` (1 s by default).
-With the default `0s`, connections that arrive before kube-proxy has caught
-up are refused.
+The drain must cover the time your cluster takes to stop routing to a
+removed endpoint, plus your longest request. kube-proxy applies endpoint
+changes at most once per `minSyncPeriod` (1 s by default), so the default
+`5s` leaves room on most clusters. A shorter drain refuses connections that
+arrive before kube-proxy has caught up. The microVM is stopped, not shut
+down: the workload gets no signal, so it must finish its work within the
+drain. The launcher pod then ends `Succeeded`.
 
 The sandbox's NetworkPolicy, and the egress rules inside the launcher pod,
 apply for as long as the launcher pod exists: the policy carries the

@@ -652,6 +652,12 @@ fn main() {
                             log::info!("vm_stopped_gracefully");
                             report_running(false, Some("VmStopped"));
                         }
+                    } else if shutdown::vm_stopped_by_termination() {
+                        // The sandbox was deleted and its drain is over: a
+                        // stop, not a failure, so the launcher pod ends
+                        // Succeeded.
+                        log::info!("vm_stopped_by_termination");
+                        report_running(false, Some("VmStopped"));
                     } else {
                         log::warn!("vm_exited_nonzero code={:?}", exit_status.code());
                         report_running(false, Some("VmFailed"));

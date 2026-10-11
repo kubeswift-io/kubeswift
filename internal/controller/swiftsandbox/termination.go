@@ -42,7 +42,7 @@ const (
 
 // terminationIntent is spec.termination for swiftletd; nil without a drain.
 func terminationIntent(sb *sandboxv1alpha1.SwiftSandbox) *runtimeintent.SandboxTerminationIntent {
-	d := sb.Spec.Termination.DrainPeriodOrDefault()
+	d := sb.Spec.DrainPeriod()
 	if d <= 0 {
 		return nil
 	}
@@ -52,7 +52,7 @@ func terminationIntent(sb *sandboxv1alpha1.SwiftSandbox) *runtimeintent.SandboxT
 // launcherGracePeriodSeconds is the termination grace period of the sandbox's
 // launcher pod: its drain, then the time swiftletd has to stop the microVM.
 func launcherGracePeriodSeconds(sb *sandboxv1alpha1.SwiftSandbox) int64 {
-	return int64(math.Ceil(sb.Spec.Termination.GracePeriod().Seconds()))
+	return int64(math.Ceil(sb.Spec.TerminationGracePeriod().Seconds()))
 }
 
 // ensureTerminationFinalizer adds sandboxTerminationFinalizer before the
@@ -95,7 +95,7 @@ func (r *SwiftSandboxReconciler) terminateLauncher(ctx context.Context, sb *sand
 	}
 	if pod.DeletionTimestamp == nil {
 		grace := launcherGracePeriodSeconds(sb)
-		drain := sb.Spec.Termination.DrainPeriodOrDefault()
+		drain := sb.Spec.DrainPeriod()
 		if err := r.setTerminating(ctx, sb, terminatingDraining, fmt.Sprintf(
 			"out of Service endpoints; the workload runs for %s, then the microVM stops", drain)); err != nil {
 			return false, ctrl.Result{}, err
@@ -120,7 +120,7 @@ func (r *SwiftSandboxReconciler) terminateLauncher(ctx context.Context, sb *sand
 		gracePeriod = time.Duration(*pod.DeletionGracePeriodSeconds) * time.Second
 	}
 	started := pod.DeletionTimestamp.Add(-gracePeriod)
-	drainEnd := started.Add(sb.Spec.Termination.DrainPeriodOrDefault())
+	drainEnd := started.Add(sb.Spec.DrainPeriod())
 	deadline := pod.DeletionTimestamp.Add(terminationSlack)
 	now := time.Now()
 	if !now.Before(deadline) {

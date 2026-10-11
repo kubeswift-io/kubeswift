@@ -40,6 +40,7 @@ static TERMINATING: AtomicBool = AtomicBool::new(false);
 static WORKLOAD_ENDED: AtomicBool = AtomicBool::new(false);
 static DRAIN_MS: AtomicU64 = AtomicU64::new(0);
 static VMM_PID: AtomicU32 = AtomicU32::new(0);
+static VM_STOPPED: AtomicBool = AtomicBool::new(false);
 
 /// How often the drain checks whether the workload has ended.
 const DRAIN_POLL: Duration = Duration::from_millis(50);
@@ -64,6 +65,12 @@ pub fn workload_ended() {
 /// Records the hypervisor's process, the one a sandbox termination stops.
 pub fn set_vmm_pid(pid: u32) {
     VMM_PID.store(pid, Ordering::SeqCst);
+}
+
+/// Whether the termination stopped the microVM: its exit is then the end
+/// the sandbox asked for, not a failure.
+pub fn vm_stopped_by_termination() -> bool {
+    VM_STOPPED.load(Ordering::SeqCst)
 }
 
 /// Waits up to `drain`, or until `ended` is set. Returns whether the workload
@@ -187,7 +194,10 @@ pub fn spawn_sigterm_handler(target: PowerTarget, mode: Mode) {
                         terminate_sandbox(
                             Duration::from_millis(DRAIN_MS.load(Ordering::SeqCst)),
                             &WORKLOAD_ENDED,
-                            || kill_vmm(VMM_PID.load(Ordering::SeqCst)),
+                            || {
+                                VM_STOPPED.store(true, Ordering::SeqCst);
+                                kill_vmm(VMM_PID.load(Ordering::SeqCst))
+                            },
                         );
                         continue;
                     }

@@ -158,7 +158,10 @@ func launchSpecChanged(oldS, newS *sandboxv1alpha1.SwiftSandboxSpec) bool {
 
 // ValidateTermination bounds spec.termination.drainPeriod.
 func ValidateTermination(t *sandboxv1alpha1.SandboxTermination) error {
-	if d := t.DrainPeriodOrDefault(); d < 0 || d > sandboxv1alpha1.TerminationMaxDrainPeriod {
+	if t == nil || t.DrainPeriod == nil {
+		return nil
+	}
+	if d := t.DrainPeriod.Duration; d < 0 || d > sandboxv1alpha1.TerminationMaxDrainPeriod {
 		return fmt.Errorf("spec.termination.drainPeriod %s must be between 0s and %s", d, sandboxv1alpha1.TerminationMaxDrainPeriod)
 	}
 	return nil
