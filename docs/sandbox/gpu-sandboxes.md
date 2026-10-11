@@ -199,6 +199,9 @@ The model is pulled and unpacked **once per node**, keyed by digest, into
 `/var/lib/kubeswift/sandbox-models/` and shared into each slot over virtio-fs. So
 every slot on the node — and every other pool or cold sandbox using the same
 model digest — reads the same host page cache, at no extra memory or disk cost.
+A sandbox whose model reference names a different repository uses the cached
+copy only once that repository has served the same content (see
+[Node caches](overview.md#node-caches)).
 `spec.model` works on a plain `SwiftSandbox` too, not just a pool.
 
 It is read-only on both sides (the launcher mounts the cache RO and the guest
