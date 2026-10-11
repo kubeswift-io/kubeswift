@@ -273,7 +273,7 @@ func (r *SwiftSandboxReconciler) findClaimedSlot(ctx context.Context, sb *sandbo
 	return nil, nil
 }
 
-// tryClaimWarmSlot atomically claims a Ready warm slot of the sandbox's pool: it flips
+// tryClaimWarmSlot atomically claims a ready (slotReady) warm slot of the sandbox's pool: it flips
 // the slot's slot-state warm->claimed, labels it for this sandbox, and re-parents its pod
 // from the pool to this SwiftSandbox. A conflicting concurrent claim loses the optimistic
 // Update (409) and the loop tries the next slot. Returns nil when none is claimable.
@@ -286,7 +286,9 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 	}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		if p.DeletionTimestamp != nil || !launcherReady(p) {
+		// Only a slot whose guest agent answers: an exec sent to a slot
+		// still booting fails the checkout, where a miss boots cold.
+		if !slotReady(p) {
 			continue
 		}
 		// Only a slot booted under the pool's current shape (a slot from

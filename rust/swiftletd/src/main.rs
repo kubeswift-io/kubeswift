@@ -1,4 +1,5 @@
 mod action;
+mod agent_ready;
 mod bridge;
 mod cpuset;
 mod intent;
@@ -422,6 +423,18 @@ fn main() {
                 if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
                     let api_socket = runtime_dir.root().join("ch.sock");
                     action::spawn_action_loop(ns.clone(), n.clone(), api_socket);
+                }
+            }
+
+            // A warm slot: say when the guest agent first answers, the point
+            // from which a checkout can hand it a workload (agent_ready.rs).
+            if intent.sandbox_warm_slot && intent.vsock.is_some() && !is_primary_udn {
+                if let (Some(ref ns), Some(ref n)) = (&namespace, &name) {
+                    agent_ready::spawn(
+                        runtime_dir.root().join("vsock.sock"),
+                        ns.clone(),
+                        n.clone(),
+                    );
                 }
             }
 

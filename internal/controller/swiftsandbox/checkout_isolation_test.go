@@ -36,6 +36,11 @@ func TestCheckout_SlotStaysIsolatedAndItsObjectsMoveToTheSandbox(t *testing.T) {
 		t.Fatalf("want one slot pod, got %d (err=%v)", len(pods.Items), err)
 	}
 	slot := pods.Items[0]
+	// swiftletd's report that the guest agent answers (agent_ready.rs).
+	slot.Annotations[GuestAgentReadyAnnotation] = "2026-10-11T00:00:00.000Z"
+	if err := c.Update(ctx, &slot); err != nil {
+		t.Fatal(err)
+	}
 	slot.Status = corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: launcherName, Ready: true}}}
 	if err := c.Status().Update(ctx, &slot); err != nil {
 		t.Fatal(err)

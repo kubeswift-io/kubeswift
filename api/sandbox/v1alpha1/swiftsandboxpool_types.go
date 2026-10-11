@@ -134,9 +134,15 @@ const (
 type SwiftSandboxPoolStatus struct {
 	// +optional
 	Phase SwiftSandboxPoolPhase `json:"phase,omitempty"`
-	// WarmReplicas is the number of Ready, pre-booted, unclaimed slots.
+	// WarmReplicas is the number of unclaimed slots ready for a checkout:
+	// booted, with the guest agent answering. Only these are handed out.
 	// +optional
 	WarmReplicas int32 `json:"warmReplicas,omitempty"`
+	// WarmingReplicas is the number of unclaimed slots not ready yet (being
+	// scheduled, materialized or booted). A checkout never takes one; with no
+	// ready slot it boots cold.
+	// +optional
+	WarmingReplicas int32 `json:"warmingReplicas,omitempty"`
 	// ClaimedReplicas is the number of slots currently checked out to a SwiftSandbox.
 	// +optional
 	ClaimedReplicas int32 `json:"claimedReplicas,omitempty"`

@@ -48,6 +48,11 @@ pub struct RuntimeIntent {
     /// drain; a warm slot's arrives with its checkout's workload.
     #[serde(default)]
     pub sandbox_termination: Option<SandboxTermination>,
+    /// A warm-pool slot (booted idle, no workload): swiftletd reports when the
+    /// guest agent first answers (agent_ready.rs), and the controller hands
+    /// the slot to no checkout before that.
+    #[serde(default)]
+    pub sandbox_warm_slot: bool,
     /// Hypervisor to use: "cloud-hypervisor" (default) or "qemu".
     /// Empty or absent means Cloud Hypervisor.
     #[serde(default)]
@@ -1308,6 +1313,15 @@ mod tests {
         assert_eq!(f.sandbox_rootfs_path(), None);
         // faas is NOT a sandbox (no sandboxRootfs marker).
         assert!(!f.is_sandbox());
+        // Absent sandboxWarmSlot: not a warm slot (a cold sandbox, or an
+        // intent from a controller that predates the field).
+        assert!(!intent.sandbox_warm_slot);
+        let warm = json.replace(
+            r#""lifecycle": "start","#,
+            r#""lifecycle": "start", "sandboxWarmSlot": true,"#,
+        );
+        let w: RuntimeIntent = serde_json::from_str(&warm).unwrap();
+        assert!(w.sandbox_warm_slot);
     }
 
     #[test]

@@ -42,7 +42,34 @@ const (
 	slotStateClaimed  = "claimed"
 
 	poolPollInterval = 10 * time.Second
+
+	// SlotReadinessAnnotation, stamped on a warm slot's pod when it is
+	// created, says the slot is ready only once its launcher reports that the
+	// guest agent answers (GuestAgentReadyAnnotation). A slot without it was
+	// created before launchers reported that, and is ready when its launcher
+	// runs, as before.
+	SlotReadinessAnnotation = "sandbox.kubeswift.io/slot-readiness"
+	slotReadinessGuestAgent = "guest-agent"
+	// GuestAgentReadyAnnotation is written by swiftletd on a warm slot the
+	// first time its guest agent answers over vsock (rust/swiftletd/src/
+	// agent_ready.rs): the rootfs is mounted, the network configured, and a
+	// checkout's exec has something to talk to.
+	GuestAgentReadyAnnotation = "kubeswift.io/guest-agent-ready"
 )
+
+// slotReady reports whether a warm slot can take a checkout now. A running
+// launcher is not enough: the microVM boots after it starts, and an exec
+// sent before the guest agent listens fails the checkout (ExecFailed). The
+// pool counts only these slots as warm, and a checkout claims only these.
+func slotReady(p *corev1.Pod) bool {
+	if p.DeletionTimestamp != nil || !launcherReady(p) {
+		return false
+	}
+	if p.Annotations[SlotReadinessAnnotation] != slotReadinessGuestAgent {
+		return true
+	}
+	return p.Annotations[GuestAgentReadyAnnotation] != ""
+}
 
 // SwiftSandboxPoolReconciler maintains a warm buffer of pre-booted, workload-less
 // sandbox slots so a SwiftSandbox can check out sub-second. Co-located with the
@@ -249,13 +276,17 @@ func (r *SwiftSandboxPoolReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if p.Labels[SlotStateLabelKey] == slotStateWarm {
 			warmLive++
 			warmPods = append(warmPods, p)
-			if launcherReady(p) {
+			if slotReady(p) {
 				ready++
 			}
 		} else {
 			claimed++ // claimed slots (Phase 3) are tracked but not replenished here
 		}
 	}
+
+	// Slots that exist but cannot take a checkout yet: still scheduling,
+	// materializing or booting. Reported apart from the warm ones.
+	pool.Status.WarmingReplicas = int32(warmLive - ready)
 
 	// The narrowing — only once every LIVE slot above holds its own grant, so no
 	// running slot loses access. Never fatal.
@@ -405,14 +436,14 @@ func slotsToDelete(minWarm, warmLive int) int {
 }
 
 // pickWarmToDrain selects up to n warm slot pods to delete, preferring
-// not-launcher-ready (still-warming) slots so a ready, checkout-serviceable slot
+// not-yet-ready (still-warming) slots so a ready, checkout-serviceable slot
 // is drained last.
 func pickWarmToDrain(warm []*corev1.Pod, n int) []*corev1.Pod {
 	if n >= len(warm) {
 		return warm
 	}
 	sort.SliceStable(warm, func(i, j int) bool {
-		return !launcherReady(warm[i]) && launcherReady(warm[j])
+		return !slotReady(warm[i]) && slotReady(warm[j])
 	})
 	return warm[:n]
 }
@@ -497,6 +528,7 @@ func (r *SwiftSandboxPoolReconciler) createWarmSlot(ctx context.Context, pool *s
 		pod.Annotations = map[string]string{}
 	}
 	pod.Annotations[SlotProfileAnnotation] = poolSlotProfile(pool)
+	pod.Annotations[SlotReadinessAnnotation] = slotReadinessGuestAgent
 	// Spread the pool's slots across kernel-nodes so a checkout landing on any node is
 	// likely to find a warm slot there (warming is node-local). Soft (ScheduleAnyway):
 	// never block warming just because one node is full.
@@ -566,6 +598,9 @@ func (r *SwiftSandboxPoolReconciler) updateStatus(ctx context.Context, pool *san
 		})
 	}
 	msg := fmt.Sprintf("%d/%d warm slots ready", ready, pool.Spec.MinWarm)
+	if w := pool.Status.WarmingReplicas; w > 0 {
+		msg += fmt.Sprintf(", %d warming", w)
+	}
 	phase := sandboxv1alpha1.SwiftSandboxPoolWarming
 	warm := metav1.ConditionFalse
 	if int32(ready) >= pool.Spec.MinWarm {

@@ -215,6 +215,9 @@ func buildIntent(sb *sandboxv1alpha1.SwiftSandbox, kernelName, rootfsPath, model
 		// is host<->guest only (not network-reachable), so it costs nothing to have.
 		Vsock: &runtimeintent.VsockIntent{CID: runtimeintent.DeriveVsockCID(sb.Namespace, sb.Name)},
 	}
+	// A warm slot is ready for a checkout once its guest agent answers;
+	// swiftletd says when (slotReady).
+	ri.SandboxWarmSlot = idle
 	if !idle {
 		// A warm slot's probes arrive with its checkout's workload instead.
 		ri.SandboxProbes = probesIntent(sb, workloadGated(sb) && swiftguest.LauncherReportsReadiness())
