@@ -13,7 +13,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-// Origin markers: which repositories a cached artifact may be used for.
+// Origin markers: which repositories a cached entry may be used for. Every
+// cache works this way: OCI-layout and unpacked artifacts, block and tree
+// rootfs entries, and model trees. Each cache is shared by every namespace on
+// the node and keyed by digest alone.
 //
 // A registry authorizes per repository, and a manifest names its blobs by
 // digest only. Resolving a reference with a sandbox's credentials proves that
@@ -25,8 +28,8 @@ import (
 //
 // So an entry is used for repository R only when .origin/<digest>/<sha256(R)>
 // exists. It is written after the entry is pulled from R, or, when the entry
-// is already cached from elsewhere, after every blob has been read from R
-// with its digest checked. A conforming registry does not serve a manifest
+// is already cached from elsewhere (or from before entries had markers), after
+// every blob has been read from R with its digest checked. A conforming registry does not serve a manifest
 // whose blobs are not in the same repository, so a re-hosted manifest without
 // its blobs fails there.
 //

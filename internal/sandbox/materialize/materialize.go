@@ -326,21 +326,22 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 	}
 
 	normalize := opts.Mode == ModeTree && opts.ReadOnlyArtifact
-	// A read-only artifact is used for a repository only once its content
-	// was read from it (origin.go). A rootfs is not an artifact.
-	var repo string
-	if normalize {
-		ref, err := parseRef(opts)
-		if err != nil {
-			return nil, err
-		}
-		repo = ref.Context().Name()
+	// Every entry, a rootfs and a model as much as an artifact, is used for a
+	// repository only once its content was read from that repository
+	// (origin.go). The caches are shared by every namespace on the node, and a
+	// manifest copied into another repository resolves to the same digest.
+	ref, err := parseRef(opts)
+	if err != nil {
+		return nil, err
 	}
+	repo := ref.Context().Name()
 
 	// Fast path — cache hit without locking: the digest is immutable, so an
-	// existing artifact is authoritative and the common case pays no lock cost.
+	// existing entry that this repository has served is authoritative and the
+	// common case pays no lock cost.
 	if fi, err := os.Stat(rootfsPath); err == nil &&
-		!(normalize && (needsReadOnlyRepair(rootfsPath) || !exists(OriginMarkerPath(opts.CacheDir, digest, repo)))) {
+		exists(OriginMarkerPath(opts.CacheDir, digest, repo)) &&
+		!(normalize && needsReadOnlyRepair(rootfsPath)) {
 		res.CacheHit = true
 		res.SizeBytes = artifactSize(rootfsPath, fi)
 		return res, nil
@@ -364,20 +365,25 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 	// atomic-rename below still keeps concurrent writers correct, just not deduped).
 	if unlock, err := lockDigest(opts.CacheDir, digest); err == nil {
 		defer unlock()
-		// Re-check under the lock: another process may have finished while we waited.
-		if fi, err := os.Stat(rootfsPath); err == nil {
-			if normalize {
-				if err := repairReadOnly(rootfsPath, true); err != nil {
-					return nil, err
-				}
-				if err := useFromRepository(opts.CacheDir, digest, repo, func() error { return checkImageBlobs(img) }); err != nil {
-					return nil, err
-				}
+	}
+	// The entry exists (another process may have finished while we waited, or
+	// it came from another repository): use it once this repository serves
+	// every blob of it.
+	if fi, err := os.Stat(rootfsPath); err == nil {
+		if normalize {
+			if err := repairReadOnly(rootfsPath, true); err != nil {
+				return nil, err
 			}
-			res.CacheHit = true
-			res.SizeBytes = artifactSize(rootfsPath, fi)
-			return res, nil
 		}
+		if !exists(OriginMarkerPath(opts.CacheDir, digest, repo)) {
+			fmt.Fprintf(os.Stderr, "materialize: %s is cached on this node, but not yet from %s; reading its blobs from there once\n", digest, repo)
+		}
+		if err := useFromRepository(opts.CacheDir, digest, repo, func() error { return checkImageBlobs(img) }); err != nil {
+			return nil, err
+		}
+		res.CacheHit = true
+		res.SizeBytes = artifactSize(rootfsPath, fi)
+		return res, nil
 	}
 
 	// Flatten the image (whiteouts applied) into a temp tree next to the target,
@@ -421,9 +427,9 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 			if err := sealReadOnly(rootfsPath); err != nil {
 				return nil, err
 			}
-			if err := recordOrigin(opts.CacheDir, digest, repo); err != nil {
-				return nil, err
-			}
+		}
+		if err := recordOrigin(opts.CacheDir, digest, repo); err != nil {
+			return nil, err
 		}
 		res.SizeBytes = treeBytes
 	default: // ModeBlock
@@ -434,6 +440,9 @@ func Materialize(opts Options, pull Puller) (*Result, error) {
 		}
 		if err := os.Rename(tmpExt4, rootfsPath); err != nil {
 			return nil, fmt.Errorf("publish ext4: %w", err)
+		}
+		if err := recordOrigin(opts.CacheDir, digest, repo); err != nil {
+			return nil, err
 		}
 		res.SizeBytes = size
 	}
