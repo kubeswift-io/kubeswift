@@ -4,7 +4,14 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
-## [Unreleased]
+## [v0.16.3] — 2026-10-11
+
+A patch release with two SwiftSandbox security fixes. Node caches of sandbox
+images and models are bound to the repository that served them. A deleted
+sandbox's NetworkPolicy now stays until its launcher has stopped, and deletion
+follows a defined order: out of Service endpoints, a bounded drain, then the
+microVM is stopped. A sandbox re-created under the same name no longer takes
+over the previous one's launcher.
 
 ### Upgrade
 
@@ -24,7 +31,8 @@ All notable changes to KubeSwift are documented here.
   controller does not remove them. Before downgrading, remove them, or
   deleting those objects (and their namespaces) waits forever:
   `kubectl patch <object> --type=json -p '[{"op":"remove","path":"/metadata/finalizers"}]'`.
-- CRD changed: `swiftsandboxes` (`spec.termination`). Apply `crds/`.
+- CRD changed: `swiftsandboxes` (`spec.termination`). Apply `crds/` before
+  the upgrade. No chart values changed.
 
 ### Security
 
@@ -40,8 +48,8 @@ All notable changes to KubeSwift are documented here.
   (#765). A repository that does not serve the layers fails the sandbox
   (`RootfsMaterializeFailed`, or the model init container).
 - A deleted sandbox's NetworkPolicy is kept until its launcher pod has
-  stopped (#774). It used to be deleted together with the sandbox while the launcher
-  pod was still within its grace period.
+  stopped (#774). It used to be deleted together with the sandbox while the
+  launcher pod was still within its grace period.
 
 ### Fixed
 
