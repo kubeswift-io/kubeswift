@@ -50,7 +50,7 @@ All notable changes to KubeSwift are documented here.
   failed or completed with it, and never started its own (#772). A sandbox
   now uses only a launcher pod it controls; it waits for a previous one to go
   (`Resolved=False`, `PreviousLauncherStopping`) and does not adopt a live pod
-  that is not its own (`LauncherPodConflict`).
+  that is not its own (`LauncherPodConflict`) (#775).
 
 ### Added
 
