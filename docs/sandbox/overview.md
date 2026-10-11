@@ -458,6 +458,20 @@ A `SwiftSandboxPool` takes the same `spec.verifyKeySecretRef`; every warm slot
 is verified, so a pool never warms an unverified image. This mirrors
 `SwiftImage`'s `spec.source.oci.verifyKeySecretRef` for golden VM disks.
 
+## Node caches
+
+A node keeps one copy of each root filesystem, model and artifact, by digest,
+under `/var/lib/kubeswift/sandbox-rootfs`, `sandbox-models` and
+`sandbox-artifacts`. Every namespace on the node shares them.
+
+A digest says what the content is, not who may read it: a manifest copied into
+another repository resolves to the same digest. So an entry is used for a
+sandbox only once the repository its image reference names has served that
+content. A pull from that repository counts. Otherwise the materializer reads
+every layer from that repository once, checking each digest, and the sandbox
+fails if the repository does not serve them. After that, the entry is used for
+that repository without contacting the registry for layers.
+
 ## Interacting with a sandbox
 
 > Also available in **kubeswift-ui** (v0.8.0+): open the sandbox in the Explorer

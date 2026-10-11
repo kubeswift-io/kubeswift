@@ -4,6 +4,32 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **A sandbox could boot, or mount as its model, a cached image its own
+  repository never served** (#773). The rootfs cache
+  (`/var/lib/kubeswift/sandbox-rootfs`) and the model cache
+  (`/var/lib/kubeswift/sandbox-models`) are shared by every namespace on a node
+  and keyed by digest, and a cache hit read no layer from the registry.
+  Someone holding a copy of another tenant's manifest and config could host
+  them in their own repository, resolve the same digest, and get that tenant's
+  image from the node's cache. Every entry is now used for a repository only
+  once that repository has served its content, as artifacts already were
+  (#765). A repository that does not serve the layers fails the sandbox
+  (`RootfsMaterializeFailed`, or the model init container).
+
+### Upgrade
+
+- Rootfs and model entries cached before this release have no record of the
+  repository they came from. The first sandbox per repository and cached image
+  reads that image's layers from its registry once (a download, no
+  unpacking); later ones use the cache as before. Expect the first start of
+  each image on each node to take about as long as a pull.
+
+---
+
 ## [v0.16.2] — 2026-10-10
 
 A patch release: guest kernels that no longer drop network packets, a
