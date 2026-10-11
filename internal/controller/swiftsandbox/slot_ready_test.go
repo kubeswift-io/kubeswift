@@ -12,6 +12,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
 	"github.com/kubeswift-io/kubeswift/internal/scheme"
@@ -272,5 +273,50 @@ func TestPoolReconcile_LegacySlotsStayWarmAcrossUpgrade(t *testing.T) {
 	}
 	if got.Status.WarmReplicas != 1 || got.Status.WarmingReplicas != 0 || got.Status.Phase != sandboxv1alpha1.SwiftSandboxPoolReady {
 		t.Fatalf("legacy slot: warm=%d warming=%d phase=%s", got.Status.WarmReplicas, got.Status.WarmingReplicas, got.Status.Phase)
+	}
+}
+
+// A slot's launcher keeps writing after the slot is ready (the guest IP lands
+// up to a poll interval after DHCP). A claim that conflicts with such a write
+// must retry the slot, not miss it and boot cold.
+func TestTryClaimWarmSlot_RetriesASlotItsLauncherJustWrote(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(1)
+	slot := warmSlot(pool, "p-slot-r1", true, true)
+	var base client.Client
+	launcherWrote := false
+	c := fake.NewClientBuilder().WithScheme(scheme.Scheme).WithObjects(pool, slot).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if !launcherWrote {
+					// The launcher's lease report lands between the read and the claim.
+					launcherWrote = true
+					var cur corev1.Pod
+					if err := base.Get(ctx, client.ObjectKeyFromObject(obj), &cur); err != nil {
+						return err
+					}
+					cur.Annotations["kubeswift.io/guest-ip"] = "192.168.99.10"
+					if err := cl.Update(ctx, &cur); err != nil {
+						return err
+					}
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).Build()
+	base = c
+	sb := &sandboxv1alpha1.SwiftSandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sb", Namespace: "ns", UID: "sb-uid"},
+		Spec:       sandboxv1alpha1.SwiftSandboxSpec{Image: "busybox:1", PoolRef: &corev1.LocalObjectReference{Name: "p"}},
+	}
+	if err := c.Create(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	r := &SwiftSandboxReconciler{Client: c, APIReader: c, Scheme: scheme.Scheme}
+	got, err := r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(pool), nil)
+	if err != nil || got == nil {
+		t.Fatalf("ready slot missed after a launcher write: slot=%v err=%v", got, err)
+	}
+	if got.Labels[SlotStateLabelKey] != slotStateClaimed || got.Annotations["kubeswift.io/guest-ip"] != "192.168.99.10" {
+		t.Fatalf("claim lost the launcher's write or did not claim: labels=%v annotations=%v", got.Labels, got.Annotations)
 	}
 }
