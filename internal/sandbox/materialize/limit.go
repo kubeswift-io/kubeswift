@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -122,13 +123,32 @@ const DefaultArtifactMaxEntries = 1 << 20
 // Options.MaxEntries entries.
 var ErrTooManyEntries = errors.New("artifact has too many entries")
 
+// ErrSparseEntry is returned for an unpacked artifact with a sparse member:
+// extracted, its apparent size is unrelated to the bytes in the stream, so it
+// can claim any size in the cache accounting.
+var ErrSparseEntry = errors.New("artifact has a sparse member")
+
 // entryLimiter passes a tar stream through, reading its headers as they go
-// by, and fails the stream at the entry past max.
+// by, and fails the stream at the entry past max, or at a sparse member.
 type entryLimiter struct {
 	tee      io.Reader
 	pw       *io.PipeWriter
 	exceeded atomic.Bool
+	sparse   atomic.Bool
 	done     chan struct{}
+}
+
+// sparse reports whether h is a sparse member, in any of tar's encodings.
+func sparse(h *tar.Header) bool {
+	if h.Typeflag == tar.TypeGNUSparse {
+		return true
+	}
+	for k := range h.PAXRecords {
+		if strings.HasPrefix(k, "GNU.sparse.") {
+			return true
+		}
+	}
+	return false
 }
 
 func newEntryLimiter(r io.Reader, max int) *entryLimiter {
@@ -138,10 +158,16 @@ func newEntryLimiter(r io.Reader, max int) *entryLimiter {
 		defer close(l.done)
 		tr := tar.NewReader(pr)
 		for n := 0; ; n++ {
-			if _, err := tr.Next(); err != nil {
+			h, err := tr.Next()
+			if err != nil {
 				break
 			}
-			if n >= max {
+			if sparse(h) {
+				l.sparse.Store(true)
+				pr.CloseWithError(ErrSparseEntry)
+				return
+			}
+			if max > 0 && n >= max {
 				l.exceeded.Store(true)
 				pr.CloseWithError(ErrTooManyEntries)
 				return

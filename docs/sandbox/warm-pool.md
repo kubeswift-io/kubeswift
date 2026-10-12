@@ -198,7 +198,11 @@ no local user on the node can read it) is shared by every sandbox on the node
 and keyed by digest. Entries are written only by the materializer (a
 privileged init container, or a fetch pod), published by an atomic rename and
 then marked sealed, and are readable by every guest user but writable by none
-(directories 0555, files 0444). Launchers mount the cache read-only.
+(directories 0555, files 0444). Launchers mount the cache read-only. A
+launcher holds a use lock on every entry it serves for as long as it runs,
+so with cache limits set (see [OCI artifacts](overview.md#oci-artifacts)) an
+entry a sandbox uses is never evicted; an evicted one is a miss for the next
+checkout and is fetched again.
 
 **A cache miss.** When a digest is not on the slot's node, or not yet verified
 with the sandbox's key there, swiftletd reports `ArtifactMissing`. The

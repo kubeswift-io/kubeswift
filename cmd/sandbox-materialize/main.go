@@ -47,6 +47,10 @@ func main() {
 		deadline   = flag.String("deadline", "", "RFC 3339 time the whole run must end by, in addition to --timeout (an optional artifact's deadline)")
 		optional   = flag.Bool("optional", false, "an optional artifact: any failure is recorded in the result as a skip, with a reason, and the run exits 0; the artifact is not marked ok")
 		okFile     = flag.String("ok-file", "", "written once this run has resolved, verified (when a key is given) and materialized the artifact; its absence means not to mount it")
+		useDir     = flag.String("use-dir", "", "the artifact cache's use-lock directory: each use of an entry is recorded there (its last use), and limits are enforced (artifacts only)")
+		cacheMax   = flag.Int64("cache-max-bytes", 0, "artifact cache limit in bytes (0: none); least recently used entries no sandbox holds are evicted after an entry is written, and a new entry is refused if the cache stays over it")
+		cachePct   = flag.Int("cache-max-percent", 0, "artifact cache limit as a percentage of its filesystem (0: none); the smaller limit applies")
+		cacheAge   = flag.Duration("cache-min-age", 10*time.Minute, "an entry used more recently than this is never evicted")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -114,7 +118,11 @@ func main() {
 		opts.MaxBytes, opts.MaxEntries = *maxBytes, *maxEntries
 	}
 
-	res, failed, err := run(ctx, opts, *verifyKey, *insecure, artifact)
+	cache := cacheOpts{useDir: *useDir, limits: materialize.CacheLimits{MaxBytes: *cacheMax, MaxPercent: *cachePct, MinAge: *cacheAge}}
+	if !artifact {
+		cache = cacheOpts{}
+	}
+	res, failed, err := run(ctx, opts, *verifyKey, *insecure, artifact, cache)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
 		if !*optional {
@@ -147,9 +155,15 @@ func main() {
 		res.ImageRef, res.RootfsPath, res.Digest, res.CacheHit, res.SizeBytes>>20)
 }
 
+// cacheOpts are the artifact cache's use-lock directory and limits.
+type cacheOpts struct {
+	useDir string
+	limits materialize.CacheLimits
+}
+
 // run resolves, verifies (with a key) and materializes, and says at which
 // stage it failed.
-func run(ctx context.Context, opts materialize.Options, verifyKey string, insecure, artifact bool) (*materialize.Result, stage, error) {
+func run(ctx context.Context, opts materialize.Options, verifyKey string, insecure, artifact bool, cache cacheOpts) (*materialize.Result, stage, error) {
 	// Verify-before-boot: resolve the digest and cosign-verify image@digest against
 	// the pinned public key BEFORE materializing a single layer. A missing/invalid
 	// signature fails here, so the init container fails and the sandbox goes
@@ -208,7 +222,38 @@ func run(ctx context.Context, opts materialize.Options, verifyKey string, insecu
 	if err != nil {
 		return nil, stageMaterialize, err
 	}
+	if cache.useDir != "" {
+		if err := accountEntry(opts.CacheDir, cache, res); err != nil {
+			return nil, stageMaterialize, err
+		}
+	}
 	return res, stageMaterialize, nil
+}
+
+// accountEntry records this use of the entry, its size when just written, and
+// keeps the cache within its limits (materialize/cachegc.go). A cache that
+// stays full refuses the entry.
+func accountEntry(cacheDir string, cache cacheOpts, res *materialize.Result) error {
+	entry := filepath.Base(res.RootfsPath)
+	now := time.Now()
+	if err := materialize.TouchUse(cache.useDir, entry, now); err != nil {
+		fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: record use: %v\n", err)
+	}
+	if !res.CacheHit {
+		if _, err := materialize.RecordSize(cacheDir, entry); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: warning: record size: %v\n", err)
+		}
+	}
+	if !cache.limits.Enabled() {
+		return nil
+	}
+	rep, err := materialize.EnforceLimits(cacheDir, cache.useDir, entry, cache.limits, now)
+	res.Cache = &rep
+	if rep.Evicted > 0 || rep.OverLimit {
+		fmt.Fprintf(os.Stderr, "sandbox-materialize: cache %d of %d bytes; evicted %d (%d bytes); over limit %t\n",
+			rep.Bytes, rep.LimitBytes, rep.Evicted, rep.EvictedBytes, rep.OverLimit)
+	}
+	return err
 }
 
 // skipReason names why an optional artifact was skipped, from a fixed set.

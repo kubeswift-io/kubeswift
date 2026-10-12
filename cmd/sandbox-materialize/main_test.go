@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -126,5 +128,83 @@ func TestSkipReason_VerificationIsNeverRetriedWithout(t *testing.T) {
 	}
 	if r := skipReason(t.Context(), stageMaterialize, materialize.ErrTooLarge); r != "MaterializeFailed" {
 		t.Errorf("reason %s", r)
+	}
+}
+
+// The node cache stays within its limit: a second artifact evicts the first,
+// least recently used; held by a launcher, the first stays and the second is
+// refused.
+func TestCacheLimit(t *testing.T) {
+	bin := binary(t)
+	srv := httptest.NewServer(registry.New())
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	push := func(tag string) string {
+		img, _ := random.Image(64*1024, 1)
+		ref, _ := name.ParseReference(host + "/art:" + tag)
+		if err := remote.Write(ref, img); err != nil {
+			t.Fatal(err)
+		}
+		d, _ := img.Digest()
+		return host + "/art@" + d.String()
+	}
+	a, b := push("a"), push("b")
+	dir := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+			if err == nil && fi.IsDir() {
+				_ = os.Chmod(p, 0o755)
+			}
+			return nil
+		})
+	})
+	cache, use := filepath.Join(dir, "cache"), filepath.Join(dir, "use")
+	runOne := func(ref string, limit int64) (int, materialize.Result) {
+		result := filepath.Join(dir, "result.json")
+		_ = os.Remove(result)
+		cmd := exec.Command(bin, "--image", ref, "--cache-dir", cache, "--mode", "oci", "--insecure",
+			"--use-dir", use, "--cache-max-bytes", strconv.FormatInt(limit, 10), "--cache-min-age", "0s", "--result-file", result)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("run: %v\n%s", err, out)
+		}
+		var res materialize.Result
+		if b, err := os.ReadFile(result); err == nil {
+			_ = json.Unmarshal(b, &res)
+		}
+		return code, res
+	}
+	code, resA := runOne(a, 1<<30)
+	if code != 0 {
+		t.Fatalf("first artifact: exit %d", code)
+	}
+	entryA := filepath.Base(resA.RootfsPath)
+	// About one entry fits: the second evicts the first.
+	code, resB := runOne(b, 150*1024)
+	if code != 0 || resB.Cache == nil || resB.Cache.Evicted != 1 {
+		t.Fatalf("second artifact: exit %d cache %+v", code, resB.Cache)
+	}
+	if _, err := os.Stat(filepath.Join(cache, entryA)); err == nil {
+		t.Fatal("least recently used entry still there")
+	}
+
+	// A launcher holds b: a needs room, cannot evict b, and is refused.
+	f, err := os.Open(materialize.UseLockPath(use, filepath.Base(resB.RootfsPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	code, resA = runOne(a, 150*1024)
+	if code == 0 {
+		t.Fatalf("a full cache accepted an entry: %+v", resA.Cache)
+	}
+	if _, err := os.Stat(filepath.Join(cache, filepath.Base(resB.RootfsPath))); err != nil {
+		t.Fatal("an entry in use was evicted")
 	}
 }

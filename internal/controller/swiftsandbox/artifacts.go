@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
@@ -233,6 +236,51 @@ func resolvedArtifacts(sb *sandboxv1alpha1.SwiftSandbox) []resolvedArtifact {
 // deadline.
 const backgroundFetchTimeout = 10 * time.Minute
 
+// The node artifact cache's use-lock directory (materialize/cachegc.go): a
+// hostPath beside the cache, read-write in materializer containers and
+// launchers. It holds only lock files.
+const (
+	artifactUseVolume = "artifact-use"
+	artifactUseDir    = "/var/lib/kubeswift/sandbox-artifacts-use"
+)
+
+// Environment carrying the chart's artifact cache limits to the controller,
+// which passes them to every artifact materializer run.
+const (
+	artifactCacheMaxBytesEnv   = "KUBESWIFT_ARTIFACT_CACHE_MAX_BYTES"
+	artifactCacheMaxPercentEnv = "KUBESWIFT_ARTIFACT_CACHE_MAX_PERCENT"
+	artifactCacheMinAgeEnv     = "KUBESWIFT_ARTIFACT_CACHE_MIN_AGE"
+)
+
+// artifactCacheArgs are the materializer flags for the use-lock directory and
+// the configured limits (unset: no limit).
+func artifactCacheArgs() []string {
+	args := []string{"--use-dir=" + artifactUseDir}
+	if v := os.Getenv(artifactCacheMaxBytesEnv); v != "" && v != "0" {
+		if q, err := resource.ParseQuantity(v); err == nil && q.Value() > 0 {
+			args = append(args, "--cache-max-bytes="+strconv.FormatInt(q.Value(), 10))
+		}
+	}
+	if v := os.Getenv(artifactCacheMaxPercentEnv); v != "" && v != "0" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			args = append(args, "--cache-max-percent="+strconv.Itoa(n))
+		}
+	}
+	if v := os.Getenv(artifactCacheMinAgeEnv); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			args = append(args, "--cache-min-age="+d.String())
+		}
+	}
+	return args
+}
+
+// artifactUseVolumeSource is the use-lock directory's hostPath.
+func artifactUseVolumeSource() corev1.Volume {
+	dirCreate := corev1.HostPathDirectoryOrCreate
+	return corev1.Volume{Name: artifactUseVolume, VolumeSource: corev1.VolumeSource{
+		HostPath: &corev1.HostPathVolumeSource{Path: artifactUseDir, Type: &dirCreate}}}
+}
+
 // artifactResultsVolume is a cold launcher pod's emptyDir where each optional
 // artifact's init container writes its ok token (artifactOKFile), and
 // artifactResultsDir where both the init containers and the launcher (read
@@ -287,13 +335,14 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Cont
 	}
 	dirCreate := corev1.HostPathDirectoryOrCreate
 	volumes := []corev1.Volume{{Name: artifactCacheVolume, VolumeSource: corev1.VolumeSource{
-		HostPath: &corev1.HostPathVolumeSource{Path: artifactCacheDir, Type: &dirCreate}}}}
+		HostPath: &corev1.HostPathVolumeSource{Path: artifactCacheDir, Type: &dirCreate}}}, artifactUseVolumeSource()}
 	var inits []corev1.Container
 	cosignHome, resultsVolume := false, false
 	for i, r := range arts {
 		mode := artifactMode(r.spec)
 		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--read-only-artifact", "--result-file", "/dev/termination-log"}
-		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}}
+		args = append(args, artifactCacheArgs()...)
+		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}, {Name: artifactUseVolume, MountPath: artifactUseDir}}
 		if r.spec.Optional {
 			// A fetch pod runs on past the artifact's deadline, up to
 			// backgroundFetchTimeout: the controller stops waiting for it at

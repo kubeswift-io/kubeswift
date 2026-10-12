@@ -154,12 +154,17 @@ impl WarmArtifact {
 pub trait Binder {
     fn bind_read_only(&self, source: &Path, target: &Path) -> Result<(), String>;
     fn is_mounted(&self, target: &Path) -> bool;
+    /// Holds the entry's use lock for the launcher's life (use_locks.rs).
+    fn hold_use(&self, _entry: &str) {}
 }
 
 /// Bind mounts in the launcher's mount namespace, which virtiofsd shares.
 pub struct MountBinder;
 
 impl Binder for MountBinder {
+    fn hold_use(&self, entry: &str) {
+        crate::use_locks::hold_if_available(Path::new(crate::use_locks::USE_DIR), entry);
+    }
     fn bind_read_only(&self, source: &Path, target: &Path) -> Result<(), String> {
         use std::ffi::CString;
         use std::os::unix::ffi::OsStrExt;
@@ -224,6 +229,13 @@ pub fn project(
 ) -> Result<Vec<swift_vsock_client::ExecMount>, String> {
     for a in artifacts {
         a.validate()?;
+    }
+    // Held before the check: an eviction then either finds the entry in use
+    // or has already unsealed it, and the check sees a miss.
+    for a in artifacts {
+        if let Some(entry) = a.entry(cache).file_name().and_then(|n| n.to_str()) {
+            binder.hold_use(entry);
+        }
     }
     let missing: Vec<&str> = artifacts
         .iter()
