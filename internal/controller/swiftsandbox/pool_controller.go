@@ -108,12 +108,17 @@ func (r *SwiftSandboxPoolReconciler) lookup(pool *sandboxv1alpha1.SwiftSandboxPo
 		w.obj = nil
 	}
 	var deadline time.Time
+	// A request asked for again in the same pass (primed, then waited for) is
+	// a follow-up: counted once.
+	seen := map[resolveKey]bool{}
 	return func(req resolveRequest) (resolveResult, bool) {
 		req.namespace = pool.Namespace
 		if deadline.IsZero() {
 			deadline = res.now().Add(res.inlineWait)
 		}
 		req.deadline = deadline
+		req.followUp = req.followUp || seen[req.key]
+		seen[req.key] = true
 		return res.get(req, w)
 	}
 }

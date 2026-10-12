@@ -70,6 +70,13 @@ func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 	if err != nil {
 		return nil, true, err
 	}
+	return resolveArtifactRequests(sb, reqs, lookup)
+}
+
+// resolveArtifactRequests is resolveArtifacts for requests already built (in
+// spec order). A refusal outranks a transient error, whichever artifact comes
+// first: retrying cannot fix it.
+func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveRequest, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
 	results := make([]resolveResult, len(reqs))
 	done := make([]bool, len(reqs))
 	for i, req := range reqs {
@@ -78,22 +85,35 @@ func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 	}
 	for i, req := range reqs {
 		if !done[i] {
-			req.followUp = true
 			results[i], done[i] = lookup(req)
 		}
 	}
 	out := make([]sandboxv1alpha1.SandboxArtifactStatus, 0, len(reqs))
 	ready := true
+	var refused, transient error
 	for i := range reqs {
 		a := &sb.Spec.Artifacts[i]
 		switch {
 		case !done[i]:
 			ready = false
 		case results[i].err != nil:
-			return nil, true, fmt.Errorf("artifact %s: %w", a.Name, results[i].err)
+			err := fmt.Errorf("artifact %s: %w", a.Name, results[i].err)
+			if registryRefused(results[i].err) {
+				if refused == nil {
+					refused = err
+				}
+			} else if transient == nil {
+				transient = err
+			}
 		default:
 			out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: results[i].digest, MountPath: a.MountPath})
 		}
+	}
+	if refused != nil {
+		return nil, true, refused
+	}
+	if transient != nil {
+		return nil, true, transient
 	}
 	return out, ready, nil
 }

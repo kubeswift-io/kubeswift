@@ -185,8 +185,10 @@ func newRegistryResolver() *registryResolver {
 // the registry's authorization, and the fraction of it after which a hit renews
 // it in the background (0 disables renewal). Call before the controllers start.
 func ConfigureAuthorization(ttl time.Duration, refresh float64) error {
-	if ttl < 0 {
-		return fmt.Errorf("authorization TTL %s is negative", ttl)
+	// A result is kept at least resolveSuccessTTL in any case (the objects it
+	// notified read it from the cache), so a shorter window cannot be had.
+	if ttl < resolveSuccessTTL {
+		return fmt.Errorf("authorization TTL %s is below the minimum %s", ttl, resolveSuccessTTL)
 	}
 	if refresh < 0 || refresh >= 1 {
 		return fmt.Errorf("authorization refresh %v must be at least 0 and below 1", refresh)
@@ -383,8 +385,10 @@ func (r *registryResolver) refresh(req resolveRequest, old *resolveEntry) {
 		old.refreshFailed = r.now()
 		return
 	}
-	if r.entries[req.key] != old {
-		return // expired or replaced meanwhile
+	// A fresh answer is installed even if the old entry expired meanwhile (a
+	// slow registry); only a newer request's entry is left alone.
+	if cur, ok := r.entries[req.key]; ok && cur != old {
+		return
 	}
 	e := &resolveEntry{done: make(chan struct{}), result: res, finished: r.now()}
 	close(e.done)

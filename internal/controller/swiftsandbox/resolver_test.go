@@ -15,12 +15,14 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sandboxv1alpha1 "github.com/kubeswift-io/kubeswift/api/sandbox/v1alpha1"
+	"github.com/kubeswift-io/kubeswift/internal/metrics"
 	"github.com/kubeswift-io/kubeswift/internal/sandbox/materialize"
 )
 
@@ -461,7 +463,7 @@ func TestConfigureAuthorization_RejectsBadValues(t *testing.T) {
 	for _, tc := range []struct {
 		ttl     time.Duration
 		refresh float64
-	}{{-time.Second, 0.5}, {time.Minute, -0.1}, {time.Minute, 1}} {
+	}{{-time.Second, 0.5}, {0, 0.5}, {10 * time.Second, 0.5}, {time.Minute, -0.1}, {time.Minute, 1}} {
 		if err := ConfigureAuthorization(tc.ttl, tc.refresh); err == nil {
 			t.Errorf("ttl %s refresh %v accepted", tc.ttl, tc.refresh)
 		}
@@ -494,5 +496,78 @@ func TestResolveArtifacts_RequestsRunTogether(t *testing.T) {
 	}
 	if took > 300*time.Millisecond {
 		t.Errorf("4 artifacts took %v; they ran one after another", took)
+	}
+}
+
+// A renewal answered after the old entry expired (a slow registry) is still a
+// fresh answer: it is installed, so the next lookup does not miss.
+func TestResolver_LateRefreshIsInstalled(t *testing.T) {
+	var calls atomic.Int32
+	gate := make(chan struct{})
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		if calls.Add(1) > 1 {
+			<-gate
+		}
+		return resolveResult{digest: "sha256:aa"}
+	})
+	r.timeout = 5 * time.Second
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+	clk.Advance(3 * time.Minute)
+	r.get(req(digestRef, nil), waiter{}) // starts the renewal
+	waitFor(t, "the renewal to start", func() bool { return calls.Load() == 2 })
+	clk.Advance(3 * time.Minute) // the old entry expires while it runs
+	r.mu.Lock()
+	r.pruneLocked()
+	r.mu.Unlock()
+	close(gate)
+	waitFor(t, "the late renewal to be installed", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		e := r.entries[req(digestRef, nil).key]
+		return e != nil && e.finished.Equal(clk.Now())
+	})
+	r.get(req(digestRef, nil), waiter{})
+	if n := calls.Load(); n != 2 {
+		t.Errorf("fetches = %d, want 2", n)
+	}
+}
+
+// A refusal on a later artifact outranks a transient error on an earlier one:
+// the sandbox fails rather than waiting on a retry that cannot help.
+func TestResolveArtifacts_RefusalOutranksTransient(t *testing.T) {
+	r := stubResolver(func(_ context.Context, _ resolveKind, o materialize.Options) resolveResult {
+		if strings.HasPrefix(o.ImageRef, "down.example/") {
+			return resolveResult{err: errors.New("connection refused")}
+		}
+		return resolveResult{err: &transport.Error{StatusCode: http.StatusForbidden}}
+	})
+	sb := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default"}}
+	sb.Spec.Artifacts = []sandboxv1alpha1.SandboxArtifact{
+		{Name: "a", Ref: "down.example/a:1", MountPath: "/a"},
+		{Name: "b", Ref: "deny.example/b:1", MountPath: "/b"},
+	}
+	rec := &SwiftSandboxReconciler{resolver: r}
+	_, _, err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb))
+	if err == nil || !registryRefused(err) || !strings.Contains(err.Error(), "artifact b") {
+		t.Fatalf("err = %v, want artifact b's refusal", err)
+	}
+}
+
+// A request primed and then waited for in the same pass is one lookup.
+func TestLookup_PrimedRequestCountedOnce(t *testing.T) {
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		return resolveResult{digest: "sha256:aa"}
+	})
+	sb := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default"}}
+	rec := &SwiftSandboxReconciler{resolver: r}
+	r.get(req(digestRef, nil), waiter{}) // cached
+	hits := testutil.ToFloat64(metrics.RegistryLookupsTotal.WithLabelValues("hit"))
+	lookup := rec.lookup(sb)
+	prime(lookup, req(digestRef, nil))
+	lookup(req(digestRef, nil))
+	if d := testutil.ToFloat64(metrics.RegistryLookupsTotal.WithLabelValues("hit")) - hits; d != 1 {
+		t.Errorf("hits counted %v, want 1", d)
 	}
 }
