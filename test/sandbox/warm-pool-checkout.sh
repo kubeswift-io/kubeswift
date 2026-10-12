@@ -89,9 +89,22 @@ EOF
 
 warm() { kubectl -n "$NS" get swiftsandboxpool "$1" -o jsonpath='{.status.warmReplicas}' 2>/dev/null; }
 
+# ready_slot POOL: a slot the controller would hand out (slotReady): labelled
+# warm, its launcher running, and, when the controller stamped it to wait for
+# the guest agent, the agent reported. The pool's status alone can be read
+# before the pool has recounted after the previous checkout's claim, and then
+# counts a slot already taken; the claim relabels the pod in the same write.
+# A slot from a controller that does not stamp (v0.16.3) is ready when its
+# launcher runs, so this test still reproduces that release's defect.
+ready_slot() {
+	kubectl -n "$NS" get pods -l "sandbox.kubeswift.io/pool=$1,sandbox.kubeswift.io/slot-state=warm" \
+		-o jsonpath='{range .items[*]}{.metadata.annotations.sandbox\.kubeswift\.io/slot-readiness}|{.metadata.annotations.kubeswift\.io/guest-agent-ready}|{.status.containerStatuses[?(@.name=="launcher")].state.running.startedAt}{"\n"}{end}' 2>/dev/null |
+		awk -F'|' '$3 != "" && ($1 != "guest-agent" || $2 != "") {found=1} END {exit !found}'
+}
+
 wait_warm() { # pool
 	local deadline=$((SECONDS + TIMEOUT))
-	until [ "$(warm "$1")" = 1 ]; do
+	until [ "$(warm "$1")" = 1 ] && ready_slot "$1"; do
 		[ "$SECONDS" -lt "$deadline" ] || die "pool $1 has no warm slot after ${TIMEOUT}s: $(kubectl -n "$NS" get swiftsandboxpool "$1" -o jsonpath='{.status.message}')"
 		sleep 0.2
 	done
