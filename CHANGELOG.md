@@ -4,6 +4,58 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.16.4] — 2026-10-12
+
+A patch release that corrects when a SwiftSandboxPool slot counts as warm. A
+slot used to be counted, and handed to a checkout, as soon as its launcher
+container was running, while its microVM was still booting. A checkout in
+those few seconds failed with `ExecFailed: GuestAgentUnreachable`. A slot is
+now warm only once its guest agent answers.
+
+### Upgrade
+
+- A pool reports `Ready`, and counts a slot in `warmReplicas`, a few seconds
+  later than on v0.16.3 (about 3.5 s per slot on the reference lab): it now
+  waits for the guest to boot and its agent to answer. This is intended; the
+  slots v0.16.3 reported in that interval could not take a checkout.
+- Run the controller and the launcher (swiftletd) image of the same release.
+  A slot created by this controller is warm only once its launcher reports
+  the guest agent; an older launcher never does, so the slot stays in
+  `warmingReplicas` and every checkout boots cold.
+- Warm slots that exist at upgrade keep the previous rule and stay warm; they
+  are not replaced.
+- CRD changed: `swiftsandboxpools` (`status.warmingReplicas`). Apply `crds/`
+  before the upgrade. No spec change, no chart values changed.
+
+### Fixed
+
+- A warm slot was handed to a checkout before its guest was ready (#777).
+  The launcher container starts before the microVM boots, and the guest agent
+  the workload is sent to listens about 3.5 s later (kernel boot including
+  DHCP, the bridge's mounts, the agent). A checkout in that window failed with
+  `ExecFailed: GuestAgentUnreachable`. Every newly created pool hit it, because
+  it reported `Ready` at launcher start, and so did a refill slot checked out
+  as soon as it appeared; a client that retries a failed sandbox after a
+  backoff saw a first checkout take seconds instead of under two. The launcher
+  of a warm slot now pings the guest agent over vsock and records
+  `kubeswift.io/guest-agent-ready` on the slot pod when it answers. Only such
+  slots count in `warmReplicas` and can be claimed. With no ready slot a
+  checkout boots cold, as before (`PoolColdFallback`).
+- A checkout skipped a ready slot, and booted cold, when the slot's launcher
+  wrote to the slot pod while it was being claimed (the guest IP lands after
+  the slot is ready). The claim now re-reads the slot and retries while it is
+  still free (#777).
+
+### Added
+
+- `SwiftSandboxPool` `status.warmingReplicas`: slots that exist but cannot
+  take a checkout yet (scheduling, materializing or booting). The pool message
+  reads `N/M warm slots ready, K warming`.
+- KVM regression test `test/sandbox/warm-pool-checkout.sh`
+  (`make sandbox-warm-checkout-test`, part of `e2e-tests`) (#777, #779).
+
+---
+
 ## [v0.16.3] — 2026-10-11
 
 A patch release with two SwiftSandbox security fixes. Node caches of sandbox
