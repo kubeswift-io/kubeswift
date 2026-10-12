@@ -158,12 +158,12 @@ func TestClaimedSlot_ArtifactMissingFetchesThenDispatchesAgain(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(slot), &p); err != nil {
 		t.Fatalf("slot deleted: %v", err)
 	}
-	if p.Annotations[annSandboxExecActionID] != string(sb.UID)+fetchedActionSuffix {
+	if p.Annotations[annSandboxExecActionID] != actionIDFor(sb, 2) {
 		t.Fatalf("action-id = %q, want the second dispatch", p.Annotations[annSandboxExecActionID])
 	}
 
 	// The second dispatch completes.
-	p.Annotations[annSandboxExecStatusID] = string(sb.UID) + fetchedActionSuffix
+	p.Annotations[annSandboxExecStatusID] = actionIDFor(sb, 2)
 	p.Annotations[annSandboxExecStatus] = "complete"
 	p.Annotations[annSandboxExecStatusDetail] = "0"
 	if err := c.Update(ctx, &p); err != nil {
@@ -236,7 +236,7 @@ func TestCheckout_ArtifactAuthorizationIsPerCredentials(t *testing.T) {
 	r.resolver = res
 	// Tenant A's answer is in the resolver.
 	resolveArtifacts(ctx, c, &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
-		Spec: sandboxv1alpha1.SwiftSandboxSpec{ImagePullSecret: "tenant-a", Artifacts: sb.Spec.Artifacts}}, r.lookup(sb))
+		Spec: sandboxv1alpha1.SwiftSandboxSpec{ImagePullSecret: "tenant-a", Artifacts: sb.Spec.Artifacts}}, r.lookup(sb), skipUnresolvedOptional, time.Now())
 
 	reconcileSB(t, r, "sb")
 	got := getSandbox(t, c, "sb")

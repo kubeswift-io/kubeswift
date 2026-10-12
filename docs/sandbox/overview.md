@@ -108,7 +108,7 @@ sandbox to change image, resources, command, or network.
 | `network.primaryIP` | string | Guest DHCP IP. Absent for `network.mode: none`. An address on the launcher pod's private nat network, so it repeats across sandboxes. |
 | `network.primaryIPScope` | string | Always `Pod` when `primaryIP` is set: reachable only from inside the launcher pod. |
 | `network.podIP` | string | IP of the launcher pod, unique in the cluster. |
-| `artifacts[]` | list | Each `spec.artifacts` entry as mounted: `name`, `digest`, `mountPath`. |
+| `artifacts[]` | list | Each `spec.artifacts` entry: `name`, `digest`, `mountPath`, `state` (Resolved, Fetching, Dispatched, Mounted, Skipped), `reason`, `message`. See [OCI artifacts](#oci-artifacts). |
 | `network.egressAllowed[]` | list | The egress allowlist the launcher enforces: `cidr`, `protocol`, `port`, and `from` (the spec entry, e.g. `service inference/llm`). |
 | `gpu.devices[]` / `gpu.nodeName` / `gpu.hypervisor` | []string / string / string | The native backend's allocation (PCI addresses, allocated node, resolved hypervisor). Absent for the DRA backend (the claim's ResourceClaim status carries device identity) and non-GPU sandboxes. |
 | `scratchDisk.pvcName` / `scratchDisk.devicePath` / `scratchDisk.bound` | string / string / bool | The attached scratch disk once its PVC is Bound. Absent when `spec.scratchDisk` is unset. |
@@ -416,6 +416,32 @@ spec:
   reached keeps it `Pending` and retries (see Troubleshooting).
 - Mounts are read-only, at clean absolute paths that do not overlap each other,
   the model mount, `/proc`, `/sys` or `/dev`.
+- **Optional artifacts.** `optional: true` marks an artifact the workload can
+  run without, such as a cache. When it cannot be resolved, fetched or
+  verified in time, the workload starts without it: nothing is mounted at its
+  `mountPath` (the path shows whatever the image has there), and
+  `status.artifacts` records `state: Skipped` with a `reason`. A Warning Event
+  (`ArtifactSkipped`, or `ArtifactVerificationFailed`) says why. Verification
+  is never skipped: an optional artifact that fails it is not mounted.
+  `fetchTimeout` (default `10s`, at most `5m`, optional artifacts only) bounds
+  how long it may delay the workload, counted from the sandbox's creation;
+  `0s` uses it only when it is already on the node. A required artifact (the
+  default) behaves as before.
+
+  | Optional artifact | Result |
+  |---|---|
+  | Registry refuses the ref | Skipped, `ResolveRefused` |
+  | Registry not answering (cold start: until `fetchTimeout`; checkout: at claim time) | Skipped, `RegistryUnavailable` / `ResolvePending` |
+  | Signature check fails | Skipped, `VerificationFailed` |
+  | Pull or extraction fails, size limit | Skipped, `MaterializeFailed` |
+  | Not on the node and `fetchTimeout` ran out (or is `0s`) | Skipped, `FetchTimeout` / `NotOnNode` |
+  | Checkout and no warm slot can mount artifacts | Skipped, `KernelUnsupported` (the sandbox still takes a warm slot) |
+
+- `status.artifacts[].state` is `Resolved`, `Fetching`, `Dispatched` (sent
+  with the workload; the launcher mounts it before the workload starts, or the
+  start fails), `Mounted` (the workload has run with it; `reason` `Cached` or
+  `Fetched`) or `Skipped`. An entry without a state was written by an earlier
+  release and was mounted.
 - With `poolRef`, a sandbox with artifacts takes a warm slot and gets its
   artifacts at checkout, without a reboot, on a slot kernel with the
   `warm-mounts` feature (`kernels/sandbox:6.6.15`, `kernels/gpu-sandbox:6.6.4`

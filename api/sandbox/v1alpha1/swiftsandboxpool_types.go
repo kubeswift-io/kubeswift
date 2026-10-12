@@ -128,6 +128,11 @@ const (
 const (
 	SwiftSandboxPoolConditionResolved = "Resolved"
 	SwiftSandboxPoolConditionWarm     = "Warm"
+	// SwiftSandboxPoolConditionCheckoutArtifacts is True when every ready
+	// slot can mount spec.artifacts at checkout (its kernel's bridge has the
+	// warm-mounts feature). A sandbox with required artifacts boots cold when
+	// no ready slot can; one with only optional artifacts starts without them.
+	SwiftSandboxPoolConditionCheckoutArtifacts = "CheckoutArtifacts"
 )
 
 // SwiftSandboxPoolStatus is the observed state.

@@ -94,19 +94,22 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if err := sandboxwebhook.ValidateArtifacts(&sb.Spec); err != nil {
 			return r.fail(ctx, sb, "InvalidArtifacts", err.Error())
 		}
-		arts, ready, err := resolveArtifacts(ctx, r.APIReader, sb, r.lookup(sb))
-		if err != nil {
-			if registryRefused(err) {
+		// An optional artifact the registry has not answered for is not waited
+		// for here: the checkout claims without it, and the request's answer
+		// serves the next checkout.
+		res := resolveArtifacts(ctx, r.APIReader, sb, r.lookup(sb), skipUnresolvedOptional, time.Now())
+		if res.err != nil {
+			if registryRefused(res.err) {
 				r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
-				return r.fail(ctx, sb, "ArtifactResolveFailed", err.Error())
+				return r.fail(ctx, sb, "ArtifactResolveFailed", res.err.Error())
 			}
-			return r.registryUnavailable(ctx, sb, err)
+			return r.registryUnavailable(ctx, sb, res.err)
 		}
-		if !ready {
+		if !res.ready {
 			return r.waitForRegistry(ctx, sb)
 		}
 		r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
-		sb.Status.Artifacts = arts
+		r.recordArtifactStatuses(sb, res.statuses, "warm")
 	}
 
 	// Adopt an already-claimed slot from a partial prior reconcile (the pod claim
@@ -165,8 +168,22 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool), inject); err != nil {
 			return ctrl.Result{}, err
 		}
+		if slot == nil && onlyOptionalArtifacts(sb) {
+			// No slot can mount artifacts at checkout, and every artifact left
+			// is optional: start without them rather than cold.
+			for _, a := range artifactsToMount(sb) {
+				r.setArtifactState(sb, a.Name, sandboxv1alpha1.SandboxArtifactSkipped, "KernelUnsupported",
+					"no warm slot can mount artifacts at checkout (needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)", "warm")
+			}
+			if inject != nil {
+				inject.arts = nil
+			}
+			if slot, err = r.tryClaimWarmSlot(ctx, sb, poolSlotProfile(&pool), inject); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		if slot == nil {
-			if len(sb.Spec.Artifacts) > 0 {
+			if len(artifactsToMount(sb)) > 0 {
 				return r.coldFallback(ctx, sb, kernelName,
 					"no warm slot that can take artifacts is available (a slot needs kernels/sandbox 6.6.15 or kernels/gpu-sandbox 6.6.4 or newer)")
 			}
@@ -196,6 +213,14 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		}
 		if err := r.stampExecAction(ctx, slot, sb, string(sb.UID), execInject{argv: argv, env: env, cwd: cwd, arts: arts}); err != nil {
 			return ctrl.Result{}, err
+		}
+	}
+
+	// Every artifact sent with the workload is mounted by the launcher before
+	// the workload starts, or the start fails (ArtifactMissing).
+	for _, a := range resolvedArtifacts(sb) {
+		if st := artifactStatus(sb, a.spec.Name); st != nil && st.State == sandboxv1alpha1.SandboxArtifactResolved {
+			st.State = sandboxv1alpha1.SandboxArtifactDispatched
 		}
 	}
 
@@ -303,7 +328,7 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 			return false
 		}
 		// Artifacts need a slot whose bridge and launcher can project them.
-		if len(sb.Spec.Artifacts) > 0 && !slotSupportsWarmMounts(p) {
+		if len(artifactsToMount(sb)) > 0 && !slotSupportsWarmMounts(p) {
 			return false
 		}
 		return true
@@ -501,8 +526,8 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	if actionID == "" {
 		actionID = string(sb.UID)
 	}
-	if (actionID == string(sb.UID) || actionID == string(sb.UID)+fetchedActionSuffix) &&
-		pod.Annotations[annSandboxExecStatusID] == actionID {
+	attempt, ours := actionAttempt(actionID, sb)
+	if ours && pod.Annotations[annSandboxExecStatusID] == actionID {
 		switch pod.Annotations[annSandboxExecStatus] {
 		case "complete":
 			code := int32(0)
@@ -510,6 +535,7 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 				code = int32(n)
 			}
 			sb.Status.ExitCode = &code
+			r.artifactsMounted(sb)
 			_ = r.Delete(ctx, &pod) // consume the slot; the pool replenishes a fresh warm one
 			if code == 0 {
 				return r.terminal(ctx, sb, sandboxv1alpha1.SwiftSandboxCompleted, "Completed", "workload exited 0")
@@ -518,10 +544,13 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 				fmt.Sprintf("workload exited %d", code))
 		case "failed":
 			detail := pod.Annotations[annSandboxExecStatusDetail]
-			// The first dispatch found artifacts missing on the node: fetch
-			// them there and dispatch again, once. The VM stays booted.
-			if missing, ok := artifactMissing(detail); ok && actionID == string(sb.UID) {
-				return r.fetchMissingArtifacts(ctx, sb, &pod, missing)
+			// The dispatch found artifacts missing on the node: fetch them
+			// there (once) and dispatch again, or, for optional ones past
+			// their deadline, dispatch again without them. The VM stays booted.
+			if missing, ok := artifactMissing(detail); ok {
+				if res, handled, err := r.artifactsMissing(ctx, sb, &pod, attempt, missing); handled || err != nil {
+					return res, err
+				}
 			}
 			_ = r.Delete(ctx, &pod)
 			reason, msg := checkoutFailure(detail)
@@ -550,6 +579,9 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 	}
 	if err := r.syncWorkloadReady(ctx, sb, &pod); err != nil {
 		return ctrl.Result{}, err
+	}
+	if c := apimeta.FindStatusCondition(sb.Status.Conditions, sandboxv1alpha1.SwiftSandboxConditionWorkloadReady); c != nil && c.Status == metav1.ConditionTrue {
+		r.artifactsMounted(sb)
 	}
 	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out)")
 }
@@ -607,31 +639,183 @@ func checkoutFailure(detail string) (reason, msg string) {
 }
 
 // ownExecAction reports whether the slot carries this sandbox's exec action:
-// the first dispatch, or the second after an artifact fetch.
+// the first dispatch, or a later one (after an artifact fetch or skip).
 func ownExecAction(slot *corev1.Pod, sb *sandboxv1alpha1.SwiftSandbox) bool {
-	id := slot.Annotations[annSandboxExecActionID]
-	return id != "" && (id == string(sb.UID) || id == string(sb.UID)+fetchedActionSuffix)
+	_, ok := actionAttempt(slot.Annotations[annSandboxExecActionID], sb)
+	return ok
 }
 
-// fetchMissingArtifacts runs the artifact fetch on the slot's node and, when
-// it succeeds, dispatches the same exec action again under a new id.
-func (r *SwiftSandboxReconciler) fetchMissingArtifacts(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missing []string) (ctrl.Result, error) {
-	state, msg, err := r.ensureArtifactFetch(ctx, sb, slot, missing)
+// actionAttempt says which dispatch of sb's workload an exec action id is: 1
+// for the first (the sandbox UID), n for "<uid>-<n>". "<uid>-fetched" (the
+// second dispatch, as releases before attempts were numbered wrote it) is 2.
+func actionAttempt(id string, sb *sandboxv1alpha1.SwiftSandbox) (int, bool) {
+	uid := string(sb.UID)
+	switch {
+	case id == "":
+		return 0, false
+	case id == uid:
+		return 1, true
+	case id == uid+fetchedActionSuffix:
+		return 2, true
+	}
+	if rest, ok := strings.CutPrefix(id, uid+"-"); ok {
+		if n, err := strconv.Atoi(rest); err == nil && n >= 2 && strconv.Itoa(n) == rest {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// actionIDFor is the exec action id of sb's attempt-th dispatch.
+func actionIDFor(sb *sandboxv1alpha1.SwiftSandbox, attempt int) string {
+	if attempt <= 1 {
+		return string(sb.UID)
+	}
+	return fmt.Sprintf("%s-%d", sb.UID, attempt)
+}
+
+// maxDispatchAttempts bounds re-dispatches of one workload: a fetch, and
+// dropping optional artifacts, each take at most one.
+const maxDispatchAttempts = 4
+
+// artifactsMissing decides what a dispatch that found artifacts missing on
+// the slot's node does next. A required artifact is fetched once; still
+// missing after that, the sandbox fails (handled=false: the caller's
+// ArtifactMissing failure). An optional one is fetched only while its
+// deadline allows and only on the first dispatch; otherwise it is skipped.
+// When nothing is left to fetch the workload is dispatched again, without
+// the skipped artifacts.
+func (r *SwiftSandboxReconciler) artifactsMissing(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, attempt int, missing []string) (ctrl.Result, bool, error) {
+	if attempt >= maxDispatchAttempts {
+		return ctrl.Result{}, false, nil
+	}
+	now := time.Now()
+	var required, wait []string
+	for _, n := range missing {
+		a := specArtifact(sb, n)
+		switch {
+		case a == nil:
+			return ctrl.Result{}, false, nil // not ours to decide: fails as ArtifactMissing
+		case !a.Optional:
+			required = append(required, n)
+		case attempt == 1 && a.ArtifactFetchTimeout() > 0 && now.Before(artifactDeadline(sb, a)):
+			wait = append(wait, n)
+		default:
+			reason, msg := "FetchTimeout", "not on the node within its fetchTimeout"
+			if a.ArtifactFetchTimeout() == 0 {
+				reason, msg = "NotOnNode", "not on the node (fetchTimeout 0s)"
+			}
+			r.setArtifactState(sb, n, sandboxv1alpha1.SandboxArtifactSkipped, reason, msg, "warm")
+		}
+	}
+	if len(required) > 0 && attempt > 1 {
+		return ctrl.Result{}, false, nil // still missing after the fetch
+	}
+	fetch := append(append([]string{}, required...), wait...)
+	if len(fetch) == 0 {
+		res, err := r.redispatch(ctx, sb, slot, attempt)
+		return res, true, err
+	}
+	state, msg, results, err := r.ensureArtifactFetch(ctx, sb, slot, fetch)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, true, err
 	}
 	switch state {
 	case fetchFailed:
 		_ = r.Delete(ctx, slot)
-		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
+		res, err := r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
+		return res, true, err
 	case fetchDone:
-		patch := client.MergeFrom(slot.DeepCopy())
-		slot.Annotations[annSandboxExecActionID] = string(sb.UID) + fetchedActionSuffix
-		if err := r.Patch(ctx, slot, patch); err != nil {
+		for name, skip := range results {
+			if artifactOptional(sb, name) {
+				r.setArtifactState(sb, name, sandboxv1alpha1.SandboxArtifactSkipped, skip.Reason, skip.Message, "warm")
+			}
+		}
+		for _, n := range fetch {
+			if st := artifactStatus(sb, n); st != nil && st.State != sandboxv1alpha1.SandboxArtifactSkipped {
+				st.State, st.Reason = sandboxv1alpha1.SandboxArtifactDispatched, "Fetched"
+			}
+		}
+		res, err := r.redispatch(ctx, sb, slot, attempt)
+		return res, true, err
+	}
+	// Running. Optional artifacts past their deadline are not waited for;
+	// the fetch goes on and fills the node cache.
+	next := 5 * time.Second
+	if len(required) == 0 {
+		var earliest time.Time
+		for _, n := range wait {
+			if d := artifactDeadline(sb, specArtifact(sb, n)); earliest.IsZero() || d.Before(earliest) {
+				earliest = d
+			}
+		}
+		if !now.Before(earliest) {
+			for _, n := range wait {
+				r.setArtifactState(sb, n, sandboxv1alpha1.SandboxArtifactSkipped, "FetchTimeout",
+					"still being fetched when its fetchTimeout ran out", "warm")
+			}
+			res, err := r.redispatch(ctx, sb, slot, attempt)
+			return res, true, err
+		}
+		if d := earliest.Sub(now); d < next {
+			next = d
+		}
+	}
+	for _, n := range fetch {
+		if st := artifactStatus(sb, n); st != nil {
+			st.State = sandboxv1alpha1.SandboxArtifactFetching
+		}
+	}
+	res, err := r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning,
+		"fetching artifacts "+strings.Join(fetch, ", ")+" for warm slot "+slot.Name)
+	if err == nil && (res.RequeueAfter == 0 || next < res.RequeueAfter) {
+		res.RequeueAfter = max(next, 100*time.Millisecond)
+	}
+	return res, true, err
+}
+
+// redispatch sends the workload again under the next attempt's id, without
+// the artifacts skipped since: one patch, which swiftletd's pod watch sees.
+func (r *SwiftSandboxReconciler) redispatch(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, attempt int) (ctrl.Result, error) {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(slot.Annotations[annSandboxExecActionArgs]), &args); err != nil {
+		return r.fail(ctx, sb, "ExecFailed", "re-dispatch: the slot's exec action is unreadable: "+err.Error())
+	}
+	var arts []warmArtifactArg
+	if raw, ok := args["artifacts"]; ok {
+		if err := json.Unmarshal(raw, &arts); err != nil {
+			return r.fail(ctx, sb, "ExecFailed", "re-dispatch: the slot's artifacts are unreadable: "+err.Error())
+		}
+	}
+	keep := arts[:0]
+	for _, a := range arts {
+		if st := artifactStatus(sb, a.Name); st == nil || st.State != sandboxv1alpha1.SandboxArtifactSkipped {
+			keep = append(keep, a)
+		}
+	}
+	if len(keep) == 0 {
+		delete(args, "artifacts")
+	} else {
+		raw, err := json.Marshal(keep)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
-		return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out, artifacts fetched)")
+		args["artifacts"] = raw
 	}
-	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning,
-		"fetching artifacts "+strings.Join(missing, ", ")+" for warm slot "+slot.Name)
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	patch := client.MergeFrom(slot.DeepCopy())
+	slot.Annotations[annSandboxExecActionArgs] = string(argsJSON)
+	slot.Annotations[annSandboxExecActionID] = actionIDFor(sb, attempt+1)
+	if err := r.Patch(ctx, slot, patch); err != nil {
+		return ctrl.Result{}, err
+	}
+	for _, a := range keep {
+		if st := artifactStatus(sb, a.Name); st != nil && st.State == sandboxv1alpha1.SandboxArtifactResolved {
+			st.State = sandboxv1alpha1.SandboxArtifactDispatched
+		}
+	}
+	return r.setPhase(ctx, sb, sandboxv1alpha1.SwiftSandboxRunning, "running (checked out, dispatched again)")
 }

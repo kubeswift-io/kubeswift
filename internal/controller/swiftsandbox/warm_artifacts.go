@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
@@ -171,7 +172,7 @@ func artifactFetchPod(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missin
 			only.Status.Artifacts = append(only.Status.Artifacts, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: d, MountPath: a.MountPath})
 		}
 	}
-	containers, volumes := artifactInits(only)
+	containers, volumes := artifactInits(only, false)
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      artifactFetchPodName(sb),
@@ -179,8 +180,11 @@ func artifactFetchPod(sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missin
 			Labels:    map[string]string{SandboxLabelKey: sb.Name, "sandbox.kubeswift.io/artifact-fetch": "true"},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:                     slot.Spec.NodeName,
-			RestartPolicy:                corev1.RestartPolicyNever,
+			NodeName:      slot.Spec.NodeName,
+			RestartPolicy: corev1.RestartPolicyNever,
+			// Pinned by node name, so no scheduler ever gives up on it: a pod
+			// whose image pull stalls would keep the sandbox fetching for good.
+			ActiveDeadlineSeconds:        ptr.To(int64(fetchPodDeadline / time.Second)),
 			Containers:                   containers,
 			Volumes:                      volumes,
 			Tolerations:                  slot.Spec.Tolerations,
@@ -211,45 +215,121 @@ const (
 	fetchFailed
 )
 
+// fetchPodDeadline bounds a fetch pod: the materializer's own run bound
+// (30 minutes) plus time to start.
+const fetchPodDeadline = 32 * time.Minute
+
 // ensureArtifactFetch creates the fetch pod for missing on slot's node, or
-// reports how the existing one stands, and why it failed.
-func (r *SwiftSandboxReconciler) ensureArtifactFetch(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missing []string) (fetchState, string, error) {
+// reports how the existing one stands, why it failed, and, once done, which
+// optional artifacts it skipped and why.
+func (r *SwiftSandboxReconciler) ensureArtifactFetch(ctx context.Context, sb *sandboxv1alpha1.SwiftSandbox, slot *corev1.Pod, missing []string) (fetchState, string, map[string]*materialize.Skip, error) {
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: sb.Namespace, Name: artifactFetchPodName(sb)}, &pod)
 	switch {
 	case apierrors.IsNotFound(err):
 		fp := artifactFetchPod(sb, slot, missing)
 		if len(fp.Spec.Containers) == 0 {
-			return fetchFailed, "swiftletd reported unknown artifacts missing: " + strings.Join(missing, ","), nil
+			return fetchFailed, "swiftletd reported unknown artifacts missing: " + strings.Join(missing, ","), nil, nil
 		}
 		if err := controllerutil.SetControllerReference(sb, fp, r.Scheme); err != nil {
-			return fetchRunning, "", err
+			return fetchRunning, "", nil, err
 		}
 		if err := r.Create(ctx, fp); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fetchRunning, "", err
+			return fetchRunning, "", nil, err
 		}
 		r.Recorder.Eventf(sb, corev1.EventTypeNormal, "FetchingArtifacts",
 			"artifacts %s are not on node %s; fetching them for warm slot %s", strings.Join(missing, ", "), slot.Spec.NodeName, slot.Name)
-		return fetchRunning, "", nil
+		return fetchRunning, "", nil, nil
 	case err != nil:
-		return fetchRunning, "", err
+		return fetchRunning, "", nil, err
 	}
 	// Only a pod this sandbox created decides: another one by that name (a
 	// user's) is not trusted for its phase or its message.
 	if !metav1.IsControlledBy(&pod, sb) {
-		return fetchFailed, fmt.Sprintf("pod %s exists and was not created for this sandbox", pod.Name), nil
+		return fetchFailed, fmt.Sprintf("pod %s exists and was not created for this sandbox", pod.Name), nil, nil
 	}
 	switch pod.Status.Phase {
 	case corev1.PodSucceeded:
-		return fetchDone, "", nil
+		skipped := map[string]*materialize.Skip{}
+		for i := range pod.Status.ContainerStatuses {
+			cs := &pod.Status.ContainerStatuses[i]
+			if res, ok := artifactResult(cs); ok && res.Skipped != nil {
+				skipped[strings.TrimPrefix(cs.Name, artifactInitPrefix)] = res.Skipped
+			}
+		}
+		return fetchDone, "", skipped, nil
 	case corev1.PodFailed:
+		// An optional artifact's container never fails (--optional): a
+		// failed container is a required artifact's, or the pod's deadline.
 		for _, cs := range pod.Status.ContainerStatuses {
 			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
 				return fetchFailed, fmt.Sprintf("artifact %s: %s", strings.TrimPrefix(cs.Name, artifactInitPrefix),
-					firstNonEmpty(strings.TrimSpace(t.Message), "materialize failed")), nil
+					firstNonEmpty(strings.TrimSpace(t.Message), "materialize failed")), nil, nil
 			}
 		}
-		return fetchFailed, "artifact fetch pod failed: " + pod.Status.Message, nil
+		return fetchFailed, "artifact fetch pod failed: " + firstNonEmpty(pod.Status.Message, pod.Status.Reason), nil, nil
 	}
-	return fetchRunning, "", nil
+	return fetchRunning, "", nil, nil
+}
+
+// specArtifact is sb's spec.artifacts entry named name, or nil.
+func specArtifact(sb *sandboxv1alpha1.SwiftSandbox, name string) *sandboxv1alpha1.SandboxArtifact {
+	for i := range sb.Spec.Artifacts {
+		if sb.Spec.Artifacts[i].Name == name {
+			return &sb.Spec.Artifacts[i]
+		}
+	}
+	return nil
+}
+
+// artifactStatus is sb's status.artifacts entry named name, or nil.
+func artifactStatus(sb *sandboxv1alpha1.SwiftSandbox, name string) *sandboxv1alpha1.SandboxArtifactStatus {
+	for i := range sb.Status.Artifacts {
+		if sb.Status.Artifacts[i].Name == name {
+			return &sb.Status.Artifacts[i]
+		}
+	}
+	return nil
+}
+
+// artifactsToMount are the spec artifacts a checkout of sb will mount: all
+// of them but those already skipped.
+func artifactsToMount(sb *sandboxv1alpha1.SwiftSandbox) []*sandboxv1alpha1.SandboxArtifact {
+	var out []*sandboxv1alpha1.SandboxArtifact
+	for i := range sb.Spec.Artifacts {
+		a := &sb.Spec.Artifacts[i]
+		if st := artifactStatus(sb, a.Name); st == nil || st.State != sandboxv1alpha1.SandboxArtifactSkipped {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// onlyOptionalArtifacts reports whether sb has artifacts to mount and every
+// one of them is optional.
+func onlyOptionalArtifacts(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	arts := artifactsToMount(sb)
+	for _, a := range arts {
+		if !a.Optional {
+			return false
+		}
+	}
+	return len(arts) > 0
+}
+
+// artifactsMounted marks the artifacts sent with the workload mounted, once
+// the workload is known to have run with them (ready, or exited): from the
+// node cache, or fetched for this sandbox.
+func (r *SwiftSandboxReconciler) artifactsMounted(sb *sandboxv1alpha1.SwiftSandbox) {
+	for i := range sb.Status.Artifacts {
+		st := &sb.Status.Artifacts[i]
+		if st.State != sandboxv1alpha1.SandboxArtifactDispatched {
+			continue
+		}
+		reason := "Cached"
+		if st.Reason == "Fetched" {
+			reason = "Fetched"
+		}
+		r.setArtifactState(sb, st.Name, sandboxv1alpha1.SandboxArtifactMounted, reason, "", "warm")
+	}
 }

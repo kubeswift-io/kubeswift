@@ -47,6 +47,14 @@ func ValidateArtifacts(s *sandboxv1alpha1.SwiftSandboxSpec) error {
 		if a.VerifyKeySecretRef != nil && a.VerifyKeySecretRef.Name == "" {
 			return fmt.Errorf("%s.verifyKeySecretRef.name is required when verifyKeySecretRef is set", at)
 		}
+		if t := a.FetchTimeout; t != nil {
+			if !a.Optional {
+				return fmt.Errorf("%s.fetchTimeout is only for an optional artifact (a required one waits as long as it takes)", at)
+			}
+			if t.Duration < 0 || t.Duration > sandboxv1alpha1.MaxArtifactFetchTimeout {
+				return fmt.Errorf("%s.fetchTimeout %s: between 0s and %s", at, t.Duration, sandboxv1alpha1.MaxArtifactFetchTimeout)
+			}
+		}
 		p := a.MountPath
 		if !mountPathRE.MatchString(p) || path.Clean(p) != p || strings.Contains(p, "/./") {
 			return fmt.Errorf("%s.mountPath %q: a clean absolute path of letters, digits and . _ - /", at, p)

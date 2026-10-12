@@ -257,6 +257,18 @@ registry does not separate tenants here).
 | Missing again after a fetch | `Failed`, `ArtifactMissing` |
 | The slot's kernel lacks `warm-mounts` (found at dispatch) | `Failed`, `KernelUnsupported` |
 
+An **optional** artifact (`optional: true`) never fails the sandbox: a
+refusal, a failed fetch or signature check, or a fetch still running when
+its `fetchTimeout` runs out (counted from the sandbox's creation) skips it,
+and the workload is dispatched again without it. It is fetched only on the
+first dispatch and only while its deadline allows; with `fetchTimeout: 0s` it
+is used only when already on the node. A fetch that outlives the deadline
+keeps running and fills the node cache for later checkouts, as long as the
+sandbox exists. A sandbox whose artifacts are all optional takes a warm slot
+even when no slot can mount artifacts, and starts without them. The pool's
+`CheckoutArtifacts` condition says how many ready slots can mount artifacts
+at checkout. Fetch pods are bounded (`activeDeadlineSeconds`).
+
 **Security boundary.** The guest sees only the staging share, and in its
 sandbox root only its own artifacts. Everything is read-only three times:
 the cache mount, the bind into the staging share, and the guest's bind
@@ -311,6 +323,10 @@ cache), `refresh` (a hit that also started a background renewal) and `miss`
 `kubeswift_registry_request_seconds{reason}` cover the requests themselves,
 `reason` being `lookup` (something waited for it) or `refresh`. A checkout of
 a digest in steady use should show hits and refreshes, not misses.
+
+`kubeswift_sandbox_artifacts_total{path,optional,result,reason}` counts
+artifacts mounted (`reason` `Cached` or `Fetched`) and skipped (the skip
+reason), on warm checkouts and cold starts.
 
 ## Limitations (v1)
 

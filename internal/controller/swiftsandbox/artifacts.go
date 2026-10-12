@@ -2,8 +2,10 @@ package swiftsandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	corev1 "k8s.io/api/core/v1"
@@ -62,21 +64,55 @@ func artifactRequests(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 	return reqs, nil
 }
 
+// optionalWait is what a resolve does with an optional artifact whose
+// registry has not answered (or answered with a transient error).
+type optionalWait int
+
+const (
+	// skipUnresolvedOptional: a warm checkout claims without it; the request
+	// keeps running and its answer serves the next checkout.
+	skipUnresolvedOptional optionalWait = iota
+	// waitUnresolvedOptional: a cold start waits for it until its deadline.
+	waitUnresolvedOptional
+)
+
+// artifactDeadline is when an optional artifact stops delaying the workload:
+// the sandbox's creation plus its fetchTimeout. Immutable, so a retry or a
+// controller restart cannot extend it.
+func artifactDeadline(sb *sandboxv1alpha1.SwiftSandbox, a *sandboxv1alpha1.SandboxArtifact) time.Time {
+	return sb.CreationTimestamp.Add(a.ArtifactFetchTimeout())
+}
+
+// artifactResolution is the outcome of resolving a sandbox's artifacts.
+type artifactResolution struct {
+	// statuses: one per artifact, in spec order, once ready.
+	statuses []sandboxv1alpha1.SandboxArtifactStatus
+	// ready: nothing is still being waited for.
+	ready bool
+	// err: a required artifact's registry error (a refusal outranks a
+	// transient error).
+	err error
+	// wakeAt: the earliest deadline of an optional artifact still waited for.
+	wakeAt time.Time
+}
+
 // resolveArtifacts resolves each artifact to the digest the node will mount.
 // Every request starts before any is waited for, and they share the pass's
-// wait; ok=false while any is still running.
-func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
+// wait.
+func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc, wait optionalWait, now time.Time) artifactResolution {
 	reqs, err := artifactRequests(ctx, c, sb)
 	if err != nil {
-		return nil, true, err
+		return artifactResolution{ready: true, err: err}
 	}
-	return resolveArtifactRequests(sb, reqs, lookup)
+	return resolveArtifactRequests(sb, reqs, lookup, wait, now)
 }
 
 // resolveArtifactRequests is resolveArtifacts for requests already built (in
-// spec order). A refusal outranks a transient error, whichever artifact comes
-// first: retrying cannot fix it.
-func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveRequest, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
+// spec order). A required artifact behaves as it always has: a refusal fails
+// the sandbox, anything else waits. An optional one never fails or delays a
+// required one: refused, it is skipped; unanswered, it is skipped or waited
+// for until its deadline, as wait says.
+func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveRequest, lookup lookupFunc, wait optionalWait, now time.Time) artifactResolution {
 	results := make([]resolveResult, len(reqs))
 	done := make([]bool, len(reqs))
 	for i, req := range reqs {
@@ -88,34 +124,65 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 			results[i], done[i] = lookup(req)
 		}
 	}
-	out := make([]sandboxv1alpha1.SandboxArtifactStatus, 0, len(reqs))
-	ready := true
+	out := artifactResolution{ready: true}
 	var refused, transient error
 	for i := range reqs {
 		a := &sb.Spec.Artifacts[i]
+		st := sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, MountPath: a.MountPath}
+		res := results[i]
 		switch {
-		case !done[i]:
-			ready = false
-		case results[i].err != nil:
-			err := fmt.Errorf("artifact %s: %w", a.Name, results[i].err)
-			if registryRefused(results[i].err) {
+		case done[i] && res.err == nil:
+			st.Digest, st.State = res.digest, sandboxv1alpha1.SandboxArtifactResolved
+		case !a.Optional && !done[i]:
+			out.ready = false
+		case !a.Optional:
+			err := fmt.Errorf("artifact %s: %w", a.Name, res.err)
+			if registryRefused(res.err) {
 				if refused == nil {
 					refused = err
 				}
 			} else if transient == nil {
 				transient = err
 			}
-		default:
-			out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: results[i].digest, MountPath: a.MountPath})
+		case done[i] && registryRefused(res.err):
+			skipArtifact(&st, "ResolveRefused", res.err.Error())
+		default: // optional, unanswered or a transient error
+			if d := artifactDeadline(sb, a); wait == waitUnresolvedOptional && now.Before(d) {
+				out.ready = false
+				if out.wakeAt.IsZero() || d.Before(out.wakeAt) {
+					out.wakeAt = d
+				}
+			} else if !done[i] {
+				skipArtifact(&st, "ResolvePending", "the registry had not answered when the sandbox started")
+			} else {
+				skipArtifact(&st, "RegistryUnavailable", res.err.Error())
+			}
 		}
+		out.statuses = append(out.statuses, st)
 	}
 	if refused != nil {
-		return nil, true, refused
+		out.err = refused
+	} else if transient != nil {
+		out.err = transient
 	}
-	if transient != nil {
-		return nil, true, transient
+	if out.err != nil || !out.ready {
+		out.statuses = nil
 	}
-	return out, ready, nil
+	return out
+}
+
+// skipArtifact records that an optional artifact is not mounted, and why.
+func skipArtifact(st *sandboxv1alpha1.SandboxArtifactStatus, reason, msg string) {
+	st.State, st.Reason, st.Message = sandboxv1alpha1.SandboxArtifactSkipped, reason, truncateMessage(msg)
+}
+
+// truncateMessage bounds a registry or materializer message kept in status.
+func truncateMessage(msg string) string {
+	const max = 512
+	if len(msg) > max {
+		return msg[:max] + "..."
+	}
+	return msg
 }
 
 // resolvedArtifact pairs an artifact with its resolved digest from status.
@@ -139,11 +206,13 @@ func (r resolvedArtifact) cachePath() string {
 }
 
 // resolvedArtifacts pairs spec.artifacts with status.artifacts by name; an
-// artifact not yet resolved is left out.
+// artifact not resolved, or skipped, is left out.
 func resolvedArtifacts(sb *sandboxv1alpha1.SwiftSandbox) []resolvedArtifact {
 	digests := map[string]string{}
-	for _, s := range sb.Status.Artifacts {
-		digests[s.Name] = s.Digest
+	for i := range sb.Status.Artifacts {
+		if s := &sb.Status.Artifacts[i]; s.Usable() {
+			digests[s.Name] = s.Digest
+		}
 	}
 	var out []resolvedArtifact
 	for i := range sb.Spec.Artifacts {
@@ -154,6 +223,31 @@ func resolvedArtifacts(sb *sandboxv1alpha1.SwiftSandbox) []resolvedArtifact {
 	return out
 }
 
+// artifactResultsVolume is a cold launcher pod's emptyDir where each optional
+// artifact's init container writes its ok token (artifactOKFile), and
+// artifactResultsDir where both the init containers and the launcher (read
+// only) mount it.
+const (
+	artifactResultsVolume = "artifact-results"
+	artifactResultsDir    = "/var/lib/kubeswift/artifact-results"
+)
+
+// artifactOKFile is where the init container of optional artifact name
+// records that THIS pod resolved, verified and materialized it. swiftletd
+// shares an optional artifact only when it exists: never decided from what
+// the shared node cache happens to hold.
+func artifactOKFile(name string) string { return artifactResultsDir + "/" + name }
+
+// hasOptionalArtifact reports whether any resolved artifact is optional.
+func hasOptionalArtifact(sb *sandboxv1alpha1.SwiftSandbox) bool {
+	for _, r := range resolvedArtifacts(sb) {
+		if r.spec.Optional {
+			return true
+		}
+	}
+	return false
+}
+
 // artifactShares are the virtio-fs shares and the kubeswift.mounts cmdline
 // value for sb's resolved artifacts.
 func artifactShares(sb *sandboxv1alpha1.SwiftSandbox) ([]runtimeintent.FilesystemIntent, string) {
@@ -161,15 +255,22 @@ func artifactShares(sb *sandboxv1alpha1.SwiftSandbox) ([]runtimeintent.Filesyste
 	var mounts []string
 	for i, r := range resolvedArtifacts(sb) {
 		tag := artifactTag(i)
-		fs = append(fs, runtimeintent.FilesystemIntent{Name: tag, Tag: tag, SourcePath: r.cachePath(), ReadOnly: true})
+		f := runtimeintent.FilesystemIntent{Name: tag, Tag: tag, SourcePath: r.cachePath(), ReadOnly: true}
+		if r.spec.Optional {
+			f.OptionalToken = artifactOKFile(r.spec.Name)
+		}
+		fs = append(fs, f)
 		mounts = append(mounts, tag+":"+r.spec.MountPath)
 	}
 	return fs, strings.Join(mounts, ",")
 }
 
-// artifactInits builds one materialize init container per resolved artifact,
-// with the volumes they need (pull Secret, cosign key, the node cache).
-func artifactInits(sb *sandboxv1alpha1.SwiftSandbox) ([]corev1.Container, []corev1.Volume) {
+// artifactInits builds one materialize container per resolved artifact, with
+// the volumes they need (pull Secret, cosign key, the node cache). An optional
+// artifact's container never fails (--optional): a failure is a skip in its
+// result, bounded by the artifact's deadline. With tokens (a cold launcher's
+// init containers) each optional one also writes its ok token.
+func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Container, []corev1.Volume) {
 	arts := resolvedArtifacts(sb)
 	if len(arts) == 0 {
 		return nil, nil
@@ -178,11 +279,19 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox) ([]corev1.Container, []core
 	volumes := []corev1.Volume{{Name: artifactCacheVolume, VolumeSource: corev1.VolumeSource{
 		HostPath: &corev1.HostPathVolumeSource{Path: artifactCacheDir, Type: &dirCreate}}}}
 	var inits []corev1.Container
-	cosignHome := false
+	cosignHome, resultsVolume := false, false
 	for i, r := range arts {
 		mode := artifactMode(r.spec)
 		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--read-only-artifact", "--result-file", "/dev/termination-log"}
 		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}}
+		if r.spec.Optional {
+			args = append(args, "--optional", "--deadline="+artifactDeadline(sb, r.spec).UTC().Format(time.RFC3339))
+			if tokens {
+				args = append(args, "--ok-file="+artifactOKFile(r.spec.Name))
+				mounts = append(mounts, corev1.VolumeMount{Name: artifactResultsVolume, MountPath: artifactResultsDir})
+				resultsVolume = true
+			}
+		}
 		var env []corev1.EnvVar
 		secret := sb.Spec.ImagePullSecret
 		if r.spec.PullSecretRef != nil {
@@ -220,6 +329,9 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox) ([]corev1.Container, []core
 	if cosignHome {
 		volumes = append(volumes, corev1.Volume{Name: artifactCosignHomeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
 	}
+	if resultsVolume {
+		volumes = append(volumes, corev1.Volume{Name: artifactResultsVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}})
+	}
 	return inits, volumes
 }
 
@@ -233,4 +345,18 @@ func artifactInitFailure(pod *corev1.Pod) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// artifactResult reads the materialize result an artifact container left in
+// its termination message: for an optional artifact, whether it was skipped.
+func artifactResult(cs *corev1.ContainerStatus) (materialize.Result, bool) {
+	var res materialize.Result
+	t := cs.State.Terminated
+	if t == nil || t.ExitCode != 0 {
+		return res, false
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(t.Message)), &res); err != nil {
+		return res, false
+	}
+	return res, true
 }

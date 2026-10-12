@@ -310,6 +310,21 @@ var (
 		[]string{"result"},
 	)
 
+	// SandboxArtifactsTotal counts what happened to sandbox artifacts, by
+	// path (warm checkout or cold start), whether the artifact is optional,
+	// result (mounted, skipped) and reason: for mounted, where the content
+	// came from (Cached on the node, Fetched for this sandbox); for skipped,
+	// why (ResolveRefused, ResolvePending, RegistryUnavailable, FetchTimeout,
+	// VerificationFailed, MaterializeFailed, KernelUnsupported, NotOnNode).
+	// Every label is from a fixed set: no names or digests.
+	SandboxArtifactsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_sandbox_artifacts_total",
+			Help: "Sandbox artifacts by path (warm, cold), optional, result (mounted, skipped) and reason",
+		},
+		[]string{"path", "optional", "result", "reason"},
+	)
+
 	// RegistryLookupsTotal counts the controllers' registry lookups (sandbox
 	// and pool image, model and artifact resolves) by how they were answered:
 	// "hit" from a finished request still valid, "refresh" from a valid entry
@@ -375,6 +390,7 @@ func MarkSandboxCheckoutObserved(uid string) bool {
 
 func init() {
 	metrics.Registry.MustRegister(
+		SandboxArtifactsTotal,
 		RegistryLookupsTotal,
 		RegistryRequestsTotal,
 		RegistryRequestSeconds,

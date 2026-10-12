@@ -140,6 +140,12 @@ type FilesystemIntent struct {
 	// ReadOnly makes the share read-only: the pod builder mounts the source
 	// read-only and swiftletd runs virtiofsd with --readonly.
 	ReadOnly bool `json:"readOnly,omitempty"`
+	// OptionalToken, when set, is a file in the launcher that must exist for
+	// the share to be made: an optional artifact's init container writes it
+	// only after resolving, verifying and materializing the artifact for this
+	// pod. Without it swiftletd drops the share and its kubeswift.mounts entry
+	// and the guest starts without the artifact.
+	OptionalToken string `json:"optionalToken,omitempty"`
 }
 
 // RestoreIntent points swiftletd at a snapshot directory for a

@@ -14,8 +14,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +30,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 // Mode selects the rootfs form.
@@ -68,6 +72,42 @@ type Result struct {
 	CacheHit   bool        `json:"cacheHit"`
 	SizeBytes  int64       `json:"sizeBytes"`
 	Config     ImageConfig `json:"config"`
+	// Skipped is set, and nothing else is, when an optional artifact's run
+	// failed: the workload starts without it.
+	Skipped *Skip `json:"skipped,omitempty"`
+}
+
+// Skip says why an optional artifact was not materialized.
+type Skip struct {
+	// Reason: FetchTimeout, VerificationFailed, ResolveRefused,
+	// RegistryUnavailable or MaterializeFailed.
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+// RegistryRefused reports whether err is a registry's refusal of the
+// reference (malformed, missing, or not readable with these credentials).
+func RegistryRefused(err error) bool {
+	var terr *transport.Error
+	if errors.As(err, &terr) {
+		switch terr.StatusCode {
+		case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return true
+		}
+	}
+	var perr *name.ErrBadName
+	return errors.As(err, &perr)
+}
+
+// RegistryTransient reports whether err is a registry error retrying could
+// fix: any other HTTP status, or no answer at all.
+func RegistryTransient(err error) bool {
+	var terr *transport.Error
+	if errors.As(err, &terr) {
+		return !RegistryRefused(err)
+	}
+	var nerr net.Error
+	return errors.As(err, &nerr)
 }
 
 // Options configure a materialize run.

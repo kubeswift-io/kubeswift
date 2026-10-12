@@ -489,10 +489,10 @@ func TestResolveArtifacts_RequestsRunTogether(t *testing.T) {
 	}
 	rec := &SwiftSandboxReconciler{resolver: r}
 	start := time.Now()
-	arts, ready, err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb))
+	res := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now())
 	took := time.Since(start)
-	if err != nil || !ready || len(arts) != 4 {
-		t.Fatalf("arts=%v ready=%v err=%v", arts, ready, err)
+	if res.err != nil || !res.ready || len(res.statuses) != 4 {
+		t.Fatalf("res=%+v", res)
 	}
 	if took > 300*time.Millisecond {
 		t.Errorf("4 artifacts took %v; they ran one after another", took)
@@ -549,7 +549,7 @@ func TestResolveArtifacts_RefusalOutranksTransient(t *testing.T) {
 		{Name: "b", Ref: "deny.example/b:1", MountPath: "/b"},
 	}
 	rec := &SwiftSandboxReconciler{resolver: r}
-	_, _, err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb))
+	err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb), skipUnresolvedOptional, time.Now()).err
 	if err == nil || !registryRefused(err) || !strings.Contains(err.Error(), "artifact b") {
 		t.Fatalf("err = %v, want artifact b's refusal", err)
 	}

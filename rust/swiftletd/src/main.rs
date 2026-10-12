@@ -7,6 +7,7 @@ mod kube_client;
 mod launch;
 mod lease;
 mod migconn;
+mod optional_shares;
 mod podwatch;
 mod probe;
 mod report;
@@ -218,6 +219,14 @@ fn main() {
             );
 
             let (namespace, name) = (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok());
+
+            // Optional artifacts this pod's init containers did not resolve,
+            // verify and materialize are not shared (optional_shares.rs).
+            let dropped =
+                optional_shares::drop_unready(&mut intent, Path::new(optional_shares::RESULTS_DIR));
+            if !dropped.is_empty() {
+                log::info!("optional_artifacts_not_shared shares={}", dropped.join(","));
+            }
 
             // What this kernel's bridge can be asked for (files, mounts).
             if let Some(kb) = intent.kernel_boot.as_ref() {
