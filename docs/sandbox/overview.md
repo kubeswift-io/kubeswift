@@ -424,7 +424,9 @@ spec:
   (`ArtifactSkipped`, or `ArtifactVerificationFailed`) says why. Verification
   is never skipped: an optional artifact that fails it is not mounted.
   `fetchTimeout` (default `10s`, at most `5m`, optional artifacts only) bounds
-  how long it may delay the workload, counted from the sandbox's creation;
+  how long it may delay the workload: at checkout, counted from the sandbox's
+  creation; on a cold start, waiting for its registry is counted from the
+  sandbox's creation and fetching it from when the launcher pod is created.
   `0s` uses it only when it is already on the node. A required artifact (the
   default) behaves as before.
 

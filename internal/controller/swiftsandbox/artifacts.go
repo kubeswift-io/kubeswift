@@ -285,7 +285,16 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Cont
 		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--read-only-artifact", "--result-file", "/dev/termination-log"}
 		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}}
 		if r.spec.Optional {
-			args = append(args, "--optional", "--deadline="+artifactDeadline(sb, r.spec).UTC().Format(time.RFC3339))
+			// A fetch pod's deadline is the artifact's own (the controller
+			// stops waiting for it then). A cold launcher's init container
+			// counts its fetchTimeout from now, when the pod is built: the
+			// time the launch waited for registries already had its own
+			// bound, and pod start-up is not the artifact's doing.
+			deadline := artifactDeadline(sb, r.spec)
+			if tokens {
+				deadline = time.Now().Add(r.spec.ArtifactFetchTimeout())
+			}
+			args = append(args, "--optional", "--deadline="+deadline.UTC().Format(time.RFC3339))
 			if tokens {
 				args = append(args, "--ok-file="+artifactOKFile(r.spec.Name))
 				mounts = append(mounts, corev1.VolumeMount{Name: artifactResultsVolume, MountPath: artifactResultsDir})

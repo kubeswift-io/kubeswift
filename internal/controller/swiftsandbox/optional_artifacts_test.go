@@ -48,7 +48,7 @@ func resolveWith(t *testing.T, sb *sandboxv1alpha1.SwiftSandbox, wait optionalWa
 
 func optSandbox(arts ...sandboxv1alpha1.SandboxArtifact) *sandboxv1alpha1.SwiftSandbox {
 	sb := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default", UID: "uid-s",
-		CreationTimestamp: metav1.Now()}}
+		CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Minute))}}
 	sb.Spec.Artifacts = arts
 	return sb
 }
@@ -99,6 +99,7 @@ func TestResolve_OptionalClassification(t *testing.T) {
 	})
 	t.Run("cold: optional transient is waited for until its deadline", func(t *testing.T) {
 		sb := optSandbox(art("opt", "r.example/down:1", true))
+		now := sb.CreationTimestamp.Time
 		res := resolveWith(t, sb, waitUnresolvedOptional, now)
 		if res.ready || res.err != nil || res.wakeAt.IsZero() || !res.wakeAt.Equal(artifactDeadline(sb, &sb.Spec.Artifacts[0])) {
 			t.Fatalf("before the deadline: %+v", res)
@@ -156,8 +157,10 @@ func TestArtifactInits_OptionalFlags(t *testing.T) {
 			t.Errorf("optional container lacks %s: %s", f, opt)
 		}
 	}
-	if !strings.Contains(opt, "--deadline="+artifactDeadline(sb, &sb.Spec.Artifacts[1]).UTC().Format(time.RFC3339)) {
-		t.Errorf("deadline: %s", opt)
+	// A cold launcher's init container counts from when the pod is built,
+	// never earlier than the artifact's own deadline.
+	if d := deadlineArg(t, opt); d.Before(time.Now().Add(9*time.Second).Truncate(time.Second)) {
+		t.Errorf("cold deadline %v counted from creation, not from the launch", d)
 	}
 	found := false
 	for _, v := range vols {
@@ -173,7 +176,8 @@ func TestArtifactInits_OptionalFlags(t *testing.T) {
 	// A fetch pod's optional container is bounded and never fails, but has no
 	// token: a warm slot checks the node's markers.
 	inits, _ = artifactInits(sb, false)
-	if o := strings.Join(inits[1].Args, " "); !strings.Contains(o, "--optional") || strings.Contains(o, "--ok-file") {
+	if o := strings.Join(inits[1].Args, " "); !strings.Contains(o, "--optional") || strings.Contains(o, "--ok-file") ||
+		!deadlineArg(t, o).Equal(artifactDeadline(sb, &sb.Spec.Artifacts[1]).Truncate(time.Second)) {
 		t.Errorf("fetch container: %s", o)
 	}
 }
@@ -384,4 +388,20 @@ func TestCheckout_OptionalOnlyTakesASlotWithoutWarmMounts(t *testing.T) {
 	if got := getSandbox(t, c, "sb"); got.Status.PodRef == slot.Name {
 		t.Error("a required artifact was skipped to take a slot")
 	}
+}
+
+// deadlineArg parses a container's --deadline.
+func deadlineArg(t *testing.T, args string) time.Time {
+	t.Helper()
+	for _, a := range strings.Fields(args) {
+		if v, ok := strings.CutPrefix(a, "--deadline="); ok {
+			d, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return d
+		}
+	}
+	t.Fatalf("no --deadline in %s", args)
+	return time.Time{}
 }
