@@ -351,7 +351,7 @@ func TestResolver_RefreshAheadDoesNotBlockAndRenews(t *testing.T) {
 		e := r.entries[req(digestRef, nil).key]
 		return e != nil && !e.refreshing && clk.Now().Sub(e.finished) == 0
 	})
-	clk.Advance(3 * time.Minute) // 6m after the first answer, 3m after the renewal
+	clk.Advance(3 * time.Minute) // 6m after the first answer, 3m after the renewal started
 	if _, ok := r.get(req(digestRef, nil), waiter{}); !ok {
 		t.Fatal("renewed entry not used")
 	}
@@ -526,7 +526,7 @@ func TestResolver_LateRefreshIsInstalled(t *testing.T) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		e := r.entries[req(digestRef, nil).key]
-		return e != nil && e.finished.Equal(clk.Now())
+		return e != nil && !e.refreshing && e.result.err == nil && e.finished.Equal(clk.Now().Add(-3*time.Minute))
 	})
 	r.get(req(digestRef, nil), waiter{})
 	if n := calls.Load(); n != 2 {
@@ -569,5 +569,31 @@ func TestLookup_PrimedRequestCountedOnce(t *testing.T) {
 	lookup(req(digestRef, nil))
 	if d := testutil.ToFloat64(metrics.RegistryLookupsTotal.WithLabelValues("hit")) - hits; d != 1 {
 		t.Errorf("hits counted %v, want 1", d)
+	}
+}
+
+// An answer's age counts from when its request started: a slow registry does
+// not stretch the authorization window by the request's duration.
+func TestResolver_AgeCountsFromRequestStart(t *testing.T) {
+	clk := &fakeClock{now: time.Now()}
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		clk.Advance(20 * time.Second) // the registry takes 20s
+		return resolveResult{digest: "sha256:aa"}
+	})
+	r.timeout = 5 * time.Second
+	r.now = clk.Now
+	start := clk.Now()
+	r.get(req(digestRef, nil), waiter{})
+	waitFor(t, "the answer", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		e := r.entries[req(digestRef, nil).key]
+		return e != nil && e.result.digest != ""
+	})
+	r.mu.Lock()
+	got := r.entries[req(digestRef, nil).key].finished
+	r.mu.Unlock()
+	if !got.Equal(start) {
+		t.Errorf("answer dated %v after the request started, want the start", got.Sub(start))
 	}
 }

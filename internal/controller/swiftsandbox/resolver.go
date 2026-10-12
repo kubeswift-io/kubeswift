@@ -354,7 +354,10 @@ func (r *registryResolver) run(req resolveRequest, e *resolveEntry) {
 	r.mu.Lock()
 	r.releaseLocked(req.namespace)
 	e.result = res
-	e.finished = r.now()
+	// The answer's age counts from when the request started: the registry may
+	// have answered at any point in between, and an authorization must not
+	// outlive its window by the request's duration.
+	e.finished = start
 	waiters := e.waiters
 	e.waiters = nil
 	close(e.done)
@@ -390,7 +393,7 @@ func (r *registryResolver) refresh(req resolveRequest, old *resolveEntry) {
 	if cur, ok := r.entries[req.key]; ok && cur != old {
 		return
 	}
-	e := &resolveEntry{done: make(chan struct{}), result: res, finished: r.now()}
+	e := &resolveEntry{done: make(chan struct{}), result: res, finished: start}
 	close(e.done)
 	r.entries[req.key] = e
 }

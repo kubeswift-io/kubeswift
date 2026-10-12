@@ -240,6 +240,13 @@ usually only until its next renewal. The cache is in memory: a controller
 restart asks the registry again. A sandbox's registry requests (image,
 model, every artifact) start together and are waited for together.
 
+An answer is shared by every sandbox presenting the same credentials, in any
+namespace, and a lookup without a pull Secret is anonymous: all anonymous
+lookups share one answer, made from the controller's network position.
+Control access to private artifacts with registry credentials, not by
+network location (an IP allowlist or a NetworkPolicy in front of the
+registry does not separate tenants here).
+
 **Failure conditions.**
 
 | Event | Result |
