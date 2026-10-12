@@ -37,15 +37,15 @@ func VerifiedMarkerPath(cacheDir, digest, keyFingerprint string) string {
 	return filepath.Join(cacheDir, verifiedDir, strings.ReplaceAll(digest, ":", "-"), keyFingerprint)
 }
 
-// RecordVerified records that digest verified with the key in keyFile.
-// Idempotent; the marker appears atomically.
-func RecordVerified(cacheDir, digest, keyFile string) error {
+// RecordVerified records that digest verified with key: the exact bytes the
+// check used, never a file read again (a mounted Secret can change in
+// between). Idempotent; the marker appears atomically.
+func RecordVerified(cacheDir, digest string, key []byte) error {
 	if !strings.HasPrefix(digest, "sha256:") || len(digest) != len("sha256:")+64 {
 		return fmt.Errorf("record verification: digest %q is not sha256", digest)
 	}
-	key, err := os.ReadFile(keyFile)
-	if err != nil {
-		return fmt.Errorf("record verification: %w", err)
+	if len(key) == 0 {
+		return fmt.Errorf("record verification: empty key")
 	}
 	marker := VerifiedMarkerPath(cacheDir, digest, KeyFingerprint(key))
 	if _, err := os.Stat(marker); err == nil {
@@ -70,4 +70,30 @@ func RecordVerified(cacheDir, digest, keyFile string) error {
 		return fmt.Errorf("record verification: %w", err)
 	}
 	return nil
+}
+
+// PinFile writes data to a new private (0600) file in dir and returns its
+// path: what a check reads must be exactly what the caller holds, even if
+// the original file is replaced meanwhile.
+func PinFile(dir, pattern string, data []byte) (string, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(name)
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(name)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }
