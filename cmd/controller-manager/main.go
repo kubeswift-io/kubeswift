@@ -102,6 +102,15 @@ func main() {
 		"Host-path prefix a SwiftGuest may mount into the (privileged) launcher pod "+
 			"-- spec.filesystems[].source.hostPath and vhost-user socket dirs. Repeatable. "+
 			"EMPTY DENIES ALL, which is the default: opt in per cluster.")
+	authTTL := flag.Duration("artifact-authorization-ttl", swiftsandbox.DefaultAuthorizationTTL,
+		"How long a registry's answer for a digest reference (an image, model or artifact pinned by "+
+			"digest) authorizes a sandbox's credentials to use that digest. A checkout within it asks no "+
+			"registry; revoking credentials at the registry takes up to this long to reach new sandboxes. "+
+			"0 keeps it as long as a tag's answer (30s).")
+	authRefresh := flag.Float64("artifact-authorization-refresh", swiftsandbox.DefaultAuthorizationRefresh,
+		"Fraction of --artifact-authorization-ttl after which a lookup answered from the cache also "+
+			"asks the registry again in the background, so a reference in use is renewed before it "+
+			"expires and no checkout waits for the registry. 0 disables renewal. At least 0, below 1.")
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -117,6 +126,11 @@ func main() {
 	// swiftmigration), and passing it through both constructors would widen
 	// their signatures for a value that never changes after startup.
 	swiftguest.ScopedOnly = *scopedLauncherRBAC
+
+	if err := swiftsandbox.ConfigureAuthorization(*authTTL, *authRefresh); err != nil {
+		klog.ErrorS(err, "invalid artifact authorization flags")
+		os.Exit(1)
+	}
 
 	certDir := *webhookCertDir
 	if envCertDir := os.Getenv(webhookCertDirEnv); envCertDir != "" {

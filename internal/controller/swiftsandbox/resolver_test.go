@@ -264,3 +264,235 @@ func TestReconcile_HangingRegistryReturnsPending(t *testing.T) {
 		t.Fatalf("after timeout: %s %+v requeue %v", got.Status.Phase, cond, res.RequeueAfter)
 	}
 }
+
+// fakeClock is a settable clock for the resolver.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+const digestRef = "reg.example/a@sha256:0123456789012345678901234567890123456789012345678901234567890123"
+
+// waitFor polls cond for up to a second.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// Within the authorization TTL a digest reference is answered without the
+// registry: the warm checkout's prepared path.
+func TestResolver_DigestHitWithinTTLAsksNoRegistry(t *testing.T) {
+	var calls atomic.Int32
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		calls.Add(1)
+		return resolveResult{digest: "sha256:aa"}
+	})
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+	clk.Advance(time.Minute)
+	if res, ok := r.get(req(digestRef, nil), waiter{}); !ok || res.digest != "sha256:aa" {
+		t.Fatalf("got %+v, %v", res, ok)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("fetches = %d, want 1", n)
+	}
+}
+
+// The defect this fixes: after the TTL a checkout waited for the registry.
+// Past the refresh point a hit is still answered from the entry, at once, and
+// the renewal runs in the background; the renewed entry then outlives the
+// original TTL.
+func TestResolver_RefreshAheadDoesNotBlockAndRenews(t *testing.T) {
+	var calls atomic.Int32
+	gate := make(chan struct{})
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		if calls.Add(1) > 1 {
+			<-gate // the renewal: a slow registry
+		}
+		return resolveResult{digest: "sha256:aa"}
+	})
+	r.timeout = 5 * time.Second
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+
+	clk.Advance(3 * time.Minute) // past refreshAt (2m30s), before the TTL
+	start := time.Now()
+	res, ok := r.get(req(digestRef, nil), waiter{})
+	if !ok || res.digest != "sha256:aa" {
+		t.Fatalf("hit past the refresh point: %+v, %v", res, ok)
+	}
+	if d := time.Since(start); d > 30*time.Millisecond {
+		t.Errorf("a hit past the refresh point waited %v for the registry", d)
+	}
+	waitFor(t, "the renewal to start", func() bool { return calls.Load() == 2 })
+	// A second hit while the renewal runs starts no other.
+	r.get(req(digestRef, nil), waiter{})
+	close(gate)
+	waitFor(t, "the renewal to land", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		e := r.entries[req(digestRef, nil).key]
+		return e != nil && !e.refreshing && clk.Now().Sub(e.finished) == 0
+	})
+	clk.Advance(3 * time.Minute) // 6m after the first answer, 3m after the renewal
+	if _, ok := r.get(req(digestRef, nil), waiter{}); !ok {
+		t.Fatal("renewed entry not used")
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("fetches = %d, want 2 (first answer, one renewal)", n)
+	}
+}
+
+// A renewal that fails for a transient reason does not extend the entry: it
+// expires at the TTL of the last answer and the next lookup asks the registry.
+// Stale authorization never becomes permanent.
+func TestResolver_FailedRefreshNeverExtends(t *testing.T) {
+	var calls atomic.Int32
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		if calls.Add(1) == 1 {
+			return resolveResult{digest: "sha256:aa"}
+		}
+		return resolveResult{err: errors.New("connection refused")}
+	})
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+	clk.Advance(3 * time.Minute)
+	if res, ok := r.get(req(digestRef, nil), waiter{}); !ok || res.err != nil {
+		t.Fatalf("still valid before the TTL: %+v, %v", res, ok)
+	}
+	waitFor(t, "the renewal to fail", func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		e := r.entries[req(digestRef, nil).key]
+		return e != nil && !e.refreshing && !e.refreshFailed.IsZero()
+	})
+	clk.Advance(2*time.Minute + time.Second) // past the first answer's TTL
+	res, _ := r.get(req(digestRef, nil), waiter{})
+	if res.err == nil {
+		t.Fatalf("an authorization past its TTL was used after a failed renewal: %+v", res)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Errorf("fetches = %d, want 3 (answer, failed renewal, new lookup)", n)
+	}
+}
+
+// A renewal refused by the registry replaces the entry at once: revoked
+// credentials reach new sandboxes at the next renewal, not at the TTL.
+func TestResolver_RefusedRefreshRevokes(t *testing.T) {
+	var calls atomic.Int32
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		if calls.Add(1) == 1 {
+			return resolveResult{digest: "sha256:aa"}
+		}
+		return resolveResult{err: &transport.Error{StatusCode: http.StatusUnauthorized}}
+	})
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+	clk.Advance(3 * time.Minute)
+	r.get(req(digestRef, nil), waiter{})
+	waitFor(t, "the refusal to replace the entry", func() bool {
+		res, _ := r.get(req(digestRef, nil), waiter{})
+		return res.err != nil && registryRefused(res.err)
+	})
+}
+
+// A tag is never renewed in the background: it can move, so its answer is
+// kept only resolveSuccessTTL.
+func TestResolver_TagIsNotRefreshed(t *testing.T) {
+	var calls atomic.Int32
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		calls.Add(1)
+		return resolveResult{digest: "sha256:aa"}
+	})
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req("reg.example/a:1", nil), waiter{})
+	clk.Advance(20 * time.Second)
+	r.get(req("reg.example/a:1", nil), waiter{})
+	time.Sleep(20 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("fetches = %d, want 1: a tag hit started a renewal", n)
+	}
+}
+
+// With renewal disabled (refresh 0) behaviour is v0.16's: hits until the TTL,
+// then a new request.
+func TestResolver_RefreshDisabled(t *testing.T) {
+	var calls atomic.Int32
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		calls.Add(1)
+		return resolveResult{digest: "sha256:aa"}
+	})
+	r.refreshAt = 0
+	clk := &fakeClock{now: time.Now()}
+	r.now = clk.Now
+	r.get(req(digestRef, nil), waiter{})
+	clk.Advance(4 * time.Minute)
+	r.get(req(digestRef, nil), waiter{})
+	time.Sleep(20 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("fetches = %d, want 1", n)
+	}
+	clk.Advance(time.Minute)
+	r.get(req(digestRef, nil), waiter{})
+	if n := calls.Load(); n != 2 {
+		t.Errorf("fetches = %d, want 2 after the TTL", n)
+	}
+}
+
+func TestConfigureAuthorization_RejectsBadValues(t *testing.T) {
+	for _, tc := range []struct {
+		ttl     time.Duration
+		refresh float64
+	}{{-time.Second, 0.5}, {time.Minute, -0.1}, {time.Minute, 1}} {
+		if err := ConfigureAuthorization(tc.ttl, tc.refresh); err == nil {
+			t.Errorf("ttl %s refresh %v accepted", tc.ttl, tc.refresh)
+		}
+	}
+	if err := ConfigureAuthorization(DefaultAuthorizationTTL, DefaultAuthorizationRefresh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Several artifacts resolve together: every request starts before any is
+// waited for, so a pass costs one wait, not one per artifact. Before, each
+// lookup waited for its own request before the next one started.
+func TestResolveArtifacts_RequestsRunTogether(t *testing.T) {
+	r := stubResolver(func(context.Context, resolveKind, materialize.Options) resolveResult {
+		time.Sleep(120 * time.Millisecond)
+		return resolveResult{digest: "sha256:aa"}
+	})
+	r.inlineWait = 250 * time.Millisecond
+	sb := &sandboxv1alpha1.SwiftSandbox{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default"}}
+	for i := 0; i < 4; i++ {
+		sb.Spec.Artifacts = append(sb.Spec.Artifacts, sandboxv1alpha1.SandboxArtifact{
+			Name: fmt.Sprintf("a%d", i), Ref: fmt.Sprintf("reg%d.example/a@sha256:%064d", i, i), MountPath: fmt.Sprintf("/a%d", i)})
+	}
+	rec := &SwiftSandboxReconciler{resolver: r}
+	start := time.Now()
+	arts, ready, err := resolveArtifacts(context.Background(), nil, sb, rec.lookup(sb))
+	took := time.Since(start)
+	if err != nil || !ready || len(arts) != 4 {
+		t.Fatalf("arts=%v ready=%v err=%v", arts, ready, err)
+	}
+	if took > 300*time.Millisecond {
+		t.Errorf("4 artifacts took %v; they ran one after another", took)
+	}
+}

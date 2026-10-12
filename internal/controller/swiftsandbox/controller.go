@@ -243,8 +243,18 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 	if err != nil {
 		return r.fail(ctx, sb, "ImagePullSecretInvalid", err.Error())
 	}
-	// Every registry request starts at once, off this worker (resolver.go).
+	// Every registry request starts at once, off this worker (resolver.go),
+	// and the pass waits for them together.
 	lookup := r.lookup(sb)
+	prime(lookup, imageRequest(sb, auth))
+	if sb.Spec.Model != nil {
+		if modelAuth, merr := pullSecretAuth(ctx, r.APIReader, sb.Namespace, sb.Spec.ImagePullSecret, sb.Spec.Model.ImageRef); merr == nil {
+			prime(lookup, modelRequest(sb.Spec.Model, modelAuth))
+		}
+	}
+	if reqs, err := artifactRequests(ctx, r.APIReader, sb); err == nil {
+		prime(lookup, reqs...)
+	}
 	ri, imageReady, imageErr := resolveImage(sb, auth, lookup)
 	var rm resolvedModel
 	modelReady, artifactsReady := true, true
@@ -740,8 +750,14 @@ func (r *SwiftSandboxReconciler) lookup(sb *sandboxv1alpha1.SwiftSandbox) lookup
 	} else {
 		w.obj = nil // no channel (a test): the periodic recheck reads the result
 	}
+	// One deadline for the pass: its lookups share the inline wait.
+	var deadline time.Time
 	return func(req resolveRequest) (resolveResult, bool) {
 		req.namespace = sb.Namespace
+		if deadline.IsZero() {
+			deadline = res.now().Add(res.inlineWait)
+		}
+		req.deadline = deadline
 		return res.get(req, w)
 	}
 }

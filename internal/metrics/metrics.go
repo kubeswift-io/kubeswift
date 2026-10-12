@@ -309,6 +309,41 @@ var (
 		},
 		[]string{"result"},
 	)
+
+	// RegistryLookupsTotal counts the controllers' registry lookups (sandbox
+	// and pool image, model and artifact resolves) by how they were answered:
+	// "hit" from a finished request still valid, "refresh" from a valid entry
+	// whose renewal was started in the background, "miss" by a new request.
+	// For digest references a hit is the authorization cache: no registry
+	// request on the checkout path.
+	RegistryLookupsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_registry_lookups_total",
+			Help: "Controller registry lookups by answer (hit, refresh = hit that started a background renewal, miss = new request)",
+		},
+		[]string{"result"},
+	)
+
+	// RegistryRequestsTotal counts finished registry requests by why they ran
+	// (lookup: an object waited for it; refresh: a background renewal) and
+	// their outcome (success, refused, unavailable).
+	RegistryRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kubeswift_registry_requests_total",
+			Help: "Controller registry requests by reason (lookup, refresh) and outcome (success, refused, unavailable)",
+		},
+		[]string{"reason", "outcome"},
+	)
+
+	// RegistryRequestSeconds is how long a registry request took, by reason.
+	RegistryRequestSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kubeswift_registry_request_seconds",
+			Help:    "Duration of controller registry requests, by reason (lookup, refresh)",
+			Buckets: []float64{0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		},
+		[]string{"reason"},
+	)
 )
 
 // cloneDownloadObserved dedupes the per-(node,snapshot) clone download byte
@@ -340,6 +375,9 @@ func MarkSandboxCheckoutObserved(uid string) bool {
 
 func init() {
 	metrics.Registry.MustRegister(
+		RegistryLookupsTotal,
+		RegistryRequestsTotal,
+		RegistryRequestSeconds,
 		VMBootSeconds,
 		VMFailuresTotal,
 		ImageImportSeconds,

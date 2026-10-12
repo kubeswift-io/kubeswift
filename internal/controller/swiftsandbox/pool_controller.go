@@ -107,8 +107,13 @@ func (r *SwiftSandboxPoolReconciler) lookup(pool *sandboxv1alpha1.SwiftSandboxPo
 	} else {
 		w.obj = nil
 	}
+	var deadline time.Time
 	return func(req resolveRequest) (resolveResult, bool) {
 		req.namespace = pool.Namespace
+		if deadline.IsZero() {
+			deadline = res.now().Add(res.inlineWait)
+		}
+		req.deadline = deadline
 		return res.get(req, w)
 	}
 }

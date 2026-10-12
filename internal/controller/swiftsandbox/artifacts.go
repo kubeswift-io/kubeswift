@@ -39,13 +39,10 @@ func artifactMode(a *sandboxv1alpha1.SandboxArtifact) materialize.Mode {
 // tag is at most 36 bytes, and the mount path rides beside it).
 func artifactTag(i int) string { return fmt.Sprintf("sbxart%d", i) }
 
-// resolveArtifacts resolves each artifact to the digest the node will mount,
-// with its pull Secret (the artifact's own, else spec.imagePullSecret). Every
-// request starts at once; ok=false while any is still running.
-func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
-	out := make([]sandboxv1alpha1.SandboxArtifactStatus, 0, len(sb.Spec.Artifacts))
-	ready := true
-	var firstErr error
+// artifactRequests are the registry requests for sb's artifacts, each with its
+// pull Secret (the artifact's own, else spec.imagePullSecret), in spec order.
+func artifactRequests(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox) ([]resolveRequest, error) {
+	reqs := make([]resolveRequest, 0, len(sb.Spec.Artifacts))
 	for i := range sb.Spec.Artifacts {
 		a := &sb.Spec.Artifacts[i]
 		secret := sb.Spec.ImagePullSecret
@@ -54,26 +51,49 @@ func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.
 		}
 		auth, err := pullSecretAuth(ctx, c, sb.Namespace, secret, a.Ref)
 		if err != nil {
-			return nil, true, refusedError{fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)}
+			return nil, refusedError{fmt.Errorf("artifact %s: pull secret %s: %w", a.Name, secret, err)}
 		}
 		kind := resolveDigestKind
 		if artifactMode(a) == materialize.ModeLayout {
 			kind = resolveDescriptorKind
 		}
-		res, ok := lookup(newResolveRequest(kind, a.Ref, artifactMode(a), artifactCacheDir, auth))
-		switch {
-		case !ok:
-			ready = false
-		case res.err != nil:
-			if firstErr == nil {
-				firstErr = fmt.Errorf("artifact %s: %w", a.Name, res.err)
-			}
-		default:
-			out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: res.digest, MountPath: a.MountPath})
+		reqs = append(reqs, newResolveRequest(kind, a.Ref, artifactMode(a), artifactCacheDir, auth))
+	}
+	return reqs, nil
+}
+
+// resolveArtifacts resolves each artifact to the digest the node will mount.
+// Every request starts before any is waited for, and they share the pass's
+// wait; ok=false while any is still running.
+func resolveArtifacts(ctx context.Context, c client.Reader, sb *sandboxv1alpha1.SwiftSandbox, lookup lookupFunc) ([]sandboxv1alpha1.SandboxArtifactStatus, bool, error) {
+	reqs, err := artifactRequests(ctx, c, sb)
+	if err != nil {
+		return nil, true, err
+	}
+	results := make([]resolveResult, len(reqs))
+	done := make([]bool, len(reqs))
+	for i, req := range reqs {
+		req.noWait = true
+		results[i], done[i] = lookup(req)
+	}
+	for i, req := range reqs {
+		if !done[i] {
+			req.followUp = true
+			results[i], done[i] = lookup(req)
 		}
 	}
-	if firstErr != nil {
-		return nil, true, firstErr
+	out := make([]sandboxv1alpha1.SandboxArtifactStatus, 0, len(reqs))
+	ready := true
+	for i := range reqs {
+		a := &sb.Spec.Artifacts[i]
+		switch {
+		case !done[i]:
+			ready = false
+		case results[i].err != nil:
+			return nil, true, fmt.Errorf("artifact %s: %w", a.Name, results[i].err)
+		default:
+			out = append(out, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, Digest: results[i].digest, MountPath: a.MountPath})
+		}
 	}
 	return out, ready, nil
 }

@@ -226,11 +226,19 @@ read from that repository, digests checked (an origin record next to the
 entry, written when the entry is pulled, or by the fetch pod reading every
 blob again for a new repository). A copied manifest without its blobs fails
 the fetch. The controller keeps a successful answer for a digest reference
-(`repo@sha256:...`) for 5 minutes, per set of credentials, so a checkout
-within that time asks no registry. A tag is re-resolved after 30 seconds: it
-can move. Revoking credentials at the registry takes up to 5 minutes to stop
-new sandboxes from checking out a digest those credentials could read. The
-cache is in memory: a controller restart asks the registry again.
+(`repo@sha256:...`) for 5 minutes (`--artifact-authorization-ttl`), per set
+of credentials, so a checkout within that time asks no registry. Once an
+answer is half that old (`--artifact-authorization-refresh`, default 0.5), a
+checkout that uses it also asks the registry again in the background: a
+digest in steady use is renewed before it expires and no checkout waits for
+the registry. Only a new answer renews it. If the renewal fails the old
+answer still expires on time; if the registry refuses, the refusal replaces
+it at once. A tag is re-resolved after 30 seconds: it can move. Revoking
+credentials at the registry takes up to the TTL to stop new sandboxes from
+checking out a digest those credentials could read, and for a digest in use
+usually only until its next renewal. The cache is in memory: a controller
+restart asks the registry again. A sandbox's registry requests (image,
+model, every artifact) start together and are waited for together.
 
 **Failure conditions.**
 
@@ -288,6 +296,14 @@ quiet pool.
 command — fell back to a cold boot). The **hit ratio is the pool's headline
 signal**: a persistent `cold` rate means `minWarm` is too low for the arrival
 rate. Pool health is `kubectl get sboxpool` (phase + `warmReplicas`).
+
+Registry lookups (image, model and artifact resolves, by both controllers):
+`kubeswift_registry_lookups_total{result}` counts `hit` (answered from the
+cache), `refresh` (a hit that also started a background renewal) and `miss`
+(a new request). `kubeswift_registry_requests_total{reason,outcome}` and
+`kubeswift_registry_request_seconds{reason}` cover the requests themselves,
+`reason` being `lookup` (something waited for it) or `refresh`. A checkout of
+a digest in steady use should show hits and refreshes, not misses.
 
 ## Limitations (v1)
 
