@@ -159,7 +159,7 @@ func TestArtifactInits_OptionalFlags(t *testing.T) {
 	}
 	// A cold launcher's init container counts from when the pod is built,
 	// never earlier than the artifact's own deadline.
-	if d := deadlineArg(t, opt); d.Before(time.Now().Add(9*time.Second).Truncate(time.Second)) {
+	if d := deadlineArg(t, opt); d.Before(time.Now().Add(9 * time.Second).Truncate(time.Second)) {
 		t.Errorf("cold deadline %v counted from creation, not from the launch", d)
 	}
 	found := false
