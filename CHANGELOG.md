@@ -4,6 +4,30 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [v0.16.5] — 2026-10-13
+
+A patch release that hardens how sandbox artifacts are verified and pulled.
+
+### Upgrade
+
+- No CRD, chart values or template changes. Upgrading changes no running
+  sandbox or warm slot.
+
+### Security
+
+- The artifact materializer read a cosign verify key twice: once for cosign
+  and once to name the record of a successful verification. A mounted
+  Secret can change between the two reads. It now reads the key once,
+  verifies a private copy of those bytes, and names the record from the same
+  bytes (#796).
+- A pull Secret's docker config is reduced to its `auths` before the
+  materializer and cosign read it: a `credsStore` or `credHelpers` it names
+  is never run in the privileged materializer (#796).
+- swiftletd refuses an artifact action whose repository fingerprint is not 64
+  hex digits before using it in a path (#796).
+
+---
+
 ## [v0.16.4] — 2026-10-12
 
 A patch release that corrects when a SwiftSandboxPool slot counts as warm. A
