@@ -152,6 +152,23 @@ func AuthFromDockerConfigJSON(dockerConfigJSON []byte, imageRef string) (authn.A
 	return authn.Anonymous, nil
 }
 
+// SanitizeDockerConfig keeps only the "auths" of a docker config.json. A
+// config's credsStore and credHelpers name programs to run for credentials;
+// a pull Secret is the tenant's input and the materializer runs privileged,
+// so no program it names is ever run.
+func SanitizeDockerConfig(dockerConfigJSON []byte) ([]byte, error) {
+	var cfg struct {
+		Auths json.RawMessage `json:"auths"`
+	}
+	if err := json.Unmarshal(dockerConfigJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("parse docker config: %w", err)
+	}
+	if len(cfg.Auths) == 0 {
+		cfg.Auths = json.RawMessage("{}")
+	}
+	return json.Marshal(cfg)
+}
+
 // registryHostMatches compares a docker-config auth key (which may carry a
 // scheme, a path, or the docker.io "https://index.docker.io/v1/" alias) against a
 // go-containerregistry registry host.

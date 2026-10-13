@@ -83,6 +83,14 @@ impl WarmArtifact {
         if !matches!(self.layout.as_str(), "" | "oci" | "unpacked") {
             return Err(format!("artifact {}: layout {:?}", self.name, self.layout));
         }
+        // Joined into a path below: an absolute or ".." value would point the
+        // origin check at any file.
+        if !is_hex64(&self.repository_fingerprint) {
+            return Err(format!(
+                "artifact {}: repository fingerprint is not sha256 hex",
+                self.name
+            ));
+        }
         if !self.key_fingerprint.is_empty() && !is_hex64(&self.key_fingerprint) {
             return Err(format!(
                 "artifact {}: key fingerprint is not sha256 hex",
@@ -405,5 +413,35 @@ mod tests {
             );
         }
         assert!(b.0.borrow().is_empty());
+    }
+
+    // A repository fingerprint naming a file that exists is refused by
+    // validation, not by the file happening to be absent: with an entry
+    // otherwise ready, an absolute path would make the origin check pass.
+    #[test]
+    fn repository_fingerprint_must_be_hex() {
+        let (cache, stage) = (tmp(), tmp());
+        let good = art("app", D1, "oci", "");
+        std::fs::create_dir_all(good.entry(&cache)).unwrap();
+        touch(good.sealed_marker(&cache));
+        let elsewhere = tmp().join("exists");
+        touch(elsewhere.clone());
+        for fp in [
+            elsewhere.to_string_lossy().into_owned(),
+            "../../../../../../../../etc/hostname".to_string(),
+            "/".to_string(),
+        ] {
+            let a = WarmArtifact {
+                repository_fingerprint: fp.clone(),
+                ..good.clone()
+            };
+            let err = project(&[a], &cache, &stage, &Recorder::default()).unwrap_err();
+            assert!(
+                err.contains("repository fingerprint"),
+                "{:?} not refused by validation: {}",
+                fp,
+                err
+            );
+        }
     }
 }

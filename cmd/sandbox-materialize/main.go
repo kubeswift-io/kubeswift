@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kubeswift-io/kubeswift/internal/oci"
@@ -50,12 +51,35 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
+	// The pull Secret is the tenant's input: only its "auths" are kept, in a
+	// private copy, so neither go-containerregistry nor cosign (which reads
+	// $DOCKER_CONFIG too) runs a credential helper it names.
+	pullConfig := *pullSecret
+	if pullConfig != "" {
+		raw, err := os.ReadFile(pullConfig)
+		if err == nil {
+			raw, err = materialize.SanitizeDockerConfig(raw)
+		}
+		var dir string
+		if err == nil {
+			dir, err = os.MkdirTemp("", "docker-config-*")
+		}
+		if err == nil {
+			pullConfig = filepath.Join(dir, "config.json")
+			err = os.WriteFile(pullConfig, raw, 0o600)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: pull secret: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	opts := materialize.Options{
 		Context:    ctx,
 		ImageRef:   *image,
 		CacheDir:   *cacheDir,
 		Mode:       materialize.Mode(*mode),
-		PullSecret: *pullSecret,
+		PullSecret: pullConfig,
 		Insecure:   *insecure,
 
 		ReadOnlyArtifact: *readOnly,
@@ -87,7 +111,22 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: resolve for verify: %v\n", rerr)
 			os.Exit(1)
 		}
-		if verr := oci.Verify(ctx, repo, digest, *verifyKey); verr != nil {
+		// The key is read once: cosign checks a private copy of these bytes
+		// and the verification record is named from the same bytes, so a
+		// key Secret changed meanwhile cannot have its fingerprint recorded
+		// for a check another key passed.
+		key, kerr := os.ReadFile(*verifyKey)
+		if kerr != nil || len(key) == 0 {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: read verify key: %v\n", kerr)
+			os.Exit(1)
+		}
+		pinned, perr := materialize.PinFile("", "verify-key-*.pub", key)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-materialize: pin verify key: %v\n", perr)
+			os.Exit(1)
+		}
+		defer os.Remove(pinned)
+		if verr := oci.Verify(ctx, repo, digest, pinned); verr != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", verr)
 			os.Exit(1)
 		}
@@ -99,7 +138,7 @@ func main() {
 		opts.ImageRef = repo + "@" + digest
 		fmt.Fprintf(os.Stderr, "sandbox-materialize: cosign-verified %s@%s\n", repo, digest)
 		if artifact {
-			if err := materialize.RecordVerified(opts.CacheDir, digest, *verifyKey); err != nil {
+			if err := materialize.RecordVerified(opts.CacheDir, digest, key); err != nil {
 				fmt.Fprintf(os.Stderr, "sandbox-materialize: %v\n", err)
 				os.Exit(1)
 			}
