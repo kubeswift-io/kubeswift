@@ -85,7 +85,7 @@ key named instead of being silently ignored. Delete the key.
 | `swiftletd.resources` | Requests/limits | `100m`/`128Mi` … `2`/`2Gi` |
 | `swiftletd.imagePullSecrets` | Pull Secrets for the launcher image on a private registry. Launcher pods run as their own ServiceAccount, so they do not inherit Secrets patched onto `default` | `[]` |
 | `sandboxMaterialize.image.registry` / `.tag` | SwiftSandbox rootfs init container, injected into sandbox pods by the controller | `ghcr.io/kubeswift-io/kubeswift` / `latest` |
-| `sandboxMaterialize.artifactCache.maxBytes` | Node artifact cache limit (quantity); least recently used entries no sandbox holds are evicted, a new artifact is refused while still over. Enable once every launcher is v0.17+ | `"0"` (none) |
+| `sandboxMaterialize.artifactCache.maxBytes` | Node artifact cache limit (quantity); least recently used entries no sandbox holds are evicted, a new artifact is refused while still over. Enable once every launcher is v0.17+ | `0` (none) |
 | `sandboxMaterialize.artifactCache.maxPercent` | Same, as a percentage of the cache filesystem; the smaller limit applies | `0` (none) |
 | `sandboxMaterialize.artifactCache.minAge` | An entry used more recently is never evicted | `10m` |
 | `sandboxMaterialize.artifactCache.evictLegacy` | Also evict entries written before v0.17 (counted, otherwise never evicted). Set once no pre-v0.17 launcher runs | `false` |
