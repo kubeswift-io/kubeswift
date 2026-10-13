@@ -71,6 +71,8 @@ spec:
               value: {{ .maxPercent | default 0 | quote }}
             - name: KUBESWIFT_ARTIFACT_CACHE_MIN_AGE
               value: {{ .minAge | default "10m" | quote }}
+            - name: KUBESWIFT_ARTIFACT_CACHE_EVICT_LEGACY
+              value: {{ .evictLegacy | default false | quote }}
             {{- end }}
             - name: POD_NAMESPACE
               valueFrom:

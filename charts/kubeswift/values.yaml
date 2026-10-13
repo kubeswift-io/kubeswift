@@ -88,6 +88,10 @@ sandboxMaterialize:
     maxBytes: "0"      # e.g. 20Gi; 0 is none
     maxPercent: 0      # of the cache filesystem; 0 is none; the smaller limit applies
     minAge: 10m        # an entry used more recently is never evicted
+    # Entries written before v0.17 are counted but never evicted (older
+    # launchers take no use locks), so a node already over the limit refuses
+    # new artifacts. Set true once no pre-v0.17 sandbox launcher is running.
+    evictLegacy: false
 
 # snapshot-oras: the uploader/downloader image for the oci (OCI registry / ORAS)
 # snapshot backend. The controller passes this to the per-snapshot push Job (and

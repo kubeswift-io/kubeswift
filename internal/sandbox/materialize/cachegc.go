@@ -58,6 +58,10 @@ type CacheLimits struct {
 	MaxPercent int // of the cache filesystem
 	// MinAge: an entry used more recently is never evicted.
 	MinAge time.Duration
+	// EvictLegacy makes entries written before sizes were recorded evictable
+	// too. Set it only once no launcher older than this release can be
+	// serving them: those take no use locks.
+	EvictLegacy bool
 }
 
 // Enabled reports whether any limit is set.
@@ -72,6 +76,7 @@ type CacheReport struct {
 	EvictedBytes int64 `json:"evictedBytes"`
 	OverLimit    bool  `json:"overLimit"`
 	Legacy       int   `json:"legacy,omitempty"`
+	LegacyBytes  int64 `json:"legacyBytes,omitempty"`
 }
 
 // UseLockPath is the use lock of entry (a base name) in useDir.
@@ -175,6 +180,7 @@ func EnforceLimits(cacheDir, useDir, keep string, lim CacheLimits, now time.Time
 		rep.Bytes += e.bytes
 		if e.legacy {
 			rep.Legacy++
+			rep.LegacyBytes += e.bytes
 		}
 	}
 	rep.LimitBytes = limitBytes(cacheDir, lim)
@@ -186,7 +192,7 @@ func EnforceLimits(cacheDir, useDir, keep string, lim CacheLimits, now time.Time
 		if rep.Bytes <= rep.LimitBytes {
 			break
 		}
-		if e.legacy || e.name == keep || now.Sub(e.lastUse) < lim.MinAge {
+		if (e.legacy && !lim.EvictLegacy) || e.name == keep || now.Sub(e.lastUse) < lim.MinAge {
 			continue
 		}
 		if evict(cacheDir, useDir, e.name) {
@@ -208,8 +214,11 @@ func EnforceLimits(cacheDir, useDir, keep string, lim CacheLimits, now time.Time
 		}
 		if evict(cacheDir, useDir, keep) {
 			rep.Bytes -= size
-			return rep, fmt.Errorf("%w: %d bytes of entries in use or used within %s against a limit of %d",
-				ErrCacheFull, rep.Bytes, lim.MinAge, rep.LimitBytes)
+			msg := fmt.Sprintf("%d bytes of entries in use or used within %s against a limit of %d", rep.Bytes, lim.MinAge, rep.LimitBytes)
+			if rep.LegacyBytes > 0 && !lim.EvictLegacy {
+				msg += fmt.Sprintf(", %d of them written before this release and never evicted unless evictLegacy is set", rep.LegacyBytes)
+			}
+			return rep, fmt.Errorf("%w: %s", ErrCacheFull, msg)
 		}
 	}
 	return rep, nil

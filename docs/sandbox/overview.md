@@ -463,7 +463,9 @@ spec:
   over the limit, the new artifact is refused (`ArtifactMaterializeFailed`;
   an optional one is skipped). Enable limits only once every sandbox launcher
   on the cluster runs v0.17 or later: older launchers do not hold use locks.
-  Entries written before v0.17 are counted but never evicted. Metrics:
+  Entries written before v0.17 are counted but never evicted, so a node whose
+  cache is already over the limit refuses new artifacts until
+  `artifactCache.evictLegacy: true` (set it once no pre-v0.17 launcher runs). Metrics:
   `kubeswift_sandbox_artifact_cache_bytes{node,kind}`,
   `kubeswift_sandbox_artifact_cache_evictions_total{node}`,
   `kubeswift_sandbox_artifact_cache_over_limit{node}`.

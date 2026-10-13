@@ -51,6 +51,7 @@ func main() {
 		cacheMax   = flag.Int64("cache-max-bytes", 0, "artifact cache limit in bytes (0: none); least recently used entries no sandbox holds are evicted after an entry is written, and a new entry is refused if the cache stays over it")
 		cachePct   = flag.Int("cache-max-percent", 0, "artifact cache limit as a percentage of its filesystem (0: none); the smaller limit applies")
 		cacheAge   = flag.Duration("cache-min-age", 10*time.Minute, "an entry used more recently than this is never evicted")
+		cacheOld   = flag.Bool("cache-evict-legacy", false, "also evict entries written before sizes were recorded; only once no older launcher can be serving them")
 		resultFile = flag.String("result-file", "/dev/termination-log", "where to write the JSON result")
 		showVer    = flag.Bool("version", false, "print version and exit")
 	)
@@ -118,7 +119,7 @@ func main() {
 		opts.MaxBytes, opts.MaxEntries = *maxBytes, *maxEntries
 	}
 
-	cache := cacheOpts{useDir: *useDir, limits: materialize.CacheLimits{MaxBytes: *cacheMax, MaxPercent: *cachePct, MinAge: *cacheAge}}
+	cache := cacheOpts{useDir: *useDir, limits: materialize.CacheLimits{MaxBytes: *cacheMax, MaxPercent: *cachePct, MinAge: *cacheAge, EvictLegacy: *cacheOld}}
 	if !artifact {
 		cache = cacheOpts{}
 	}

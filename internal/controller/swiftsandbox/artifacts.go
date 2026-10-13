@@ -250,6 +250,7 @@ const (
 	artifactCacheMaxBytesEnv   = "KUBESWIFT_ARTIFACT_CACHE_MAX_BYTES"
 	artifactCacheMaxPercentEnv = "KUBESWIFT_ARTIFACT_CACHE_MAX_PERCENT"
 	artifactCacheMinAgeEnv     = "KUBESWIFT_ARTIFACT_CACHE_MIN_AGE"
+	artifactCacheEvictOldEnv   = "KUBESWIFT_ARTIFACT_CACHE_EVICT_LEGACY"
 )
 
 // artifactCacheArgs are the materializer flags for the use-lock directory and
@@ -270,6 +271,9 @@ func artifactCacheArgs() []string {
 		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
 			args = append(args, "--cache-min-age="+d.String())
 		}
+	}
+	if os.Getenv(artifactCacheEvictOldEnv) == "true" {
+		args = append(args, "--cache-evict-legacy")
 	}
 	return args
 }

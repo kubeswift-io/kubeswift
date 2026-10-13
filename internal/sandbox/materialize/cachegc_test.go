@@ -236,3 +236,22 @@ func TestEntryLimiter_RefusesSparse(t *testing.T) {
 		t.Error("ordinary member refused")
 	}
 }
+
+// Entries from before size records are evicted only when the operator says no
+// older launcher can be serving them.
+func TestEnforceLimits_EvictLegacyOnlyWhenAsked(t *testing.T) {
+	cache, use := cacheDirs(t)
+	now := time.Now()
+	legacy, fresh := digestEntry('a', true), digestEntry('b', true)
+	entryFixture(t, cache, use, legacy, 256*kib, now.Add(-time.Hour), true)
+	entryFixture(t, cache, use, fresh, 256*kib, now, false)
+	_, err := EnforceLimits(cache, use, fresh, CacheLimits{MaxBytes: 300 * kib}, now)
+	if !errors.Is(err, ErrCacheFull) || !strings.Contains(err.Error(), "evictLegacy") {
+		t.Fatalf("err = %v", err)
+	}
+	entryFixture(t, cache, use, fresh, 256*kib, now, false)
+	rep, err := EnforceLimits(cache, use, fresh, CacheLimits{MaxBytes: 300 * kib, EvictLegacy: true}, now)
+	if err != nil || rep.Evicted != 1 || exists(filepath.Join(cache, legacy)) {
+		t.Fatalf("rep=%+v err=%v", rep, err)
+	}
+}

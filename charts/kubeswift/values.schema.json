@@ -64,7 +64,8 @@
           "properties": {
             "maxBytes": { "type": ["string", "integer"] },
             "maxPercent": { "type": "integer", "minimum": 0, "maximum": 100 },
-            "minAge": { "type": "string" }
+            "minAge": { "type": "string" },
+            "evictLegacy": { "type": "boolean" }
           }
         }
       }
