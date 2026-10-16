@@ -1,6 +1,6 @@
 # CRD Reference
 
-All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **17 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
+All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **18 CRDs across 10 API groups**. This document gives full field detail for the core workload CRDs (SwiftGuest, SwiftGuestClass, SwiftImage, SwiftSeedProfile, SwiftKernel, SwiftGPUProfile, SwiftGPUNode), and concise reference entries — purpose, key fields, and a link to the authoritative feature doc — for the snapshot, migration, pool, sandbox, fleet, and storage-location CRDs. For exhaustive field detail on any CRD, use `kubectl explain <crd>` against an installed cluster.
 
 | CRD | Short | API group | Scope | Reference |
 |-----|-------|-----------|-------|-----------|
@@ -18,6 +18,7 @@ All KubeSwift CRDs are `v1alpha1`. KubeSwift ships **17 CRDs across 10 API group
 | SwiftMigration | `smig` | `migration.kubeswift.io` | Namespaced | [below](#swiftmigration) |
 | SwiftSandbox | `sbox` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandbox) |
 | SwiftSandboxPool | `sboxpool` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftsandboxpool) |
+| SwiftArtifactPlacement | `sap` | `sandbox.kubeswift.io` | Namespaced | [below](#swiftartifactplacement) |
 | Cluster | `ksc` | `fleet.kubeswift.io` | Namespaced | [below](#cluster) |
 | SwiftClusterStorageLocation | `csloc` | `storage.kubeswift.io` | Cluster | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
 | SwiftStorageLocation | `sloc` | `storage.kubeswift.io` | Namespaced | [below](#swiftclusterstoragelocation-and-swiftstoragelocation) |
@@ -612,6 +613,29 @@ subresource (`.spec.minWarm`) is the seam for `kubectl scale` and an HPA.
 | `maxWarm` | int32 | Cap on warm slots (back-pressure); `0` means no cap beyond `minWarm`. |
 
 Full reference: [Warm pools](sandbox/warm-pool.md) · [GPU sandboxes › Warm GPU pools](sandbox/gpu-sandboxes.md#warm-gpu-pools-sub-second-inference-start).
+
+---
+
+## SwiftArtifactPlacement
+
+**Group:** `sandbox.kubeswift.io/v1alpha1`
+**Scope:** Namespaced
+**Short name:** `sap`
+**Subresource:** status
+
+Prepares OCI artifacts in the node cache of every node that runs a slot of a
+`SwiftSandboxPool`, so a checkout that mounts one needs no fetch. Changes
+nothing in the pool or its slots.
+
+| Key field | Type | Description |
+|-----------|------|--------------|
+| `poolRef` | LocalObjectReference | The pool, in this namespace, whose slots' nodes receive the artifacts. Required. |
+| `artifacts[]` | list (1-16) | `name`, `ref` (a digest reference, required), `layout` (`oci` default or `unpacked`), `pullSecretRef`, `verifyKeySecretRef`: as on a SwiftSandbox artifact. |
+| `status.targetNodes` / `status.preparedNodes` | int32 | Nodes running a slot of the pool, and how many hold every artifact. |
+| `status.nodes[]` / `status.artifacts[]` | list | Per node: `prepared`, `preparedAt`, `reason`, `message`, `failures`. Per artifact: `digest`, `preparedNodes`, `reason`. |
+| `status.conditions[Prepared]` | Condition | True when every node holds every artifact. |
+
+Full reference: [Warm pools › Preparing artifacts before checkout](sandbox/warm-pool.md#preparing-artifacts-before-checkout).
 
 ---
 

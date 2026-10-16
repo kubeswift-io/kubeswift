@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -333,6 +334,14 @@ func (r *SwiftSandboxReconciler) tryClaimWarmSlot(ctx context.Context, sb *sandb
 			return false
 		}
 		return true
+	}
+	// A slot on a node a SwiftArtifactPlacement has prepared for every
+	// artifact this checkout mounts goes first: its projection needs no
+	// fetch. Any other eligible slot still serves.
+	if prepared := r.preparedNodes(ctx, sb); len(prepared) > 0 {
+		sort.SliceStable(pods.Items, func(i, j int) bool {
+			return prepared[pods.Items[i].Spec.NodeName] && !prepared[pods.Items[j].Spec.NodeName]
+		})
 	}
 	for i := range pods.Items {
 		p := &pods.Items[i]

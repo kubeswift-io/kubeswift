@@ -170,7 +170,7 @@ rules:
   # SwiftSandbox (sandbox.kubeswift.io). Owns launcher pods + intent ConfigMaps
   # (granted via the core "" group); status via the /status subresource.
   - apiGroups: ["sandbox.kubeswift.io"]
-    resources: ["swiftsandboxes", "swiftsandboxes/status", "swiftsandboxpools", "swiftsandboxpools/status"]
+    resources: ["swiftsandboxes", "swiftsandboxes/status", "swiftsandboxpools", "swiftsandboxpools/status", "swiftartifactplacements", "swiftartifactplacements/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # SwiftSandbox restricted-mode NetworkPolicy (deny-ingress) on the launcher pod.
   - apiGroups: ["networking.k8s.io"]

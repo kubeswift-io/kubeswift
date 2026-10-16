@@ -269,6 +269,12 @@ even when no slot can mount artifacts, and starts without them. The pool's
 `CheckoutArtifacts` condition says how many ready slots can mount artifacts
 at checkout. Fetch pods are bounded (`activeDeadlineSeconds`).
 
+A skipped artifact leaves nothing at its `mountPath`: no empty mount is
+made, and the path shows whatever the image has there. A workload tells the
+two apart by whether `mountPath` is a mount point (`mountpoint -q /path`, or
+a line for it in `/proc/self/mountinfo`), not by whether the directory
+exists. `status.artifacts` records `Skipped` and why.
+
 **Security boundary.** The guest sees only the staging share, and in its
 sandbox root only its own artifacts. Everything is read-only three times:
 the cache mount, the bind into the staging share, and the guest's bind
@@ -283,6 +289,69 @@ request waits and retries (`RegistryUnavailable`).
 Not limited: the total size of the node cache. Nothing removes entries; a
 namespace that may create sandboxes can fill the node's disk with distinct
 artifacts, as it could before with cold sandboxes.
+
+## Preparing artifacts before checkout
+
+A checkout that mounts an artifact its node does not hold waits for a fetch
+pod (seconds). A `SwiftArtifactPlacement` fetches artifacts onto the nodes of
+a pool ahead of time, so checkouts find them there:
+
+```yaml
+apiVersion: sandbox.kubeswift.io/v1alpha1
+kind: SwiftArtifactPlacement
+metadata: {name: app-cache}
+spec:
+  poolRef: {name: runtime}
+  artifacts:
+  - name: cache
+    ref: registry.example/app/cache@sha256:...   # a digest is required
+    layout: unpacked
+    pullSecretRef: {name: app-pull}               # optional
+    verifyKeySecretRef: {name: app-cosign}        # optional
+```
+
+Its targets are the nodes running a slot of the pool, warm or claimed; a
+node joins when a slot lands on it and leaves when its last slot goes. On
+each, a prepare pod runs the same materializer as a checkout's fetch pod,
+with the placement's pull Secret and key, and is deleted when done. Nothing
+else changes: the pool and its slots are not touched or restarted, and a
+checkout still names its artifacts in `spec.artifacts`.
+
+**Prepared** means the node's cache held the artifact at that digest, read
+from that repository and verified with that key, when last checked
+(`status.nodes[].preparedAt`; checked again every 15 minutes), and the
+registry authorized the placement's credentials for it within the last
+minute. A checkout uses the entry when it names the same repository, digest,
+layout and key, and among warm slots prefers one on a node prepared for
+every artifact it mounts. The launcher still checks the entry itself: a
+placement makes no entry usable that a fetch would not.
+
+Status:
+
+```
+$ kubectl get sap
+NAME        POOL      PREPARED   NODES   STATUS     AGE
+app-cache   runtime   3          3       Prepared   2m
+```
+
+`status.nodes` lists each node (`prepared`, `reason`, `message`,
+`failures`), `status.artifacts` each artifact's digest and how many nodes
+hold it. The `Prepared` condition is True when every node holds every
+artifact; else its reason is `Preparing`, `PrepareFailed`,
+`VerificationFailed`, `ArtifactRefused`, `PoolNotFound` or `NoTargetNodes`.
+A node that fails is retried after 30 seconds, doubling to 10 minutes; the
+others are not held back. A registry refusal of the placement's credentials
+prepares nothing.
+
+Placements are independent of each other and of the pool: several can name
+one pool, for different artifacts or owners. Deleting a placement stops
+preparing (its prepare pods go with it); entries already cached stay. A
+changed digest is prepared afresh. Two placements, or a placement and a
+checkout, that fetch one digest on one node at once download it once (the
+materializer locks the digest on the node).
+
+The pool's warm-slot readiness is unaffected: a slot is warm when its guest
+agent answers, whether or not a placement has prepared its node.
 
 ## Node placement
 
