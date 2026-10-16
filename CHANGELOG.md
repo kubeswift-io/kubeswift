@@ -4,6 +4,23 @@ All notable changes to KubeSwift are documented here.
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- A warm checkout no longer waits for the registry when an artifact's
+  authorization expires (#794). The controller keeps a digest reference's
+  answer for `--artifact-authorization-ttl` (default 5m, at least 30s) per set
+  of credentials and renews it in the background once it is half that old
+  (`--artifact-authorization-refresh`, default 0.5), so a digest in steady
+  use is renewed before it expires. A sandbox's registry requests (image,
+  model, every artifact) now start together and are waited for together.
+  New metrics: `kubeswift_registry_lookups_total{answer}`,
+  `kubeswift_registry_requests_total{reason,outcome}`,
+  `kubeswift_registry_request_seconds{reason}`.
+
+---
+
 ## [v0.16.5] — 2026-10-13
 
 A patch release that hardens how sandbox artifacts are verified and pulled.
