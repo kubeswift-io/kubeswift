@@ -6,6 +6,25 @@ All notable changes to KubeSwift are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Optional artifacts** (#795): `spec.artifacts[].optional: true` marks an
+  artifact the workload can run without, such as a cache. When it cannot be
+  resolved, fetched or verified within `fetchTimeout` (default 10s, at most
+  5m, counted from the sandbox's creation) the workload starts without it:
+  nothing is mounted at `mountPath`, and the workload can tell by whether
+  `mountPath` is a mount point. Verification is never skipped. A required
+  artifact (the default, and every artifact from before) behaves exactly as
+  in v0.16. A warm fetch that outlives the deadline keeps running (up to 10
+  minutes) and fills the node cache for the next checkout.
+- `status.artifacts[]` gains `state` (Resolved, Fetching, Dispatched,
+  Mounted, Skipped, Failed), `reason`, `message` and `optional`. A required
+  artifact that fails the sandbox reads Failed with the sandbox's reason.
+  Warning Events `ArtifactSkipped` and `ArtifactVerificationFailed`, metric
+  `kubeswift_sandbox_artifacts_total{path,optional,result,reason}`, and a
+  pool condition `CheckoutArtifacts` (how many ready slots can mount
+  artifacts at checkout).
+
 ### Changed
 
 - A warm checkout no longer waits for the registry when an artifact's
