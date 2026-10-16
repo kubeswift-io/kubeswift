@@ -184,12 +184,17 @@ func TestArtifactInits_OptionalFlags(t *testing.T) {
 	if fs[0].OptionalToken != "" || fs[1].OptionalToken != artifactOKFile("opt") {
 		t.Errorf("tokens %q %q", fs[0].OptionalToken, fs[1].OptionalToken)
 	}
-	// A fetch pod's optional container is bounded and never fails, but has no
-	// token: a warm slot checks the node's markers.
+	// A fetch pod's optional container never fails and has no token (a warm
+	// slot checks the node's markers). It is bounded, but runs past the
+	// artifact's deadline, so a fetch the checkout stopped waiting for still
+	// fills the node cache.
 	inits, _ = artifactInits(sb, false)
-	if o := strings.Join(inits[1].Args, " "); !strings.Contains(o, "--optional") || strings.Contains(o, "--ok-file") ||
-		!deadlineArg(t, o).Equal(artifactDeadline(sb, &sb.Spec.Artifacts[1]).Truncate(time.Second)) {
+	o := strings.Join(inits[1].Args, " ")
+	if !strings.Contains(o, "--optional") || strings.Contains(o, "--ok-file") {
 		t.Errorf("fetch container: %s", o)
+	}
+	if d := deadlineArg(t, o); !d.After(artifactDeadline(sb, &sb.Spec.Artifacts[1])) || d.After(time.Now().Add(backgroundFetchTimeout)) {
+		t.Errorf("fetch container deadline %v: want past the artifact's (%v), within %v", d, artifactDeadline(sb, &sb.Spec.Artifacts[1]), backgroundFetchTimeout)
 	}
 }
 

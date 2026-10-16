@@ -228,6 +228,11 @@ func resolvedArtifacts(sb *sandboxv1alpha1.SwiftSandbox) []resolvedArtifact {
 	return out
 }
 
+// backgroundFetchTimeout bounds an optional artifact's fetch that no
+// workload waits for any more: a warm checkout's fetch past the artifact's
+// deadline.
+const backgroundFetchTimeout = 10 * time.Minute
+
 // artifactResultsVolume is a cold launcher pod's emptyDir where each optional
 // artifact's init container writes its ok token (artifactOKFile), and
 // artifactResultsDir where both the init containers and the launcher (read
@@ -290,12 +295,17 @@ func artifactInits(sb *sandboxv1alpha1.SwiftSandbox, tokens bool) ([]corev1.Cont
 		args := []string{"--image", r.pinned(), "--cache-dir", artifactCacheDir, "--mode", string(mode), "--read-only-artifact", "--result-file", "/dev/termination-log"}
 		mounts := []corev1.VolumeMount{{Name: artifactCacheVolume, MountPath: artifactCacheDir}}
 		if r.spec.Optional {
-			// A fetch pod's deadline is the artifact's own (the controller
-			// stops waiting for it then). A cold launcher's init container
-			// counts its fetchTimeout from now, when the pod is built: the
-			// time the launch waited for registries already had its own
-			// bound, and pod start-up is not the artifact's doing.
-			deadline := artifactDeadline(sb, r.spec)
+			// A fetch pod runs on past the artifact's deadline, up to
+			// backgroundFetchTimeout: the controller stops waiting for it at
+			// the deadline and dispatches without the artifact, and the
+			// fetch fills the node cache for the next checkout. Bounding it
+			// by the deadline instead meant an artifact slower to fetch than
+			// its fetchTimeout was never cached at all. A cold launcher's
+			// init container counts its fetchTimeout from now, when the pod
+			// is built: the boot waits for it, the time the launch waited
+			// for registries already had its own bound, and pod start-up is
+			// not the artifact's doing.
+			deadline := time.Now().Add(backgroundFetchTimeout)
 			if tokens {
 				deadline = time.Now().Add(r.spec.ArtifactFetchTimeout())
 			}

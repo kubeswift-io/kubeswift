@@ -263,8 +263,8 @@ its `fetchTimeout` runs out (counted from the sandbox's creation) skips it,
 and the workload is dispatched again without it. It is fetched only on the
 first dispatch and only while its deadline allows; with `fetchTimeout: 0s` it
 is used only when already on the node. A fetch that outlives the deadline
-keeps running and fills the node cache for later checkouts, as long as the
-sandbox exists. A sandbox whose artifacts are all optional takes a warm slot
+keeps running (up to 10 minutes, while the sandbox exists) and fills the node
+cache for later checkouts. A sandbox whose artifacts are all optional takes a warm slot
 even when no slot can mount artifacts, and starts without them. The pool's
 `CheckoutArtifacts` condition says how many ready slots can mount artifacts
 at checkout. Fetch pods are bounded (`activeDeadlineSeconds`).
