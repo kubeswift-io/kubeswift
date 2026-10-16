@@ -94,6 +94,9 @@ type artifactResolution struct {
 	err error
 	// wakeAt: the earliest deadline of an optional artifact still waited for.
 	wakeAt time.Time
+	// failed: when a required artifact was refused, every artifact's status
+	// with that one Failed, for the sandbox to record as it fails.
+	failed []sandboxv1alpha1.SandboxArtifactStatus
 }
 
 // resolveArtifacts resolves each artifact to the digest the node will mount.
@@ -141,6 +144,7 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 				if refused == nil {
 					refused = err
 				}
+				st.State, st.Reason, st.Message = sandboxv1alpha1.SandboxArtifactFailed, "ArtifactResolveFailed", truncateMessage(res.err.Error())
 			} else if transient == nil {
 				transient = err
 			}
@@ -162,6 +166,7 @@ func resolveArtifactRequests(sb *sandboxv1alpha1.SwiftSandbox, reqs []resolveReq
 	}
 	if refused != nil {
 		out.err = refused
+		out.failed = out.statuses
 	} else if transient != nil {
 		out.err = transient
 	}

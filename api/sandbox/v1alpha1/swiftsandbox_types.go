@@ -520,7 +520,7 @@ func (a *SandboxArtifact) ArtifactLayout() string {
 }
 
 // SandboxArtifactState is where an artifact stands.
-// +kubebuilder:validation:Enum=Resolved;Fetching;Dispatched;Mounted;Skipped
+// +kubebuilder:validation:Enum=Resolved;Fetching;Dispatched;Mounted;Skipped;Failed
 type SandboxArtifactState string
 
 const (
@@ -536,6 +536,10 @@ const (
 	// SandboxArtifactSkipped: an optional artifact the workload runs without;
 	// reason and message say why.
 	SandboxArtifactSkipped SandboxArtifactState = "Skipped"
+	// SandboxArtifactFailed: a required artifact that failed the sandbox;
+	// reason (the sandbox's: ArtifactResolveFailed, ArtifactMaterializeFailed,
+	// ArtifactMissing) and message say why.
+	SandboxArtifactFailed SandboxArtifactState = "Failed"
 )
 
 // SandboxArtifactStatus is an artifact as resolved, and how it was
@@ -553,7 +557,7 @@ type SandboxArtifactStatus struct {
 	// Reason is a CamelCase word: for Skipped why (ResolveRefused,
 	// RegistryUnavailable, FetchTimeout, VerificationFailed,
 	// MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
-	// Fetched).
+	// Fetched); for Failed the sandbox's failure reason.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 	// +optional

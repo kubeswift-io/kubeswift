@@ -41,6 +41,37 @@ func (r *SwiftSandboxReconciler) setArtifactState(sb *sandboxv1alpha1.SwiftSandb
 			r.artifactSkipped(sb, s, path)
 		case sandboxv1alpha1.SandboxArtifactMounted:
 			metrics.SandboxArtifactsTotal.WithLabelValues(path, boolLabel(artifactOptional(sb, name)), "mounted", reason).Inc()
+		case sandboxv1alpha1.SandboxArtifactFailed:
+			metrics.SandboxArtifactsTotal.WithLabelValues(path, boolLabel(artifactOptional(sb, name)), "failed", reason).Inc()
+		}
+	}
+}
+
+// failArtifacts records the required artifacts that fail sb as Failed with
+// the sandbox's reason. A message "artifact <name>: ..." names one; else
+// every name in names fails.
+func (r *SwiftSandboxReconciler) failArtifacts(sb *sandboxv1alpha1.SwiftSandbox, names []string, reason, msg, path string) {
+	if rest, ok := strings.CutPrefix(msg, "artifact "); ok {
+		if name, _, ok := strings.Cut(rest, ":"); ok && artifactStatus(sb, name) != nil {
+			names = []string{name}
+		}
+	}
+	for _, name := range names {
+		if !artifactOptional(sb, name) {
+			r.setArtifactState(sb, name, sandboxv1alpha1.SandboxArtifactFailed, reason, msg, path)
+		}
+	}
+}
+
+// recordFailedResolve records a refused required artifact's statuses.
+func (r *SwiftSandboxReconciler) recordFailedResolve(sb *sandboxv1alpha1.SwiftSandbox, res artifactResolution, path string) {
+	if len(res.failed) == 0 {
+		return
+	}
+	sb.Status.Artifacts = res.failed
+	for i := range res.failed {
+		if s := &res.failed[i]; s.State == sandboxv1alpha1.SandboxArtifactFailed {
+			metrics.SandboxArtifactsTotal.WithLabelValues(path, "false", "failed", s.Reason).Inc()
 		}
 	}
 }

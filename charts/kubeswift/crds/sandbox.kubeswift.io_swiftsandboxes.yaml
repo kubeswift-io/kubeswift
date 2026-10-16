@@ -1386,7 +1386,7 @@ spec:
                         Reason is a CamelCase word: for Skipped why (ResolveRefused,
                         RegistryUnavailable, FetchTimeout, VerificationFailed,
                         MaterializeFailed, KernelUnsupported); for Mounted where from (Cached,
-                        Fetched).
+                        Fetched); for Failed the sandbox's failure reason.
                       type: string
                     state:
                       description: SandboxArtifactState is where an artifact stands.
@@ -1396,6 +1396,7 @@ spec:
                       - Dispatched
                       - Mounted
                       - Skipped
+                      - Failed
                       type: string
                   required:
                   - mountPath

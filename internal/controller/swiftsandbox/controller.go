@@ -293,6 +293,9 @@ func (r *SwiftSandboxReconciler) createLaunch(ctx context.Context, sb *sandboxv1
 		}
 		if registryRefused(f.err) {
 			r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+			if f.reason == "ArtifactResolveFailed" {
+				r.recordFailedResolve(sb, arts, "cold")
+			}
 			return r.fail(ctx, sb, f.reason, f.err.Error())
 		}
 		return r.registryUnavailable(ctx, sb, f.err)
@@ -401,6 +404,7 @@ func (r *SwiftSandboxReconciler) reconcilePodState(ctx context.Context, sb *sand
 		}
 	}
 	if msg, failed := artifactInitFailure(pod); failed {
+		r.failArtifacts(sb, nil, "ArtifactMaterializeFailed", msg, "cold")
 		return r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
 	}
 

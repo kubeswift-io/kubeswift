@@ -87,6 +87,17 @@ func TestResolve_OptionalClassification(t *testing.T) {
 		if res.err == nil || !registryRefused(res.err) {
 			t.Fatalf("res=%+v", res)
 		}
+		// The sandbox records which artifact failed it, and why.
+		failed := map[string]sandboxv1alpha1.SandboxArtifactStatus{}
+		for _, s := range res.failed {
+			failed[s.Name] = s
+		}
+		if s := failed["req"]; s.State != sandboxv1alpha1.SandboxArtifactFailed || s.Reason != "ArtifactResolveFailed" || s.Message == "" {
+			t.Errorf("req = %+v, want Failed/ArtifactResolveFailed with a message", s)
+		}
+		if s := failed["opt"]; s.State != sandboxv1alpha1.SandboxArtifactResolved {
+			t.Errorf("opt = %+v, want Resolved", s)
+		}
 	})
 	t.Run("warm: optional unanswered is skipped, not waited for", func(t *testing.T) {
 		res := resolveWith(t, optSandbox(art("opt", "r.example/slow:1", true)), skipUnresolvedOptional, now)
@@ -404,4 +415,31 @@ func deadlineArg(t *testing.T, args string) time.Time {
 	}
 	t.Fatalf("no --deadline in %s", args)
 	return time.Time{}
+}
+
+// A required artifact that fails the sandbox is recorded Failed with the
+// sandbox's reason: the one a message names, else every name given; an
+// optional one is never marked Failed.
+func TestFailArtifacts(t *testing.T) {
+	sb := optSandbox(art("a", "r.example/ok:1", false), art("b", "r.example/ok:1", false), art("o", "r.example/ok:1", true))
+	for _, a := range sb.Spec.Artifacts {
+		sb.Status.Artifacts = append(sb.Status.Artifacts, sandboxv1alpha1.SandboxArtifactStatus{Name: a.Name, State: sandboxv1alpha1.SandboxArtifactFetching})
+	}
+	r := &SwiftSandboxReconciler{}
+	r.failArtifacts(sb, []string{"a", "b", "o"}, "ArtifactMaterializeFailed", "artifact b: invalid tar header", "warm")
+	got := map[string]sandboxv1alpha1.SandboxArtifactState{}
+	for _, s := range sb.Status.Artifacts {
+		got[s.Name] = s.State
+	}
+	if got["b"] != sandboxv1alpha1.SandboxArtifactFailed || got["a"] != sandboxv1alpha1.SandboxArtifactFetching {
+		t.Errorf("named failure: %v, want only b Failed", got)
+	}
+	r.failArtifacts(sb, []string{"a", "o"}, "ArtifactMissing", "a,o", "warm")
+	got = map[string]sandboxv1alpha1.SandboxArtifactState{}
+	for _, s := range sb.Status.Artifacts {
+		got[s.Name] = s.State
+	}
+	if got["a"] != sandboxv1alpha1.SandboxArtifactFailed || got["o"] == sandboxv1alpha1.SandboxArtifactFailed {
+		t.Errorf("unnamed failure: %v, want a Failed and o untouched", got)
+	}
 }

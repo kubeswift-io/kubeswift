@@ -101,6 +101,7 @@ func (r *SwiftSandboxReconciler) reconcilePooled(ctx context.Context, sb *sandbo
 		if res.err != nil {
 			if registryRefused(res.err) {
 				r.registryFailures.Delete(client.ObjectKeyFromObject(sb))
+				r.recordFailedResolve(sb, res, "warm")
 				return r.fail(ctx, sb, "ArtifactResolveFailed", res.err.Error())
 			}
 			return r.registryUnavailable(ctx, sb, res.err)
@@ -554,6 +555,9 @@ func (r *SwiftSandboxReconciler) reconcileClaimedSlot(ctx context.Context, sb *s
 			}
 			_ = r.Delete(ctx, &pod)
 			reason, msg := checkoutFailure(detail)
+			if missing, ok := artifactMissing(detail); ok {
+				r.failArtifacts(sb, missing, reason, msg, "warm")
+			}
 			return r.fail(ctx, sb, reason, msg)
 		}
 	}
@@ -723,6 +727,7 @@ func (r *SwiftSandboxReconciler) artifactsMissing(ctx context.Context, sb *sandb
 	switch state {
 	case fetchFailed:
 		_ = r.Delete(ctx, slot)
+		r.failArtifacts(sb, fetch, "ArtifactMaterializeFailed", msg, "warm")
 		res, err := r.fail(ctx, sb, "ArtifactMaterializeFailed", msg)
 		return res, true, err
 	case fetchDone:
