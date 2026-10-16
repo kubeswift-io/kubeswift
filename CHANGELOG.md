@@ -26,7 +26,7 @@ All notable changes to KubeSwift are documented here.
   artifact (the default, and every artifact from before) behaves exactly as
   in v0.16. A warm fetch that outlives the deadline keeps running (up to 10
   minutes) and fills the node cache for the next checkout.
-- **SwiftArtifactPlacement** (new CRD, `sap`): prepares digest-pinned OCI
+- **SwiftArtifactPlacement** (new CRD, `sap`, #799): prepares digest-pinned OCI
   artifacts in the node cache of every node that runs a slot of a
   SwiftSandboxPool, so a checkout that mounts one needs no fetch. Each
   artifact is authorized with the placement's own credentials, fetched and
