@@ -138,6 +138,12 @@ spec:
   counted in `warmingReplicas`, not `warmReplicas`. With no ready slot the
   sandbox boots cold (`PoolColdFallback`, `no warm slot available`). The pool
   is `Ready` once `minWarm` slots are ready, so a checkout made then gets one.
+- A slot whose guest agent has not answered 5 minutes after its launcher
+  started (a guest hung in boot, a kernel without the agent, a launcher older
+  than the controller) is deleted and replaced, with a Warning Event
+  `SlotNotReady`. Each consecutive replacement in a pool doubles the wait, up
+  to an hour, until a new slot gets ready. The controller flag
+  `--warm-slot-ready-timeout` sets it (`0` never replaces a slot).
 - A slot is only handed to a sandbox it honors: the slot has already booted,
   and a checkout only injects a command. The sandbox's `image`, `network.mode`,
   `network.egress.allow`, `network.ports`, `network.ingress`, `verifyKeySecretRef`, `rootfsMode`, kernel, `cpu` and `memory` must equal the
